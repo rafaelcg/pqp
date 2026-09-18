@@ -10,6 +10,7 @@ import {
   History,
   Lock,
   Menu,
+  MoreHorizontal,
   Phone,
   Pin,
   Settings,
@@ -17,9 +18,13 @@ import {
   Video,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu as ActionMenu } from "@/components/ui/menu";
+import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  WATCH_PARTY_MAX_GUESTS,
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
@@ -470,7 +475,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
-import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
+import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
+import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
+import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
@@ -1268,6 +1275,27 @@ function MainAppContent({
     active: false,
     canSideBySide: false,
   });
+  /**
+   * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
+   * Two candidate elements, one handed out: the slot this file draws over
+   * the bottom of the stage pane, and the span `HlsWatchPlayer` draws in
+   * its own bottom bar for a seatless viewer. The player's wins while it
+   * exists, so a viewer with a picture never gets two bars. See
+   * `WatchPartyBarSlot`.
+   */
+  const [stageBarEl, setStageBarEl] = useState<HTMLDivElement | null>(null);
+  const [playerBarEl, setPlayerBarEl] = useState<HTMLDivElement | null>(null);
+  const watchPartyBarSlot = playerBarEl ?? stageBarEl;
+  /** The host's status line over the top edge of the stage (pass 3). */
+  const [statusSlotEl, setStatusSlotEl] = useState<HTMLDivElement | null>(null);
+  /**
+   * ONE PANEL WITH TABS (pass 4): which body the chat column shows while a
+   * party is live, Chat or Pessoas. Back to Chat on every channel change.
+   */
+  const [watchPanelTab, setWatchPanelTab] = useState<"chat" | "people">("chat");
+  useEffect(() => {
+    setWatchPanelTab("chat");
+  }, [selectedChannelId]);
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
@@ -3104,6 +3132,7 @@ function MainAppContent({
               : pickServerLandingTarget(
                   channelList,
                   communityHomeOn() && first.communityHomeEnabled === true,
+                  first.isCommunity === true,
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -3918,6 +3947,7 @@ function MainAppContent({
         const land = pickServerLandingTarget(
           list,
           communityHomeOn() && server?.communityHomeEnabled === true,
+          server?.isCommunity === true,
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -5385,6 +5415,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             list,
             communityHomeOn() && targetServer?.communityHomeEnabled === true,
+            targetServer?.isCommunity === true,
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -5462,23 +5493,26 @@ function MainAppContent({
     });
   }, []);
 
-  // Two switches gate the Baú row + feed: the instance flag (config probe,
-  // dev override) and this server's own opt-in from Server settings. Opening
-  // the server lands on the feed whenever both are on.
+  // Two switches gate the live Baú feed: the instance flag and this
+  // server's own opt-in. A community still opens Overview without them
+  // (identity header, empty feed). A private hall still needs both.
   // Computed here, above every early return, because the "New" chip below is
   // a hook.
   const communityHomeFeatureOn = isCommunityHomeEnabled({
     config: communityHomeConfig,
     allowLocalOverride: isDevAuthBypassEnabled(),
   });
-  const communityHomeEnabled =
+  const communityHomeFeedLive =
     communityHomeFeatureOn &&
     servers.find((s) => s.id === selectedServerId)?.communityHomeEnabled ===
       true;
+  const selectedIsCommunity =
+    servers.find((s) => s.id === selectedServerId)?.isCommunity === true;
+  const communityHomeEnabled = communityHomeFeedLive;
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
-    communityHomeEnabled;
+    (communityHomeFeedLive || selectedIsCommunity);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -6370,6 +6404,38 @@ function MainAppContent({
    * all", not which of its two surfaces is currently up. */
   const isWatchPartySplit =
     splitKind === "watch" || splitKind === "watch-audience";
+  /**
+   * THE PARTY BAR IS THE CHANNEL HEADER WHILE A PARTY IS LIVE (2026-09-18,
+   * `docs/plans/WATCH_PARTY_UI.md` pass 1). Eight regions were counted on
+   * the host's screen and four of them were bars; the first two said the
+   * channel's name and then the party's name, one under the other. So the
+   * header below is not drawn while `WatchPartyPanel` draws its live bar,
+   * and what the header owned that the bar has no words for (the phone nav
+   * button, pins, past broadcasts, channel settings, members) rides into
+   * the bar through `headerLeading` / `headerTrailing`. Same condition as
+   * `watchPartySurface`'s "live" branch, so the two can never both be up
+   * or both be missing.
+   */
+  const partyOwnsHeader = (() => {
+    if (
+      !selectedChannel ||
+      selectedChannel.kind !== "server" ||
+      !isWatchPartyChannelType(selectedChannel.type) ||
+      !isWatchPartyChannelsEnabled() ||
+      !user
+    ) {
+      return false;
+    }
+    const party = watchParties.byChannel[selectedChannel.id];
+    if (!party) {
+      return false;
+    }
+    const hasStream =
+      voiceState.channelLive[selectedChannel.id]?.stream != null;
+    return (
+      party.state === "live" || (party.state === "scheduled" && hasStream)
+    );
+  })();
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -6768,6 +6834,7 @@ function MainAppContent({
           </p>
         </div>
       )}
+      {!partyOwnsHeader && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -7002,6 +7069,7 @@ function MainAppContent({
           )}
         </div>
       </header>
+      )}
       {/* Straight under the header, above everything a message could push
           around: an invited stranger's first screen otherwise says "Start the
           thread" over a markdown cheatsheet and nothing else. */}
@@ -7154,7 +7222,93 @@ function MainAppContent({
             }
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
+            onToggleCamera={() => void voice.toggleCamera()}
             slot="chrome"
+            barSlot={watchPartyBarSlot}
+            statusSlot={statusSlotEl}
+            headerLeading={
+              partyOwnsHeader ? (
+                <button
+                  type="button"
+                  className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+                  aria-label={t("chrome.openNav")}
+                  onClick={() => setMobileNavOpen(true)}
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              ) : undefined
+            }
+            headerTrailing={
+              partyOwnsHeader ? (
+                <ActionMenu
+                  items={
+                    [
+                      {
+                        id: "pins",
+                        label: t("chrome.pins"),
+                        icon: Pin,
+                        onSelect: () => setPinsOpen(true),
+                      },
+                      canViewWatchPartyHistory
+                        ? {
+                            id: "history",
+                            label: t("chrome.watchPartyHistory"),
+                            icon: History,
+                            onSelect: () =>
+                              setWatchPartyHistoryChannelId(
+                                selectedChannel.id,
+                              ),
+                          }
+                        : null,
+                      canManageChannels || canManageRoles
+                        ? {
+                            id: "settings",
+                            label: t("chrome.channelSettings"),
+                            icon: Settings,
+                            onSelect: () =>
+                              setChannelSettings({
+                                channelId: selectedChannel.id,
+                                section: canManageChannels
+                                  ? "overview"
+                                  : "permissions",
+                                forceAdvanced: false,
+                              }),
+                          }
+                        : null,
+                      memberSidebarAvailable
+                        ? {
+                            id: "members",
+                            label: t("memberList.toggle"),
+                            icon: Users,
+                            checked: memberSidebar.open && !openThread,
+                            onSelect: () => {
+                              if (openThread) {
+                                closeThreadPanel();
+                                if (!memberSidebar.open) {
+                                  memberSidebar.toggle();
+                                }
+                                return;
+                              }
+                              memberSidebar.toggle();
+                            },
+                          }
+                        : null,
+                    ].filter(Boolean) as ContextMenuItemDef[]
+                  }
+                  align="end"
+                >
+                  <button
+                    type="button"
+                    className={HEADER_ACTION_TILE}
+                    aria-label={t("chrome.moreActions")}
+                    title={t("chrome.moreActions")}
+                    data-channel-header-more=""
+                  >
+                    <MoreHorizontal className="h-4 w-4" aria-hidden />
+                  </button>
+                </ActionMenu>
+              ) : undefined
+            }
           />
         )}
       {/* CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md). One mount line: every
@@ -7168,7 +7322,6 @@ function MainAppContent({
           <WatchPartyGuestsOverlay
             party={watchParties.byChannel[selectedChannel.id] ?? null}
             currentUserId={user.id}
-            cohostCandidates={cohostCandidates}
             inRoom={
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status === "connected"
@@ -7189,6 +7342,8 @@ function MainAppContent({
             }
             onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
             onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
+            barSlot={watchPartyBarSlot}
+            onOpenPeople={() => setWatchPanelTab("people")}
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
@@ -7207,6 +7362,37 @@ function MainAppContent({
         // no stage above the transcript then.
         chatHeader={callDockOnScreen ? undefined : {
           title: t("chat.paneTitle"),
+          tabs: partyOwnsHeader
+            ? {
+                items: [
+                  { id: "chat", label: t("chat.paneTitle") },
+                  {
+                    id: "people",
+                    label: t("watchParty.panel.people"),
+                    // One person can be in both queues (a legacy hand and
+                    // a guests request); the panel lists them once, so the
+                    // badge counts them once too.
+                    count: (() => {
+                      const party = watchParties.byChannel[selectedChannel.id];
+                      if (!party) return 0;
+                      const requests = party.guests?.requests ?? [];
+                      const ids = new Set(requests.map((p) => p.userId));
+                      const extraHands = party.stage.hands.filter(
+                        (p) => !ids.has(p.userId),
+                      ).length;
+                      const hiddenRequests = Math.max(
+                        0,
+                        (party.guests?.requestCount ?? 0) - requests.length,
+                      );
+                      return requests.length + extraHands + hiddenRequests;
+                    })(),
+                  },
+                ],
+                active: watchPanelTab,
+                onSelect: (id) =>
+                  setWatchPanelTab(id === "people" ? "people" : "chat"),
+              }
+            : undefined,
           meta:
             splitKind === "watch"
               ? t("watchParty.live.viewers", {
@@ -7353,6 +7539,7 @@ function MainAppContent({
             }
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
+            onToggleCamera={() => void voice.toggleCamera()}
             slot="surface"
             /* The pane owns this surface's height, exactly as it owns
                `WatchChannelStage`'s and `VoiceChannelStage`'s below. This
@@ -7362,6 +7549,16 @@ function MainAppContent({
             fill={splitState.active}
             onShapeChange={handleWatchPartyShape}
           />
+        )}
+      {/* THE BAR'S HOME ON THE STAGE PANE, while a party is live. The
+          party panel (chrome slot, above the split) and the guests overlay
+          portal their controls here. Empty, it draws nothing. */}
+      {partyOwnsHeader &&
+        (stageShape === "expanded" || stageShape === "fullscreen") && (
+          <>
+            <WatchPartyBarSlot placement="status" onElement={setStatusSlotEl} />
+            <WatchPartyBarSlot placement="stage" onElement={setStageBarEl} />
+          </>
         )}
       {/* THE STAGE IS NOT MOUNTED HERE ANY MORE, only addressed. The watch
           surface lives at the root of this component so that clicking another
@@ -7393,23 +7590,30 @@ function MainAppContent({
             // `CallStage` before the seat does. See `CallStage.isWatchPartyChannel`.
             isWatchPartyChannel={isWatchPartySplit}
             presenterStage={(stream) => (
-              <WatchPartyPresenterStage
-                stream={stream}
-                liveStream={
-                  voiceState.channelLive[selectedChannel.id]?.stream ?? null
-                }
-                channelId={selectedChannel.id}
-                audienceCount={watchAudienceCount(
-                  voiceState.channelLive[selectedChannel.id],
-                  voiceState.occupancy[selectedChannel.id],
-                )}
-                hands={
-                  watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
-                }
-                onInvite={(userId) =>
-                  void handleWatchPartyStage("invite", userId)
-                }
-              />
+              /* ONE STAGE (pass 3 of `docs/plans/WATCH_PARTY_UI.md`): what
+                 the audience sees once the transcode is up, the host's own
+                 capture until then, the reconnecting pill over either. The
+                 room's activity is in the chat column (pass 4). */
+              <div className="flex h-full min-h-0 w-full flex-col">
+                <WatchPartyStage
+                  state={
+                    voiceState.voiceChannelId === selectedChannel.id &&
+                    voiceState.sharePublishRecovering
+                      ? "reconnecting"
+                      : voiceState.channelLive[selectedChannel.id]?.stream
+                        ? "live"
+                        : stream
+                          ? "preparing"
+                          : "holding"
+                  }
+                  hostSide
+                  captureStream={stream}
+                  liveStream={
+                    voiceState.channelLive[selectedChannel.id]?.stream ?? null
+                  }
+                  className="min-h-0 flex-1"
+                />
+              </div>
             )}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
@@ -7498,6 +7702,52 @@ function MainAppContent({
           </>
         }
       >
+      {/* PESSOAS (pass 4): the same column, a different body. The composer
+          below stays on every tab. */}
+      {partyOwnsHeader &&
+      watchPanelTab === "people" &&
+      watchParties.byChannel[selectedChannel.id] &&
+      user ? (
+        <WatchPartyPeoplePanel
+          party={watchParties.byChannel[selectedChannel.id]!}
+          runsTheParty={
+            watchParties.byChannel[selectedChannel.id]!.viewerRole === "host" ||
+            watchParties.byChannel[selectedChannel.id]!.viewerRole === "cohost"
+          }
+          roster={voiceState.occupancy[selectedChannel.id] ?? []}
+          audienceCount={watchAudienceCount(
+            voiceState.channelLive[selectedChannel.id],
+            voiceState.occupancy[selectedChannel.id],
+          )}
+          max={WATCH_PARTY_MAX_GUESTS}
+          candidates={cohostCandidates}
+          onAccept={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "accept", userId },
+              selectedChannel.id,
+            )
+          }
+          onDecline={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "decline", userId },
+              selectedChannel.id,
+            )
+          }
+          onRemove={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "remove", userId },
+              selectedChannel.id,
+            )
+          }
+          onInvite={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "invite", userId },
+              selectedChannel.id,
+            )
+          }
+          onStageAction={handleWatchPartyStage}
+        />
+      ) : (
       <MessageList
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
@@ -7572,6 +7822,27 @@ function MainAppContent({
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
       />
+      )}
+      {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
+          a Chamar beside them, reaction bursts, as a strip above the
+          composer that folds to one line. Host and co-hosts only; it is a
+          moderation surface. */}
+      {partyOwnsHeader &&
+        watchPanelTab === "chat" &&
+        (watchParties.byChannel[selectedChannel.id]?.viewerRole === "host" ||
+          watchParties.byChannel[selectedChannel.id]?.viewerRole === "cohost") && (
+          <WatchPartyActivityFeed
+            collapsible
+            className="shrink-0"
+            channelId={selectedChannel.id}
+            audienceCount={watchAudienceCount(
+              voiceState.channelLive[selectedChannel.id],
+              voiceState.occupancy[selectedChannel.id],
+            )}
+            hands={watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []}
+            onInvite={(userId) => void handleWatchPartyStage("invite", userId)}
+          />
+        )}
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
@@ -8252,6 +8523,9 @@ function MainAppContent({
           <CommunityHomeFeed
             serverId={selectedServer.id}
             serverName={selectedServer.name}
+            server={selectedServer}
+            feedAvailable={communityHomeFeedLive}
+            homeFeatureOn={communityHomeFeatureOn}
             me={{
               id: user.id,
               displayName: user.displayName,
@@ -8270,7 +8544,24 @@ function MainAppContent({
             )}
             onDismissIntro={settleCommunityHomeIntro}
             onOpenNav={() => setMobileNavOpen(true)}
+            onOpenServerSettings={() => setServerSettingsOpen(true)}
+            onServerUpdated={(server) => {
+              setServers((prev) =>
+                prev.map((current) =>
+                  current.id === server.id
+                    ? {
+                        ...current,
+                        ...server,
+                        role: current.role,
+                        showOnProfile: current.showOnProfile,
+                      }
+                    : current,
+                ),
+              );
+            }}
             refreshSignal={communityHomeUpdateNudge}
+            channels={channels}
+            onOpenChannel={(channelId) => void openChannel(channelId)}
           />
         )}
 
@@ -8487,13 +8778,16 @@ function MainAppContent({
                 : current,
             ),
           );
-          // Baú turned off while it was open: step back to a real channel.
+          // Baú turned off while it was open: stay on Overview for a
+          // community (the identity header is the homepage). A private hall
+          // steps back to a real channel.
           if (
             server.id === selectedServerId &&
             !server.communityHomeEnabled &&
+            !server.isCommunity &&
             isCommunityHomeChannelId(selectedChannelId)
           ) {
-            const fallback = pickServerLandingTarget(channels, false);
+            const fallback = pickServerLandingTarget(channels, false, false);
             if (fallback) {
               void selectChannel(fallback.id, server.id);
             }
@@ -8521,6 +8815,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             newChannels,
             communityHomeOn() && server.communityHomeEnabled === true,
+            server.isCommunity === true,
           );
           if (land) {
             await selectChannel(land.id, server.id);
@@ -8908,6 +9203,12 @@ function MainAppContent({
               }
               onReturn={returnToWatchChannel}
               onDismiss={watchDock.dismiss}
+              /* A seatless viewer's bar lives on the player (pass 2). Only
+                 for a watch party session: a plain voice channel with an
+                 ad-hoc share has no party controls to place. */
+              onBarSlot={
+                watchDock.session.isWatchParty ? setPlayerBarEl : undefined
+              }
               onSetWatchingLive={(channelId, watching) =>
                 voice.setWatchingLive(channelId, watching)
               }

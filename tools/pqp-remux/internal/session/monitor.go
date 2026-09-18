@@ -46,10 +46,23 @@ import (
 // formatted line per session per interval, no allocation per packet).
 const statsInterval = 5 * time.Second
 
-// monitorTick is how often RunMonitor wakes to consider a keep-alive
-// flush. Finer than a part target so the held frame is published close to
-// the moment the part boundary passes rather than up to a whole tick late.
-const monitorTick = 100 * time.Millisecond
+// MonitorTick is how often RunMonitor wakes to consider a keep-alive
+// flush and to release whatever the reorder buffer has held past its
+// deadline. Finer than a part target so the held frame is published close
+// to the moment the part boundary passes rather than up to a whole tick
+// late.
+//
+// EXPORTED BECAUSE internal/control DEPENDS ON ITS VALUE, not merely on
+// its existence: it is the second term of reorderDelayBound, so it is
+// part of the worst gap a healthy pipeline can produce, and
+// WatchdogConfig.partStuckThreshold has to sit above that. Kept as one
+// constant rather than two literals so lowering or raising the tick
+// cannot silently leave the watchdog sized for the old one.
+const MonitorTick = 100 * time.Millisecond
+
+// monitorTick is the unexported spelling this package's own code and
+// tests have always used.
+const monitorTick = MonitorTick
 
 // videoIdleAfter returns how long with no completed access unit counts as
 // "the source has gone quiet" -- both for this session's own logging and,
@@ -153,11 +166,19 @@ func (s *Session) RunMonitor(ctx context.Context, label string) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			// Before idleTick, deliberately: a packet released from the
+			// reorder buffer may complete the access unit idleTick would
+			// otherwise decide the source is too quiet to have sent.
+			s.reorderTick(now)
 			s.idleTick(now)
 			if now.Before(nextStats) {
 				continue
 			}
 			cur := s.Stats()
+			// Stats() is side-effect free (internal/control's watchdog
+			// reads it every tick); the windowed reorder max is taken
+			// here, once per printed line, and nowhere else.
+			cur.ReorderMaxDelayMs = s.takeReorderMaxDelayMs()
 			log.Print(formatStatsLine(label, prev, cur, now.Sub(prevAt)))
 			prev, prevAt = cur, now
 			nextStats = now.Add(statsInterval)
@@ -223,19 +244,20 @@ func (s *Session) idleTick(now time.Time) bool {
 	// than this tick thinks and the flush would over-stretch it.
 	lastFrame = s.lastVideoFrameAtNs.Load()
 	held = now.Sub(time.Unix(0, lastFrame))
-	var frag *pipeline.Fragment
+	var frags []*pipeline.Fragment
 	if held >= s.videoIdleAfter() {
-		frag = s.frag.IdleFlush(durationToTicks(held))
+		frags = s.frag.IdleFlush(durationToTicks(held))
 	}
-	if frag != nil {
+	for _, frag := range frags {
 		s.publish(frag)
 	}
+	s.mirrorRepeatCounters()
 	s.videoMu.Unlock()
 
-	if frag == nil {
+	if len(frags) == 0 {
 		return false
 	}
-	s.keepAlivePartsWritten.Add(1)
+	s.keepAlivePartsWritten.Add(uint64(len(frags)))
 	return true
 }
 
@@ -286,11 +308,50 @@ type Stats struct {
 	VideoFramesSeen      uint64
 	VideoKeyframesSeen   uint64
 	VideoDepacketizeErrs uint64
+	VideoPacketsLost     uint64
+	VideoLatePackets     uint64
+	// VideoGapHistogram is h264.Depacketizer.GapHistogram: how many
+	// sequence GAPS, by size (1 / 2-4 / 5-16 / 17-64 / 65+ packets).
+	// VideoPacketsLost above is how many packets those gaps swallowed in
+	// total, and the two answer completely different questions: one long
+	// burst and thirty small holes can produce the identical total and
+	// call for opposite fixes.
+	VideoGapHistogram [h264.GapBucketCount]uint64
+	// VideoReorderHeldDelayed and VideoReorderResequenced are the two
+	// halves of what used to be one VideoReorderHeld: packets the reorder
+	// buffer delivered after GIVING UP on the hole in front of them, and
+	// packets it delivered because that hole was FILLED. See
+	// reorder.go's own doc comment -- the combined counter could not tell
+	// "the buffer saved a GOP" from "the buffer delayed a GOP".
+	VideoReorderHeldDelayed uint64
+	VideoReorderResequenced uint64
+	// ReorderMaxDelayMs is the longest any packet waited in the reorder
+	// buffer during the window this Stats is the END of. It is NOT filled
+	// in by Stats() -- RunMonitor takes it (and resets the accumulator)
+	// immediately before formatting a line, because Stats() is also read
+	// by internal/control's watchdog every tick and must not consume it.
+	// Zero everywhere else, which is the honest answer for a snapshot
+	// that is not the end of a window.
+	ReorderMaxDelayMs   int64
+	VideoDamageEpisodes uint64
+	VideoDamagedDropped uint64
+	// VideoMarkerlessAUs is how many access units were closed by the next
+	// packet's RTP timestamp instead of by a marker packet, and DELIVERED.
+	// It sits beside damage= on the line on purpose: until 2026-09-17 these
+	// were counted as damage, discarded, and answered with a PLI, on a path
+	// with lost=0 in every window. A non-zero reading here with damage=+0 is
+	// the healthy shape, not a problem to chase.
+	VideoMarkerlessAUs   uint64
 	PartsWritten         uint64
 	BytesWritten         uint64
 	VideoSegmentsWritten uint64
 	KeepAlivePartsWrites uint64
-	VideoIdle            bool
+	// RepeatFrames and ClockCuts are zero for every session that is not
+	// cutting parts on the clock, which makes them the one-glance answer
+	// to "is CLOCK_CUT_PARTS doing anything on this stream".
+	RepeatFrames uint64
+	ClockCuts    uint64
+	VideoIdle    bool
 	// VideoMediaMs/AudioMediaMs and the anchors below are what
 	// `timelineRatio` is computed from: how much MEDIA each track has
 	// published against how much WALL clock has passed since that
@@ -345,16 +406,26 @@ func (s *Session) Stats() Stats {
 		VideoFramesSeen:      s.videoFramesSeen.Load(),
 		VideoKeyframesSeen:   s.videoKeyframesSeen.Load(),
 		VideoDepacketizeErrs: s.videoDepacketizeErrs.Load(),
-		PartsWritten:         s.partsWritten.Load(),
-		BytesWritten:         s.bytesWritten.Load(),
-		VideoSegmentsWritten: s.videoSegmentsWritten.Load(),
-		KeepAlivePartsWrites: s.keepAlivePartsWritten.Load(),
-		VideoIdle:            s.videoIdle.Load(),
-		VideoMediaMs:         s.videoMediaMs.Load(),
-		AudioPacketsSeen:     s.audioPacketsSeen.Load(),
-		Now:                  now,
-		StartedAt:            s.started,
+		VideoLatePackets:     s.videoLatePackets.Load() + s.reorderLate(),
+
+		VideoReorderHeldDelayed: s.reorderHeldDelayed(),
+		VideoReorderResequenced: s.reorderResequenced(),
+		VideoDamageEpisodes:     s.damageEpisodes.Load(),
+		VideoDamagedDropped:     s.damagedAUsDropped.Load(),
+		VideoMarkerlessAUs:      s.videoMarkerlessAUs.Load(),
+		PartsWritten:            s.partsWritten.Load(),
+		BytesWritten:            s.bytesWritten.Load(),
+		VideoSegmentsWritten:    s.videoSegmentsWritten.Load(),
+		KeepAlivePartsWrites:    s.keepAlivePartsWritten.Load(),
+		RepeatFrames:            s.repeatFrames.Load(),
+		ClockCuts:               s.clockCuts.Load(),
+		VideoIdle:               s.videoIdle.Load(),
+		VideoMediaMs:            s.videoMediaMs.Load(),
+		AudioPacketsSeen:        s.audioPacketsSeen.Load(),
+		Now:                     now,
+		StartedAt:               s.started,
 	}
+	st.VideoPacketsLost, st.VideoGapHistogram = s.videoLossCounters()
 	if ns := s.videoTimelineAnchorNs.Load(); ns != 0 {
 		st.VideoMediaAnchor = time.Unix(0, ns)
 	}
@@ -402,6 +473,33 @@ func (s *Session) Stats() Stats {
 	return st
 }
 
+// videoLossCounters reads the depacketizer's two loss measurements under
+// videoMu. h264.Depacketizer is explicitly not safe for concurrent use and
+// the RTP goroutine owns it, so the monitor may only look at it with the
+// lock the RTP path holds -- the same rule reorderLate and its siblings
+// already follow for the reorder buffer.
+func (s *Session) videoLossCounters() (lost uint64, gaps [h264.GapBucketCount]uint64) {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	return s.dep.LostPackets(), s.dep.GapHistogram()
+}
+
+// formatGapHistogram renders one window's gap-size histogram as
+// `1:N 2:N 5:N 17:N 65:N`, the bucket lower bounds from
+// h264.GapBucketLabels against the per-window deltas. Always all five
+// fields, always in the same order, so it greps and diffs -- an all-zero
+// reading is a measurement, not an absence.
+func formatGapHistogram(prev, cur [h264.GapBucketCount]uint64) string {
+	var b strings.Builder
+	for i := range cur {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%d:%d", h264.GapBucketLabels[i], cur[i]-prev[i])
+	}
+	return b.String()
+}
+
 // formatStatsLine renders one window: deltas and rates for everything that
 // counts, absolute ages for everything that is a "when did X last happen".
 // One line, always the same field order, so it greps and diffs.
@@ -414,14 +512,25 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "pqp-remux: stats %s window=%s subscribed=%t", label, window.Round(100*time.Millisecond), cur.Subscribed)
-	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d idle=%t",
+	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d gaps=%s late=+%d heldDelayed=+%d resequenced=+%d reorderMaxDelayMs=%d damage=+%d damagedDropped=+%d markerless=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d repeats=+%d cuts=+%d idle=%t",
 		cur.VideoPacketsSeen-prev.VideoPacketsSeen, rate(prev.VideoPacketsSeen, cur.VideoPacketsSeen),
 		cur.VideoFramesSeen-prev.VideoFramesSeen, rate(prev.VideoFramesSeen, cur.VideoFramesSeen),
 		cur.VideoKeyframesSeen-prev.VideoKeyframesSeen,
 		cur.VideoDepacketizeErrs-prev.VideoDepacketizeErrs,
+		cur.VideoPacketsLost-prev.VideoPacketsLost,
+		formatGapHistogram(prev.VideoGapHistogram, cur.VideoGapHistogram),
+		cur.VideoLatePackets-prev.VideoLatePackets,
+		cur.VideoReorderHeldDelayed-prev.VideoReorderHeldDelayed,
+		cur.VideoReorderResequenced-prev.VideoReorderResequenced,
+		cur.ReorderMaxDelayMs,
+		cur.VideoDamageEpisodes-prev.VideoDamageEpisodes,
+		cur.VideoDamagedDropped-prev.VideoDamagedDropped,
+		cur.VideoMarkerlessAUs-prev.VideoMarkerlessAUs,
 		cur.PartsWritten-prev.PartsWritten, rate(prev.PartsWritten, cur.PartsWritten),
 		cur.VideoSegmentsWritten-prev.VideoSegmentsWritten,
 		cur.KeepAlivePartsWrites-prev.KeepAlivePartsWrites,
+		cur.RepeatFrames-prev.RepeatFrames,
+		cur.ClockCuts-prev.ClockCuts,
 		cur.VideoIdle)
 	fmt.Fprintf(&b, " lastPkt=%s lastFrame=%s lastIdr=%s lastPart=%s",
 		ago(cur.Now, cur.LastVideoPacket), ago(cur.Now, cur.LastVideoFrame),

@@ -16,6 +16,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -34,6 +35,7 @@ import (
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/serve"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/skipframe"
 )
 
 // Session owns the one video track's whole pipeline: depacketize, mux,
@@ -107,11 +109,43 @@ type Session struct {
 	implausibleParamSets atomic.Uint64
 	droppingDamaged      atomic.Bool
 	damagedAUsDropped    atomic.Uint64
+	// damageEpisodes counts the times droppingDamaged was armed by packet
+	// loss (a sequence gap or a discarded access unit); videoLatePackets
+	// counts late/duplicate RTP packets the depacketizer ignored.
+	damageEpisodes   atomic.Uint64
+	videoLatePackets atomic.Uint64
+	// videoMarkerlessAUs counts access units the depacketizer closed on a
+	// timestamp change rather than on a marker packet. NOT damage and NOT
+	// a drop: the frame is delivered. It is here because a publisher that
+	// leans on the markerless boundary is worth being able to see, and
+	// because the eight of these in fifteen minutes on 2026-09-17 were
+	// being counted as damage and answered with a PLI. markerlessLogged
+	// keeps the first one to one log line per session.
+	videoMarkerlessAUs atomic.Uint64
+	markerlessLogged   atomic.Bool
+	// damageOpen is true from a discard until the next IDR: further
+	// discards inside the same wait are the same episode (one PLI).
+	damageOpen atomic.Bool
+	// reorder holds out-of-order video packets briefly so a retransmission
+	// fills a hole before it counts as loss. Guarded by videoMu.
+	reorder *reorderBuffer
 	// initSPS/initPPS are the parameter sets the CURRENT init segment was
 	// built from. Compared byte-for-byte against every later in-band
 	// pair; a real change rebuilds the init. Protected by videoMu.
 	initSPS []byte
 	initPPS []byte
+	// clockCutParts is the CLOCK_CUT_PARTS switch: build a repeat-frame
+	// synthesizer for each init segment and hand it to the fragmenter, so
+	// parts close on the clock instead of on an access unit. Off by
+	// default; see pipeline.Fragmenter.SetRepeater for what it buys and
+	// what it costs. Set once, before the session starts receiving, by
+	// EnableClockCutParts.
+	clockCutParts bool
+	// synth is the current repeat-frame synthesizer, rebuilt with every
+	// init segment (its frames are only valid for the parameter sets they
+	// were written against) and nil while the publisher's stream is one
+	// skipframe refuses. Touched only under videoMu.
+	synth *skipframe.Synth
 	// demoteReason, when non-empty, asks the control-plane watchdog to
 	// demote this session off the LL rung (parameter-set change that
 	// could not be represented). Read without videoMu from Health.
@@ -144,6 +178,13 @@ type Session struct {
 	audioFramesSeen       atomic.Uint64
 	audioSegmentsWritten  atomic.Uint64
 	keepAlivePartsWritten atomic.Uint64
+	// repeatFrames/clockCuts mirror the fragmenter's own counters,
+	// copied under videoMu on the paths that move them so Stats can read
+	// them from the monitor goroutine without racing the muxer. Both stay
+	// at zero unless EnableClockCutParts was called AND the stream turned
+	// out to be one internal/skipframe can synthesize into.
+	repeatFrames atomic.Uint64
+	clockCuts    atomic.Uint64
 	// videoMediaMs/audioMediaMs are the total MEDIA time each track has
 	// published (the sum of every part's own duration), and
 	// videoTimelineAnchorNs/audioTimelineAnchorNs are the wall-clock
@@ -282,7 +323,8 @@ type Session struct {
 // set later with SetKeyframeRequester.
 func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requester) *Session {
 	s := &Session{
-		dep: h264.NewDepacketizer(),
+		dep:     h264.NewDepacketizer(),
+		reorder: newReorderBuffer(reorderHoldMax),
 		frag: pipeline.NewFragmenter(pipeline.Config{
 			Timescale:       h264.ClockRate,
 			PartDuration:    partTicks,
@@ -536,13 +578,54 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	s.videoPacketsSeen.Add(1)
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
-	au, err := s.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
+	for _, ordered := range s.reorder.push(pkt, now) {
+		s.handleOrderedVideoPacket(ordered, now)
+	}
+}
+
+// handleOrderedVideoPacket is HandleVideoPacket after the reorder buffer:
+// packets arrive here in sequence order, with any hole the buffer gave up
+// on left for the depacketizer's sequence check to catch.
+func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
+	aus, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
 	if err != nil {
+		if errors.Is(err, h264.ErrLatePacket) {
+			s.videoLatePackets.Add(1)
+			return
+		}
 		s.videoDepacketizeErrs.Add(1)
 		s.logDepacketizeError(now, err)
+		if h264.IsDamage(err) {
+			s.markDamaged(now, err)
+		}
 	}
-	if au == nil {
-		return
+	// One packet can close two access units: the markerless AU in front of
+	// it plus its own, when it is a whole single-packet frame. Deliver them
+	// in the order the depacketizer returned, which is PTS order, because
+	// the fragmenter's timeline depends on it.
+	for _, au := range aus {
+		if au == nil {
+			continue
+		}
+		if !s.deliverAccessUnit(au, now) {
+			return
+		}
+	}
+}
+
+// deliverAccessUnit is the per-AU half of handleOrderedVideoPacket. It
+// returns false when the session must stop accepting access units at all
+// (it demoted itself off the LL rung); an AU that is merely skipped
+// returns true, because the ones behind it are still good.
+func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
+	if au.Markerless {
+		n := s.videoMarkerlessAUs.Add(1)
+		if s.markerlessLogged.CompareAndSwap(false, true) {
+			// Once per session: this publisher does not always set the
+			// marker bit, and that is legal. The running count is
+			// markerless= on the stats line.
+			log.Printf("pqp-remux: video: access unit closed by the RTP timestamp, no marker packet (delivered, not damage; %d so far)", n)
+		}
 	}
 
 	silence := s.idleFor(now)
@@ -554,6 +637,7 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	}
 
 	if au.IsIDR {
+		s.damageOpen.Store(false)
 		s.videoKeyframesSeen.Add(1)
 		s.lastIdrAtMs.Store(s.elapsedMs())
 		s.idrSeen.Store(true)
@@ -569,10 +653,10 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 			}
 		} else if !bytes.Equal(au.SPS, s.initSPS) || !bytes.Equal(au.PPS, s.initPPS) {
 			if !s.handleParameterSetChange(au) {
-				return
+				return s.DemoteReason() == ""
 			}
 			if s.DemoteReason() != "" {
-				return
+				return false
 			}
 		}
 	}
@@ -582,19 +666,62 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 		// rather than hand the decoder slices it will reject (-12911 measured).
 		if !au.IsIDR {
 			s.damagedAUsDropped.Add(1)
-			return
+			return true
 		}
 		s.droppingDamaged.Store(false)
 	}
 
-	frag, err := s.frag.Push(au)
+	frags, err := s.frag.Push(au)
 	if err != nil && err != pipeline.ErrWaitingForIDR {
 		log.Printf("pqp-remux: fragmenter: %v", err)
 	}
-	if frag == nil {
-		return
+	// One access unit closes at most one part in the ordinary case, and
+	// several when clock cutting fills a long frame gap with repeat
+	// frames (pipeline.Fragmenter.SetRepeater). Publish them in order: the
+	// ring's own sequence numbering depends on it.
+	for _, frag := range frags {
+		s.publish(frag)
 	}
-	s.publish(frag)
+	s.mirrorRepeatCounters()
+	return true
+}
+
+// mirrorRepeatCounters copies the fragmenter's repeat-frame counters into
+// atomics Stats can read. Called on the two paths that move them, both
+// already holding videoMu.
+func (s *Session) mirrorRepeatCounters() {
+	s.repeatFrames.Store(s.frag.RepeatFrames())
+	s.clockCuts.Store(s.frag.ClockCuts())
+}
+
+// EnableClockCutParts turns on clock-cut parts for this session: every
+// part closes at exactly the part target, with the remainder of a long
+// frame gap filled by synthesized frames that repeat the picture already
+// on screen (internal/skipframe). Call it immediately after New, before
+// the session receives anything.
+//
+// It is a REQUEST, not a guarantee. The synthesizer refuses any stream
+// whose parameter sets it cannot write a correct slice for (CABAC,
+// multiple slice groups, weighted prediction, field coding,
+// pic_order_cnt_type other than 2, more than one reference frame), and a
+// session on such a stream behaves exactly as it does with this off:
+// parts close on access units and may run longer than the target. What
+// the publisher actually sends decides, and the stats line's repeats/cuts
+// counters are what say which way it went.
+func (s *Session) EnableClockCutParts() { s.clockCutParts = true }
+
+// SetReorderHold sets how long this session's video reorder buffer holds
+// a packet waiting for the one in front of it (REORDER_HOLD_MS). Zero
+// turns holding off entirely: every gap goes straight to the depacketizer,
+// which is the behaviour before the buffer existed and the rollback if the
+// hold ever costs more than it buys.
+//
+// Call it immediately after New, before the session receives anything --
+// it REPLACES the buffer, so anything already pending would be dropped.
+func (s *Session) SetReorderHold(d time.Duration) {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	s.reorder = newReorderBuffer(d)
 }
 
 // publishInit builds and stores one video init segment. Returns false when
@@ -613,6 +740,10 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 	s.initSPS = append([]byte(nil), sps...)
 	s.initPPS = append([]byte(nil), pps...)
 	s.initSet.Store(true)
+	// discontinuity is exactly "these are new parameter sets, not the
+	// session's first", which is also exactly when the replacement
+	// synthesizer has to wait for the segment boundary.
+	s.refreshRepeater(sps, pps, discontinuity)
 	gen := s.initGeneration.Add(1)
 	r2Name := "video-init.mp4"
 	if gen > 1 {
@@ -620,6 +751,51 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 	}
 	s.enqueueR2(r2Name, initSeg, "video/mp4")
 	return true
+}
+
+// refreshRepeater rebuilds the repeat-frame synthesizer for the parameter
+// sets the init segment was just built from, and hands it to the
+// fragmenter. Called from publishInit, under videoMu, for the same reason
+// it exists: a synthesized frame carries the picture's macroblock count,
+// so one written against the previous SPS decodes to a DIFFERENT picture
+// after Chrome's screen-share encoder ramps from 640x360 to 1280x720 --
+// which is not hypothetical, it is what the first run of skipframe's
+// bitstream test against a real capture caught.
+//
+// A stream the synthesizer refuses leaves the fragmenter with no
+// repeater, which is exactly its pre-clock-cut behaviour: parts close on
+// access units and may run long. That is a log line, never an error.
+//
+// atNextSegment says the parameter sets CHANGED rather than arrived, in
+// which case the replacement must not take over until the segment that
+// the new init describes actually opens. Swapping any earlier writes
+// frames for the new picture size into the last part of the old segment,
+// which is undecodable against the init that part is listed under: it
+// happened on London staging on 2026-09-17 at 23:11:00Z, one part wide,
+// "mb_skip_run 3645 is invalid" from ffmpeg. See
+// pipeline.Fragmenter.SetRepeaterAtNextSegment.
+func (s *Session) refreshRepeater(sps, pps []byte, atNextSegment bool) {
+	if !s.clockCutParts {
+		return
+	}
+	arm := s.frag.SetRepeater
+	when := "now"
+	if atNextSegment {
+		arm = s.frag.SetRepeaterAtNextSegment
+		when = "at the next segment boundary"
+	}
+	synth, err := skipframe.New(sps, pps)
+	if err != nil {
+		log.Printf("pqp-remux: clock-cut parts unavailable for this stream (%s): %v", when, err)
+		s.synth = nil
+		arm(nil)
+		return
+	}
+	synth.Inherit(s.synth)
+	s.synth = synth
+	arm(synth)
+	log.Printf("pqp-remux: clock-cut parts armed %s: parts close on the clock, gaps filled with repeat frames (inserted=%d renumbered=%d)",
+		when, synth.Inserted(), synth.Rewritten())
 }
 
 // handleParameterSetChange rebuilds the init segment when the publisher's
@@ -674,6 +850,43 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s as a new init map",
 		oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq, uri)
 	return true
+}
+
+// markDamaged is the response to the depacketizer throwing media away: ask
+// the publisher for a keyframe at once (Requester.OnLoss, then a retry
+// every second while it is owed) instead of after the periodic gate. The
+// frames that follow may reference what was lost and are forwarded anyway:
+// a decoder conceals a missing reference for the ~300 ms until the IDR
+// lands, which every player survived for months, whereas holding those
+// frames back (tried 2026-09-17 20:04Z to 21:45Z) stretched one sample
+// across the whole wait, put PART-TARGET at seconds for the rest of the
+// session, and that is a playlist Apple refuses outright ("non-terminal
+// partial segment duration must be at least 85% of PART-TARGET") and
+// hls.js stalls on. The malformed access unit itself never goes out; that
+// is the depacketizer's job and the part that killed viewers.
+//
+// damagedEpisodes counts these; the drop-until-IDR path stays for the
+// implausible-parameter-set case only (handleParameterSetChange), where
+// the frames that follow are damaged themselves, not merely mis-referenced.
+func (s *Session) markDamaged(now time.Time, cause error) {
+	if !s.damageOpen.CompareAndSwap(false, true) {
+		return
+	}
+	s.damageEpisodes.Add(1)
+	pliSent := false
+	if kr := s.keyReq.Load(); kr != nil {
+		pliSent = kr.OnLoss(now)
+	}
+	// gap= is THIS episode's gap, lostTotal= the session's running total.
+	// They used to be one field called `lost=`, which was the cumulative
+	// total: an analysis of the 2026-09-17 stalls read the differences
+	// between successive episodes' `lost=` as burst lengths, and since an
+	// episode latches until the next IDR (the CAS above) each of those
+	// differences was a sum over an unknown number of holes. Two numbers,
+	// each named for what it is. See h264.Depacketizer.GapHistogram for
+	// the shape across the whole session.
+	log.Printf("pqp-remux: video damage: %v; keyframe requested (episode %d, gap=%d, lostTotal=%d, pli=%t)",
+		cause, s.damageEpisodes.Load(), s.dep.LastGap(), s.dep.LostPackets(), pliSent)
 }
 
 func (s *Session) requestDemote(reason string) {

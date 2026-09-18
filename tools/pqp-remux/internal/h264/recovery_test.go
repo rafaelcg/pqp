@@ -24,13 +24,13 @@ func TestDepacketizer_RecoversOnTheNextIDRAfterLoss(t *testing.T) {
 	// A clean IDR first, so the session has a keyframe before the loss.
 	sps := []byte{0x42, 0x00, 0x1F}
 	pps := []byte{0xAA}
-	if au, err := d.Push(stapA(
+	if au, err := pushOne(d, stapA(
 		singleNALPacket(nal.TypeSPS, 3, sps),
 		singleNALPacket(nal.TypePPS, 3, pps),
 	), 1000, false); err != nil || au != nil {
 		t.Fatalf("SPS/PPS: au=%v err=%v", au, err)
 	}
-	first, err := d.Push(singleNALPacket(nal.TypeIDR, 3, []byte{0x01, 0x02}), 1000, true)
+	first, err := pushOne(d, singleNALPacket(nal.TypeIDR, 3, []byte{0x01, 0x02}), 1000, true)
 	if err != nil || first == nil || !first.IsIDR {
 		t.Fatalf("the first IDR did not come out: au=%v err=%v", first, err)
 	}
@@ -40,14 +40,14 @@ func TestDepacketizer_RecoversOnTheNextIDRAfterLoss(t *testing.T) {
 	// marker) never do.
 	frags := fuA(nal.TypeSlice, 2, bytes.Repeat([]byte{0x33}, 400), 4)
 	for _, p := range frags[:2] {
-		if au, err := d.Push(p, 4000, false); err != nil || au != nil {
+		if au, err := pushOne(d, p, 4000, false); err != nil || au != nil {
 			t.Fatalf("mid-loss fragment: au=%v err=%v", au, err)
 		}
 	}
 
 	// The next frame turns up with a new timestamp. The half-assembled
 	// access unit is discarded, loudly, and never merged into this one.
-	au, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x44}), 7000, true)
+	au, err := pushOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x44}), 7000, true)
 	if err != errTimestampChangedMidAU {
 		t.Fatalf("expected the lost-marker error, got %v", err)
 	}
@@ -65,7 +65,7 @@ func TestDepacketizer_RecoversOnTheNextIDRAfterLoss(t *testing.T) {
 	// SPS/PPS still available for the init segment -- which is what
 	// "recovers" has to mean for a muxer, not merely "stops erroring".
 	idrPayload := []byte{0x09, 0x08, 0x07}
-	recovered, err := d.Push(stapA(
+	recovered, err := pushOne(d, stapA(
 		singleNALPacket(nal.TypeSPS, 3, sps),
 		singleNALPacket(nal.TypePPS, 3, pps),
 		singleNALPacket(nal.TypeIDR, 3, idrPayload),

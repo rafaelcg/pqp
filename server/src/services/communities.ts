@@ -1,9 +1,13 @@
 import {
   COMMUNITY_MEMBER_FLOOR,
   deriveCommunitySlug,
+  mapCommunityFeatured,
   monthStamp,
+  parseStoredCommunityLinks,
   type CommunityCategory,
+  type CommunityFeaturedEmbed,
   type CommunityLanguage,
+  type CommunityLink,
   type CommunitySettings,
   type CommunitySummary,
   type PublicCommunity,
@@ -435,14 +439,22 @@ export async function getPublicCommunity(
     name: string;
     community_slug: string;
     community_tagline: string | null;
+    community_about: string | null;
+    community_links: unknown;
+    community_featured_kind: string | null;
+    community_featured_embed_url: string | null;
+    community_featured_url: string | null;
     community_category: CommunityCategory;
     member_count: number;
     icon_url: string | null;
     banner_url: string | null;
     created_at: Date;
   }>(
-    `SELECT s.name, s.community_slug, s.community_tagline, s.community_category,
-            s.member_count, s.icon_url, s.banner_url, s.created_at
+    `SELECT s.name, s.community_slug, s.community_tagline, s.community_about,
+            s.community_links, s.community_featured_kind,
+            s.community_featured_embed_url, s.community_featured_url,
+            s.community_category, s.member_count, s.icon_url, s.banner_url,
+            s.created_at
        FROM servers s
       WHERE s.community_slug = $1
         AND s.is_community
@@ -457,6 +469,13 @@ export async function getPublicCommunity(
     slug: row.community_slug,
     name: row.name,
     tagline: row.community_tagline,
+    about: row.community_about,
+    links: parseStoredCommunityLinks(row.community_links),
+    featured: mapCommunityFeatured({
+      kind: row.community_featured_kind,
+      embedUrl: row.community_featured_embed_url,
+      imageUrl: row.community_featured_url,
+    }),
     category: row.community_category,
     memberCount: row.member_count,
     iconUrl: row.icon_url,
@@ -488,37 +507,58 @@ export async function findCommunityIdBySlug(
   return result.rows[0]?.id ?? null;
 }
 
+type CommunitySettingsRow = {
+  is_community: boolean;
+  is_community_listed: boolean;
+  community_slug: string | null;
+  community_tagline: string | null;
+  community_about: string | null;
+  community_links: unknown;
+  community_featured_kind: string | null;
+  community_featured_embed_url: string | null;
+  community_featured_url: string | null;
+  community_category: CommunityCategory;
+  community_language: CommunityLanguage;
+  is_community_suspended: boolean;
+};
+
+function settingsFromRow(row: CommunitySettingsRow): CommunitySettings {
+  return {
+    isCommunity: row.is_community,
+    isListed: row.is_community_listed,
+    slug: row.community_slug,
+    tagline: row.community_tagline,
+    about: row.community_about,
+    links: parseStoredCommunityLinks(row.community_links),
+    featured: mapCommunityFeatured({
+      kind: row.community_featured_kind,
+      embedUrl: row.community_featured_embed_url,
+      imageUrl: row.community_featured_url,
+    }),
+    category: row.community_category,
+    language: row.community_language,
+    suspended: row.is_community_suspended,
+  };
+}
+
+const SETTINGS_COLUMNS = `is_community, is_community_listed, community_slug,
+  community_tagline, community_about, community_links, community_featured_kind,
+  community_featured_embed_url, community_featured_url, community_category,
+  community_language, is_community_suspended`;
+
 /** The panel's own view of its server's two switches. */
 export async function getCommunitySettings(
   serverId: string,
 ): Promise<CommunitySettings | null> {
-  const result = await getPool().query<{
-    is_community: boolean;
-    is_community_listed: boolean;
-    community_slug: string | null;
-    community_tagline: string | null;
-    community_category: CommunityCategory;
-    community_language: CommunityLanguage;
-    is_community_suspended: boolean;
-  }>(
-    `SELECT is_community, is_community_listed, community_slug, community_tagline,
-            community_category, community_language, is_community_suspended
-     FROM servers WHERE id = $1`,
+  const result = await getPool().query<CommunitySettingsRow>(
+    `SELECT ${SETTINGS_COLUMNS} FROM servers WHERE id = $1`,
     [serverId],
   );
   const row = result.rows[0];
   if (!row) {
     return null;
   }
-  return {
-    isCommunity: row.is_community,
-    isListed: row.is_community_listed,
-    slug: row.community_slug,
-    tagline: row.community_tagline,
-    category: row.community_category,
-    language: row.community_language,
-    suspended: row.is_community_suspended,
-  };
+  return settingsFromRow(row);
 }
 
 export interface CommunityUpdate {
@@ -528,6 +568,10 @@ export interface CommunityUpdate {
   isListed?: boolean;
   /** Explicit null clears; absent leaves it. */
   tagline?: string | null;
+  about?: string | null;
+  links?: CommunityLink[];
+  /** Null clears youtube, twitch, and an uploaded image. */
+  featured?: CommunityFeaturedEmbed | null;
   category?: CommunityCategory;
   /**
    * The address the owner typed. Absent means "derive one if this listing has
@@ -682,23 +726,18 @@ export async function updateCommunitySettings(
   serverId: string,
   update: CommunityUpdate,
   actor: CommunityUpdateActor,
-): Promise<{ settings: CommunitySettings; previous: CommunitySettings } | null> {
+): Promise<{
+  settings: CommunitySettings;
+  previous: CommunitySettings;
+  previousFeaturedKey: string | null;
+} | null> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    const before = await client.query<{
-      name: string;
-      is_community: boolean;
-      is_community_listed: boolean;
-      community_slug: string | null;
-      community_tagline: string | null;
-      community_category: CommunityCategory;
-      community_language: CommunityLanguage;
-      is_community_suspended: boolean;
-    }>(
-      `SELECT name, is_community, is_community_listed, community_slug,
-              community_tagline, community_category, community_language,
-              is_community_suspended
+    const before = await client.query<
+      CommunitySettingsRow & { name: string; community_featured_key: string | null }
+    >(
+      `SELECT name, ${SETTINGS_COLUMNS}, community_featured_key
        FROM servers WHERE id = $1 FOR UPDATE`,
       [serverId],
     );
@@ -753,26 +792,22 @@ export async function updateCommunitySettings(
     // to retype the pitch or lose the URL. The unique index is partial on
     // `is_community` so a room with no public page stops holding an address
     // against a live claimant while still keeping it on the row.
-    const result = await client.query<{
-      is_community: boolean;
-      is_community_listed: boolean;
-      community_slug: string | null;
-      community_tagline: string | null;
-      community_category: CommunityCategory;
-      community_language: CommunityLanguage;
-      is_community_suspended: boolean;
-    }>(
+    const result = await client.query<CommunitySettingsRow>(
       `UPDATE servers SET
          is_community = $2,
          is_community_listed = $8,
          community_tagline = CASE WHEN $3::boolean THEN $4 ELSE community_tagline END,
          community_category = COALESCE($5, community_category),
          community_slug = $6,
-         community_language = COALESCE($7, community_language)
+         community_language = COALESCE($7, community_language),
+         community_about = CASE WHEN $9::boolean THEN $10 ELSE community_about END,
+         community_links = CASE WHEN $11::boolean THEN $12::jsonb ELSE community_links END,
+         community_featured_kind = CASE WHEN $13::boolean THEN $14 ELSE community_featured_kind END,
+         community_featured_embed_url = CASE WHEN $13::boolean THEN $15 ELSE community_featured_embed_url END,
+         community_featured_url = CASE WHEN $13::boolean THEN NULL ELSE community_featured_url END,
+         community_featured_key = CASE WHEN $13::boolean THEN NULL ELSE community_featured_key END
        WHERE id = $1
-       RETURNING is_community, is_community_listed, community_slug,
-                 community_tagline, community_category, community_language,
-                 is_community_suspended`,
+       RETURNING ${SETTINGS_COLUMNS}`,
       [
         serverId,
         willBeAddressed,
@@ -782,30 +817,25 @@ export async function updateCommunitySettings(
         nextSlug,
         update.language ?? null,
         willBeListed,
+        update.about !== undefined,
+        update.about ?? null,
+        update.links !== undefined,
+        JSON.stringify(update.links ?? []),
+        update.featured !== undefined,
+        update.featured?.kind ?? null,
+        update.featured?.url ?? null,
       ],
     );
     await client.query("COMMIT");
 
     const row = result.rows[0]!;
     return {
-      settings: {
-        isCommunity: row.is_community,
-        isListed: row.is_community_listed,
-        slug: row.community_slug,
-        tagline: row.community_tagline,
-        category: row.community_category,
-        language: row.community_language,
-        suspended: row.is_community_suspended,
-      },
-      previous: {
-        isCommunity: previousRow.is_community,
-        isListed: previousRow.is_community_listed,
-        slug: previousRow.community_slug,
-        tagline: previousRow.community_tagline,
-        category: previousRow.community_category,
-        language: previousRow.community_language,
-        suspended: previousRow.is_community_suspended,
-      },
+      settings: settingsFromRow(row),
+      previous: settingsFromRow(previousRow),
+      previousFeaturedKey:
+        update.featured !== undefined
+          ? previousRow.community_featured_key
+          : null,
     };
   } catch (error) {
     // A `CommunitySlugError` and a `CommunityListingForbiddenError` have both

@@ -119,6 +119,7 @@ import {
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
+import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
@@ -586,34 +587,17 @@ export function ChannelList({
           />
         )}
         <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
-          {communityHomeEnabled && server && onSelectCommunityHome && (
-            <Tooltip label={t("communityHome.channelName")} side="right">
-              <button
-                type="button"
-                data-community-home-row
-                aria-current={communityHomeSelected ? "page" : undefined}
-                className={cn(
-                  "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
-                  communityHomeSelected
-                    ? "bg-ink-4 text-signal"
-                    : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
-                )}
-                onClick={onSelectCommunityHome}
-              >
-                <Archive className="h-4 w-4" aria-hidden />
-                {communityHomeUnread > 0 && (
-                  <span
-                    data-community-home-unread
-                    className="absolute -right-1 -top-1 min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                    aria-label={t("communityHome.badge.unread", {
-                      count: communityHomeUnread,
-                    })}
-                  >
-                    {formatBadgeCount(communityHomeUnread)}
-                  </span>
-                )}
-              </button>
-            </Tooltip>
+          {(communityHomeEnabled || server?.isCommunity) &&
+            server &&
+            onSelectCommunityHome && (
+            <CommunityHomeNavButton
+              server={server}
+              selected={communityHomeSelected}
+              unread={communityHomeUnread}
+              showNew={communityHomeShowNew}
+              compact
+              onSelect={onSelectCommunityHome}
+            />
           )}
           {railGroups.map((group, index) => (
             <div
@@ -1490,58 +1474,20 @@ export function ChannelList({
               />
             )}
 
-            {communityHomeEnabled && server && onSelectCommunityHome && (
+            {(communityHomeEnabled || server?.isCommunity) &&
+            server &&
+            onSelectCommunityHome && (
               <div className="mb-3 px-1">
-                <button
-                  type="button"
-                  data-community-home-row
-                  aria-current={communityHomeSelected ? "page" : undefined}
-                  className={cn(
-                    "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
-                    communityHomeSelected
-                      ? "bg-ink-4 text-paper"
-                      : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
-                  )}
-                  onClick={() => {
+                <CommunityHomeNavButton
+                  server={server}
+                  selected={communityHomeSelected}
+                  unread={communityHomeUnread}
+                  showNew={communityHomeShowNew}
+                  onSelect={() => {
                     onSelectCommunityHome();
                     onMobileClose?.();
                   }}
-                >
-                  <Archive
-                    className={cn(
-                      "mt-0.5 h-4 w-4 shrink-0",
-                      communityHomeSelected ? "text-signal" : "text-paper-muted",
-                    )}
-                    aria-hidden
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className="truncate text-sm font-semibold text-paper">
-                        {t("communityHome.channelName")}
-                      </span>
-                      {communityHomeUnread > 0 ? (
-                        <span
-                          className="ml-auto min-w-4 shrink-0 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                          aria-label={t("communityHome.badge.unread", {
-                            count: communityHomeUnread,
-                          })}
-                          data-community-home-unread
-                        >
-                          {formatBadgeCount(communityHomeUnread)}
-                        </span>
-                      ) : (
-                        communityHomeShowNew && (
-                          <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
-                            {t("communityHome.badge.new")}
-                          </span>
-                        )
-                      )}
-                    </span>
-                    <span className="block truncate text-[10px] text-paper-muted">
-                      {t("communityHome.channelHint")}
-                    </span>
-                  </span>
-                </button>
+                />
               </div>
             )}
 
@@ -2187,6 +2133,142 @@ export function DraftMark() {
       <span className="sr-only">{t("chrome.draftSr")}</span>
     </>
   );
+}
+
+function CommunityHomeFace({
+  server,
+  compact,
+}: {
+  server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
+  compact?: boolean;
+}) {
+  const tile = compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg";
+  const type = compact ? "text-[11px]" : "text-[10px]";
+  const poster = server.isCommunity || Boolean(server.iconUrl);
+  if (!poster) {
+    return (
+      <span
+        className={cn(
+          "flex shrink-0 items-center justify-center bg-ink-4 text-paper-muted",
+          tile,
+        )}
+        data-community-home-face="chest"
+      >
+        <Archive className="h-4 w-4" aria-hidden />
+      </span>
+    );
+  }
+  const hue = heroHue(server.communitySlug ?? server.name);
+  return (
+    <span
+      className={cn(
+        "relative flex shrink-0 items-center justify-center overflow-hidden font-display font-bold text-paper",
+        tile,
+        type,
+      )}
+      style={heroTintStyle(hue, 60)}
+      data-community-home-face="poster"
+    >
+      <ServerIcon
+        name={server.name}
+        iconUrl={server.iconUrl}
+        className="h-full w-full object-cover"
+        textClassName={cn("font-display font-bold text-paper", type)}
+        fallback={initialsFor(server.name)}
+      />
+    </span>
+  );
+}
+
+function CommunityHomeUnreadBadge({
+  count,
+  compact,
+}: {
+  count: number;
+  compact?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      data-community-home-unread
+      className={cn(
+        "min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper",
+        compact && "absolute -right-1 -top-1",
+        !compact && "ml-auto shrink-0",
+      )}
+      aria-label={t("communityHome.badge.unread", { count })}
+    >
+      {formatBadgeCount(count)}
+    </span>
+  );
+}
+
+/**
+ * Baú in the channel list: a page, not a #channel. Community servers show
+ * the same face as the poster. Private halls keep the chest. No teaching
+ * subtitle. The intro card already says what this is.
+ */
+function CommunityHomeNavButton({
+  server,
+  selected,
+  unread,
+  showNew,
+  compact = false,
+  onSelect,
+}: {
+  server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
+  selected: boolean;
+  unread: number;
+  showNew: boolean;
+  compact?: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useTranslation();
+  const button = (
+    <button
+      type="button"
+      data-community-home-row
+      aria-current={selected ? "page" : undefined}
+      aria-label={compact ? t("communityHome.channelName") : undefined}
+      className={cn(
+        "transition-colors",
+        compact
+          ? "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+          : "flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left",
+        selected
+          ? compact
+            ? "bg-ink-4 text-signal"
+            : "bg-ink-4 text-paper"
+          : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
+      )}
+      onClick={onSelect}
+    >
+      <CommunityHomeFace server={server} compact={compact} />
+      {!compact && (
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-paper">
+          {t("communityHome.channelName")}
+        </span>
+      )}
+      {unread > 0 ? (
+        <CommunityHomeUnreadBadge count={unread} compact={compact} />
+      ) : (
+        !compact &&
+        showNew && (
+          <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+            {t("communityHome.badge.new")}
+          </span>
+        )
+      )}
+    </button>
+  );
+  if (compact) {
+    return (
+      <Tooltip label={t("communityHome.channelName")} side="right">
+        {button}
+      </Tooltip>
+    );
+  }
+  return button;
 }
 
 function ChannelRow({

@@ -12,11 +12,13 @@ import {
 } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { isSeatedOnAnotherDevice } from "@/lib/dual-device-watch";
-import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
+import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
+import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 
 /**
  * Watch mode without a seat.
@@ -48,6 +50,7 @@ export function WatchStage({
   onJoin,
   fullscreen,
   onLeaveParty,
+  onBarSlot,
   mediaTitle,
   communityName,
   coverUrl,
@@ -119,6 +122,12 @@ export function WatchStage({
   };
   /** How to stop watching, when leaving the room is a thing this person can do. */
   onLeaveParty?: () => void;
+  /**
+   * Where the watch party's bar goes while this person has a picture (see
+   * `WatchPartyBarSlot`): a span in the player's bottom bar. Omitted when
+   * docked, where a 240px box has no room for it.
+   */
+  onBarSlot?: (element: HTMLDivElement | null) => void;
   mediaTitle?: string;
   communityName?: string | null;
   coverUrl?: string | null;
@@ -241,7 +250,21 @@ export function WatchStage({
               : undefined
           }
           meta={docked ? null : audienceMeta}
-          actions={docked ? miniActions : overlayActions}
+          /* PARAR DE ASSISTIR IS ON THE BOTTOM BAR NOW (pass 2), beside the
+             party's own controls, so the viewer has one row to read. The
+             top overlay keeps the audience count and, docked, the mini
+             chrome. */
+          actions={docked ? miniActions : undefined}
+          bottomActions={
+            docked ? undefined : (
+              <>
+                {onBarSlot ? (
+                  <WatchPartyBarSlot placement="player" onElement={onBarSlot} />
+                ) : null}
+                {overlayActions}
+              </>
+            )
+          }
           dualDeviceWarning={dualDeviceWarning}
           onSessionOver={onSessionOver}
         />
@@ -263,7 +286,7 @@ export function WatchStage({
           aria-hidden="true"
           tabIndex={-1}
           data-testid="watch-mini-picture"
-          className="absolute inset-0 z-20 cursor-pointer"
+          className={cn("absolute inset-0 cursor-pointer", STAGE_LAYER.tileTarget)}
           onClick={onReturn}
         />
       ) : null}
@@ -280,44 +303,23 @@ function EndedWatchStage({
   audienceMeta: ReactNode;
   actions: ReactNode;
 }) {
-  const { t } = useTranslation();
+  // One stage for every state (pass 3 of `docs/plans/WATCH_PARTY_UI.md`):
+  // the same component the party panel draws its holding screen with, in
+  // its `ended` or `holding` state, with this mount's own footer.
   return (
-    <div className="flex h-full w-full flex-col bg-black">
-      <div
-        data-testid="watch-stage-ended"
-        className={cn(
-          "relative flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-1 px-6 text-center",
-          !ended && "overflow-hidden",
-        )}
-      >
-        {ended ? (
-          <>
-            <p className="text-sm font-semibold text-paper">
-              {t("voice.watch.ended")}
-            </p>
-            <p className="text-xs text-paper-muted">
-              {t("voice.watch.endedHint")}
-            </p>
-          </>
-        ) : (
-          // Announced/live, still no playable frame: the same holding screen
-          // the player shows once it has a URL to buffer, so a viewer who
-          // opens the channel before the egress has one sees the same "on
-          // its way" screen rather than a bare loading sentence.
-          //
-          // C3 (post-mortem item): the rotating lines are deliberately vague
-          // ("hang tight, it's coming") because this state covers both a
-          // few-second egress warm-up AND a presenter who has not pressed
-          // share yet, which can last indefinitely. The caption underneath
-          // says the second half in words, so a long wait here reads as "the
-          // show has not started" rather than as something stuck.
-          <StreamStartingSoon caption={t("voice.watch.notStartedCaption")} />
-        )}
-      </div>
-      <div className="flex shrink-0 items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">{audienceMeta}</div>
-        <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
-      </div>
+    <div
+      data-testid="watch-stage-ended"
+      className="h-full w-full"
+    >
+    <WatchPartyStage
+      state={ended ? "ended" : "holding"}
+      footer={
+        <div className="flex shrink-0 items-center justify-between gap-3 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">{audienceMeta}</div>
+          <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+        </div>
+      }
+    />
     </div>
   );
 }
@@ -356,6 +358,7 @@ export function WatchChannelStage({
   voiceState,
   onJoin,
   onLeaveParty,
+  onBarSlot,
   onSetWatchingLive,
   onSeedChannelLive,
   fill = false,
@@ -384,6 +387,8 @@ export function WatchChannelStage({
    * means leaving the room, which only the caller knows how to do.
    */
   onLeaveParty?: () => void;
+  /** See `WatchStage`'s `onBarSlot`. */
+  onBarSlot?: (element: HTMLDivElement | null) => void;
   onSetWatchingLive: (channelId: string, watching: boolean) => void;
   /** Where the one-time `GET /api/channels/:id/live` answer goes. */
   onSeedChannelLive: (
@@ -593,8 +598,14 @@ export function WatchChannelStage({
           voiceState.occupancy[channelId],
         )}
         ended={ended}
-        onJoin={docked ? undefined : onJoin}
+        /* A VIEWER CANNOT JOIN A WATCH PARTY (pass 5 of
+           `docs/plans/WATCH_PARTY_UI.md`): the party bar owns every way in,
+           and this mount refuses the offer for a watch party channel even
+           when a caller passes one, so the third join button cannot grow
+           back by accident. A plain voice channel's bare share keeps it. */
+        onJoin={docked || isWatchParty ? undefined : onJoin}
         onLeaveParty={docked ? undefined : onLeaveParty}
+        onBarSlot={docked ? undefined : onBarSlot}
         docked={docked}
         onReturn={onReturn}
         onDismiss={onDismiss}

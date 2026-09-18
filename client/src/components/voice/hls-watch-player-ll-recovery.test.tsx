@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import Hls from "hls.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HlsWatchPlayer } from "./hls-watch-player";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { LL_HLS_EDGE_JUMP_MAX } from "@/lib/hls-live-edge";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -164,12 +165,14 @@ describe("an LL player that falls behind the part ring", () => {
   async function mount(mode: "ll" | "live" = "ll") {
     await act(async () => {
       root.render(
-        <HlsWatchPlayer
-          src={LL_SRC}
-          layout="cinema"
-          mode={mode}
-          partTargetMs={500}
-        />,
+        <TooltipProvider>
+          <HlsWatchPlayer
+            src={LL_SRC}
+            layout="cinema"
+            mode={mode}
+            partTargetMs={500}
+          />
+        </TooltipProvider>,
       );
     });
     // `attach()` awaits `import("hls.js")`, so it finishes a few ticks after
@@ -189,6 +192,21 @@ describe("an LL player that falls behind the part ring", () => {
       await act(async () => {
         vi.advanceTimersByTime(1_000);
       });
+    }
+  }
+
+  /**
+   * Ticks one second at a time until the loader does SOMETHING, then stops
+   * -- exactly on the FIRST ladder rung's own calls, and no further.
+   * `"reload-level"` (the STALL_LADDER's second rung) calls `stopLoad` +
+   * `startLoad` too, the SAME shape `"jump-live"`'s own restart does, so a
+   * test that ticks even one step past the first rung cannot tell the two
+   * apart by their calls alone -- this is what keeps every assertion below
+   * about the FIRST rung only.
+   */
+  async function tickUntilLoaderActs(maxTicks = 30) {
+    for (let i = 0; i < maxTicks && calls.length === 0; i += 1) {
+      await tick(1);
     }
   }
 
@@ -435,5 +453,80 @@ describe("an LL player that falls behind the part ring", () => {
       expect(line).toContain("details=bufferStalledError");
       expect(line).toContain("targetDuration=7s");
     }
+  });
+
+  /**
+   * THE FIX ITSELF (production, 2026-09-17): a viewer whose FIRST attach
+   * never paints a frame -- exactly what "opened the party page while the
+   * LL session had just (re)started" produces -- gets ONE live-edge jump on
+   * the "stall" reason's first rung instead of the ~40 s ladder walk
+   * (`start-load` / `reload-level` for three cycles, then a rebuild) the
+   * incident showed. `hls-stall.test.ts`'s `"jump-live"` suite pins the
+   * pure decision; this drives it through the real player's stall tick, the
+   * same "wiring, not the pieces" reasoning this whole file states above.
+   */
+  it("jumps to the live edge once a fresh attach stalls without ever painting a frame", async () => {
+    await mount();
+    const video = container.querySelector("video");
+    expect(video).not.toBeNull();
+    await act(async () => {
+      video!.dispatchEvent(new Event("waiting"));
+    });
+    // Stop the INSTANT the loader does something -- the FIRST rung only.
+    // `"reload-level"` (STALL_LADDER's SECOND rung) calls `stopLoad` +
+    // `startLoad` too, the same shape the jump's own restart does, so
+    // ticking even one step further would make the two indistinguishable
+    // by their calls alone.
+    await tickUntilLoaderActs();
+    // The same shape `stopLoad` + `startLoad(edge)` the missing-fragment
+    // jump makes -- one live-edge restart, not a ladder walk.
+    expect(calls).toEqual(["stopLoad", "startLoad(1499.5)"]);
+  });
+
+  it("never jumps once this attach has actually played -- that is the starved-presenter case", async () => {
+    await mount();
+    const video = container.querySelector("video");
+    await act(async () => {
+      video!.dispatchEvent(new Event("playing"));
+    });
+    calls.length = 0;
+    await act(async () => {
+      video!.dispatchEvent(new Event("waiting"));
+    });
+    await tickUntilLoaderActs();
+    // The ordinary ladder's first rung -- `startLoad` alone, no `stopLoad`
+    // -- not the jump's `stopLoad` + `startLoad` pair.
+    expect(calls).toEqual(["startLoad(1499.5)"]);
+  });
+
+  it("falls back to the ordinary ladder once the shared jump budget is already spent", async () => {
+    await mount();
+    // Spend the two-jump budget on missing-fragment errors first -- spaced
+    // just past the pin rule's 10 s window (like "is bounded" above) so each
+    // one earns its own jump rather than tripping §4's pin, but still
+    // within the jump budget's OWN 30 s window by the time the stall below
+    // fires, so both still count against it.
+    await act(async () => {
+      fire(missingPartError());
+    });
+    expect(calls).toContain("startLoad(1499.5)");
+    calls.length = 0;
+    await tick(11);
+    await act(async () => {
+      fire(missingPartError());
+    });
+    expect(calls).toContain("startLoad(1499.5)");
+    calls.length = 0;
+    // Budget spent (two jumps inside the last 30 s): a stall discovered now,
+    // on an attach that has still never played, falls back to the ordinary
+    // ladder instead of a third jump.
+    const video = container.querySelector("video");
+    await act(async () => {
+      video!.dispatchEvent(new Event("waiting"));
+    });
+    await tickUntilLoaderActs();
+    // The ordinary first rung runs instead, still seeking the edge (LL,
+    // unchanged) but never the jump's own `stopLoad`.
+    expect(calls).toEqual(["startLoad(1499.5)"]);
   });
 });

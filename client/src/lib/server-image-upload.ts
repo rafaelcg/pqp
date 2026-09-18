@@ -1,5 +1,7 @@
 import {
   maxServerImageBytes,
+  COMMUNITY_FEATURED_IMAGE_HEIGHT,
+  COMMUNITY_FEATURED_IMAGE_WIDTH,
   SERVER_BANNER_HEIGHT,
   SERVER_BANNER_WIDTH,
   SERVER_ICON_SIZE,
@@ -39,7 +41,13 @@ export async function uploadServerImage(
     cropped =
       kind === "banner"
         ? await cropImageToRect(file, SERVER_BANNER_WIDTH, SERVER_BANNER_HEIGHT)
-        : await cropImageToSquare(file, SERVER_ICON_SIZE);
+        : kind === "featured"
+          ? await cropImageToRect(
+              file,
+              COMMUNITY_FEATURED_IMAGE_WIDTH,
+              COMMUNITY_FEATURED_IMAGE_HEIGHT,
+            )
+          : await cropImageToSquare(file, SERVER_ICON_SIZE);
   } catch {
     // `createImageBitmap` refuses anything that is not a decodable image, which
     // is the only validation this needs: the picker's `accept` is a hint, and a

@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { COMMUNITY_ABOUT_MAX_LENGTH } from "@pqp/shared";
 
 /**
  * Who may edit a community's listing panel, over HTTP.
@@ -89,6 +90,9 @@ interface SettingsBody {
     isListed: boolean;
     slug: string | null;
     tagline: string | null;
+    about: string | null;
+    links: { kind: string; url: string }[];
+    featured: { kind: string; url: string } | null;
     category: string;
     language: string;
     suspended: boolean;
@@ -229,6 +233,143 @@ describeDb("community settings permissions", () => {
       };
       expect(body.community.name).toBe("MoonKase");
       expect(body.community.tagline).toBe("Sala da moonkase");
+    });
+
+    it("puts about, links and a featured clip on the public poster, not a 400 on the slug", async () => {
+      await listedByOwner();
+      await call(admin, "PATCH", `/api/servers/${serverId}/community`, {
+        slug: "moonkase",
+      });
+      const patched = await call<SettingsBody>(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        {
+          about: "Lives na Twitch e cortes no YouTube.",
+          links: [{ url: "https://www.twitch.tv/moonkaselive" }],
+          featured: {
+            kind: "youtube",
+            url: "https://youtu.be/jNQXAC9IVRw",
+          },
+        },
+      );
+      expect(patched.status).toBe(200);
+      expect(patched.body.community.about).toBe(
+        "Lives na Twitch e cortes no YouTube.",
+      );
+      expect(patched.body.community.links).toHaveLength(1);
+      expect(patched.body.community.links[0]?.kind).toBe("twitch");
+      expect(patched.body.community.links[0]?.url).toContain(
+        "twitch.tv/moonkaselive",
+      );
+      expect(patched.body.community.featured).toEqual({
+        kind: "youtube",
+        url: "https://youtu.be/jNQXAC9IVRw",
+      });
+
+      const junk = await call(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { links: [{ url: "http://example.com" }] },
+      );
+      expect(junk.status).toBe(400);
+
+      const page = await fetch(`${baseUrl}/api/public/communities/moonkase`);
+      expect(page.status).toBe(200);
+      const body = (await page.json()) as {
+        community: {
+          about: string | null;
+          links: { kind: string; url: string }[];
+          featured: { kind: string; url: string } | null;
+        };
+      };
+      expect(body.community.about).toBe("Lives na Twitch e cortes no YouTube.");
+      expect(body.community.links[0]?.kind).toBe("twitch");
+      expect(body.community.featured?.kind).toBe("youtube");
+    });
+
+    it("refuses an about longer than 2000 characters", async () => {
+      await listedByOwner();
+      const refused = await call(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { about: "x".repeat(COMMUNITY_ABOUT_MAX_LENGTH + 1) },
+      );
+      expect(refused.status).toBe(400);
+    });
+
+    it("refuses a featured kind that does not match the URL", async () => {
+      await listedByOwner();
+      const refused = await call(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        {
+          featured: {
+            kind: "youtube",
+            url: "https://www.twitch.tv/moonkaselive",
+          },
+        },
+      );
+      expect(refused.status).toBe(400);
+    });
+
+    it("clears featured with null", async () => {
+      await listedByOwner();
+      await call(admin, "PATCH", `/api/servers/${serverId}/community`, {
+        featured: {
+          kind: "youtube",
+          url: "https://youtu.be/jNQXAC9IVRw",
+        },
+      });
+      const cleared = await call<SettingsBody>(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { featured: null },
+      );
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.community.featured).toBeNull();
+    });
+
+    it("a featured embed after an image drops the old object key", async () => {
+      await listedByOwner();
+      await getPool().query(
+        `UPDATE servers SET
+           community_featured_kind = 'image',
+           community_featured_url = $2,
+           community_featured_key = $3
+         WHERE id = $1`,
+        [
+          serverId,
+          `/api/servers/${serverId}/featured?v=deadbeef`,
+          `servers/${serverId}/featured/old.jpg`,
+        ],
+      );
+      const patched = await call<SettingsBody>(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        {
+          featured: {
+            kind: "youtube",
+            url: "https://youtu.be/jNQXAC9IVRw",
+          },
+        },
+      );
+      expect(patched.status).toBe(200);
+      expect(patched.body.community.featured).toEqual({
+        kind: "youtube",
+        url: "https://youtu.be/jNQXAC9IVRw",
+      });
+      const row = await getPool().query<{
+        community_featured_key: string | null;
+      }>(`SELECT community_featured_key FROM servers WHERE id = $1`, [
+        serverId,
+      ]);
+      expect(row.rows[0]!.community_featured_key).toBeNull();
     });
 
     it("is not a plain member's to set", async () => {

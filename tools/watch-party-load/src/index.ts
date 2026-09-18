@@ -1,6 +1,7 @@
 /* eslint-disable no-console -- this is a command-line load harness. */
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
+import { pathToFileURL } from "node:url";
 import { Client as PgClient } from "pg";
 import { WebSocket } from "ws";
 import { Agent, setGlobalDispatcher } from "undici";
@@ -79,6 +80,8 @@ type Manifest = {
   serverId: string;
   textChannelId: string;
   voiceChannelId: string;
+  /** Set only when `prepare --watch-party` made a `watch_party` channel beside the plain voice one. */
+  watchPartyChannelId?: string;
   inviteCode: string;
   createdAt: string;
 };
@@ -263,10 +266,26 @@ async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
   const voice = created.channels.find((channel) => channel.type === "voice");
   if (!text || !voice) throw new Error("created server is missing default text or voice channel");
   await api(safe.apiUrl, owner, "PATCH", `/api/channels/${voice.id}`, { voiceTransport: "livekit" });
+  // `--watch-party` makes a real `watch_party` channel beside the plain voice
+  // one and hands @everyone START_WATCH_PARTY on it: `pickHlsSharer` only
+  // starts an HLS egress in a watch-party room, and `prepare` finishing
+  // before any `shard` runs is what guarantees the grant lands before the
+  // presenter ever joins -- `canStream` is computed from the role bits at
+  // join time, so granting it after the join would be too late.
+  let watchPartyChannelId: string | undefined;
+  if (has("--watch-party")) {
+    const partyChannel = await api<{ channel: { id: string } }>(safe.apiUrl, owner, "POST", `/api/servers/${created.server.id}/channels`, { name: "watch-party", type: "watch_party" });
+    watchPartyChannelId = partyChannel.channel.id;
+    const { roles } = await api<{ roles: Array<{ id: string; permissions: string; isEveryone: boolean }> }>(safe.apiUrl, owner, "GET", `/api/servers/${created.server.id}/roles`);
+    const everyone = roles.find((role) => role.isEveryone);
+    if (!everyone) throw new Error("created server has no @everyone role");
+    const granted = (BigInt(everyone.permissions) | 8_388_608n /* START_WATCH_PARTY */).toString();
+    await api(safe.apiUrl, owner, "PATCH", `/api/roles/${everyone.id}`, { permissions: granted });
+  }
   const invite = await api<{ invite: { code: string } }>(safe.apiUrl, owner, "POST", `/api/servers/${created.server.id}/invites`, {});
-  const manifest: Manifest = { version: 1, runId: safe.runId, apiUrl: safe.apiUrl, wsUrl: safe.wsUrl, participants: total, serverId: created.server.id, textChannelId: text.id, voiceChannelId: voice.id, inviteCode: invite.invite.code, createdAt: new Date().toISOString() };
+  const manifest: Manifest = { version: 1, runId: safe.runId, apiUrl: safe.apiUrl, wsUrl: safe.wsUrl, participants: total, serverId: created.server.id, textChannelId: text.id, voiceChannelId: voice.id, ...(watchPartyChannelId ? { watchPartyChannelId } : {}), inviteCode: invite.invite.code, createdAt: new Date().toISOString() };
   writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-  console.log(JSON.stringify({ prepared: true, manifest: arg("--manifest"), runId: safe.runId, participants: total }, null, 2));
+  console.log(JSON.stringify({ prepared: true, manifest: arg("--manifest"), runId: safe.runId, participants: total, watchPartyChannelId }, null, 2));
 }
 function manifest(safe: ReturnType<typeof assertSafeTarget>): Manifest {
   const parsed = JSON.parse(readFileSync(requiredArg("--manifest"), "utf8")) as Manifest;
@@ -314,7 +333,7 @@ type Resume = { peerId: string; resumeToken: string };
  * `resumed: true`. Every frame the socket receives is counted by type so the
  * report can say what a socket without the delta caps pays.
  */
-async function openAppSocket(wsUrl: string, token: string, room: Manifest, legacy: boolean, deadlineAtMs: number, index: number, counters: WsCounters, started: number, resume?: Resume): Promise<AppSession> {
+export async function openAppSocket(wsUrl: string, token: string, room: Manifest, legacy: boolean, deadlineAtMs: number, index: number, counters: WsCounters, started: number, resume?: Resume): Promise<AppSession> {
   let attempts = 0;
   let backoff = 1_000;
   for (;;) {
@@ -324,12 +343,20 @@ async function openAppSocket(wsUrl: string, token: string, room: Manifest, legac
       return await new Promise<AppSession>((resolve, reject) => {
         const socket = new WebSocket(wsUrl, { perMessageDeflate: !legacy });
         let opened = 0;
+        // Hoisted, not declared inside the `open` handler: the `message`
+        // handler below is a sibling callback on the same socket, not nested
+        // inside `open`'s, so a `const` there would not be in scope for
+        // `clearTimeout` here. Bug: this timer used to be re-armed on open
+        // and cleared only on `close`, never on `welcome`, so it fired
+        // `socket.close()` on a perfectly good, already-welcomed socket 12s
+        // after it opened.
+        let welcomeTimer: ReturnType<typeof setTimeout> | undefined;
         const connectTimer = setTimeout(() => { socket.close(); reject(new Error("no voice welcome within 12s of socket open")); }, WELCOME_TIMEOUT_MS + HTTP_TIMEOUT_MS);
         socket.on("open", () => {
           opened = Date.now();
           // Re-arm from open, the way the browser does.
           clearTimeout(connectTimer);
-          const welcomeTimer = setTimeout(() => { socket.close(); reject(new Error("no voice welcome within 12s of socket open")); }, WELCOME_TIMEOUT_MS);
+          welcomeTimer = setTimeout(() => { socket.close(); reject(new Error("no voice welcome within 12s of socket open")); }, WELCOME_TIMEOUT_MS);
           socket.once("close", () => clearTimeout(welcomeTimer));
           const auth: Record<string, unknown> = { type: "auth", token };
           if (!legacy) auth.caps = ["voice-roster-delta", "presence-delta"];
@@ -347,12 +374,13 @@ async function openAppSocket(wsUrl: string, token: string, room: Manifest, legac
             socket.send(JSON.stringify({ type: "join-voice-room", voiceChannelId: room.voiceChannelId, transports: ["livekit"], resume: true, ...(resume ? { resumePeerId: resume.peerId, resumeToken: resume.resumeToken } : {}) }));
           }
           if (type === "welcome") {
+            clearTimeout(welcomeTimer);
             if (!frame.peerId) { reject(new Error("welcome missing peer id")); return; }
             resolve({ socket, peerId: frame.peerId, resumeToken: frame.resumeToken ?? "", welcomeMs: Date.now() - started, socketOpenToWelcomeMs: Date.now() - (opened || attemptStarted), attempts, resumed: frame.resumed === true, counters });
           }
-          if (["voice-join-refused", "voice-room-full", "voice-transport-unsupported"].includes(type)) { reject(new Error(type)); }
+          if (["voice-join-refused", "voice-room-full", "voice-transport-unsupported"].includes(type)) { clearTimeout(welcomeTimer); reject(new Error(type)); }
         });
-        socket.on("error", (error) => { reject(error); });
+        socket.on("error", (error) => { clearTimeout(welcomeTimer); reject(error); });
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -672,6 +700,9 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
     // abort every other in-flight participant or turn a failed run into no
     // report at all.
     if (publisher) await publisher.stop().catch(() => {});
+    if (presenter && socket && socket.readyState === WebSocket.OPEN) {
+      await new Promise<void>((resolve) => socket!.send(JSON.stringify({ type: "set-sharing-screen", sharing: false }), () => resolve()));
+    }
     intentionalDisconnect = true;
     if (socket) await hangUp(socket, peerId, resumeToken).catch(() => {});
     if (room) await room.disconnect().catch(() => {});
@@ -717,7 +748,16 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
     const stampede = plan.arrivalWindowMs > 0;
     if (!stampede) await sleep(plan.startAtMs - Date.now());
     const mediaStartedAt = Date.now();
-    if (role === "presenter") { publisher = await publish(room, plan.presenterVideo, "tone"); result.requestedVideoBitrateBps = plan.presenterVideo.bitrate; }
+    if (role === "presenter") {
+      publisher = await publish(room, plan.presenterVideo, "tone");
+      result.requestedVideoBitrateBps = plan.presenterVideo.bitrate;
+      // The real client sends this over the app socket once it is actually
+      // publishing the screen track. The API only starts a watch-party HLS
+      // egress for a peer with `sharingScreen` (`pickHlsSharer` in
+      // server/src/ws/voice.ts) -- without this frame the harness's
+      // presenter looks, to the server, like a member who never shared.
+      socket?.send(JSON.stringify({ type: "set-sharing-screen", sharing: true, sourceHeight: plan.presenterVideo.height }));
+    }
     else if (role === "audio") publisher = await publish(room, null, "speech");
     else if (role === "camera") { publisher = await publish(room, plan.cameraVideo, "speech"); result.requestedVideoBitrateBps = plan.cameraVideo.bitrate; }
     // Time to first decoded frame, from RTC connect and from arrival.
@@ -810,6 +850,32 @@ function percentile(values: number[], p: number): number | null {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)] ?? null;
 }
+type WatchPartyHandle = { sessionId: string; token: string };
+/**
+ * Creates and goes live on the manifest's `watch_party` channel, as the
+ * presenter identity (index 0) -- the same account that then joins the room
+ * in `one()`, so it is the party's host and may call `goLive` on it. Runs
+ * BEFORE `one()` starts the presenter's own age-gate/invite/socket sequence,
+ * so this repeats that sequence itself: the presenter is not yet a server
+ * member the first time this is called. `passAgeGate`/the invite join are
+ * idempotent, so `one()` redoing them right after costs one wasted round
+ * trip, not a failure.
+ */
+async function goLiveAsPresenter(safe: ReturnType<typeof assertSafeTarget>, info: Manifest, lowLatency: boolean): Promise<WatchPartyHandle | undefined> {
+  if (!info.watchPartyChannelId) return undefined;
+  const token = tokenFor(safe.runId, 0, safe.local);
+  await passAgeGate(safe.apiUrl, token);
+  await api(safe.apiUrl, token, "POST", `/api/invites/${info.inviteCode}/join`);
+  const created = await api<{ party: { id: string } }>(safe.apiUrl, token, "POST", `/api/channels/${info.watchPartyChannelId}/watch-parties`, { name: `Load ${safe.runId}`, options: { lowLatency } });
+  await api(safe.apiUrl, token, "POST", `/api/watch-parties/${created.party.id}/state`, { state: "live", lowLatency });
+  return { sessionId: created.party.id, token };
+}
+async function endWatchParty(safe: ReturnType<typeof assertSafeTarget>, handle: WatchPartyHandle | undefined): Promise<void> {
+  if (!handle) return;
+  await api(safe.apiUrl, handle.token, "POST", `/api/watch-parties/${handle.sessionId}/state`, { state: "ended" }).catch((error) => {
+    console.error(JSON.stringify({ event: "watch-party-end-failed", sessionId: handle.sessionId, message: error instanceof Error ? error.message : String(error) }));
+  });
+}
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900); const decodeSamples = numberArg("--decode-sample", safe.local ? 2 : 25); const startAtMs = Number(arg("--start-at-ms", safe.local ? String(Date.now() + 1_000) : "0"));
   const minDecodedFps = numberArg("--min-decoded-fps", 24);
@@ -826,6 +892,15 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const churnRtcEvery = numberArg("--churn-rtc-every", 10);
   const presenterOnly = has("--presenter-only");
   const noPresenter = has("--no-presenter");
+  const lowLatency = has("--low-latency");
+  // When the manifest has a `watch_party` channel (`prepare --watch-party`)
+  // and this run is the presenter-only share, the presenter joins THAT
+  // channel's voice room instead of the plain one -- HLS only ever starts in
+  // a watch-party room (`pickHlsSharer`). Every other mode (full runs,
+  // receivers, `--no-presenter`) is unaffected: they keep joining
+  // `voiceChannelId` exactly as before.
+  const usingWatchParty = presenterOnly && Boolean(info.watchPartyChannelId);
+  const joinRoom: Manifest = usingWatchParty ? { ...info, voiceChannelId: info.watchPartyChannelId! } : info;
   const pinArg = (name: string, fallback: string): VideoQuality | null => { const v = arg(name, fallback); if (v === "none") return null; if (v === "high") return VideoQuality.HIGH; if (v === "medium") return VideoQuality.MEDIUM; if (v === "low") return VideoQuality.LOW; throw new Error(`${name} must be high|medium|low|none`); };
   const plan: ShardPlan = {
     holdMs: holdSeconds * 1000, startAtMs, arrivalWindowMs: arrivalWindowSeconds * 1000, arrivalLeadMs: arrivalLeadSeconds * 1000,
@@ -863,7 +938,13 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   armAbort();
   console.error(JSON.stringify({ shard: shardIndex, of: shardCount, participants: indexes.length, roles: { presenter: indexes.filter((i) => roleOf(i) === "presenter").length, audio: indexes.filter((i) => roleOf(i) === "audio").length, camera: indexes.filter((i) => roleOf(i) === "camera").length, receiver: indexes.filter((i) => roleOf(i) === "receiver").length }, legacy: indexes.filter(isLegacy).length, mode: plan.arrivalWindowMs > 0 ? "stampede" : "barrier", startAt: new Date(startAtMs).toISOString(), lastArrival: new Date(Math.max(...indexes.map(arriveAt))).toISOString() }));
   const churners = indexes.filter((i) => roleOf(i) !== "presenter");
-  const results = await Promise.all(indexes.map((index) => one(index, roleOf(index), isLegacy(index), decodedIndexes.has(index), safe, info, plan, arriveAt(index), acquireJoin, churners.indexOf(index), Math.max(1, churners.length))));
+  const watchParty = usingWatchParty ? await goLiveAsPresenter(safe, info, lowLatency) : undefined;
+  let results: ParticipantResult[];
+  try {
+    results = await Promise.all(indexes.map((index) => one(index, roleOf(index), isLegacy(index), decodedIndexes.has(index), safe, joinRoom, plan, arriveAt(index), acquireJoin, churners.indexOf(index), Math.max(1, churners.length))));
+  } finally {
+    await endWatchParty(safe, watchParty);
+  }
   clearInterval(sampler);
   const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
   const decoded = results.filter((result) => result.decodeSample);
@@ -878,7 +959,7 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   for (const r of results) if (r.failureClass) failureClasses[r.failureClass] = (failureClasses[r.failureClass] ?? 0) + 1;
   const report = {
     runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, startAtMs,
-    plan: { holdSeconds, arrivalWindowSeconds, arrivalLeadSeconds, legacyShare, audioPublishers, cameraPublishers, joinConcurrency, presenterProfile: arg("--presenter-profile", "720p"), cameraProfile: arg("--camera-profile", "1080p"), screenPin: arg("--screen-pin", "none"), cameraPin: arg("--camera-pin", "low"), presenterOnly, noPresenter, coldBootstrap: coldBoot, churnEveryMs, churnRtcEvery },
+    plan: { holdSeconds, arrivalWindowSeconds, arrivalLeadSeconds, legacyShare, audioPublishers, cameraPublishers, joinConcurrency, presenterProfile: arg("--presenter-profile", "720p"), cameraProfile: arg("--camera-profile", "1080p"), screenPin: arg("--screen-pin", "none"), cameraPin: arg("--camera-pin", "low"), presenterOnly, noPresenter, coldBootstrap: coldBoot, churnEveryMs, churnRtcEvery, usingWatchParty, lowLatency },
     mediaContract: { source: `${plan.presenterVideo.width}x${plan.presenterVideo.height}@${plan.presenterVideo.fps}`, requestedVideoBitrateBps: plan.presenterVideo.bitrate, requestedAudioBitrateBps: AUDIO_BITRATE_BPS, decodedSampleCount: decoded.length, minDecodedFps, decodeWarmupSeconds: warmupSeconds, minDecodedFrames: Math.ceil(minDecodedFps * Math.max(0, holdSeconds - warmupSeconds)) },
     generator: { wallMs, cpuMs: (cpu.user + cpu.system) / 1000, cpuPercentOfOneCore: ((cpu.user + cpu.system) / 1000 / wallMs) * 100, maxRssBytes, maxEventLoopLagMs, uncaughtErrors },
     aggregateRtp: { receivedBytes: totalReceivedBytes, receivedBitrateBps: totalReceivedBytes * 8_000 / (holdSeconds * 1000), sentBytes: totalSentBytes, sentBitrateBps: totalSentBytes * 8_000 / (holdSeconds * 1000) },
@@ -916,7 +997,9 @@ async function cleanup(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
 }
 const USAGE = [
   "usage: pnpm exec tsx src/index.ts <command> [flags]   (or: pnpm wp <command> [flags])",
-  "  prepare --manifest <file> [--participants N]",
+  "  prepare --manifest <file> [--participants N] [--watch-party]",
+  "          --watch-party makes a real watch_party channel beside the plain voice one",
+  "          and grants @everyone START_WATCH_PARTY on it -- needed for HLS to ever start",
   "  shard   --manifest <file> --shard-index I --shard-count N --report <file>",
   "          [--hold-seconds S] [--decode-sample N] [--start-at-ms T]",
   "          [--min-decoded-fps F] [--decode-warmup-seconds S]",
@@ -925,6 +1008,12 @@ const USAGE = [
   "          [--presenter-profile 720p|720p-simulcast|1080p] [--screen-pin high|medium|low|none]",
   "          [--audio-publishers N] [--camera-publishers M] [--camera-profile 1080p|720p] [--camera-pin low|none]",
   "          [--join-concurrency N] [--join-deadline-seconds S] [--presenter-only] [--no-presenter]",
+  "          [--low-latency]               with --presenter-only and a --watch-party manifest: go live requesting the LL-HLS ladder",
+  "          --presenter-only against a --watch-party manifest joins the watch_party channel's",
+  "          room (not the plain voice one), creates the party as the presenter, goes live",
+  "          before joining, and ends the party (state: ended) once the hold is over -- this",
+  "          is what actually produces a playlist for hls-audience.ts to poll; a plain",
+  "          --presenter-only run in an ordinary voice channel never starts HLS",
   "          [--cold-bootstrap]            the browser's 21-request first load instead of the thin one",
   "          [--churn-every-ms MS] [--churn-rtc-every N]   run D: this process reconnects one receiver every MS (resume pair, expect resumed:true); every Nth also drops the LiveKit room and re-mints",
   "  cleanup --manifest <file>            (also needs PQP_LOAD_DATABASE_URL)",
@@ -934,13 +1023,20 @@ const USAGE = [
   "     (loopback overrides), PQP_LOAD_SMOKE=1, PQP_LOAD_DIAGNOSTIC=1,",
   "     PQP_LOAD_SIZE_OVERRIDE=1 (hosted 2..2000 participants, 5 s..30 min hold), PQP_LOAD_TRACE=1",
 ].join("\n");
-const command = process.argv[2] as Command | "help" | "--help" | "-h" | undefined;
-if (command === "help" || command === "--help" || command === "-h") {
-  console.log(USAGE);
-  await dispose();
-} else {
-  if (!(["prepare", "shard", "cleanup"] as string[]).includes(command ?? "")) throw new Error(USAGE);
-  const safe = assertSafeTarget();
-  try { if (command === "prepare") await prepare(safe); else if (command === "shard") await shard(safe); else await cleanup(safe); }
-  finally { await dispose(); }
+// Only run the CLI when this file is executed directly (`tsx src/index.ts`),
+// not when it is imported -- open-app-socket.test.ts imports `openAppSocket`
+// from this module, and without this guard that import would hit the
+// `throw new Error(USAGE)` below (vitest's argv has no prepare/shard/cleanup)
+// before a single test ran.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const command = process.argv[2] as Command | "help" | "--help" | "-h" | undefined;
+  if (command === "help" || command === "--help" || command === "-h") {
+    console.log(USAGE);
+    await dispose();
+  } else {
+    if (!(["prepare", "shard", "cleanup"] as string[]).includes(command ?? "")) throw new Error(USAGE);
+    const safe = assertSafeTarget();
+    try { if (command === "prepare") await prepare(safe); else if (command === "shard") await shard(safe); else await cleanup(safe); }
+    finally { await dispose(); }
+  }
 }

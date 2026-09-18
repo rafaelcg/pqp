@@ -165,7 +165,7 @@ export function WatchPartyTransmission({
   onStreamQualityChange,
   onOpenMixer,
   detailsInDialog = false,
-  trailing,
+  overlay = false,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -254,12 +254,13 @@ export function WatchPartyTransmission({
    */
   detailsInDialog?: boolean;
   /**
-   * Drawn at the right end of the status row, outside the toggle (a button
-   * cannot hold a button). The panel puts the mic warning and its Ativar
-   * mic here, so the muted state is part of the same line as the health
-   * dot instead of a red strip of its own (2026-09-13).
+   * Drawn over the picture (pass 3 of `docs/plans/WATCH_PARTY_UI.md`): a
+   * pill at the top edge of the stage instead of a strip above the split.
+   * While the health is `ok` the sentence folds away and the dot alone
+   * stays, still the button that opens the details; there is nothing to
+   * say, and the picture is the point.
    */
-  trailing?: ReactNode;
+  overlay?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -305,18 +306,37 @@ export function WatchPartyTransmission({
         )
       : 0;
 
+  /**
+   * `height` NEVER ARRIVES ON THE LL PATH, AND THAT IS NOT "STILL PREPARING".
+   * `topHeight` is the tallest rung the LiveKit egress ladder actually
+   * started (PR 376); a `mode: "ll"` session (`pqp-remux`, no transcode, no
+   * ladder) never sets it, on a live party or a dead one alike, and the
+   * summary below used to read `height === null` as "the ladder has not
+   * produced its first rung yet" -- true for the conventional path, and a
+   * permanent state for this one. A staging LL party stuck on "Preparing
+   * the broadcast" for its whole runtime while the sidebar's AO VIVO pill
+   * (which reads `party.state`, not this stream) correctly said live
+   * (2026-09-18). `startLlSession` broadcasts `voice-stream` only once the
+   * remux session is confirmed started (`server/src/voice/hls-remux.ts`),
+   * with no rung wait behind it, so `stream` existing with `mode: "ll"` is
+   * already the live fact -- the same "how many are watching" wording the
+   * conventional ladder reaches once its own rungs are up.
+   */
+  const llMode = stream?.mode === "ll";
   const summary = !stream
     ? isPresenting
       ? t("watchParty.tx.collapsedPreparing")
       : t("watchParty.tx.collapsedIdle")
-    : height === null
-      ? t("watchParty.tx.collapsedPreparing")
-      : audienceCount > 0
-        ? t("watchParty.tx.collapsedRung", {
-            height,
-            count: audienceCount,
-          })
-        : t("watchParty.tx.collapsedRungZero", { height });
+    : llMode
+      ? t("watchParty.live.viewers", { count: audienceCount })
+      : height === null
+        ? t("watchParty.tx.collapsedPreparing")
+        : audienceCount > 0
+          ? t("watchParty.tx.collapsedRung", {
+              height,
+              count: audienceCount,
+            })
+          : t("watchParty.tx.collapsedRungZero", { height });
 
   /**
    * ONE COLOUR FOR THE WHOLE BROADCAST, the way Twitch's Stream Health and
@@ -512,9 +532,11 @@ export function WatchPartyTransmission({
       data-tx-open={open ? "" : undefined}
       data-tx-health={health}
       className={cn(
-        detailsInDialog
-          ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
-          : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
+        overlay
+          ? "max-w-full rounded-full bg-black/60 px-2.5 py-1"
+          : detailsInDialog
+            ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
+            : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
         className,
       )}
     >
@@ -555,7 +577,10 @@ export function WatchPartyTransmission({
             {t("watchParty.tx.title")}
           </span>
         )}
-        <span data-testid="watch-party-tx-summary" className="truncate">
+        <span
+          data-testid="watch-party-tx-summary"
+          className={cn("truncate", overlay && health === "ok" && "sr-only")}
+        >
           {statusLine}
         </span>
         {/* IN THE COLLAPSED ROW, because the panel is collapsed by default and
@@ -597,7 +622,6 @@ export function WatchPartyTransmission({
           />
         )}
       </button>
-      {trailing}
       </div>
 
       {open && detailsInDialog && (

@@ -509,15 +509,23 @@ describe("the persistent mic-muted warning (2026-09-13)", () => {
       ...over,
     });
 
-  it("warns on the status row while presenting with the mic muted, with Ativar mic inline", () => {
-    // Not a red strip of its own any more (2026-09-13): the amber end of the
-    // same line as the health dot, inside the transmission row.
+  it("is the mic pill itself while presenting with the mic muted (2026-09-18)", () => {
+    // Not a sentence on the status row any more: the pill in the dock goes
+    // amber, says the sentence, and is the Ativar mic action. One control
+    // carries the fact and the fix.
     const html = live({ isPresenting: true, micState: "muted" });
-    const tx = html.slice(html.indexOf('data-testid="watch-party-transmission"'));
-    const row = tx.slice(0, tx.indexOf('data-testid="watch-party-dock"'));
-    expect(row).toContain("watch-party-mic-muted-warning");
-    expect(row).toContain("data-watch-party-activate-mic");
-    expect(html).toContain('data-watch-party-mic="muted"');
+    const pill = html.slice(
+      html.indexOf('data-watch-party-mic="muted"'),
+      html.indexOf("</button>", html.indexOf('data-watch-party-mic="muted"')),
+    );
+    expect(pill).toContain("watch-party-mic-muted-warning");
+    expect(pill).toContain("data-watch-party-activate-mic");
+    expect(pill).toContain("nobody hears you");
+    const tx = html.slice(
+      html.indexOf('data-testid="watch-party-transmission"'),
+      html.indexOf('data-testid="watch-party-bar-controls"'),
+    );
+    expect(tx).not.toContain("watch-party-mic-muted-warning");
   });
 
   it("says nothing while not presenting, muted or not", () => {
@@ -1069,7 +1077,7 @@ describe("the live bar, by who is behind it", () => {
       micState: "everyone",
       onShareScreen: async () => {},
     });
-    const dockAt = html.indexOf('data-testid="watch-party-dock"');
+    const dockAt = html.indexOf('data-testid="watch-party-bar-controls"');
     const barAt = html.indexOf('data-watch-party-bar="presenter"');
     expect(dockAt).toBeGreaterThan(barAt);
     // On the dock: mic pill, share, mixer.
@@ -1094,9 +1102,9 @@ describe("the live bar, by who is behind it", () => {
     expect(html).not.toContain("watch-party-tx-mixer-summary");
   });
 
-  it("gives a viewer no dock", () => {
+  it("gives a seatless viewer with nothing to press no bar at all", () => {
     const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "viewer" } });
-    expect(html).not.toContain("watch-party-dock");
+    expect(html).not.toContain("watch-party-bar-controls");
   });
 
   it("keeps the checklist on the empty stage and drops its second share button", () => {

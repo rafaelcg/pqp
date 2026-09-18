@@ -1,0 +1,9 @@
+{
+  "name": "@pqp/ll-loss-harness",
+  "private": true,
+  "type": "module",
+  "description": "Local, offline LL-HLS packet-loss repro rig. Not a pnpm workspace member on purpose -- see README.md.",
+  "scripts": {
+    "run": "./run.sh"
+  }
+}

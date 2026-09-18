@@ -881,6 +881,9 @@ describeDb("communities", () => {
         // asked for it. See the `communitySlug` audit entry below.
         slug: "vira-comunidade",
         tagline: "acorda cedo não",
+        about: null,
+        links: [],
+        featured: null,
         category: "humor",
         // Never sent by this PATCH, and it comes back as the column's default:
         // a listing nobody said anything about is a Portuguese one.
@@ -1569,10 +1572,13 @@ describeDb("communities", () => {
         "/api/public/communities/valorant-brasil",
       );
       expect(Object.keys(res.body.community).sort()).toEqual([
+        "about",
         "bannerUrl",
         "category",
         "createdMonth",
+        "featured",
         "iconUrl",
+        "links",
         "memberCount",
         "name",
         "slug",

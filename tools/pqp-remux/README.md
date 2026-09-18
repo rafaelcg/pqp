@@ -98,6 +98,8 @@ Read by `internal/config`.
 | `KEYFRAME_POLICY` | `natural` | `natural` (never send a PLI) or `pli` (paced, gated requests). **`L0.2` has not chosen a branch yet** — this defaults to `natural` on purpose |
 | `PLI_GATE_FACTOR` | `1.0` | In `pli` mode, wait this many × `SEGMENT_MS` with no IDR before asking for one. A factor above 1 pushes the earliest possible segment boundary past `SEGMENT_MS`, because a segment closes on the first IDR at or after the target |
 | `PLI_PACE_MS` | `500` | Minimum spacing between repeated PLI requests while still waiting for an IDR. **Floored at 500ms** regardless of a lower value: `L0.1` found the SFU's own `rtc.pli_throttle` (Low tier) defaults to 500ms for a single-layer publish (our screen share always is), so asking faster only wastes RTCP, it does not get more keyframes |
+| `CLOCK_CUT_PARTS` | `false` | **Off by default; deploying the binary changes nothing until it is set.** Cut every part at exactly `PART_MS` instead of on whichever access unit arrives after the target has passed, filling the rest of a long frame gap with synthesized frames that repeat the picture already on screen (`internal/skipframe`). It exists because `PART-TARGET` is a promise: AVPlayer refuses a playlist outright, as a fatal parse error, when a partial segment runs longer than it, or when a non-terminal one is shorter than 85% of it — and a part is otherwise exactly as long as the frame it holds. Measured against the live stream on 2026-09-17: parts of 0.667s, 1.1s and 2.25s beside the usual 0.5s. The synthesizer refuses any stream it cannot write a correct slice for (CABAC, several slice groups, weighted prediction, field coding, `pic_order_cnt_type` other than 2, more than one reference frame), and such a session keeps today's behaviour exactly; the stats line's `repeats=`/`cuts=` counters say which way it went |
+| `REORDER_HOLD_MS` | `300` | How long a video RTP packet waits for the one in front of it before the gap is handed to the depacketizer. Roughly one publisher-to-SFU round trip, which is when a NACKed retransmission lands. **`0` turns holding off entirely**: every gap goes straight through, the behaviour before the buffer existed, and the rollback if the hold ever costs more than it buys. Bounded at 1000; past that it is a jitter buffer wearing this knob's name. The buffer can add at most `REORDER_HOLD_MS` plus one 100ms monitor tick to the pipeline (`internal/session`'s `reorderDelayBound`), and `PART_STUCK_MS` is sized against exactly that sum (see `internal/control`'s `partStuckThreshold`). Read by BOTH binaries: `pqp-remuxd` loads its own copy, because production runs that one |
 | `AAC_BITRATE_KBPS` | `128` | Target AAC-LC bitrate `internal/aacenc` asks ffmpeg's native encoder for |
 | `FFMPEG_PATH` | `ffmpeg` (via `PATH`) | Override the ffmpeg binary `internal/aacenc` shells out to |
 | `CHANNEL_ID` | `ROOM`'s value | The R2 key layout's `channelId` segment. Defaults to `ROOM` because `server/src/voice/hls-egress.ts`'s own `roomName` **is** the channel id (one LiveKit room per voice channel) — this exists only to override that in a test or a future topology where that stops holding |
@@ -397,7 +399,8 @@ time tracks the wall clock, whatever the frame rate**:
   time.
 - **A quiet source's part waits for the frame that really ends the gap**
   and carries that frame's true duration, so **parts may run longer than
-  `PART_MS`** — about a second on a static tab. `state.json` reports the
+  `PART_MS`** — about a second on a static tab. (Unless `CLOCK_CUT_PARTS`
+  is on, which is exactly what it changes.) `state.json` reports the
   real figure in `partTargetMs` (the configured `PART_MS` raised to cover
   the longest listed part, and bounded by `SEGMENT_MS`), because
   `PART-TARGET` is a promise about the maximum and the edge Worker times
@@ -416,13 +419,30 @@ time tracks the wall clock, whatever the frame rate**:
 `timelineRatio` on the stats line is that property, measured: media
 published over wall clock passed, per track. It belongs at `1.00`.
 
-**The limit, stated plainly.** One part per quiet episode. Past that the
-video timeline is HELD at the last frame while the **audio** track — paced
-off the wall clock by `runAudioPacer`, so it never goes idle — keeps
-producing parts at `PART_MS`. Publishing more video than that would mean
-emitting a coded frame the publisher never sent twice, which is safe only
-for an IDR (a P-frame applied to its own output is not the picture it
-codes) and is not something this pipeline does. Under
+**The limit, stated plainly, with `CLOCK_CUT_PARTS` off.** One part per
+quiet episode. Past that the video timeline is HELD at the last frame
+while the **audio** track — paced off the wall clock by `runAudioPacer`,
+so it never goes idle — keeps producing parts at `PART_MS`. Publishing
+more video than that would mean emitting a coded frame the publisher
+never sent twice, which is safe only for an IDR (a P-frame applied to its
+own output is not the picture it codes) and is not something this
+pipeline did until `internal/skipframe` existed.
+
+**With `CLOCK_CUT_PARTS=true` that limit is gone**, because the thing it
+was waiting for now exists: a frame that says "the picture did not
+change" is neither a guess nor a re-send of a coded frame. A freeze then
+produces one part per `PART_MS` for **up to a minute**, every part
+exactly the target, and `partTargetMs` stops climbing with the worst gap
+the session ever had. The minute is a cap, not a cadence: a segment
+closes only on an IDR and a frozen source sends neither frames nor IDRs,
+so filling forever would mean an open segment collecting two parts a
+second, every one of them listed in every playlist the edge serves. Past
+it the old behaviour returns — the timeline holds, one long part is
+published, and the frame that ends the freeze pays the time back. What is published is a P slice whose every
+macroblock is `P_Skip`, which copies the previous picture with a zero
+motion vector and no residual — bit-exact, verified against ffmpeg with
+`-err_detect explode` and `framemd5` on a real capture
+(`internal/skipframe`'s bitstream test). Under
 `KEYFRAME_POLICY=pli` a quiet source is by definition past the gate
 window, so the requester is already asking for a keyframe throughout; if
 the browser answers, ordinary frames resume and the question does not
@@ -447,7 +467,7 @@ signature on one line:
 ```
 pqp-remux: stats session=<id> window=5s subscribed=true
   | video pkts=+1200 (240.0/s) frames=+150 (30.0/s) idr=+2 drops=+7
-    parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
+    markerless=+0 parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
     lastPkt=8ms lastFrame=12ms lastIdr=1.9s lastPart=210ms openSeg=2100ms
     timelineRatio=1.00
   | audio pkts=+250 frames=+234 parts=+10 (2.0/s) segs=+1 timelineRatio=1.00
@@ -465,6 +485,15 @@ show (2026-09-15: 0.54 on video, 0.98 on audio, everything else healthy).
 `maxMs` is a high-water mark and deliberately never reset —
 "did this bucket ever go slow" is a different question from "is it slow
 now", which `lastMs` already answers.
+
+`markerless=` is the odd one out on that line: it is not a fault. It counts
+access units closed by the next packet's RTP timestamp instead of by a
+marker packet, and delivered. A reading above zero with `damage=+0` and
+`lost=+0` beside it is a healthy stream from a publisher that does not
+always set the marker bit, which is legal (RFC 6184 section 5.1) and which
+a real Chrome screen share did eight times in fifteen minutes on a clean
+London box on 2026-09-17. Those eight used to be counted as damage:
+discarded, and answered with a PLI. See `internal/h264`'s `Push`.
 
 Three state changes log immediately rather than waiting for the next
 window: the source going quiet and coming back (`video source idle` /
@@ -820,7 +849,8 @@ documented in Config above — `pqp-remuxd` shares those names with
 | `REMUX_CONTROL_SECRET` | — (required) | The shared HMAC secret. `pqp-remuxd` refuses to start without it — an unsigned control API on a box that can disclose a live presenter's media is not a mode this binary offers. Matches `pqp-api`'s `LIVE_HLS_REMUX_CONTROL_SECRET`. |
 | `MEDIA_ORIGIN_KEY` | — (optional; required with a non-loopback `CONTROL_LISTEN`) | Gates `/s/:id/*` via the `X-Pqp-Origin-Key` header — see "Access control" above. Empty (the default, loopback-only posture) leaves those routes unauthenticated. |
 | `FIRST_PART_TIMEOUT_MS` | `60000` (60s) | No part has EVER arrived for this long → demote, reason `no-video`. Governs the "waiting for a presenter" phase, deliberately separate from and much longer than `PART_STUCK_MS` — see "Watchdog" above. |
-| `PART_STUCK_MS` | `3000` | Once at least one part has arrived: no NEW part for this long → restart the session's pipeline once. `docs/plans/LL_HLS.md` §5's own number ("six parts"). |
+| `PART_STUCK_MS` | `3000` | Once at least one part has arrived: no NEW part for this long → restart the session's pipeline once. `docs/plans/LL_HLS.md` §5's own number ("six parts"). **Sized against the reorder buffer since 2026-09-17**: the effective threshold is this value or twice `PART_MS + REORDER_HOLD_MS + 100ms`, whichever is larger, because a part boundary needs the NEXT access unit and the reorder buffer can delay that. At the defaults the derived floor is 1800ms, so this value still wins and nothing changes; lowering this or raising `REORDER_HOLD_MS` can no longer produce a watchdog that restarts healthy sessions. See `internal/control.WatchdogConfig.partStuckThreshold`. |
+| `REORDER_HOLD_MS` | `300` | How long a video RTP packet waits for the one in front of it before the gap is handed to the depacketizer. Roughly one publisher-to-SFU round trip, which is when a NACKed retransmission lands. **`0` turns holding off entirely**: every gap goes straight through, the behaviour before the buffer existed, and the rollback if the hold ever costs more than it buys. Bounded at 1000; past that it is a jitter buffer wearing this knob's name. The buffer can add at most `REORDER_HOLD_MS` plus one 100ms monitor tick to the pipeline (`internal/session`'s `reorderDelayBound`), and `PART_STUCK_MS` is sized against exactly that sum (see `internal/control`'s `partStuckThreshold`). Read by BOTH binaries: `pqp-remuxd` loads its own copy, because production runs that one |
 | `VIDEO_IDLE_MAX_MS` | `120000` (2 min) | How long a source sending NO RTP at all is forgiven before the restart-then-demote ladder is allowed to run on it anyway; `0` forgives forever. Exists because "no RTP" has two causes that look identical from this end — a publisher genuinely sending nothing (a static tab share, benign) and our own receive path having died quietly with no track-ended event (recoverable, and only by a restart). Far longer than any tab-capture refresh gap, short enough to recover a dead receiver while a party is still worth saving. See "Watchdog and the demotion contract", step 1-bis. **`0` is the only supported way to say "never"** — a large number is not, and one past 24 hours is refused at startup along with the three timers above it: these are millisecond values, and a count typed in the wrong unit wraps `time.Duration` into a tiny or negative bound, which restarts a quiet source on the first quiet tick instead of forgiving it (Farol review, PR #626). `evaluateWatchdog`'s own `msDuration` saturates as well, so neither a validated nor a hand-built `WatchdogConfig` can wrap. |
 | `DEMOTE_WINDOW_MS` | `300000` (5 min) | A second stall within this long of the last restart demotes instead of restarting again; further apart, it's a fresh episode. Sized after the conventional path's own "3 restarts per 5 min then a 5 min cooldown" family (`CLAUDE.md` pitfall 15) — there is no measured number for this specific ladder in the plan text, so this is `L1.6`'s own considered default, not a specified one. |
 
@@ -893,10 +923,12 @@ ffmpeg or `R2_TEST_MINIO_*` aren't available, matching this repo's
 infrastructure rather than assumed-present. Notably:
 
 - `internal/h264`: RTP → access-unit reassembly (single NAL, STAP-A, FU-A),
-  timestamp unwrap across a 32-bit wraparound, a lost marker packet
-  discarding the stale access unit rather than merging it into the next
-  one, and an access unit bounded at `maxAccessUnitBytes` rather than
-  growing forever when a marker never arrives.
+  timestamp unwrap across a 32-bit wraparound, a missing marker packet
+  closing the access unit on the timestamp change and DELIVERING it rather
+  than merging it into the next one (and, when that access unit ends
+  mid-NAL, discarding it instead and asking for a keyframe), and an access
+  unit bounded at `maxAccessUnitBytes` rather than growing forever when no
+  boundary ever arrives.
 - `internal/nal`: the Exp-Golomb SPS parser, round-tripped against a
   bit-writer built in the test file, for both baseline and a High-profile
   stream with an all-identity scaling matrix; `unescapeRBSP` directly,
@@ -961,7 +993,26 @@ infrastructure rather than assumed-present. Notably:
   even past its target (elastic "Branch A"), and does close on the next
   real IDR, with the resulting fragment's first sample verified sync at the
   box level; the audio fragmenter's on-schedule (no IDR-wait) segment cuts
-  and monotonic sequence numbers.
+  and monotonic sequence numbers. With a repeater set (`CLOCK_CUT_PARTS`):
+  no part longer than the target and no non-terminal part under 85% of it
+  through a two-second stall and through a five-second freeze published by
+  the keep-alive, each part starting exactly where the previous one ended,
+  the timeline still tracking the wall clock at 0.2, 1.4 and 30 fps, the
+  resume after a freeze never rewinding, and a stream the synthesizer
+  refuses falling back to the long, honest part it always produced.
+- `internal/skipframe`: the synthesized repeat frame, read back field by
+  field (`first_mb_in_slice`, `slice_type`, `frame_num`, the marking and
+  reference-list flags, `mb_skip_run` covering every macroblock), the
+  `frame_num` renumbering of real slices around inserted frames including
+  a wrap at `MaxFrameNum`, every refusal in `New` provoked on its own, and
+  the two ways synthesis stops itself mid-session (the publisher's
+  parameter sets changing, a slice carrying reference marking commands).
+  **And the check no unit test can make**: a real capture and an
+  ffmpeg-encoded stream both decoded with `-err_detect explode` after
+  repeat frames are inserted into them, asserting zero decoder
+  diagnostics, every inserted frame's `framemd5` identical to the frame
+  before it, and every real frame's `framemd5` unchanged by the
+  insertion. It skips when ffmpeg is not on `PATH`.
 - `internal/r2`: the upload queue/retry/counter state machine against an
   in-memory fake (success, transient-then-succeeds, gives-up-after-max-
   retries, a full queue drops rather than blocks, concurrent `Enqueue`

@@ -13,14 +13,15 @@ Staging is the proving ground. Production has the flags unset.
 
 | Name | Default | What it does |
 |---|---|---|
-| `COMMUNITY_HOME_ENABLED` | off | The surface exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row. |
+| `COMMUNITY_HOME_ENABLED` | off | The feed exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row on a private hall. A community still lands on Overview (identity poster, empty feed). |
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
 **Plus one per-server switch.** With the instance flag on, each server still
 starts with Baú off. An owner turns it on in Server settings (the Baú section,
 `PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
-The row, the landing and the feed need both; the routes need only the instance
-flag, so the setting itself can be flipped through the API. Until the row is
+The row, the landing and the feed need both on a private hall. A community
+always lands on Overview (identity), even with Baú still off; the feed stays
+empty until staff turn it on, and only if the instance flag is on. Until the row is
 opened once on a server it carries a small "New" chip (`localStorage`, per
 server, `client/src/lib/community-home/new-badges.ts`).
 
@@ -50,7 +51,7 @@ COMMUNITY_HOME_VIP_ENABLED=true
 |---|---|
 | `MANAGE_SERVER` | Write, edit, delete, publish, schedule, drafts; turn comments off per post; delete any comment. Always sees members-only posts in full. |
 | VIP cargo (`system_key=vip`) | Cannot publish. Sees members-only posts in full. |
-| Everyone else | Free posts in full. Members-only posts as title + teaser + lock, with body, media **and comment words** stripped on the API (the count survives). |
+| Everyone else | Free posts in full. Members-only posts as title + teaser + lock plate (when the post has media), with body, media **and comment words** stripped on the API. Like count and comment count survive. |
 
 Visibility is enforced in `server/src/services/community-home.ts` (`toPost`);
 the client never reconstructs a locked post from what it has. The staff-only
@@ -58,33 +59,73 @@ the client never reconstructs a locked post from what it has. The staff-only
 only changes how a manager's own screen renders `post.locked`; it exists so
 staff can check the teaser without a second account.
 
-Staff CMS opens from the header **pen** (`MANAGE_SERVER`). Compact header is
-four slots: drawer mark · title (Home / Baú) · staff pen · overflow. Inspector
-and drafts live in that overflow — never Feed|Compose|Drafts tabs, never a
-second viewer row, never a FAB. Dirty close of compose saves a draft into
-overflow; drafts never mix into the member feed.
+Staff CMS opens from **Novo post** on the cover (`MANAGE_SERVER`), next to
+**Edit page** and overflow. Inspector and drafts live in that overflow —
+never Feed|Compose|Drafts tabs, never a second viewer row, never a FAB.
+A community Overview has no Discord channel header: the cover is the top
+of the pane. Dirty close of compose saves a draft into overflow; drafts
+never mix into the member feed.
+
+Card chrome is Patreon-shaped, not Discord-shaped: flush media (or a 16:9
+hatched lock plate, or the public YouTube poster when `posterUrl` is set) at
+the top, a display title, a quiet relative date, the
+body or a public teaser, then likes and the comment count. There is no
+member-facing author row. The page is the creator. Locked cards still show
+counts; they never expand comment words. Dummy CSS blur lines stand in for
+the hidden body. They are not the real text. The plate is only for posts
+with `hasMedia` (true when `media_kind` is set, even if `media` is null for
+this viewer). A text-only VIP post does not grow a fake video. A locked
+YouTube post may show the public `i.ytimg.com` poster (`posterUrl`). That
+image is already on YouTube. Uploaded files stay hatched: those pixels are
+the secret. The poster names the video id, so do not put an unlisted clip
+behind VIP if the id must stay private.
+
+Staff lock a post with **VIP** in compose, or **Trancar (VIP)** / **Liberar**
+in the card overflow. Pin, edit and delete live there too. Members never
+see the overflow.
 
 Card footers are like + comment count only. Join-call chrome stays off Baú
 cards. Comment teasers on the card are 0–2 (owner reply else oldest, 2-line
-clamp); the rest opens on detail tap.
+clamp); the rest opens on detail tap. Locked cards do not expand comments.
 
-The unlock CTA is disabled and reads "VIP, coming soon". There is no checkout.
-See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
+The unlock CTA is disabled and reads "VIP, coming soon". There is no
+checkout, Gift, Buy post, or price. See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md)
+for what would replace it.
 
 ## What is in the pane
 
-- **Row** in the channel list above TEXT on every server that opted in while
-  the flag is on, with a red count of published posts this person has not
-  seen (`GET …/home/unread`; own posts never count, and the VIP filter
+- **Row** in the channel list above TEXT, still called Baú. It is a page
+  tile (community icon or hue initials; chest on a private hall), not a
+  two-line channel with a teaching subtitle. A community always gets the
+  row. A private hall gets it when it opted in and the
+  instance flag is on. The unread count is published posts this person has
+  not seen (`GET …/home/unread`; own posts never count, and the VIP filter
   matches the feed so the badge cannot promise a post the feed will not
-  show). Opening the feed stamps `community_home_reads` and clears it. The
-  count outranks the "New" chip: a number says more.
-  Landing (`client/src/lib/community-home/landing.ts`): if Baú is on for this
-  server, opening it (no channel in the URL, clicking the server in the rail,
-  first load) lands on the feed every time — community or private hall. A
-  URL that already names a channel still opens that channel. The unread
-  stamp and the "New" chip are unchanged: opening the feed still writes
-  `community_home_reads` and still clears the discovery chip.
+  show). Opening the live feed stamps `community_home_reads` and clears it.
+  The count outranks the "New" chip: a number says more.
+  Landing (`client/src/lib/community-home/landing.ts`): a **community**
+  always lands on this pane (identity header, then the feed). A private hall
+  still needs the server's own Baú opt-in. If the instance flag or the
+  server opt-in is off, a community still opens Overview: the header shows
+  and the feed is empty until staff turn Baú on. A URL that already names a
+  channel still opens that channel. The unread stamp and the "New" chip are
+  unchanged: opening the live feed still writes `community_home_reads` and
+  still clears the discovery chip.
+- **Identity header** on that same scroll, only for `isCommunity`. Cover
+  is full-bleed on the pane (Patreon creator page). With no cover uploaded,
+  the band is a tiled pqp.gg mosaic over the hashed hue wash, the same
+  default `/c/` uses. With no posts the about stays in the header. With
+  posts the header compresses (name, tagline), about plus official links
+  move to a sticky rail beside the feed, and cards lead with media. Staff
+  with Manage Server get **Edit page** on the cover: in-place cover, icon,
+  tagline, about and official
+  links. The editor keeps the poster as a live preview, with cover/icon
+  controls on the pictures and a labeled form under them (crop size, file
+  type, cap). Pictures apply as soon as they are picked. The rest waits for
+  Save. Directory, slug and featured stay in Server settings. No featured
+  16:9 here (pin a Baú post instead). Private halls that turned Baú on
+  keep today's feed with no identity header. One channel-list row, still
+  called Baú.
 - **Live corner card** when a post is published while you are in that
   server, looking at another channel (`community-home-update` plus unread
   going up). Not the author: own posts never count as unread. Not if you
@@ -132,10 +173,14 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   arbitrary host stays plain text. The GIF panel opens below the box when
   there is room and above when there is not, because a comment box can sit
   anywhere in a scrolling feed.
-- **Cards**: no "free" chip ever; a VIP chip only on a members-only post
-  while the VIP flag is on. Heart with a count. The two newest comments under
-  the card, "See all N" fetches the rest. Delete is a two-step button, not a
-  browser dialog.
+- **Cards**: flush media (or a 16:9 lock plate, YouTube poster when we have
+  one) at the top, a big title, a quiet date, body or teaser, then likes +
+  comment count on every published card including locked. No author row. No
+  "free" chip. Locked badge on the plate (or by the date on a text-only VIP
+  post). Dummy CSS blur lines, never the real body. Staff overflow can lock
+  or unlock (VIP visibility). Delete is a two-step in that overflow, not a
+  browser dialog. Heart with a count. The two newest comments under an
+  unlocked card, "See all N" fetches the rest.
 
 ## Limits
 
@@ -221,8 +266,9 @@ the expected shape of a self-host without storage, not a bug.
 - `packages/shared/src/community-home.test.ts`: YouTube / Twitch / TikTok /
   Instagram URL classifiers (profiles, stories and short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
-  card's contract (no free chip, locked leaks nothing, two comments max,
-  Twitch / TikTok / Instagram iframes).
+  card's contract (no free chip, no author row, locked leaks nothing, likes
+  and comment count stay on locked cards, two comments max, Twitch / TikTok /
+  Instagram iframes).
 - `client/src/lib/community-home/embed-preview.test.ts` and
   `community-home-compose-embed.test.tsx`: composer live unfurl (player after
   debounce, skeleton while settling, muted hint after idle).

@@ -14,6 +14,7 @@ import {
   twitchEmbedSrc,
   type CommunityHomeContentType,
   youtubeEmbedSrc,
+  youtubePosterUrl,
 } from "@pqp/shared";
 import {
   claimCommunityHomeMediaUpload,
@@ -42,6 +43,7 @@ export {
   tiktokEmbedSrc,
   twitchEmbedSrc,
   youtubeEmbedSrc,
+  youtubePosterUrl,
 };
 export type {
   CommunityHomeMedia,

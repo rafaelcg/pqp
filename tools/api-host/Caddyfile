@@ -35,6 +35,60 @@
 		# just drops and reconnects per the drain contract below.
 		lb_try_duration 5s
 		flush_interval -1
+
+		# Without trusted_proxies, Caddy does not trust the incoming
+		# X-Forwarded-For it receives from Cloudflare's edge — it writes
+		# its own, carrying only the immediate connection's address, which
+		# behind Cloudflare is a Cloudflare edge IP, the same one for
+		# every viewer who lands on that edge. The API's rate limiter
+		# (server/src/lib/rate-limit.ts) keys per-address buckets on that
+		# header, so every viewer sharing an edge shared one bucket: a
+		# watch party where 300 people arrive at once got closed with
+		# 4429 (server/src/ws/index.ts). Ranges below from
+		# https://www.cloudflare.com/ips-v4 and
+		# https://www.cloudflare.com/ips-v6, fetched 2026-09-18. ufw on
+		# this box already restricts 80/443 to these same ranges
+		# (cloud-init.yaml / provision.sh), so trusting them here is safe
+		# — nothing else can be the immediate connection.
+		trusted_proxies \
+ 173.245.48.0/20 \
+ 103.21.244.0/22 \
+ 103.22.200.0/22 \
+ 103.31.4.0/22 \
+ 141.101.64.0/18 \
+ 108.162.192.0/18 \
+ 190.93.240.0/20 \
+ 188.114.96.0/20 \
+ 197.234.240.0/22 \
+ 198.41.128.0/17 \
+ 162.158.0.0/15 \
+ 104.16.0.0/13 \
+ 104.24.0.0/14 \
+ 172.64.0.0/13 \
+ 131.0.72.0/22 \
+ 2400:cb00::/32 \
+ 2606:4700::/32 \
+ 2803:f800::/32 \
+ 2405:b500::/32 \
+ 2405:8100::/32 \
+ 2a06:98c0::/29 \
+ 2c0f:f248::/32
+
+		# Belt-and-braces: even if the trusted_proxies list above goes
+		# stale (Cloudflare adds a range), send the real viewer address
+		# Cloudflare itself vouches for, so the API sees the true client
+		# either way.
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+
+		# Let a `caddy reload` (every deploy, pqp-deploy.sh) drain open
+		# WebSockets instead of cutting them: without this, Caddy closes
+		# every open `/ws` connection the instant the new config swaps in.
+		# 30s covers the client's own reconnect-jitter window (CLAUDE.md
+		# pitfall #11) with room to spare. Only takes effect once a config
+		# carrying this line has itself been loaded — the reload that
+		# first applies it still closes sockets, so do that one outside a
+		# party (tools/api-host/README.md "Apply").
+		stream_close_delay 30s
 	}
 }
 
