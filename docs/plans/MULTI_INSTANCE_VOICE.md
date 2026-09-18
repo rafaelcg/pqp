@@ -447,8 +447,11 @@ holds the room. Rows are ended by two rules, not one: a row of an EARLIER
 session is superseded by definition and is closed whether or not a leftover
 egress is still writing to it (otherwise retention never collects its
 objects), while a row of THIS session is closed only when its egress is gone.
-The LL path already had this shape (`reconcileLlHlsNow` claims an open row
-before it resumes); this is the conventional half. Beside it, a second defect
+The LL path already had claim-before-act at boot (`adoptLlHlsSessions`) and
+inside `startLlSession`, but not the already-up-machine resume twin: that is
+`adoptRunningLlHlsSession` in `hls-remux.ts`, which asks the remux box (not
+LiveKit) whether the session is still listed, claims the row, and adopts into
+`llRooms` with no `POST` and no `DELETE`. Beside it, a second defect
 from the same incident: `decideLadder` was priced against
 `activeLadderEgressCount()`, which counts every ACTIVE egress on the box
 including the ones `endSupersededSessions` was a line away from stopping, so
