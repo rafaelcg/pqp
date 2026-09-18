@@ -1236,11 +1236,20 @@ describeDb("voice across two instances", () => {
       expect(row).toBeDefined();
       expect(row?.orphaned_at).toBeInstanceOf(Date);
       // Still on the roster, socket gone, seat held.
+      //
+      // READ WHAT B WOULD SERVE, not what B happened to send. Orphaning a
+      // seat changes nothing a roster carries (`rowToParticipant` has no
+      // `orphanedAt`), so `sendRoster`'s `unchanged` path is entitled to send
+      // no frame at all here, and whether it does depends only on whether
+      // this process had already described the room correctly. It had not,
+      // until `VOICE_REGISTRY_BATCH` made A's row land before A's bus hint
+      // went out: waiting for a NEW frame was waiting on a race B used to
+      // lose. A fresh socket's read is the assertion that means what this
+      // says it means.
       await settle();
-      await waitFor(
-        () => lastRoster(bystanderOnB, channel)?.participants.length === 2,
-        "roster on B still lists the orphan",
-      );
+      const probeOnB = recorder();
+      await b.voice.sendAllVoiceRosters(probeOnB.socket, asUser(randomUUID()));
+      expect(lastRoster(probeOnB, channel)?.participants).toHaveLength(2);
       expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
       // Once orphaned, a second pass is a no-op.
       expect(await b.voice.runVoiceReconcile()).toMatchObject({
