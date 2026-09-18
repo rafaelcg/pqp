@@ -310,7 +310,7 @@ export interface WatchPartyPanelProps {
   /**
    * CÂMERA ON THE BAR (2026-09-18). The host had no way to turn their
    * camera on in a party: the call strip's camera button is hidden under
-   * the party chrome (#538, when the stream never carried a camera), and
+   * the party chrome (PR 538, when the stream never carried a camera), and
    * the stream has carried one since `LIVE_HLS_CAMERA` (a second 360p
    * egress the viewer's player draws in a corner). This is that door.
    */
