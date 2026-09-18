@@ -6,7 +6,12 @@ import {
   type CompressorNodeLike,
   type GainNodeLike,
 } from "./screen-mix";
-import { DISPLAY_GAIN_RANGE, MIC_GAIN_RANGE } from "./stream-mix-levels";
+import {
+  DISPLAY_GAIN_RANGE,
+  LIMITER_THRESHOLD_DBFS,
+  MIC_GAIN_RANGE,
+  MIX_MAKEUP_GAIN,
+} from "./stream-mix-levels";
 
 // This suite runs in `node`, with no `window`, so `readStreamMixLevels()`
 // (screen-mix.ts's source for its initial gains) always falls back to its
@@ -42,12 +47,17 @@ vi.stubGlobal("MediaStream", FakeStream);
  */
 function fakeContext() {
   const connections: string[] = [];
+  /** Every `a -> b` the graph actually wired, so a test can walk the bus. */
+  const edges: string[] = [];
   let sources = 0;
   let gainCount = 0;
   const node = (name: string): AudioNodeLike & { name: string } => ({
     name,
-    connect: () => {
+    connect: (target: AudioNodeLike) => {
       connections.push(name);
+      edges.push(
+        `${name}->${(target as { name?: string }).name ?? "unknown"}`,
+      );
     },
     disconnect: () => {
       const idx = connections.lastIndexOf(name);
@@ -75,6 +85,7 @@ function fakeContext() {
   };
   return {
     connections,
+    edges,
     mixed,
     closed,
     gains,
@@ -104,7 +115,11 @@ function fakeContextWithAnalyser(level: { value: number }) {
   const analyser: AnalyserNodeLike & { name: string } = {
     name: "analyser",
     fftSize: 32,
-    connect: () => {},
+    connect: (target: AudioNodeLike) => {
+      base.edges.push(
+        `analyser->${(target as { name?: string }).name ?? "unknown"}`,
+      );
+    },
     disconnect: () => {},
     getFloatTimeDomainData: (buffer: Float32Array) => {
       buffer.fill(level.value);
@@ -167,6 +182,61 @@ afterEach(() => {
 });
 
 describe("createScreenMix", () => {
+  /**
+   * REGRESSION, 2026-09-18. #513 put a -6 dBFS / 12:1 limiter on the bus and
+   * no makeup gain after it, and `DynamicsCompressorNode` adds none of its
+   * own: from that deploy on, nothing a watch party published could reach
+   * within 6 dB of full scale, on top of the display branch's own -3 dB and
+   * another -6 while ducked. The audience's report was "the shared tab AND
+   * the mic are very low", which is the shape of a whole-bus ceiling rather
+   * than one branch being wrong.
+   */
+  it("makes the limiter's ceiling back up before the destination", () => {
+    const f = fakeContext();
+    const display = new FakeStream([
+      new FakeTrack("video"),
+      new FakeTrack("audio"),
+    ]);
+    const mic = new FakeStream([new FakeTrack("audio")]);
+    const mix = createScreenMix(
+      display as unknown as MediaStream,
+      mic as unknown as MediaStream,
+      () => f.context as never,
+    );
+
+    // Exactly the ceiling the limiter takes, no more: +6 dB against a -6
+    // dBFS threshold.
+    expect(MIX_MAKEUP_GAIN).toBeCloseTo(10 ** (-LIMITER_THRESHOLD_DBFS / 20), 6);
+    expect(f.compressor.threshold.value).toBe(LIMITER_THRESHOLD_DBFS);
+
+    const makeup = f.gains.find((g) => g.gain.value === MIX_MAKEUP_GAIN);
+    expect(makeup, "no makeup gain on the bus").toBeDefined();
+    // AFTER the limiter and BEFORE the destination: applied first it would
+    // just drive the limiter harder and change nothing at all.
+    expect(f.edges).toContain(`compressor->${makeup!.name}`);
+    expect(f.edges).toContain(`${makeup!.name}->dest`);
+    expect(f.edges).not.toContain("compressor->dest");
+    mix.close();
+  });
+
+  it("meters the bus AFTER the makeup gain, which is what leaves", () => {
+    const f = fakeContextWithAnalyser({ value: 0 });
+    const display = new FakeStream([
+      new FakeTrack("video"),
+      new FakeTrack("audio"),
+    ]);
+    const mix = createScreenMix(
+      display as unknown as MediaStream,
+      null,
+      () => f.context as never,
+    );
+    const makeup = f.gains.find((g) => g.gain.value === MIX_MAKEUP_GAIN);
+    expect(makeup).toBeDefined();
+    expect(f.edges).toContain(`${makeup!.name}->analyser`);
+    expect(f.edges).toContain("analyser->dest");
+    mix.close();
+  });
+
   it("publishes the display video with ONE mixed audio track", () => {
     const f = fakeContext();
     const video = new FakeTrack("video");
@@ -179,10 +249,11 @@ describe("createScreenMix", () => {
     );
     expect((mix.stream as unknown as FakeStream).getVideoTracks()).toEqual([video]);
     expect((mix.stream as unknown as FakeStream).getAudioTracks()).toEqual([f.mixed]);
-    // Bus wiring: compressor->dest, both gains->compressor, both
-    // sources->their gain. Five connections, not the old two, now that each
-    // branch has a gain stage feeding a shared limiter.
-    expect(f.connections).toHaveLength(5);
+    // Bus wiring: compressor->makeup, makeup->dest, both gains->compressor,
+    // both sources->their gain. Six connections, not the old two, now that
+    // each branch has a gain stage feeding a shared limiter and the limiter's
+    // ceiling is made back up before the destination.
+    expect(f.connections).toHaveLength(6);
     expect(mix.micIn()).toBe(true);
   });
 
@@ -191,8 +262,9 @@ describe("createScreenMix", () => {
     const display = new FakeStream([new FakeTrack("video")]);
     const mic = new FakeStream([new FakeTrack("audio")]);
     const mix = createScreenMix(display as never, mic as never, () => f.context as never);
-    // compressor->dest, both gains->compressor, mic source->mic gain.
-    expect(f.connections).toHaveLength(4);
+    // compressor->makeup, makeup->dest, both gains->compressor, mic
+    // source->mic gain.
+    expect(f.connections).toHaveLength(5);
     expect(mix.micIn()).toBe(true);
   });
 
@@ -203,10 +275,10 @@ describe("createScreenMix", () => {
     expect(mix.micIn()).toBe(false);
     mix.setMic(new FakeStream([new FakeTrack("audio")]) as never);
     expect(mix.micIn()).toBe(true);
-    expect(f.connections).toHaveLength(5);
+    expect(f.connections).toHaveLength(6);
     mix.setMic(null);
     expect(mix.micIn()).toBe(false);
-    expect(f.connections).toHaveLength(4);
+    expect(f.connections).toHaveLength(5);
   });
 
   it("closes the context, disconnects the whole bus and stops the mixed track", () => {

@@ -36,6 +36,10 @@ import type {
   AudioNodeLike,
   GainNodeLike,
 } from "./screen-mix";
+import {
+  LIMITER_THRESHOLD_DBFS,
+  MIX_MAKEUP_GAIN,
+} from "./stream-mix-levels";
 import type { WatchPartyGuestsMode } from "@pqp/shared";
 
 /**
@@ -75,7 +79,7 @@ export function createStageMix(
   // microphones summed at unity can clip, and a guest's mic is not something
   // this module should be trusting to arrive at a sane level.
   const compressor = context.createDynamicsCompressor();
-  compressor.threshold.value = -6;
+  compressor.threshold.value = LIMITER_THRESHOLD_DBFS;
   compressor.knee.value = 6;
   compressor.ratio.value = 12;
   compressor.attack.value = 0.003;
@@ -83,12 +87,21 @@ export function createStageMix(
 
   let lastOutputDbfs: number | null = null;
   let outputInterval: ReturnType<typeof setInterval> | null = null;
+  // Makeup gain, for the same reason and by the same amount as
+  // `screen-mix.ts`'s (see `MIX_MAKEUP_GAIN`): a `DynamicsCompressorNode`
+  // adds none of its own, so without this the stage rung is published with a
+  // hard ceiling 6 dB under everything the audience hears it next to — and
+  // when the party is in "separada" (or has guests, which forces it) this bus
+  // IS the voice the audience gets.
+  const makeupGainNode = context.createGain();
+  makeupGainNode.gain.value = MIX_MAKEUP_GAIN;
+  compressor.connect(makeupGainNode);
   const outputAnalyser = context.createAnalyser?.();
   if (outputAnalyser) {
-    compressor.connect(outputAnalyser);
+    makeupGainNode.connect(outputAnalyser);
     outputAnalyser.connect(destination);
   } else {
-    compressor.connect(destination);
+    makeupGainNode.connect(destination);
   }
   const startOutputMeter = () => {
     if (!outputAnalyser) {
@@ -176,6 +189,7 @@ export function createStageMix(
         branch.gain.disconnect();
       }
       guestBranches.clear();
+      makeupGainNode.disconnect();
       compressor.disconnect();
       outputAnalyser?.disconnect();
       void context.close();
