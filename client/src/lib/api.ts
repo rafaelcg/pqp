@@ -136,6 +136,14 @@ export class ApiError extends Error {
      * absent or unparseable.
      */
     readonly retryAfterMs: number | null = null,
+    /**
+     * The whole parsed failure body, when there was one, for the rare caller
+     * that needs more than the sentence. `POST .../watch-parties` answers a
+     * 409 with `blockingParty` so the client can open the party that is in
+     * the way instead of printing a sentence about a party the person cannot
+     * find. Unknown on purpose: every reader narrows what it needs.
+     */
+    readonly details: unknown = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -221,6 +229,7 @@ export async function apiFetch<T>(
         response.status,
         body.error ?? "Request failed",
         parseRetryAfterMs(response.headers.get("Retry-After")),
+        body,
       );
     }
 
