@@ -32,3 +32,24 @@ rolls the update across `api-a` then `api-b` (or just `api-a` under
 "Two replicas on one box". Gated on `vars.DEPLOY_TARGET == 'vultr'`, so
 merging this directory or the workflow changes nothing on its own — see
 `docs/deploy-vultr.md` for the cutover sequence.
+
+## Apply a Caddyfile-only change by hand
+
+For a change that is only this `Caddyfile` (no new image to roll), on the
+box:
+
+```bash
+sudo cp Caddyfile /opt/pqp/Caddyfile
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+```
+
+`caddy reload` validates the new config before it swaps it in, so a bad
+config is refused rather than left half-applied — the explicit `validate`
+step above just surfaces that same check before you commit to the reload.
+
+**The first reload after adding (or changing) `stream_close_delay` still
+closes every open `/ws` connection.** The delay only takes effect once a
+config carrying it has itself been loaded — the reload that installs it is
+the one reload it cannot protect. Every reload after that one drains
+sockets instead of cutting them. Do this first reload outside a party.

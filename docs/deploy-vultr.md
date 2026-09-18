@@ -169,9 +169,34 @@ WS_COMPRESSION
 ```
 
 `TRUST_PROXY=true` still means exactly one hop, same as `fly.toml`'s
-comment — that hop is now Caddy on this box, not fly-proxy. Cloudflare in
-front of Caddy is invisible to `clientAddress()`, the same way Cloudflare
-proxied DNS in front of Fly already was.
+comment — that hop is now Caddy on this box, not fly-proxy. That hop is only
+trustworthy if Caddy itself is configured to trust it: Caddy's
+`reverse_proxy`, per its own docs, does not use the `X-Forwarded-For` it
+receives from Cloudflare's edge unless the immediate connection is in its
+`trusted_proxies` list — without one, it discards whatever Cloudflare sent
+and writes its own, carrying only the immediate connection's address, which
+behind Cloudflare is a Cloudflare edge IP, the *same* address for every
+viewer who lands on that edge. `clientAddress()` (`server/src/lib/rate-limit.ts`)
+reads exactly that one hop, so every such viewer would share one anonymous
+bucket and one socket bucket — a watch party where 300 people arrive at once
+gets closed with 4429 rather than rate-limited per person.
+`tools/api-host/Caddyfile`'s `(upstreams)` snippet sets `trusted_proxies` to
+Cloudflare's published ranges plus a `header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}`
+belt-and-braces line, so the one hop `TRUST_PROXY=true` reads is the real
+per-viewer address Cloudflare itself vouches for, not Cloudflare's own edge.
+
+**Verify it from two networks**, since this is exactly the kind of bug that
+passes every single-machine test: from two different networks (a laptop off
+wifi plus a phone on cellular, or two cloud boxes in different regions),
+send bursts of requests at the same anonymous endpoint at the same time and
+confirm one network exhausting its 240-per-60s budget does not touch the
+other's — for example two `curl` loops run in parallel, each hammering
+`GET /api/ice-servers` (or any other unauthenticated-but-rate-limited route)
+and each expecting its *own* 429 after roughly 240 requests, not before. The
+other check needs a live party rather than a synthetic burst: watch
+`ws.close code=4429` on the operator dashboard while a room fills up — it
+should stay near zero as people join from many networks through the same
+Cloudflare edge, not climb with the room size.
 
 **Postgres.** If moving to Vultr Managed PostgreSQL, its instances only
 accept TLS connections, but that TLS requirement belongs on `DATABASE_SSL`,
