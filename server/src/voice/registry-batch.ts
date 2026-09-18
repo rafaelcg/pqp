@@ -701,14 +701,18 @@ async function writeBatch(batch: Queue): Promise<void> {
     // is a handful of round trips for a batch of work, and a statement budget
     // that hides its own transaction overhead is not a budget.
     await countedQuery(client, "registry.batchTx", "BEGIN");
-    // THE FLUSH IS BOUNDED, because one flush runs at a time and a stuck one
-    // would otherwise hold the queue open for as long as the database took to
-    // answer. `pool.connect()` already has `connectionTimeoutMillis` (10 s);
-    // this covers the other half, a statement that is accepted and never
-    // returns (a lock wait, a stalled replica). Past the bound the flush fails
-    // like any other failure: retried once, then replayed row by row. Costs
-    // one round trip per flush, which is the cheapest place to buy a hard
-    // ceiling on the one code path in this file that is allowed to block.
+    // NOTHING HERE MAY BLOCK FOREVER, because one flush runs at a time and a
+    // stuck one holds the queue open behind it for as long as the database
+    // takes to answer. `pool.connect()` above already has the pool's
+    // `connectionTimeoutMillis` (10 s); this covers the other half, a
+    // statement that is accepted and never returns (a lock wait, a stalled
+    // replica). It is a bound PER STATEMENT, not per transaction — see
+    // `FLUSH_STATEMENT_TIMEOUT_MS` for the arithmetic — and past it the flush
+    // fails like any other failure: retried once, then replayed row by row.
+    // `SET LOCAL` unwinds with the transaction, so the connection goes back to
+    // the pool exactly as it came out. Costs one round trip per flush, which
+    // is the cheapest place to buy a ceiling on the one code path in this file
+    // that is allowed to block.
     await countedQuery(
       client,
       "registry.batchTx",
