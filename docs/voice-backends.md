@@ -394,17 +394,15 @@ and the room size, and reaching the derived limit is one of the promotion
 triggers above. So the same measurement that makes the warning honest also
 makes the limit honest.
 
-**iOS and Android do not follow it yet.** Both support LiveKit rooms, so both
-work perfectly well *in* a promoted room; what neither can do is move an
-in-progress call from a mesh to the SFU without rejoining. Until they can, a
-native seat in a room somebody promotes is released with the frame above and
-has to rejoin. What each needs, exactly: declare
+**iOS and Android follow it now** (iOS `VoiceModel.onTransportChanged`, Android
+`VoiceController.onTransportChanged`, PR #409); both declare
+`voice-transport-changed` on `auth`, which is what stops the server releasing
+the seat. A socket that does **not** declare it still has its seat released
+with the frame above and has to rejoin, which is what any older build on a
+phone still does. What a client needs, exactly: declare
 `"voice-transport-changed"` in its `auth` caps, handle the frame by tearing the
 mesh engine down and bringing the LiveKit engine up **against the same peer
-id** (Android already has the two engines and the token mint; iOS likewise),
-and keep mute, camera and share intent across the swap. Android's contract
-test (`WireProtocolTest.deliberatelyIgnored`) carries the entry that has to be
-deleted when it does. Tracked in `docs/PARITY.md`.
+id**, and keep mute, camera and share intent across the swap.
 
 Tests: `server/src/voice/promotion.test.ts` (the arithmetic against the
 capacity document, and the two room-full guards), `server/src/ws/voice-promotion.test.ts`
@@ -479,7 +477,7 @@ None of the receive path has been run on hardware yet.
 
 **iOS publishes screen shares on LiveKit** (PR `ios/livekit-share-send`). The ReplayKit bridge is unchanged and transport-agnostic: the extension writes NV12 over the App Group socket, and the app feeds the frames to the mesh's `RTCVideoSource` or to a LiveKit `BufferCapturer` track published as `Track.Source.ScreenShareVideo`. The bridge is armed once the room is connected, and the publish waits for the first frame, because the SDK resolves a buffer track's dimensions from what it captures. The SDK's own broadcast path is not used, deliberately: it JPEG-encodes every frame inside the ~50 MB extension process. The publish carries the web's ladder from PR #237, layer for layer (`sfuScreenPlan` in `ios/pqp/Sources/Voice/VideoQuality.swift`), including the large-room cap, so a phone cannot hand a watch party an uncapped 1080p30 stream. The share control follows `welcome.self.canSpeak`. Still mesh-only on iOS: the receive-side video quality ladder; LiveKit subscribes at the SDK's defaults. **Device-only and unverified:** ReplayKit broadcast has no simulator equivalent.
 
-**Android is still mesh-only.** It declares `["mesh"]` and is refused from SFU rooms with `voice-transport-unsupported`, exactly as iOS was before this.
+**Android runs LiveKit rooms too** (PR #248). It declares `["mesh", "livekit"]` on `join-voice-room`, pinned literal-for-literal by `WireProtocolTest`, and its LiveKit leg is `android/app/src/main/kotlin/gg/pqp/app/voice/LiveKitEngine.kt`. This paragraph said the opposite for months, which is worth more than a correction: somebody debugging an Android join against the hosted SFU reads this section first, and it told them the phone was *supposed* to be refused.
 
 ### What can still split a call
 
@@ -489,7 +487,7 @@ With the registry on and two live instances (M5 of the plan, 2026-09-06):
 
 - **Transport disagreement cannot split a call any more.** The pin is one row in `voice_rooms`; whoever inserts first decides, the other adopts (`voice.transportAdopted`). Two images mid-rollout with different LiveKit config still log `voice.configDrift` from the `voice.hello` exchange, and the CI assertion after a deploy fails if the started machines are not on one image.
 - **Mesh spans instances (since 2026-09-08); the machine count does not pick the transport.** A room nobody has pinned gets the transport policy's answer, on one machine or two, and pins it atomically in `voice_rooms`; a room already pinned (on either transport) is adopted by whichever machine the join or resume lands on (`voice.meshPinAdopted` when it is mesh). For one day a guard sent a fresh mesh room to the SFU while a second lease was live (`voice.meshGuardForcedSfu`); it went the same night, because production has `LIVEKIT_*` set and a peak of forty small rooms would all have landed on the media box. A signaling frame for a peer this instance does not hold crosses on `voice.signal`, stamped with the sender's room; the instance holding the target applies the same-room rule against its own map before delivering, so the bus is no wider a door than the local relay. The ceiling counts the rows too. A machine that is draining withdraws its lease before it closes a single socket, so it stops counting at once. Until 2026-09-08 the guard refused a join into a room pinned elsewhere (`voice-join-refused`, `reason: "mesh-multi-instance"`), which hung up four resumes in the 2026-09-07 window; that refusal, and the `voice.meshClusterUnsafe` warning that went with it, no longer exist.
-- **What can still split a call:** a client that cannot run LiveKit on a two-machine deployment (Android, which declares `["mesh"]`) is refused from every room the policy sent to the SFU, exactly as it is refused from a large server's room today; that is a refusal, visible, not a split. And a `DATABASE_URL` through a transaction-mode pooler, where LISTEN never delivers: the rows are still right, the hints never arrive, and the other machine's sidebar is stale until something local makes it re-read the rows. `bus.selfEchoMissing` at boot is the tell; the plan's note on failing `/health` for it is still open.
+- **What can still split a call:** a client that cannot run LiveKit on a two-machine deployment (no shipping client is one any more: web, Electron, iOS and Android all declare `["mesh", "livekit"]`) is refused from every room the policy sent to the SFU, exactly as it is refused from a large server's room today; that is a refusal, visible, not a split. And a `DATABASE_URL` through a transaction-mode pooler, where LISTEN never delivers: the rows are still right, the hints never arrive, and the other machine's sidebar is stale until something local makes it re-read the rows. `bus.selfEchoMissing` at boot is the tell; the plan's note on failing `/health` for it is still open.
 
 ### The voice registry (`VOICE_REGISTRY=postgres`, off by default)
 

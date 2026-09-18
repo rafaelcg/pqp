@@ -193,14 +193,26 @@ private fun SignedInNav(
     val unsupported = stringResource(R.string.voice_transport_unsupported)
     val screenDenied = stringResource(R.string.voice_screen_share_denied)
     val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
+    val tokenRefused = stringResource(R.string.voice_token_refused)
+    val transportMismatch = stringResource(R.string.voice_transport_mismatch)
+    val backendTimedOut = stringResource(R.string.voice_backend_timeout)
     val joinRefused = stringResource(R.string.voice_join_refused)
     val joinTimedOut = stringResource(R.string.voice_join_timeout)
+    // One sentence per failure class, and the four SFU ones are not
+    // interchangeable: a refused token, a room the server says is peer-to-peer,
+    // a media box nothing can reach and a handshake that ran out of time have
+    // different causes and different next steps. They shared one string until
+    // `SfuFailureKind` split them, which made every report of "voice does not
+    // work on Android" unactionable.
     LaunchedEffect(voiceState.refusal) {
         val text = when (voiceState.refusal) {
             Refusal.RoomFull -> roomFull
             Refusal.TransportUnsupported -> unsupported
             Refusal.ScreenShareDenied -> screenDenied
             Refusal.VoiceBackendUnreachable -> backendUnreachable
+            Refusal.VoiceTokenRefused -> tokenRefused
+            Refusal.VoiceTransportMismatch -> transportMismatch
+            Refusal.VoiceBackendTimedOut -> backendTimedOut
             Refusal.JoinRefused -> joinRefused
             Refusal.JoinTimedOut -> joinTimedOut
             null -> return@LaunchedEffect
