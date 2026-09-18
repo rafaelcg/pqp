@@ -310,6 +310,24 @@ export interface AdminMetrics {
      *  `VoiceActivitySnapshot.registry`. Zero when `VOICE_REGISTRY` is off. */
     registry: {
       writesPerMinute: number;
+      /**
+       * `VOICE_REGISTRY_BATCH`: the write coalescer, since the last deploy,
+       * on the instance that answered. `rowsCoalesced` over `batchFlushes` is
+       * the compression ratio and the only number that says the flag is
+       * buying anything — about one means every flush carried one row, which
+       * is the unbatched cost plus latency. `flushFailures` (a flush that
+       * failed twice and fell back to per-row writes) and `staleDropped` (a
+       * seat that left between a write being asked for and the flush issuing
+       * it) both belong at zero. Null when batching is off.
+       */
+      batch: {
+        batchFlushes: number;
+        rowsCoalesced: number;
+        maxBatch: number;
+        flushMsP95: number;
+        flushFailures: number;
+        staleDropped: number;
+      } | null;
     };
     /**
      * WHETHER ANYBODY IS SITTING IN A CALL THEY LEFT.

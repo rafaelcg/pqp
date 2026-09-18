@@ -18,6 +18,16 @@ import {
   VOICE_RESUME_TOKEN_TTL_MS,
   VOICE_RESUME_TTL_MS,
 } from "../ws/voice-resume-token.js";
+import {
+  enqueueVoicePeerDelete,
+  enqueueVoicePeerOrphan,
+  enqueueVoicePeerRetire,
+  enqueueVoicePeerUpsert,
+  enqueueVoiceRoomTidy,
+  enqueueVoiceWatchPartyTidy,
+  flushVoiceRegistryBatch,
+  isVoiceRegistryBatchEnabled,
+} from "./registry-batch.js";
 
 /**
  * The voice registry: `ws/voice.ts`'s peer map and transport pin, written to
@@ -135,6 +145,13 @@ const inFlight = new Set<Promise<unknown>>();
  * writes (`ws/voice.ts`'s `trackRowWrite`) so tests can await it, and the
  * writes inside that chain each pass through `track()` again on their own.
  * Counting `"chain"` too would double-count every chained write.
+ *
+ * WITH `VOICE_REGISTRY_BATCH` ON THIS COUNTS ROW WRITES ASKED FOR, NOT
+ * STATEMENTS ISSUED, and that is deliberate: it stays comparable across the
+ * flip, so turning batching on cannot make this graph fall off a cliff and
+ * look like a voice outage. What the batching bought is the pair beside it
+ * on the same endpoint, `voice.registry.batch.rowsCoalesced` over
+ * `batchFlushes`.
  */
 const REGISTRY_WRITE_BUCKET_MS = 1_000;
 const REGISTRY_WRITE_BUCKETS = 60;
@@ -210,9 +227,19 @@ export function trackPendingRegistryWork(work: Promise<unknown>): void {
   track(work, "chain");
 }
 
-/** Test seam: resolves once every registry write asked for so far has settled. */
+/**
+ * Test seam: resolves once every registry write asked for so far has settled.
+ *
+ * The batch is drained rather than waited out. With `VOICE_REGISTRY_BATCH` on
+ * an enqueued write does not land until its window fires, so without this a
+ * suite would be sleeping on a 50 ms timer between every assertion, and a
+ * chain of three writes (`ws/voice.ts`'s `trackRowWrite`, which does not
+ * issue the next write until the last one landed) would cost three of them.
+ * A no-op with the flag off: the queue is always empty.
+ */
 export async function settleVoiceRegistryWrites(): Promise<void> {
   while (inFlight.size > 0) {
+    await flushVoiceRegistryBatch();
     await Promise.allSettled([...inFlight]);
   }
 }
@@ -327,8 +354,13 @@ export async function readVoiceRoomTransport(
  * left describing a room nobody is in. A no-op for an occupied room.
  */
 export function unpinVoiceRoomIfEmpty(channelId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoiceRoomTidy(channelId), "unpinIfEmpty");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.unpinIfEmpty",
       `DELETE FROM voice_rooms r
         WHERE r.channel_id = $1
           AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
@@ -362,6 +394,23 @@ export interface VoicePeerRow {
 export type VoicePeerWrite = Omit<VoicePeerRow, "instanceId"> & {
   /** What the room runs on, so a missing room row can be recreated. */
   transport: VoiceRoomTransport;
+  /**
+   * Whether the caller still holds this seat, asked again at WRITE time.
+   *
+   * Unbatched this is redundant: `ws/voice.ts`'s `writePeerRow` checks peer
+   * identity against its map and the statement goes out in the same tick. With
+   * `VOICE_REGISTRY_BATCH` on there is a window between asking for the write
+   * and the flush that issues it, and an upsert whose seat left during that
+   * window is exactly the shape of CLAUDE.md pitfall 13: a row written back
+   * over its own delete, `orphaned_at` NULL, a live `instance_id`, and nothing
+   * in the cluster allowed to sweep it. So the guard is re-asked in
+   * `registry-batch.ts` immediately before the row goes into the statement,
+   * and an upsert that fails it is dropped and counted.
+   *
+   * Optional: a caller with no map behind it (a test, a one-off repair) omits
+   * it and is taken at its word.
+   */
+  stillSeated?: () => boolean;
 };
 
 interface VoicePeerDbRow {
@@ -424,6 +473,9 @@ const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
  * room, where `transport` is the decision this join already adopted.
  */
 export function upsertVoicePeer(peer: VoicePeerWrite): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerUpsert(peer), "upsertPeer");
+  }
   return track(writePeer(peer), "upsertPeer");
 }
 
@@ -517,6 +569,13 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
  * next joiner adopts, at the same transport the room just had.
  */
 export function deleteVoicePeer(peerId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    // The batch keeps the two halves apart in the same way and gains one
+    // guarantee the loose pair cannot have: a flush's own deletes are visible
+    // to its own room tidy, so two of a room's seats leaving in one window
+    // always clear the room row. See `registry-batch.ts`'s `runPlan`.
+    return track(enqueueVoicePeerDelete(peerId), "deletePeer");
+  }
   return track(
     (async () => {
       const pool = getPool();
@@ -674,8 +733,13 @@ export function markVoicePeerOrphaned(
   peerId: string,
   orphanedAt: Date | null,
 ): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerOrphan(peerId, orphanedAt), "markOrphaned");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.markOrphaned",
       `UPDATE voice_peers
           SET orphaned_at = $2, instance_id = $3, updated_at = NOW()
         WHERE peer_id = $1`,
@@ -1127,8 +1191,13 @@ export async function readWatchParty(
  * next call in the channel does not inherit a film nobody is watching.
  */
 export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoiceWatchPartyTidy(channelId), "clearWatchParty");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.clearWatchParty",
       `UPDATE voice_rooms r
           SET watch_party = NULL, watch_party_rev = 0
         WHERE r.channel_id = $1
@@ -1442,8 +1511,13 @@ export async function reconcileVoiceRegistry(options: {
 
 /** Block reconstruct of a hung-up id cluster-wide for the token's life. */
 export function retireVoicePeerId(peerId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerRetire(peerId), "retirePeer");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.retirePeer",
       `INSERT INTO voice_retired_peers (peer_id) VALUES ($1)
        ON CONFLICT (peer_id) DO UPDATE SET retired_at = NOW()`,
       [peerId],
