@@ -580,6 +580,18 @@ say I am alive" is not "I am alive". A row another process wrote in the last 60 
 between `startLlSession`'s INSERT and its POST) is left alone whatever the
 heartbeats say, which is this section's own grace, now enforced.
 
+**And the owner has to change hands on a RESUME, not only at boot.** Boot
+adoption covers the machine that comes up; it does not cover the machine that
+was already up when the presenter landed on it. `#625` closed that for the
+conventional ladder. LL was left out on purpose (no `egress_id` to ask LiveKit
+about), and `startLlSession`'s claim-before-act was not the same shape: a
+transient `GET /sessions` failure looked like "gone" and POSTed a second
+start, and a lost claim had no `stand-down` answer. `adoptRunningLlHlsSession`
+is the LL twin — same moment as the seat adoption, asks the remux box, claims
+the row, adopts into `llRooms` with no `POST` and no `DELETE`. `fresh` vs
+`stand-down` is the same split: the loser of a two-machine race starts
+nothing and stops nothing.
+
 **The mode re-check has to run where the transcode is.** Every path into
 `pushLiveHls` reads this process's own maps, so on the machine a viewer's
 frame happened to land on — about half of them, with no session affinity —

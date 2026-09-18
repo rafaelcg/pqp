@@ -777,7 +777,10 @@ describe("starting a session (item 2: deterministic ids)", () => {
     // The core fix of item 2's follow-up (a Farol finding, fourth round):
     // a lookup failure must never be read as "no open row", because that
     // would let this proceed to mint and start a SECOND session on top of
-    // one that might still be running fine.
+    // one that might still be running fine. Resume-adopt asks first and
+    // stands down on the same answer, so startLlSession is never reached
+    // and startFailures stays at zero — the failure is the stand-down, not
+    // a counted start attempt.
     enableLL();
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl });
@@ -790,14 +793,10 @@ describe("starting a session (item 2: deterministic ids)", () => {
     expect(stream).toBeNull();
     expect(server.calls).toHaveLength(0); // the control API was never even asked
     expect(llHasRoom(CHANNEL)).toBe(false);
-    expect(llHlsActivity().startFailures).toBe(1);
+    expect(llHlsActivity().startFailures).toBe(0);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",
       expect.objectContaining({ channelId: CHANNEL, source: "open-row" }),
-    );
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStartFailed",
-      expect.objectContaining({ channelId: CHANNEL, reason: "lookup-failed" }),
     );
   });
 
@@ -805,7 +804,8 @@ describe("starting a session (item 2: deterministic ids)", () => {
     enableLL();
     const db = createFakeDb();
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    let now = 1_700_000_000_000;
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => now });
     let failOnce = true;
     query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (failOnce) {
@@ -818,6 +818,9 @@ describe("starting a session (item 2: deterministic ids)", () => {
     const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
     expect(first).toBeNull();
 
+    // The stand-down is cached for a few seconds so a roster storm does not
+    // re-probe on every join; past that window the next reconcile asks again.
+    now += 6_000;
     const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(second).not.toBeNull();

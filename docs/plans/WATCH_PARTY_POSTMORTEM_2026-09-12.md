@@ -7,7 +7,7 @@ Status legend: P0 = before the next party, P1 = this month, P2 = backlog. Effort
 | # | Item | Why (evidence) | Effort | Prio |
 |---|------|----------------|--------|------|
 | A1 | Exempt egress identities (`EG_*`) from every SFU eviction sweep; cancel `voice_resweeps` rows when a channel goes public; log who triggered a sweep | 23:12–23:26: three permission saves scheduled 15-min sweeps that evicted our transcoder every 5 s and kicked seated users ("sai da call sozinho") | 0.5 | P0 |
-| A2 | Database write budget: batch voice-registry seat writes and heartbeats, cache roster membership checks, coalesce presence broadcasts; add a counter for tx/s per seated user | ~330 tx/s with 276 clients and 60 seated; the shared-CPU node died at 23:23 | 2 | P0 |
+| A2 | Database write budget: batch voice-registry seat writes and heartbeats, cache roster membership checks, coalesce presence broadcasts; add a counter for tx/s per seated user | ~330 tx/s with 276 clients and 60 seated; the shared-CPU node died at 23:23 | 2 | P0 — reads shipped (`READ_CACHE`, on); writes shipped behind `VOICE_REGISTRY_BATCH`, default off, see §G |
 | A3 | Load test the **database** with the real shape: 60–100 seated churning, 300 watchers, 5 joins/min, 30 min sustained, against a clone of the prod plan; gate on pool queue depth and p99 query time | Every earlier test hit the playlist route or WS joins on staging's DB; the write path was never measured | 1 | P0 |
 | A4 | Alerts: pool queued > 20 for 30 s, `select 1` > 50 ms, readiness false, HLS rung death rate; page to Rafael's phone | We learned about the collapse from viewers | 0.5 | P0 |
 | A5 | Decommission `pqp-db-2`, verify nightly backup runs against `pqp-db-4`, update `docs/DB_RUNBOOK.md` with the stop-API-then-resize and the new-cluster-copy recipes (8 MB, 3 s dump) | Cluster still up; backup secret staged, not deployed | 0.5 | P0 |
@@ -82,3 +82,56 @@ Prices are Vultr list prices as of 2026-09-12 (`vhp-*` plans from the Vultr API;
 - Nine ghost ACTIVE egress records in LiveKit (A7).
 - Recording of tonight: mirror on the egress box under `/srv/party-archive/live/318a0954-.../`, stitch with `ffmpeg -f concat`; set `keep_replay` on tonight's sessions before the 3 h retention passes.
 - PRs ready to merge in the post-party window: #517 (RNNoise, opt-in), #518 (mic archive, restarts-api, dark), #520 (mini-player on voice channels), #524 (desktop share parity, then tag 0.1.6).
+
+## G. A2, the write half: the voice-registry write coalescer (2026-09-18, behind a flag)
+
+A2 was two halves. The **read** half shipped as `server/src/lib/read-cache.ts` (`READ_CACHE`, on by
+default): identical Postgres reads during a reload storm are coalesced, and 200 concurrent cold
+bootstraps against staging are now unremarkable. The **write** half was still open, and a staging
+run on 2026-09-18 said so in numbers:
+
+| what | measured on staging, 2026-09-18 |
+|---|---|
+| 800 seated sockets rejoining at once | pool wait queue **4,604** on one API process (1,765 on each of two). `lib/db-breaker.ts` opens at a queue of 8 for 5 s, so the breaker opened and **every rejoin failed** |
+| ~700 seats leaving at once | `checks.postgres.ms` **1,225**, 141 queries queued, for a minute |
+| 200 concurrent cold bootstraps (reads) | fine — the read cache does its job |
+
+The cause is one line of arithmetic: with `VOICE_REGISTRY=postgres`, a join, a state change and a
+leave are each their own statement on their own pooled connection, so the pool sees the fan-in of
+the event rather than the work of it.
+
+**What shipped**: `VOICE_REGISTRY_BATCH` (`server/src/voice/registry-batch.ts`), **default off**.
+On, peer upserts, peer deletes, orphan stamps, retired ids and the two empty-room tidies for this
+instance are queued and flushed every `VOICE_REGISTRY_BATCH_MS` (default 50) or as soon as
+`VOICE_REGISTRY_BATCH_MAX` (default 200) rows are waiting, as one multi-row statement per kind
+inside **one transaction on one pooled connection**, with at most one flush in flight. The queue
+absorbs the burst so the pool sees one checkout instead of hundreds. Measured in
+`server/src/voice/registry-batch.test.ts` against a real Postgres: 500 joins then 500 leaves cost
+**2,000 statements with the flag off and 20 with it on**, four flushes, 300 rows in the largest,
+p95 flush 3 ms.
+
+**Ordering is preserved, and that is a correctness rule, not a nicety** (CLAUDE.md pitfall 13).
+`ws/voice.ts`'s `trackRowWrite` still chains a peer's writes, so a peer's second op is not enqueued
+until the first op's flush has committed; inside a flush the queue holds at most one op per peer
+and the later one wins, folded rather than appended (an orphan stamp lands *inside* a pending
+upsert so its state change is not lost, and a delete an upsert replaced is remembered); and the
+"is this seat still in the map" check is re-asked at **flush** time, because batching opens a new
+window between a write being asked for and the statement going out. A `set-voice-state` behind a
+leave therefore still cannot resurrect a seat.
+
+**What is deliberately not batched**: the instance heartbeat (already one row per instance per
+tick), `sweepOwnStaleVoicePeers` and `reconcileVoiceRegistry` (already one statement each however
+many peers they touch), and the moderator mute / raised hand / watch-party / music writes, which
+are one write per deliberate human action rather than seat churn.
+
+**Turning it on**: set `VOICE_REGISTRY_BATCH=on` (restarts the API). Watch `voice.registry.batch`
+on `GET /api/admin/metrics` — `rowsCoalesced / batchFlushes` is the compression ratio and a ratio
+of about 1 means the flag is on and buying nothing; `flushFailures` (a flush that failed twice and
+fell back to per-row writes) and `staleDropped` (the pitfall-13 guard firing) both belong at zero.
+`voice.registry.writesPerMinute` deliberately keeps counting row writes *asked for* rather than
+statements issued, so it stays comparable across the flip and a healthy batcher cannot make the
+graph look like a voice outage. Rollback is unsetting it.
+
+**Still open in A2**: the leave path's per-seat `listVoicePeersInRoom` (one roster read per leave,
+to decide whether the person's hand should come down) and the presence broadcast coalescing. Both
+are reads or fan-out rather than registry writes, and neither was what the numbers above pointed at.

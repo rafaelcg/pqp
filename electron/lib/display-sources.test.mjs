@@ -11,6 +11,8 @@ const {
   pickAutomatically,
   screenPermission,
   captureResponse,
+  windowsNtBuild,
+  windowsBuildAllowsOwnAudioExclude,
 } = require("./display-sources.js");
 
 /** A `NativeImage` as far as this module is concerned. */
@@ -281,26 +283,57 @@ describe("screenPermission", () => {
   });
 });
 
+describe("windowsNtBuild", () => {
+  it("reads the third component, never major === 11", () => {
+    assert.equal(windowsNtBuild("10.0.22631"), 22631);
+    assert.equal(windowsNtBuild("10.0.22000"), 22000);
+    assert.equal(windowsNtBuild("10.0.19045"), 19045);
+    assert.equal(windowsNtBuild("11.0.0"), 0);
+  });
+
+  it("refuses Server 2022 and Windows 10", () => {
+    assert.equal(windowsBuildAllowsOwnAudioExclude("10.0.20348"), false);
+    assert.equal(windowsBuildAllowsOwnAudioExclude("10.0.19045"), false);
+    assert.equal(windowsBuildAllowsOwnAudioExclude("10.0.22000"), true);
+    assert.equal(windowsBuildAllowsOwnAudioExclude("10.0.22631"), true);
+    assert.equal(windowsBuildAllowsOwnAudioExclude(""), false);
+    assert.equal(windowsBuildAllowsOwnAudioExclude(undefined), false);
+  });
+});
+
 describe("captureResponse", () => {
   const source = { id: "screen:0:0", name: "Screen 1" };
+  const win11 = "10.0.22631";
 
-  it("asks for loopback audio only on Windows", () => {
-    assert.deepEqual(captureResponse(source, "win32", true), {
+  it("asks for loopback audio only on Windows 11", () => {
+    assert.deepEqual(captureResponse(source, "win32", true, win11), {
       video: source,
       audio: "loopback",
     });
+  });
+
+  it("refuses loopback on Windows 10 and Server 2022", () => {
+    for (const release of ["10.0.19045", "10.0.20348", undefined, ""]) {
+      assert.deepEqual(captureResponse(source, "win32", true, release), {
+        video: source,
+      });
+    }
   });
 
   it("never asks for loopback elsewhere", () => {
     // Not a silent share: on macOS this fails the whole request, so the user
     // gets nothing rather than a video-only share.
     for (const platform of ["darwin", "linux"]) {
-      assert.deepEqual(captureResponse(source, platform, true), { video: source });
+      assert.deepEqual(captureResponse(source, platform, true, win11), {
+        video: source,
+      });
     }
   });
 
   it("skips audio the page never asked for", () => {
-    assert.deepEqual(captureResponse(source, "win32", false), { video: source });
+    assert.deepEqual(captureResponse(source, "win32", false, win11), {
+      video: source,
+    });
   });
 
   it("is the echo switch: no request, no whole-system loopback", () => {
@@ -309,14 +342,14 @@ describe("captureResponse", () => {
     // page asked `restrictOwnAudio`. A false `audioRequested` must still skip
     // the tap entirely, including on v0.1.3, and for every source kind.
     for (const candidate of [source, { id: "window:12:0", name: "Game" }]) {
-      const response = captureResponse(candidate, "win32", false);
+      const response = captureResponse(candidate, "win32", false, win11);
       assert.equal(response.audio, undefined);
       assert.equal(response.video, candidate);
     }
   });
 
   it("returns null when there is no source", () => {
-    assert.equal(captureResponse(null, "win32", true), null);
+    assert.equal(captureResponse(null, "win32", true, win11), null);
     assert.equal(captureResponse(undefined, "darwin", false), null);
   });
 });

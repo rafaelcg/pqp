@@ -99,6 +99,7 @@ import {
   liveHlsStreamFromDb,
   reconcileLiveHls,
   setLiveHlsChangeListener,
+  setLiveHlsPresenterCheck,
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
@@ -155,6 +156,11 @@ import {
   type VoicePeerRow,
   type VoiceRosterPeerRow,
 } from "../voice/registry.js";
+import {
+  isVoiceRegistryBatchEnabled,
+  voiceRegistryBatchMetrics,
+  type VoiceRegistryBatchMetrics,
+} from "../voice/registry-batch.js";
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
@@ -592,6 +598,13 @@ function writePeerRow(peer: VoicePeer): void {
       orphanedAt:
         peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
       transport: getRoomTransport(peer.voiceChannelId),
+      // The same identity check as above, handed to the registry so it can
+      // ask it AGAIN at the moment the row goes out. With
+      // `VOICE_REGISTRY_BATCH` on the write is issued a window later than it
+      // was asked for, and a seat can leave inside that window; the check
+      // here would then have passed for a peer that no longer exists, which
+      // is precisely how pitfall 13's immortal rows were made.
+      stillSeated: () => peers.get(peer.id) === peer,
     }),
   );
 }
@@ -1653,6 +1666,24 @@ export interface VoiceActivitySnapshot {
    */
   registry: {
     writesPerMinute: number;
+    /**
+     * `VOICE_REGISTRY_BATCH`: what the write coalescer is doing, since boot.
+     *
+     * `rowsCoalesced / batchFlushes` IS the compression ratio, and it is the
+     * number that says whether the flag is doing anything at all: a ratio of
+     * about one means every flush carried one row, which is the unbatched
+     * cost with extra latency. Pitfall 12 is why it is here at all — a flag
+     * production sets must carry the counter that proves it runs.
+     *
+     * `flushFailures` is flushes that failed twice and fell back to per-row
+     * writes, and `staleDropped` is the pitfall-13 guard firing at flush time
+     * on a seat that left inside the window. Both belong at zero; a climbing
+     * `staleDropped` is the guard working, not a leak.
+     *
+     * Null when batching is off, so a zero never claims a batcher is healthy
+     * on a deployment that has none.
+     */
+    batch: VoiceRegistryBatchMetrics | null;
   };
   /**
    * WHETHER ANYONE IS SITTING IN A CALL THEY LEFT.
@@ -1823,7 +1854,12 @@ async function readSeatHealth(): Promise<VoiceActivitySnapshot["seats"]> {
     return {
       idleOverAnHour: idle.seats,
       oldestIdleMinutes: idle.oldestIdleMinutes,
-      staleRowWritesRefused,
+      // Both halves of the same refusal: the one this file catches when the
+      // write is asked for, and the one `registry-batch.ts` catches at flush
+      // time on a seat that left inside the window. They mean the same thing
+      // to an operator, so they are one number.
+      staleRowWritesRefused:
+        staleRowWritesRefused + voiceRegistryBatchMetrics().staleDropped,
       ghostsSwept: ghostSeatsSwept,
       meshHoldsRefused,
       idleAloneWarned,
@@ -1931,6 +1967,10 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     },
     registry: {
       writesPerMinute: registryOn() ? voiceRegistryWritesPerMinute() : 0,
+      batch:
+        registryOn() && isVoiceRegistryBatchEnabled()
+          ? voiceRegistryBatchMetrics()
+          : null,
     },
     seats,
     roster: {
@@ -2345,6 +2385,30 @@ setLiveHlsChangeListener((channelId, reason) => {
 setLiveHlsSfuLoadReader(async () =>
   estimateSfuLoadMbps(await readRoomLoads()),
 );
+
+/**
+ * IS THIS PERSON STILL THE PRESENTER, asked by the media path at the moment
+ * it is about to spend a core on them (`LiveHlsPresenterCheck`).
+ *
+ * The same two authorities `pushLiveHls` reads, and deliberately no others:
+ * a party this process saw end, and the room's current `pickHlsSharer`. What
+ * makes it worth asking twice is WHEN: the push reads them before a server-id
+ * lookup, a mode resolve and this channel's whole reconcile queue, and on
+ * 2026-09-17 a start that had been decided before a party ended ran after it,
+ * for a presenter who left 200 ms later.
+ *
+ * A peer id that is no longer in the room, or is in it without the three bits
+ * `pickHlsSharer` needs, is "gone". That is the conservative answer on
+ * purpose: the cost of it being briefly wrong is a start the very next push
+ * makes anyway (every one of those bits changing is itself a `pushLiveHls`),
+ * and the cost of the other answer is a transcode nobody is watching.
+ */
+setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
+  if (watchPartyKnownOver(channelId)) {
+    return false;
+  }
+  return pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId;
+});
 
 /**
  * The stream a `channel-live` frame carries for this channel, from THIS

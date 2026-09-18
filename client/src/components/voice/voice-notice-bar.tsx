@@ -38,16 +38,19 @@ export function VoiceNoticeBar({
     return null;
   }
   return (
+    // Status only. The strip sits over the share tile's own controls, so it
+    // stays pointer-events-none and only the close button opts back in --
+    // otherwise it captures clicks meant for fullscreen underneath it.
     <p
       role="status"
       data-voice-notice
-      className="absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
     >
       <span>{notice}</span>
       <button
         type="button"
         aria-label={t("common.close")}
-        className="rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline focus-visible:outline-1"
+        className="pointer-events-auto rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline focus-visible:outline-1"
         onClick={() => setHidden(notice)}
       >
         <X className="size-3.5" aria-hidden="true" />

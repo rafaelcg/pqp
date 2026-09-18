@@ -1860,9 +1860,19 @@ already cover it; a future stitch of face-plus-film side by side reads the
 A stalling stream and a healthy one look identical from the API. Read this
 before diagnosing one.
 
+**The state map is its own document now.** [`docs/WATCH_PARTY_LIFECYCLE.md`](./WATCH_PARTY_LIFECYCLE.md)
+lists the three machines (the party session, the HLS session and its LL
+substate, and what the viewer's player shows), who moves each one, and the
+invariants between them -- including the five that broke together on
+2026-09-17 and produced a zombie session, a restart for a party that was
+over, and a viewer stuck on "reconnecting" with the truth in the sidebar
+beside it. Read that first when a party is in a state nobody can explain;
+this section is the restart machinery underneath it.
+
 **Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
 `no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
-`playlist-not-ready`. It did not, and on 2026-09-09 a live party logged two
+`playlist-not-ready`, `presenter-gone` (the presenter left while this session
+was still inside its readiness probe, 2026-09-17), `ll-mode-selected`. It did not, and on 2026-09-09 a live party logged two
 `voice.hlsStarted` for one channel nine minutes apart, same presenter, with
 nothing at all in between. Three of `stopRoom`'s callers logged nothing and the
 fourth logged only in a branch a silent one pre-empted, so there was no way to

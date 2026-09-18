@@ -871,6 +871,64 @@ communication to 192.168.50.245 not permitted by network security policy`),
 left the WS room (server: `voice.join` then `voice.leave`, no ghost) and showed
 the "could not reach the voice server" snackbar. It never built a mesh.
 
+**None of that has been run against `sfu.pqp.gg`.** The rig above is a local
+container; the hosted media box is a different network path entirely (grey-cloud
+DNS straight to the Vultr IP, UDP mux 7882 to 7885, a Let's Encrypt certificate
+Caddy owns, and TURN on `turn.pqp.gg` whose TLS half is dead because Caddy owns
+443). The first real report from a phone in a production LiveKit room came on
+18 Sep 2026 and said only "Não foi possível conectar ao servidor de voz desta
+chamada", which was the whole vocabulary this client had.
+
+### Which of the four things went wrong
+
+`SfuJoinFailure.kt` classifies it, `LiveKitEngine` logs it and the toast says
+it. The four classes, and what each one means:
+
+| `SfuFailureKind` | What it is | Retried |
+|---|---|---|
+| `TokenRefused` | `POST /api/voice/token` answered 400, 401, 403, 404 or 429. The seat, the account or the channel, not the network. A 404 is also what a ban looks like. | 429 only |
+| `TransportMismatch` | 409 `This room runs peer-to-peer`: the room's pin is not visible to the instance that served the request, or the room was unpinned between `welcome` and the mint. | no |
+| `Unreachable` | Nothing answered: an IO or TLS failure to `wss://sfu.pqp.gg`, a 5xx from the mint, or a `Room.connect` that never completed ICE inside livekit-android's own 20 s ceiling. | yes, twice |
+| `TimedOut` | The whole sequence ran past `JOIN_TIMEOUT_MS` (45 s, the same budget the web and iOS allow). | no |
+
+Each has its own string in both languages, so the toast is now a first
+diagnosis rather than a shrug. The retry is bounded twice, by
+`SFU_CONNECT_ATTEMPTS` (3) and by the single 45 s deadline over the whole
+sequence, and only `Unreachable` and 429 are tried again: a phone that retries
+a refusal cannot be told to stop. The waits are **jittered**, half to one and a
+half times the schedule, for the same reason `reconnect-jitter.ts` exists on
+the web: the retry is most useful exactly when the SFU has started failing,
+which is when every phone in every room is retrying at once, and a fixed
+schedule would put all of them on the same two instants.
+
+**The log line.** Fixed field order, fixed field count, `-` for anything
+absent, because for a TLS or ICE failure this is the *only* record that exists
+anywhere (the server never sees the attempt):
+
+```
+sfu-join-failed kind=Unreachable status=- attempt=1 channel=… peer=… detail=…
+```
+
+To capture the next one from a phone with USB debugging on:
+
+```bash
+adb logcat -c
+adb logcat -v time pqp.voice:V AndroidRuntime:E '*:S' | tee /tmp/pqp-voice.log
+```
+
+`sfu-join-ok` is the success line, and it carries the SFU URL the token named.
+
+**A failing connect used to report itself twice, and the wrong one won.**
+`RTCEngine.onError` raises `Room.onFailToConnect` for anything thrown while the
+connection state is CONNECTING, which emits `RoomEvent.FailedToConnect`; then
+`Room.connect` throws the same failure with more in it. Both called `fail`,
+`fail` is one-shot, and the collector usually got there first, so the
+`RoomException.ConnectException` that says whether the signalling socket, TLS
+or ICE was the problem went into a `catch` that could no longer do anything
+with it. `handshakesInFlight` in `LiveKitEngine` is what stops that, and
+`SfuJoinFailureTest` reads the two collector branches off disk to keep it
+stopped.
+
 **Local LiveKit rig for a debug build.** The debug network security config
 allows cleartext only to `localhost`, `127.0.0.1` and `10.0.2.2`, and the SFU
 URL the app dials is whatever the server's `LIVEKIT_URL` says. So run the API
@@ -1646,15 +1704,19 @@ somebody killed the app.
 `JoinWatchdog` ends every one of them. Twelve seconds, the same
 `JOIN_TIMEOUT_MS` the web client uses and asserted against that file so the two
 cannot drift. It covers the socket leg only; the media leg after `welcome` keeps
-its own 45 s deadline inside `LiveKitEngine`, which ends in
-`Refusal.VoiceBackendUnreachable`. On expiry the app sends `leave-voice-room`
+its own 45 s deadline inside `LiveKitEngine`, which ends in one of the four
+refusals in the table above rather than a single sentence. On expiry the app sends `leave-voice-room`
 first, because "nothing came back" is not "the server never saw it" and a lost
 `welcome` leaves a seat on everybody's roster; then it stops and says *Não deu
 para entrar na call. Tenta de novo.*
 
 It does not retry. The likeliest causes are not transient, and a person told
 what happened taps the button again in one gesture, while a phone retrying a
-refusal in a loop cannot be told to stop.
+refusal in a loop cannot be told to stop. The **media** leg is the one
+exception, and a narrow one: a classified `Unreachable` (or a 429) is tried up
+to `SFU_CONNECT_ATTEMPTS` times inside the same 45 s budget, because a phone is
+the client that most often fails on the first packet of a handshake and
+succeeds on the second. A refusal is still never retried.
 
 The generation counter is the whole of the correctness argument: a socket drop
 rebuilds the call from scratch, so a second `enter` happens while the first

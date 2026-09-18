@@ -1255,13 +1255,25 @@ async function remuxListSessions(): Promise<RemuxSessionInfo[]> {
   return remuxListSessionsResponseSchema.parse(await response.json()).sessions;
 }
 
-/** The box's current answer for one specific session id, or null if it holds no such session. */
-async function findRemuxSessionById(sessionId: string): Promise<RemuxSessionInfo | null> {
+/**
+ * The box's current answer for one specific session id.
+ *
+ * THREE ANSWERS, not two: collapsing a list failure into "not found" was how
+ * a transient control-API blip during a rolling deploy could look like "the
+ * remux is gone" and hand `startLlSession` a licence to POST a second start
+ * on top of a session that was still running. `failed` is "could not ask" —
+ * the same fail-closed shape `listActiveEgresses() === null` has on the
+ * conventional side — and every caller must treat it as stand-down, never as
+ * a reason to start.
+ */
+async function findRemuxSessionById(
+  sessionId: string,
+): Promise<RemuxSessionInfo | null | "failed"> {
   try {
     const sessions = await remuxListSessions();
     return sessions.find((session) => session.sessionId === sessionId) ?? null;
   } catch {
-    return null;
+    return "failed";
   }
 }
 
@@ -1735,10 +1747,24 @@ async function startLlSession(
     // one resumed the remux session, the other stopped it as an orphan.
     // Exactly one of them can win this UPDATE.
     //
+    // THE HEARTBEAT GOES FIRST for the reason `ensureHlsOwnerHeartbeat`
+    // states: a claimant that cannot say it is alive is one the other
+    // machine is entitled to take the row straight back from. The boot
+    // sweep and `adoptRunningLlHlsSession` already do this; a start that
+    // still reaches an open row (handover, remux gone) must too.
+    //
     // `failed` is treated like `refused` on purpose: a database we could not
     // ask is not permission, it is the absence of an answer, and the fail-
     // closed rule this whole file is built on (see `findOpenLlRow`) says do
     // nothing and let the next reconcile try.
+    if (!(await ensureHlsOwnerHeartbeat())) {
+      llStartFailures += 1;
+      logEvent("voice.hlsLlStartFailed", {
+        channelId,
+        reason: "heartbeat-unavailable",
+      });
+      return null;
+    }
     const claim = await claimHlsSessionRow(openRow.id);
     if (claim !== "claimed") {
       llStartFailures += 1;
@@ -1813,6 +1839,18 @@ async function startLlSession(
   let info: RemuxSessionInfo;
   try {
     const existing = await findRemuxSessionById(sessionId);
+    if (existing === "failed") {
+      // COULD NOT ASK IS NOT "GONE". Starting on a list failure is the
+      // rolling-deploy shape that looks identical to a restart and is not
+      // one: the box may still be writing parts for this exact sessionId.
+      llStartFailures += 1;
+      logEvent("voice.hlsLlStartFailed", {
+        channelId,
+        reason: "list-failed",
+        sessionId,
+      });
+      return null;
+    }
     if (existing) {
       logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId });
       info = existing;
@@ -1895,6 +1933,253 @@ export async function stopLlSession(channelId: string, reason: string): Promise<
 }
 
 /**
+ * THE PRESENTER MOVED MACHINES; THE REMUX DID NOT.
+ *
+ * `#625` closed this for the conventional LiveKit ladder (`adoptRunningLiveHlsSession`
+ * in `hls-egress.ts`). LL was deliberately left out of that pass — an LL row has
+ * no `egress_id`, so asking LiveKit whether the session is still listed can never
+ * match — and the comment there said the LL half already had the shape via
+ * `reconcileLlHlsNow` → `startLlSession`. That was half true: `startLlSession`
+ * claims an open row before it acts, but it is still a *start* path. On a
+ * machine that was already up when the presenter resumed onto it, the only
+ * route into a healthy remux session was that start, which on a transient
+ * `GET /sessions` failure treated "could not ask" as "gone" and POSTed a
+ * second start, and which had no `fresh` / `stand-down` split for a claim this
+ * process lost. The loser of a two-machine race could therefore stop (or
+ * restart) the winner's healthy remux session — the same rolling-deploy
+ * incident #625 fixed for the ladder, arriving through the LL door.
+ *
+ * This is the LL twin of that adoption, asked at the same moment the seat is
+ * adopted rather than only at boot (`adoptLlHlsSessions`):
+ *
+ *  1. open, not-stopping `mode='ll'` row for this channel, same presenter;
+ *  2. no row owned by an instance still answering its `voice_instances`
+ *     heartbeat;
+ *  3. the remux box still lists the session, and it is not demoted;
+ *  4. `ensureHlsOwnerHeartbeat()`, then `claimHlsSessionRow` as the verdict;
+ *  5. adopt into `llRooms` with the row's `startedAt` / playlist URL — no
+ *     `POST /sessions`, no `DELETE`, nothing for a viewer to notice.
+ *
+ * `"No"` is two different answers, the same split #625 learned the hard way:
+ * `fresh` is a genuine restart (nothing to inherit, a different presenter, the
+ * remux no longer lists it); `stand-down` is "somebody alive holds this, or
+ * the question could not be answered" (owner still answering, list/lookup/
+ * heartbeat failed, claim lost). On stand-down the caller does NOTHING this
+ * reconcile and asks again on the next roster event. Starting on any of those
+ * would be the same incident one step further along.
+ *
+ * WHAT IT DELIBERATELY DOES NOT ASK: LiveKit. An LL row names a remux session,
+ * and the only sweep entitled to judge those rows is the one that asks the box
+ * holding them (`docs/plans/LL_HLS.md` §5). Conventional stale sweeps keep
+ * excluding `mode='ll'` for exactly that reason.
+ */
+type LlResumeAdoption =
+  | { kind: "adopted"; stream: LiveHlsStream }
+  | { kind: "fresh" }
+  | { kind: "stand-down"; reason: string };
+
+/**
+ * The last non-adopted answer per channel AND PRESENTER, and when it was
+ * decided — same shape and reason as the conventional `resumeDecisionCache`.
+ * A room filling up must not put a row read and a remux `GET /sessions`
+ * behind every join; a stand-down decided while A was sharing says nothing
+ * about B.
+ */
+const llResumeDecisionCache = new Map<
+  string,
+  { at: number; decision: LlResumeAdoption }
+>();
+const LL_RESUME_DECISION_TTL_MS = 5_000;
+const LL_RESUME_DECISION_MAX_ENTRIES = 128;
+const llResumeRefusalLoggedAt = new Map<string, number>();
+const LL_RESUME_REFUSAL_LOG_THROTTLE_MS = 30_000;
+
+export async function adoptRunningLlHlsSession(
+  channelId: string,
+  presenterPeerId: string,
+  now = nowImpl(),
+): Promise<LlResumeAdoption> {
+  if (!isLiveHlsLLEnabled() || !remuxControlUrl() || !remuxControlSecret()) {
+    return { kind: "fresh" };
+  }
+  if (llRooms.has(channelId)) {
+    return { kind: "fresh" };
+  }
+  // LENGTH-PREFIXED, not `a:b` — same reason as the conventional twin: both
+  // halves are ids this process is handed, and a separator either could
+  // contain would let two pairs share one key.
+  const decisionKey = `${channelId.length}:${channelId}:${presenterPeerId}`;
+  const cached = llResumeDecisionCache.get(decisionKey);
+  if (cached && now - cached.at < LL_RESUME_DECISION_TTL_MS) {
+    return cached.decision;
+  }
+  const remember = (decision: LlResumeAdoption): LlResumeAdoption => {
+    if (llResumeDecisionCache.size > LL_RESUME_DECISION_MAX_ENTRIES) {
+      for (const [seen, entry] of llResumeDecisionCache) {
+        if (now - entry.at >= LL_RESUME_DECISION_TTL_MS) {
+          llResumeDecisionCache.delete(seen);
+        }
+      }
+    }
+    llResumeDecisionCache.set(decisionKey, { at: now, decision });
+    return decision;
+  };
+
+  const lookup = await findOpenLlRow(channelId);
+  if (!lookup.ok) {
+    return remember({ kind: "stand-down", reason: "lookup-failed" });
+  }
+  const row = lookup.row;
+  if (!row || !row.remuxSessionId) {
+    // Ordinary case for a share that is starting: nothing to inherit.
+    return remember({ kind: "fresh" });
+  }
+  if (row.stoppingAtMs !== null) {
+    // Mid-teardown: not ours to adopt as live. `startLlSession` already knows
+    // how to finish closing it before anything new is minted.
+    return remember({ kind: "fresh" });
+  }
+
+  const refuse = (
+    kind: LlResumeAdoption["kind"] & ("fresh" | "stand-down"),
+    reason: string,
+    detail: Record<string, unknown> = {},
+  ): LlResumeAdoption => {
+    const key = `${channelId}:${reason}`;
+    const stamped = Date.now();
+    for (const [seen, at] of llResumeRefusalLoggedAt) {
+      if (stamped - at > LL_RESUME_REFUSAL_LOG_THROTTLE_MS) {
+        llResumeRefusalLoggedAt.delete(seen);
+      }
+    }
+    const previous = llResumeRefusalLoggedAt.get(key);
+    if (
+      previous === undefined ||
+      stamped - previous >= LL_RESUME_REFUSAL_LOG_THROTTLE_MS
+    ) {
+      llResumeRefusalLoggedAt.set(key, stamped);
+      logEvent("voice.hlsLlResumeNotAdopted", {
+        channelId,
+        presenterPeerId,
+        kind,
+        reason,
+        ...detail,
+      });
+    }
+    return remember(
+      kind === "fresh" ? { kind: "fresh" } : { kind: "stand-down", reason },
+    );
+  };
+
+  if (row.presenterPeerId !== presenterPeerId) {
+    // A DIFFERENT PERSON IS PRESENTING NOW. A resume keeps its peer id, so a
+    // mismatch here is a genuine handover and deserves its own session.
+    return refuse("fresh", "presenter-changed", {
+      startedAt: row.startedAtMs,
+      was: row.presenterPeerId,
+    });
+  }
+
+  const liveOthers = await liveOtherInstances();
+  if (liveOthers === null) {
+    return refuse("stand-down", "owner-lookup-failed", {
+      startedAt: row.startedAtMs,
+    });
+  }
+  if (ownedByLiveOtherInstance(row.instanceId, liveOthers)) {
+    noteHlsSkippedOwnedElsewhere({
+      site: "ll-resume-adopt",
+      channelId,
+      sessionId: row.id,
+      ownerInstanceId: row.instanceId,
+    });
+    // AND THE CALLER STARTS NOTHING EITHER. Falling through to
+    // `startLlSession` on a live owner's row is how a rolling deploy's
+    // survivor used to race the draining machine's last heartbeat.
+    return remember({ kind: "stand-down", reason: "owned-elsewhere" });
+  }
+
+  let remote: RemuxSessionInfo | null;
+  try {
+    const sessions = await remuxListSessions();
+    remote =
+      sessions.find((session) => session.sessionId === row.remuxSessionId) ?? null;
+  } catch (error) {
+    logEvent("voice.hlsLlResumeLookupFailed", {
+      channelId,
+      presenterPeerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // COULD NOT ASK IS NOT "NOTHING TO INHERIT".
+    return remember({ kind: "stand-down", reason: "list-failed" });
+  }
+  if (!remote) {
+    // The remux really does not hold it. That is a genuine restart, and the
+    // caller's `startLlSession` is the right answer to it.
+    return refuse("fresh", "no-live-session", {
+      startedAt: row.startedAtMs,
+      remuxSessionId: row.remuxSessionId,
+    });
+  }
+  if (remote.demoted === true || remote.state === "demoted") {
+    // Demoted is over for the LL half. Do not adopt it as live, and do not
+    // fall through to a start that would resume the same demoted remux id
+    // either — stand down and let the next health tick's demotion sweep (once
+    // a machine holds the row in `llRooms`, e.g. via boot adopt) finish the
+    // cleanup. A healthy rolling-deploy handoff never lands here.
+    return refuse("stand-down", "demoted", {
+      startedAt: row.startedAtMs,
+      remuxSessionId: row.remuxSessionId,
+      demotedReason: remote.demotedReason ?? null,
+    });
+  }
+
+  if (!(await ensureHlsOwnerHeartbeat())) {
+    return refuse("stand-down", "heartbeat-unavailable", {
+      startedAt: row.startedAtMs,
+    });
+  }
+  const claim = await claimHlsSessionRow(row.id);
+  if (claim !== "claimed") {
+    // A CLAIM THIS PROCESS LOST IS NOT A RESTART. Falling through to
+    // `startLlSession` on either `refused` or `failed` would have the loser
+    // of a two-machine race mint a second remux session (or stop the
+    // winner's) — the incident this function exists to end.
+    return refuse("stand-down", `claim-${claim}`, {
+      startedAt: row.startedAtMs,
+      sessionId: row.id,
+    });
+  }
+
+  const startedAt = row.startedAtMs;
+  const stream: LiveHlsStream = {
+    hlsUrl: llPlaylistUrl(channelId, startedAt),
+    startedAt,
+    presenterPeerId,
+    delaySeconds: llDelaySeconds(),
+    mode: "ll",
+    partTargetMs: row.partTargetMs ?? remuxSessionConfig().partMs,
+  };
+  llRooms.set(channelId, {
+    sessionId: row.remuxSessionId,
+    startedAt,
+    presenterPeerId,
+    stream,
+  });
+  // Not remembered in the decision cache: an adoption is answered once and
+  // every later call short-circuits on `llRooms.has` above.
+  logEvent("voice.hlsLlSessionResumeAdopted", {
+    channelId,
+    presenterPeerId,
+    startedAt,
+    from: row.instanceId,
+    sessionId: row.remuxSessionId,
+    rowId: row.id,
+  });
+  return { kind: "adopted", stream };
+}
+
+/**
  * The LL half of `reconcileLiveHlsNow`, single-flighted per channel. No
  * track probing: unlike the conventional ladder, `pqp-remux` finds the
  * presenter's screen share itself (its README, "Presenter authorization" —
@@ -1955,6 +2240,25 @@ async function reconcileLlHlsNowLocked(
       // The next reconcile tries the stop again first.
       logEvent("voice.hlsLlSwitchDeferred", { channelId, presenterPeerId });
       return llRooms.get(channelId)!.stream;
+    }
+  } else {
+    // NOTHING LOCAL, BUT MAYBE NOT NOTHING AT ALL. This process holds no LL
+    // room for a channel it has never presented — and also for one whose
+    // presenter has just RESUMED here off a machine that is draining for a
+    // deploy, while the remux carries on untouched on its own box. The two
+    // look identical from here and only one of them wants a new remux
+    // session. Mirror of `adoptRunningLiveHlsSession` on the conventional
+    // side (#625); gated on `current` having been absent so a genuine
+    // handover (the stop above) still falls through to a fresh start.
+    const resumed = await adoptRunningLlHlsSession(channelId, presenterPeerId);
+    if (resumed.kind === "adopted") {
+      return resumed.stream;
+    }
+    if (resumed.kind === "stand-down") {
+      // Somebody else alive is driving this, or the question could not be
+      // answered. Starting on either would race the winner's healthy remux
+      // session. Do nothing at all and ask again on the next roster event.
+      return null;
     }
   }
   return startLlSession(channelId, presenterPeerId);
@@ -2501,6 +2805,8 @@ export function resetHlsRemuxForTests(): void {
   nowImpl = () => Date.now();
   llRooms.clear();
   llReconcileQueue.clear();
+  llResumeDecisionCache.clear();
+  llResumeRefusalLoggedAt.clear();
   lastLookupFailureLoggedAt.clear();
   lastModeResolved.clear();
   llDemotedAt.clear();

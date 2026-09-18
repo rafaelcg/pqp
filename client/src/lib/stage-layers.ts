@@ -45,3 +45,28 @@ export const STAGE_LAYER = {
   menus: "z-[60]",
   fullscreen: "z-50",
 } as const;
+
+/**
+ * THE RUNG `CallStage`'S OWN CONTROL BAR TAKES, and why it is not always
+ * `chrome` (2026-09-18).
+ *
+ * The party bar and the call stage's control bar are both `absolute
+ * inset-x-0 bottom-0` in the same stacking context, and the call bar is
+ * later in `App.tsx`'s document order. At equal `z` that means the call bar
+ * wins every hit test over the party bar, and the control at the right-hand
+ * end of the call bar is the red hang-up. `watchPartyChrome` is supposed to
+ * empty that bar and make it inert before the two ever coexist, and on
+ * 2026-09-18 it did not: it asked a narrower question than the one that drew
+ * the party bar, a host pressed the hang-up while aiming at the party's own
+ * controls, and a live show ended twice in four minutes.
+ *
+ * Both gates are one predicate now (`lib/watch-party-chrome.ts`), but that
+ * is a fact about `App.tsx`. This is the fact about the pixels: on a channel
+ * whose TYPE is a watch party, the call bar paints a rung DOWN, so the
+ * party's controls win any overlap whatever the two gates believe. Its own
+ * buttons stay clickable everywhere the party bar has none — the slot is
+ * `pointer-events-none` with only its children live.
+ */
+export function callControlsLayer(isWatchPartyChannel: boolean): string {
+  return isWatchPartyChannel ? STAGE_LAYER.badges : STAGE_LAYER.chrome;
+}

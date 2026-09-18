@@ -6,8 +6,18 @@ import {
   clearPoolStats,
   noteRuntimeSample,
   registerPoolStats,
+  registerPoolCheckoutStats,
   registerDbBreakerStats,
 } from "./lib/runtime.js";
+import {
+  noteCheckout,
+  noteCheckoutQuery,
+  noteRelease,
+  poolCheckoutStats,
+  startStuckCheckoutSweeper,
+  stopStuckCheckoutSweeper,
+} from "./lib/pool-checkouts.js";
+import { processRole } from "./lib/process-role.js";
 import {
   createDbBreaker,
   DB_BREAKER_PROBE_INTERVAL_MS,
@@ -542,8 +552,94 @@ function isThenable(value: unknown): value is Promise<unknown> {
 
 /** Clients with a `BEGIN` that has not yet been closed by a `COMMIT`/`ROLLBACK`. */
 const openTransactionClients = new WeakSet<object>();
-/** Clients a rejected query poisoned mid-transaction — must be destroyed, never reused. */
-const poisonedClients = new WeakSet<object>();
+/**
+ * Clients that must be destroyed on release rather than returned to the idle
+ * list, mapped to WHY, so the line the destruction logs names the cause
+ * instead of asserting the only one this map originally had.
+ */
+const poisonedClients = new WeakMap<object, string>();
+
+function poisonClient(client: object, reason: string): void {
+  if (!poisonedClients.has(client)) {
+    poisonedClients.set(client, reason);
+  }
+}
+
+/**
+ * Whether an error means this connection can never be trusted again, and if
+ * so, which kind.
+ *
+ * THE DISTINCTION THIS FILE TURNS ON. A Postgres error that arrived as an
+ * ErrorResponse followed by a ReadyForQuery is a connection that RESYNCHRONISED:
+ * the server and this client agree about where they are in the protocol, and
+ * the connection is immediately reusable. `57014 canceling statement due to
+ * statement timeout` is exactly that, which is why it is deliberately NOT in
+ * the list below: destroying a connection Postgres cleanly cancelled would
+ * churn the whole pool during a slow-query storm and buy nothing, since there
+ * is nothing wrong with it.
+ *
+ * `query_timeout` is the opposite case and the reason this function exists. It
+ * is a client-side timer, not a cancellation: pg has no query cancellation
+ * this version can use, so when it fires, the statement may still be running
+ * server-side and the response it is waiting for may still arrive later, out
+ * of band, onto a socket somebody else is by then using. The client's protocol
+ * state is unknown. That is precisely the staging failure (a reply lost in a
+ * proxy), and a client in that state that a caller's ordinary
+ * `finally { client.release() }` hands back as idle is a pool slot as dead as
+ * it was before this change, now with the pool believing it is free.
+ *
+ * Connection-level errors are here for the same reason: the socket is gone or
+ * the backend was terminated, so whatever the driver thinks about the
+ * connection is no longer true.
+ */
+export function isPoisoningQueryError(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const message =
+    typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : "";
+  // pg's own read-timeout error carries no `code`; the message is the only
+  // handle it gives (`Query read timeout`, client.js). Matched loosely so a
+  // wording change upstream degrades to "not poisoned" rather than to a
+  // crash, and pinned by `isPoisoningQueryError`'s own test.
+  if (/query read timeout/i.test(message)) {
+    return "query-read-timeout";
+  }
+  if (
+    /connection terminated|client has encountered a connection error|client was closed|terminating connection|server closed the connection/i.test(
+      message,
+    )
+  ) {
+    return "connection-lost";
+  }
+  const code = (error as { code?: unknown }).code;
+  if (
+    typeof code === "string" &&
+    // Socket-level (Node) and connection-level (Postgres class 08, plus the
+    // 57P0x "your backend is going away" family).
+    [
+      "ECONNRESET",
+      "EPIPE",
+      "ETIMEDOUT",
+      "ECONNREFUSED",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTCONN",
+      "08000",
+      "08003",
+      "08006",
+      "08P01",
+      "57P01",
+      "57P02",
+      "57P03",
+    ].includes(code)
+  ) {
+    return "connection-lost";
+  }
+  return null;
+}
 
 function guardQueryMethod(
   target: { query: (...args: unknown[]) => unknown },
@@ -560,7 +656,7 @@ function guardQueryMethod(
     if (kind === null && shouldRejectDbCall()) {
       dbBreaker.noteRejected();
       if (openTransactionClients.has(target)) {
-        poisonedClients.add(target);
+        poisonClient(target, "breaker-rejected-mid-transaction");
       }
       return Promise.reject(new DatabaseUnavailableError());
     }
@@ -591,7 +687,7 @@ function guardQueryMethod(
           // The transaction's fate is now unknown — Postgres refused or
           // never heard the statement meant to resolve it one way or the
           // other. Never hand this connection back out as if it were clean.
-          poisonedClients.add(target);
+          poisonClient(target, "transaction-end-failed");
           throw error;
         },
       );
@@ -627,14 +723,20 @@ function guardClientRelease(client: pg.PoolClient): void {
   (client as unknown as { release: (err?: Error | boolean) => void }).release = (
     err?: Error | boolean,
   ) => {
-    if (poisonedClients.has(client)) {
+    const reason = poisonedClients.get(client);
+    if (reason !== undefined) {
       poisonedClients.delete(client);
       openTransactionClients.delete(client);
+      // One line per destroyed connection. Bounded by `PG_POOL_MAX` per
+      // outage burst, and during an incident it is the difference between
+      // "the pool is churning" and knowing which of the three causes is
+      // doing it. `db.pool.clientDestroyed` belongs at zero.
+      logEvent("db.pool.clientDestroyed", { reason });
       originalRelease(
         err instanceof Error
           ? err
           : new Error(
-              "A DB-breaker rejection landed mid-transaction on this client; destroying it instead of returning a possibly-dirty connection to the pool.",
+              `This client is not safe to reuse (${reason}); destroying it instead of returning a possibly-dirty connection to the pool.`,
             ),
       );
       return;
@@ -687,6 +789,193 @@ export function pgSslConfig(): { ssl?: { rejectUnauthorized: boolean } } {
   return useSsl ? { ssl: { rejectUnauthorized: false } } : {};
 }
 
+/**
+ * How long a statement issued through the main pool may take before this
+ * process stops waiting for it.
+ *
+ * WHY THIS EXISTS, in numbers. A reconnect storm on staging on 2026-09-17 (800
+ * voice seats dropping and rejoining at once) left both API processes at
+ * `total: 22 / idle: 0 / busy: 22 / waiting: 15`, `pressure: "saturated"`, the
+ * circuit breaker open, for many minutes, with two sockets still connected,
+ * while `pg_stat_activity` showed all 45 API backends `idle` in `ClientRead`,
+ * some for over 250 seconds, the oldest backend 756 seconds old. Postgres had
+ * finished every one of those queries. The replies never arrived (staging talks
+ * to its database through Fly's flycast proxy, which evidently dropped TCP
+ * streams under the burst), and this pool had `connectionTimeoutMillis` and
+ * `idleTimeoutMillis` and nothing at all that bounded *waiting for a reply*. A
+ * query whose answer is lost therefore pinned a pool slot forever: the pool
+ * exhausted, the breaker opened on the timeouts, and nothing recovered without
+ * a restart.
+ *
+ * Production talks to a Vultr managed Postgres directly, so the trigger is
+ * probably staging-specific. The failure mode is not: any lost reply, from any
+ * cause, does this.
+ *
+ * FIFTEEN SECONDS is far longer than any request-path query in this codebase
+ * (the slowest measured ones are tens of milliseconds) and short enough that a
+ * pool of 70 cannot be emptied for long by queries that will never answer.
+ * `0` disables the bound entirely, which is the rollback switch.
+ */
+export const DEFAULT_PG_QUERY_TIMEOUT_MS = 15_000;
+
+/**
+ * The same bound on `pqp-worker`, which is a different workload: every job in
+ * `jobs.ts` runs there (`docs/plans/COLD_PATHS.md`), and while each of them is
+ * written to claim bounded work (retention deletes 500 rows per statement,
+ * the sweeps filter on `expires_at` and `SKIP LOCKED`), a first sweep against
+ * a long backlog, or a bucket listing against a cold table, can legitimately
+ * take much longer than a request ever may. Two minutes is generous for all of
+ * them and still finite, which is the only property that matters here.
+ */
+export const DEFAULT_PG_WORKER_QUERY_TIMEOUT_MS = 120_000;
+
+/**
+ * Postgres's own `statement_timeout` is set this far BELOW the client-side
+ * `query_timeout`, deliberately.
+ *
+ * The two bound different failures and only one of them is clean. A statement
+ * that is genuinely slow should be cancelled by Postgres: the server sends an
+ * ErrorResponse and a ReadyForQuery, the caller gets a real `57014 canceling
+ * statement due to statement timeout`, and the connection is immediately
+ * reusable. `query_timeout` is this process giving up on a socket it can no
+ * longer trust: pg has no query cancellation this version can use, so the
+ * statement may still be running server-side and the connection's state is
+ * unknown afterwards. Giving Postgres a one-second head start means the
+ * ordinary case takes the clean door and `query_timeout` fires only for the
+ * failure it was added for: a reply that is never coming.
+ */
+const STATEMENT_TIMEOUT_HEAD_START_MS = 1_000;
+
+/**
+ * TCP keepalive on every pooled connection, so the kernel notices a peer that
+ * stopped answering instead of leaving a socket open forever.
+ *
+ * Ten seconds of idle before the first probe. This is a backstop, not the fix:
+ * the probe interval and retry count are the operating system's (on Linux,
+ * nine probes 75 s apart), so a dead peer is detected in minutes, not seconds.
+ * `query_timeout` above is what bounds the damage; this is what eventually
+ * cleans up the socket underneath it.
+ */
+const PG_KEEPALIVE_INITIAL_DELAY_MS = 10_000;
+
+/**
+ * `PG_QUERY_TIMEOUT_MS`, or `PG_WORKER_QUERY_TIMEOUT_MS` on the batch worker.
+ *
+ * The worker reads its own variable first and falls back to the shared one
+ * before its own default, so a deployment that sets one value across every
+ * process still gets what it asked for, and one that sets neither gets the two
+ * different defaults above. `0` means "no bound", for a rollback. An
+ * unparseable value logs and uses the default: the failure mode of a typo must
+ * never be an unbounded pool.
+ */
+export function resolvePgQueryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const isWorker = processRole(env) === "worker";
+  const fallback = isWorker
+    ? DEFAULT_PG_WORKER_QUERY_TIMEOUT_MS
+    : DEFAULT_PG_QUERY_TIMEOUT_MS;
+  const raw = isWorker
+    ? (env.PG_WORKER_QUERY_TIMEOUT_MS ?? env.PG_QUERY_TIMEOUT_MS)
+    : env.PG_QUERY_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(
+      `[db] unusable query timeout ${JSON.stringify(raw)}; using ${fallback}ms.`,
+    );
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+/**
+ * The timeouts a `pg.Pool` is created with, or `{}` when they are disabled.
+ * Separate from `getPool` so a test can assert the shape without a database.
+ */
+export function pgTimeoutConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): { statement_timeout?: number; query_timeout?: number } {
+  const timeout = resolvePgQueryTimeoutMs(env);
+  if (timeout <= 0) {
+    return {};
+  }
+  return {
+    statement_timeout: timeout,
+    query_timeout: timeout + STATEMENT_TIMEOUT_HEAD_START_MS,
+  };
+}
+
+/**
+ * Watches every query a checked-out client runs, for two things.
+ *
+ *  1. The statement text, so `db.pool.stuckClient` can say WHICH query is
+ *     sitting on a pool slot rather than only that one is.
+ *  2. Whether the query ended in a way that makes this connection unsafe to
+ *     reuse (`isPoisoningQueryError`), in which case the client is poisoned
+ *     and `guardClientRelease` destroys it however cleanly its borrower
+ *     releases it.
+ *
+ * THE SECOND ONE IS THE POINT, and a first version of this change shipped
+ * without it. `query_timeout` rejecting a promise does not cancel the
+ * statement and does not make the `PoolClient` unusable in pg's eyes. On the
+ * `pool.query()` path that is survivable by accident, because pg-pool calls
+ * `client.release(err)` itself on any error and a truthy `err` makes it
+ * destroy the client. The EXPLICIT checkout path has no such accident: every
+ * transaction in `server/src/services/*.ts` does `getPool().connect()` and
+ * `finally { client.release() }` with no argument, because the caller has no
+ * way to know the connection is compromised. pg-pool then puts a client that
+ * is still waiting on a response that will never come back into the idle list
+ * and hands it to the next request, which queues behind that missing response
+ * and times out too. That is the staging failure reproducing itself through
+ * the very pool this change was meant to protect, and it is the path that
+ * stranded the pool on 2026-09-17.
+ *
+ * Installed from the pool's own `acquire` event rather than from
+ * `guardedConnect`, and this is the part that is easy to get wrong.
+ * `pool.query()` reaches its client through pg-pool's *callback* form of
+ * `connect()`, which resolves `guardedConnect`'s own `await` to `undefined`
+ * (the client goes to the callback instead), so wrapping done there covers
+ * `getPool().connect()` and misses every single-statement query in the
+ * codebase, which is most of them. `acquire` fires for both paths, before
+ * either one hands the client to its caller.
+ *
+ * Idempotent per client object for exactly the reason `guardQueryMethod` is:
+ * pg-pool hands the same `PoolClient` back out on every checkout, so a wrapper
+ * installed per checkout would nest one layer deeper each time, forever.
+ */
+const observedClients = new WeakSet<object>();
+
+function observeClientQueries(client: object): void {
+  const target = client as { query?: (...args: unknown[]) => unknown };
+  if (typeof target.query !== "function" || observedClients.has(client)) {
+    return;
+  }
+  observedClients.add(client);
+  const original = target.query.bind(target) as (...args: unknown[]) => unknown;
+  target.query = (...args: unknown[]) => {
+    noteCheckoutQuery(client, queryTextOf(args));
+    const result = original(...args);
+    // pg's callback overload returns a `Query`, not a promise, and `pool.query`
+    // uses exactly that form. Nothing to observe there, and nothing that needs
+    // observing: pg-pool passes the error to `release` itself on that path.
+    if (!isThenable(result)) {
+      return result;
+    }
+    return result.then(undefined, (error: unknown) => {
+      const reason = isPoisoningQueryError(error);
+      if (reason) {
+        poisonClient(client, reason);
+      }
+      // Rethrown unchanged: the caller's own error handling is none of this
+      // wrapper's business, and it must see the same error it always saw.
+      throw error;
+    });
+  };
+}
+
 export function getPool(): pg.Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
@@ -694,11 +983,24 @@ export function getPool(): pg.Pool {
       throw new Error("DATABASE_URL is required");
     }
     const max = Number(process.env.PG_POOL_MAX ?? 10);
+    // Resolved ONCE, here, and reused for the diagnostic below rather than
+    // read again on every sweep: the pool's own bound is fixed at creation, so
+    // a threshold that could drift away from it would describe a timeout this
+    // process is not actually applying, and `processRole` logs on an
+    // unrecognised `WORKER_MODE`, which, read every five seconds, would be a
+    // warning per tick forever.
+    const timeouts = pgTimeoutConfig();
     const created = new pg.Pool({
       connectionString,
       max,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
+      // See the three comment blocks above: a bound on waiting for a reply,
+      // Postgres's own bound a second earlier, and a kernel-level backstop for
+      // a peer that has gone away entirely.
+      ...timeouts,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: PG_KEEPALIVE_INITIAL_DELAY_MS,
       ...pgSslConfig(),
     });
     pool = created;
@@ -736,6 +1038,30 @@ export function getPool(): pg.Pool {
       console.error("[db] idle client error:", error);
     });
 
+    // Checkout ages, for `runtime.pool.longestCheckoutMs` /
+    // `checkedOutOver10s` and for `db.pool.stuckClient`. See
+    // `lib/pool-checkouts.ts` for what these answer that `busy` cannot.
+    //
+    // Three listeners, because a checkout ends in three ways and all of them
+    // have to delete the entry: an ordinary `release`, and a `remove` for a
+    // client pg-pool destroys (`release(err)`, `maxUses`, the idle timeout,
+    // `end()`). `acquire` fires inside `_acquireClient` BEFORE the client
+    // reaches either `pool.query`'s internal callback or `connect()`'s
+    // promise, which is why `observeClientQueries` goes on here too.
+    created.on("acquire", (client) => {
+      noteCheckout(client);
+      observeClientQueries(client);
+    });
+    created.on("release", (_err, client) => noteRelease(client));
+    created.on("remove", (client) => noteRelease(client));
+    registerPoolCheckoutStats(() => poolCheckoutStats());
+    // When the timeout is disabled the diagnostic keeps the default
+    // threshold: a rollback switch that removes the bound should not also
+    // remove the warning that it is needed.
+    const stuckThresholdMs =
+      timeouts.statement_timeout ?? DEFAULT_PG_QUERY_TIMEOUT_MS;
+    startStuckCheckoutSweeper(() => stuckThresholdMs);
+
     // Saturation, for the operator dashboard's `runtime` block. All four are
     // plain property reads, so exposing them costs nothing and adds no query;
     // `max` is closed over rather than read back off the pool so this does not
@@ -763,14 +1089,67 @@ export async function closePool(): Promise<void> {
   // Before the await: nothing should be able to read counters off a pool that
   // is being torn down.
   clearPoolStats();
+  stopStuckCheckoutSweeper();
   await current?.end().catch(() => {});
   await closeDbBreakerProbe();
 }
 
+/**
+ * Boot DDL is the one thing in this process that may legitimately take
+ * minutes, and it runs before the server listens.
+ *
+ * `CREATE UNIQUE INDEX CONCURRENTLY` on `messages` (below) is unbounded by
+ * construction: it scans the whole table twice, and how long that takes is a
+ * property of how much history the instance has, not of anything this code
+ * controls. `schema.sql` is the same shape: a long DDL blob whose cost grows
+ * with the data. Applying the request-path `statement_timeout` to either would
+ * mean a deploy that fails to boot on exactly the busiest instance, which is
+ * the worst possible place to learn it, so both run on a connection with the
+ * bound lifted.
+ *
+ * Both halves of the bound have to be lifted and they lift differently.
+ * `statement_timeout` is a session setting, so `SET` clears it for this
+ * connection; `query_timeout` is a client-side timer pg reads per query, so it
+ * is overridden per statement (`0` there is falsy and would fall back to the
+ * pool's value), hence a large number rather than none, which is also a better
+ * answer than "wait forever" if boot really is wedged.
+ *
+ * The connection is ALWAYS destroyed rather than released, success or failure:
+ * a session-level `SET` must never ride back into the pool on a reused client
+ * and quietly un-bound an ordinary request an hour later.
+ */
+const BOOT_DDL_QUERY_TIMEOUT_MS = 30 * 60_000;
+
+async function withBootDdlClient<T>(
+  run: (
+    query: (text: string, params?: unknown[]) => Promise<pg.QueryResult>,
+  ) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect();
+  const query = (text: string, params?: unknown[]) =>
+    client.query({
+      text,
+      values: params,
+      query_timeout: BOOT_DDL_QUERY_TIMEOUT_MS,
+    } as pg.QueryConfig) as Promise<pg.QueryResult>;
+  try {
+    await query("SET statement_timeout = 0");
+    return await run(query);
+  } finally {
+    client.release(
+      new Error(
+        "boot DDL connection: statement_timeout was lifted on it, so it is destroyed rather than returned to the pool.",
+      ),
+    );
+  }
+}
+
 export async function initDb(): Promise<void> {
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
-  await getPool().query(schema);
-  await ensureConcurrentIndexes();
+  await withBootDdlClient(async (query) => {
+    await query(schema);
+    await ensureConcurrentIndexes(query);
+  });
 }
 
 /**
@@ -794,23 +1173,24 @@ const CONCURRENT_INDEXES: ReadonlyArray<{ name: string; definition: string }> = 
   },
 ];
 
-async function ensureConcurrentIndexes(): Promise<void> {
-  const pool = getPool();
+async function ensureConcurrentIndexes(
+  query: (text: string, params?: unknown[]) => Promise<pg.QueryResult>,
+): Promise<void> {
   for (const index of CONCURRENT_INDEXES) {
-    const state = await pool.query<{ indisvalid: boolean }>(
+    const state = (await query(
       `SELECT i.indisvalid FROM pg_index i
          JOIN pg_class c ON c.oid = i.indexrelid
         WHERE c.relname = $1`,
       [index.name],
-    );
+    )) as pg.QueryResult<{ indisvalid: boolean }>;
     const row = state.rows[0];
     if (row?.indisvalid) {
       continue;
     }
     if (row) {
-      await pool.query(`DROP INDEX CONCURRENTLY IF EXISTS ${index.name}`);
+      await query(`DROP INDEX CONCURRENTLY IF EXISTS ${index.name}`);
     }
-    await pool.query(
+    await query(
       `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${index.name} ${index.definition}`,
     );
   }

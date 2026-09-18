@@ -447,8 +447,11 @@ holds the room. Rows are ended by two rules, not one: a row of an EARLIER
 session is superseded by definition and is closed whether or not a leftover
 egress is still writing to it (otherwise retention never collects its
 objects), while a row of THIS session is closed only when its egress is gone.
-The LL path already had this shape (`reconcileLlHlsNow` claims an open row
-before it resumes); this is the conventional half. Beside it, a second defect
+The LL path already had claim-before-act at boot (`adoptLlHlsSessions`) and
+inside `startLlSession`, but not the already-up-machine resume twin: that is
+`adoptRunningLlHlsSession` in `hls-remux.ts`, which asks the remux box (not
+LiveKit) whether the session is still listed, claims the row, and adopts into
+`llRooms` with no `POST` and no `DELETE`. Beside it, a second defect
 from the same incident: `decideLadder` was priced against
 `activeLadderEgressCount()`, which counts every ACTIVE egress on the box
 including the ones `endSupersededSessions` was a line away from stopping, so
@@ -518,6 +521,17 @@ jitter to `RECONNECT_BASE_DELAY_MS` if not present (check
 - `CLUSTER_BUS=postgres` (exists) turns on fan-out.
 - New `VOICE_REGISTRY=postgres|off` (default `off`) gates registry writes/reads.
   `off` keeps `voice.ts` byte-for-byte today's behaviour; the tables sit empty.
+- `VOICE_REGISTRY_BATCH=on|off` (default `off`) sits **under** that one: with
+  the registry on, it coalesces this instance's seat writes into one multi-row
+  statement per kind per 50 ms window, inside one transaction on one pooled
+  connection, at most one flush in flight. It exists because the registry turns
+  every seat change into its own round trip, and a mass event then arrives at
+  the pool as fan-in rather than work — 800 rejoins put 4,604 callers on
+  staging's wait queue on 2026-09-18 and opened the database breaker. Per-peer
+  ordering is unchanged (the "still seated" check is re-asked at flush time, so
+  pitfall 13 stays closed), the wire is unchanged, and `off` is the rollback.
+  `server/src/voice/registry-batch.ts`, and
+  `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md` §G for the numbers.
 - Rollback at any milestone: `fly scale count 1 --region gru`, then set
   `VOICE_REGISTRY=off` (and `CLUSTER_BUS=off` if needed). Rows left in
   `voice_peers` are ignored when the flag is off and swept by the reconcile when
