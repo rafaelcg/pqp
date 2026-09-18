@@ -260,6 +260,38 @@ describeDb("voice registry write coalescer", () => {
   });
 
   /**
+   * THE TIDY STILL RUNS WHEN THE ONLY UPSERT FOR THE ROOM WAS REFUSED.
+   *
+   * `runPlan` skips a tidy for any channel the same flush seated somebody
+   * into, which is free (an occupied room matches neither tidy) and is a belt
+   * on the watch-party tidy. The question a reviewer rightly asked is what
+   * happens when that upsert is then DROPPED by the stale-seat guard: if the
+   * skip were computed from what was ENQUEUED rather than from what SURVIVED,
+   * a refused write would suppress the cleanup behind it and leave an empty
+   * room row, and the watch party on it, standing. It is computed from the
+   * survivors, and this is the test that says so.
+   */
+  it("still tidies a room whose only upsert was refused as stale", async () => {
+    process.env.VOICE_REGISTRY_BATCH = "on";
+    process.env.VOICE_REGISTRY_BATCH_MS = "10000";
+    const channel = randomUUID();
+    await pinVoiceRoom(channel, "livekit");
+    const peer = seat(channel);
+
+    void upsertVoicePeer({ ...peer, stillSeated: () => false });
+    void unpinVoiceRoomIfEmpty(channel);
+    await flushVoiceRegistryBatch();
+
+    expect(voiceRegistryBatchMetrics().staleDropped).toBe(1);
+    expect(await getVoicePeerRow(peer.peerId)).toBeNull();
+    const rooms = await getPool().query(
+      `SELECT 1 FROM voice_rooms WHERE channel_id = $1`,
+      [channel],
+    );
+    expect(rooms.rowCount).toBe(0);
+  });
+
+  /**
    * An orphan stamp that lands on a pending upsert is FOLDED INTO it rather
    * than queued over it. Replacing would have thrown away the state change
    * the upsert carried — a mute in the same window as the socket closing —

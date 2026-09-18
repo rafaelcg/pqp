@@ -84,10 +84,14 @@ export const DEFAULT_BATCH_MS = 50;
 export const DEFAULT_BATCH_MAX = 200;
 
 /**
- * How long one flush may spend inside its transaction. Measured p95 is three
- * milliseconds; five seconds is a ceiling, not a budget, and the only thing
- * it exists to stop is a flush that never returns holding the queue open
- * behind it.
+ * How long one STATEMENT of a flush may run. Not the flush: `statement_timeout`
+ * is per statement, and a flush issues at most seven that can block (two
+ * upserts, the orphan stamp, the delete, the retire, the two tidies), so the
+ * transaction's own worst case is seven times this. That is the honest number
+ * and it is deliberately still a long way above the measured p95 of three
+ * milliseconds: this is a ceiling on a pathology, not a budget for normal
+ * work, and the only thing it exists to stop is a statement that never
+ * returns holding the queue open behind it, because one flush runs at a time.
  */
 export const FLUSH_STATEMENT_TIMEOUT_MS = 5_000;
 
