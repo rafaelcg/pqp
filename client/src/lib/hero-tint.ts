@@ -9,7 +9,9 @@ import type { CSSProperties } from "react";
  * majority of subjects will never upload an image, and a page whose top third
  * is a grey rectangle is a page nobody screenshots. Hashing an identifier into
  * a hue gives every subject its own field, stable across loads, pages and
- * devices, and turns "no banner" from a hole into a design.
+ * devices, and turns "no banner" from a hole into a design. Community covers
+ * layer a pqp.gg mosaic on this wash (`HeroMosaic`); the hue is still the
+ * field, so two communities stay apart.
  *
  * DELIBERATELY A HUE ONLY. Chroma and lightness are fixed in the token layer
  * (`--hero-tint-near` / `--hero-tint-far` in index.css), so every generated

@@ -158,16 +158,36 @@ enum class Refusal {
     JoinTimedOut,
 
     /**
-     * The room's transport is one this client speaks, and the media leg still
-     * did not come up.
+     * The room's transport is one this client speaks, and nothing on the way
+     * to the media server answered.
      *
      * A distinct refusal from [TransportUnsupported], which is a refusal to
-     * *try*. This one is the SFU being unreachable, the token being refused, or
-     * the join timing out, and it must never be answered by building a mesh
-     * instead: the server pinned this room to LiveKit and a mesh peer in it is
-     * somebody on the roster who can neither hear nor be heard.
+     * *try*. This one and the three below it must never be answered by
+     * building a mesh instead: the server pinned this room to LiveKit and a
+     * mesh peer in it is somebody on the roster who can neither hear nor be
+     * heard.
+     *
+     * This used to be the whole of the SFU's failure vocabulary: one sentence
+     * for a refused token, a room the server says is peer-to-peer, an
+     * unreachable media box and a handshake that timed out. See
+     * [SfuFailureKind] for what that cost.
      */
     VoiceBackendUnreachable,
+
+    /**
+     * `POST /api/voice/token` said no: the seat, the account or the channel,
+     * rather than the network. [SfuFailureKind.TokenRefused].
+     */
+    VoiceTokenRefused,
+
+    /**
+     * The server says this room is not on LiveKit after all (409).
+     * [SfuFailureKind.TransportMismatch].
+     */
+    VoiceTransportMismatch,
+
+    /** The media leg ran past its deadline. [SfuFailureKind.TimedOut]. */
+    VoiceBackendTimedOut,
 }
 
 /**
@@ -339,7 +359,7 @@ class VoiceController(
         // "Stop sharing" chip and a refused publish both have to take the
         // roster claim down with them.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
-        onFailed = { reason -> onVoiceBackendUnreachable(reason) },
+        onFailed = { failure -> onSfuFailure(failure) },
         onConnected = {
             // Only now is the call actually a call. `welcome` arrived long
             // before this, and reporting Connected there would put a green dot
@@ -599,14 +619,6 @@ class VoiceController(
     }
 
     /**
-     * The room's transport is one we speak and the media leg did not come up.
-     *
-     * Leaves rather than degrading. There is no mesh to fall back to, because
-     * the server pinned this room, so the honest outcome is to be out of the call
-     * with a sentence about it, which is what [Refusal.VoiceBackendUnreachable]
-     * carries to the snackbar.
-     */
-    /**
      * The join went out and the server never answered.
      *
      * ENDS THE ATTEMPT RATHER THAN RETRYING IT. A retry would be guessing that
@@ -637,9 +649,26 @@ class VoiceController(
         )
     }
 
-    private fun onVoiceBackendUnreachable(reason: String) {
+    /**
+     * The media leg of a LiveKit room did not happen, in one of four ways.
+     *
+     * Leaves rather than degrading, whichever way it was. There is no mesh to
+     * fall back to, because the server pinned this room, so the honest outcome
+     * is to be out of the call with a sentence about it.
+     *
+     * The log line is the point of the `kind` and `status` fields: an SFU join
+     * that fails on somebody's phone leaves nothing behind on the server (the
+     * mint's 403 and 409 are logged there, but a TLS or ICE failure never
+     * reaches it at all), so the only record of what happened is this line and
+     * whatever `adb logcat` catches. Its shape is fixed by
+     * [SfuFailure.logLine]; see the PR that introduced it for the filter.
+     */
+    private fun onSfuFailure(failure: SfuFailure) {
         if (!_state.value.isActive) return
-        Log.w(TAG, "voice backend unreachable: $reason")
+        Log.w(
+            TAG,
+            failure.logLine(_state.value.channelId, _state.value.localPeerId, SFU_CONNECT_ATTEMPTS),
+        )
         joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
@@ -648,20 +677,34 @@ class VoiceController(
         teardown()
         _state.value = VoiceState(
             stage = VoiceStage.Refused,
-            refusal = Refusal.VoiceBackendUnreachable,
+            refusal = refusalFor(failure.kind),
             muted = _state.value.muted,
             speakerphone = _state.value.speakerphone,
         )
     }
 
-    fun toggleMute() {
+    fun toggleMute() = setMuted(!_state.value.muted)
+
+    /**
+     * Set mute to a specific value rather than flip whatever this device
+     * currently has.
+     *
+     * `toggleMute` is what a tap on our own mic button means: a request to
+     * flip. [android.telecom.Connection.onCallAudioStateChanged] is not a
+     * request, it is a fact ("the Bluetooth headset's mute button was
+     * pressed, mute is now X") delivered on a schedule this client does not
+     * control, and can be re-delivered unchanged. Toggling on a re-delivery
+     * would desync the microphone from every other client's roster view of
+     * it with nothing on screen explaining why.
+     */
+    fun setMuted(muted: Boolean) {
         // Neither a moderator's mute nor a listen-only seat is ours to lift.
         // The server would refuse the frame anyway; refusing here keeps the
         // control honest and saves the round trip that would otherwise flicker
         // the microphone icon. `muteControlEnabled` is the one expression the
         // call bar draws from, so the two cannot disagree.
         if (!_state.value.muteControlEnabled) return
-        val muted = !_state.value.muted
+        if (_state.value.muted == muted) return
         _state.value = _state.value.copy(muted = muted)
         engine.setMuted(muted || _state.value.deafened)
         pushVoiceState()

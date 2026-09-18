@@ -266,6 +266,10 @@ test("making a server ticks the server row and leaves the other two", async ({
     .fill("Panelinha");
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
+  // Creating now stays on a done step with the invite paste, instead of
+  // closing. Dismiss it so the hub card is reachable again.
+  await page.getByRole("button", { name: "Done" }).click();
+
   // Creating opens the new server, so come back to the hub to read the card.
   await expect(page.getByPlaceholder(/^Message /)).toBeVisible({
     timeout: 20_000,

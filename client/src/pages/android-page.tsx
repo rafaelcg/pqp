@@ -8,19 +8,26 @@ import { Button } from "@/components/ui/button";
 import { androidApkUrl } from "@/lib/android-apk";
 import { recordAndroidApkClick } from "@/lib/android-apk-click";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { testflightUrl } from "@/lib/testflight";
 
 /**
- * `/android` — the APK landing. Same job as `/beta` for iOS: one conversion,
- * honest about what it is (a sideloaded APK, not Play Store). The download
- * URL comes from `android-apk.ts`, so the button is real whether or not a
- * build-time override is set.
+ * `/android` — the download landing. Same job as `/beta` for iOS: one
+ * conversion, honest about what it is. The download URL comes from
+ * `android-apk.ts`, so the button is real whether or not a build-time
+ * override is set.
  *
- * The copy names the build (0.3.1, beta) and what it does not do yet, so
+ * The copy names the build (0.4.0, beta) and what it does not do yet, so
  * nobody installs it expecting a screen-share viewer or a camera. Voice on
  * this build joins every room, LiveKit ones included; the earlier build was
  * refused from large rooms, which is why the CTA was switched off for a day
  * (`VITE_ANDROID_APK_URL` set to a space on Pages, not a code change).
+ *
+ * `VITE_PLAY_STORE_URL` (`play-store.ts`), unset today, is the switch for
+ * "the store is open": set, the Play button leads and the sideload steps
+ * disappear in favor of a plain secondary "or download the APK" link, with
+ * the click beacon staying on that link only. Unset, this page is unchanged
+ * from before that variable existed.
  *
  * The hero is a two-column split (copy left, a real screenshot right) on
  * the same grid `/download` uses. The photo is a capture of the running app,
@@ -68,6 +75,7 @@ const STEPS: MessageKey[] = [
 export function AndroidPage() {
   const { t } = useTranslation();
   const apkUrl = androidApkUrl();
+  const playUrl = playStoreUrl();
   const iosUrl = testflightUrl();
 
   return (
@@ -113,7 +121,25 @@ export function AndroidPage() {
                 className="animate-rise mt-9 flex flex-col items-start gap-3"
                 style={stagger(3)}
               >
-                {apkUrl ? (
+                {playUrl ? (
+                  <>
+                    <Button asChild className="cta-lift h-12 px-8 text-base">
+                      <a href={playUrl} rel="noopener">
+                        {t("androidPage.cta.play")}
+                      </a>
+                    </Button>
+                    {apkUrl && (
+                      <a
+                        href={apkUrl}
+                        rel="noopener"
+                        onClick={() => recordAndroidApkClick()}
+                        className="text-sm text-paper-muted underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+                      >
+                        {t("androidPage.cta.apkAlt")}
+                      </a>
+                    )}
+                  </>
+                ) : apkUrl ? (
                   <>
                     <Button asChild className="cta-lift h-12 px-8 text-base">
                       <a href={apkUrl} rel="noopener" onClick={() => recordAndroidApkClick()}>
@@ -179,33 +205,35 @@ export function AndroidPage() {
             </div>
           </section>
 
-          <section
-            className="animate-rise mx-auto mt-16 max-w-3xl"
-            style={stagger(6)}
-          >
-            <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
-              {t("androidPage.how.title")}
-            </h2>
-            <ol className="mx-auto mt-8 flex max-w-xl flex-col gap-4">
-              {STEPS.map((step, index) => (
-                <li key={step} className="flex items-start gap-4">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-signal font-display text-sm font-bold text-ink">
-                    {index + 1}
-                  </span>
-                  <span className="pt-1 text-pretty text-base leading-relaxed text-paper">
-                    {t(step)}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </section>
+          {!playUrl && (
+            <section
+              className="animate-rise mx-auto mt-16 max-w-3xl"
+              style={stagger(6)}
+            >
+              <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
+                {t("androidPage.how.title")}
+              </h2>
+              <ol className="mx-auto mt-8 flex max-w-xl flex-col gap-4">
+                {STEPS.map((step, index) => (
+                  <li key={step} className="flex items-start gap-4">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-signal font-display text-sm font-bold text-ink">
+                      {index + 1}
+                    </span>
+                    <span className="pt-1 text-pretty text-base leading-relaxed text-paper">
+                      {t(step)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
 
           <p className="mx-auto mt-14 max-w-xl text-pretty text-center text-sm leading-relaxed text-paper-muted">
             {t("androidPage.notYet")}
           </p>
 
           <p className="mx-auto mt-4 max-w-xl text-pretty text-center text-sm leading-relaxed text-paper-muted">
-            {t("androidPage.honest")}
+            {playUrl ? t("androidPage.honest.play") : t("androidPage.honest")}
           </p>
 
           {iosUrl && (
@@ -219,14 +247,24 @@ export function AndroidPage() {
             </p>
           )}
 
-          {apkUrl && (
+          {playUrl ? (
             <div className="mt-10 flex justify-center">
               <Button asChild className="cta-lift h-12 px-8 text-base">
-                <a href={apkUrl} rel="noopener" onClick={() => recordAndroidApkClick()}>
-                  {t("androidPage.cta")}
+                <a href={playUrl} rel="noopener">
+                  {t("androidPage.cta.play")}
                 </a>
               </Button>
             </div>
+          ) : (
+            apkUrl && (
+              <div className="mt-10 flex justify-center">
+                <Button asChild className="cta-lift h-12 px-8 text-base">
+                  <a href={apkUrl} rel="noopener" onClick={() => recordAndroidApkClick()}>
+                    {t("androidPage.cta")}
+                  </a>
+                </Button>
+              </div>
+            )
           )}
         </div>
       </main>

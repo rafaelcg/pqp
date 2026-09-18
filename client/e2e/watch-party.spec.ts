@@ -2220,3 +2220,118 @@ test("a watch party puts the chat beside the film, in stream shape", async ({
   await row.hover();
   await expect(row.getByRole("button", { name: "Add reaction" })).toHaveCount(0);
 });
+
+/**
+ * EVERY BUTTON OVER THE PICTURE TAKES ITS OWN CLICK (pass 5 of
+ * `docs/plans/WATCH_PARTY_UI.md`, §10). The layers over a stage used to pick
+ * their own z-index per file, and the report that started §10 was "some
+ * buttons were not clickable because of the overlay that appears when you
+ * hover over the stream". This walks every visible button on the stage, the
+ * party header and the chat header and asserts that the element at its
+ * centre is the button itself (or something inside it): nothing invisible
+ * sits on top of it. Checked with the chrome awake, which is the state a
+ * person is in when they reach for a control.
+ */
+async function unclickableButtons(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const scopes = [
+      "[data-call-split-stage]",
+      '[data-testid="watch-party-bar"]',
+      '[data-testid="call-split-chat-header"]',
+      '[data-testid="watch-party-bar-controls"]',
+    ];
+    const seen = new Set<Element>();
+    const bad: string[] = [];
+    for (const scope of scopes) {
+      for (const root of document.querySelectorAll(scope)) {
+        for (const button of root.querySelectorAll("button")) {
+          if (seen.has(button)) continue;
+          seen.add(button);
+          const rect = button.getBoundingClientRect();
+          if (rect.width < 4 || rect.height < 4) continue;
+          if (
+            rect.right < 0 ||
+            rect.bottom < 0 ||
+            rect.left > window.innerWidth ||
+            rect.top > window.innerHeight
+          )
+            continue;
+          // Faded chrome is meant to be under something else's pointer;
+          // only awake controls are held to the rule.
+          let faded = false;
+          for (
+            let el: Element | null = button;
+            el && el !== document.body;
+            el = el.parentElement
+          ) {
+            const style = getComputedStyle(el);
+            if (style.opacity === "0" || style.visibility === "hidden") {
+              faded = true;
+              break;
+            }
+          }
+          if (faded) continue;
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          );
+          if (!hit || !(button === hit || button.contains(hit))) {
+            const name =
+              button.getAttribute("aria-label") ??
+              button.getAttribute("data-testid") ??
+              button.textContent?.trim().slice(0, 40) ??
+              "?";
+            const under =
+              hit?.getAttribute("data-testid") ??
+              hit?.tagName.toLowerCase() ??
+              "nothing";
+            bad.push(`${name} <- ${under}`);
+          }
+        }
+      }
+    }
+    return bad;
+  });
+}
+
+test("every awake button over the picture takes its own click", async ({
+  page,
+  browser,
+}) => {
+  const shared = await seedServer("wp-click-host", "wp-click-viewer");
+  const party = await createParty("wp-click-host", shared.serverId, "Cinemoon");
+  await setPartyState("wp-click-host", party.partyId, "live");
+  const here = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+
+  // The host, live, nothing shared yet: the header, the status line and the
+  // bar (mic, share, audio) are all on screen.
+  await openAs(page, here, "wp-click-host");
+  await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator("[data-watch-party-bar-share]")).toBeVisible();
+  expect(await unclickableButtons(page)).toEqual([]);
+
+  // The seatless viewer with a picture: the player's chrome, awake.
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(viewer, here, "wp-click-viewer");
+    const stage = viewer.getByTestId("watch-channel-stage");
+    await expect(stage).toBeVisible({ timeout: 20_000 });
+    await expect(viewer.getByTestId("watch-player-bar")).toBeVisible();
+    const box = await stage.boundingBox();
+    if (box) {
+      await viewer.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await viewer.mouse.move(box.x + box.width / 2 + 5, box.y + box.height / 2);
+    }
+    await expect(viewer.getByTestId("watch-player-bar")).toHaveCSS(
+      "opacity",
+      "1",
+    );
+    expect(await unclickableButtons(viewer)).toEqual([]);
+  } finally {
+    await second.context.close();
+  }
+});

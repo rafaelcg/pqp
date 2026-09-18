@@ -61,7 +61,7 @@ export function collectScreenTiles(args: {
     cameraHasVoiceAudio?: boolean;
     presenterPeerId: string;
     delaySeconds?: number;
-    /** See `ScreenShareTile.mode`'s comment -- absent on `LiveHlsStream` today. */
+    /** See `ScreenShareTile.mode`'s comment. Carried by `LiveHlsStream`. */
     mode?: HlsMode;
     partTargetMs?: number;
   } | null;

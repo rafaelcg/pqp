@@ -37,13 +37,21 @@ struct MediaFullscreenView: View {
     var body: some View {
         ZStack {
             Color.black
-                .opacity(1 - dragProgress * 0.6)
+                // Double(dragProgress), not bare arithmetic: mixing a CGFloat
+                // property with untyped literals inside a Double-expecting
+                // argument (.opacity(_ opacity: Double)) is an ambiguous
+                // overload of `-` on at least one toolchain in active use
+                // here (Xcode 26.3 on the iOS CI runner; Xcode 27 resolves
+                // it, which is why this went unnoticed locally until PR 682
+                // added the first CI that actually builds ios/ -- pre-existing
+                // bug, unrelated to that PR's own diff, fixed alongside it).
+                .opacity(1 - Double(dragProgress) * 0.6)
                 .ignoresSafeArea()
 
             content
 
             closeButton
-                .opacity(1 - dragProgress)
+                .opacity(1 - Double(dragProgress))
         }
         .statusBarHidden()
         .task { await load() }
@@ -87,7 +95,7 @@ struct MediaFullscreenView: View {
             VideoPlayer(player: player)
                 .ignoresSafeArea()
                 .offset(y: videoDragOffset)
-                .opacity(1 - dragProgress)
+                .opacity(1 - Double(dragProgress))
                 .gesture(videoDismissGesture)
         }
     }

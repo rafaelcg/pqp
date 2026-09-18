@@ -871,6 +871,64 @@ communication to 192.168.50.245 not permitted by network security policy`),
 left the WS room (server: `voice.join` then `voice.leave`, no ghost) and showed
 the "could not reach the voice server" snackbar. It never built a mesh.
 
+**None of that has been run against `sfu.pqp.gg`.** The rig above is a local
+container; the hosted media box is a different network path entirely (grey-cloud
+DNS straight to the Vultr IP, UDP mux 7882 to 7885, a Let's Encrypt certificate
+Caddy owns, and TURN on `turn.pqp.gg` whose TLS half is dead because Caddy owns
+443). The first real report from a phone in a production LiveKit room came on
+18 Sep 2026 and said only "Não foi possível conectar ao servidor de voz desta
+chamada", which was the whole vocabulary this client had.
+
+### Which of the four things went wrong
+
+`SfuJoinFailure.kt` classifies it, `LiveKitEngine` logs it and the toast says
+it. The four classes, and what each one means:
+
+| `SfuFailureKind` | What it is | Retried |
+|---|---|---|
+| `TokenRefused` | `POST /api/voice/token` answered 400, 401, 403, 404 or 429. The seat, the account or the channel, not the network. A 404 is also what a ban looks like. | 429 only |
+| `TransportMismatch` | 409 `This room runs peer-to-peer`: the room's pin is not visible to the instance that served the request, or the room was unpinned between `welcome` and the mint. | no |
+| `Unreachable` | Nothing answered: an IO or TLS failure to `wss://sfu.pqp.gg`, a 5xx from the mint, or a `Room.connect` that never completed ICE inside livekit-android's own 20 s ceiling. | yes, twice |
+| `TimedOut` | The whole sequence ran past `JOIN_TIMEOUT_MS` (45 s, the same budget the web and iOS allow). | no |
+
+Each has its own string in both languages, so the toast is now a first
+diagnosis rather than a shrug. The retry is bounded twice, by
+`SFU_CONNECT_ATTEMPTS` (3) and by the single 45 s deadline over the whole
+sequence, and only `Unreachable` and 429 are tried again: a phone that retries
+a refusal cannot be told to stop. The waits are **jittered**, half to one and a
+half times the schedule, for the same reason `reconnect-jitter.ts` exists on
+the web: the retry is most useful exactly when the SFU has started failing,
+which is when every phone in every room is retrying at once, and a fixed
+schedule would put all of them on the same two instants.
+
+**The log line.** Fixed field order, fixed field count, `-` for anything
+absent, because for a TLS or ICE failure this is the *only* record that exists
+anywhere (the server never sees the attempt):
+
+```
+sfu-join-failed kind=Unreachable status=- attempt=1 channel=… peer=… detail=…
+```
+
+To capture the next one from a phone with USB debugging on:
+
+```bash
+adb logcat -c
+adb logcat -v time pqp.voice:V AndroidRuntime:E '*:S' | tee /tmp/pqp-voice.log
+```
+
+`sfu-join-ok` is the success line, and it carries the SFU URL the token named.
+
+**A failing connect used to report itself twice, and the wrong one won.**
+`RTCEngine.onError` raises `Room.onFailToConnect` for anything thrown while the
+connection state is CONNECTING, which emits `RoomEvent.FailedToConnect`; then
+`Room.connect` throws the same failure with more in it. Both called `fail`,
+`fail` is one-shot, and the collector usually got there first, so the
+`RoomException.ConnectException` that says whether the signalling socket, TLS
+or ICE was the problem went into a `catch` that could no longer do anything
+with it. `handshakesInFlight` in `LiveKitEngine` is what stops that, and
+`SfuJoinFailureTest` reads the two collector branches off disk to keep it
+stopped.
+
 **Local LiveKit rig for a debug build.** The debug network security config
 allows cleartext only to `localhost`, `127.0.0.1` and `10.0.2.2`, and the SFU
 URL the app dials is whatever the server's `LIVEKIT_URL` says. So run the API
@@ -1646,15 +1704,19 @@ somebody killed the app.
 `JoinWatchdog` ends every one of them. Twelve seconds, the same
 `JOIN_TIMEOUT_MS` the web client uses and asserted against that file so the two
 cannot drift. It covers the socket leg only; the media leg after `welcome` keeps
-its own 45 s deadline inside `LiveKitEngine`, which ends in
-`Refusal.VoiceBackendUnreachable`. On expiry the app sends `leave-voice-room`
+its own 45 s deadline inside `LiveKitEngine`, which ends in one of the four
+refusals in the table above rather than a single sentence. On expiry the app sends `leave-voice-room`
 first, because "nothing came back" is not "the server never saw it" and a lost
 `welcome` leaves a seat on everybody's roster; then it stops and says *Não deu
 para entrar na call. Tenta de novo.*
 
 It does not retry. The likeliest causes are not transient, and a person told
 what happened taps the button again in one gesture, while a phone retrying a
-refusal in a loop cannot be told to stop.
+refusal in a loop cannot be told to stop. The **media** leg is the one
+exception, and a narrow one: a classified `Unreachable` (or a 429) is tried up
+to `SFU_CONNECT_ATTEMPTS` times inside the same 45 s budget, because a phone is
+the client that most often fails on the first packet of a handshake and
+succeeds on the second. A refusal is still never retried.
 
 The generation counter is the whole of the correctness argument: a socket drop
 rebuilds the call from scratch, so a second `enter` happens while the first
@@ -2772,6 +2834,172 @@ Every tester who installed a beta before this landed has an APK signed by some
 evicted-cache key. The first correctly signed publish cannot update over it.
 They uninstall pqp once, install the new APK from `pqp.gg/android`, and every
 update after that is an ordinary in-place update.
+
+## Shipping to Google Play
+
+The app was approved on Google Play. This is the pipeline that ships a
+**production** release, and it is deliberately a second workflow rather than a
+mode of `android.yml`: that one runs on nearly every push and holds a key Play
+must never see (the sideload key, previous section); this one runs rarely and
+holds two credentials that only exist for Play.
+
+### The upload key is not the sideload key
+
+`docs/ANDROID_RELEASE.md` §2 already walked through creating it, and the
+keystore that exists at `~/pqp-upload.jks` on the maintainer's laptop (dated
+2026-08-26, ahead of the approved submission) is that upload key, not the
+sideload one in `~/.config/pqp/android-sideload-keystore/` — that directory's
+own `README.txt` says so explicitly: *"This is NOT the Play upload key. Play
+has never seen it and never will."* `android/app/build.gradle.kts` keeps them
+as two named signing configs (`release` for the upload key, `sideloadRelease`
+for the beta key) for exactly this reason.
+
+**Rafael, confirm this before trusting it**, since nobody but the account
+holder can read a Play Console page: Play Console → your app → **Setup → App
+signing**, and compare the **Upload key certificate** SHA-256 fingerprint
+shown there against:
+
+```bash
+keytool -list -v -keystore ~/pqp-upload.jks -alias pqp-upload
+```
+
+If they match, `~/pqp-upload.jks` is confirmed as the live upload key and
+`ANDROID_UPLOAD_KEYSTORE_B64` below should be built from it. If they do not
+match, or the alias is not `pqp-upload`, something else signed the approved
+build and it needs to be found before any CI upload is attempted — an upload
+signed with the wrong key is a hard rejection from Play, not a warning.
+
+**Back this file up properly first.** It currently lives only at
+`~/pqp-upload.jks`, unlike the sideload key, which has a durable copy at
+`~/.config/pqp/android-sideload-keystore/` with its own password file and
+README. Losing the upload key is recoverable through Google support (unlike
+losing an app signing key, which Play App Signing exists to avoid), but it is
+still a support ticket and a delay. Move it to
+`~/.config/pqp/android-upload-keystore/` alongside a `password.txt` and a short
+README the same shape as the sideload one, and keep that directory backed up
+off this laptop.
+
+### Requirements check, against what is actually configured
+
+| Requirement | State |
+|---|---|
+| Target API level | `targetSdk = 37` (`android/app/build.gradle.kts`). Play's rule moves every year; 37 is ahead of any current floor. Recheck the live number at [developer.android.com/google/play/requirements/target-sdk](https://developer.android.com/google/play/requirements/target-sdk) before a release if this doc is more than a few months old |
+| 64-bit | Met by construction. No `abiFilters`/`splits` block restricts the native libraries, so `bundleRelease` ships all four ABIs (including `arm64-v8a`) in the `.aab` and Play generates the per-device APK |
+| App Bundle, not APK | `bundleRelease` is what this pipeline builds and uploads. `android.yml`'s sideload path stays an APK on purpose — GitHub's release asset is a sideload, not a store artifact |
+| `versionCode` strictly increasing | Currently `6` (`versionName = "0.3.1"`), a hand-bumped literal with a comment at the call site explaining why the last bump mattered (crash on version 1's SIGTRAP, fixed but unshippable until the number moved). See "The versionCode scheme" below — this pipeline verifies it, it does not derive it |
+| Privacy policy URL | `pqp.gg/privacy` (`client/src/pages/legal/privacy.en.tsx` / `privacy.pt-BR.tsx`), already what the iOS listing uses |
+| Data safety form | Already filled in, per `docs/ANDROID_RELEASE.md` §6. What the *build* has to keep matching it: the manifest declares `RECORD_AUDIO`, `BLUETOOTH_CONNECT`, `POST_NOTIFICATIONS`, `VIBRATE`, and the two foreground-service types (`FOREGROUND_SERVICE_MICROPHONE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION`) — if `android-telecom` (open PR) lands and adds call-management permissions, or attachments (B5) ship on Android, revisit the form before the next release; neither is on this branch |
+
+### The versionCode scheme
+
+There is no automatic derivation here, on purpose. `versionCode` and
+`versionName` live in `android/app/build.gradle.kts` as literals, bumped by
+hand for every release, exactly as `docs/ANDROID_RELEASE.md` §1 and §8 already
+say. The release workflow does not compute a new number from the tag or the
+run number; it **reads** the two values out of that file and, on a tag push,
+refuses to build if the tag's version does not match `versionName` — a cheap
+guard against tagging before bumping, not a replacement for bumping.
+
+**Before every release:** bump both in `android/app/build.gradle.kts`
+(`versionCode` up by at least 1, `versionName` to the new version), commit,
+then tag `android-v<versionName>`.
+
+### One-time setup (Rafael only — an agent must not do this)
+
+1. **Play Console → Setup → API access.** Create or link a Google Cloud
+   project if none is linked yet.
+2. **Create a service account** from that page (or in the linked Cloud
+   project's IAM), then in Play Console grant it access to this app with the
+   **Release manager** permission (upload and release to any track; it does
+   not need "Admin").
+3. **Create a JSON key** for that service account and download it.
+4. Set five GitHub Actions secrets on `rafaelcg/pqp`:
+
+   | Secret | Value |
+   |---|---|
+   | `PLAY_SERVICE_ACCOUNT_JSON` | the full contents of the service-account JSON file |
+   | `ANDROID_UPLOAD_KEYSTORE_B64` | `base64 -i ~/pqp-upload.jks \| tr -d '\n'` (after moving it to the durable location above, use that path) |
+   | `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | the store password chosen in `docs/ANDROID_RELEASE.md` §2 |
+   | `ANDROID_UPLOAD_KEY_ALIAS` | `pqp-upload` |
+   | `ANDROID_UPLOAD_KEY_PASSWORD` | the key password (same value as the store password, if that is how it was generated) |
+
+   ```bash
+   base64 -i ~/pqp-upload.jks | tr -d '\n' | gh secret set ANDROID_UPLOAD_KEYSTORE_B64 --repo rafaelcg/pqp
+   gh secret set ANDROID_UPLOAD_KEYSTORE_PASSWORD --repo rafaelcg/pqp
+   gh secret set ANDROID_UPLOAD_KEY_ALIAS --repo rafaelcg/pqp --body pqp-upload
+   gh secret set ANDROID_UPLOAD_KEY_PASSWORD --repo rafaelcg/pqp
+   gh secret set PLAY_SERVICE_ACCOUNT_JSON --repo rafaelcg/pqp < service-account.json
+   ```
+
+   `gh secret set NAME` with no `--body` reads from stdin, so a password never
+   touches shell history. Until all five are set, `.github/workflows/android-release.yml`
+   still builds, lints, tests and attaches the `.aab` as a workflow artifact —
+   it skips only the Play upload, loudly, with a job-summary note saying which
+   secret is missing.
+
+5. **Create the `play-production` GitHub Environment** (repo Settings →
+   Environments → New environment, name it exactly `play-production`) and add
+   at least one **Required reviewer** (Rafael). The workflow already
+   references this environment — `environment:` on the `release` job resolves
+   to `play-production` only when `track: production` is chosen from
+   `workflow_dispatch`, and to a separate, unrestricted `play-internal`
+   environment otherwise — but a referenced environment with no protection
+   rule configured on it is a no-op: creating it here, with the reviewer, is
+   what actually makes choosing `production` from the dropdown pause for
+   approval instead of publishing immediately (Farol review on PR 679, before
+   which there was no such gate at all). `play-internal` needs no setup;
+   letting it not exist yet is fine too — an unconfigured environment simply
+   has no protection rules, which is the correct behaviour for it.
+6. **Restrict who can create `android-v*` tags**, with a repository ruleset
+   (Settings → Rules → Rulesets → New tag ruleset, target pattern
+   `android-v*`, restrict tag creation to specific people/teams or require it
+   to come from a signed/verified commit). A tag is not a reviewed change the
+   way a merged PR is, and this job runs with the Play upload keystore and
+   service account the moment a matching tag exists — the workflow's own
+   "Verify the tag is reachable from main" step is a code-level backstop
+   (refuses a tag pointing at a commit not on `main`), not a substitute for
+   controlling who can push the tag in the first place.
+
+### Per-release flow
+
+1. Bump `versionCode` and `versionName` in `android/app/build.gradle.kts`
+   (see "The versionCode scheme" above). Merge that to `main` like any other
+   change.
+2. Tag it: `git tag android-v0.3.2 && git push origin android-v0.3.2` (the tag
+   must equal the `versionName` you just set, prefixed `android-v`).
+3. Watch the **Android release** workflow run. It builds `bundleRelease`
+   (which also runs `lint`, `testDebugUnitTest`, and the native-JNI-class
+   check that already guards `android.yml`), verifies the bundle is actually
+   signed, uploads it to Play on the **internal** track with status
+   `completed`, and attaches the `.aab` as a workflow artifact either way.
+4. **Promote to production the way Play expects**: Play Console → your
+   release on the internal track → **Promote release** → Production. This
+   reuses the exact bundle already on the internal track; it does not
+   re-upload. **Do not** re-run this workflow with `track: production` to
+   "promote" a build that already went to internal — Play refuses a second
+   upload of a `versionCode` it has already seen, so that would fail with a
+   duplicate-version error. `workflow_dispatch` with `track: production` is
+   for the separate case of building a *fresh* release and sending it
+   straight to production, skipping internal entirely — only do that once the
+   normal internal-first flow has been used a few times without surprises.
+5. Fill in the release notes in Play Console (per-locale, pt-BR and en-US) if
+   the `release_notes` workflow input was left blank; it falls back to a
+   generic line rather than blocking the upload.
+
+### Rollback
+
+`status: completed` means the workflow's own upload goes to 100% of the
+track's audience immediately; there is no staged-rollout percentage set from
+here. Two levers exist once something is live and wrong, both in Play
+Console, neither of them this repo's CI:
+
+- **Halt the rollout** on the affected release (Production → Releases → the
+  release → Halt rollout / Remove from tracks) to stop it reaching more
+  devices. It does not un-install anything already delivered.
+- **Roll forward**, not back: Play does not let a `versionCode` already seen
+  be re-served, so recovering from a bad release means bumping the version
+  again with the fix and shipping it through the same per-release flow above,
+  same as every other platform in this repo (Fly, Cloudflare Pages).
 
 ## CI
 

@@ -13,7 +13,7 @@ import test from "node:test";
 // `index.ts`, untested directly in this package (see those files' absence
 // from any `*.test.mjs`), covered only by `tsc --noEmit` and the pure
 // modules underneath it.
-import { LlPlaylistOrigin } from "../dist/ll-playlist-origin.js";
+import { LlPlaylistOrigin, __resetLlPlaylistNotFoundLogForTests } from "../dist/ll-playlist-origin.js";
 import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 const ORIGIN_BASE = "https://remux-box.test";
@@ -69,7 +69,7 @@ function stateFixture({ withAudio = false } = {}) {
  * file's job is exercising `LlPlaylistOrigin`'s FETCH/CACHE behavior, not
  * re-proving the box parser.
  */
-function minimalInitSegmentBytes() {
+function minimalInitSegmentBytes({ profile = 0x64, compatibility = 0x00, level = 0x28, width = 1920, height = 1080 } = {}) {
   function u32(n) {
     return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
   }
@@ -83,12 +83,12 @@ function minimalInitSegmentBytes() {
     const body = [...ascii(type), ...payload];
     return [...u32(body.length + 4), ...body];
   }
-  const avcC = box("avcC", [1, 0x64, 0x00, 0x28, 0xff, 0xe1, ...u16(2), 0xaa, 0xbb, 1, ...u16(2), 0xcc, 0xdd]);
+  const avcC = box("avcC", [1, profile, compatibility, level, 0xff, 0xe1, ...u16(2), 0xaa, 0xbb, 1, ...u16(2), 0xcc, 0xdd]);
   const visualSampleEntryFixed = [
     ...new Array(8).fill(0),
     ...new Array(16).fill(0),
-    ...u16(1920),
-    ...u16(1080),
+    ...u16(width),
+    ...u16(height),
     ...u32(0x00480000),
     ...u32(0x00480000),
     ...u32(0),
@@ -140,6 +140,7 @@ function delay(ms, signal) {
 function installFetchStub({
   stateProvider,
   initBytes = minimalInitSegmentBytes(),
+  initBytesForUri,
   headersDelayMs = 0,
   bodyDelayMs = 0,
 } = {}) {
@@ -164,12 +165,12 @@ function installFetchStub({
         arrayBuffer: () => delay(bodyDelayMs, signal).then(() => body),
       };
     }
-    if (href.endsWith("/init.mp4")) {
+    if (/\/init(?:-\d+)?\.mp4$/.test(href)) {
       calls.init += 1;
       return {
         status: 200,
         ok: true,
-        arrayBuffer: () => delay(bodyDelayMs, signal).then(() => initBytes),
+        arrayBuffer: () => delay(bodyDelayMs, signal).then(() => initBytesForUri?.(href) ?? initBytes),
       };
     }
     calls.other += 1;
@@ -191,14 +192,14 @@ test("audio appears later: the master playlist grows an audio group on a LATER r
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
 
     const firstMaster = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
-    assert.ok(firstMaster);
-    const firstText = await firstMaster.text();
+    assert.equal(firstMaster.kind, "ready");
+    const firstText = await firstMaster.response.text();
     assert.doesNotMatch(firstText, /EXT-X-MEDIA:TYPE=AUDIO/, "no stage source has spoken yet");
 
     withAudio = true; // the session's state.json now reports an audio track
     const secondMaster = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
-    assert.ok(secondMaster);
-    const secondText = await secondMaster.text();
+    assert.equal(secondMaster.kind, "ready");
+    const secondText = await secondMaster.response.text();
     assert.match(secondText, /EXT-X-MEDIA:TYPE=AUDIO/, "the audio group must appear once state.json reports one");
     assert.match(secondText, /CODECS="avc1\.640028,mp4a\.40\.2"/);
 
@@ -208,6 +209,36 @@ test("audio appears later: the master playlist grows an audio group on a LATER r
     // codec constant.
     assert.equal(stub.calls.init, 1, "video init segment should be fetched once and cached");
     assert.equal(stub.calls.state, 2, "state.json is fetched fresh on every master request");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a new video init refetches codec and geometry instead of using the previous init's cache", async () => {
+  let initUri = "init.mp4";
+  const stub = installFetchStub({
+    stateProvider: () => {
+      const state = stateFixture();
+      state.video.initUri = initUri;
+      state.video.segments[0].initUri = initUri;
+      return state;
+    },
+    initBytesForUri: (href) =>
+      href.endsWith("/init-2.mp4")
+        ? minimalInitSegmentBytes({ profile: 0x4d, level: 0x1f, width: 1280, height: 720 })
+        : minimalInitSegmentBytes(),
+  });
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    const first = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
+    assert.equal(first.kind, "ready");
+    assert.match(await first.response.text(), /RESOLUTION=1920x1080,CODECS="avc1\.640028"/);
+
+    initUri = "init-2.mp4";
+    const second = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
+    assert.equal(second.kind, "ready");
+    assert.match(await second.response.text(), /RESOLUTION=1280x720,CODECS="avc1\.4d001f"/);
+    assert.equal(stub.calls.init, 2, "each distinct newest init URI must be fetched once");
   } finally {
     stub.restore();
   }
@@ -227,7 +258,7 @@ test("N concurrent master requests for the same session produce exactly one stat
     );
     assert.equal(results.length, N);
     for (const r of results) {
-      assert.ok(r, "every concurrent master request should still resolve to a playlist");
+      assert.equal(r.kind, "ready", "every concurrent master request should still resolve to a playlist");
     }
     assert.equal(stub.calls.state, 1, `expected exactly 1 state.json fetch for ${N} concurrent joins, got ${stub.calls.state}`);
     assert.equal(stub.calls.init, 1, `expected exactly 1 init.mp4 fetch for ${N} concurrent joins, got ${stub.calls.init}`);
@@ -260,8 +291,24 @@ test("N concurrent rendition requests for the same session produce exactly one s
   }
 });
 
+/** Captures `logEvent`'s structured lines (it writes JSON to `console.log`) for the duration of one test. */
+function captureLogEvents() {
+  const original = console.log;
+  const lines = [];
+  console.log = (text) => {
+    try {
+      lines.push(JSON.parse(text));
+    } catch {
+      // Not one of ours; drop it rather than fail the test on noise.
+    }
+  };
+  return { lines, restore: () => (console.log = original) };
+}
+
 test("a request for the ll-audio rung 404s cleanly once audio genuinely does not exist yet, with no crash", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
   const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
+  const logs = captureLogEvents();
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const response = await origin.fetchPlaylist({
@@ -272,29 +319,125 @@ test("a request for the ll-audio rung 404s cleanly once audio genuinely does not
     });
     assert.equal(response.status, 404);
   } finally {
+    logs.restore();
     stub.restore();
   }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1, "a 404 must say why");
+  assert.equal(notFound[0].reason, "rung-track-absent");
+  assert.equal(notFound[0].rung, LL_AUDIO_RUNG);
 });
 
-test("a session with no LL state at all (plain 404) makes the master route return null, not throw", async () => {
+// THE 2026-09-17 OUTAGE, PINNED. A watchdog restart takes the session out
+// of `pqp-remuxd`'s registry, `state.json` 404s, and every viewer's
+// playlist 404s with it, the only 404 path this Worker has. It used to
+// be silent, so the cause was guessed at (the sliding window, which
+// cannot 404 here at all) for an afternoon. Repo pitfall 16.
+test("a playlist 404 because the remux origin has no state for this session names the reason", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  let response;
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    response = await origin.fetchPlaylist({
+      channelId: CHANNEL_ID,
+      startedAt: STARTED_AT,
+      rung: LL_VIDEO_RUNG,
+      token: "ignored",
+    });
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  assert.equal(response.status, 404);
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1);
+  assert.equal(notFound[0].reason, "no-state");
+  assert.equal(notFound[0].channelId, CHANNEL_ID);
+  assert.equal(notFound[0].suppressed, 0, "the first 404 of an episode is never a suppressed batch");
+});
+
+// A session that has gone means EVERY viewer keeps polling into this
+// branch. One line per poll would turn an outage into a log-throttling
+// incident on top of the outage (Farol review, PR #706), so the line is
+// throttled per (session, rung, reason) and carries how many it stood in
+// for.
+test("repeated 404s for one session write one log line, carrying the suppressed count", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    for (let i = 0; i < 25; i += 1) {
+      const response = await origin.fetchPlaylist({
+        channelId: CHANNEL_ID,
+        startedAt: STARTED_AT,
+        rung: LL_VIDEO_RUNG,
+        token: "ignored",
+      });
+      assert.equal(response.status, 404, "every viewer still gets a 404; only the logging is throttled");
+    }
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1, "25 polls inside the window must write one line, not 25");
+  assert.equal(notFound[0].suppressed, 0);
+});
+
+// The throttle is per (session, rung, reason), so a second party 404ing at
+// the same moment is not silenced by the first one's line.
+test("the 404 log throttle is per session and rung, not global", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    for (const [channelId, rung] of [
+      [CHANNEL_ID, LL_VIDEO_RUNG],
+      [CHANNEL_ID, LL_AUDIO_RUNG],
+      ["chan_other", LL_VIDEO_RUNG],
+    ]) {
+      await origin.fetchPlaylist({ channelId, startedAt: STARTED_AT, rung, token: "ignored" });
+    }
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 3);
+});
+
+test("a session whose state.json is not written YET answers `not-ready: no-state`, never a conventional fallback", async () => {
+  // THE 2026-09-15 BUG, pinned. A 404 on state.json used to be read as
+  // "this party is conventional" and resolved to `null`, which `index.ts`
+  // turned into the API's conventional master. For an LL session — and by
+  // the time this method is called, `requestsLlMode` has already said the
+  // request IS for one — that is a ladder nothing is writing. The only
+  // honest answer is "not yet", with a reason.
   const original = globalThis.fetch;
   globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
-    assert.equal(result, null);
+    assert.deepEqual(result, { kind: "not-ready", reason: "no-state" });
   } finally {
     globalThis.fetch = original;
   }
 });
 
-test("a conventional session's master request does not wait out the full origin timeout -- MASTER_PROBE_TIMEOUT_MS bounds it", async () => {
+test("a slow origin does not hold an LL master request out to the full origin timeout -- MASTER_PROBE_TIMEOUT_MS bounds it", async () => {
   // A generously long origin timeout (5000ms) that would normally govern
-  // this fetch -- state.json itself answers 404 (no LL session), but only
-  // after a delay well PAST the master route's own short probe deadline.
-  // Without the probe bound, `fetchMultivariantPlaylist` would wait the
-  // full STATE_DELAY_MS before falling back to the API; with it, THIS
-  // request must come back quickly regardless.
+  // this fetch -- state.json itself answers 404, but only after a delay
+  // well PAST the master route's own short probe deadline. Without the
+  // probe bound, `fetchMultivariantPlaylist` would wait the full
+  // STATE_DELAY_MS before answering; with it, THIS request must come back
+  // quickly and tell the player to retry.
   const STATE_DELAY_MS = 2_500; // comfortably past the module's MASTER_PROBE_TIMEOUT_MS (1_500ms), well inside the 5000ms origin timeout below
   const original = globalThis.fetch;
   let calls = 0;
@@ -308,7 +451,7 @@ test("a conventional session's master request does not wait out the full origin 
     const startedAt = Date.now();
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
     const elapsedMs = Date.now() - startedAt;
-    assert.equal(result, null, "a conventional (no-LL) session must still fall back to the API");
+    assert.deepEqual(result, { kind: "not-ready", reason: "probe-timeout" });
     assert.ok(
       elapsedMs < STATE_DELAY_MS,
       `expected the master probe's own short deadline to win before the ${STATE_DELAY_MS}ms origin delay (got ${elapsedMs}ms)`,
@@ -319,7 +462,11 @@ test("a conventional session's master request does not wait out the full origin 
   }
 });
 
-test("a negative probe is cached: a second master request for the same conventional session skips the origin entirely", async () => {
+test("a not-ready answer is memoed: a second master request inside the TTL skips the origin, and the memo expires", async () => {
+  // The bound that keeps five hundred people joining a WARMING party from
+  // being five hundred state.json fetches a second against the remux. One
+  // second, not five: see `NOT_READY_CACHE_TTL_MS`'s doc comment for why a
+  // longer memo would add that long to the start of every LL party.
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -329,18 +476,25 @@ test("a negative probe is cached: a second master request for the same conventio
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const first = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
-    assert.equal(first, null);
+    assert.deepEqual(first, { kind: "not-ready", reason: "no-state" });
     assert.equal(calls, 1, "the first request has to ask the origin");
 
     const second = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
-    assert.equal(second, null);
-    assert.equal(calls, 1, "a second request within the cache TTL must not ask the origin again");
+    assert.deepEqual(second, { kind: "not-ready", reason: "no-state" });
+    assert.equal(calls, 1, "a second request within the memo TTL must not ask the origin again");
 
     // A DIFFERENT session (channel) is unaffected by the first session's
-    // cached negative -- the cache key includes channelId/startedAt.
+    // memo -- the key includes channelId/startedAt.
     const otherChannel = await origin.fetchMultivariantPlaylist("chan_other", STARTED_AT, "token-3");
-    assert.equal(otherChannel, null);
+    assert.deepEqual(otherChannel, { kind: "not-ready", reason: "no-state" });
     assert.equal(calls, 2, "a different session must still be probed on its own");
+
+    // AND IT LETS GO. A memo that outlived the warm-up would be the bug
+    // this whole change is about, one layer down: the session becomes
+    // ready and nobody notices.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-4");
+    assert.equal(calls, 3, "past the TTL the origin must be asked again");
   } finally {
     globalThis.fetch = original;
   }
@@ -353,9 +507,9 @@ test("a stalled body is bounded by the timeout, not just the headers wait", asyn
   // caller's `.arrayBuffer()`/`.json()` read afterward had no deadline at
   // all -- this master request would have hung for the full body delay
   // (or forever, against a genuinely stuck connection) instead of failing
-  // fast. `fetchMultivariantPlaylist` swallows the resulting error and
-  // resolves to `null` (see this file's "FAILS TOWARD..." doc comment), so
-  // what this test can observe is TIMING: it must come back well inside the
+  // fast. `fetchMultivariantPlaylist` turns the resulting error into a
+  // `not-ready` (see this file's "FAILS TOWARD..." doc comment), so what
+  // this test can observe is TIMING: it must come back well inside the
   // stall, not after it.
   const TIMEOUT_MS = 50;
   const BODY_STALL_MS = 2000;
@@ -369,7 +523,7 @@ test("a stalled body is bounded by the timeout, not just the headers wait", asyn
     const startedAt = Date.now();
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
     const elapsedMs = Date.now() - startedAt;
-    assert.equal(result, null, "a stalled remux body must fail the master request, not hang it");
+    assert.equal(result.kind, "not-ready", "a stalled remux body must fail the master request, not hang it");
     assert.ok(
       elapsedMs < BODY_STALL_MS / 2,
       `expected the abort to bound the body read well under the ${BODY_STALL_MS}ms stall (got ${elapsedMs}ms)`,
@@ -436,9 +590,9 @@ test("the origin key is never forwarded to a viewer: the rendered response carri
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000, "remux-shared-secret");
     const master = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
-    assert.ok(master);
-    assert.equal(master.headers.get("X-Pqp-Origin-Key"), null);
-    assert.equal(master.headers.get("Content-Type"), "application/vnd.apple.mpegurl; charset=utf-8");
+    assert.equal(master.kind, "ready");
+    assert.equal(master.response.headers.get("X-Pqp-Origin-Key"), null);
+    assert.equal(master.response.headers.get("Content-Type"), "application/vnd.apple.mpegurl; charset=utf-8");
 
     const rendition = await origin.fetchPlaylist({
       channelId: CHANNEL_ID,

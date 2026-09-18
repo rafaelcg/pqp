@@ -167,30 +167,26 @@ export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 3_500_000;
 export type HlsMode = "conventional" | "ll";
 
 /**
- * `LiveHlsStream.mode` (PR 580, `feat/llhls-l1-5-control-plane`, not yet
- * merged to `main`) and `LiveHlsStream.partTargetMs`, which does not exist
- * on that branch's wire type EITHER as of this PR -- `hls-remux.ts` there
- * stores `part_target_ms` on the `hls_sessions` row and never puts it on the
- * `LiveHlsStream` it hands back. `packages/shared/src/live-hls.ts` on `main`
- * carries neither field today.
+ * The two LL fields of `LiveHlsStream`, as a structural minimum.
  *
- * This client does not validate incoming `channel-live`/`voice-stream`
- * frames or `GET /api/channels/:id/live` answers against the shared zod
- * schema at all (`client/src/lib/realtime.ts`'s `JSON.parse(...) as
+ * BOTH ARE ON THE WIRE TYPE NOW (`packages/shared/src/live-hls.ts`): `mode`
+ * since PR 580, `partTargetMs` since the change that made the delivery mode
+ * a statement rather than a guess. This interface no longer exists to paper
+ * over a missing type -- it exists so the readers below (`hlsModeOf`,
+ * `hlsPartTargetMs`) accept anything carrying those two fields: a whole
+ * `LiveHlsStream`, a `collectScreenTiles` tile, or a test fixture that has
+ * no business constructing a full stream.
+ *
+ * Kept deliberately narrow for a second reason. This client does not
+ * validate incoming `channel-live`/`voice-stream` frames against the shared
+ * zod schema at all (`client/src/lib/realtime.ts`'s `JSON.parse(...) as
  * ChatServerMessage | VoiceSignalingMessage` is a type assertion, not a
- * parse) -- so a server that DOES send `mode`/`partTargetMs` on the wire
- * already reaches this object at runtime; only the TypeScript type is
- * missing them. This interface is the narrow, local fix for that: every read
- * site casts through it rather than widening `LiveHlsStream` itself, which
- * this task is not allowed to touch (client-only; see `CLAUDE.md`).
- *
- * TODO(PR 580): once `mode` (and a `partTargetMs`, once something wires it
- * onto the wire type) land on `packages/shared/src/live-hls.ts`, delete this
- * interface and read the fields straight off `LiveHlsStream`.
+ * parse), so `partTargetMs` arriving as something absurd is a real runtime
+ * possibility -- which is what `validPartTargetMs` below is for, and why
+ * nothing reads the raw field directly.
  */
 export interface LlHlsStreamFields {
   mode?: HlsMode;
-  /** Absent until `partTargetMs` exists on the wire type; see above. */
   partTargetMs?: number;
 }
 
@@ -302,7 +298,65 @@ export function hlsPartTargetMs(
  * below for the actual part-level signal.
  */
 export const LL_HLS_SEQUENCE_STUCK_SEGMENTS = 3;
+/**
+ * The FLOOR under `llSequenceStuckMs`, not the value. It only ever binds
+ * when a manifest advertises an absurdly short `EXT-X-TARGETDURATION`.
+ */
 export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
+
+/**
+ * The sane band for a manifest's own `EXT-X-TARGETDURATION`, in seconds.
+ * Nothing this pipeline produces sits outside it: `pqp-remux` closes a video
+ * segment on an IDR and the keyframe gate is a PLI every four seconds, so a
+ * real party advertises between four and nine.
+ */
+export const LL_HLS_MIN_TARGET_DURATION_SECONDS = 1;
+export const LL_HLS_MAX_TARGET_DURATION_SECONDS = 30;
+
+/** The one validity check for a raw `LevelDetails.targetduration`. */
+export function validTargetDurationSeconds(
+  value: number | null | undefined,
+): number | null {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < LL_HLS_MIN_TARGET_DURATION_SECONDS ||
+    value > LL_HLS_MAX_TARGET_DURATION_SECONDS
+  ) {
+    return null;
+  }
+  return value;
+}
+
+/**
+ * THE BACKSTOP'S THRESHOLD COMES FROM THE MANIFEST, NOT FROM A GUESS ABOUT
+ * SEGMENT LENGTH (production, 2026-09-16 00:50-00:56 UK).
+ *
+ * `HLS_LIVE_SEGMENT_SECONDS` is 4, so this used to resolve to a flat 12 s on
+ * every LL session. But `pqp-remux` closes a video segment only on an IDR,
+ * and the keyframe gate is a PLI every 4 s answered in about a second: real
+ * segments run 5 to 9 s, and the session live at the time advertised
+ * `EXT-X-TARGETDURATION 7`. `EXT-X-MEDIA-SEQUENCE` therefore legitimately
+ * sat still for longer than 12 s on a completely healthy stream, the
+ * watchdog called `sequence-stuck`, the ladder seeked and reloaded and
+ * cancelled its own in-flight part downloads, and the rebuilt player hit the
+ * same clock a few seconds later. Six `audio-init.mp4` fetches in a minute,
+ * all of them self-inflicted.
+ *
+ * Three TARGETDURATIONs, which is what a manifest actually promises about
+ * its own cadence: 21 s for that party rather than 12. The old segment
+ * constant survives only as the value before the first manifest arrives.
+ */
+export function llSequenceStuckMs(
+  targetDurationSeconds?: number | null,
+): number {
+  const seconds =
+    validTargetDurationSeconds(targetDurationSeconds) ?? HLS_LIVE_SEGMENT_SECONDS;
+  return Math.max(
+    LL_HLS_SEQUENCE_STUCK_SEGMENTS * seconds * 1_000,
+    LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
+  );
+}
 
 /**
  * §5's PART-level stall check, SEPARATE from the segment-based ceiling
@@ -319,13 +373,233 @@ export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
 export const LL_HLS_PART_STUCK_PARTS = 4;
 
 /**
+ * The part-stuck threshold, from the manifest's own `EXT-X-PART-INF`
+ * `PART-TARGET` when there is one and from the server-advertised
+ * `partTargetMs` until then. Same reasoning as `llSequenceStuckMs` above:
+ * what the playlist says about its own cadence beats what the wire frame
+ * said about the deployment's default.
+ */
+export function llPartStuckMs(
+  partTargetMs: number | null | undefined,
+  manifestPartTargetSeconds?: number | null,
+): number {
+  const fromManifest =
+    typeof manifestPartTargetSeconds === "number" &&
+    Number.isFinite(manifestPartTargetSeconds) &&
+    manifestPartTargetSeconds > 0
+      ? manifestPartTargetSeconds * 1_000
+      : null;
+  return LL_HLS_PART_STUCK_PARTS * validPartTargetMs(fromManifest ?? partTargetMs);
+}
+
+/**
+ * WHICH hls.js ERRORS THE LL RECOVERY LADDER IS ALLOWED TO TREAT AS FATAL.
+ *
+ * The 2026-09-16 capture showed the fatal ladder running in a loop --
+ * `start-load`, `reload-level`, `recover-media-error`, `rebuilding the
+ * player`, again -- on a session the server was serving perfectly (remux at
+ * 2 parts/s, `timelineRatio` 1.00, 520 Worker requests all 200). hls.js's
+ * gap controller escalates `bufferStalledError` to `fatal: true` once it has
+ * spent `nudgeMaxRetry` nudges (`hls.js` `GapController._tryNudgeBuffer`),
+ * which on a presenter whose upload is starved is a statement about the
+ * BUFFER, not about the source. Handing that to a ladder whose last rung is
+ * "build a new player" throws away the buffer that was the problem.
+ *
+ * Three families, LL only:
+ *
+ * - `"buffer"`: hls.js is telling us the playhead is not moving. Never the
+ *   fatal ladder, fatal flag or not -- it opens the ordinary buffering
+ *   episode instead, so a starved source shows buffering and recovers on
+ *   its own when parts resume.
+ * - `"media"`: the pipeline genuinely cannot use the bytes it was given.
+ *   Worth one `recoverMediaError()` and, failing that, a BOUNDED rebuild.
+ * - `"other"`: everything else (network, manifest loads, the 404/410 the
+ *   live-edge jump owns) keeps exactly the ladder it has always had.
+ */
+export const LL_HLS_BUFFER_ERROR_DETAILS: readonly string[] = [
+  "bufferStalledError",
+  "bufferSeekOverHole",
+  "bufferNudgeOnStall",
+];
+
+export const LL_HLS_MEDIA_ERROR_DETAILS: readonly string[] = [
+  "bufferAppendError",
+  "bufferAppendingError",
+  "bufferAddCodecError",
+  "bufferIncompatibleCodecsError",
+  "fragParsingError",
+  "manifestParsingError",
+];
+
+export type LlHlsErrorClass = "buffer" | "media" | "other";
+
+export function classifyLlHlsError(
+  details: string | null | undefined,
+): LlHlsErrorClass {
+  if (typeof details !== "string") {
+    return "other";
+  }
+  if (LL_HLS_BUFFER_ERROR_DETAILS.includes(details)) {
+    return "buffer";
+  }
+  if (LL_HLS_MEDIA_ERROR_DETAILS.includes(details)) {
+    return "media";
+  }
+  return "other";
+}
+
+/**
+ * How many rebuilds one media-class error is worth before the holding
+ * screen. Two, and then the person gets "try again" rather than a player
+ * that tears itself down every few seconds for the rest of the party.
+ */
+export const LL_HLS_MAX_MEDIA_REBUILDS = 2;
+
+/** What the watchdog remembers about the last hls.js error, for the log. */
+export interface HlsErrorSummary {
+  type?: string | null;
+  details?: string | null;
+  fatal?: boolean | null;
+  reason?: string | null;
+  message?: string | null;
+}
+
+/**
+ * THE LOG LINE HAS TO NAME THE CAUSE (pitfall 16's rule, applied to our own
+ * console). `[hls] stream stalled (fatal), start-load` says which of OUR
+ * reasons fired and nothing at all about hls.js's, so the 2026-09-16 capture
+ * could not tell a starved buffer from a broken decoder from a 404. Every
+ * field hls.js puts on an `ERROR` that matters here, in one string.
+ */
+export function describeHlsError(error: HlsErrorSummary | null): string {
+  if (!error) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (error.type) {
+    parts.push(`type=${error.type}`);
+  }
+  if (error.details) {
+    parts.push(`details=${error.details}`);
+  }
+  if (typeof error.fatal === "boolean") {
+    parts.push(`fatal=${error.fatal}`);
+  }
+  if (error.reason) {
+    parts.push(`reason=${error.reason}`);
+  }
+  if (error.message) {
+    parts.push(`err=${error.message}`);
+  }
+  return parts.join(" ");
+}
+
+/**
  * How far behind the edge hls.js is allowed to drift before it forces a
  * seek forward (`config.liveMaxLatencyDuration`). HLS has no manifest tag
  * for this the way `PART-HOLD-BACK` covers the sync target, so it stays a
  * config concern -- sized off the party's own part target, never a fixed
  * number, per §2's "do not hardcode 20 s anywhere on this path".
+ *
+ * APPLIED AFTER CONSTRUCTION, NEVER IN THE CONSTRUCTOR CONFIG -- see
+ * `applyLlLatencyCeiling` for why, and for the production outage that
+ * taught it.
  */
 export const LL_HLS_MAX_LATENCY_PARTS = 8;
+
+/** The ceiling itself, in seconds, from this party's own part target. */
+export function llMaxLatencySeconds(partTargetMs: number): number {
+  return (LL_HLS_MAX_LATENCY_PARTS * validPartTargetMs(partTargetMs)) / 1000;
+}
+
+/**
+ * How much room above the manifest's own `PART-HOLD-BACK` the ceiling keeps.
+ *
+ * THE CEILING HAS TO SIT ABOVE THE TARGET, AND THE TARGET IS THE MANIFEST'S.
+ * `LL_HLS_MAX_LATENCY_PARTS` is a number about the part target and nothing
+ * else, which was fine while the two happened to agree: at a 500 ms part
+ * target it is 4 s, comfortably above the 1.5 s `PART-HOLD-BACK` the remux
+ * advertised on 2026-09-15. Raise the hold-back to ~3 s (the edge's own fix
+ * for the same evening's rebuffering) and the pair becomes 3 s of target
+ * under a 4 s ceiling: one second of slack, after which
+ * `StreamController.synchronizeToLiveEdge` force-seeks the playhead
+ * (`currentTime < end - maxLatency`). A viewer who hiccups for a second
+ * gets a seek, which empties the tiny LL buffer, which is another hiccup.
+ * That is the "struggles until it settles" shape, self-inflicted.
+ *
+ * So the ceiling is the larger of the two readings, and the manifest one
+ * carries six parts of headroom above whatever hold-back the server chose.
+ * Six because it is three seconds at the 500 ms target: enough that an
+ * ordinary stumble is ridden out by `maxLiveSyncPlaybackRate` instead of a
+ * seek, and still far short of the conventional path's 20 s cushion.
+ */
+export const LL_HLS_LATENCY_CEILING_HEADROOM_PARTS = 6;
+
+/**
+ * The LL latency ceiling in seconds, given what the manifest actually says.
+ * `partHoldBackSeconds` is hls.js's own `LevelDetails.partHoldBack`, which
+ * is only known once a playlist has loaded -- `null`/absent (the attach,
+ * before the first `LEVEL_UPDATED`) keeps exactly the part-derived number
+ * `llMaxLatencySeconds` always returned.
+ */
+export function llLatencyCeilingSeconds(
+  partTargetMs: number,
+  partHoldBackSeconds?: number | null,
+): number {
+  const floor = llMaxLatencySeconds(partTargetMs);
+  if (
+    typeof partHoldBackSeconds !== "number" ||
+    !Number.isFinite(partHoldBackSeconds) ||
+    partHoldBackSeconds <= 0
+  ) {
+    return floor;
+  }
+  const headroom =
+    (LL_HLS_LATENCY_CEILING_HEADROOM_PARTS * validPartTargetMs(partTargetMs)) /
+    1000;
+  return Math.max(floor, partHoldBackSeconds + headroom);
+}
+
+/**
+ * Sets the LL latency ceiling on an ALREADY CONSTRUCTED hls.js instance.
+ *
+ * THIS IS NOT A STYLE CHOICE, IT IS THE ONLY PLACE hls.js ACCEPTS IT.
+ * `mergeConfig` (verified against `hls.mjs` 1.7.2) validates the
+ * constructor's own `userConfig` and THROWS on this exact pair:
+ *
+ *   if (userConfig.liveMaxLatencyDuration !== undefined &&
+ *       (userConfig.liveSyncDuration === undefined ||
+ *        userConfig.liveMaxLatencyDuration <= userConfig.liveSyncDuration))
+ *     throw new Error('Illegal hls.js config: "liveMaxLatencyDuration" must
+ *                      be greater than "liveSyncDuration"');
+ *
+ * and `llHlsConfig` omits `liveSyncDuration` ON PURPOSE, because setting it
+ * is precisely what stops hls.js deferring to the manifest's own
+ * `PART-HOLD-BACK` (`HlsLLPlayerConfig`'s own comment). The two requirements
+ * are only compatible if the ceiling goes on after the merge. It cost a live
+ * party: shipped in the constructor config, `new Hls(llHlsConfig(...))` threw
+ * for EVERY LL viewer, `attach()` was called as `void attach()` so the
+ * rejection was unhandled and silent, `loadSource` was never reached, and a
+ * viewer sat on "A transmissão travou, reconectando" having issued not one
+ * request for a playlist. Production, 2026-09-15: a two-minute HAR of a
+ * viewer holding a correct `mode: "ll"` frame and a correct edge URL contains
+ * zero requests to the edge host.
+ *
+ * `hls.config` is the MERGED config and hls.js reads the ceiling off it
+ * (`LatencyController.maxLatency`), not off `userConfig`; hls.js mutates the
+ * same object itself when a caller sets `hls.targetLatency`. Typed
+ * structurally so this file keeps needing no hls.js import.
+ */
+export function applyLlLatencyCeiling(
+  player: { config: { liveMaxLatencyDuration?: number } },
+  partTargetMs: number,
+  partHoldBackSeconds?: number | null,
+): void {
+  player.config.liveMaxLatencyDuration = llLatencyCeilingSeconds(
+    partTargetMs,
+    partHoldBackSeconds,
+  );
+}
 
 /**
  * hls.js's OWN low-latency catch-up (`config.maxLiveSyncPlaybackRate`,
@@ -348,48 +622,205 @@ export const LL_HLS_BACK_BUFFER_SECONDS = 4;
 export const LL_HLS_MAX_BUFFER_LENGTH_SECONDS = 6;
 export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
 
+/**
+ * WHAT THIS CONFIG DELIBERATELY DOES NOT CONTAIN, AND WHY THAT IS THE WHOLE
+ * POINT. `liveSyncDuration`/`liveSyncDurationCount` are left OUT: verified
+ * against `hls.mjs`'s `LatencyController.updateTargetLatency`, hls.js only
+ * overrides the manifest's `PART-HOLD-BACK`/`HOLD-BACK` when the
+ * constructor's OWN `userConfig` set one of those two -- so omitting both is
+ * what "defer to the manifest when one is present" (`docs/plans/LL_HLS.md`
+ * §4) actually means in hls.js terms, not just a comment.
+ *
+ * `liveMaxLatencyDuration` is left out too, for a DIFFERENT reason: hls.js
+ * refuses a constructor config that carries it without `liveSyncDuration`,
+ * and refuses it by throwing. It is still applied, after construction, by
+ * `applyLlLatencyCeiling` -- see that function for the outage.
+ */
 export interface HlsLLPlayerConfig {
   lowLatencyMode: true;
-  /**
-   * Deliberately the only live-edge-targeting field this config sets.
-   * `liveSyncDuration`/`liveSyncDurationCount` are left OUT on purpose:
-   * verified against `hls.mjs`'s `LatencyController.updateTargetLatency`,
-   * hls.js only overrides the manifest's `PART-HOLD-BACK`/`HOLD-BACK` when
-   * the constructor's OWN `userConfig` set `liveSyncDuration` or
-   * `liveSyncDurationCount` -- so omitting both here is what "defer to the
-   * manifest when one is present" (`docs/plans/LL_HLS.md` §4) actually
-   * means in hls.js terms, not just a comment. `liveMaxLatencyDuration` has
-   * no manifest equivalent to defer to (HLS states a hold-back, never a
-   * "this is too far" ceiling), so it stays an explicit, part-derived
-   * config value.
-   */
-  liveMaxLatencyDuration: number;
   maxLiveSyncPlaybackRate: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
   backBufferLength: number;
   startLevel: number;
+  /**
+   * THE MASTER PLAYLIST OF A WARMING LL SESSION IS A RETRYABLE 503, and
+   * hls.js's default budget for that is one retry.
+   *
+   * The edge Worker answers `503 Retry-After: 1` while `pqp-remux` has not
+   * written its first `state.json` for a session -- deliberately, because
+   * the alternative is what shipped before: quietly serving the
+   * conventional ladder's master for an LL session, whose conventional
+   * ladder the API never started (`tools/hls-edge/src/index.ts`,
+   * `llNotReady`). Riding that window out is the player's half of the
+   * bargain, and hls.js's stock `manifestLoadPolicy.default.errorRetry` is
+   * `maxNumRetry: 1` -- two 503s and the manifest load is fatal, which on a
+   * session that needs two seconds to subscribe is most of them.
+   *
+   * Verified against `hls.mjs`: `retryForHttpStatus` retries any status
+   * outside 4xx, so a 503 IS retried; only the budget was too small. The
+   * delays are paced to the edge's own `Retry-After` rather than as fast as
+   * hls.js will go -- see `LL_HLS_MANIFEST_RETRY_DELAY_MS`.
+   * Everything but `errorRetry` here is hls.js's own default for this
+   * policy, restated because the config is replaced wholesale, not merged.
+   * LL only -- the conventional path never sees this branch and keeps the
+   * stock policy it has always had.
+   */
+  manifestLoadPolicy: {
+    default: {
+      maxTimeToFirstByteMs: number;
+      maxLoadTimeMs: number;
+      timeoutRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+      errorRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+    };
+  };
+  /**
+   * A TRANSIENT 500 ON A PART MUST NOT COST THE PART THAT FOLLOWS IT.
+   *
+   * hls.js's stock `fragLoadPolicy` is six error retries paced 1 s, 2 s, 4 s,
+   * 8 s, 8 s -- a budget written for 4 s segments, where waiting eight
+   * seconds for one is a hiccup. Against 500 ms parts it is a guarantee: by
+   * the third retry the part being retried has left the ring, the ones after
+   * it have too, and the player emerges from its own backoff behind the
+   * window with nothing to ask for. That is exactly what the edge Worker's
+   * five sporadic 500s produced on 2026-09-15 (21:29-21:41 UTC).
+   *
+   * Paced to the part instead: a handful of quick tries inside roughly a
+   * second and a half, then let it go fatal, where the live-edge recovery
+   * (`isMissingFragmentError`) picks it up and jumps to live rather than
+   * grinding through a stale window. Fewer retries than the default and a
+   * far better outcome, because failing fast on a live edge is how you stay
+   * on it.
+   *
+   * AND THE TIMEOUT HALF IS PACED THE SAME WAY (a Farol finding on this PR).
+   * The first cut restated hls.js's own `timeoutRetry` -- four immediate
+   * retries against a 10 s `maxTimeToFirstByteMs` -- which is up to fifty
+   * seconds spent on ONE part that has not produced a byte, four ring-widths
+   * of an LL stream, while the live-edge recovery below waits for a fatal
+   * that is not coming. A request with no first byte after
+   * `LL_HLS_FRAG_TTFB_MS` is not going to be useful at this cadence, and a
+   * retry that has not finished inside `LL_HLS_FRAG_MAX_LOAD_MS` is loading
+   * a part the player no longer wants. One retry, then fatal, then the jump.
+   */
+  fragLoadPolicy: {
+    default: {
+      maxTimeToFirstByteMs: number;
+      maxLoadTimeMs: number;
+      timeoutRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+      errorRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+    };
+  };
 }
 
 /**
- * The LL hls.js config, pure and derived entirely from `partTargetMs` --
- * never a hardcoded 20 s, and never `liveSyncDurationCount`/`liveSyncDuration`
- * (see `HlsLLPlayerConfig`'s own comment on why leaving those two out is the
- * whole point).
+ * How many times an LL master load is retried before hls.js calls it fatal,
+ * and how long between tries.
+ *
+ * PACED TO THE EDGE'S OWN `Retry-After`, NOT FASTER (a Farol finding on this
+ * PR: a first draft retried every 500 ms, which at party scale is the client
+ * half of a thundering herd -- the Worker's not-ready memo bounds what
+ * reaches the REMUX, and bounds nothing about what reaches the Worker). The
+ * Worker answers `Retry-After: 1`, so the first retry waits a second; hls.js
+ * then backs off toward `maxRetryDelayMs`, giving 1 + 2 + 2 + 2 + 2 + 2 ≈
+ * 11 s of patience for at most seven requests per viewer. Two hundred people
+ * joining a session that takes ten seconds to warm up is therefore ~1400
+ * Worker requests spread over eleven seconds, and still one `state.json`
+ * fetch a second against the box.
+ *
+ * Eleven seconds is chosen against what it is waiting FOR: `pqp-remux` has
+ * to subscribe to the LiveKit track and write one part. A start slower than
+ * that is not a warm-up, and letting the load go fatal hands the viewer to
+ * the player's own recovery ladder, which is where a genuinely broken
+ * session belongs.
  */
-export function llHlsConfig(partTargetMs: number): HlsLLPlayerConfig {
-  const partSeconds =
-    Number.isFinite(partTargetMs) && partTargetMs > 0
-      ? partTargetMs / 1000
-      : LL_HLS_DEFAULT_PART_TARGET_MS / 1000;
+export const LL_HLS_MANIFEST_RETRY_COUNT = 6;
+export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 1_000;
+export const LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS = 2_000;
+
+/**
+ * The part-paced fragment retry budget (`HlsLLPlayerConfig.fragLoadPolicy`).
+ * Three tries at 200 ms, 400 ms, 800 ms is ~1.4 s of patience, under three
+ * parts of the window -- enough to ride out a Worker blip, short enough that
+ * what the player asks for next is still in the ring.
+ */
+export const LL_HLS_FRAG_RETRY_COUNT = 3;
+export const LL_HLS_FRAG_RETRY_DELAY_MS = 200;
+export const LL_HLS_FRAG_MAX_RETRY_DELAY_MS = 1_000;
+
+/**
+ * The timeout half of the same budget. Two seconds to the first byte and
+ * five to finish, against the fifty hls.js's own defaults allow. A slow link
+ * that cannot make that is a viewer who should be on the conventional
+ * ladder, which is where §4's pin rule sends them.
+ *
+ * THREE RETRIES INSIDE THE SAME CEILING, NOT ONE (production, 2026-09-16).
+ * One retry meant a presenter whose upload went quiet -- which the same
+ * capture showed, tiny parts and a shrinking buffer -- produced a fatal
+ * `fragLoadTimeOut` after two tries, and a fatal network error is what the
+ * recovery ladder reads as "this source is gone". Four attempts paced
+ * 200/400/800 ms ride out a starved second instead of tearing the player
+ * down over it.
+ *
+ * AND THE WHOLE BUDGET STILL FITS THE RING, which is the invariant this
+ * cannot break (`hls-live-edge.test.ts`, "cannot sit on one part for longer
+ * than the ring holds"): four attempts at 2.5 s plus 1.4 s of backoff is
+ * under the ~12 s of parts the remux keeps, where the old two attempts at
+ * 5 s were 10 s. More chances, same ceiling -- what changed is the shape of
+ * the patience, not its size.
+ */
+export const LL_HLS_FRAG_TTFB_MS = 2_000;
+export const LL_HLS_FRAG_MAX_LOAD_MS = 2_500;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 3;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS = 200;
+export const LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS = 1_000;
+
+/**
+ * The LL hls.js CONSTRUCTOR config: everything hls.js will accept at
+ * construction time, and nothing it will not.
+ *
+ * TAKES NO PART TARGET ANY MORE. The one field that was derived from it,
+ * `liveMaxLatencyDuration`, cannot live in a constructor config at all
+ * (`applyLlLatencyCeiling`), and everything left here is a fixed choice. A
+ * caller that still has a part target hands it to `applyLlLatencyCeiling`
+ * right after `new Hls(...)`; §2's "do not hardcode 20 s anywhere on this
+ * path" is unchanged, the number just lands one line later.
+ */
+export function llHlsConfig(): HlsLLPlayerConfig {
   return {
     lowLatencyMode: true,
-    liveMaxLatencyDuration: LL_HLS_MAX_LATENCY_PARTS * partSeconds,
     maxLiveSyncPlaybackRate: LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
     maxBufferLength: LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
     backBufferLength: LL_HLS_BACK_BUFFER_SECONDS,
     startLevel: -1,
+    manifestLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: Infinity,
+        maxLoadTimeMs: 20_000,
+        timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+        errorRetry: {
+          maxNumRetry: LL_HLS_MANIFEST_RETRY_COUNT,
+          retryDelayMs: LL_HLS_MANIFEST_RETRY_DELAY_MS,
+          maxRetryDelayMs: LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS,
+        },
+      },
+    },
+    fragLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: LL_HLS_FRAG_TTFB_MS,
+        maxLoadTimeMs: LL_HLS_FRAG_MAX_LOAD_MS,
+        timeoutRetry: {
+          maxNumRetry: LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+          retryDelayMs: LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS,
+          maxRetryDelayMs: LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS,
+        },
+        errorRetry: {
+          maxNumRetry: LL_HLS_FRAG_RETRY_COUNT,
+          retryDelayMs: LL_HLS_FRAG_RETRY_DELAY_MS,
+          maxRetryDelayMs: LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
+        },
+      },
+    },
   };
 }
 
@@ -484,6 +915,123 @@ const PART_LOAD_ERROR_DETAILS = new Set([
 
 export function isLlPartLoadErrorDetail(details: string): boolean {
   return PART_LOAD_ERROR_DETAILS.has(details);
+}
+
+/**
+ * The HTTP statuses that mean "what you asked for is not here any more":
+ * the edge Worker answers 404 for a part that has left the ring
+ * (`hlsEdge.llPartMissing`), and 410 is the same answer said properly.
+ */
+const MISSING_FRAGMENT_STATUSES = new Set([404, 410]);
+
+/**
+ * A fatal error that says the PLAYER fell behind the window, not that the
+ * STREAM is gone.
+ *
+ * §5's rule, which the 2026-09-15 run found the client did not have: a 404
+ * on a part or segment is "you are asking for the wrong place", and the
+ * remedy for that is to jump to live, not to tell a room full of people the
+ * broadcast died. hls.js cannot make that distinction on its own -- a 4xx is
+ * never retried (`retryForHttpStatus`), an LL master usually offers no other
+ * level to fail over to, so the error controller has nowhere to go but
+ * fatal, and the viewer got "A transmissão caiu / Tentar de novo" over a
+ * stream that was still running perfectly.
+ *
+ * Deliberately narrow on two axes. Only a FRAGMENT/part load
+ * (`isLlPartLoadErrorDetail`): a 404 on the master or on a level playlist is
+ * the session genuinely being gone, and that one must still escalate. And
+ * only a status that says "not here" -- a 500 is the Worker having a bad
+ * moment on a part that still exists, which the retry budget above owns.
+ */
+export function isMissingFragmentError(input: {
+  fatal: boolean;
+  details: string;
+  responseCode?: number | null;
+}): boolean {
+  return (
+    input.fatal &&
+    isLlPartLoadErrorDetail(input.details) &&
+    typeof input.responseCode === "number" &&
+    MISSING_FRAGMENT_STATUSES.has(input.responseCode)
+  );
+}
+
+/**
+ * How many live-edge jumps one attach may make, and over what window.
+ *
+ * BOUNDED, because "jump to live and carry on" is only a recovery while the
+ * thing it recovers from is transient. A stream whose parts keep 404ing at
+ * the edge is not a viewer who fell behind, and jumping forever would trade
+ * a holding screen that says what happened for a silent loop that says
+ * nothing -- pitfall 16's lesson, one layer up. Past the budget the error
+ * goes back to the stall watchdog's own ladder exactly as it did before,
+ * which is what eventually reaches "A transmissão caiu" and a retry button.
+ */
+export const LL_HLS_EDGE_JUMP_MAX = 2;
+export const LL_HLS_EDGE_JUMP_WINDOW_MS = 30_000;
+
+/**
+ * Whether another live-edge jump is inside the budget. `timestampsMs` is
+ * every jump this attach has already made, ascending; the caller appends
+ * only when this says yes.
+ */
+export function canJumpToLiveEdge(
+  timestampsMs: readonly number[],
+  now: number,
+  windowMs: number = LL_HLS_EDGE_JUMP_WINDOW_MS,
+  max: number = LL_HLS_EDGE_JUMP_MAX,
+): boolean {
+  return timestampsMs.filter((at) => now - at < windowMs).length < max;
+}
+
+/**
+ * How long after an attach the watchdog's SOFT rules stay quiet on LL.
+ *
+ * A player in the first seconds of an LL stream is doing exactly what a
+ * stalled one looks like: waiting for a manifest the edge may still be
+ * answering `503 Retry-After: 1` for (`LL_HLS_MANIFEST_RETRY_COUNT` buys it
+ * eleven seconds of that), then filling a six-second buffer from 500 ms
+ * parts. `LL_HLS_PART_STUCK_PARTS` is two seconds at that target, so the
+ * part rule could fire its nudge -- a `startLoad`, i.e. a reset of the load
+ * that was going fine -- before the first part had ever arrived. That is the
+ * "struggles until it settles" half the client owns.
+ *
+ * Six seconds, which is the LL forward buffer plus a part: past that, a
+ * player with no picture has a real problem. Only the soft rules are
+ * suppressed -- a genuine fatal error still escalates on the tick it
+ * arrives, because a source that is gone at second two is gone.
+ */
+export const LL_HLS_STARTUP_GRACE_MS = 6_000;
+
+/**
+ * Own playlist/master (or a media-playlist level) answered 404/410.
+ *
+ * During a conventional egress restart the previous `startedAt` disappears
+ * and every viewer still pointed at it gets a 404 storm for ~10–15 s until
+ * they adopt the new master. That is a session that is GONE, not a
+ * transient network blip and not a missing fragment inside a still-live
+ * window (those stay `fragLoadError` and are not this). The watch player
+ * uses this to `stopLoad` and hold rather than walking the fatal /
+ * start-load ladder into a 1–2 s last-segment loop.
+ *
+ * Timeouts are deliberately excluded: a slow playlist is not "gone", and
+ * hls.js's own retry budget still applies.
+ */
+const PLAYLIST_GONE_DETAILS = new Set([
+  "manifestLoadError",
+  "levelLoadError",
+]);
+
+export function isPlaylistGoneError(input: {
+  details?: string | null;
+  responseCode?: number | null;
+}): boolean {
+  const code = input.responseCode;
+  if (code !== 404 && code !== 410) {
+    return false;
+  }
+  const details = input.details;
+  return typeof details === "string" && PLAYLIST_GONE_DETAILS.has(details);
 }
 
 /**
@@ -716,14 +1264,55 @@ export interface HlsRecoveryHandle {
  * only needs the one assignment: ABR will reselect and the resulting fetch
  * reloads it regardless of which rung it lands on.
  */
-export function reloadHlsLevelPlaylist(hls: HlsRecoveryHandle): void {
+export function reloadHlsLevelPlaylist(
+  hls: HlsRecoveryHandle,
+  startPosition: number | null = null,
+): void {
   const level = hls.currentLevel;
   hls.stopLoad?.();
   hls.currentLevel = -1;
   if (level >= 0) {
     hls.currentLevel = level;
   }
-  hls.startLoad?.(-1);
+  hls.startLoad?.(recoveryStartPosition(startPosition));
+}
+
+/**
+ * `-1` IS NOT "THE LIVE EDGE", AND THAT COST AN LL PARTY.
+ *
+ * Every step of the ladder used to call `startLoad(-1)` on the strength of
+ * the name. Verified against `hls.mjs` 1.7.2, `StreamController.startLoad`
+ * does this instead:
+ *
+ *   if (lastCurrentTime > 0 && startPosition === -1 && ...) {
+ *     this.log(`Override startPosition with lastCurrentTime @...`);
+ *     startPosition = lastCurrentTime;
+ *   }
+ *
+ * so `-1` means "resume where the playhead was", and only means the live
+ * edge on a player that never played. On a conventional stream that is
+ * harmless: the playhead is inside a 60 s window and the recovery is over in
+ * one segment. On LL it is the bug. The remux keeps parts for the newest
+ * three segments (~12 s), so a playhead frozen by an error for even half a
+ * minute names a part that left the ring long ago; hls.js asks for it, the
+ * edge Worker answers 404, and a 404 is the one status hls.js never retries
+ * (`retryForHttpStatus`: no 4xx). Production, 2026-09-15 21:37:47 and again
+ * at 21:40:59: `ll/part-699.m4s` requested with the edge at part ~1,400 and
+ * ~1,600, both times straight to a fatal network error and "A transmissão
+ * caiu".
+ *
+ * So a live recovery passes the live edge it is about to seek the element to
+ * (`liveSeekTarget`), and the loader and the element agree instead of the
+ * loader firing one doomed request at the old position first. `null` (VOD,
+ * or no live edge known yet) keeps the old `-1`, which is what a replay
+ * wants: resume where you were.
+ */
+function recoveryStartPosition(startPosition: number | null | undefined): number {
+  return typeof startPosition === "number" &&
+    Number.isFinite(startPosition) &&
+    startPosition >= 0
+    ? startPosition
+    : -1;
 }
 
 /**
@@ -739,23 +1328,25 @@ export function reloadHlsLevelPlaylist(hls: HlsRecoveryHandle): void {
 export function applyHlsRecoveryStep(
   hls: HlsRecoveryHandle | null | undefined,
   decision: "recover-media-error" | "start-load" | "restart-load" | "reload-level",
+  startPosition: number | null = null,
 ): void {
   if (!hls) {
     return;
   }
+  const from = recoveryStartPosition(startPosition);
   switch (decision) {
     case "recover-media-error":
       hls.recoverMediaError?.();
       return;
     case "start-load":
-      hls.startLoad?.(-1);
+      hls.startLoad?.(from);
       return;
     case "restart-load":
       hls.stopLoad?.();
-      hls.startLoad?.(-1);
+      hls.startLoad?.(from);
       return;
     case "reload-level":
-      reloadHlsLevelPlaylist(hls);
+      reloadHlsLevelPlaylist(hls, startPosition);
       return;
   }
 }

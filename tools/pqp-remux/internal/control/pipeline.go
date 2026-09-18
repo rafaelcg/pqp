@@ -56,6 +56,59 @@ type PipelineHealth struct {
 	// predecessor (Farol review, PR #621).
 	VideoPartSeq uint32
 	AudioPartSeq uint32
+
+	// DemoteReason is non-empty when the pipeline itself has asked to be
+	// taken off the LL rung (today: an H.264 parameter-set change that
+	// could not be represented as a new init + discontinuity). The
+	// watchdog demotes on the next tick — see evaluateWatchdog.
+	DemoteReason string
+
+	// --- the source's own liveness, added 2026-09-15 ---
+	//
+	// WHY A WATCHDOG NEEDS THESE. Until now the only thing this struct
+	// said about a session in trouble was "no part has been published
+	// for N seconds", and that one fact has at least three completely
+	// different causes: the publisher stopped sending (a Chrome TAB
+	// share of static content sends NO frames while nothing repaints),
+	// the publisher is sending and nothing comes out of the depacketizer
+	// (loss, a wedged access unit), or frames come out and the muxer
+	// publishes nothing. Only the first is NOT a stall, and on
+	// 2026-09-15 it was treated as one: a production session was
+	// restarted and then demoted off the low-latency rung for a source
+	// that was behaving normally. LastVideoPacketAt and LastVideoFrameAt
+	// are what let evaluateWatchdog tell those three apart -- see
+	// sourceIdle there. Zero means "never", and a Pipeline that does not
+	// report them (every fake in this package's own tests) is evaluated
+	// exactly as it was before they existed.
+	LastVideoPacketAt time.Time
+	LastVideoFrameAt  time.Time
+
+	VideoPacketsSeen     uint64
+	VideoFramesSeen      uint64
+	VideoKeyframesSeen   uint64
+	VideoDepacketizeErrs uint64
+	// KeepAliveParts counts parts published by the idle keep-alive rather
+	// than by an arriving access unit (internal/session's idleTick). A
+	// session whose parts are ALL keep-alives is a frozen picture, which
+	// is a real thing to see on a dashboard and not visible from
+	// PartsWritten alone.
+	KeepAliveParts    uint64
+	AudioPartsWritten uint64
+
+	// PLIsSent/PLIsSinceIdr come from internal/keyframe.Requester under
+	// KEYFRAME_POLICY=pli, and are 0 under "natural" (no requester is
+	// ever constructed). PLIsSinceIdr above zero means this process has
+	// asked for a keyframe and not been answered yet.
+	PLIsSent     uint64
+	PLIsSinceIdr uint64
+
+	R2Uploaded      uint64
+	R2Failed        uint64
+	R2Dropped       uint64
+	R2Queued        int
+	R2InFlight      int64
+	R2LastLatencyMs int64
+	R2MaxLatencyMs  int64
 }
 
 // Pipeline is the minimal surface a managed session's media pipeline

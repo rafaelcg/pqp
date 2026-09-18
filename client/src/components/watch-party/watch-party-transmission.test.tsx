@@ -171,3 +171,87 @@ describe("StreamMixSummary", () => {
     expect(html).not.toContain("watch-party-tx-mic-gain-slider");
   });
 });
+
+/**
+ * THE INCIDENT (2026-09-16). The presenter's own screen publish dropped after
+ * an API-restart reconnect. The server still called the party live and the
+ * HLS stream lingered, so a health keyed on `stream` alone kept saying "ok"
+ * with an uptime ticking up over a dead broadcast for 35 minutes. `recovering`
+ * is the presenter's truthful signal and it must win over the stale stream.
+ */
+describe("the presenter's own publish dropping (recovering)", () => {
+  function detailed(recovering: boolean) {
+    return renderToStaticMarkup(
+      <WatchPartyTransmission
+        stream={stream({})}
+        wentLiveAt="2026-09-09T12:00:00.000Z"
+        audienceCount={137}
+        isPresenting
+        recovering={recovering}
+        quality="auto"
+        roomViewers={4}
+        transport="livekit"
+        detailsInDialog
+        now={new Date("2026-09-09T12:20:00.000Z")}
+      />,
+    );
+  }
+
+  it("says the stream dropped instead of counting uptime over a live stream", () => {
+    const html = detailed(true);
+    expect(html).toContain("Your stream dropped. Reconnecting");
+    // Not the healthy summary, and not the 20-minute uptime it would otherwise
+    // show for a stream that started at 12:00 and a clock at 12:20.
+    expect(html).not.toContain("20 min");
+    expect(html).toContain('aria-label="Reconnecting your stream"');
+  });
+
+  it("marks the health bad even though the server still reports a live stream", () => {
+    // The dot is `bg-danger` only for the bad state; a live stream with no
+    // fault would be `bg-success`.
+    const html = detailed(true);
+    const dot = html.slice(html.indexOf("watch-party-tx-health"));
+    expect(dot).toContain("bg-danger");
+  });
+
+  it("leaves the uptime running when the publish is healthy", () => {
+    // The control case: same live stream, not recovering -> the 20-minute
+    // uptime is present, proving the freeze above is `recovering`'s doing.
+    expect(detailed(false)).toContain("20 min");
+  });
+});
+
+/**
+ * THE LOW-LATENCY PATH NEVER REACHES THE LIVE WORDING (staging, 2026-09-18).
+ * The summary's live branch is gated on `stream.topHeight`, the tallest rung
+ * the LiveKit egress ladder actually started -- but `mode: "ll"` sessions
+ * (`pqp-remux`, no transcode) have no ladder and never set `topHeight`, so
+ * the header reads "Preparing the broadcast" for the whole party even though
+ * the room is live, viewers are watching and the sidebar's AO VIVO pill
+ * already agrees. Same shape as pitfall 9/12: a signal that only ever meant
+ * one delivery mode was read as if it covered both.
+ */
+describe("the low-latency path (mode: \"ll\") reaching the live wording", () => {
+  it("says how many are watching instead of freezing on 'preparing'", () => {
+    const html = markup({ mode: "ll", topHeight: undefined });
+    expect(html).toContain("137 watching");
+    expect(html).not.toContain("Preparing the broadcast");
+  });
+
+  it("still says nobody is watching yet, without freezing on 'preparing'", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyTransmission
+        stream={stream({ mode: "ll", topHeight: undefined })}
+        wentLiveAt="2026-09-09T12:00:00.000Z"
+        audienceCount={0}
+        isPresenting
+        quality="auto"
+        roomViewers={4}
+        transport="livekit"
+        now={new Date("2026-09-09T12:20:00.000Z")}
+      />,
+    );
+    expect(html).toContain("nobody watching yet");
+    expect(html).not.toContain("Preparing the broadcast");
+  });
+});

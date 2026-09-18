@@ -21,6 +21,7 @@ import test from "node:test";
 // untested here for that reason, same as before this file existed.
 import { handlePlaylistRequest } from "../dist/index.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "../src/hls-viewer-token.js";
+import { LL_MODE_PARAM, LL_MODE_VALUE } from "../dist/playlist-route.js";
 import { LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 /** Same minting scheme as `hls-viewer-token.test.mjs` -- see that file's
@@ -87,10 +88,23 @@ function requestFor(channelId, startedAt, token) {
   return new Request(url, { method: "GET" });
 }
 
+/**
+ * The URL an LL session's `hlsUrl` actually is: `?mode=ll` FIRST (the API
+ * builds the path with the marker already on it, `llPlaylistUrl`) and the
+ * viewer token appended after, which is the order `stampViewerStream`
+ * produces.
+ */
+function llRequestFor(channelId, startedAt, token) {
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}` +
+    `?${LL_MODE_PARAM}=${LL_MODE_VALUE}&${HLS_VIEWER_TOKEN_PARAM}=${token}`;
+  return new Request(url, { method: "GET" });
+}
+
 /** An `LlPlaylistOrigin`-shaped fake that records whether it was ever asked
  * to serve a master playlist -- the assertion this whole file exists for:
  * a revoked viewer must never reach this call at all. */
-function fakeLlOrigin({ ready, response = null } = {}) {
+function fakeLlOrigin({ ready, response = null, notReady = null } = {}) {
   let calls = 0;
   return {
     get ready() {
@@ -98,7 +112,10 @@ function fakeLlOrigin({ ready, response = null } = {}) {
     },
     async fetchMultivariantPlaylist() {
       calls += 1;
-      return response;
+      if (notReady) {
+        return { kind: "not-ready", reason: notReady };
+      }
+      return { kind: "ready", response };
     },
     get calls() {
       return calls;
@@ -133,7 +150,7 @@ test("LL master route: a revoked viewer is refused BEFORE the LL origin is ever 
   });
 
   const response = await handlePlaylistRequest(
-    requestFor(channelId, startedAt, token),
+    llRequestFor(channelId, startedAt, token),
     { api: fakeApiOrigin(), ll },
     noopCtx,
     env,
@@ -162,7 +179,7 @@ test("LL master route: an unrevoked viewer is served the LL master, unchanged", 
   const env = baseEnv({ HLS_REVOKED_USERS: fakeKv([]) });
 
   const response = await handlePlaylistRequest(
-    requestFor(channelId, startedAt, token),
+    llRequestFor(channelId, startedAt, token),
     { api: fakeApiOrigin(), ll },
     noopCtx,
     env,
@@ -189,7 +206,7 @@ test("LL master route: a KV read error fails CLOSED, same as the rendition route
   const env = baseEnv({ HLS_REVOKED_USERS: throwingKv() });
 
   const response = await handlePlaylistRequest(
-    requestFor(channelId, startedAt, token),
+    llRequestFor(channelId, startedAt, token),
     { api: fakeApiOrigin(), ll },
     noopCtx,
     env,
@@ -204,22 +221,22 @@ test("LL master route: a KV read error fails CLOSED, same as the rendition route
   assert.equal(ll.calls, 0);
 });
 
-test("LL master route: LL origin not ready falls through to the API forward, no revocation check needed", async () => {
-  const channelId = "chan-noll-1";
+test("conventional master route: no `mode=ll` means the LL origin is never asked, even when it is ready", async () => {
+  // THE 2026-09-15 BUG, FROM THE OTHER SIDE. Before the marker existed this
+  // branch probed the remux for EVERY master request once `LL_ORIGIN_BASE`
+  // was set -- a conventional session paid the probe's latency and an
+  // unhealthy remux could hold every conventional viewer's join open. A
+  // request that does not ask for LL must be the byte-for-byte API forward
+  // it was before any of this existed.
+  const channelId = "chan-conventional-1";
   const startedAt = "1726000000003";
-  const userId = "user-noll-1";
+  const userId = "user-conventional-1";
   const token = tokenFor(userId, channelId, startedAt);
-  // Not-ready LL origin: fetchMultivariantPlaylist must never be called, so
-  // asserting `.calls` catches a regression that stops checking `ready`.
-  const ll = fakeLlOrigin({ ready: false });
-  const env = baseEnv({
-    // Even a revoked user reaches the plain API forward here -- this route
-    // relies on the API's OWN always-current check when the LL path isn't
-    // in play at all, matching the module doc comment ("WHAT THIS WORKER
-    // DOES NOT MAKE FASTER"). This case is about the LL branch being
-    // skipped cleanly, not about revocation.
-    HLS_REVOKED_USERS: fakeKv([]),
+  const ll = fakeLlOrigin({
+    ready: true,
+    response: new Response("#EXTM3U\nLL SHOULD NOT BE REACHED\n", { status: 200 }),
   });
+  const env = baseEnv({ HLS_REVOKED_USERS: fakeKv([]) });
 
   const response = await handlePlaylistRequest(
     requestFor(channelId, startedAt, token),
@@ -233,7 +250,69 @@ test("LL master route: LL origin not ready falls through to the API forward, no 
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("X-HLS-Edge-Cache"), "BYPASS");
-  assert.equal(ll.calls, 0);
+  assert.equal(response.headers.get("X-HLS-Edge-Mode"), null);
+  assert.equal(await response.text(), "#EXTM3U\n");
+  assert.equal(ll.calls, 0, "a conventional master must never touch the LL origin");
+});
+
+test("LL master route: a session whose state is not written yet gets 503 + Retry-After, NEVER the conventional ladder", async () => {
+  // The whole point of this change. On 2026-09-15 the audience's only
+  // master request arrived 300 ms into an LL session, found no state, and
+  // was answered with the conventional ladder's master -- for a session
+  // whose conventional ladder the API had deliberately not started. The
+  // player fetched `/720p30`, got nothing, and the party read "A
+  // transmissão caiu". A retryable refusal is the honest answer.
+  const channelId = "chan-warming-1";
+  const startedAt = "1726000000006";
+  const userId = "user-warming-1";
+  const token = tokenFor(userId, channelId, startedAt);
+  const ll = fakeLlOrigin({ ready: true, notReady: "no-state" });
+  const api = fakeApiOrigin();
+  const env = baseEnv({ HLS_REVOKED_USERS: fakeKv([]) });
+
+  const response = await handlePlaylistRequest(
+    llRequestFor(channelId, startedAt, token),
+    { api, ll },
+    noopCtx,
+    env,
+    channelId,
+    startedAt,
+    undefined,
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("Retry-After"), "1");
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.equal(response.headers.get("X-HLS-Edge-LL-Not-Ready"), "no-state");
+  assert.equal(ll.calls, 1);
+});
+
+test("LL master route: an unconfigured LL origin is a loud 503, not a silent conventional answer", async () => {
+  // The API only stamps `mode=ll` when it has both a remux control plane
+  // and an edge front (`resolveHlsMode`), so this is a Worker deployed
+  // without `LL_ORIGIN_BASE` while the API already selects LL -- a deploy
+  // ordering mistake. The API forward would 404 (it has never known how to
+  // render a `mode = 'll'` row) and would do it silently.
+  const channelId = "chan-noll-1";
+  const startedAt = "1726000000007";
+  const userId = "user-noll-1";
+  const token = tokenFor(userId, channelId, startedAt);
+  const ll = fakeLlOrigin({ ready: false });
+  const env = baseEnv({ HLS_REVOKED_USERS: fakeKv([]) });
+
+  const response = await handlePlaylistRequest(
+    llRequestFor(channelId, startedAt, token),
+    { api: fakeApiOrigin(), ll },
+    noopCtx,
+    env,
+    channelId,
+    startedAt,
+    undefined,
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("X-HLS-Edge-LL-Not-Ready"), "origin-not-configured");
+  assert.equal(ll.calls, 0, "an unready origin must not be asked");
 });
 
 test("LL rendition route (ll): a revoked viewer is refused before any origin -- API or LL -- is ever selected", async () => {
@@ -294,4 +373,103 @@ test("LL rendition route (ll): a CHANNEL-WIDE revocation (not just a per-viewer 
   const body = await response.json();
   assert.equal(body.reason, "revoked");
   assert.equal(ll.calls, 0);
+});
+
+// ---------------------------------------------------------------------------
+// THE PLAIN (NON-BLOCKING) RENDITION PATH UNDER CONCURRENCY
+//
+// Two of the thirteen requests the Workers runtime killed on 2026-09-15 were
+// PLAIN playlist requests with no `_HLS_*` directive at all, which is what
+// put `inFlightRenditionFetches` in scope alongside the blocking-reload
+// machinery: a caller joining a shared fetch owned by a request that has
+// already returned has no pending I/O of its own. This exercises that path
+// end to end -- the 2 s cache lookup, the coalesced origin fetch, the
+// response build -- with a burst of concurrent callers on one key, and
+// asserts that every one of them settles and that `ctx.waitUntil` is handed
+// the producer's fetch.
+// ---------------------------------------------------------------------------
+
+/** `caches.default` is a Workers global with no Node counterpart; this is the smallest thing `safeCacheMatch`/`safeCachePut` accept. */
+function withFakeCaches(run) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "caches");
+  const previous = globalThis.caches;
+  const puts = [];
+  globalThis.caches = {
+    default: {
+      async match() {
+        return undefined;
+      },
+      async put(key, response) {
+        puts.push(key);
+        // Read the body the way the real cache does, so a response that
+        // cannot be consumed twice fails here rather than silently.
+        await response.arrayBuffer();
+      },
+    },
+  };
+  return run(puts).finally(() => {
+    if (had) {
+      globalThis.caches = previous;
+    } else {
+      delete globalThis.caches;
+    }
+  });
+}
+
+function renditionRequestFor(channelId, startedAt, rung, token) {
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${rung}` +
+    `?${HLS_VIEWER_TOKEN_PARAM}=${token}`;
+  return new Request(url, { method: "GET" });
+}
+
+test("the plain rendition path: a burst of concurrent viewers all settle on ONE origin fetch", async () => {
+  await withFakeCaches(async () => {
+    const channelId = "chan-plain-burst";
+    const startedAt = "1726000000000";
+    const rung = "720p30";
+    const token = tokenFor("user-plain-burst", channelId, startedAt);
+
+    let originCalls = 0;
+    const origin = {
+      ready: true,
+      async fetchPlaylist() {
+        originCalls += 1;
+        // Not instant: the whole point is that the later callers arrive
+        // while the first one's fetch is still in flight.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return new Response("#EXTM3U\n#EXT-X-TARGETDURATION:4\n", { status: 200 });
+      },
+    };
+
+    /** @type {Promise<unknown>[]} */
+    const kept = [];
+    const ctx = { waitUntil: (promise) => kept.push(Promise.resolve(promise).catch(() => {})) };
+
+    const responses = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        handlePlaylistRequest(
+          renditionRequestFor(channelId, startedAt, rung, token),
+          { api: origin, ll: { ready: false } },
+          ctx,
+          baseEnv({ ORIGIN_BASE: "https://api.example" }),
+          channelId,
+          startedAt,
+          rung,
+        ),
+      ),
+    );
+
+    assert.equal(responses.length, 12);
+    for (const response of responses) {
+      assert.equal(response.status, 200, "every concurrent caller must get an answer");
+      assert.equal(await response.text(), "#EXTM3U\n#EXT-X-TARGETDURATION:4\n");
+    }
+    assert.equal(originCalls, 1, "twelve viewers, one origin fetch -- the whole reason this Worker exists");
+    assert.ok(
+      kept.length >= 1,
+      "the producing request must extend its own context past its response, or the fetch its joiners share dies with it",
+    );
+    await Promise.all(kept);
+  });
 });

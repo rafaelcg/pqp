@@ -1,5 +1,8 @@
 import { describeLimitation, sampleVoiceStats } from "@/lib/voice-stats-probe";
-import type { HlsSourceInput } from "@/lib/video-quality";
+import {
+  SCREEN_CAPTURE_HEIGHT,
+  type HlsSourceInput,
+} from "@/lib/video-quality";
 
 /**
  * The presenter's half of the ladder.
@@ -73,24 +76,50 @@ export async function readPresenterHlsFeed(): Promise<PresenterHlsFeed> {
  * Null unless all three are true: an egress is live on this channel, this
  * machine is the one sharing, and the room is on the SFU. Anything else is
  * an ordinary call whose large-room cap this feature must not touch.
+ *
+ * A LOW-LATENCY SESSION STATES NO LADDER, AND THAT IS NOT "NO SESSION".
+ * `pqp-remux` is a CMAF passthrough: it does not transcode renditions, it
+ * forwards the presenter's own top simulcast layer verbatim, so its
+ * `voice-stream` frame carries `mode: "ll"` and no `topHeight` at all
+ * (`server/src/voice/hls-remux.ts` builds the stream with `mode`,
+ * `partTargetMs` and nothing about size). Reading that absence as "there is
+ * no egress" is what left a production presenter publishing TWO active
+ * screen encodings for a whole 21 minute party on 2026-09-17: a null here
+ * means `setHlsSource(null)`, and then nothing pins the encoder, nothing
+ * deactivates the 360p rung the remux never subscribes to, and nothing caps
+ * the presenter's camera either.
+ *
+ * For a passthrough the ladder's top IS the presenter's own ceiling, so that
+ * is what goes on the wire. `hlsSourceTopHeight` then holds the published
+ * height at `maxPublishHeight` (720 by default) behind the measured-uplink
+ * gate, exactly as it does for a conventional 1080p ladder, which is the
+ * right answer here twice over: an LL viewer is handed the presenter's own
+ * packets, and their loss with them.
  */
 export function hlsSourceFor(input: {
   /** `stream.topHeight` from the live `voice-stream` frame, if any. */
   streamTopHeight: number | null | undefined;
+  /** `stream.mode` from the same frame. Absent means conventional. */
+  streamMode?: "conventional" | "ll" | undefined;
   isSharingScreen: boolean;
   usingSfu: boolean;
   uplinkBps: number | null;
   limitedBy?: HlsSourceInput["limitedBy"];
 }): HlsSourceInput | null {
-  if (
-    !input.isSharingScreen ||
-    !input.usingSfu ||
-    typeof input.streamTopHeight !== "number"
-  ) {
+  if (!input.isSharingScreen || !input.usingSfu) {
+    return null;
+  }
+  const ladderTopHeight =
+    typeof input.streamTopHeight === "number"
+      ? input.streamTopHeight
+      : input.streamMode === "ll"
+        ? SCREEN_CAPTURE_HEIGHT
+        : null;
+  if (ladderTopHeight === null) {
     return null;
   }
   return {
-    ladderTopHeight: input.streamTopHeight,
+    ladderTopHeight,
     uplinkBps: input.uplinkBps,
     limitedBy: input.limitedBy ?? null,
   };

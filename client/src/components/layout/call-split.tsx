@@ -125,6 +125,17 @@ export interface CallSplitChatHeader {
     canToggle: boolean;
     onToggle: () => void;
   };
+  /**
+   * ONE PANEL WITH TABS (pass 4 of `docs/plans/WATCH_PARTY_UI.md`). When
+   * present the title gives way to a row of tabs (Chat, Pessoas); the
+   * caller renders whichever body the active tab asks for below this
+   * header. The hide-video and hide-chat controls stay where they are.
+   */
+  tabs?: {
+    items: readonly { id: string; label: string; count?: number }[];
+    active: string;
+    onSelect: (id: string) => void;
+  };
 }
 
 export interface CallSplitState {
@@ -611,8 +622,39 @@ function ChatPaneHeader({
       data-testid="call-split-chat-header"
       className="flex shrink-0 items-center gap-2 border-b border-ink-4/60 bg-ink-2 px-3 py-1.5"
     >
-      <span className="min-w-0 flex-1 truncate text-xs">
-        <span className="font-semibold text-paper">{header.title}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-xs">
+        {header.tabs ? (
+          <span role="tablist" className="flex shrink-0 items-center gap-0.5">
+            {header.tabs.items.map((tab) => {
+              const active = tab.id === header.tabs?.active;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  data-watch-party-panel-tab={tab.id}
+                  className={cn(
+                    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold transition-colors",
+                    active
+                      ? "bg-surface-2 text-paper"
+                      : "text-paper-muted hover:bg-surface-2 hover:text-paper",
+                  )}
+                  onClick={() => header.tabs?.onSelect(tab.id)}
+                >
+                  {tab.label}
+                  {tab.count !== undefined && tab.count > 0 && (
+                    <span className="ml-1 rounded-full bg-signal/20 px-1.5 text-[10px] text-signal">
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </span>
+        ) : (
+          <span className="font-semibold text-paper">{header.title}</span>
+        )}
         {header.meta && (
           <span className="text-paper-muted"> · {header.meta}</span>
         )}

@@ -39,3 +39,28 @@ describe("the AO VIVO pill", () => {
     expect(html).toContain("bg-danger");
   });
 });
+
+/**
+ * The presenter's own truthful state after their screen publish drops. It is
+ * NOT live and must not read as red "AO VIVO" — that was the 35-minute lie.
+ */
+describe("the reconnecting pill", () => {
+  const html = renderToStaticMarkup(<LivePill variant="recovering" />);
+
+  it("marks itself recovering, not live", () => {
+    expect(html).toContain('data-watch-party-live-pill="recovering"');
+  });
+
+  it("is amber, never the live red", () => {
+    expect(html).toContain("text-warning");
+    expect(html).toContain("bg-warning");
+    expect(html).not.toContain("text-danger");
+    expect(html).not.toContain("bg-danger");
+  });
+
+  it("still pulses only the dot, only under motion-safe", () => {
+    expect(html).toContain("motion-safe:animate-pulse");
+    const outer = html.slice(0, html.indexOf("aria-hidden"));
+    expect(outer).not.toContain("animate-pulse");
+  });
+});

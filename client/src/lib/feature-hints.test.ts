@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACHED_FEATURE_HINT_ORDER,
   FEATURE_HINT_STORAGE_KEYS,
   isFeatureHintSeen,
   rememberFeatureHint,
+  shouldOfferBringFriendsHint,
+  shouldOfferCallDockHint,
   shouldOfferChannelPinHint,
   shouldOfferComposerFormatHint,
   shouldOfferShortcutsHint,
@@ -28,6 +31,22 @@ describe("winningFeatureHint", () => {
     ).toBeNull();
   });
 
+  it("lets the moved controls beat every hint that points at one of them", () => {
+    expect(
+      winningFeatureHint({
+        callDock: true,
+        watchPartyHost: true,
+        watchPartyViewer: true,
+        watchParty: true,
+        music: true,
+        composerFormat: true,
+      }),
+    ).toBe("callDock");
+    expect(ATTACHED_FEATURE_HINT_ORDER[0]).toBe("callDock");
+    // And steps aside once it has had its turn.
+    expect(winningFeatureHint({ callDock: false, music: true })).toBe("music");
+  });
+
   it("lets Watch party beat the format bar, and format beat pin", () => {
     expect(
       winningFeatureHint({ watchParty: true, composerFormat: true, channelPin: true }),
@@ -36,6 +55,12 @@ describe("winningFeatureHint", () => {
       winningFeatureHint({ composerFormat: true, channelPin: true }),
     ).toBe("composerFormat");
     expect(winningFeatureHint({ channelPin: true })).toBe("channelPin");
+    expect(
+      winningFeatureHint({ watchParty: true, bringFriends: true }),
+    ).toBe("watchParty");
+    expect(
+      winningFeatureHint({ bringFriends: true, music: true }),
+    ).toBe("bringFriends");
   });
 });
 
@@ -56,6 +81,36 @@ describe("remember / seen", () => {
     rememberFeatureHint("shortcuts", storage, false);
     expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.shortcuts)).toBeNull();
     expect(isFeatureHintSeen("shortcuts", storage, false)).toBe(false);
+  });
+});
+
+describe("shouldOfferCallDockHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    dockVisible: true,
+    connected: true,
+  };
+
+  it("shows the first time the dock opens in a room you are in", () => {
+    expect(shouldOfferCallDockHint(ready)).toBe(true);
+  });
+
+  it("stays away once seen, under automation, off the dock, or before the join lands", () => {
+    expect(shouldOfferCallDockHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferCallDockHint({ ...ready, automated: true })).toBe(false);
+    expect(shouldOfferCallDockHint({ ...ready, dockVisible: false })).toBe(
+      false,
+    );
+    expect(shouldOfferCallDockHint({ ...ready, connected: false })).toBe(
+      false,
+    );
+  });
+
+  it("has a key of its own", () => {
+    expect(FEATURE_HINT_STORAGE_KEYS.callDock).toBe(
+      "pqp:feature-hint-call-dock-2026-09",
+    );
   });
 });
 
@@ -84,6 +139,48 @@ describe("shouldOfferWatchPartyHint", () => {
     expect(shouldOfferWatchPartyHint({ ...ready, canShare: false })).toBe(
       false,
     );
+  });
+});
+
+describe("shouldOfferBringFriendsHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    presenting: true,
+    inServer: true,
+    canInvite: true,
+    roomSize: 1,
+  };
+
+  it("shows once when you are presenting to a small server call", () => {
+    expect(shouldOfferBringFriendsHint(ready)).toBe(true);
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 2 })).toBe(true);
+  });
+
+  it("hides for viewers, DMs, a full trio, or a second look", () => {
+    expect(shouldOfferBringFriendsHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferBringFriendsHint({ ...ready, automated: true })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, presenting: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, inServer: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, canInvite: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 3 })).toBe(false);
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 0 })).toBe(false);
+  });
+
+  it("records under the September 2026 key", () => {
+    const storage = memory();
+    rememberFeatureHint("bringFriends", storage, true);
+    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.bringFriends)).toBe("1");
+    expect(isFeatureHintSeen("bringFriends", storage, true)).toBe(true);
+    expect(isFeatureHintSeen("bringFriends", storage, false)).toBe(false);
   });
 });
 

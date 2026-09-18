@@ -75,13 +75,13 @@ func TestDepacketizer_SingleNALPerPacket(t *testing.T) {
 
 	// SPS and PPS each arrive as their own packet with no marker, the IDR
 	// slice closes the access unit.
-	if au, err := d.Push(singleNALPacket(nal.TypeSPS, 3, sps), 1000, false); err != nil || au != nil {
+	if au, err := pushOne(d, singleNALPacket(nal.TypeSPS, 3, sps), 1000, false); err != nil || au != nil {
 		t.Fatalf("sps packet: au=%v err=%v", au, err)
 	}
-	if au, err := d.Push(singleNALPacket(nal.TypePPS, 3, pps), 1000, false); err != nil || au != nil {
+	if au, err := pushOne(d, singleNALPacket(nal.TypePPS, 3, pps), 1000, false); err != nil || au != nil {
 		t.Fatalf("pps packet: au=%v err=%v", au, err)
 	}
-	au, err := d.Push(singleNALPacket(nal.TypeIDR, 3, idr), 1000, true)
+	au, err := pushOne(d, singleNALPacket(nal.TypeIDR, 3, idr), 1000, true)
 	if err != nil {
 		t.Fatalf("idr packet: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestDepacketizer_StapA(t *testing.T) {
 	pps := singleNALPacket(nal.TypePPS, 3, []byte{4, 5})
 	idr := singleNALPacket(nal.TypeIDR, 3, bytes.Repeat([]byte{0x7F}, 10))
 
-	au, err := d.Push(stapA(sps, pps, idr), 500, true)
+	au, err := pushOne(d, stapA(sps, pps, idr), 500, true)
 	if err != nil {
 		t.Fatalf("Push: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestDepacketizer_FUA_Reassembly(t *testing.T) {
 	for i, frag := range fragments {
 		marker := i == len(fragments)-1
 		var err error
-		au, err = d.Push(frag, 12345, marker)
+		au, err = pushOne(d, frag, 12345, marker)
 		if err != nil {
 			t.Fatalf("fragment %d: %v", i, err)
 		}
@@ -176,15 +176,15 @@ func TestDepacketizer_MultipleAccessUnitsAdvancePTS(t *testing.T) {
 	p1 := singleNALPacket(nal.TypeSlice, 2, []byte{4, 5, 6})
 	p2 := singleNALPacket(nal.TypeSlice, 2, []byte{7, 8, 9})
 
-	au1, err := d.Push(idr, 90000, true)
+	au1, err := pushOne(d, idr, 90000, true)
 	if err != nil || au1 == nil {
 		t.Fatalf("au1: au=%v err=%v", au1, err)
 	}
-	au2, err := d.Push(p1, 93000, true) // +3000 ticks = +33.3ms at 90kHz
+	au2, err := pushOne(d, p1, 93000, true) // +3000 ticks = +33.3ms at 90kHz
 	if err != nil || au2 == nil {
 		t.Fatalf("au2: au=%v err=%v", au2, err)
 	}
-	au3, err := d.Push(p2, 96000, true)
+	au3, err := pushOne(d, p2, 96000, true)
 	if err != nil || au3 == nil {
 		t.Fatalf("au3: au=%v err=%v", au3, err)
 	}
@@ -197,32 +197,46 @@ func TestDepacketizer_MultipleAccessUnitsAdvancePTS(t *testing.T) {
 	}
 }
 
-// TestDepacketizer_LostMarkerDoesNotMergeFrames is the regression test for
-// the bug Farol caught: a lost marker packet used to leave the next
-// frame's NALs appended onto the previous (still-open, stale-PTS) access
-// unit instead of splitting the boundary, producing one CMAF sample that
-// silently spanned two pictures. Frame two's own packet here both closes
-// the recovery (discarding frame one) and, since it carries marker=true
-// itself, completes standalone in the same call.
-func TestDepacketizer_LostMarkerDoesNotMergeFrames(t *testing.T) {
+// TestDepacketizer_MissingMarkerDoesNotMergeFrames is the regression test
+// for the bug Farol caught: a frame with no marker packet used to leave the
+// next frame's NALs appended onto the previous (still-open, stale-PTS)
+// access unit instead of splitting the boundary, producing one CMAF sample
+// that silently spanned two pictures.
+//
+// The boundary rule it pins is unchanged; what the boundary DOES changed on
+// 2026-09-18. Frame one ends on a whole NAL, so the timestamp change closes
+// and DELIVERS it (flagged Markerless) instead of discarding it and asking
+// for a keyframe -- see Push. Frame two's own packet carries marker=true,
+// so one call returns both access units, each with its own PTS and its own
+// bytes, which is a stronger statement of "do not merge" than the discard
+// ever was.
+func TestDepacketizer_MissingMarkerDoesNotMergeFrames(t *testing.T) {
 	d := NewDepacketizer()
 
-	// Frame one's marker is "lost": push its only packet with marker=false.
-	if au, err := d.Push(singleNALPacket(nal.TypeIDR, 3, []byte{0x11, 0x22}), 1000, false); au != nil {
-		t.Fatalf("expected no AU yet (marker withheld), got %v (err=%v)", au, err)
+	// Frame one's marker is withheld: push its only packet with marker=false.
+	if aus, err := d.Push(singleNALPacket(nal.TypeIDR, 3, []byte{0x11, 0x22}), 1000, false); len(aus) != 0 {
+		t.Fatalf("expected no AU yet (marker withheld), got %v (err=%v)", aus, err)
 	}
 
 	// Frame two arrives at a new timestamp while frame one is still open,
-	// and itself carries marker=true. This must discard frame one and
-	// complete frame two standalone, not merge the two.
-	au, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x33, 0x44}), 2000, true)
-	if err != errTimestampChangedMidAU {
-		t.Fatalf("expected errTimestampChangedMidAU, got %v", err)
+	// and itself carries marker=true: two access units out of one call.
+	aus, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x33, 0x44}), 2000, true)
+	if err != nil {
+		t.Fatalf("a markerless boundary over a whole NAL is not an error: %v", err)
 	}
-	if au == nil {
-		t.Fatal("frame two's own packet carries marker=true and must complete, even though it also had to discard frame one")
+	if len(aus) != 2 {
+		t.Fatalf("got %d access units, want frame one (markerless) and frame two", len(aus))
 	}
-	units := mustParseUnits(t, au.AVCC)
+	if !aus[0].Markerless || aus[0].PTS != 0 {
+		t.Fatalf("frame one = markerless %t pts %d, want true 0", aus[0].Markerless, aus[0].PTS)
+	}
+	if units := mustParseUnits(t, aus[0].AVCC); len(units) != 1 || !units[0].IsIDR() {
+		t.Fatalf("frame one must be delivered as exactly its own IDR NAL, got %d units", len(units))
+	}
+	if aus[1].Markerless || aus[1].PTS != 1000 {
+		t.Fatalf("frame two = markerless %t pts %d, want false 1000", aus[1].Markerless, aus[1].PTS)
+	}
+	units := mustParseUnits(t, aus[1].AVCC)
 	if len(units) != 1 || !units[0].IsSlice() {
 		t.Fatalf("frame two must contain exactly its own NAL, got %d units (frame one's bytes leaked forward)", len(units))
 	}
@@ -230,9 +244,9 @@ func TestDepacketizer_LostMarkerDoesNotMergeFrames(t *testing.T) {
 		t.Fatal("frame two's payload must be its own bytes, not frame one's")
 	}
 
-	// A clean frame three afterward proves the discard did not wedge the
+	// A clean frame three afterward proves the split did not wedge the
 	// depacketizer.
-	au3, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x55}), 3000, true)
+	au3, err := pushOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x55}), 3000, true)
 	if err != nil {
 		t.Fatalf("frame three: %v", err)
 	}
@@ -248,7 +262,7 @@ func TestDepacketizer_AccessUnitTooLargeIsDiscarded(t *testing.T) {
 	d := NewDepacketizer()
 	big := bytes.Repeat([]byte{0xAB}, maxAccessUnitBytes+1)
 
-	au, err := d.Push(singleNALPacket(nal.TypeIDR, 3, big), 5000, false)
+	au, err := pushOne(d, singleNALPacket(nal.TypeIDR, 3, big), 5000, false)
 	if err != errAccessUnitTooLarge {
 		t.Fatalf("expected errAccessUnitTooLarge, got %v", err)
 	}
@@ -258,7 +272,7 @@ func TestDepacketizer_AccessUnitTooLargeIsDiscarded(t *testing.T) {
 
 	// The depacketizer must recover: a fresh, small AU at a new timestamp
 	// completes normally afterward.
-	au2, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x01}), 6000, true)
+	au2, err := pushOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x01}), 6000, true)
 	if err != nil {
 		t.Fatalf("recovery frame: %v", err)
 	}
@@ -276,7 +290,7 @@ func TestDepacketizer_TimestampUnwrapAcrossWraparound(t *testing.T) {
 	// Start near the top of the 32-bit range and cross the wraparound.
 	nearMax := ^uint32(0) - 1000
 
-	au1, err := d.Push(idr, nearMax, true)
+	au1, err := pushOne(d, idr, nearMax, true)
 	if err != nil || au1 == nil {
 		t.Fatalf("au1: au=%v err=%v", au1, err)
 	}
@@ -285,7 +299,7 @@ func TestDepacketizer_TimestampUnwrapAcrossWraparound(t *testing.T) {
 	}
 
 	wrapped := nearMax + 2000 // wraps past ^uint32(0), computed at runtime
-	au2, err := d.Push(slice, wrapped, true)
+	au2, err := pushOne(d, slice, wrapped, true)
 	if err != nil || au2 == nil {
 		t.Fatalf("au2: au=%v err=%v", au2, err)
 	}

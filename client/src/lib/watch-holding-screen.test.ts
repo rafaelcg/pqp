@@ -36,6 +36,16 @@ describe("resolveHoldingScreenReason", () => {
     ).toBe("restarting");
   });
 
+  it("maps a playlist-gone 404 to restarting — same dead-window copy", () => {
+    expect(
+      resolveHoldingScreenReason({
+        ...playing,
+        hasFrame: true,
+        stallReason: "playlist-gone",
+      }),
+    ).toBe("restarting");
+  });
+
   it("shows restarting even with a frame still on screen and phase still playing (B1.3: no rebuild for sequence-stuck)", () => {
     // The player no longer tears hls.js down for a stuck egress, so `phase`
     // never leaves "playing" and the last frame never leaves `hasFrame`.
@@ -126,6 +136,12 @@ describe("resolveHoldingScreenReason (mode: vod)", () => {
     ).toBe("buffering");
   });
 
+  it("never reads playlist-gone as a live restart either", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, stallReason: "playlist-gone" }),
+    ).toBe("buffering");
+  });
+
   it("every other stall reason is still plain buffering, not the live 'stalled, reconnecting' copy", () => {
     for (const stallReason of ["fatal", "stall", null] as const) {
       expect(
@@ -145,5 +161,73 @@ describe("resolveHoldingScreenReason (mode: vod)", () => {
     expect(
       resolveHoldingScreenReason({ ...buffering, phase: "dead" }),
     ).toBe("unavailable");
+  });
+});
+
+/**
+ * THE 2026-09-17 LIFECYCLE INCIDENT, the viewer's half. Everything above is
+ * an inference from the outside -- a playlist that stopped answering looks
+ * the same whether an egress is being replaced or the show ended twenty
+ * minutes ago -- and the watchdog resolves that ambiguity by assuming the
+ * first, forever. `sessionOver` is the server having been asked and having
+ * answered, so it outranks every one of them.
+ */
+describe("resolveHoldingScreenReason with a server answer", () => {
+  const stalled = {
+    phase: "playing" as const,
+    hasFrame: false,
+    stallReason: "playlist-gone" as const,
+    authGraceActive: false,
+  };
+
+  it("says the session ended, not that it is restarting", () => {
+    expect(
+      resolveHoldingScreenReason({ ...stalled, sessionOver: "over" }),
+    ).toBe("over");
+  });
+
+  it("says the presenter is coming back when the party is still live", () => {
+    expect(
+      resolveHoldingScreenReason({ ...stalled, sessionOver: "awaiting" }),
+    ).toBe("awaiting");
+  });
+
+  it("outranks the auth grace, which is a guess about a hiccup", () => {
+    expect(
+      resolveHoldingScreenReason({
+        ...stalled,
+        authGraceActive: true,
+        sessionOver: "over",
+      }),
+    ).toBe("over");
+  });
+
+  it("does not outrank the retry button a person is already looking at", () => {
+    expect(
+      resolveHoldingScreenReason({
+        ...stalled,
+        phase: "dead",
+        sessionOver: "over",
+      }),
+    ).toBe("dead");
+  });
+
+  it("never reaches a replay, which has no live channel to ask about", () => {
+    expect(
+      resolveHoldingScreenReason({
+        ...stalled,
+        mode: "vod",
+        sessionOver: "over",
+      }),
+    ).toBe("buffering");
+  });
+
+  it("changes nothing at all while it is null, which is every healthy moment", () => {
+    for (const sessionOver of [null, undefined] as const) {
+      expect(
+        resolveHoldingScreenReason({ ...stalled, sessionOver }),
+        `sessionOver=${sessionOver}`,
+      ).toBe("restarting");
+    }
   });
 });

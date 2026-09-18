@@ -56,6 +56,10 @@ import { loadLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { writeStreamMixLevels } from "@/lib/stream-mix-levels";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
 import {
+  screenPublishState,
+  shouldRepublishScreen,
+} from "@/lib/screen-publish-recovery";
+import {
   getVoiceTrackMode,
   saveVoiceTrackMode,
   type VoiceTrackMode,
@@ -543,6 +547,17 @@ export interface VoiceState {
    * its own does not.
    */
   screenShareAudioFailed: boolean;
+  /**
+   * We are the SFU presenter of a watch party and our OWN screen-share
+   * publication is not currently live — a reconnect dropped it and the client
+   * is re-establishing it. The presenter's surfaces (the AO VIVO pill, the
+   * transmission health and uptime, the sidebar live block) read this to stop
+   * claiming "live" while the party is actually dead at the source, instead of
+   * trusting the server's `party.state`, which lags by minutes. False for
+   * everyone who is not the presenter, so it never touches a viewer's UI. See
+   * `lib/screen-publish-recovery.ts`.
+   */
+  sharePublishRecovering: boolean;
   // --- conversation calls ---
   /**
    * Conversations currently ringing this device, oldest first. Lives on the
@@ -1159,6 +1174,19 @@ export type VoiceSessionProvider = (
  */
 const HLS_SOURCE_SAMPLE_MS = 2_000;
 
+/**
+ * How often, while presenting a watch party on the SFU, the client checks that
+ * its own screen publication is still on the wire, and how many consecutive
+ * misses it waits for before believing it. Two ticks (~3 s) is long enough to
+ * ride out the sub-second gap of a legitimate quality-change republish — during
+ * which the publication is briefly absent — so a routine republish is never
+ * mistaken for a drop, while a genuine drop still surfaces and self-heals in a
+ * few seconds instead of never (the 2026-09-16 incident: 35 minutes of a fake
+ * "AO VIVO" over a dead party).
+ */
+const SCREEN_PUBLISH_RECONCILE_MS = 1_500;
+const SCREEN_PUBLISH_MISS_CONFIRM = 2;
+
 export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
@@ -1262,6 +1290,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   async function refreshHlsSource(): Promise<void> {
     const wanted = hlsSourceFor({
       streamTopHeight: state.liveStream?.topHeight,
+      // An LL session never states a top: the remux forwards the top layer
+      // rather than transcoding a ladder, so the mode is the only thing on
+      // the frame that says an egress is running at all.
+      streamMode: state.liveStream?.mode,
       isSharingScreen: state.isSharingScreen,
       usingSfu: state.usingSfu,
       uplinkBps: null,
@@ -1309,6 +1341,16 @@ export function createVoiceController(transport: RealtimeTransport) {
   let audienceSeat = false;
   /** Owns the getDisplayMedia() capture; mirrored into state.localScreenStream. */
   let screenCaptureStream: MediaStream | null = null;
+  /**
+   * Watchdog over our own screen publication while presenting on the SFU, and
+   * the flags that keep its auto-recovery honest: `screenPublishMisses` is the
+   * consecutive-not-live streak (`SCREEN_PUBLISH_MISS_CONFIRM` before we act),
+   * and `republishingScreen` is the single-flight guard so overlapping ticks
+   * can never double-publish. See `reconcileScreenPublish`.
+   */
+  let screenPublishTimer: ReturnType<typeof setInterval> | null = null;
+  let screenPublishMisses = 0;
+  let republishingScreen = false;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let speakingRaf = 0;
   let voiceActivityPollId = 0;
@@ -1521,6 +1563,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingSystemAudio: false,
     isShareCursorVisible: false,
     screenShareAudioFailed: false,
+    sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
@@ -2667,6 +2710,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       userId: self.userId,
       displayName: self.displayName,
       send: (music) => transport.sendVoice({ type: "set-music", state: music }),
+      sendListening: (listening) =>
+        transport.sendVoice({ type: "set-music-listening", listening }),
     });
   }
 
@@ -2737,6 +2782,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     sfu = null;
     sfuPublicationMuted = null;
     state.usingSfu = false;
+    // The publish watchdog is meaningless without a session; stop it (and clear
+    // any recovering flag) before `usingSfu` goes false so a stray tick cannot
+    // read a half-torn-down session. A rebuild starts it again once media is up.
+    ensureScreenPublishWatchdog();
     identities.clear();
     if (stageMix) {
       stageMix.close();
@@ -3162,6 +3211,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
     state.isShareCursorVisible = false;
+    // The capture is gone, so the publish watchdog has nothing to watch: stop
+    // it and drop any recovering flag rather than leave a timer firing against
+    // a share that ended.
+    ensureScreenPublishWatchdog();
   }
 
   /**
@@ -3244,6 +3297,110 @@ export function createVoiceController(transport: RealtimeTransport) {
       uplinkBps: state.uplinkBps ?? undefined,
       sourceHeight: screenSourceHeight(),
     });
+  }
+
+  /**
+   * The four facts `screenPublishState` needs, read off the live session.
+   * `captureTrackLive` reads the getDisplayMedia track directly: the capture is
+   * a browser-level grant that survives a WS drop, so it is alive long after
+   * the publication is not.
+   */
+  function currentScreenPublishState() {
+    const captureTrackLive =
+      screenCaptureStream?.getVideoTracks()[0]?.readyState === "live";
+    return screenPublishState({
+      usingSfu: state.usingSfu,
+      sharing: screenCaptureStream !== null,
+      captureTrackLive,
+      publicationLive: sfu?.screenPublishLive() ?? false,
+    });
+  }
+
+  /**
+   * Re-establish our own screen publication after it dropped. Reuses the two
+   * proven, serialized ops rather than a new publish path: `unpublishScreen`
+   * clears LiveKit-session's stale `publishedScreenTrack`/pin (a bare
+   * `publishScreen` would otherwise short-circuit, believing the dead share is
+   * still up), and `publishScreen` then republishes cleanly under a fresh sid,
+   * which `announceSharing` re-declares so the server restarts the HLS egress.
+   * Guarded by `republishingScreen` so it runs one at a time.
+   */
+  async function recoverScreenPublish() {
+    if (!sfu || !screenCaptureStream || republishingScreen) {
+      return;
+    }
+    republishingScreen = true;
+    try {
+      syncWatchPartyPublishCeiling();
+      await sfu.unpublishScreen();
+      // A leave() or a genuine stop may have landed while we awaited.
+      if (!sfu || !screenCaptureStream) {
+        return;
+      }
+      await sfu.publishScreen(screenCaptureStream);
+      announceSharing();
+    } catch (err) {
+      // Left for the next tick to retry; the watchdog keeps running.
+      console.warn("[pqp] screen republish failed", err);
+    } finally {
+      republishingScreen = false;
+    }
+  }
+
+  /**
+   * One pass of the publish watchdog: recompute the truthful state, drive the
+   * presenter's `sharePublishRecovering` flag, and, once a drop is confirmed
+   * across `SCREEN_PUBLISH_MISS_CONFIRM` ticks, auto-republish. `immediate`
+   * skips the confirmation delay for the WS-resume path, where there is no
+   * in-flight quality republish to be fooled by and the fix wants to be prompt.
+   */
+  function reconcileScreenPublish(immediate = false): void {
+    const next = currentScreenPublishState();
+    if (next === "recovering") {
+      screenPublishMisses += 1;
+    } else {
+      screenPublishMisses = 0;
+    }
+    const confirmed =
+      next === "recovering" &&
+      (immediate || screenPublishMisses >= SCREEN_PUBLISH_MISS_CONFIRM);
+    if (state.sharePublishRecovering !== confirmed) {
+      state.sharePublishRecovering = confirmed;
+      emit();
+    }
+    if (
+      confirmed &&
+      shouldRepublishScreen({
+        state: next,
+        roomConnected: sfu?.isConnected() ?? false,
+        republishInFlight: republishingScreen,
+      })
+    ) {
+      void recoverScreenPublish();
+    }
+  }
+
+  /**
+   * Start or stop the watchdog to match whether we are presenting on the SFU.
+   * Called wherever a share starts, stops, or a session is (re)built.
+   */
+  function ensureScreenPublishWatchdog(): void {
+    const need = state.usingSfu && screenCaptureStream !== null;
+    if (need && screenPublishTimer === null) {
+      screenPublishMisses = 0;
+      screenPublishTimer = setInterval(
+        () => reconcileScreenPublish(),
+        SCREEN_PUBLISH_RECONCILE_MS,
+      );
+    } else if (!need && screenPublishTimer !== null) {
+      clearInterval(screenPublishTimer);
+      screenPublishTimer = null;
+      screenPublishMisses = 0;
+      if (state.sharePublishRecovering) {
+        state.sharePublishRecovering = false;
+        emit();
+      }
+    }
   }
 
   /**
@@ -3561,6 +3718,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         });
       }
       state.usingSfu = true;
+      // Now that the (rebuilt) session is up and any carried-over share is
+      // republished, arm the watchdog over our own publication.
+      ensureScreenPublishWatchdog();
       emit();
       return true;
     } catch (err) {
@@ -3777,6 +3937,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isSharingSystemAudio: false,
       isShareCursorVisible: false,
       screenShareAudioFailed: false,
+      sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
       localCameraStream: null,
@@ -4119,6 +4280,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           switchingRooms = false;
           preservedSelfVoice = null;
           redeclareLocalMedia();
+          // THE INCIDENT FIX. This resume kept the SFU session (LiveKit stayed
+          // connected across the API restart), so nothing above rebuilt or
+          // republished the screen. `redeclareLocalMedia` only re-announces the
+          // roster flag; it does NOT put the picture back on the wire. If the
+          // publication did not survive the drop, reconcile it now — promptly,
+          // since there is no in-flight quality republish here to be fooled by —
+          // and arm the watchdog to keep it honest for the rest of the call.
+          ensureScreenPublishWatchdog();
+          reconcileScreenPublish(true);
           emit();
           break;
         }
@@ -5595,6 +5765,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         // SCREEN_SHARE track the moment this frame lands; announcing first
         // made every staging start miss the track and fall back to WebRTC.
         announceSharing();
+        // The share is on the wire; watch that it stays there.
+        ensureScreenPublishWatchdog();
         // Not awaited, on purpose: the party must not wait on a side
         // recording, and the server polls for this track for a minute after
         // the session starts precisely because it lands a beat late.

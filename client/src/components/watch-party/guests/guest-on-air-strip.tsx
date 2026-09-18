@@ -45,7 +45,13 @@ export function GuestOnAirStrip({
       aria-live="polite"
       data-watch-party-on-air-strip
       className={cn(
-        "flex flex-col gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-on-danger-soft outline-none sm:flex-row sm:items-center sm:justify-between",
+        // A ROW ON THE BAR, NOT A CARD ABOVE THE STAGE (pass 2 of
+        // `docs/plans/WATCH_PARTY_UI.md`). The container it is portalled
+        // into tints itself red on `:has()` of this element; the strip keeps
+        // its own ground for the fallback, in place. The sentence under the
+        // title survives at `sm` and up; the pulsing dot, the title and the
+        // three buttons are the bar at every width.
+        "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-1.5 text-on-danger-soft outline-none",
         className,
       )}
     >
@@ -59,7 +65,7 @@ export function GuestOnAirStrip({
             <Radio className="h-3.5 w-3.5" aria-hidden="true" />
             {t("watchParty.guests.onAir")}
           </span>
-          <span className="text-xs opacity-90">
+          <span className="hidden text-xs opacity-90 sm:inline">
             {t("watchParty.guests.onAirBody")}
           </span>
         </div>

@@ -77,6 +77,7 @@ const idle: VoiceState = {
   isSharingSystemAudio: false,
   isShareCursorVisible: false,
   screenShareAudioFailed: false,
+  sharePublishRecovering: false,
   incomingCalls: [],
   isCameraOn: false,
   localCameraStream: null,
@@ -130,5 +131,40 @@ describe("CallControls in a watch party room", () => {
     const html = render({ ...idle, canStream: true });
     expect(html).toContain("lucide-monitor-play");
     expect(html).toContain("lucide-screen-share");
+  });
+});
+
+describe("CallControls collapsed push-to-talk", () => {
+  it("puts hold-to-talk in the control row, not a yellow warning", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <CallControls
+          voiceState={{ ...idle, inputMode: "push-to-talk" }}
+          collapsed
+          canExpand={false}
+          userCollapsed
+          fullscreenAvailable={false}
+          isFullscreen={false}
+          onToggleFullscreen={() => {}}
+          onToggleMute={() => {}}
+          onToggleCamera={() => {}}
+          videoQuality="720p"
+          onVideoQualityChange={() => {}}
+          qualityMenuOpen={false}
+          onQualityMenuOpenChange={() => {}}
+          onStartScreenShare={() => {}}
+          onStopScreenShare={() => {}}
+          onToggleCollapsed={() => {}}
+          onLeave={() => {}}
+          pushToTalk
+          isTransmitting={false}
+          pushToTalkKeyLabel="`"
+          windowFocused={false}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("lucide-mic-off");
+    expect(html).not.toContain("text-warning");
+    expect(html).toContain("opacity-50");
   });
 });

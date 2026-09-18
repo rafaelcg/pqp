@@ -4,7 +4,6 @@ import {
   SERVER_ICON_SIZE,
   SERVER_IMAGE_MIME_ALLOWLIST,
   type Server,
-  type ServerImageKind,
 } from "@pqp/shared";
 import { useEffect, useRef, useState } from "react";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
@@ -137,7 +136,7 @@ function ImageField({
   hasImage,
   preview,
 }: {
-  kind: ServerImageKind;
+  kind: "icon" | "banner";
   server: Server;
   onUpdated: (server: Server) => void;
   label: string;

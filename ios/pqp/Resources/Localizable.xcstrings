@@ -3841,6 +3841,16 @@
         }
       }
     },
+    "Service is temporarily unavailable. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serviço temporariamente indisponível. Tente de novo em instantes."
+          }
+        }
+      }
+    },
     "Settings" : {
       "localizations" : {
         "pt-BR" : {
@@ -5897,6 +5907,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sair da tela cheia"
+          }
+        }
+      }
+    },
+    "Back" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        }
+      }
+    },
+    "live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ao vivo"
           }
         }
       }

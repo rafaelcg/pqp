@@ -1,0 +1,32 @@
+# Self-contained, LOCAL-ONLY LiveKit config for tools/ll-loss-harness.
+# Modeled on tools/sfu/livekit.yaml.tmpl but stripped of everything that
+# assumes a real box on the internet: no TURN (there is no NAT to cross
+# inside a docker-compose network), no external IP, no Prometheus.
+# The two placeholder tokens under `keys:` below are substituted by
+# scripts/gen-keys.sh with freshly generated, harness-only values every
+# run -- never a production key. See that script and the README's
+# "Ephemeral keys" section.
+port: 7880
+rtc:
+  udp_port: 7882-7885
+  tcp_port: 7881
+  # Both peers (rampub, pqp-remuxd) are containers on this same
+  # docker-compose bridge network -- there is nothing to NAT-traverse, so
+  # LiveKit should advertise its own container-local addresses rather
+  # than trying to discover a public IP (which would fail, or worse,
+  # discover the host's).
+  use_external_ip: false
+keys:
+  __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
+limit:
+  num_tracks: -1
+  bytes_per_sec: -1
+room:
+  auto_create: true
+  empty_timeout: 120
+  departure_timeout: 20
+  max_participants: 0
+logging:
+  level: info
+  json: true
+  pion_level: error

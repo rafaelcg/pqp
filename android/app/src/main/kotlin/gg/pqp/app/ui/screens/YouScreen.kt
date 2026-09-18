@@ -34,6 +34,7 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.PushSettingsSection
+import gg.pqp.app.social.ui.BlockedUsersDialog
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.ConnectionDoctorDialog
@@ -62,6 +63,7 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
     val me = (phase as? SessionPhase.Ready)?.me
     var confirmingDelete by remember { mutableStateOf(false) }
     var checkingConnection by remember { mutableStateOf(false) }
+    var showingBlocked by remember { mutableStateOf(false) }
 
     // Ends the Clerk session first, then forgets it locally; the order and
     // the reason live on `SessionStore.signOut`, which the connection banner
@@ -82,6 +84,10 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
     // Hung off the screen rather than off the row that opens it, so that a
     // recomposition of the section cannot take the one screen in the app whose
     // next action is irreversible down with it.
+    if (showingBlocked) {
+        BlockedUsersDialog(session = session, onDismiss = { showingBlocked = false })
+    }
+
     if (confirmingDelete) {
         DeleteAccountDialog(
             session = session,
@@ -169,6 +175,18 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
                 navigates = true,
                 onClick = { checkingConnection = true },
                 modifier = Modifier.testTag("you.checkConnection"),
+            )
+
+            // Blocking itself starts from a friend row and has nowhere to be
+            // seen again once that row scrolls away: the server has always
+            // listed and reversed a block, and nothing on Android ever asked.
+            Spacer(Modifier.height(Spacing.sm))
+            SettingsRow(
+                icon = PqpIcons.Block,
+                label = stringResource(R.string.you_blocked_users),
+                navigates = true,
+                onClick = { showingBlocked = true },
+                modifier = Modifier.testTag("you.blockedUsersRow"),
             )
 
             Spacer(Modifier.height(Spacing.sm))

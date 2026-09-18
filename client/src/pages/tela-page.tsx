@@ -10,18 +10,14 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
- * `/tela`: the pt-BR search landing for "discord sem compartilhamento de tela
- * no brasil, o que usar agora".
+ * `/tela`: the short page a friend pastes when they just want to share a
+ * screen now. A DIFFERENT JOB FROM `/vs-discord` (the scoreboard) and from
+ * `/` (the long story). A tap on this link has about 30 seconds of patience:
+ * one job, one button, then the honest options below the fold.
  *
- * A DIFFERENT JOB FROM `/vs-discord`. That page is a scoreboard for somebody
- * already weighing the two products; this one meets somebody mid-search who
- * only wants to know what works TODAY, and answers that first, with pqp as one
- * of four honest options rather than the only one. Saying out loud that pqp is
- * ours is part of the answer, not a footnote: a comparison that hides its
- * author is the kind of page people learn to scroll past.
- *
- * The same truth rules as the scoreboard: the suspension stated as Discord
- * announced it, no opinion on the order, no mockery, no App Store claim, no
+ * Saying out loud that pqp is ours is part of the answer, not a footnote.
+ * The Discord suspension lives in the FAQ, dated as Discord announced it,
+ * with no opinion on the order, no mockery, no App Store claim, and no
  * "better than Discord". Status lines about the other products are dated on
  * the page (`tela.options.asOf`) so a reader can tell how fresh they are.
  */
@@ -87,6 +83,7 @@ const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
   { id: "free", question: "tela.faq.free.q", answer: "tela.faq.free.a" },
   { id: "mobile", question: "tela.faq.mobile.q", answer: "tela.faq.mobile.a" },
   { id: "data", question: "tela.faq.data.q", answer: "tela.faq.data.a" },
+  { id: "why", question: "tela.faq.why.q", answer: "tela.faq.why.a" },
 ];
 
 function stagger(i: number): CSSProperties {
@@ -130,6 +127,8 @@ export function TelaPage() {
       <Seo
         title={t("tela.seo.title")}
         description={t("tela.seo.description")}
+        ogTitle={t("tela.seo.ogTitle")}
+        ogDescription={t("tela.seo.ogDescription")}
         path="/tela"
       />
       <MarketingNav />
@@ -140,46 +139,39 @@ export function TelaPage() {
           aria-hidden
         />
 
-        <div className="relative mx-auto max-w-5xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
-          {/* The answer first. The H1 is the query and its reply in one line. */}
+        <div className="relative mx-auto max-w-5xl px-5 pb-24 pt-16 sm:px-8 sm:pt-24">
+          {/* One job, one line, one button. Comparison and ANPD live below. */}
           <h1
-            className="animate-rise mx-auto max-w-3xl text-balance text-center font-display text-3xl font-bold leading-[1.1] tracking-tight sm:text-5xl"
+            className="animate-rise mx-auto max-w-3xl text-balance text-center font-display text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl"
             style={stagger(0)}
           >
             {t("tela.hero.title")}
           </h1>
 
           <p
-            className="animate-rise mx-auto mt-6 max-w-2xl text-pretty text-center text-base leading-relaxed text-paper-muted sm:text-lg"
+            className="animate-rise mx-auto mt-6 max-w-xl text-pretty text-center text-lg leading-relaxed text-paper-muted sm:text-xl"
             style={stagger(1)}
           >
             {t("tela.hero.lede")}
           </p>
 
           <div
-            className="animate-rise mt-8 flex flex-wrap items-center justify-center gap-3"
+            className="animate-rise mt-9 flex justify-center"
             style={stagger(2)}
           >
-            <CreateRoomButton />
-            <Button
-              asChild
-              variant="secondary"
-              className="cta-lift h-11 px-6 text-base"
-            >
-              <Link to="/vs-discord">{t("tela.cta.compare")}</Link>
-            </Button>
+            <CreateRoomButton className="h-12 min-w-[12.5rem] px-8" />
           </div>
 
           <p
-            className="animate-rise mx-auto mt-5 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80"
+            className="animate-rise mx-auto mt-4 max-w-md text-pretty text-center text-sm text-paper-muted"
             style={stagger(3)}
           >
-            {t("tela.hero.disclosure")}
+            {t("tela.hero.note")}
           </p>
 
           {/* What works today: four cards, ours marked as ours. */}
           <section
-            className="animate-rise mt-16"
+            className="animate-rise mt-20"
             style={stagger(4)}
             aria-labelledby="tela-options"
           >
@@ -189,6 +181,9 @@ export function TelaPage() {
             >
               {t("tela.options.title")}
             </h2>
+            <p className="mx-auto mt-4 max-w-2xl text-pretty text-center text-sm leading-relaxed text-paper-muted">
+              {t("tela.hero.disclosure")}
+            </p>
             <ul className="mt-8 grid gap-4 sm:grid-cols-2">
               {OPTIONS.map((option) => (
                 <li
@@ -334,15 +329,17 @@ export function TelaPage() {
             <p className="mx-auto mt-4 max-w-2xl text-pretty text-base leading-relaxed text-paper-muted sm:text-lg">
               {t("tela.cta.body")}
             </p>
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <div className="mt-8 flex justify-center">
               <CreateRoomButton />
+            </div>
+            <p className="mt-5">
               <Link
                 to="/vs-discord"
                 className="text-sm text-paper-muted underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
               >
                 {t("tela.cta.compare")}
               </Link>
-            </div>
+            </p>
           </section>
         </div>
       </main>

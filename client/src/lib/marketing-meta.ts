@@ -96,6 +96,15 @@ interface PageCopy {
   canonicalPath: string;
   title: Record<MarketingLocale, string>;
   description: Record<MarketingLocale, string>;
+  /**
+   * Paste-card title. When omitted, `title` is reused for og and twitter.
+   * `/tela` is the only page that splits search words from the card.
+   */
+  ogTitle?: Record<MarketingLocale, string>;
+  /**
+   * Paste-card description. When omitted, `description` is reused.
+   */
+  ogDescription?: Record<MarketingLocale, string>;
 }
 
 /**
@@ -131,13 +140,21 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/tela": {
     canonicalPath: "/tela",
     title: {
-      "pt-BR": "Alternativa ao Discord para compartilhar tela | pqp",
-      en: "A Discord alternative for sharing your screen | pqp",
+      "pt-BR": "Compartilhar tela no navegador | pqp",
+      en: "Share your screen in the browser | pqp",
     },
     description: {
       "pt-BR":
-        "Compartilhe a tela com os amigos sem Discord, direto do navegador e com som. Comparação honesta do que funciona hoje no Brasil. Grátis e de código aberto.",
-      en: "Share your screen with friends without Discord, straight from the browser, with audio. An honest comparison of what works today in Brazil. Free and open source.",
+        "Compartilhe a tela com som, direto do navegador. Sem instalar. Funciona no Brasil. Manda o link e a galera entra.",
+      en: "Share your screen with sound, straight from the browser. Nothing to install. Works in Brazil. Send the link and people join.",
+    },
+    ogTitle: {
+      "pt-BR": "Compartilhar tela agora (funciona no BR)",
+      en: "Share your screen now (works in Brazil)",
+    },
+    ogDescription: {
+      "pt-BR": "Abre no navegador. Sem instalar. A galera entra pelo link.",
+      en: "Opens in the browser. Nothing to install. People join from the link.",
     },
   },
   "/beta": {
@@ -160,8 +177,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "Acesso antecipado ao pqp no Android. Versão 0.3.1, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
-      en: "Early access to pqp on Android. Version 0.3.1, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
+        "Acesso antecipado ao pqp no Android. Versão 0.4.0, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
+      en: "Early access to pqp on Android. Version 0.4.0, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
     },
   },
   "/download": {
@@ -425,6 +442,12 @@ export const TELA_FAQ: Record<
       answer:
         "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
     },
+    {
+      question:
+        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
+      answer:
+        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord. Esta página é sobre o que dá pra usar agora, não conselho jurídico.",
+    },
   ],
   en: [
     {
@@ -457,6 +480,11 @@ export const TELA_FAQ: Record<
       answer:
         "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
     },
+    {
+      question: "Why is Discord screen share suspended in Brazil?",
+      answer:
+        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement. This page is about what you can use right now, not legal advice.",
+    },
   ],
 };
 
@@ -472,13 +500,29 @@ export function escapeHtml(value: string): string {
 /**
  * The structured data a page can honestly claim.
  *
- * Every page carries the WebSite node. The landing adds SoftwareApplication —
- * the page is the product — mirroring what the shipped `index.html` says
- * (`applicationCategory`, a zero-price Offer) and, since the redesign, its
- * own FAQPage. `/vs-discord` adds FAQPage too, whose questions are the FAQ
- * section actually rendered on the page — schema for copy a visitor can
- * read, never schema alone. `/tela` does the same with its own six.
+ * Every page carries the WebSite node, and now an Organization node beside
+ * it: one stable identity for the publisher, independent of which page a
+ * crawler landed on first, with `sameAs` pointing at the two other places the
+ * same product answers for itself — the source repository and the Play Store
+ * listing. Both are checked-in facts, not guesses: the repo is the one this
+ * codebase lives in, and the Play listing is the one `docs/ANDROID_RELEASE.md`
+ * records production access as open for. The App Store is deliberately absent
+ * — TestFlight is a beta enrollment, not a public listing, and `sameAs` is for
+ * pages anyone can already land on.
+ *
+ * The landing adds SoftwareApplication — the page is the product — mirroring
+ * what the shipped `index.html` says (`applicationCategory`, a zero-price
+ * Offer) and, since the redesign, its own FAQPage, plus the same Play Store
+ * link on `sameAs` for the one app-store URL that is public today. `/vs-discord`
+ * adds FAQPage too, whose questions are the FAQ section actually rendered on
+ * the page — schema for copy a visitor can read, never schema alone. `/tela`
+ * does the same with its own seven.
  */
+const ORGANIZATION_SAME_AS = [
+  "https://github.com/rafaelcg/pqp",
+  "https://play.google.com/store/apps/details?id=gg.pqp.app",
+];
+
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
     {
@@ -487,16 +531,24 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       url: `${CANONICAL_ORIGIN}/`,
       inLanguage: ["pt-BR", "en"],
     },
+    {
+      "@type": "Organization",
+      name: "pqp",
+      url: `${CANONICAL_ORIGIN}/`,
+      logo: `${CANONICAL_ORIGIN}/icons/icon-512.png`,
+      sameAs: ORGANIZATION_SAME_AS,
+    },
   ];
   if (page === "/") {
     graph.push({
       "@type": "SoftwareApplication",
       name: "pqp",
       applicationCategory: "CommunicationApplication",
-      operatingSystem: "Web",
+      operatingSystem: "Web, Windows, macOS, Linux, Android",
       url: `${CANONICAL_ORIGIN}/`,
       description: PAGE_COPY["/"].description[locale],
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+      sameAs: ORGANIZATION_SAME_AS,
     });
   }
   const faq =
@@ -541,6 +593,8 @@ export function renderMarketingHead(
   const url = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
   const title = copy.title[locale];
   const description = copy.description[locale];
+  const ogTitle = copy.ogTitle?.[locale] ?? title;
+  const ogDescription = copy.ogDescription?.[locale] ?? description;
   const image = `${CANONICAL_ORIGIN}/images/og-image.jpg`;
   const e = escapeHtml;
   const langSuffix = url.includes("?") ? "&" : "?";
@@ -555,12 +609,12 @@ export function renderMarketingHead(
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="pqp" />`,
     `<meta property="og:url" content="${e(url)}" />`,
-    `<meta property="og:title" content="${e(title)}" />`,
-    `<meta property="og:description" content="${e(description)}" />`,
+    `<meta property="og:title" content="${e(ogTitle)}" />`,
+    `<meta property="og:description" content="${e(ogDescription)}" />`,
     `<meta property="og:image" content="${e(image)}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
-    `<meta name="twitter:title" content="${e(title)}" />`,
-    `<meta name="twitter:description" content="${e(description)}" />`,
+    `<meta name="twitter:title" content="${e(ogTitle)}" />`,
+    `<meta name="twitter:description" content="${e(ogDescription)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="robots" content="index, follow" />`,
     // The locale this document was negotiated in, for the client bundle to

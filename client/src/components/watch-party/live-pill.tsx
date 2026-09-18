@@ -23,21 +23,44 @@ import { cn } from "@/lib/utils";
  * of step in a card the size of a postage stamp. The avatar's dot is static
  * now; this is the one that moves.
  */
-export function LivePill({ className }: { className?: string }) {
+/**
+ * `recovering` is the presenter's own truthful state: their screen-share
+ * publish dropped (a reconnect) and the client is putting it back. It is NOT
+ * "AO VIVO" — saying so is the 35-minute lie this variant exists to stop — so
+ * it borrows the badge's shape but not its word or its red: amber, "RECONECTANDO",
+ * and still the dot that carries the pulse (never the text; see the note above).
+ * Only the presenter's surfaces ever pass it; a viewer keeps the live badge.
+ */
+export function LivePill({
+  className,
+  variant = "live",
+}: {
+  className?: string;
+  variant?: "live" | "recovering";
+}) {
   const { t } = useTranslation();
+  const recovering = variant === "recovering";
   return (
     <span
-      data-watch-party-live-pill=""
+      data-watch-party-live-pill={recovering ? "recovering" : ""}
       className={cn(
-        "flex shrink-0 items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger",
+        "flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
+        recovering
+          ? "bg-warning/15 text-warning"
+          : "bg-danger/15 text-danger",
         className,
       )}
     >
       <span
         aria-hidden="true"
-        className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse"
+        className={cn(
+          "h-1.5 w-1.5 rounded-full motion-safe:animate-pulse",
+          recovering ? "bg-warning" : "bg-danger",
+        )}
       />
-      {t("watchParty.live.badge")}
+      {recovering
+        ? t("watchParty.live.recovering")
+        : t("watchParty.live.badge")}
     </span>
   );
 }

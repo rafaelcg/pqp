@@ -17,15 +17,19 @@
  * server-side FROM A VIEWER'S PERSPECTIVE — this Worker is not a viewer, the
  * same way it already isn't when it fetches from `ApiPlaylistOrigin`.
  *
- * FAILS TOWARD "FALL BACK TO CONVENTIONAL", NEVER TOWARD "BREAK THE MASTER
- * ROUTE". `fetchMultivariantPlaylist` is the one method whose caller
- * (`index.ts`) treats every failure — no LL session, a bad `state.json`, a
- * dead origin, an init segment this file's codec reader can't parse — as
- * `null`, meaning "build the LL master some other time; forward to the API
- * like `docs/plans/LL_HLS.md` §4 says a conventional session always could."
- * A session this Worker cannot confidently render as LL must never come
- * back as a 502 where the API would have answered it as
- * conventional-with-no-LL-rung; see that call site's own comment for why.
+ * FAILS TOWARD "NOT READY YET", NEVER TOWARD "HERE IS THE OTHER LADDER".
+ * `fetchMultivariantPlaylist` used to collapse every failure — no LL
+ * session, a bad `state.json`, a dead origin, an unreadable init segment —
+ * into `null`, which its caller read as "this party is conventional, forward
+ * to the API". That conflated two different things, and the difference cost
+ * four production attempts at low latency on 2026-09-15: a session 300 ms
+ * old has no `state.json` yet AND IS LOW-LATENCY, and answering it with the
+ * conventional master handed the audience a ladder that, for an LL session,
+ * nothing is writing. It is not this module's job to decide the mode any
+ * more — `requestsLlMode` in `playlist-route.ts` reads the mode the API put
+ * in the URL — so every failure here is now reported AS a failure, with a
+ * reason, and `index.ts` turns it into a retryable `503`. See that call
+ * site.
  *
  * `fetchPlaylist` renders with `LL_TOKEN_PLACEHOLDER`, never a real token —
  * see `ll-playlist.js`'s header. This is what lets `index.ts` cache and
@@ -34,29 +38,24 @@
  * token here leaked one viewer's bearer credential into the shared
  * cache/coalescer's entry, readable by every other viewer who hit it warm.
  *
- * A CONVENTIONAL MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT.
- * `fetchMultivariantPlaylist` runs for EVERY session/master request once
- * `LL_ORIGIN_BASE` is configured, LL or not — a conventional session's is
- * the common case at party scale, and each one used to probe `state.json`
- * and simply wait out `timeoutMs` (the SAME bound the codec/rendition
- * fetches use, chosen for those, not for this) before falling back to the
- * API. A Farol review flagged this twice: as latency (every conventional
- * master request pays the probe) and as availability (an unhealthy LL
- * origin holds every one of them for the full timeout before the API is
- * even tried). `MASTER_PROBE_TIMEOUT_MS` bounds THIS caller's own patience
- * separately from `timeoutMs` — `state.json` is a small, frequently
- * rewritten file a healthy remux answers in well under a second, so a
- * master request that has not heard back by then almost certainly belongs
- * to a conventional session or an unhealthy origin either way, and the
- * honest move is to answer from the API now rather than make a viewer's
- * player wait on a guess. The underlying fetch is never aborted when the
- * probe deadline wins — it keeps running under its own `timeoutMs` in the
- * background, exactly as `fetchFromOrigin`'s in-flight de-dup already
- * shares it with any other concurrent caller, and whatever it eventually
- * decides is remembered in `sessionProbeCache` so the NEXT master request
- * for the SAME (channelId, startedAt) skips the wait entirely for
- * `SESSION_PROBE_CACHE_TTL_MS` — turning "every viewer's join pays a
- * probe" into "one prober per window pays it."
+ * A CONVENTIONAL MASTER REQUEST NEVER REACHES THIS FILE AT ALL ANY MORE.
+ * `index.ts` only calls `fetchMultivariantPlaylist` when the request itself
+ * says `mode=ll`, so the conventional master route is byte-for-byte the API
+ * forward it was before LL existed: no probe, no added latency, and an
+ * unhealthy LL origin cannot hold a conventional viewer's join open for a
+ * moment. That was two separate Farol findings against the probing version,
+ * and the explicit marker retires both rather than tuning them.
+ *
+ * WHAT THE TWO REMAINING BOUNDS ARE FOR. `MASTER_PROBE_TIMEOUT_MS` is how
+ * long an LL master request waits on `state.json` before answering "not
+ * ready" — short, because a healthy remux rewrites that file every part and
+ * a player that is told to come back in a second loses a second, where a
+ * player held open loses the request. The underlying fetch is never aborted
+ * when the deadline wins: it keeps running under its own `timeoutMs` and
+ * whatever it settles on is remembered in `notReadyCache`, so the next
+ * arrival within `NOT_READY_CACHE_TTL_MS` is answered without a second
+ * origin fetch. Five hundred viewers joining a warming session therefore
+ * cost the remux about one `state.json` fetch a second, not five hundred.
  */
 
 import { AAC_LC_CODEC, extractAvc1VideoInfo } from "./ll-init-codecs.js";
@@ -75,29 +74,133 @@ import {
 } from "./ll-state.js";
 import type { PlaylistFetch, PlaylistOrigin } from "./playlist-origin.js";
 import { logEvent } from "./log.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 
 /** Bound on the per-session video-codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
 const VIDEO_CODEC_CACHE_MAX_ENTRIES = 200;
 
-/** See this file's header, "A CONVENTIONAL MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT" — deliberately much shorter than the `timeoutMs` the underlying origin fetch still runs under. */
+/** See this file's header, "WHAT THE TWO REMAINING BOUNDS ARE FOR" — deliberately much shorter than the `timeoutMs` the underlying origin fetch still runs under. */
 const MASTER_PROBE_TIMEOUT_MS = 1_500;
 
-/** How long a (channelId, startedAt) recently found to have no LL session (or an unreachable/erroring origin) is treated that way without asking again — same header. Short enough that a session which starts conventional and later grows an LL state (or a recovering origin) is noticed again within one window. */
-const SESSION_PROBE_CACHE_TTL_MS = 5_000;
+/**
+ * How long a (channelId, startedAt) just found NOT READY is answered that
+ * way without asking the origin again.
+ *
+ * ONE SECOND, NOT FIVE. Its predecessor cached "this session is not LL" for
+ * five seconds, which was the right shape for a question asked once per
+ * party; this one caches "the LL session is still warming up", which is the
+ * state EVERY LL session passes through in its first moments and leaves for
+ * good. Holding that answer for five seconds would add five seconds of black
+ * to the start of every low-latency party. One second is long enough to
+ * collapse a join burst and short enough that nobody waits on a session that
+ * is already writing.
+ */
+const NOT_READY_CACHE_TTL_MS = 1_000;
 
 /** Same bounded-map shape as `videoCodecCache` below — a churn of distinct (channelId, startedAt) pairs must not grow this forever. */
-const SESSION_PROBE_CACHE_MAX_ENTRIES = 500;
+const NOT_READY_CACHE_MAX_ENTRIES = 500;
 
 /** Thrown internally by `raceProbe` when `MASTER_PROBE_TIMEOUT_MS` elapses before the underlying fetch settles — never thrown across this module's own public API. */
 class MasterProbeTimeoutError extends Error {}
 
 /**
+ * How often ONE (session, rung, reason) may write a
+ * `hlsEdge.llPlaylistNotFound` line. Same throttling shape as
+ * `hls-blocking-reload.js`'s `CAPACITY_FALLBACK_LOG_INTERVAL_MS`, and for
+ * the same reason, only sharper here: a 404 on this route means the remux
+ * session is gone, and every viewer keeps polling anyway. Hundreds of
+ * viewers at one poll a second is hundreds of identical log writes a
+ * second, at the exact moment the edge is handling a failure, which is how
+ * an outage becomes a log-throttling incident on top of an outage (Farol
+ * review, PR #706).
+ *
+ * Throttled, never dropped: the line that does get written carries
+ * `suppressed`, the count since the last one, so the aggregate is still
+ * readable. The FIRST 404 of an episode is always logged, which is the one
+ * an operator is looking for.
+ */
+const NOT_FOUND_LOG_INTERVAL_MS = 10_000;
+
+/** Same bounded-map reasoning as `notReadyCache`: a churn of distinct sessions must not grow this forever. */
+const NOT_FOUND_LOG_MAX_ENTRIES = 500;
+
+interface NotFoundLogState {
+  lastLoggedAt: number;
+  suppressed: number;
+}
+
+const notFoundLogState = new Map<string, NotFoundLogState>();
+
+/**
+ * Writes `hlsEdge.llPlaylistNotFound` at most once per
+ * `NOT_FOUND_LOG_INTERVAL_MS` per (session, rung, reason), carrying however
+ * many were suppressed since the last one.
+ */
+function logPlaylistNotFound(
+  reason: "no-state" | "rung-track-absent",
+  channelId: string,
+  startedAt: string,
+  rung: string | undefined,
+  now = Date.now(),
+): void {
+  const key = `${reason}|${channelId}|${startedAt}|${rung ?? ""}`;
+  const state = notFoundLogState.get(key);
+  if (state && now - state.lastLoggedAt < NOT_FOUND_LOG_INTERVAL_MS) {
+    state.suppressed += 1;
+    return;
+  }
+  const suppressed = state?.suppressed ?? 0;
+  // Re-insert so the entry moves to the end of the Map's insertion order,
+  // which is what makes the eviction below least-recently-LOGGED rather
+  // than arbitrary.
+  notFoundLogState.delete(key);
+  notFoundLogState.set(key, { lastLoggedAt: now, suppressed: 0 });
+  while (notFoundLogState.size > NOT_FOUND_LOG_MAX_ENTRIES) {
+    const oldest = notFoundLogState.keys().next();
+    if (oldest.done) break;
+    notFoundLogState.delete(oldest.value);
+  }
+  logEvent("hlsEdge.llPlaylistNotFound", {
+    reason,
+    channelId,
+    startedAt,
+    rung: rung ?? null,
+    suppressed,
+  });
+}
+
+/** Test seam: `notFoundLogState` is module state and one test's 404s must not throttle the next test's. */
+export function __resetLlPlaylistNotFoundLogForTests(): void {
+  notFoundLogState.clear();
+}
+
+/**
+ * Why an LL master could not be built right now. Every one of these is
+ * TEMPORARY by construction — an LL session whose state has not been written
+ * yet, an origin that is slow or down, an init segment not fully flushed —
+ * which is what makes `503 Retry-After` the honest answer rather than a
+ * fallback to a ladder nobody is writing. Carried through to
+ * `hlsEdge.llMasterNotReady` so an operator can tell a warming remux apart
+ * from a dead one without a packet capture (pitfall 16's rule: an endpoint
+ * that refuses somebody must say why).
+ */
+export type LlMasterNotReadyReason =
+  | "no-state"
+  | "probe-timeout"
+  | "origin-error"
+  | "build-failed";
+
+export type LlMultivariantResult =
+  | { kind: "ready"; response: Response }
+  | { kind: "not-ready"; reason: LlMasterNotReadyReason };
+
+/**
  * Only the VIDEO half of a session's codec info is cached — it is read off
- * `avcC` in `init.mp4`, which cannot change for the session's lifetime once
- * written. The AUDIO codec is deliberately NOT part of this shape: see
+ * the state snapshot's newest init segment. The AUDIO codec is deliberately NOT part of this shape: see
  * `videoCodecFor`'s doc comment for why caching it too was a real bug.
  */
 interface CachedVideoCodec {
+  initUri: string;
   videoCodec: string;
   videoWidth: number;
   videoHeight: number;
@@ -140,6 +243,14 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private readonly originKey: string | undefined;
   private readonly timeoutMs: number;
+  /**
+   * How many part targets of `PART-HOLD-BACK` every rendition this origin
+   * renders advertises — `LL_PART_HOLD_BACK_PARTS`, threaded down from
+   * `index.ts` because the env is only readable there. `undefined` keeps
+   * `ll-playlist.js`'s own default (6); the clamping rules are that module's,
+   * not this one's (`partHoldBackSeconds`).
+   */
+  private readonly partHoldBackParts: number | undefined;
   private readonly videoCodecCache = new Map<string, CachedVideoCodec>();
 
   /**
@@ -159,15 +270,17 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   private readonly inFlight = new Map<string, Promise<BufferedOriginResponse>>();
 
   /**
-   * `(channelId, startedAt)` key -> the epoch ms a "no LL session here" (or
-   * "origin errored") result was last observed. Checked ONLY by
-   * `fetchMultivariantPlaylist` — see this file's header, "A CONVENTIONAL
-   * MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT". Never consulted
-   * by `fetchPlaylist` (the rendition route): a viewer only ever asks for
-   * `ll`/`ll-audio` because a master response already handed them that rung
-   * name, so that route has no "is this even LL" question to short-circuit.
+   * `(channelId, startedAt)` key -> the last "not ready" answer and when it
+   * was observed. Checked ONLY by `fetchMultivariantPlaylist` — see this
+   * file's header. Never consulted by `fetchPlaylist` (the rendition route):
+   * a viewer only ever asks for `ll`/`ll-audio` because a master response
+   * already handed them that rung name, so that route has nothing to
+   * short-circuit.
    */
-  private readonly sessionProbeCache = new Map<string, number>();
+  private readonly notReadyCache = new Map<
+    string,
+    { at: number; reason: LlMasterNotReadyReason }
+  >();
 
   // A plain constructor body, not TypeScript parameter-property shorthand:
   // this class is exercised directly by `test/ll-playlist-origin.test.mjs`
@@ -175,10 +288,16 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   // which erases type annotations but cannot inject the
   // `this.field = field` assignments parameter properties require --
   // `tsc --noEmit` doesn't care either way, but the test runner does.
-  constructor(originBase: string | undefined, timeoutMs: number, originKey?: string) {
+  constructor(
+    originBase: string | undefined,
+    timeoutMs: number,
+    originKey?: string,
+    partHoldBackParts?: number,
+  ) {
     this.originBase = originBase;
     this.timeoutMs = timeoutMs;
     this.originKey = originKey;
+    this.partHoldBackParts = partHoldBackParts;
   }
 
   get ready(): boolean {
@@ -200,17 +319,26 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * `finally` runs, means one timeout covers the ENTIRE exchange — the same
    * fix `ApiPlaylistOrigin.fetchPlaylist` already applies, for the same
    * reason (see that method's own doc comment).
+   *
+   * NEVER AWAITED UNBOUNDEDLY BY A JOINER (2026-09-15). The in-flight map
+   * shares one fetch between concurrent callers, and in Workers those callers
+   * are usually different REQUESTS — so a joiner used to be betting its own
+   * response on a fetch owned by a context it does not control, and on the
+   * single `AbortController` that context armed. When the owner returned, its
+   * fetch was cancelled and the joiner saw an abort-shaped rejection from a
+   * perfectly healthy origin (five 502s that afternoon), or nothing at all.
+   * `coalesceFetch` bounds the join and lets a joiner DETACH and fetch for
+   * itself — with its own controller and its own timer — rather than
+   * aborting the shared fetch out from under whoever is still attached. See
+   * `coalesced-fetch.js`'s header.
    */
-  private fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
-    const existing = this.inFlight.get(path);
-    if (existing) {
-      return existing;
-    }
-    const promise = this.fetchFromOriginUncoalesced(path);
-    this.inFlight.set(path, promise);
-    return promise.finally(() => {
-      this.inFlight.delete(path);
+  private async fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
+    const coalesced = await coalesceFetch(this.inFlight, path, () => this.fetchFromOriginUncoalesced(path), {
+      onDetach: ({ reason, attempt }) => {
+        logEvent("hlsEdge.llOriginJoinDetached", { path, reason, attempt });
+      },
     });
+    return coalesced.result;
   }
 
   private async fetchFromOriginUncoalesced(path: string): Promise<BufferedOriginResponse> {
@@ -318,6 +446,26 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     }
     const found = await this.fetchState(req.channelId, req.startedAt);
     if (!found) {
+      // THE ONLY WAY A VIEWER'S PLAYLIST REQUEST 404s, AND IT NEVER SAID
+      // SO. `state.json` answered 404 at the remux origin. Deliberately
+      // reported with the SAME reason name the master path already uses
+      // (`LlMasterNotReadyReason`'s `no-state`), because this one 404 has
+      // two readings and this route cannot tell them apart: the registry
+      // has stopped holding the session (a watchdog restart, a demote, or
+      // a DELETE, all of which remove it outright), or the session is
+      // alive and has simply not written its first state yet. What
+      // separates them is age, not anything visible here, so claiming
+      // "session-gone" would be a guess dressed as a measurement.
+      //
+      // On 2026-09-17 the first reading was the real one twice inside an
+      // hour (a reorder-buffer stall crossed the part-stuck threshold, see
+      // `internal/session/reorder.go`): every viewer's `/ll` and
+      // `/ll-audio` 404ed together, and the first theory reached for was
+      // the sliding window, which this Worker cannot 404 for at all (an
+      // msn behind the edge is a 200, an msn too far ahead is a 400).
+      // Naming the reason at all is repo pitfall 16's rule: an endpoint
+      // that refuses somebody must say why.
+      logPlaylistNotFound("no-state", req.channelId, req.startedAt, req.rung);
       return new Response("Not found", { status: 404 });
     }
     const track = trackForRung(found.state, req.rung);
@@ -325,10 +473,16 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       // A real LL session that has not (yet, or ever, e.g. no stage audio)
       // enabled this specific track — 404 for THIS rung, which the
       // existing non-200 handling in `index.ts` already refuses to cache.
+      // Distinct from `no-state` above: the session is alive, its state
+      // parsed, and every other rung of it is being served.
+      logPlaylistNotFound("rung-track-absent", req.channelId, req.startedAt, req.rung);
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);
-    const text = buildLlRenditionPlaylist(found.state, track, req.rung, { basePath });
+    const text = buildLlRenditionPlaylist(found.state, track, req.rung, {
+      basePath,
+      partHoldBackParts: this.partHoldBackParts,
+    });
     return new Response(text, {
       status: 200,
       headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },
@@ -336,38 +490,40 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   }
 
   /**
-   * The multivariant playlist for the session/master route, or `null` when
-   * this Worker should not answer with one at all (no LL session; origin
-   * unreachable; a `state.json` or init segment this file can't make sense
-   * of). See this file's header, "FAILS TOWARD...". Called directly, per
-   * request, with the CALLER's own real token (this route is never cached —
-   * see `ll-playlist.js`'s header and `index.ts`'s own comment on the
-   * session/master route for why that has always been true, LL or not).
+   * The multivariant playlist for the session/master route of a request that
+   * ASKED for LL (`requestsLlMode`, `playlist-route.ts`), or a `not-ready`
+   * with a reason. Never "fall back to conventional": the caller has already
+   * been told by the API which mode this session is, and there is no
+   * conventional ladder running for an LL one — see this file's header.
+   * Called directly, per request, with the CALLER's own real token (this
+   * route is never cached — see `ll-playlist.js`'s header and `index.ts`'s
+   * own comment on the session/master route for why that has always been
+   * true, LL or not).
    */
   async fetchMultivariantPlaylist(
     channelId: string,
     startedAt: string,
     token: string,
-  ): Promise<Response | null> {
+  ): Promise<LlMultivariantResult> {
     const probeKey = `${channelId}:${startedAt}`;
-    if (this.recentlyProbedNegative(probeKey)) {
-      return null;
+    const remembered = this.recentNotReady(probeKey);
+    if (remembered) {
+      return { kind: "not-ready", reason: remembered };
     }
     // Started once, awaited with a SHORT deadline below -- but never
     // aborted when that deadline wins, so a slow-but-eventually-answering
-    // origin still gets to populate `sessionProbeCache` for the benefit of
-    // the NEXT master request, even though THIS one already fell back to
-    // the API. See this file's header, "A CONVENTIONAL MASTER REQUEST MUST
-    // NOT PAY THE FULL UPSTREAM TIMEOUT".
+    // origin still gets to populate `notReadyCache` for the benefit of the
+    // NEXT master request, even though THIS one already answered 503. See
+    // this file's header, "WHAT THE TWO REMAINING BOUNDS ARE FOR".
     const statePromise = this.fetchState(channelId, startedAt);
     statePromise.then(
       (result) => {
         if (!result) {
-          this.rememberNegativeProbe(probeKey);
+          this.rememberNotReady(probeKey, "no-state");
         }
       },
       () => {
-        this.rememberNegativeProbe(probeKey);
+        this.rememberNotReady(probeKey, "origin-error");
       },
     );
     let found: { sessionId: string; state: LlSessionState } | null;
@@ -376,13 +532,16 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     } catch (error) {
       if (error instanceof MasterProbeTimeoutError) {
         logEvent("hlsEdge.llMasterProbeTimedOut", { channelId, timeoutMs: MASTER_PROBE_TIMEOUT_MS });
-      } else {
-        logEvent("hlsEdge.llStateFetchFailed", { channelId, error: String(error) });
+        // NOT remembered: the underlying fetch is still running and its own
+        // `.then` above writes the memo with the answer it actually gets. A
+        // timeout is this request giving up, not a verdict about the session.
+        return { kind: "not-ready", reason: "probe-timeout" };
       }
-      return null;
+      logEvent("hlsEdge.llStateFetchFailed", { channelId, error: String(error) });
+      return { kind: "not-ready", reason: "origin-error" };
     }
     if (!found) {
-      return null;
+      return { kind: "not-ready", reason: "no-state" };
     }
     try {
       const videoCodec = await this.videoCodecFor(found.sessionId, found.state);
@@ -400,25 +559,32 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
         videoHeight: videoCodec.videoHeight,
         audioCodec,
       });
-      return new Response(text, {
-        status: 200,
-        headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },
-      });
+      return {
+        kind: "ready",
+        response: new Response(text, {
+          status: 200,
+          headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },
+        }),
+      };
     } catch (error) {
       logEvent("hlsEdge.llMultivariantBuildFailed", {
         channelId,
         sessionId: found.sessionId,
         error: String(error),
       });
-      return null;
+      // Remembered like a missing state: an init segment this file cannot
+      // read is almost always one the remux has only half written, which the
+      // next second fixes on its own.
+      this.rememberNotReady(probeKey, "build-failed");
+      return { kind: "not-ready", reason: "build-failed" };
     }
   }
 
   /**
-   * Only the VIDEO codec/geometry is memoized here, and only once
-   * successfully read — `avcC` in `init.mp4` cannot change for a session's
-   * lifetime, so every later master request for the same session reuses it
-   * with no origin fetch at all.
+   * Only the VIDEO codec/geometry is memoized here, and only for the init
+   * URI that supplied it. A remux can replace `init.mp4` with `init-2.mp4`
+   * mid-session after a codec or geometry change, so a later state snapshot
+   * naming a new newest init must refetch before building its master.
    *
    * A first version of this method cached the AUDIO codec alongside the
    * video one, computed from whatever `state.audio` happened to be on the
@@ -437,7 +603,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private async videoCodecFor(sessionId: string, state: LlSessionState): Promise<CachedVideoCodec> {
     const cached = this.videoCodecCache.get(sessionId);
-    if (cached) {
+    if (cached?.initUri === state.video.initUri) {
       return cached;
     }
     const fetched = await this.fetchFromOrigin(originAssetPath(sessionId, state.video.initUri));
@@ -449,6 +615,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       throw new Error("video init segment did not yield an avcC box");
     }
     const result: CachedVideoCodec = {
+      initUri: state.video.initUri,
       videoCodec: videoInfo.codec,
       videoWidth: videoInfo.width,
       videoHeight: videoInfo.height,
@@ -463,20 +630,23 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     return result;
   }
 
-  /** True when `key` was last probed negative within `SESSION_PROBE_CACHE_TTL_MS` — see `sessionProbeCache`'s doc comment. */
-  private recentlyProbedNegative(key: string): boolean {
-    const at = this.sessionProbeCache.get(key);
-    return at !== undefined && Date.now() - at < SESSION_PROBE_CACHE_TTL_MS;
+  /** The reason `key` was last found not ready, if that was within `NOT_READY_CACHE_TTL_MS` — see `notReadyCache`'s doc comment. */
+  private recentNotReady(key: string): LlMasterNotReadyReason | null {
+    const entry = this.notReadyCache.get(key);
+    if (!entry || Date.now() - entry.at >= NOT_READY_CACHE_TTL_MS) {
+      return null;
+    }
+    return entry.reason;
   }
 
-  private rememberNegativeProbe(key: string): void {
-    if (this.sessionProbeCache.size >= SESSION_PROBE_CACHE_MAX_ENTRIES && !this.sessionProbeCache.has(key)) {
-      const oldestKey = this.sessionProbeCache.keys().next().value;
+  private rememberNotReady(key: string, reason: LlMasterNotReadyReason): void {
+    if (this.notReadyCache.size >= NOT_READY_CACHE_MAX_ENTRIES && !this.notReadyCache.has(key)) {
+      const oldestKey = this.notReadyCache.keys().next().value;
       if (oldestKey !== undefined) {
-        this.sessionProbeCache.delete(oldestKey);
+        this.notReadyCache.delete(oldestKey);
       }
     }
-    this.sessionProbeCache.set(key, Date.now());
+    this.notReadyCache.set(key, { at: Date.now(), reason });
   }
 
   /**

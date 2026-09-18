@@ -46,6 +46,8 @@ import {
   MAX_SERVER_BANNER_BYTES,
   MAX_SERVER_ICON_BYTES,
   maxServerImageBytes,
+  COMMUNITY_FEATURED_IMAGE_HEIGHT,
+  COMMUNITY_FEATURED_IMAGE_WIDTH,
   SERVER_BANNER_HEIGHT,
   SERVER_BANNER_WIDTH,
   SERVER_ICON_SIZE,
@@ -81,6 +83,9 @@ import {
   USER_BANNER_HEIGHT,
   USER_BANNER_WIDTH,
   communityTaglineSchema,
+  communityAboutSchema,
+  normalizeCommunityLinks,
+  parseCommunityFeaturedEmbed,
   updateCommunitySchema,
   reportStatusSchema,
   resolveReportSchema,
@@ -295,9 +300,9 @@ import {
 } from "../services/avatars.js";
 import {
   createServerImageUpload,
-  discardServerImageObject,
   isServerImageUploadConfigured,
   presignServerImageRead,
+  scheduleDiscardServerImageObject,
   serverImageUrlForKey,
   setServerImage,
   verifyServerImageObject,
@@ -496,7 +501,12 @@ import {
   searchGifs,
   trendingGifs,
 } from "../services/gifs.js";
-import { MusicResolveError, resolveMusic } from "../services/music.js";
+import {
+  MusicResolveError,
+  relatedMusicTracks,
+  resolveMusic,
+  searchMusicCandidates,
+} from "../services/music.js";
 import {
   completeConnection,
   connectionsConfig,
@@ -960,6 +970,7 @@ export function resetApiRateLimits(): void {
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
   operatorLimiter.reset();
+  musicResolveLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -2833,6 +2844,72 @@ router.get("/api/music/resolve", async (ctx) => {
   }
 });
 
+router.get("/api/music/search", async (ctx) => {
+  const key = `user:${ctx.user.id}`;
+  if (!musicResolveLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const query = (ctx.url.searchParams.get("q") ?? "").trim();
+  if (!query) {
+    throw new HttpError(400, "Missing q");
+  }
+  if (query.length > 2048) {
+    throw new HttpError(400, "Query too long");
+  }
+  try {
+    const tracks = await searchMusicCandidates(query);
+    if (tracks.length === 0) {
+      throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
+    }
+    return { tracks };
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
+      if (error.code === "upstream") {
+        console.error("[music] upstream failed:", error.message);
+        throw new HttpError(502, "Music provider unavailable");
+      }
+      throw new HttpError(error.code === "not_found" ? 404 : 400, error.message);
+    }
+    throw error;
+  }
+});
+
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+router.get("/api/music/related", async (ctx) => {
+  const key = `user:${ctx.user.id}`;
+  if (!musicResolveLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const videoId = (ctx.url.searchParams.get("videoId") ?? "").trim();
+  if (!YOUTUBE_VIDEO_ID.test(videoId)) {
+    throw new HttpError(400, "Invalid videoId");
+  }
+  try {
+    const tracks = await relatedMusicTracks(videoId);
+    return { tracks };
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
+      if (error.code === "upstream") {
+        console.error("[music] upstream failed:", error.message);
+        throw new HttpError(502, "Music provider unavailable");
+      }
+      throw new HttpError(error.code === "not_found" ? 404 : 400, error.message);
+    }
+    throw error;
+  }
+});
+
 // ------------------------------------------------------------ attachments
 
 /**
@@ -3280,10 +3357,27 @@ router.get("/api/servers/images/config", async () => ({
     width: SERVER_BANNER_WIDTH,
     height: SERVER_BANNER_HEIGHT,
   },
+  featured: {
+    maxBytes: MAX_SERVER_BANNER_BYTES,
+    width: COMMUNITY_FEATURED_IMAGE_WIDTH,
+    height: COMMUNITY_FEATURED_IMAGE_HEIGHT,
+  },
 }));
 
+function serverImageAuditAction(
+  kind: ServerImageKind,
+): "server.icon_update" | "server.banner_update" | "server.community_update" {
+  if (kind === "banner") {
+    return "server.banner_update";
+  }
+  if (kind === "featured") {
+    return "server.community_update";
+  }
+  return "server.icon_update";
+}
+
 /**
- * Mint an upload for one of a server's two pictures.
+ * Mint an upload for one of a server's pictures.
  *
  * The per-kind cap is applied here rather than in `createServerImageUploadSchema`
  * because the schema does not know which kind it is parsing, and a banner's
@@ -3296,6 +3390,9 @@ async function mintServerImage(
   ctx: { req: IncomingMessage; res: ServerResponse; user: { id: string } },
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
@@ -3337,6 +3434,9 @@ async function claimServerImage(
   ctx: { req: IncomingMessage; user: { id: string } },
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
@@ -3358,12 +3458,12 @@ async function claimServerImage(
     throw new NotFound("Server not found");
   }
   if (updated.previousKey && updated.previousKey !== body.key) {
-    void discardServerImageObject(updated.previousKey);
+    scheduleDiscardServerImageObject(updated.previousKey);
   }
   await logAudit({
     serverId,
     actorId: ctx.user.id,
-    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    action: serverImageAuditAction(kind),
     targetType: "server",
     targetId: serverId,
     changes: [{ key: kind, old: null, new: "set" }],
@@ -3384,18 +3484,21 @@ async function clearServerImage(
   userId: string,
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   await requirePermission(serverId, userId, Permission.MANAGE_SERVER);
   const updated = await setServerImage(kind, serverId, null, SERVER_COLUMNS);
   if (!updated) {
     throw new NotFound("Server not found");
   }
   if (updated.previousKey) {
-    void discardServerImageObject(updated.previousKey);
+    scheduleDiscardServerImageObject(updated.previousKey);
   }
   await logAudit({
     serverId,
     actorId: userId,
-    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    action: serverImageAuditAction(kind),
     targetType: "server",
     targetId: serverId,
     changes: [{ key: kind, old: "set", new: null }],
@@ -3421,6 +3524,16 @@ router.post("/api/servers/:serverId/banner/claim", async (ctx, { serverId }) =>
 );
 router.delete("/api/servers/:serverId/banner", async ({ user }, { serverId }) =>
   clearServerImage("banner", user.id, serverId!),
+);
+
+router.post("/api/servers/:serverId/featured", async (ctx, { serverId }) =>
+  mintServerImage("featured", ctx, serverId!),
+);
+router.post("/api/servers/:serverId/featured/claim", async (ctx, { serverId }) =>
+  claimServerImage("featured", ctx, serverId!),
+);
+router.delete("/api/servers/:serverId/featured", async ({ user }, { serverId }) =>
+  clearServerImage("featured", user.id, serverId!),
 );
 
 // ---------------------------------------------------------- community home (Baú)
@@ -4188,13 +4301,10 @@ router.patch(
      * The address, validated here rather than in the schema for the tagline's
      * reason and one sharper one.
      *
-     * THE STATUS CODE IS THE FIELD NAME. This route can refuse for exactly one
-     * reason that is not "invalid request": the address. So 400, 409 and 422
-     * from here always mean the address and never anything else, and the
-     * settings form attaches all three to the address input rather than to the
-     * form as a whole. That is a contract worth stating out loud, because the
-     * day a second field can refuse, this stops being true and the form starts
-     * pointing at the wrong box.
+     * 409 and 422 from this route always mean the address. 400 on the slug
+     * still means the address when the message matches "cannot be used".
+     * About, links, and featured also 400, and those land on the form as a
+     * whole — never on the slug box.
      *
      * `communitySlugSchema` slugifies first, so an owner who types "Valorant
      * Brasil" is answered with `valorant-brasil` rather than told off for
@@ -4212,6 +4322,50 @@ router.patch(
       slug = parsed.data;
     }
 
+    let about: string | null | undefined;
+    if (body.about !== undefined) {
+      if (body.about === null || body.about.trim() === "") {
+        about = null;
+      } else {
+        const parsed = communityAboutSchema.safeParse(body.about);
+        if (!parsed.success) {
+          throw new HttpError(
+            400,
+            parsed.error.issues[0]?.message ?? "That about text is too long",
+          );
+        }
+        about = parsed.data;
+      }
+    }
+
+    let links: NonNullable<ReturnType<typeof normalizeCommunityLinks>> | undefined;
+    if (body.links !== undefined) {
+      const parsed = normalizeCommunityLinks(body.links);
+      if (parsed === null) {
+        throw new HttpError(
+          400,
+          "That link is not allowed. Use https, and only YouTube, Twitch, Instagram, TikTok, X, or a website.",
+        );
+      }
+      links = parsed;
+    }
+
+    let featured: ReturnType<typeof parseCommunityFeaturedEmbed> | null | undefined;
+    if (body.featured !== undefined) {
+      if (body.featured === null) {
+        featured = null;
+      } else {
+        const parsed = parseCommunityFeaturedEmbed(body.featured.url);
+        if (!parsed || parsed.kind !== body.featured.kind) {
+          throw new HttpError(
+            400,
+            "Featured media has to be a YouTube video or a Twitch link.",
+          );
+        }
+        featured = parsed;
+      }
+    }
+
     let updated;
     try {
       updated = await updateCommunitySettings(
@@ -4222,6 +4376,9 @@ router.patch(
             : {}),
           ...(body.isListed !== undefined ? { isListed: body.isListed } : {}),
           ...(tagline !== undefined ? { tagline } : {}),
+          ...(about !== undefined ? { about } : {}),
+          ...(links !== undefined ? { links } : {}),
+          ...(featured !== undefined ? { featured } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
           ...(body.language !== undefined ? { language: body.language } : {}),
@@ -4266,6 +4423,10 @@ router.patch(
     }
     if (!updated) {
       throw new NotFound("Server not found");
+    }
+
+    if (updated.previousFeaturedKey) {
+      scheduleDiscardServerImageObject(updated.previousFeaturedKey);
     }
 
     // One entry for the whole patch, carrying only what actually moved. Listing
@@ -4336,6 +4497,37 @@ router.patch(
               key: "communityLanguage",
               old: updated.previous.language,
               new: updated.settings.language,
+            },
+          ]
+        : []),
+      ...(about !== undefined && updated.previous.about !== updated.settings.about
+        ? [
+            {
+              key: "communityAbout",
+              old: updated.previous.about,
+              new: updated.settings.about,
+            },
+          ]
+        : []),
+      ...(links !== undefined &&
+      JSON.stringify(updated.previous.links) !==
+        JSON.stringify(updated.settings.links)
+        ? [
+            {
+              key: "communityLinks",
+              old: updated.previous.links,
+              new: updated.settings.links,
+            },
+          ]
+        : []),
+      ...(featured !== undefined &&
+      JSON.stringify(updated.previous.featured) !==
+        JSON.stringify(updated.settings.featured)
+        ? [
+            {
+              key: "communityFeatured",
+              old: updated.previous.featured,
+              new: updated.settings.featured,
             },
           ]
         : []),
@@ -4721,12 +4913,31 @@ router.post(
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
   const state = await getChannelLiveState(channelId!);
+  // WHICH OF THE TWO SILENCES THIS IS, and the client cannot work it out for
+  // itself. "No stream" covers a show that is over and a presenter who has
+  // stepped away from one that is still running, and the watch player's
+  // holding screen has to say something different in each ("a sessão acabou"
+  // against "esperando o apresentador voltar"). Only the party row knows.
+  //
+  // A BOOLEAN, NOT THE STATUS. A draft is somebody thinking and is invisible
+  // to a viewer by design (`watchPartySurface`); a party being LIVE is
+  // already broadcast to the whole server. So this answers the one bit that
+  // is public anyway and leaks nothing the sidebar does not already show.
+  // Cached per channel (`getActiveWatchPartyRow`), only asked on the answer
+  // that needs it, and a lookup that throws leaves the field false rather
+  // than failing a read the player depends on.
+  const party =
+    state.stream === null && state.known
+      ? await getActiveWatchPartyRow(channelId!).catch(() => null)
+      : null;
   return {
     stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
     // Absent on a null the server could not vouch for (the session table was
     // unreachable), so the client holds what it has instead of reading one
     // failed query as the party being over. Same contract as `channel-live`.
-    ...(state.stream === null && state.known ? { ended: true } : {}),
+    ...(state.stream === null && state.known
+      ? { ended: true, partyLive: party?.status === "live" }
+      : {}),
     watching: state.watching,
     participants: state.participants,
   };
@@ -8775,18 +8986,21 @@ async function serveUserBannerObject(
 }
 
 const SERVER_IMAGE_OBJECT_PATH =
-  /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner)$/;
+  /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner|featured)$/;
 
 /**
- * A server's icon or banner, as a redirect to the object store.
+ * A server's icon, banner, or community featured image, as a redirect to the
+ * object store.
  *
  * DELIBERATELY UNAUTHENTICATED, the fourth route in this file that is, and for
  * the same reason as `serveAvatarObject`: a browser cannot attach a Bearer
- * token to an `<img src>`. What it discloses is one image about a server whose
- * id the caller already has — and for a listed community, the directory hands
- * that id to strangers by design. For an unlisted server, the id is the secret
- * (as it is for every other id in this schema), and a picture is strictly less
- * than the name and member count an invite already reveals.
+ * token to an `<img src>`. Featured reads `community_featured_key`, not the
+ * icon or banner columns — the kind in the path is the lookup. What it
+ * discloses is one image about a server whose id the caller already has — and
+ * for a listed community, the directory hands that id to strangers by design.
+ * For an unlisted server, the id is the secret (as it is for every other id in
+ * this schema), and a picture is strictly less than the name and member count
+ * an invite already reveals.
  *
  * A redirect rather than a proxy, exactly as avatars are: the bytes are in our
  * own bucket and streaming a banner per viewer per render is the egress bill
@@ -8803,6 +9017,10 @@ async function serveServerImageObject(
   serverId: string,
   kind: ServerImageKind,
 ): Promise<void> {
+  if (kind !== "icon" && kind !== "banner" && kind !== "featured") {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
   let url: string | null;
   try {
     url = await presignServerImageRead(kind, serverId);

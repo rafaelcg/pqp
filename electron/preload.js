@@ -250,6 +250,19 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return ipcRenderer.invoke("pqp:set-locale", locale);
   },
 
+  /**
+   * Launch at login. macOS and Windows only (Electron has no Linux
+   * implementation); the main process answers `false` to both on Linux
+   * rather than pretending the toggle did something.
+   */
+  getStartAtLogin() {
+    return ipcRenderer.invoke("pqp:get-start-at-login");
+  },
+
+  setStartAtLogin(value) {
+    return ipcRenderer.invoke("pqp:set-start-at-login", value === true);
+  },
+
   /** Dock / taskbar mention count. Zero clears it. */
   setBadgeCount(count) {
     if (!Number.isFinite(count)) {

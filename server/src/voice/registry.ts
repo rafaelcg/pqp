@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { MusicState, VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
+import {
+  musicStateSchema,
+  type MusicState,
+  type VoiceRoomTransport,
+  type WatchPartyState,
+} from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { noteLiveInstanceCount } from "../lib/cluster-rate-limit.js";
@@ -13,6 +18,16 @@ import {
   VOICE_RESUME_TOKEN_TTL_MS,
   VOICE_RESUME_TTL_MS,
 } from "../ws/voice-resume-token.js";
+import {
+  enqueueVoicePeerDelete,
+  enqueueVoicePeerOrphan,
+  enqueueVoicePeerRetire,
+  enqueueVoicePeerUpsert,
+  enqueueVoiceRoomTidy,
+  enqueueVoiceWatchPartyTidy,
+  flushVoiceRegistryBatch,
+  isVoiceRegistryBatchEnabled,
+} from "./registry-batch.js";
 
 /**
  * The voice registry: `ws/voice.ts`'s peer map and transport pin, written to
@@ -130,6 +145,13 @@ const inFlight = new Set<Promise<unknown>>();
  * writes (`ws/voice.ts`'s `trackRowWrite`) so tests can await it, and the
  * writes inside that chain each pass through `track()` again on their own.
  * Counting `"chain"` too would double-count every chained write.
+ *
+ * WITH `VOICE_REGISTRY_BATCH` ON THIS COUNTS ROW WRITES ASKED FOR, NOT
+ * STATEMENTS ISSUED, and that is deliberate: it stays comparable across the
+ * flip, so turning batching on cannot make this graph fall off a cliff and
+ * look like a voice outage. What the batching bought is the pair beside it
+ * on the same endpoint, `voice.registry.batch.rowsCoalesced` over
+ * `batchFlushes`.
  */
 const REGISTRY_WRITE_BUCKET_MS = 1_000;
 const REGISTRY_WRITE_BUCKETS = 60;
@@ -205,9 +227,19 @@ export function trackPendingRegistryWork(work: Promise<unknown>): void {
   track(work, "chain");
 }
 
-/** Test seam: resolves once every registry write asked for so far has settled. */
+/**
+ * Test seam: resolves once every registry write asked for so far has settled.
+ *
+ * The batch is drained rather than waited out. With `VOICE_REGISTRY_BATCH` on
+ * an enqueued write does not land until its window fires, so without this a
+ * suite would be sleeping on a 50 ms timer between every assertion, and a
+ * chain of three writes (`ws/voice.ts`'s `trackRowWrite`, which does not
+ * issue the next write until the last one landed) would cost three of them.
+ * A no-op with the flag off: the queue is always empty.
+ */
 export async function settleVoiceRegistryWrites(): Promise<void> {
   while (inFlight.size > 0) {
+    await flushVoiceRegistryBatch();
     await Promise.allSettled([...inFlight]);
   }
 }
@@ -322,8 +354,13 @@ export async function readVoiceRoomTransport(
  * left describing a room nobody is in. A no-op for an occupied room.
  */
 export function unpinVoiceRoomIfEmpty(channelId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoiceRoomTidy(channelId), "unpinIfEmpty");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.unpinIfEmpty",
       `DELETE FROM voice_rooms r
         WHERE r.channel_id = $1
           AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
@@ -345,6 +382,7 @@ export interface VoicePeerRow {
   muted: boolean;
   deafened: boolean;
   sharingScreen: boolean;
+  listeningMusic: boolean;
   cameraStreamId: string | null;
   screenAudioStreamId: string | null;
   canSpeak: boolean;
@@ -356,6 +394,23 @@ export interface VoicePeerRow {
 export type VoicePeerWrite = Omit<VoicePeerRow, "instanceId"> & {
   /** What the room runs on, so a missing room row can be recreated. */
   transport: VoiceRoomTransport;
+  /**
+   * Whether the caller still holds this seat, asked again at WRITE time.
+   *
+   * Unbatched this is redundant: `ws/voice.ts`'s `writePeerRow` checks peer
+   * identity against its map and the statement goes out in the same tick. With
+   * `VOICE_REGISTRY_BATCH` on there is a window between asking for the write
+   * and the flush that issues it, and an upsert whose seat left during that
+   * window is exactly the shape of CLAUDE.md pitfall 13: a row written back
+   * over its own delete, `orphaned_at` NULL, a live `instance_id`, and nothing
+   * in the cluster allowed to sweep it. So the guard is re-asked in
+   * `registry-batch.ts` immediately before the row goes into the statement,
+   * and an upsert that fails it is dropped and counted.
+   *
+   * Optional: a caller with no map behind it (a test, a one-off repair) omits
+   * it and is taken at its word.
+   */
+  stillSeated?: () => boolean;
 };
 
 interface VoicePeerDbRow {
@@ -368,6 +423,7 @@ interface VoicePeerDbRow {
   muted: boolean;
   deafened: boolean;
   sharing_screen: boolean;
+  listening_music: boolean;
   camera_stream_id: string | null;
   screen_audio_stream_id: string | null;
   can_speak: boolean;
@@ -387,6 +443,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
     muted: row.muted,
     deafened: row.deafened,
     sharingScreen: row.sharing_screen,
+    listeningMusic: row.listening_music ?? true,
     cameraStreamId: row.camera_stream_id,
     screenAudioStreamId: row.screen_audio_stream_id,
     canSpeak: row.can_speak,
@@ -397,7 +454,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
 }
 
 const PEER_COLUMNS = `peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
-       muted, deafened, sharing_screen, camera_stream_id, screen_audio_stream_id,
+       muted, deafened, sharing_screen, listening_music, camera_stream_id, screen_audio_stream_id,
        can_speak, can_stream, can_resume, orphaned_at`;
 /** The same list qualified as `p.<column>`, for statements that join `voice_peers p`. */
 const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
@@ -416,6 +473,9 @@ const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
  * room, where `transport` is the decision this join already adopted.
  */
 export function upsertVoicePeer(peer: VoicePeerWrite): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerUpsert(peer), "upsertPeer");
+  }
   return track(writePeer(peer), "upsertPeer");
 }
 
@@ -435,9 +495,9 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
         "registry.upsertPeer",
         `INSERT INTO voice_peers (
            peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
-           muted, deafened, sharing_screen, camera_stream_id,
+           muted, deafened, sharing_screen, listening_music, camera_stream_id,
            screen_audio_stream_id, can_speak, can_stream, can_resume, orphaned_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          ON CONFLICT (peer_id) DO UPDATE SET
            channel_id = EXCLUDED.channel_id,
            user_id = EXCLUDED.user_id,
@@ -447,6 +507,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
            muted = EXCLUDED.muted,
            deafened = EXCLUDED.deafened,
            sharing_screen = EXCLUDED.sharing_screen,
+           listening_music = EXCLUDED.listening_music,
            camera_stream_id = EXCLUDED.camera_stream_id,
            screen_audio_stream_id = EXCLUDED.screen_audio_stream_id,
            can_speak = EXCLUDED.can_speak,
@@ -464,6 +525,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
           peer.muted,
           peer.deafened,
           peer.sharingScreen,
+          peer.listeningMusic,
           peer.cameraStreamId,
           peer.screenAudioStreamId,
           peer.canSpeak,
@@ -507,6 +569,13 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
  * next joiner adopts, at the same transport the room just had.
  */
 export function deleteVoicePeer(peerId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    // The batch keeps the two halves apart in the same way and gains one
+    // guarantee the loose pair cannot have: a flush's own deletes are visible
+    // to its own room tidy, so two of a room's seats leaving in one window
+    // always clear the room row. See `registry-batch.ts`'s `runPlan`.
+    return track(enqueueVoicePeerDelete(peerId), "deletePeer");
+  }
   return track(
     (async () => {
       const pool = getPool();
@@ -664,8 +733,13 @@ export function markVoicePeerOrphaned(
   peerId: string,
   orphanedAt: Date | null,
 ): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerOrphan(peerId, orphanedAt), "markOrphaned");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.markOrphaned",
       `UPDATE voice_peers
           SET orphaned_at = $2, instance_id = $3, updated_at = NOW()
         WHERE peer_id = $1`,
@@ -850,7 +924,7 @@ interface RosterDbRow extends VoicePeerDbRow {
 
 const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
-       p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.camera_stream_id,
+       p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.listening_music, p.camera_stream_id,
        p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at,
        EXISTS (
          SELECT 1 FROM voice_server_mutes m
@@ -1117,8 +1191,13 @@ export async function readWatchParty(
  * next call in the channel does not inherit a film nobody is watching.
  */
 export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoiceWatchPartyTidy(channelId), "clearWatchParty");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.clearWatchParty",
       `UPDATE voice_rooms r
           SET watch_party = NULL, watch_party_rev = 0
         WHERE r.channel_id = $1
@@ -1188,14 +1267,19 @@ export async function persistMusic(
 export async function readMusic(
   channelId: string,
 ): Promise<MusicState | null | undefined> {
-  const result = await getPool().query<{ music: MusicState | null }>(
+  const result = await getPool().query<{ music: unknown }>(
     `SELECT music FROM voice_rooms WHERE channel_id = $1`,
     [channelId],
   );
   if (result.rows.length === 0) {
     return undefined;
   }
-  return result.rows[0]?.music ?? null;
+  const raw = result.rows[0]?.music ?? null;
+  if (raw === null) {
+    return null;
+  }
+  const parsed = musicStateSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -1427,8 +1511,13 @@ export async function reconcileVoiceRegistry(options: {
 
 /** Block reconstruct of a hung-up id cluster-wide for the token's life. */
 export function retireVoicePeerId(peerId: string): Promise<unknown> {
+  if (isVoiceRegistryBatchEnabled()) {
+    return track(enqueueVoicePeerRetire(peerId), "retirePeer");
+  }
   return track(
-    getPool().query(
+    countedQuery(
+      getPool(),
+      "registry.retirePeer",
       `INSERT INTO voice_retired_peers (peer_id) VALUES ($1)
        ON CONFLICT (peer_id) DO UPDATE SET retired_at = NOW()`,
       [peerId],
@@ -1669,6 +1758,13 @@ export function startVoiceInstanceHeartbeat(
   return async () => {
     clearInterval(timer);
     await running?.catch(() => {});
+    // Anything the coalescer is still holding goes out BEFORE the lease is
+    // withdrawn. A deploy drains sockets in batches, so the last hundred
+    // milliseconds of a shutdown are mostly leaves, and a window's worth of
+    // them queued at the moment the process exits would be rows nobody
+    // deletes until the reconcile spends the whole resume window on them.
+    // A no-op with `VOICE_REGISTRY_BATCH` off: the queue is always empty.
+    await flushVoiceRegistryBatch().catch(() => {});
     await withdrawVoiceInstance().catch(() => {});
   };
 }

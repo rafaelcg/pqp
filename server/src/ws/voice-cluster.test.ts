@@ -414,6 +414,10 @@ function queue(
     atMs: Date.now(),
     rev,
     actorId,
+    openControls: false,
+    repeat: "off",
+    skipVotes: [],
+    history: [],
     ...extra,
   };
 }
@@ -1052,6 +1056,89 @@ describeDb("voice across two instances", () => {
     });
   });
 
+  describe("music listening across instances", () => {
+    /**
+     * The listener flag is a row, not a gossip, so B must build its roster
+     * and its channel-music count from `voice_peers` with the registry on
+     * (pitfall 12). The write counter is the line that proves the path ran.
+     */
+    it("a listening toggle on A is on B's roster and in B's listener count", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const userB = randomUUID();
+      // Watcher first, same as the other roster groups: a socket that
+      // connects after both seats are already up never sees those joins.
+      const sidebarOnB = watcher(b);
+      const listenerOnB = await join(b, userB, channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 1,
+        "B's own roster on B",
+      );
+      const dj = await join(a, userA, channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 2,
+        "both on B's sidebar",
+      );
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("kkkkkkkkkkk", userA)),
+        },
+      );
+      await waitFor(
+        () => frames(listenerOnB, "music").length === 1,
+        "music on B",
+      );
+      await settle();
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        { type: "set-music-listening", listening: false },
+      );
+      await settle();
+
+      await waitFor(() => {
+        const roster = lastRoster(sidebarOnB, channel) as
+          | {
+              participants: {
+                peerId: string;
+                listeningMusic?: boolean;
+              }[];
+            }
+          | undefined;
+        const onA = roster?.participants.find((p) => p.peerId === dj.peerId);
+        return onA?.listeningMusic === false;
+      }, "A not listening on B's roster");
+
+      await waitFor(() => {
+        const pills = frames(sidebarOnB, "channel-music");
+        const last = pills[pills.length - 1] as
+          | { track?: { listeners?: number } | null }
+          | undefined;
+        return last?.track?.listeners === 1;
+      }, "B's channel-music count is 1");
+
+      const row = await pools[0]!.getPool().query<{
+        listening_music: boolean;
+      }>(`SELECT listening_music FROM voice_peers WHERE peer_id = $1`, [
+        dj.peerId,
+      ]);
+      expect(row.rows[0]?.listening_music).toBe(false);
+
+      const snapshotA = await a.voice.getVoiceActivitySnapshot();
+      const snapshotB = await b.voice.getVoiceActivitySnapshot();
+      expect(snapshotA.cluster.musicListeningWrites).toBeGreaterThanOrEqual(1);
+      expect(snapshotA.registry.writesPerMinute).toBeGreaterThan(0);
+      expect(snapshotB.roster.snapshots + snapshotB.roster.deltas).toBeGreaterThan(
+        0,
+      );
+    });
+  });
+
   describe("resume across instances", () => {
     // On the SFU, which is what production runs; a mesh seat moving
     // machines is pinned by the "mesh across instances" group below. The
@@ -1149,11 +1236,20 @@ describeDb("voice across two instances", () => {
       expect(row).toBeDefined();
       expect(row?.orphaned_at).toBeInstanceOf(Date);
       // Still on the roster, socket gone, seat held.
+      //
+      // READ WHAT B WOULD SERVE, not what B happened to send. Orphaning a
+      // seat changes nothing a roster carries (`rowToParticipant` has no
+      // `orphanedAt`), so `sendRoster`'s `unchanged` path is entitled to send
+      // no frame at all here, and whether it does depends only on whether
+      // this process had already described the room correctly. It had not,
+      // until `VOICE_REGISTRY_BATCH` made A's row land before A's bus hint
+      // went out: waiting for a NEW frame was waiting on a race B used to
+      // lose. A fresh socket's read is the assertion that means what this
+      // says it means.
       await settle();
-      await waitFor(
-        () => lastRoster(bystanderOnB, channel)?.participants.length === 2,
-        "roster on B still lists the orphan",
-      );
+      const probeOnB = recorder();
+      await b.voice.sendAllVoiceRosters(probeOnB.socket, asUser(randomUUID()));
+      expect(lastRoster(probeOnB, channel)?.participants).toHaveLength(2);
       expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
       // Once orphaned, a second pass is a no-op.
       expect(await b.voice.runVoiceReconcile()).toMatchObject({

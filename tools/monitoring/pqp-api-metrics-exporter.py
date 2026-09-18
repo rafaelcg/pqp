@@ -80,12 +80,48 @@ def gauge(lines: list[str], name: str, help_text: str, value) -> None:
     lines.append(f"{name} {value}")
 
 
+def labeled_gauge(
+    lines: list[str], name: str, help_text: str, samples: list[tuple[dict[str, str], object]]
+) -> None:
+    """Same as gauge(), but one series per label set. `samples` is a list of
+    (labels, value) pairs, e.g. ({"backend": "mesh"}, 3). Caller decides which
+    label combinations to emit -- see voice_room_backend_totals() below for
+    why mesh and livekit are always both present."""
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} gauge")
+    for labels, value in samples:
+        label_str = ",".join(f'{key}="{val}"' for key, val in labels.items())
+        lines.append(f"{name}{{{label_str}}} {value}")
+
+
+def voice_room_backend_totals(rooms) -> dict[str, dict[str, int]]:
+    """Sums voice.rooms[] participants and counts rooms by transport.
+
+    mesh and livekit are always both present, zero when nobody holds either,
+    so a stacked panel reads a real zero instead of "no data" the moment a
+    room's last call ends -- rooms may be absent or empty on an older payload
+    shape or a quiet process, and a room with a transport this exporter does
+    not recognise is skipped rather than guessed at.
+    """
+    totals: dict[str, dict[str, int]] = {
+        "mesh": {"participants": 0, "rooms": 0},
+        "livekit": {"participants": 0, "rooms": 0},
+    }
+    for room in rooms or []:
+        backend = room.get("transport")
+        if backend not in totals:
+            continue
+        totals[backend]["participants"] += int(room.get("participants") or 0)
+        totals[backend]["rooms"] += 1
+    return totals
+
+
 def fetch_admin_metrics() -> dict:
     if not TOKEN:
         raise RuntimeError("ADMIN_METRICS_TOKEN is not set")
     request = urllib.request.Request(
         f"{API_URL}/api/admin/metrics",
-        headers={"Authorization": f"Bearer {TOKEN}"},
+        headers={"User-Agent": "pqp-api-metrics-exporter/1 (+https://pqp.gg)", "Authorization": f"Bearer {TOKEN}"},
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         if response.status != 200:
@@ -93,14 +129,35 @@ def fetch_admin_metrics() -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def render(payload: dict) -> str:
-    ready = payload.get("ready", {})
+def fetch_ready() -> dict:
+    """GET /ready on its own, unauthenticated.
+
+    The admin payload also carries a `ready` block, but it is sampled while
+    that same request runs the dashboard's query burst on a cold cache, so
+    its Postgres round trip read 40-65 ms every other scrape on a box whose
+    real probe is 1 ms (2026-09-17, first day behind Cloudflare). /ready is
+    the number an external monitor would see, so it is the one to graph and
+    alert on. Falls back to the admin block if /ready itself fails, so a
+    transient error here does not blank the gauges.
+    """
+    request = urllib.request.Request(
+        f"{API_URL}/ready",
+        headers={"User-Agent": "pqp-api-metrics-exporter/1 (+https://pqp.gg)"},
+    )
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def render(payload: dict, ready_payload: dict | None = None) -> str:
+    ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
     postgres = checks.get("postgres", {})
     pool = checks.get("pool", {})
     runtime = payload.get("runtime", {})
     voice = payload.get("voice", {})
     live_hls = payload.get("liveHls", {})
+    cluster = payload.get("cluster", {})
+    breaker = runtime.get("db", {}).get("breaker", {})
 
     lines: list[str] = []
     gauge(
@@ -147,6 +204,18 @@ def render(payload: dict) -> str:
     )
     gauge(
         lines,
+        "pqp_api_users_online",
+        "Open WebSocket connections across the whole cluster (cluster.sockets), used as the "
+        "'people online' gauge. pqp has no field that dedupes by user: sockets are per-session "
+        "(one person open in two tabs holds two), and connections.ofUsers on the same payload "
+        "is all-time signups with a linked Steam/Battle.net/Twitch account, not presence -- "
+        "cluster.sockets is the closest thing to online users this payload has. On a "
+        "one-machine deployment (today) it equals runtime.sockets; VOICE_REGISTRY=off makes it "
+        "exactly runtime.sockets by construction.",
+        cluster.get("sockets", -1),
+    )
+    gauge(
+        lines,
         "pqp_api_voice_participants",
         "People seated in a voice room on this process's view of the registry (voice.participants).",
         voice.get("participants", -1),
@@ -157,6 +226,54 @@ def render(payload: dict) -> str:
         "Voice rooms with at least one seat (voice.activeRooms).",
         voice.get("activeRooms", -1),
     )
+    gauge(
+        lines,
+        "pqp_api_voice_largest_room_now",
+        "Seats in the single largest voice room right now (voice.largestRoomNow).",
+        voice.get("largestRoomNow", -1),
+    )
+    gauge(
+        lines,
+        "pqp_api_voice_peak_room_size_today",
+        "Highest voice.largestRoomNow seen since voice.peakTrackedSince (process start or the last Sao Paulo midnight).",
+        voice.get("peakRoomSizeToday", -1),
+    )
+    backend_totals = voice_room_backend_totals(voice.get("rooms"))
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_participants_by_backend",
+        "voice.rooms[].participants summed by transport (voice.rooms[].transport). "
+        "mesh and livekit are both always emitted, zero when nobody is on that backend, "
+        "so this never reads no data just because a call ended.",
+        [({"backend": backend}, counts["participants"]) for backend, counts in backend_totals.items()],
+    )
+    labeled_gauge(
+        lines,
+        "pqp_api_voice_rooms_by_backend",
+        "Count of voice.rooms[] by transport (voice.rooms[].transport). "
+        "mesh and livekit are both always emitted, zero when neither has a room open.",
+        [({"backend": backend}, counts["rooms"]) for backend, counts in backend_totals.items()],
+    )
+    gauge(
+        lines,
+        "pqp_api_db_breaker_open",
+        "1 when the A3.1 circuit breaker over the Postgres pool (runtime.db.breaker.state) "
+        "is anything but closed (open or half-open), 0 when closed or the field is missing "
+        "(same falsy-default convention as pqp_api_ready_ok).",
+        0 if breaker.get("state", "closed") == "closed" else 1,
+    )
+    # No pqp_api_hls_viewers gauge, and no pqp_api_hls_active_sessions distinct
+    # from pqp_api_hls_sessions below: pqp has no server-side count of
+    # concurrent watch-party viewers anywhere in the codebase today -- the
+    # playlist proxy (server/src/voice/hls-playlist-proxy.ts) is a stateless,
+    # unauthenticated-per-request pull with no per-request log, same finding
+    # already written up in grafana-dashboard-event.json's "Watching" panel
+    # and this directory's README. liveHls.sessions / liveHls.rungs below are
+    # transcode PROCESS counts (how many encodes are running), not audience
+    # size, and are not a substitute for it. Adding a real viewer count would
+    # mean touching runtime code, which is out of scope for a monitoring-only
+    # change; if that ever lands, wire its field in here rather than guessing
+    # from sessions/rungs.
     gauge(
         lines,
         "pqp_api_hls_sessions",
@@ -219,7 +336,12 @@ def main() -> int:
     # keep reading a confident, wrong, green number through an outage.
     try:
         payload = fetch_admin_metrics()
-        body = render(payload)
+        try:
+            ready_payload = fetch_ready()
+        except Exception as exc:  # noqa: BLE001
+            print(f"pqp-api-metrics-exporter: /ready fetch failed, using admin block: {exc}", file=sys.stderr)
+            ready_payload = None
+        body = render(payload, ready_payload)
     except (
         urllib.error.URLError,
         RuntimeError,

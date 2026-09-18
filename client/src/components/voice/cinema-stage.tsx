@@ -7,6 +7,7 @@ import { watchPlayerMode, type HlsMode } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 
 /**
  * Full-bleed HLS video for a live stream's audience: no roster, no mute or
@@ -136,7 +137,7 @@ export function CinemaStage({
       {stagePeople.length > 0 && (
         <button
           type="button"
-          className="absolute bottom-16 left-3 z-30 flex items-center -space-x-2"
+          className={cn("absolute bottom-16 left-3 flex items-center -space-x-2", STAGE_LAYER.tileControls)}
           aria-label={t("voice.cinema.stage")}
           onClick={() => setSheetOpen(true)}
         >
@@ -166,7 +167,7 @@ export function CinemaStage({
       )}
       {sheetOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 sm:items-center"
+          className={cn("fixed inset-0 flex items-end justify-center bg-ink/60 sm:items-center", STAGE_LAYER.menus)}
           onClick={() => setSheetOpen(false)}
         >
           <div

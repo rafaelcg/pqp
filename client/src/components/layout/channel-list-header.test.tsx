@@ -39,6 +39,10 @@ const server: Server = {
   isCommunity: false,
   communityHomeEnabled: false,
   showOnProfile: true,
+  communityTagline: null,
+  communityAbout: null,
+  communityLinks: [],
+  communitySlug: null,
 };
 
 const channels: Channel[] = [

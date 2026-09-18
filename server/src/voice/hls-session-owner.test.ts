@@ -51,7 +51,9 @@ const {
   checkLiveHlsHealth,
   deferredHlsStopCount,
   liveHlsActivity,
+  liveHlsRungsFor,
   liveHlsStreamFor,
+  reconcileLiveHls,
   resetLiveHlsForTests,
   seedDeferredHlsStopForTests,
   setLiveHlsTestHooks,
@@ -67,6 +69,7 @@ const {
 describeDb("hls_sessions ownership across two API machines", () => {
   /** The OTHER machine. This test process is always "B". */
   let machineA: string;
+  let serverA: string;
   let channelA: string;
 
   beforeAll(async () => {
@@ -96,10 +99,11 @@ describeDb("hls_sessions ownership across two API machines", () => {
       `INSERT INTO servers (name, owner_id) VALUES ('test', $1) RETURNING id`,
       [user.id],
     );
+    serverA = server.rows[0]!.id;
     const channels = await getPool().query<{ id: string }>(
       `INSERT INTO channels (server_id, name, type, position)
        VALUES ($1, 'a', 'voice', 0) RETURNING id`,
-      [server.rows[0]!.id],
+      [serverA],
     );
     channelA = channels.rows[0]!.id;
   });
@@ -124,18 +128,23 @@ describeDb("hls_sessions ownership across two API machines", () => {
     egressId: string;
     instanceId: string | null;
     endedAt?: Date | null;
+    /** `hls_sessions.rung`. Null is the pre-ladder single-rendition shape. */
+    rung?: string | null;
+    presenterPeerId?: string;
   }): Promise<string> {
     const row = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, ended_at, egress_id,
-          presenter_peer_id, video_track_id, instance_id)
-       VALUES ($1, $2, NOW(), $3, $4, 'peer-1', 'TR_V', $5)
+          presenter_peer_id, video_track_id, rung, instance_id)
+       VALUES ($1, $2, NOW(), $3, $4, $5, 'TR_V', $6, $7)
        RETURNING id`,
       [
         channelA,
         options.prefix,
         options.endedAt ?? null,
         options.egressId,
+        options.presenterPeerId ?? "peer-1",
+        options.rung ?? null,
         options.instanceId,
       ],
     );
@@ -636,5 +645,344 @@ describeDb("hls_sessions ownership across two API machines", () => {
         reason: "no-live-session",
       }),
     );
+  });
+
+  /**
+   * THE PRESENTER MOVED MACHINES; THE TRANSCODE DID NOT.
+   *
+   * Production, 2026-09-15, a rolling deploy of the two `pqp-api` machines
+   * with a watch party live on a conventional ladder. Each drain closed the
+   * presenter's socket, they resumed on the sibling in about a second with
+   * the same peer id -- and the sibling, holding no `rooms` entry for the
+   * channel, took the only path it had: a brand-new `startedAt`, a brand-new
+   * ladder, and `endSupersededSessions` stopping the perfectly healthy
+   * egresses on the LiveKit box it had just replaced. Three rungs became
+   * two, then one; every viewer rebuffered twice inside two minutes; and the
+   * second restart refused `720p30` outright, because it was priced against
+   * the egresses it was about to stop.
+   *
+   * The seat is already adopted by heartbeat expiry (`voice.resumeAdopted`,
+   * `ownerAlive=false`). The session is adopted by the same rule here.
+   */
+  describe("a presenter resuming on the other machine", () => {
+    beforeEach(() => {
+      process.env.LIVE_HLS_ENABLED = "true";
+      process.env.LIVEKIT_URL = "wss://sfu.example.test";
+      process.env.LIVEKIT_API_KEY = "key";
+      process.env.LIVEKIT_API_SECRET = "secret";
+      process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
+      process.env.LIVE_HLS_S3_ACCESS_KEY_ID = "ak";
+      process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY = "sk";
+      process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
+      process.env.LIVE_HLS_LADDER = "720p30,480p30";
+    });
+
+    afterEach(() => {
+      delete process.env.LIVE_HLS_ENABLED;
+      delete process.env.LIVEKIT_URL;
+      delete process.env.LIVEKIT_API_KEY;
+      delete process.env.LIVEKIT_API_SECRET;
+      delete process.env.LIVE_HLS_S3_BUCKET;
+      delete process.env.LIVE_HLS_S3_ACCESS_KEY_ID;
+      delete process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY;
+      delete process.env.LIVE_HLS_S3_ENDPOINT;
+      delete process.env.LIVE_HLS_LADDER;
+    });
+
+    const STARTED_AT = 1789473851426;
+    const PRESENTER = "peer-presenter";
+
+    /** The three rows a 480p30 + 720p30 + mic party leaves behind. */
+    async function liveLadderRows(
+      instanceId: string | null,
+      startedAt = STARTED_AT,
+    ): Promise<{ low: string; high: string; mic: string }> {
+      const low = await makeSession({
+        prefix: `live/${channelA}/${startedAt}-480p30`,
+        egressId: "EG_low",
+        instanceId,
+        rung: "480p30",
+        presenterPeerId: PRESENTER,
+      });
+      const high = await makeSession({
+        prefix: `live/${channelA}/${startedAt}-720p30`,
+        egressId: "EG_high",
+        instanceId,
+        rung: "720p30",
+        presenterPeerId: PRESENTER,
+      });
+      const mic = await makeSession({
+        prefix: `live/${channelA}/${startedAt}-mic`,
+        egressId: "EG_mic",
+        instanceId,
+        rung: "mic",
+        presenterPeerId: PRESENTER,
+      });
+      return { low, high, mic };
+    }
+
+    /** Everything the ladder left running on the box, still ACTIVE. */
+    function boxRunning(egressIds: string[]) {
+      const start = vi.fn(async () => ({ egressId: "EG_new" }));
+      const stop = vi.fn(async () => {});
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: start,
+          stopEgress: stop,
+          listEgress: async () =>
+            egressIds.map((egressId) => ({
+              egressId,
+              status: EgressStatus.EGRESS_ACTIVE,
+              roomName: channelA,
+              startedAt: Date.now(),
+            })),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      return { start, stop };
+    }
+
+    it("adopts the running session instead of starting a second ladder", async () => {
+      // The machine that drained: its heartbeat has lapsed, which is exactly
+      // what `voice.resumeAdopted ownerAlive=false` said about the seat.
+      await heartbeat(machineA, 300);
+      const rows = await liveLadderRows(machineA);
+      const { start, stop } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      // THE SAME SESSION, so every viewer's playlist URL is the one they are
+      // already polling and nobody rebuffers.
+      expect(stream?.startedAt).toBe(STARTED_AT);
+      expect(stream?.presenterPeerId).toBe(PRESENTER);
+      // NOT A SINGLE NEW TRANSCODE, and nothing healthy stopped.
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      // Every rung came back, lowest first -- not just the one that happened
+      // to be listed first.
+      expect(liveHlsRungsFor(channelA).map((rung) => rung.name)).toEqual([
+        "480p30",
+        "720p30",
+      ]);
+      // And the rows are this machine's now, or the next one to boot would
+      // free a session this one is driving.
+      for (const id of [rows.low, rows.high, rows.mic]) {
+        const row = await rowById(id);
+        expect(row.ended_at).toBeNull();
+        expect(row.instance_id).toBe(hlsOwnerInstanceId());
+      }
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsSessionResumeAdopted",
+        expect.objectContaining({
+          channelId: channelA,
+          presenterPeerId: PRESENTER,
+          startedAt: STARTED_AT,
+          rungs: ["480p30", "720p30"],
+        }),
+      );
+    });
+
+    it("ends the rows of an earlier session it did not adopt, and stops nothing", async () => {
+      // The 12:02 ladder, superseded and never closed: left open, retention
+      // never collects its objects. Stopping a leftover EGRESS is deliberately
+      // not this path's job -- `reapForeignEgresses` asks who owns an id
+      // before it stops one, and now runs for this channel.
+      await heartbeat(machineA, 300);
+      const stale = await makeSession({
+        prefix: `live/${channelA}/${STARTED_AT - 90_000}-720p30`,
+        egressId: "EG_gone",
+        instanceId: machineA,
+        rung: "720p30",
+        presenterPeerId: PRESENTER,
+      });
+      const rows = await liveLadderRows(machineA);
+      const { stop } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+
+      await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect((await rowById(stale)).ended_at).not.toBeNull();
+      expect((await rowById(rows.low)).ended_at).toBeNull();
+      expect(stop).not.toHaveBeenCalled();
+    });
+
+    it("stands down while the owner is still answering, and starts nothing", async () => {
+      await heartbeat(machineA, 2);
+      const rows = await liveLadderRows(machineA);
+      const { start, stop } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      // Two monitors on one transcode is the failure `hls-ownership.ts`
+      // exists to stop, so the row keeps its owner and the skip is counted.
+      expect((await rowById(rows.low)).instance_id).toBe(machineA);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsSkippedOwnedElsewhere",
+        expect.objectContaining({ site: "resume-adopt", ownerInstanceId: machineA }),
+      );
+      // AND NO SECOND LADDER. Falling through to `startRoom` here would have
+      // `endSupersededSessions` stop a live machine's egresses, which is the
+      // incident this whole change is about reached from another direction.
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(stream).toBeNull();
+      expect((await rowById(rows.high)).ended_at).toBeNull();
+    });
+
+    it("the loser of a concurrent claim starts nothing at all", async () => {
+      // TWO MACHINES RESUMING THE SAME PRESENTER AT ONCE. Both read the rows
+      // while the old owner's heartbeat has lapsed; one claims the primary
+      // rung and the other must NOT read its lost claim as "nothing to
+      // inherit" and mint a second ladder beside the winner's.
+      //
+      // The race is real, not mocked: the other machine takes the rows during
+      // the `ListEgress` round trip, which is after this process has read the
+      // live instances and before it issues its claim.
+      await heartbeat(machineA, 300);
+      const rows = await liveLadderRows(machineA);
+      const machineB = randomUUID();
+      const start = vi.fn(async () => ({ egressId: "EG_new" }));
+      const stop = vi.fn(async () => {});
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: start,
+          stopEgress: stop,
+          listEgress: async () => {
+            await heartbeat(machineB, 0);
+            await getPool().query(
+              `UPDATE hls_sessions SET instance_id = $2 WHERE channel_id = $1`,
+              [channelA, machineB],
+            );
+            return ["EG_low", "EG_high", "EG_mic"].map((egressId) => ({
+              egressId,
+              status: EgressStatus.EGRESS_ACTIVE,
+              roomName: channelA,
+              startedAt: Date.now(),
+            }));
+          },
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect(stream).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      // The winner keeps the session, whole and open.
+      for (const id of [rows.low, rows.high, rows.mic]) {
+        const row = await rowById(id);
+        expect(row.instance_id).toBe(machineB);
+        expect(row.ended_at).toBeNull();
+      }
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ kind: "stand-down", reason: "claim-refused" }),
+      );
+    });
+
+    it("ends an earlier session's row even when a leftover egress is still listed", async () => {
+      // A row of a session this channel is no longer serving is superseded by
+      // definition. Left open because LiveKit still lists its egress, it stays
+      // open for the life of the deployment and retention never collects its
+      // objects; the egress itself is the ownership-aware reaper's business.
+      await heartbeat(machineA, 300);
+      const stale = await makeSession({
+        prefix: `live/${channelA}/${STARTED_AT - 90_000}-720p30`,
+        egressId: "EG_leftover",
+        instanceId: machineA,
+        rung: "720p30",
+        presenterPeerId: PRESENTER,
+      });
+      await liveLadderRows(machineA);
+      const { stop } = boxRunning([
+        "EG_low",
+        "EG_high",
+        "EG_mic",
+        "EG_leftover",
+      ]);
+
+      await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect((await rowById(stale)).ended_at).not.toBeNull();
+      expect(stop).not.toHaveBeenCalled();
+    });
+
+    it("starts fresh when the egresses are gone, which is a genuine restart", async () => {
+      await heartbeat(machineA, 300);
+      await liveLadderRows(machineA);
+      // LiveKit lists nothing for this room: the transcode really did die
+      // with the machine, and there is nothing to inherit.
+      const { start } = boxRunning([]);
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect(start).toHaveBeenCalled();
+      expect(stream?.startedAt).not.toBe(STARTED_AT);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ reason: "no-live-rung" }),
+      );
+    });
+
+    it("starts fresh for a different presenter, which is a genuine handover", async () => {
+      await heartbeat(machineA, 300);
+      await liveLadderRows(machineA);
+      const { start } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, "peer-somebody-else", serverA);
+
+      expect(start).toHaveBeenCalled();
+      expect(stream?.startedAt).not.toBe(STARTED_AT);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ reason: "presenter-changed" }),
+      );
+    });
+
+    it("a co-host taking over is not served the previous presenter's answer", async () => {
+      // The five-second decision cache exists so a room filling up does not
+      // put a row read and a `ListEgress` behind every join. It is keyed by
+      // the presenter too, because every answer it caches is about one person:
+      // a `stand-down` decided while one host was sharing says nothing about
+      // the next, and serving it would make a handover wait for no reason.
+      await heartbeat(machineA, 2);
+      await liveLadderRows(machineA);
+      const { start } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+
+      // The owner is alive, so this presenter stands down and nothing starts.
+      expect(await reconcileLiveHls(channelA, PRESENTER, serverA)).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+
+      // A second later, somebody else is presenting. Same channel, same
+      // window: a channel-keyed cache would hand them the stand-down.
+      const stream = await reconcileLiveHls(channelA, "peer-co-host", serverA);
+
+      expect(start).toHaveBeenCalled();
+      expect(stream?.startedAt).not.toBe(STARTED_AT);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ kind: "fresh", reason: "presenter-changed" }),
+      );
+    });
+
+    it("with VOICE_REGISTRY off, a single process still adopts its own leftovers", async () => {
+      // The self-host: one process, no heartbeats worth reading. A row naming
+      // a previous boot must not make a live transcode unadoptable.
+      delete process.env.VOICE_REGISTRY;
+      await heartbeat(machineA, 2);
+      const rows = await liveLadderRows(machineA);
+      const { start } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect(stream?.startedAt).toBe(STARTED_AT);
+      expect(start).not.toHaveBeenCalled();
+      expect((await rowById(rows.high)).instance_id).toBe(hlsOwnerInstanceId());
+    });
   });
 });

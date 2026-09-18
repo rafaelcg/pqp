@@ -42,19 +42,19 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    # THE macOS JOB MUST NOT HOLD A RELEASE HOSTAGE. It has been red since early
-    # September over signing (the write-up is beside "Package Electron" below and
-    # in docs/DESKTOP.md 3.8), and Windows is where the desktop users are.
-    # `fail-fast: false` already keeps the other two runners going; this is the
-    # other half, so a `v*` tag whose mac job dies still finishes as a green
-    # workflow with the Windows and Linux artifacts published to the release
-    # rather than a red run nobody can ship from.
-    #
-    # It is a plaster and it is labelled as one. The step below annotates the run
-    # so a failure is still visible, and this line comes out the moment a mac
-    # build is green again: a permanently ignored job is a job nobody fixes.
-    continue-on-error: ${{ matrix.platform == 'mac' }}
+    # 60 minutes was plenty for mac/linux before this PR. Windows, when
+    # SignPath is configured, now blocks on a human approving the signing
+    # request (SignPath Foundation's free OSS policy requires manual
+    # approval on every release, see docs/DESKTOP.md §4), so the win job
+    # needs real headroom. A quiet run finishes in minutes regardless; this
+    # only matters the day nobody clicks approve fast.
+    timeout-minutes: 180
+    # The macOS job used to carry `continue-on-error: true` while it was red
+    # over signing (docs/DESKTOP.md 3.8, fixed 2026-09-13). It has been green
+    # for three days and dozens of runs since (see "Package Electron" and
+    # "Verify macOS signing and notarization" below), so the plaster is off.
+    # `fail-fast: false` still keeps Windows and Linux building when mac fails
+    # for real, which is the part of that safety net worth keeping.
     strategy:
       fail-fast: false
       matrix:
@@ -103,7 +103,20 @@ jobs:
       #
       # macOS only: CSC_LINK / CSC_KEY_PASSWORD are also read by the Windows
       # signer, so they are scoped to the mac job and unset elsewhere. Windows
-      # signing, when it happens, uses WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD.
+      # signing prefers SignPath Foundation's free-for-OSS program (see
+      # docs/DESKTOP.md §4): SIGNPATH_CONFIGURED (a boolean; see its own
+      # comment below for why this step gets that instead of the real
+      # SIGNPATH_API_TOKEN) plus three repo variables (organization id,
+      # project slug, signing policy slug). SignPath signs asynchronously and
+      # requires a human to approve every release, so this build step only
+      # produces UNSIGNED Windows artifacts when SignPath is configured; the
+      # actual signing happens in the steps below, after "Package Electron"
+      # for this platform. A plain WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD .pfx
+      # stays as a fallback for a traditional certificate when SignPath is
+      # not configured, still signed inline here by electron-builder itself —
+      # but, like SignPath, never PUBLISHED here; both wait for "Verify
+      # Windows signing" to pass first (see that step and the `--publish`
+      # branch below).
       #
       # electron-builder must stay at 26.16.1 or newer, and `^26.16.1` in
       # electron/package.json is load-bearing rather than tidy. Every release up
@@ -141,6 +154,22 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # SignPath (preferred Windows path, see docs/DESKTOP.md §4).
+          # SIGNPATH_CONFIGURED is a BOOLEAN, evaluated by the Actions runner
+          # from the secret's presence, not the secret itself: this step runs
+          # electron-builder, repository-controlled build code that a
+          # workflow_dispatch on any branch can point at modified hooks/config,
+          # and the actual SIGNPATH_API_TOKEN must never be readable from
+          # inside it (Farol review, PR 677) — only "Submit Windows build to
+          # SignPath for signing" below needs the real token, and it takes it
+          # straight from `secrets`, not from this step's environment.
+          # Organization id, project slug and signing policy slug are not
+          # sensitive and live as repo variables so they are visible next to
+          # the workflow that uses them.
+          SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
         run: |
           set -euo pipefail
           args=("--${PLATFORM}")
@@ -188,9 +217,24 @@ jobs:
           else
             # Never let the macOS cert leak into a Windows/Linux signer.
             unset CSC_LINK CSC_KEY_PASSWORD
-            if [ "$PLATFORM" = "win" ] && [ -z "${WIN_CSC_LINK:-}" ]; then
-              echo "::warning::No WIN_CSC_LINK — Windows build is unsigned; SmartScreen will warn on download."
-              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            if [ "$PLATFORM" = "win" ]; then
+              if [ "${SIGNPATH_CONFIGURED:-false}" = "true" ] && [ -n "${SIGNPATH_ORGANIZATION_ID:-}" ] && \
+                 [ -n "${SIGNPATH_PROJECT_SLUG:-}" ] && [ -n "${SIGNPATH_SIGNING_POLICY_SLUG:-}" ] && \
+                 [ "$IS_TAG" = "true" ]; then
+                # SignPath signs after this build, in the steps below (submit,
+                # wait for a human's approval, download, patch the update
+                # feed's hash, then publish), never here. electron-builder
+                # must not sign or publish this run.
+                echo "::notice::Building unsigned Windows artifacts for SignPath. Signing happens in a later step."
+                echo "SIGNPATH_ENABLED=true" >> "$GITHUB_ENV"
+                export CSC_IDENTITY_AUTO_DISCOVERY=false
+              elif [ -n "${WIN_CSC_LINK:-}" ]; then
+                echo "::notice::Signing Windows build with WIN_CSC_LINK."
+                echo "WIN_SIGNED=true" >> "$GITHUB_ENV"
+              else
+                echo "::warning::No Windows signing configured (SignPath or WIN_CSC_LINK). Windows build is unsigned; SmartScreen will warn on download. See docs/DESKTOP.md §4."
+                export CSC_IDENTITY_AUTO_DISCOVERY=false
+              fi
             fi
           fi
 
@@ -198,17 +242,23 @@ jobs:
           # download from the run, so a push to main cannot rewrite the update
           # feed that installed apps are polling.
           #
-          # macOS is the one exception, and it NEVER publishes here, tag or
-          # not. electron-builder's `--publish always` uploads as part of THIS
-          # command, which runs before "Verify macOS signing and notarization"
-          # below — so publishing here can hand a user an unsigned or
-          # notarization-stripped .dmg before anything has checked it, and the
-          # job-level `continue-on-error` above hides that from the run's
-          # status. macOS publishes for real in "Publish macOS release
-          # assets", gated on that verification step passing (an unsigned
-          # build still counts as passing — see that step). Windows and Linux
-          # have no such gate, so they keep the one-step build-and-publish.
-          if [ "$IS_TAG" = "true" ] && [ "$PLATFORM" != "mac" ]; then
+          # Linux is the only platform that still publishes as part of THIS
+          # command. macOS and Windows both publish in a later, dedicated step
+          # instead, gated on that platform's own verification step passing:
+          # electron-builder's `--publish always` here would upload before
+          # "Verify macOS signing and notarization" / "Verify Windows signing"
+          # ever run, so a bad signature (or a notarization-stripped .dmg, or
+          # no signed .exe at all) could reach a user before anything checked
+          # it. macOS publishes for real in "Publish macOS release assets",
+          # gated on that verification step passing (an unsigned build still
+          # counts as passing — see that step), and, until this review, the
+          # Windows WIN_CSC_LINK fallback had no such gate at all: THAT path
+          # used to publish right here, with verification only ever running
+          # after the fact and only ever warning (Farol review, PR 677).
+          # Windows now always defers to "Publish Windows release assets"
+          # below, whichever of SignPath / WIN_CSC_LINK / unsigned produced
+          # its files.
+          if [ "$IS_TAG" = "true" ] && [ "$PLATFORM" = "linux" ]; then
             args+=("--publish" "always")
           else
             args+=("--publish" "never")
@@ -216,6 +266,70 @@ jobs:
 
           echo "electron-builder ${args[*]}"
           pnpm exec electron-builder "${args[@]}"
+
+      # SignPath signs the two top-level .exe files people actually download
+      # and run (the NSIS installer, the portable build). It does not reach
+      # inside the installer to sign the pqp.exe that ends up in Program
+      # Files after install, because NSIS is a self-extracting exe, not one
+      # of SignPath's composite formats (msi/appx/msix/zip) that it can
+      # unpack, sign the contents of, and repackage. That is fine for what
+      # this PR exists to fix: SmartScreen's "Windows protected your PC"
+      # triggers on a freshly downloaded top-level file (Mark-of-the-Web),
+      # which is exactly the installer and the portable exe, not a file
+      # written during a local install. See docs/DESKTOP.md §4 "What
+      # SignPath signs, and what it does not".
+      - name: Upload unsigned Windows artifacts for SignPath
+        id: upload-unsigned-win
+        if: matrix.platform == 'win' && env.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: electron/release/*.exe
+          retention-days: 1
+
+      # Blocks until a human approves the signing request (SignPath
+      # Foundation's free OSS policy requires manual approval on every
+      # release, docs/DESKTOP.md §4) or the timeout below is hit. The job
+      # timeout above is set wide enough to give that real headroom.
+      #
+      # Pinned to a full commit SHA, not the mutable `v3` tag: this step runs
+      # with `contents: write` and the SignPath API token, so a compromised
+      # tag would be able to exfiltrate the token or tamper with release
+      # assets via GITHUB_TOKEN (Farol review, PR 677). `# v3.0.0` names what
+      # is pinned; bump only through a deliberate review of the new commit.
+      - name: Submit Windows build to SignPath for signing
+        id: signpath
+        if: matrix.platform == 'win' && env.SIGNPATH_ENABLED == 'true'
+        uses: SignPath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-win.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: "9000"
+          output-artifact-directory: electron/release-signed
+
+      # Copies the signed exe(s) over their unsigned originals in release/ so
+      # every step after this one (verification, the update feed hash fix,
+      # publishing, the final "Upload artifacts") works the same way
+      # regardless of which Windows signing path ran. Also fixes latest.yml:
+      # electron-builder wrote it against the unsigned bytes, and SignPath
+      # changed those bytes, so left alone the update feed would carry a
+      # hash that does not match what a user actually downloads and
+      # electron-updater would reject every update silently. See
+      # fix-update-feed-hash.js for the full story and its one known gap
+      # (the .blockmap, which only costs a fallback to a full download).
+      - name: Apply the signed Windows artifacts
+        if: matrix.platform == 'win' && env.SIGNPATH_ENABLED == 'true'
+        working-directory: electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp release-signed/*.exe release/
+          node scripts/fix-update-feed-hash.js release/latest.yml release-signed
+          echo "WIN_SIGNED=true" >> "$GITHUB_ENV"
 
       # A green "Package Electron" is NOT evidence that the download works.
       # Run 31183972324 was green and shipped a .dmg that Gatekeeper rejects
@@ -283,21 +397,11 @@ jobs:
 
           exit $status
 
-      # `continue-on-error` on this job hides the red X, so say it out loud here.
-      # A warning annotation still shows on the run summary and in the PR, which
-      # is the difference between "known and tolerated" and "silently broken".
-      - name: Say so when the macOS build failed
-        if: failure() && matrix.platform == 'mac'
-        shell: bash
-        run: |
-          echo "::warning::The macOS desktop build failed and the workflow was allowed to pass anyway (known signing issue, docs/DESKTOP.md 3.8). Windows and Linux artifacts are unaffected. Remove continue-on-error from .github/workflows/electron.yml once a mac build is green."
-
       # The other half of moving macOS's publish out of "Package Electron":
       # upload the artifacts it already built, but only now that Gatekeeper
       # has actually looked at them. `steps.verify-mac.outcome` reads the
-      # verification step's own result, not the job's — the job-level
-      # `continue-on-error` above only changes what the RUN reports, it does
-      # not change what this step sees, so a failed check still blocks this.
+      # verification step's own result, so a failed check still blocks this
+      # even though the job itself would already be red by then too.
       # An unsigned build (fork, or secrets not set yet) still publishes here:
       # the verify step exits 0 for that case on purpose, same as it always
       # has, and that was never what this gate is for.
@@ -325,6 +429,71 @@ jobs:
           assets=(release/*.dmg release/*.zip release/*.blockmap release/*.yml)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::warning::No macOS release assets found in release/ to publish for $tag."
+            exit 0
+          fi
+          gh release upload "$tag" "${assets[@]}" --repo rafaelcg/pqp --clobber
+
+      # A REAL gate, the same shape as "Verify macOS signing and
+      # notarization": "Publish Windows release assets" below only runs when
+      # this step succeeds. Windows had no verification or publish gate at
+      # all before this PR — the WIN_CSC_LINK fallback published straight out
+      # of "Package Electron" with nothing checking the signature first
+      # (Farol review, PR 677). An UNSIGNED build still exits 0 here on
+      # purpose, same as macOS: that is a known, warned-about state, not a
+      # broken one.
+      - name: Verify Windows signing
+        id: verify-win
+        if: matrix.platform == 'win'
+        working-directory: electron
+        shell: pwsh
+        run: |
+          if ($env:WIN_SIGNED -ne "true") {
+            Write-Host "::warning::Unsigned Windows build. Skipping Authenticode verification."
+            exit 0
+          }
+          $failed = $false
+          $exes = Get-ChildItem -Path release -Filter *.exe -Recurse -ErrorAction SilentlyContinue
+          if (-not $exes) {
+            Write-Host "::error::WIN_SIGNED is true but no .exe files were found under release/ to verify."
+            exit 1
+          }
+          foreach ($exe in $exes) {
+            $sig = Get-AuthenticodeSignature $exe.FullName
+            Write-Host "=== $($exe.Name): $($sig.Status) $($sig.StatusMessage)"
+            if ($sig.Status -ne "Valid") {
+              Write-Host "::error::$($exe.Name) failed Authenticode verification: $($sig.Status) $($sig.StatusMessage)"
+              $failed = $true
+            }
+          }
+          if ($failed) {
+            Write-Host "::error::One or more Windows artifacts did not verify. See docs/DESKTOP.md Windows signing section."
+            exit 1
+          }
+          Write-Host "All Windows artifacts verified with a valid Authenticode signature."
+
+      # The one Windows publish step, covering SignPath, WIN_CSC_LINK and the
+      # unsigned fallback alike: "Package Electron" above never publishes
+      # Windows assets itself, so whichever path produced release/'s files,
+      # nothing reaches the release until "Verify Windows signing" (above)
+      # has actually looked at them and passed.
+      - name: Publish Windows release assets
+        if: |
+          matrix.platform == 'win' &&
+          startsWith(github.ref, 'refs/tags/v') &&
+          steps.verify-win.outcome == 'success'
+        working-directory: electron
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1 || \
+            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag"
+          assets=(release/*.exe release/*.blockmap release/*.yml)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::warning::No Windows release assets found in release/ to publish for $tag."
             exit 0
           fi
           gh release upload "$tag" "${assets[@]}" --repo rafaelcg/pqp --clobber

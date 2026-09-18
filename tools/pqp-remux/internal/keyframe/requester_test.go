@@ -105,3 +105,73 @@ func TestRequester_NaturalPolicyNeverSends(t *testing.T) {
 		t.Fatalf("PolicyNatural must never send a PLI, got %d calls", sender.calls)
 	}
 }
+
+func TestRequester_OnLossSendsImmediatelyAndIsPaced(t *testing.T) {
+	sender := &fakeSender{}
+	r := NewRequester(Config{Policy: PolicyPLI, SegmentTargetMs: 4000}, sender)
+	cur := at(0)
+	r.now = func() time.Time { return cur }
+	r.OnIDR(cur)
+
+	if !r.OnLoss(at(100)) || sender.calls != 1 {
+		t.Fatalf("first loss must send a PLI at once: calls=%d", sender.calls)
+	}
+	if r.OnLoss(at(200)) || sender.calls != 1 {
+		t.Fatalf("a second loss 100ms later must be paced: calls=%d", sender.calls)
+	}
+	if !r.OnLoss(at(500)) || sender.calls != 2 {
+		t.Fatalf("a loss past the pace must send again: calls=%d", sender.calls)
+	}
+	st := r.Stats()
+	if st.LossPLIs != 2 || st.PLIsSent != 2 || st.PLIsSinceIDR != 2 {
+		t.Fatalf("stats = %+v", st)
+	}
+	// The periodic gate paces off the loss PLI too: no burst right after.
+	cur = at(600)
+	r.tick()
+	if sender.calls != 2 {
+		t.Fatalf("periodic tick right after a loss PLI must not double up: calls=%d", sender.calls)
+	}
+	var nilReq *Requester
+	if nilReq.OnLoss(at(0)) {
+		t.Fatal("nil requester must be a no-op")
+	}
+}
+
+func TestRequester_RetriesEverySecondWhileAnIDRIsOwedAfterLoss(t *testing.T) {
+	sender := &fakeSender{}
+	r := NewRequester(Config{Policy: PolicyPLI, SegmentTargetMs: 4000}, sender)
+	cur := at(0)
+	r.now = func() time.Time { return cur }
+	r.OnIDR(cur)
+
+	cur = at(500)
+	if !r.OnLoss(cur) || sender.calls != 1 {
+		t.Fatalf("loss PLI: calls=%d", sender.calls)
+	}
+	cur = at(1000)
+	r.tick()
+	if sender.calls != 1 {
+		t.Fatalf("500ms after the loss PLI nothing should re-send: calls=%d", sender.calls)
+	}
+	cur = at(500 + int(lossRetryInterval/time.Millisecond))
+	r.tick()
+	if sender.calls != 2 {
+		t.Fatalf("a second past the loss PLI with no IDR must re-send: calls=%d", sender.calls)
+	}
+	cur = at(500 + 2*int(lossRetryInterval/time.Millisecond))
+	r.tick()
+	if sender.calls != 3 {
+		t.Fatalf("and again: calls=%d", sender.calls)
+	}
+	// The IDR arrives: the retry stops, the periodic gate is back in charge.
+	r.OnIDR(cur)
+	cur = cur.Add(2 * lossRetryInterval)
+	r.tick()
+	if sender.calls != 3 {
+		t.Fatalf("after the IDR the loss retry must stop: calls=%d", sender.calls)
+	}
+	if st := r.Stats(); st.LossPLIs != 3 {
+		t.Fatalf("LossPLIs = %d, want 3 (one loss PLI + two retries)", st.LossPLIs)
+	}
+}

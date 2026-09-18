@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   firstResultFromHtml,
   playlistFromHtml,
@@ -46,6 +46,46 @@ describe("spotifyTrackListFromHtml", () => {
       ],
     });
     expect(spotifyTrackListFromHtml("<html></html>")).toEqual({ name: null, tracks: [] });
+  });
+});
+
+describe("relatedMusicTracks", () => {
+  it("maps InnerTube hits to MusicResolved with a null sourceUrl", async () => {
+    const innertube = await import("./innertube.js");
+    const spy = vi.spyOn(innertube, "innertubeRelated").mockResolvedValue([
+      {
+        videoId: "relWeb00001",
+        title: "Parecida",
+        durationMs: 180_000,
+        thumbnailUrl: "https://i.ytimg.com/vi/relWeb00001/hqdefault.jpg",
+      },
+    ]);
+    const { relatedMusicTracks } = await import("./music.js");
+    await expect(relatedMusicTracks("dQw4w9WgXcQ")).resolves.toEqual([
+      {
+        provider: "youtube",
+        videoId: "relWeb00001",
+        title: "Parecida",
+        sourceUrl: null,
+        thumbnailUrl: "https://i.ytimg.com/vi/relWeb00001/hqdefault.jpg",
+        durationMs: 180_000,
+      },
+    ]);
+    expect(spy).toHaveBeenCalledWith("dQw4w9WgXcQ", 20);
+    spy.mockRestore();
+  });
+
+  it("surfaces empty related as not_found", async () => {
+    const innertube = await import("./innertube.js");
+    const spy = vi.spyOn(innertube, "innertubeRelated").mockResolvedValue(null);
+    const { relatedMusicTracks, MusicResolveError } = await import("./music.js");
+    await expect(relatedMusicTracks("dQw4w9WgXcQ")).rejects.toBeInstanceOf(MusicResolveError);
+    try {
+      await relatedMusicTracks("dQw4w9WgXcQ");
+    } catch (error) {
+      expect((error as InstanceType<typeof MusicResolveError>).code).toBe("not_found");
+    }
+    spy.mockRestore();
   });
 });
 

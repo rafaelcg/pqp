@@ -57,6 +57,15 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         private set
 
     /**
+     * Application-scoped for the same reason [voice] and [calls] are: a call
+     * outlives every Activity, and Telecom itself hands connections to
+     * `PqpConnectionService` on its own schedule with no Activity in the
+     * process at all.
+     */
+    lateinit var telecom: gg.pqp.app.voice.telecom.TelecomController
+        private set
+
+    /**
      * Application-scoped for one reason the others do not have: the watcher
      * count is per socket, and this is what re-announces a watch after a
      * reconnect. Tied to a screen it would forget the moment somebody rotated
@@ -81,6 +90,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
         calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)
+        telecom = gg.pqp.app.voice.telecom.TelecomController(this, voice, calls, appScope)
         watch = gg.pqp.app.watch.WatchLiveStore(
             frames = session.realtime.frames,
             realtimeState = session.realtime.state,

@@ -14,9 +14,15 @@ func singleNAL(naluType byte, rbsp []byte) []byte {
 	return append([]byte{naluType}, rbsp...)
 }
 
+// testVideoSeq hands every test packet the next RTP sequence number, so the
+// depacketizer's continuity check (PushRTP) sees a clean stream unless a
+// test skips numbers on purpose (see loss_test.go).
+var testVideoSeq uint16
+
 func videoPacket(payload []byte, ts uint32, marker bool) *rtp.Packet {
+	testVideoSeq++
 	return &rtp.Packet{
-		Header:  rtp.Header{Timestamp: ts, Marker: marker},
+		Header:  rtp.Header{SequenceNumber: testVideoSeq, Timestamp: ts, Marker: marker},
 		Payload: payload,
 	}
 }

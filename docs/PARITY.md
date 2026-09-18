@@ -116,7 +116,7 @@ Paths are relative to the repo root. `ios/` means
 | Connection doctor | full (`client/src/lib/connection-doctor.ts`) | same | missing | open PR #217 |
 | Call rating prompt | full (`client/src/components/voice/call-rating-prompt.tsx`) | same | full (`ios/Voice/CallRating.swift`) | missing |
 | DM calls, ringing, incoming banner | full (`client/src/components/dm/incoming-call-overlay.tsx`) | same | full (`ios/Voice/CallModel.swift`, `ios/Voice/CallStageView.swift`) | full while the app is open: ring frames, a ringtone that respects DND, incoming banner, accept and decline (`android/voice/CallMachine.kt`, `android/voice/Ringer.kt`, `android/ui/components/IncomingCallBanner.kt`); a ring to a closed app still needs the push server leg |
-| Background audio while the app is hidden | n/a | n/a | partial: `audio` + `voip` background modes, no CallKit or PushKit (`ios/pqp/Info.plist:70`) | full: foreground service with Hang up (`android/voice/VoiceService.kt`) |
+| Background audio while the app is hidden | n/a | n/a | partial: CallKit reports the call and drives lock-screen/CarPlay answer, end and mute while the socket is alive (`ios/pqp/Sources/Voice/CallKitCoordinator.swift`, `docs/IOS_CALLKIT.md`); no PushKit yet, so a killed app still does not ring, see that doc's server contract | full: foreground service with Hang up (`android/voice/VoiceService.kt`) |
 
 #### The `live-reaction` frames, for whoever picks this up on a phone
 

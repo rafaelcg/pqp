@@ -655,6 +655,7 @@ final class ChatModel {
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,
              .voiceTransportChanged, .voiceJoinRefused, .voiceScreenShareDenied,
+             .voiceModeration,
              // The broadcast belongs to the stage above this transcript, not
              // to the transcript. `WatchModel` is what reads these.
              .voiceStream, .channelLive,

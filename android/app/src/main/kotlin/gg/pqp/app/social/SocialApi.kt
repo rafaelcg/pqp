@@ -59,6 +59,18 @@ suspend fun ApiClient.removeFriendship(userId: String): OkResponse =
 suspend fun ApiClient.blockUser(userId: String): OkResponse =
     postJson("/api/blocks", PqpJson.encodeToString(BlockRequest.serializer(), BlockRequest(userId)))
 
+/**
+ * The caller's own block list. There is no separate screen for the friends
+ * this account is blocked BY: the server never says, for the same reason a
+ * refusal to open a DM never names which side blocked which.
+ */
+suspend fun ApiClient.blockedUsers(): List<BlockedUser> =
+    getJson<BlockListResponse>("/api/blocks").blocked
+
+/** Undo a block. Silent to the other side, the way blocking itself is. */
+suspend fun ApiClient.unblockUser(userId: String): OkResponse =
+    deleteJson("/api/blocks/$userId")
+
 // --- discovery -------------------------------------------------------------
 
 /** Prefix search over handles. Excludes the caller server-side. */

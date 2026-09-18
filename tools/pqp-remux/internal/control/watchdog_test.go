@@ -12,6 +12,7 @@ func fixedWatchdogCfg() WatchdogConfig {
 		FirstPartTimeoutMs: DefaultFirstPartTimeoutMs,
 		PartStuckMs:        DefaultPartStuckMs,
 		DemoteWindowMs:     DefaultDemoteWindowMs,
+		VideoIdleMaxMs:     DefaultVideoIdleMaxMs,
 	}
 }
 

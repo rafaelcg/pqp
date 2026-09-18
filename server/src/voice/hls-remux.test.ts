@@ -1,6 +1,10 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { remuxControlSignaturePayload } from "@pqp/shared";
+import {
+  LIVE_HLS_MODE_LL,
+  LIVE_HLS_MODE_PARAM,
+  remuxControlSignaturePayload,
+} from "@pqp/shared";
 
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
@@ -18,7 +22,7 @@ const {
   liveHlsLLAllowlist,
   liveHlsLLAvailable,
   resolveHlsMode,
-  requestedHlsModeForChannel,
+  liveHlsRequestForChannel,
   setRequestedHlsMode,
   deriveLlSessionId,
   remuxControlUrl,
@@ -41,17 +45,38 @@ const SERVER = "00000000-0000-4000-8000-0000000000ee";
 const OTHER_SERVER = "00000000-0000-4000-8000-0000000000ff";
 const CONTROL_URL = "https://egress.example.test:8443";
 const ORIGIN_URL = "https://hls-origin.example.test";
+/**
+ * `LIVE_HLS_PLAYLIST_BASE_URL`. Not decoration: the edge Worker is the ONLY
+ * thing that can render an LL playlist (this API's own proxy answers "not
+ * found" for a `mode = 'll'` row, by design), so `resolveHlsMode` refuses
+ * `ll` without one -- see `llPlaylistFrontConfigured`.
+ */
+const EDGE_BASE_URL = "https://hls.example.test";
 const SECRET = "test-remux-secret";
 
 function enableLL() {
   process.env.LIVE_HLS_LL = "true";
+  process.env.LIVE_HLS_PLAYLIST_BASE_URL = EDGE_BASE_URL;
   process.env.LIVE_HLS_REMUX_CONTROL_URL = CONTROL_URL;
   process.env.LIVE_HLS_REMUX_CONTROL_SECRET = SECRET;
   process.env.LIVE_HLS_REMUX_ORIGIN_URL = ORIGIN_URL;
 }
 
+/**
+ * The flag AND an edge playlist front. Both are required before `ll` is ever
+ * on the table (`llPlaylistFrontConfigured`): the edge Worker is the only
+ * thing that can render an LL playlist, so an API with no edge host picking
+ * `ll` would mean a party live, correct in every log, and black for
+ * everybody watching.
+ */
+function enableMode() {
+  process.env.LIVE_HLS_LL = "true";
+  process.env.LIVE_HLS_PLAYLIST_BASE_URL = EDGE_BASE_URL;
+}
+
 function disableLL() {
   delete process.env.LIVE_HLS_LL;
+  delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
   delete process.env.LIVE_HLS_LL_ALLOWLIST;
   delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
   delete process.env.LIVE_HLS_REMUX_CONTROL_SECRET;
@@ -87,6 +112,9 @@ interface FakeHlsRow {
   /** Which API process owns it. The fake plays one machine unless a test says otherwise. */
   instance_id?: string | null;
 }
+
+/** Every fake party starts at the same instant; no test here turns on when. */
+const FAKE_PARTY_CREATED_AT_MS = 1_725_000_000_000;
 
 function createFakeDb() {
   const hlsRows: FakeHlsRow[] = [];
@@ -158,14 +186,22 @@ function createFakeDb() {
       return { rowCount: count, rows: [] };
     }
 
-    if (sql.includes("SELECT low_latency_requested")) {
+    if (sql.includes("SELECT id, low_latency_requested")) {
       const [channelId] = p as [string];
-      const found = [...channelSessions.values()].find(
-        (c) => c.channel_id === channelId && c.status === "live",
+      const found = [...channelSessions].find(
+        ([, c]) => c.channel_id === channelId && c.status === "live",
       );
       return {
         rowCount: found ? 1 : 0,
-        rows: found ? [{ low_latency_requested: found.low_latency_requested }] : [],
+        rows: found
+          ? [
+              {
+                id: found[0],
+                low_latency_requested: found[1].low_latency_requested,
+                created_at_ms: String(FAKE_PARTY_CREATED_AT_MS),
+              },
+            ]
+          : [],
       };
     }
 
@@ -336,32 +372,32 @@ describe("resolveHlsMode: flag off means conventional, whatever was asked", () =
   });
 
   it("stays conventional when the flag is on but nothing asked for it", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: false })).toBe("conventional");
   });
 
   it("is ll when the flag is on, requested, and there is no allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(isLiveHlsLLEnabled()).toBe(true);
     expect(liveHlsLLAllowlist()).toBeNull();
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("is ll for a server on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = `${OTHER_SERVER},${SERVER}`;
     expect(liveHlsLLAllowlist()).toEqual(new Set([OTHER_SERVER, SERVER]));
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("stays conventional for a server NOT on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
   });
 
   it("stays conventional with no server id and an allowlist set", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
     expect(resolveHlsMode({ serverId: null, requestedMode: true })).toBe("conventional");
   });
@@ -374,7 +410,7 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
   });
 
   it("is true for any server when the flag is on and there is no allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(liveHlsLLAvailable(SERVER)).toBe(true);
     expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(true);
     // The deployment-wide answer, asked before a client knows its server:
@@ -384,7 +420,7 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
   });
 
   it("is true only for a server on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
     expect(liveHlsLLAvailable(SERVER)).toBe(true);
     expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(false);
@@ -394,7 +430,11 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
 
 describe("the per-channel request field is durable, not process memory", () => {
   it("defaults to false for a channel with no live party row", async () => {
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: false,
+      partySessionId: null,
+      partyCreatedAtMs: null,
+    });
   });
 
   it("persists a request written on the party's own row and reads it back by channel", async () => {
@@ -408,7 +448,11 @@ describe("the per-channel request field is durable, not process memory", () => {
 
     await setRequestedHlsMode("party-1", true);
 
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(true);
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: true,
+      partySessionId: "party-1",
+      partyCreatedAtMs: FAKE_PARTY_CREATED_AT_MS,
+    });
   });
 
   it("survives being read by a totally different call -- no in-memory state involved", async () => {
@@ -425,8 +469,16 @@ describe("the per-channel request field is durable, not process memory", () => {
     resetHlsRemuxForTests();
     query.mockImplementation(db.queryImpl);
 
-    expect(await requestedHlsModeForChannel(OTHER_CHANNEL)).toBe(true);
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+    expect(await liveHlsRequestForChannel(OTHER_CHANNEL)).toEqual({
+      requested: true,
+      partySessionId: "party-2",
+      partyCreatedAtMs: FAKE_PARTY_CREATED_AT_MS,
+    });
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: false,
+      partySessionId: null,
+      partyCreatedAtMs: null,
+    });
   });
 
   it("fails CLOSED: answers null (never false) on a database read failure, logged once", async () => {
@@ -439,7 +491,7 @@ describe("the per-channel request field is durable, not process memory", () => {
       throw new Error("connection terminated");
     });
 
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(await liveHlsRequestForChannel(CHANNEL)).toBeNull();
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",
       expect.objectContaining({ channelId: CHANNEL, source: "requested-mode" }),
@@ -448,7 +500,7 @@ describe("the per-channel request field is durable, not process memory", () => {
     // Rate limited: a second failure for the same channel inside the window
     // does not log again.
     logEvent.mockClear();
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(await liveHlsRequestForChannel(CHANNEL)).toBeNull();
     expect(logEvent).not.toHaveBeenCalled();
   });
 
@@ -457,9 +509,9 @@ describe("the per-channel request field is durable, not process memory", () => {
       throw new Error("connection terminated");
     });
 
-    await requestedHlsModeForChannel(CHANNEL);
+    await liveHlsRequestForChannel(CHANNEL);
     logEvent.mockClear();
-    await requestedHlsModeForChannel(OTHER_CHANNEL);
+    await liveHlsRequestForChannel(OTHER_CHANNEL);
 
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",
@@ -651,7 +703,62 @@ describe("the LL playlist URL never names the origin host (item 1)", () => {
     await adoptLlHlsSessions();
 
     expect(llStreamFor(CHANNEL)?.hlsUrl).not.toMatch(/^https?:\/\//);
-    expect(llStreamFor(CHANNEL)?.hlsUrl).toBe(`/api/voice/hls-playlist/${CHANNEL}/1725000000000`);
+    expect(llStreamFor(CHANNEL)?.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/1725000000000?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`,
+    );
+  });
+});
+
+describe("the delivery mode is stated on the wire, not inferred at the edge", () => {
+  /**
+   * THE 2026-09-15 FAILURE, PINNED AT ITS SOURCE. Low latency was enabled in
+   * production four times and no viewer was ever handed the low-latency
+   * stream: the edge Worker decided the mode by probing the remux for
+   * `state.json`, a session 300 ms old had none, and it quietly answered
+   * with the conventional ladder's master -- for a party whose conventional
+   * ladder the API had deliberately not started. The fix is that the API,
+   * which CHOSE the mode, says so in the URL it hands out.
+   */
+  it("an LL session's hlsUrl carries the mode marker, and says `ll` beside it", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream?.mode).toBe("ll");
+    expect(stream?.hlsUrl).toContain(`${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`);
+    // The marker rides on a URL `stampViewerStream` then appends `?t=` to
+    // with an `&`, so the whole thing has to parse as one query string.
+    const url = new URL(`https://api.example.test${stream!.hlsUrl}`);
+    expect(url.searchParams.get(LIVE_HLS_MODE_PARAM)).toBe(LIVE_HLS_MODE_LL);
+  });
+
+  it("states the part target the session actually writes at", async () => {
+    enableLL();
+    process.env.LIVE_HLS_REMUX_PART_MS = "320";
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream?.partTargetMs).toBe(320);
+  });
+
+  it("refuses `ll` outright when there is no edge front to render it", () => {
+    // `LIVE_HLS_LL` on, the party asked, no allowlist -- and no
+    // `LIVE_HLS_PLAYLIST_BASE_URL`. The only renderer of an LL playlist is
+    // the edge Worker; this API's own proxy answers "not found" for a
+    // `mode = 'll'` row. Picking the mode anyway is a party that is live,
+    // correct in every log, and black for everybody watching.
+    process.env.LIVE_HLS_LL = "true";
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
+    expect(liveHlsLLAvailable(SERVER)).toBe(false);
   });
 });
 
@@ -670,7 +777,10 @@ describe("starting a session (item 2: deterministic ids)", () => {
     // The core fix of item 2's follow-up (a Farol finding, fourth round):
     // a lookup failure must never be read as "no open row", because that
     // would let this proceed to mint and start a SECOND session on top of
-    // one that might still be running fine.
+    // one that might still be running fine. Resume-adopt asks first and
+    // stands down on the same answer, so startLlSession is never reached
+    // and startFailures stays at zero — the failure is the stand-down, not
+    // a counted start attempt.
     enableLL();
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl });
@@ -683,14 +793,10 @@ describe("starting a session (item 2: deterministic ids)", () => {
     expect(stream).toBeNull();
     expect(server.calls).toHaveLength(0); // the control API was never even asked
     expect(llHasRoom(CHANNEL)).toBe(false);
-    expect(llHlsActivity().startFailures).toBe(1);
+    expect(llHlsActivity().startFailures).toBe(0);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",
       expect.objectContaining({ channelId: CHANNEL, source: "open-row" }),
-    );
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStartFailed",
-      expect.objectContaining({ channelId: CHANNEL, reason: "lookup-failed" }),
     );
   });
 
@@ -698,7 +804,8 @@ describe("starting a session (item 2: deterministic ids)", () => {
     enableLL();
     const db = createFakeDb();
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    let now = 1_700_000_000_000;
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => now });
     let failOnce = true;
     query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (failOnce) {
@@ -711,6 +818,9 @@ describe("starting a session (item 2: deterministic ids)", () => {
     const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
     expect(first).toBeNull();
 
+    // The stand-down is cached for a few seconds so a roster storm does not
+    // re-probe on every join; past that window the next reconcile asks again.
+    now += 6_000;
     const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(second).not.toBeNull();

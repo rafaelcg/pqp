@@ -92,6 +92,7 @@ import type {
   UpdateAutomodRuleInput,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
+import { parseRetryAfterMs } from "./reconnect-jitter";
 
 const API_TIMEOUT_MS = 12_000;
 
@@ -127,6 +128,14 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * The server's `Retry-After`, in ms, when it sent one — the DB circuit
+     * breaker answers a saturated pool with `503 database_unavailable` and
+     * `Retry-After: 5`. Callers that auto-retry (the cold bootstrap) honor it
+     * as a floor so a recovery wave does not re-saturate the pool. null when
+     * absent or unparseable.
+     */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -208,7 +217,11 @@ export async function apiFetch<T>(
       const body = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
-      throw new ApiError(response.status, body.error ?? "Request failed");
+      throw new ApiError(
+        response.status,
+        body.error ?? "Request failed",
+        parseRetryAfterMs(response.headers.get("Retry-After")),
+      );
     }
 
     return (await response.json()) as T;
@@ -642,6 +655,14 @@ export const fetchChannelLive = (channelId: string) =>
      * query as the party being over. Same contract as `channel-live`.
      */
     ended?: boolean;
+    /**
+     * Only alongside `ended`: whether a watch party is still LIVE in this
+     * channel with no stream, which is the difference between "the show is
+     * over" and "the presenter stepped away". The watch player says a
+     * different thing for each (`watch-holding-screen.ts`). Absent from an
+     * older API, which reads as `false` and gives the plainer of the two.
+     */
+    partyLive?: boolean;
     watching: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);
@@ -671,6 +692,20 @@ export const fetchTrendingGifs = (signal?: AbortSignal) =>
 export const resolveMusic = (query: string, signal?: AbortSignal) =>
   apiFetch<{ track: MusicResolved; tracks: MusicResolved[]; listName: string | null }>(
     `/api/music/resolve?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
+
+/** Top search hits for the add box. Text queries, not pasted links. */
+export const searchMusic = (query: string, signal?: AbortSignal) =>
+  apiFetch<{ tracks: MusicResolved[] }>(
+    `/api/music/search?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
+
+/** Related videos for autoplay when the queue runs out. */
+export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
+  apiFetch<{ tracks: MusicResolved[] }>(
+    `/api/music/related?videoId=${encodeURIComponent(videoId)}`,
     signal ? { signal } : {},
   );
 

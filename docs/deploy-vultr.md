@@ -138,7 +138,7 @@ their current values rather than minting new ones. `provision.sh` is
 idempotent; re-run it (without the secrets, which persist once set) any time
 to check for drift, the same way `tools/sfu/install.sh` works.
 
-**This step does not start `api`, `worker` or `caddy`.** It lays out
+**This step does not start `api-a`/`api-b`, `worker` or `caddy`.** It lays out
 `/opt/pqp/{compose.yaml,Caddyfile,.env,backup.env}`, installs Docker, ufw,
 unattended-upgrades, Alloy, and the nightly backup cron. `.env` and
 `backup.env` are written as empty templates the first time only — fill them
@@ -169,9 +169,34 @@ WS_COMPRESSION
 ```
 
 `TRUST_PROXY=true` still means exactly one hop, same as `fly.toml`'s
-comment — that hop is now Caddy on this box, not fly-proxy. Cloudflare in
-front of Caddy is invisible to `clientAddress()`, the same way Cloudflare
-proxied DNS in front of Fly already was.
+comment — that hop is now Caddy on this box, not fly-proxy. That hop is only
+trustworthy if Caddy itself is configured to trust it: Caddy's
+`reverse_proxy`, per its own docs, does not use the `X-Forwarded-For` it
+receives from Cloudflare's edge unless the immediate connection is in its
+`trusted_proxies` list — without one, it discards whatever Cloudflare sent
+and writes its own, carrying only the immediate connection's address, which
+behind Cloudflare is a Cloudflare edge IP, the *same* address for every
+viewer who lands on that edge. `clientAddress()` (`server/src/lib/rate-limit.ts`)
+reads exactly that one hop, so every such viewer would share one anonymous
+bucket and one socket bucket — a watch party where 300 people arrive at once
+gets closed with 4429 rather than rate-limited per person.
+`tools/api-host/Caddyfile`'s `(upstreams)` snippet sets `trusted_proxies` to
+Cloudflare's published ranges plus a `header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}`
+belt-and-braces line, so the one hop `TRUST_PROXY=true` reads is the real
+per-viewer address Cloudflare itself vouches for, not Cloudflare's own edge.
+
+**Verify it from two networks**, since this is exactly the kind of bug that
+passes every single-machine test: from two different networks (a laptop off
+wifi plus a phone on cellular, or two cloud boxes in different regions),
+send bursts of requests at the same anonymous endpoint at the same time and
+confirm one network exhausting its 240-per-60s budget does not touch the
+other's — for example two `curl` loops run in parallel, each hammering
+`GET /api/ice-servers` (or any other unauthenticated-but-rate-limited route)
+and each expecting its *own* 429 after roughly 240 requests, not before. The
+other check needs a live party rather than a synthetic burst: watch
+`ws.close code=4429` on the operator dashboard while a room fills up — it
+should stay near zero as people join from many networks through the same
+Cloudflare edge, not climb with the room size.
 
 **Postgres.** If moving to Vultr Managed PostgreSQL, its instances only
 accept TLS connections, but that TLS requirement belongs on `DATABASE_SSL`,
@@ -263,14 +288,17 @@ api worker` by hand) rather than the workflow.
 ssh pqp@<ip> 'cd /opt/pqp && \
   APP_IMAGE_TAG=<a tag you pushed by hand, or build+push once locally> \
   APP_VERSION=<same> \
-  docker compose pull api worker && \
-  APP_IMAGE_TAG=<same> APP_VERSION=<same> docker compose up -d api worker caddy'
+  COMPOSE_PROFILES=replicas docker compose pull api-a api-b worker && \
+  APP_IMAGE_TAG=<same> APP_VERSION=<same> COMPOSE_PROFILES=replicas docker compose up -d api-a api-b worker caddy'
 curl -sS https://api.pqp.gg/health   # once DNS points here, or curl the box IP with -H "Host: api.pqp.gg" --insecure first
 curl -sS https://api.pqp.gg/ready
 ```
 
-Fix anything here before touching DNS. `docker compose logs api worker
-caddy` on the box is the first thing to read when either check fails.
+`COMPOSE_PROFILES=replicas` is what turns `api-b` on — see "Two replicas on
+one box" below. Drop it (and `api-b` from the service lists) for a
+single-container first deploy instead. Fix anything here before touching
+DNS. `docker compose logs api-a api-b worker caddy` on the box is the first
+thing to read when either check fails.
 
 **Run these checks from the box, not from your laptop.** `provision.sh` and
 `cloud-init.yaml` leave ufw denying 80/443 to everyone except Cloudflare's
@@ -351,7 +379,9 @@ fly scale count 1 --region gru --app pqp-api
 gh workflow enable "Deploy API (Fly)"
 gh variable set DEPLOY_TARGET --body fly
 # 4. Stop the box from taking further writes, once traffic has drained:
-ssh pqp@<ip> 'cd /opt/pqp && docker compose stop api worker'
+ssh pqp@<ip> 'cd /opt/pqp && docker compose stop api-a api-b worker'
+# (harmless if api-b was never running — API_REPLICAS=1 — compose just
+# reports it has no container for that service)
 ```
 
 If the two Postgres instances have diverged (writes landed on the Vultr
@@ -366,13 +396,22 @@ Decide the cutover window with that in mind, same as the Fly migration was.
 
 **Check what is running.**
 ```bash
-ssh pqp@<ip> 'cd /opt/pqp && docker compose ps && docker compose logs --tail=100 api'
+ssh pqp@<ip> 'cd /opt/pqp && COMPOSE_PROFILES=replicas docker compose ps && docker compose logs --tail=100 api-a'
 curl -sS https://api.pqp.gg/health | jq
 ```
+`COMPOSE_PROFILES=replicas` on the `ps` is only needed to see `api-b` in the
+listing when it's running (§9) — a bare `docker compose ps` still shows
+`api-a`, `worker` and `caddy` either way, since only `api-b` carries the
+profile.
 
 **Rotate a secret.** Edit `/opt/pqp/.env` by hand (`ssh` + `sudoedit` or
-`scp` a new copy), then `docker compose up -d api worker` to pick it up —
-this restarts both, same WebSocket-drop contract as a Fly secret rotation.
+`scp` a new copy), then re-run a deploy (`gh workflow run "Deploy API
+(Vultr)"`, or `sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)`
+on the box) to pick it up — `pqp-deploy.sh` always brings up whichever
+replicas `API_REPLICAS` currently calls for, so this is the same motion as
+a normal deploy, just against the tag already running. This restarts every
+api replica and the worker, same WebSocket-drop contract as a Fly secret
+rotation, but rolling — see §9.
 
 **Provisioning drift.** Re-run `provision.sh` (see step 2); it changes
 nothing that already matches and never touches the running containers.
@@ -384,5 +423,196 @@ for the Fly-scheduled version, since it is the identical script.
 **Reboot.** `unattended-upgrades` may schedule a kernel update; a reboot is
 manual (`Automatic-Reboot` is left `false`, same call as the SFU box). In a
 quiet window: `ssh pqp@<ip> sudo reboot`. Docker's `restart: unless-stopped`
-brings `api`, `worker` and `caddy` back on their own; confirm with `curl
-https://api.pqp.gg/health`.
+brings `api-a`, `api-b` (if `API_REPLICAS` calls for it), `worker` and
+`caddy` back on their own; confirm with `curl https://api.pqp.gg/health`.
+
+## 9. Two replicas on one box
+
+`docs/plans/ALWAYS_ON.md` A0.2. `compose.yaml` runs the API half twice —
+`api-a` and `api-b`, same image, same `.env`, same `WORKER_MODE=api` — and
+Caddy load-balances `/api/*` and `/ws` across both (`tools/api-host/
+Caddyfile`'s `(upstreams)` snippet: `round_robin`, active health checking
+on `/health` every 5s). `pqp-deploy.sh` updates them one at a time: pull,
+bring up `api-a`, wait for its Docker healthcheck AND confirm its `/health`
+reports the tag just deployed, only then touch `api-b`, then `worker`. Cost:
+**$0** — same box, same plan, two processes instead of one.
+
+This works because the multi-instance server groundwork is already live in
+production: `CLUSTER_BUS=postgres` (chat fan-out over Postgres LISTEN/
+NOTIFY) and `VOICE_REGISTRY=postgres` (the shared voice peer map and
+transport pins) are both set in this box's `.env` today, M1-M5 of
+`docs/plans/MULTI_INSTANCE_VOICE.md`. Two processes serving the same
+channel is only safe with those two flags on — without them, two replicas
+would just split the userbase, and two people in one channel on different
+replicas would silently stop seeing each other's messages and presence.
+Each process picks its own random instance id at boot
+(`server/src/lib/bus.ts`'s `INSTANCE_ID`, regenerated every boot on
+purpose, not configurable) — `api-a` and `api-b` are already distinct rows
+in the voice registry with no extra wiring in this file.
+
+**What this protects against.** A redeploy no longer takes every WebSocket
+down at once — only the replica being updated drains, the other keeps
+serving, and it's the drain contract CLAUDE.md pitfall #11 already
+describes: `/health` goes unhealthy on that container first (Caddy's active
+health check pulls it out of rotation within ~5s), then its sockets close
+in batches, and the reconnects land on the sibling via Caddy the same way a
+second Fly machine used to catch them. A single container crash (OOM, an
+unhandled exception that takes the process down, `docker restart` by hand)
+fails over the same way, automatically, with no deploy involved.
+
+**What it does not protect against.** This is still ONE box. Losing the
+host — power, disk, Vultr maintenance, a `docker compose down` typo — is
+still full downtime for both replicas at once, same as before this PR.
+That is what `docs/plans/ALWAYS_ON.md` A0.3 (a second box + a Vultr Load
+Balancer) is for, and it explicitly depends on A0.2 (this) soaking cleanly
+first.
+
+**Flipping `API_REPLICAS`.** Default (unset, or anything other than
+exactly `1`) runs both replicas — that is the normal, shipped state.
+`API_REPLICAS=1` is the one-line rollback to a single container, kept
+around until `docs/plans/ALWAYS_ON.md` A0.1/M6 (a staging rehearsal of the
+multi-instance registry under real traffic shape) has reported back:
+
+```bash
+ssh pqp@<ip> 'sudoedit /opt/pqp/.env'
+# add or change: API_REPLICAS=1
+ssh pqp@<ip> 'sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)'
+```
+
+`pqp-deploy.sh` reads `API_REPLICAS` out of `.env` on every invocation, so
+re-running a deploy (the same tag, or a new one) is what applies a change —
+there is no separate switch to flip in CI or in `compose.yaml` itself.
+Setting it back to unset (or any value other than `1`) and re-deploying
+restores both replicas. `compose.yaml` gates `api-b` behind the `replicas`
+Compose profile, which the script activates via `COMPOSE_PROFILES` based on
+this same variable, so a fresh box that has never run two replicas never
+creates `api-b` at all. A box that WAS running two replicas and is being
+switched down to one is different: Compose does not remove a container
+just because its profile went inactive, so `pqp-deploy.sh` explicitly
+`stop`s and `rm`s an existing `api-b` (once `api-a` is confirmed healthy on
+the new tag) as part of applying `API_REPLICAS=1` — without that step a
+stale `api-b` would keep running, keep taking a share of Caddy's
+round-robin, and keep drifting further from whatever tag `api-a` is on.
+Either way, once the transition is applied, a bare `docker compose ps` on
+the box correctly shows only `api-a`.
+
+**Database connection budget.** `api-a` and `api-b` each keep their own
+independent Postgres pool — nothing here shares one pool between them — so
+`pqp-deploy.sh` treats `.env`'s `PG_POOL_MAX` as the TOTAL budget for the
+API side and divides it evenly across however many replicas are actually
+running (`API_PG_POOL_MAX_PER_REPLICA`, re-derived on every deploy and
+passed to `compose.yaml` as each api container's own `PG_POOL_MAX`
+override). Production's `PG_POOL_MAX=70` (`docs/plans/
+WATCH_PARTY_POSTMORTEM_2026-09-12.md` §E) means two replicas get 35 each —
+the SAME total the single `api` container used to hold alone, not double
+it, and `API_REPLICAS=1` restores the full 70 to `api-a` on its own. This
+is on top of `worker`'s own, already-separate `WORKER_PG_POOL_MAX` (default
+4), which this split does not touch. Before changing `.env`'s `PG_POOL_MAX`
+itself, check what the box's actual Vultr Managed PostgreSQL plan reports
+for `max_connections` in the Vultr dashboard — same "could not fetch this
+live" gap `docs/plans/ALWAYS_ON.md`'s A3.5 already flags for Vultr pricing,
+so this doc does not repeat a number here that might not match the plan —
+and re-derive the total the way `docs/DB_RUNBOOK.md` §3 walks through for
+Fly's memory-based ceiling (that section predates the Vultr move and still
+describes Fly's tiers, but the reasoning — leave headroom for shared
+buffers and the OS, not just backend count — carries over). `PG_POOL_MAX`
+in `.env` staying a single number an operator sizes once, rather than a
+separate one per replica to keep in sync, is deliberate; `docs/plans/
+ALWAYS_ON.md`'s A3.2 (PgBouncer) is the follow-up that raises the ceiling
+itself rather than just dividing today's number more ways.
+
+**Migrating an existing box — ONE MANUAL STEP REQUIRED FIRST, before the
+first CI-driven deploy of this PR.** `/usr/local/bin/pqp-deploy` on the box
+today is whatever `provision.sh` last installed there — the deploy
+workflow only ever transfers `compose.yaml`/`Caddyfile` automatically, so
+the script itself does not update on its own... except this PR changes
+that (see "Keeping `pqp-deploy.sh` itself in sync" below), and that new
+self-update logic only exists in the NEW script. An old, pre-this-PR
+script has no code path that even looks for a staged `pqp-deploy.sh`, so
+it cannot bootstrap itself — the first deploy has to be pushed by hand.
+Skip this and the automated pipeline does not degrade gracefully: the old
+script's fixed `docker compose pull api worker` line runs against the
+NEWLY installed compose.yaml (which the old script *does* know how to
+install, since that part hasn't changed) — but that file no longer defines
+an `api` service at all, so the pull fails outright, the workflow's
+rollback re-invokes the SAME old script against the SAME already-replaced
+compose.yaml, and rollback fails the same way. Do this instead:
+
+```bash
+# From a checkout of this PR's branch (or main, once merged):
+ssh pqp@<ip> 'mkdir -p /tmp/pqp-provision'
+scp -r tools/api-host tools/db-backup pqp@<ip>:/tmp/pqp-provision/
+ssh pqp@<ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
+  sudo bash /tmp/pqp-provision/api-host/provision.sh'
+```
+No new secrets needed for this re-run (`provision.sh` is idempotent and
+keeps whatever it already has — see step 2 above); this only needs to
+install the updated `/usr/local/bin/pqp-deploy`. Confirm it landed:
+```bash
+ssh pqp@<ip> 'sha256sum /usr/local/bin/pqp-deploy'
+sha256sum tools/api-host/pqp-deploy.sh   # should match
+```
+Only after that does the normal CI-driven deploy pick up this PR safely.
+From that point on, this is a one-time cost: every deploy after it keeps
+`/usr/local/bin/pqp-deploy` current on its own (see below), so the next
+change to this file never needs this dance repeated.
+
+**What actually happens once the box's script is current.** A box already
+running the old single-`api` service still has an `api` container when
+this compose file lands — `api-a`/`api-b` are new service names, not a
+rename Compose can follow on its own. `pqp-deploy.sh` passes
+`--remove-orphans` on its first `up`, which stops (honouring that old
+container's own 60s `stop_grace_period`, set when it was created under the
+previous compose file) and removes it once `api-a` is confirmed healthy —
+without that flag the old `api` container would keep running forever under
+`restart: unless-stopped`, invisible to Caddy (which only ever pointed at
+`api`, never `api-a`) and to every check in this script, still holding a
+database connection and a cluster-bus identity. Expect this one migration
+deploy to cause a one-time full drain of whatever was still connected to
+the old container — same shape as any other `restarts-api` deploy, just
+folded into adopting the two-replica layout instead of a second, separate
+step.
+
+**Keeping `pqp-deploy.sh` itself in sync.** Past that first manual step,
+the deploy workflow signs and transfers `pqp-deploy.sh` alongside
+`compose.yaml`/`Caddyfile` — same HMAC manifest, same verify-before-install
+gate — and `pqp-deploy.sh` installs a newer copy of itself into
+`/usr/local/bin/pqp-deploy` mid-run when one is staged. That is safe while
+the CURRENTLY EXECUTING copy keeps running: `install` writes the new
+content to a fresh inode and renames it into place atomically, so the
+already-open script the shell is mid-way through reading is unaffected —
+only the NEXT invocation picks up whatever was just installed. Provisioning
+drift (routine ops, below) still works the same way for everything else
+`provision.sh` owns; this is specifically about the one file that used to
+require it.
+
+**Verifying it.**
+```bash
+# Both replicas answer directly, on their own loopback-only port
+# (compose.yaml's 127.0.0.1:3011 / :3012 — not reachable off the box):
+ssh pqp@<ip> 'curl -sS http://127.0.0.1:3011/health | jq'
+ssh pqp@<ip> 'curl -sS http://127.0.0.1:3012/health | jq'   # empty/refused is expected under API_REPLICAS=1
+
+# The public path, round-robined by Caddy — run it a few times and both
+# hits should report the same deployed version:
+for i in 1 2 3 4; do curl -sS https://api.pqp.gg/health | jq -r .version; done
+
+# What Caddy itself thinks of each upstream's health (look for api-a/api-b
+# in the log lines; a single dial failure right after a redeploy is
+# expected and self-heals within one health_interval):
+ssh pqp@<ip> 'cd /opt/pqp && docker compose logs --tail=50 caddy'
+```
+The deploy workflow (`.github/workflows/deploy-api-vultr.yml`) runs the
+first two of these itself as part of "Verify the deployed commit" — direct
+per-container checks, because the SSH identity it uses (`pqp-deploy`) has
+no Docker socket access and can't `exec` into a container the way
+`pqp-deploy.sh` does as root — plus the round-robined check through Caddy,
+before calling a deploy done.
+
+**Expected noise under `API_REPLICAS=1`.** Caddy still lists `api-b:3001`
+as an upstream (the Caddyfile does not change per replica count); with the
+container never started, its hostname does not resolve on the compose
+network, so Caddy's active health checker logs a dial failure for it every
+`health_interval`. That is this mechanism working as designed — Caddy
+routes everything to `api-a`, the only thing actually running — not a
+misconfiguration to chase.

@@ -4,6 +4,7 @@ import { useTranslation } from "@/lib/i18n";
 import { subscribeToLiveReactions } from "@/lib/live-reactions";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 import {
   admitParticles,
   chipLabel,
@@ -170,7 +171,8 @@ export function LiveReactionParticleLayer({
   return (
     <div
       className={cn(
-        "pointer-events-none absolute inset-0 z-20 overflow-hidden",
+        "pointer-events-none absolute inset-0 overflow-hidden",
+        STAGE_LAYER.reactions,
         bursting && "animate-live-reaction-burst",
         className,
       )}
@@ -214,7 +216,8 @@ export function LiveReactionsChip({
   return (
     <div
       className={cn(
-        "pointer-events-none absolute bottom-14 right-3 z-20",
+        "pointer-events-none absolute bottom-14 right-3",
+        STAGE_LAYER.reactions,
         className,
       )}
       data-testid="live-reactions-chip"

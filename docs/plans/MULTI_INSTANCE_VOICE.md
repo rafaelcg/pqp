@@ -410,6 +410,62 @@ beside it, are how you tell from outside that the guard runs at all: zero on one
 machine, non-zero within a deploy of a party running on two. See
 `server/src/voice/hls-ownership.ts`.
 
+**And the owner has to change hands on a RESUME, not only at boot.** Boot
+adoption covers the machine that comes up; it does not cover the machine that
+was already up when the presenter landed on it. On 2026-09-15 a rolling deploy
+drained both machines in turn with a party live on a 480p30 + 720p30 + mic
+ladder. Each drain closed the presenter's socket, they resumed on the sibling
+in about a second with the same peer id (`voice.resumeAdopted ownerAlive=false
+orphaned=true`), and the sibling, holding no `rooms` entry for the channel,
+took the only path it had: `startRoom`, a new `startedAt`, a new ladder, and
+`endSupersededSessions` stopping the healthy egresses on the LiveKit box it had
+just replaced. Three rungs became two, then one; every viewer rebuffered twice
+inside two minutes. `adoptRunningLiveHlsSession` in `hls-egress.ts` now asks
+the same question the seat adoption asks, at the same moment: an open row set
+for this channel, same presenter, egresses LiveKit still lists, owner not
+answering its heartbeat, is claimed (`claimHlsSessionRow` on the lowest rung is
+the verdict, the rest are repaired with `claimHlsSessionRows`) and adopted
+rung, camera and archive, with no new transcode and nothing stopped.
+
+"No" is two different answers, and conflating them was the first thing a Farol
+review caught. `fresh` is a genuine restart (nothing to inherit, a different
+presenter, an egress LiveKit no longer lists) and the caller starts a ladder,
+exactly as it did before this existed. `stand-down` is "somebody alive holds
+this, or the question could not be answered": an owner still answering its
+heartbeat, an ownership or listing lookup that failed, and above all a CLAIM
+THIS PROCESS LOST. On a stand-down the caller does nothing at all this
+reconcile and asks again on the next roster event. Starting a ladder on any of
+them would be the same incident one step further along, with the loser of a
+two-machine race superseding the winner's healthy egresses. The reason is in
+`voice.hlsResumeNotAdopted` (`kind` plus `reason`, throttled per channel per
+reason) or in `voice.hlsSkippedOwnedElsewhere` for the owner case, and a
+non-adopted answer is cached for five seconds so a room filling up does not
+put a row read and a `ListEgress` behind every join. Leftover egresses are
+left to `reapForeignEgresses` on the monitor tick, which asks who owns an id
+before it stops one, and which now runs for the channel because this process
+holds the room. Rows are ended by two rules, not one: a row of an EARLIER
+session is superseded by definition and is closed whether or not a leftover
+egress is still writing to it (otherwise retention never collects its
+objects), while a row of THIS session is closed only when its egress is gone.
+The LL path already had claim-before-act at boot (`adoptLlHlsSessions`) and
+inside `startLlSession`, but not the already-up-machine resume twin: that is
+`adoptRunningLlHlsSession` in `hls-remux.ts`, which asks the remux box (not
+LiveKit) whether the session is still listed, claims the row, and adopts into
+`llRooms` with no `POST` and no `DELETE`. Beside it, a second defect
+from the same incident: `decideLadder` was priced against
+`activeLadderEgressCount()`, which counts every ACTIVE egress on the box
+including the ones `endSupersededSessions` was a line away from stopping, so
+the second restart read `ladderMbps=600` against a 450 budget and refused
+`720p30` outright. `planSupersededEgresses` now names the ids a start is
+actually entitled to end (this channel's active egresses, minus any a live
+other instance owns and any whose last `StopEgress` failed and is in backoff)
+and only those are left out of the count; its listing is passed through to
+`activeBoxEgressCount` so the box is not listed twice on one start. A draining
+machine still stops no egress of
+its own: `shutdown()` in `server/src/index.ts` stops the monitor and nothing
+else, and a socket closed with 1001 ORPHANS its peer rather than removing it,
+so no `pushLiveHls` teardown runs on the way out.
+
 ### 5.8 Metrics and moderation targeting
 
 `getVoiceActivitySnapshot` rooms/participants from `voice_peers` (async; the
@@ -465,6 +521,17 @@ jitter to `RECONNECT_BASE_DELAY_MS` if not present (check
 - `CLUSTER_BUS=postgres` (exists) turns on fan-out.
 - New `VOICE_REGISTRY=postgres|off` (default `off`) gates registry writes/reads.
   `off` keeps `voice.ts` byte-for-byte today's behaviour; the tables sit empty.
+- `VOICE_REGISTRY_BATCH=on|off` (default `off`) sits **under** that one: with
+  the registry on, it coalesces this instance's seat writes into one multi-row
+  statement per kind per 50 ms window, inside one transaction on one pooled
+  connection, at most one flush in flight. It exists because the registry turns
+  every seat change into its own round trip, and a mass event then arrives at
+  the pool as fan-in rather than work — 800 rejoins put 4,604 callers on
+  staging's wait queue on 2026-09-18 and opened the database breaker. Per-peer
+  ordering is unchanged (the "still seated" check is re-asked at flush time, so
+  pitfall 13 stays closed), the wire is unchanged, and `off` is the rollback.
+  `server/src/voice/registry-batch.ts`, and
+  `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md` §G for the numbers.
 - Rollback at any milestone: `fly scale count 1 --region gru`, then set
   `VOICE_REGISTRY=off` (and `CLUSTER_BUS=off` if needed). Rows left in
   `voice_peers` are ignored when the flag is off and swept by the reconcile when

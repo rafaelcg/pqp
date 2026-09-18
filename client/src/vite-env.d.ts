@@ -45,6 +45,14 @@ interface ImportMetaEnv {
    */
   readonly VITE_ANDROID_APK_URL?: string;
   /**
+   * Public Google Play listing URL. Hosted-only, no code default: unset means
+   * no Play link exists yet and `/android` behaves exactly as it does today
+   * (the APK as the only button). Set, the Play button becomes primary and
+   * the APK drops to a secondary "or download the APK" link. See
+   * `lib/play-store.ts`.
+   */
+  readonly VITE_PLAY_STORE_URL?: string;
+  /**
    * Public POST URL that counts a tap on the Android APK button. Hosted-only:
    * unset means the client never beacons, which is what every self-hosted
    * build wants. See `lib/android-apk-click.ts`.

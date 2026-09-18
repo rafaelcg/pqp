@@ -59,9 +59,65 @@
  * paid for) and reads the entry back out of the cache, streaming from the
  * colo rather than from the isolate. The shared buffer is its fallback only
  * if that read comes back empty.
+ *
+ * AND WHY NEITHER OF THOSE AWAITS MAY BE UNBOUNDED (production,
+ * 2026-09-15, the evening after PR #645). Both of the paragraph above's
+ * `await`s -- the joiner's share of the origin fetch, and the joiner's wait
+ * on the producer's cache write -- were on promises created in ANOTHER
+ * REQUEST'S context, and in Workers that is the one thing a request may
+ * never bet its response on:
+ *
+ *   **A `fetch()` and a `setTimeout()` belong to the request context that
+ *   created them.** When that request is answered or aborted, its pending
+ *   I/O is cancelled, its timers stop firing, and a second request parked on
+ *   its promise never resumes.
+ *
+ * `coalesced-fetch.js`'s header has the full derivation; PR #645 applied it
+ * to the PLAYLIST path and left this one alone, on the reading that
+ * `ctx.waitUntil` below already anchored the producer. It anchors the
+ * producer. It does nothing for the joiner. Two players on one LL session
+ * (a viewer and the host's own "Publico" preview) ask for the same part
+ * within ~15 ms all evening -- one produces, one joins -- and hls.js cancels
+ * a part request the instant it decides to stall, which takes the producer's
+ * context with it. Five media requests that evening were killed with "your
+ * Worker's code had hung and would never generate a response", each after a
+ * WALL TIME OF 5-6 ms: `ll/part-941.m4s`, `ll/part-1004.m4s`,
+ * `ll-audio/audio-part-1020.m4s`, `ll-audio/audio-part-1030.m4s`,
+ * `ll-audio/audio-part-1475.m4s` -- against an origin that answered 3,093
+ * requests in the same window with two legitimate 404s and a max of 691 ms.
+ * The wall time IS the diagnosis, the same way it was in #645: those
+ * requests were never waiting on anything real, because everything they were
+ * waiting on belonged to somebody else.
+ *
+ * FOUR LAYERS, none of which has to be right on its own:
+ *
+ *  1. `coalesceFetch` (`coalesced-fetch.js`) replaces the hand-rolled
+ *     in-flight map. A joiner's share is bounded by a timer OF ITS OWN and
+ *     is detachable; the producer is anchored with `ctx.waitUntil`; and the
+ *     producer is elected per key at SETTLEMENT, so a fetch that was
+ *     detached from and replaced does not write the cache under its own
+ *     replacement when it lands late.
+ *  2. The joiner's wait on the cache write is bounded the same way
+ *     (`awaitBounded`, `DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS`), and a write
+ *     promise that misses its bound is DROPPED from the map, so the next
+ *     arrival does not queue behind the same dead context too.
+ *  3. The write is published from INSIDE the shared chain, the instant the
+ *     origin answers, rather than from the producing request's continuation.
+ *     That keeps the window Farol caught on `L2.3`'s first commit closed --
+ *     an arrival always sees either the in-flight fetch or the in-flight
+ *     write, never an empty cache and an empty map -- which `coalesceFetch`
+ *     deleting its map entry at settlement would otherwise have reopened.
+ *  4. A last-resort `Promise.race` over the whole served path
+ *     (`DEFAULT_MEDIA_HARD_TIMEOUT_MS`), armed with a timer in THIS
+ *     request's context. It is what makes the hang detector structurally
+ *     unreachable -- the request always holds live pending I/O of its own --
+ *     and when it fires, the request answers itself by fetching the part
+ *     directly. `hlsEdge.llMediaHardTimeout` belongs at zero, and so does
+ *     `hlsEdge.llMediaJoinDetached`.
  */
 
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 import { logEvent } from "./log.js";
 import { LL_AUDIO_RUNG, playlistOriginKindForRung } from "./ll-state.js";
 import { authorizeViewer, type ViewerAccessEnv } from "./viewer-access.js";
@@ -92,8 +148,15 @@ import type { PartyPassRevocationGate } from "./party-pass-revocation.js";
  * legitimately name things differently; `test/ll-state-remux-golden.test.mjs`
  * pins the names the real one emits today, and `hlsEdge.llPartNameRefused`
  * is what a divergence would look like from the outside.
+ *
+ * `init(?:-\d+)?\.mp4` covers the first generation (`init.mp4`) and every
+ * later one published after an H.264 parameter-set change (`init-2.mp4`,
+ * …) — same grammar `pqp-remux`'s `isVideoInitURI` accepts. Without the
+ * numbered form, a playlist that correctly advertised `init-2.mp4` after
+ * a resolution ramp would 404 every MAP fetch and leave viewers with no
+ * video again (PR #656 review).
  */
-const MEDIA_NAME_PATTERN = /^(init\.mp4|seg-\d{1,12}\.m4s|part-\d{1,12}\.m4s)$/;
+const MEDIA_NAME_PATTERN = /^(init(?:-\d{1,12})?\.mp4|seg-\d{1,12}\.m4s|part-\d{1,12}\.m4s)$/;
 const AUDIO_NAME_PREFIX = "audio-";
 
 function nameBelongsToRung(name: string, rung: string): boolean {
@@ -216,39 +279,140 @@ interface FetchedMedia {
 interface CoalescedMedia {
   result: FetchedMedia;
   /**
-   * Resolves once the producer has finished populating the cache (or
-   * decided not to: a 404, a 5xx, a failed write). A NON-producer awaits it
-   * and then reads the entry back out of the cache instead of building its
-   * own `Response` from the shared buffer — see `handleLlMediaRequest`.
+   * The producer's cache write, when one is in flight for this key.
+   * Published from inside the shared chain the instant the origin answers
+   * (`publishCacheWrite`), so every joiner and every late arrival finds it
+   * deterministically rather than racing the producer's continuation.
+   * A NON-producer awaits it -- BOUNDED, see `awaitBounded` -- and then
+   * reads the entry back out of the cache instead of building its own
+   * `Response` from the shared buffer. `null` when the fetch was not ok (a
+   * 404 is never cached) or when the write has already finished.
    */
-  settled: Promise<void>;
-  /** True only for the caller whose call started the origin fetch. */
+  settled: Promise<void> | null;
+  /**
+   * True only for the caller whose fetch was still this key's current one
+   * when it settled -- `coalesceFetch`'s definition, not "my call started a
+   * fetch". See that module's doc comment for why the difference matters.
+   */
   isProducer: boolean;
 }
 
 /**
+ * How long a joiner waits on the producer's CACHE WRITE before giving up on
+ * it and answering from its own copy of the shared buffer.
+ *
+ * The write is a `cache.put` against the colo, single-digit milliseconds in
+ * the ordinary case, and the producer has already paid for the bytes. So
+ * reaching this bound does not mean the cache is slow: it means the context
+ * that owned the write is gone, which is exactly the failure this whole
+ * module was rewritten for. One second, the same value and the same
+ * reasoning as `coalesced-fetch.js`'s `DEFAULT_JOIN_BOUND_MS`.
+ */
+export const DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS = 1_000;
+
+/**
+ * The last-resort guard on the whole served path, and the reason the
+ * Workers hang detector can no longer reach this route at all: a timer armed
+ * in THIS request's context is live pending I/O, whatever every shared
+ * promise above it is doing.
+ *
+ * Five seconds, chosen to sit comfortably ABOVE every deliberate bound
+ * below it -- `MAX_JOIN_ATTEMPTS * DEFAULT_JOIN_BOUND_MS` (2 s) plus
+ * `DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS` (1 s) -- and comfortably BELOW the
+ * point at which a part is worth waiting for at all: the part target is
+ * 500 ms, so a viewer still waiting at five seconds is ten parts behind and
+ * has already stalled. It is deliberately under `UPSTREAM_TIMEOUT_MS` (8 s,
+ * `index.ts`), which means a genuinely slow-but-alive origin fetch loses
+ * this race and costs one extra fetch. That is the trade this guard exists
+ * to make: a request that is never answered is worse than one more request
+ * against a box whose measured max is 691 ms. `hlsEdge.llMediaHardTimeout`
+ * is how you find out it happened, and it belongs at zero.
+ */
+export const DEFAULT_MEDIA_HARD_TIMEOUT_MS = 5_000;
+
+/**
+ * The timers this route arms, injectable so `test/ll-media.test.mjs` can
+ * make a bound fire deterministically instead of sleeping for a second.
+ * Every one of them is armed with `setTimer` IN THE CALLING REQUEST'S
+ * CONTEXT -- that is the entire point (see this file's header), so a fake
+ * that never fires would be testing the opposite of the fix.
+ */
+export interface LlMediaTimers {
+  setTimer?: (ms: number, cb: () => void) => () => void;
+  /** Passed straight to `coalesceFetch`; defaults to `DEFAULT_JOIN_BOUND_MS`. */
+  joinBoundMs?: number;
+  writeJoinBoundMs?: number;
+  hardTimeoutMs?: number;
+}
+
+/** @returns a cancel function, so a guard that lost its race stops holding the context open. */
+function defaultSetTimer(ms: number, cb: () => void): () => void {
+  const handle = setTimeout(cb, ms);
+  return () => clearTimeout(handle);
+}
+
+/**
+ * Awaits `promise`, but never for longer than `boundMs`, with the timer
+ * armed in THIS request's context -- and never leaving an unhandled
+ * rejection behind when the bound wins first.
+ *
+ * Resolves `true` when the promise settled (either way: a rejected write is
+ * finished business, and reading the cache is still the right next move),
+ * `false` when the bound won.
+ */
+function awaitBounded(
+  promise: Promise<unknown>,
+  boundMs: number,
+  setTimer: (ms: number, cb: () => void) => () => void,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const cancel = setTimer(boundMs, () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve(false);
+    });
+    const finish = (): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cancel();
+      resolve(true);
+    };
+    // Both handlers attached unconditionally, even after the bound has
+    // already won: this is the only handler this caller ever gives the
+    // shared promise, and dropping it on a timeout would turn a later
+    // rejection into an unhandled one, which in Workers is an error the
+    // runtime reports against the isolate. Same rule as `joinBounded`.
+    promise.then(finish, finish);
+  });
+}
+
+/**
  * One media object's origin fetch, shared by every concurrent caller asking
- * for the SAME cache key — the same in-flight-map pattern
- * `index.ts`'s `fetchRenditionCoalesced` uses for a rendition playlist, and
- * for the same reason: when a popular part is first asked for, every viewer
- * in the colo asks within the same few milliseconds and each of them
- * observes `cache.match` as empty. Keyed on the cache key (the path, never
- * the token), so viewers with different tokens share one fetch.
+ * for the SAME cache key -- the same in-flight-map pattern `index.ts`'s
+ * `fetchRenditionCoalesced` uses for a rendition playlist, and for the same
+ * reason: when a popular part is first asked for, every viewer in the colo
+ * asks within the same few milliseconds and each of them observes
+ * `cache.match` as empty. Keyed on the cache key (the path, never the
+ * token), so viewers with different tokens share one fetch.
  *
- * THE ENTRY LIVES UNTIL THE CACHE IS POPULATED, NOT UNTIL THE ORIGIN
- * ANSWERS. A first version deleted the in-flight entry in a `finally` the
- * moment the fetch settled and only THEN scheduled `cache.put` under
- * `waitUntil` — leaving a window in which a newly arriving viewer saw an
- * empty cache AND an empty in-flight map, and started a second real fetch
- * for the same part. At party scale that window is exactly when the burst
- * arrives, so it defeated the one-fetch collapse this route exists for
- * (Farol, on this PR's first commit). The cache write now happens INSIDE
- * the shared chain, and the entry is removed only after it has, so the
- * window has nothing in it.
+ * SHARED THROUGH `coalesceFetch`, NOT THROUGH A BARE MAP (2026-09-15) --
+ * see this file's header for the five hung requests that bought that rule,
+ * and `coalesced-fetch.js` for how a bounded, detachable join works.
  *
- * Callers still get their bytes as soon as the ORIGIN answers — they await
- * the fetch promise, not the write — so nobody pays the cache write's
- * latency to be served.
+ * THE WRITE IS PUBLISHED BEFORE THE FETCH IS UNPUBLISHED. `coalesceFetch`
+ * clears its map entry when the fetch SETTLES, which on its own would
+ * reopen the window Farol caught on this route's first commit: a viewer
+ * arriving between the origin answering and the cache being populated would
+ * see an empty cache AND an empty in-flight map and start a second real
+ * fetch, at exactly the moment the burst arrives. So `produce` publishes
+ * the write into `settledMediaWrites` from INSIDE the shared chain, before
+ * it resolves -- the two maps overlap, and an arrival always has something
+ * to join.
  *
  * This composes with, rather than replaces, `LlPlaylistOrigin`'s own
  * per-path in-flight map: that one de-duplicates across every caller inside
@@ -258,20 +422,52 @@ interface CoalescedMedia {
 const inFlightMediaFetches = new Map<string, Promise<FetchedMedia>>();
 const settledMediaWrites = new Map<string, Promise<void>>();
 
-function fetchMediaCoalesced(
+/**
+ * ONLY THE FETCH THAT PRODUCED THE BYTES WRITES THEM, and it writes them
+ * from inside the shared chain rather than from its own request handler --
+ * every other caller sharing this fetch would otherwise run the identical
+ * `cache.put` on the identical key for no benefit (the same finding Farol
+ * raised against the rendition route).
+ *
+ * `ctx` here is the PRODUCING request's context, because `produce` is
+ * called synchronously on that request's stack, so `ctx.waitUntil` anchors
+ * the write to the one context that has a reason to outlive its response.
+ */
+function publishCacheWrite(
+  key: string,
+  cacheKey: Request,
+  cache: Cache,
+  route: LlMediaRoute,
+  fetched: FetchedMedia,
+  ctx: ExecutionContext,
+): void {
+  const toCache = new Response(fetched.body, {
+    status: 200,
+    headers: mediaHeaders(route, fetched.body.byteLength),
+  });
+  const write: Promise<void> = safeCachePut(cache, cacheKey, toCache).finally(() => {
+    // Only if it is still ours: a later fetch for the same key may already
+    // have published its own write, and evicting that one would send every
+    // arrival straight to the origin.
+    if (settledMediaWrites.get(key) === write) {
+      settledMediaWrites.delete(key);
+    }
+  });
+  settledMediaWrites.set(key, write);
+  ctx.waitUntil(write);
+}
+
+async function fetchMediaCoalesced(
   cacheKey: Request,
   origin: LlMediaOrigin,
   route: LlMediaRoute,
   cache: Cache,
   ctx: ExecutionContext,
-): CoalescedMedia | Promise<CoalescedMedia> {
-  const existing = inFlightMediaFetches.get(cacheKey.url);
-  if (existing) {
-    const settled = settledMediaWrites.get(cacheKey.url) ?? Promise.resolve();
-    return existing.then((result) => ({ result, settled, isProducer: false }));
-  }
-  const startTime = Date.now();
-  const promise = (async (): Promise<FetchedMedia> => {
+  timers: LlMediaTimers,
+): Promise<CoalescedMedia> {
+  const key = cacheKey.url;
+  const produce = async (): Promise<FetchedMedia> => {
+    const startTime = Date.now();
     let fetched: FetchedMedia;
     try {
       fetched = await origin.fetchMedia(route.channelId, route.startedAt, route.name);
@@ -294,41 +490,38 @@ function fetchMediaCoalesced(
         bytes: fetched.body.byteLength,
         durationMs: Date.now() - startTime,
       });
+      publishCacheWrite(key, cacheKey, cache, route, fetched, ctx);
     }
     return fetched;
-  })();
-  inFlightMediaFetches.set(cacheKey.url, promise);
+  };
 
-  // ONLY THE PRODUCER WRITES THE CACHE, and it writes it from HERE rather
-  // than from its own request handler -- every other caller sharing this
-  // fetch would otherwise run the identical `cache.put` on the identical
-  // key for no benefit (the same finding Farol raised against the rendition
-  // route), and doing it inside the chain is what keeps the in-flight entry
-  // alive across the write (see the doc comment above).
-  const settled = promise
-    .then(
-      async (fetched) => {
-        if (!fetched.ok) {
-          return;
-        }
-        const toCache = new Response(fetched.body, {
-          status: 200,
-          headers: mediaHeaders(route, fetched.body.byteLength),
-        });
-        await safeCachePut(cache, cacheKey, toCache);
-      },
-      () => {
-        // The failure is already logged inside the shared fetch, and the
-        // caller sees it as a rejection of `promise` itself.
-      },
-    )
-    .finally(() => {
-      inFlightMediaFetches.delete(cacheKey.url);
-      settledMediaWrites.delete(cacheKey.url);
-    });
-  settledMediaWrites.set(cacheKey.url, settled);
-  ctx.waitUntil(settled);
-  return promise.then((result) => ({ result, settled, isProducer: true }));
+  // BOTH HALVES OF THE FIX (see `coalesced-fetch.js`'s header). `keepAlive`
+  // extends the PRODUCING request's context past its own response, so the
+  // fetch every joiner is sharing survives long enough to answer them. The
+  // bounded, detachable join inside `coalesceFetch` is the other half, for
+  // the joiners of a producer that dies anyway -- a viewer whose player
+  // cancels a part request takes their context with it whatever this Worker
+  // does, and on this route that is not an edge case: it is what hls.js
+  // does every time it decides it has stalled.
+  const coalesced = await coalesceFetch(inFlightMediaFetches, key, produce, {
+    joinBoundMs: timers.joinBoundMs,
+    setTimer: timers.setTimer ?? defaultSetTimer,
+    keepAlive: (promise) => ctx.waitUntil(promise),
+    onDetach: ({ reason, attempt }) => {
+      logEvent("hlsEdge.llMediaJoinDetached", {
+        channelId: route.channelId,
+        rung: route.rung,
+        name: route.name,
+        reason,
+        attempt,
+      });
+    },
+  });
+  return {
+    result: coalesced.result,
+    isProducer: coalesced.isProducer,
+    settled: settledMediaWrites.get(key) ?? null,
+  };
 }
 
 function mediaHeaders(route: LlMediaRoute, byteLength: number): Headers {
@@ -354,11 +547,195 @@ function json(status: number, body: unknown): Response {
 }
 
 /**
+ * The two answers that are not bytes, shared by the coalesced path and the
+ * hard-timeout path so they cannot drift apart.
+ *
+ * A 404 is the ordinary preload-hint race -- the playlist named a part the
+ * box has not finished writing -- passed through as a 404 the player
+ * retries and NEVER cached (this file's header, property 3).
+ */
+function refusalFor(fetched: FetchedMedia, route: LlMediaRoute): Response | null {
+  if (fetched.status === 404) {
+    countEvent("hlsEdge.llPartMissing", route);
+    return text(404, "Not found", { "Cache-Control": "no-store" });
+  }
+  if (!fetched.ok) {
+    logEvent("hlsEdge.llPartOriginRejected", {
+      channelId: route.channelId,
+      rung: route.rung,
+      name: route.name,
+      status: fetched.status,
+    });
+    return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
+  }
+  return null;
+}
+
+/**
+ * Reads the entry the producer has just written (or is writing) and serves
+ * it, streaming from the colo instead of from this isolate's copy of the
+ * shared buffer -- see this file's header, "WHY THE BODY IS BUFFERED".
+ * `null` when there is nothing there, which is always a fall-through to a
+ * real fetch, never a failure.
+ */
+async function serveFromPendingWrite(
+  pending: Promise<void> | null,
+  key: string,
+  cacheKey: Request,
+  cache: Cache,
+  route: LlMediaRoute,
+  timers: LlMediaTimers,
+): Promise<Response | null> {
+  if (pending) {
+    const settledInTime = await awaitBounded(
+      pending,
+      timers.writeJoinBoundMs ?? DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS,
+      timers.setTimer ?? defaultSetTimer,
+    );
+    if (!settledInTime) {
+      // The context that owned the write is gone. Drop the entry so the
+      // NEXT arrival does not spend its own bound queueing behind the same
+      // corpse, then read the cache anyway -- the write may still have
+      // landed before its owner went away.
+      countEvent("hlsEdge.llMediaWriteJoinTimeout", route);
+      if (settledMediaWrites.get(key) === pending) {
+        settledMediaWrites.delete(key);
+      }
+    }
+  }
+  const warmed = await safeCacheMatch(cache, cacheKey);
+  if (!warmed) {
+    return null;
+  }
+  const headers = new Headers(warmed.headers);
+  headers.set("X-HLS-Edge-Cache", "COALESCED");
+  return new Response(warmed.body, { status: warmed.status, headers });
+}
+
+/**
+ * The ordinary served path: join whatever is already happening for this
+ * key, or produce it. Never rejects -- every failure is a `Response` --
+ * because it is one half of a `Promise.race` whose other half is a timer,
+ * and a rejection racing a timer is an unhandled rejection waiting to
+ * happen.
+ */
+async function serveCoalesced(
+  cacheKey: Request,
+  origin: LlMediaOrigin,
+  route: LlMediaRoute,
+  cache: Cache,
+  ctx: ExecutionContext,
+  timers: LlMediaTimers,
+): Promise<Response> {
+  const key = cacheKey.url;
+
+  // A producer may already hold these bytes and be writing them. Joining
+  // that write is cheaper than a second origin fetch, and it is what keeps
+  // the gap between "the fetch settled" and "the cache is warm" from being
+  // a hole in the collapse this route exists for.
+  const pendingWrite = settledMediaWrites.get(key);
+  if (pendingWrite) {
+    const warm = await serveFromPendingWrite(pendingWrite, key, cacheKey, cache, route, timers);
+    if (warm) {
+      return warm;
+    }
+  }
+
+  let coalesced: CoalescedMedia;
+  try {
+    coalesced = await fetchMediaCoalesced(cacheKey, origin, route, cache, ctx, timers);
+  } catch {
+    // Already logged once, inside the shared fetch.
+    return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
+  }
+
+  const refusal = refusalFor(coalesced.result, route);
+  if (refusal) {
+    return refusal;
+  }
+
+  // A WAITER IS SERVED FROM THE CACHE, NOT FROM THE SHARED BUFFER. The
+  // producer holds the whole object in isolate memory (it has to: it just
+  // read it), and every waiter that built its OWN `Response` from that same
+  // buffer added another copy for as long as its client took to drain it --
+  // hundreds of viewers times a several-hundred-KB segment is real memory
+  // pressure on one isolate, which Farol flagged on this route's first
+  // commit. The buffered copy below is the fallback for when that read
+  // comes back empty -- a failed, evicted, or never-finished write --
+  // because a viewer must never be worse off than before this optimization
+  // existed.
+  if (!coalesced.isProducer) {
+    const warm = await serveFromPendingWrite(
+      coalesced.settled,
+      key,
+      cacheKey,
+      cache,
+      route,
+      timers,
+    );
+    if (warm) {
+      return warm;
+    }
+  }
+
+  const headers = mediaHeaders(route, coalesced.result.body.byteLength);
+  headers.set("X-HLS-Edge-Cache", coalesced.isProducer ? "MISS" : "COALESCED");
+  return new Response(coalesced.result.body, { status: 200, headers });
+}
+
+/**
+ * The last resort, reached only when the guard timer beat every shared
+ * promise this request was attached to: fetch the part for THIS request,
+ * with this request's own context behind it, and answer. One extra origin
+ * request, which is the cheap half of the trade described on
+ * `DEFAULT_MEDIA_HARD_TIMEOUT_MS`.
+ */
+async function serveDirect(
+  cacheKey: Request,
+  origin: LlMediaOrigin,
+  route: LlMediaRoute,
+  cache: Cache,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  let fetched: FetchedMedia;
+  try {
+    fetched = await origin.fetchMedia(route.channelId, route.startedAt, route.name);
+  } catch (error) {
+    logEvent("hlsEdge.llPartOriginError", {
+      channelId: route.channelId,
+      rung: route.rung,
+      name: route.name,
+      error: String(error),
+    });
+    return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
+  }
+  const refusal = refusalFor(fetched, route);
+  if (refusal) {
+    return refusal;
+  }
+  // Worth writing: whatever went wrong upstream, the colo not having these
+  // bytes is why the next viewer would go through the same thing.
+  const toCache = new Response(fetched.body, {
+    status: 200,
+    headers: mediaHeaders(route, fetched.body.byteLength),
+  });
+  ctx.waitUntil(safeCachePut(cache, cacheKey, toCache));
+  const headers = mediaHeaders(route, fetched.body.byteLength);
+  headers.set("X-HLS-Edge-Cache", "HARD-TIMEOUT");
+  return new Response(fetched.body, { status: 200, headers });
+}
+
+/** The sentinel `Promise.race` returns when the guard timer wins. Never a `Response`, so the check cannot be accidentally truthy. */
+const HARD_TIMEOUT = Symbol("ll-media-hard-timeout");
+
+/**
  * The LL media route. Exported for `index.ts` (which supplies
  * `caches.default`) and for `test/ll-media.test.mjs` (which supplies a fake
- * `Cache`) — the injected cache is the seam that lets this whole route run
+ * `Cache`) -- the injected cache is the seam that lets this whole route run
  * under `node --test` with no Workers runtime, unlike the rendition route,
- * which reaches `caches.default` directly.
+ * which reaches `caches.default` directly. `timers` is the second such
+ * seam, added with the 2026-09-15 fix: a test can make a join bound or the
+ * hard timeout fire on demand instead of waiting a real second for it.
  */
 export async function handleLlMediaRequest(
   request: Request,
@@ -368,6 +745,7 @@ export async function handleLlMediaRequest(
   env: ViewerAccessEnv,
   gate: PartyPassRevocationGate,
   route: LlMediaRoute,
+  timers: LlMediaTimers = {},
 ): Promise<Response> {
   // Only the LL rungs have media on this Worker at all. A conventional
   // rung's segments are presigned storage URLs the player fetches straight
@@ -429,60 +807,34 @@ export async function handleLlMediaRequest(
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  let fetched: FetchedMedia;
-  let isProducer: boolean;
-  let settled: Promise<void>;
+  // THE LAST-RESORT GUARD, and the reason the Workers hang detector can no
+  // longer reach this route: from here down this request holds a timer of
+  // its OWN, so it always has live pending I/O no matter what any shared
+  // promise above it is doing. See this file's header, layer 4.
+  const setTimer = timers.setTimer ?? defaultSetTimer;
+  const hardTimeoutMs = timers.hardTimeoutMs ?? DEFAULT_MEDIA_HARD_TIMEOUT_MS;
+  let cancelGuard: () => void = () => {};
+  const guard = new Promise<typeof HARD_TIMEOUT>((resolve) => {
+    cancelGuard = setTimer(hardTimeoutMs, () => resolve(HARD_TIMEOUT));
+  });
+  let served: Response | typeof HARD_TIMEOUT;
   try {
-    const coalesced = await fetchMediaCoalesced(cacheKey, origin, route, cache, ctx);
-    fetched = coalesced.result;
-    isProducer = coalesced.isProducer;
-    settled = coalesced.settled;
-  } catch {
-    // Already logged once, inside the shared fetch.
-    return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
+    served = await Promise.race([
+      serveCoalesced(cacheKey, origin, route, cache, ctx, timers),
+      guard,
+    ]);
+  } finally {
+    // Whoever won, the timer stops holding this context open.
+    cancelGuard();
   }
-
-  if (fetched.status === 404) {
-    // The ordinary preload-hint race: the playlist named a part the box has
-    // not finished writing. Passed through as a 404 the player retries,
-    // NEVER cached -- see this file's header, property 3.
-    countEvent("hlsEdge.llPartMissing", route);
-    return text(404, "Not found", { "Cache-Control": "no-store" });
+  if (served !== HARD_TIMEOUT) {
+    return served;
   }
-
-  if (!fetched.ok) {
-    logEvent("hlsEdge.llPartOriginRejected", {
-      channelId: route.channelId,
-      rung: route.rung,
-      name: route.name,
-      status: fetched.status,
-    });
-    return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
-  }
-
-  // A WAITER IS SERVED FROM THE CACHE, NOT FROM THE SHARED BUFFER. The
-  // producer holds the whole object in isolate memory (it has to: it just
-  // read it), and every waiter that built its OWN `Response` from that same
-  // buffer added another copy for as long as its client took to drain it --
-  // hundreds of viewers times a several-hundred-KB segment is real memory
-  // pressure on one isolate, which Farol flagged on this PR's first commit.
-  // Waiting for the write the producer is already doing (a few ms, against
-  // an origin fetch they have ALREADY paid) and reading the entry back
-  // means the bytes stream out of the colo's cache instead. The buffered
-  // copy below is the fallback for when that read comes back empty -- a
-  // failed or evicted write -- because a viewer must never be worse off
-  // than before this optimization existed.
-  if (!isProducer) {
-    await settled;
-    const warmed = await safeCacheMatch(cache, cacheKey);
-    if (warmed) {
-      const headers = new Headers(warmed.headers);
-      headers.set("X-HLS-Edge-Cache", "COALESCED");
-      return new Response(warmed.body, { status: warmed.status, headers });
-    }
-  }
-
-  const headers = mediaHeaders(route, fetched.body.byteLength);
-  headers.set("X-HLS-Edge-Cache", isProducer ? "MISS" : "COALESCED");
-  return new Response(fetched.body, { status: 200, headers });
+  logEvent("hlsEdge.llMediaHardTimeout", {
+    channelId: route.channelId,
+    rung: route.rung,
+    name: route.name,
+    budgetMs: hardTimeoutMs,
+  });
+  return serveDirect(cacheKey, origin, route, cache, ctx);
 }

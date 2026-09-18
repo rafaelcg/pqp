@@ -38,6 +38,15 @@ PQP_LOAD_SFU_HOST=staging-sfu.example.test \
 LOAD_TEST_TOKEN=... pnpm exec tsx src/index.ts prepare --manifest /tmp/wp500.json --participants 500
 ```
 
+Add `--watch-party` to also make a real `watch_party` channel beside the plain
+voice one, and grant `@everyone` `START_WATCH_PARTY` on it. This is what a
+`shard --presenter-only` run (and `seat-churn.ts`, which prefers it
+automatically) needs to actually exercise the watch-party path: HLS only ever
+starts in a `watch_party` channel (`pickHlsSharer` in `server/src/ws/voice.ts`),
+and the grant has to land before the presenter ever joins, because `canStream`
+is computed from the role bits at join time — which is exactly why it happens
+here, in `prepare`, and not later in `shard`.
+
 Each generator runs one non-overlapping shard against that manifest. Start the
 presenter shard first (`--shard-index 0` contains participant 0), then the
 receiver shards. The default 900-second hold is intentionally in the requested
@@ -186,7 +195,8 @@ first-frame budget and the expected received height do.
 | `--cold-bootstrap` | off | The browser's 21-request first load (`coldBootstrap` in `server/scripts/load-fanout.ts`) instead of the thin four GETs |
 | `--churn-every-ms MS` / `--churn-rtc-every N` | 0 / 10 | Run D: this process drops one receiver's app socket without a leave every MS during the hold and reconnects with the resume pair, recording `resumed: true` and the time to welcome; every Nth churn also drops the LiveKit room, re-mints and reconnects, recording the time to the first frame again |
 | `--join-concurrency N` | 12 | Joins in flight per process |
-| `--presenter-only` / `--no-presenter` | | Run the presenter in a process of its own: the shard that would contain index 0 passes `--no-presenter` |
+| `--presenter-only` / `--no-presenter` | | Run the presenter in a process of its own: the shard that would contain index 0 passes `--no-presenter`. Against a manifest `prepare --watch-party` made, `--presenter-only` joins the `watch_party` channel instead of the plain voice one, creates the party as the presenter, goes live before joining, and ends it (`state: ended`) once the hold is over — this is what actually produces an HLS playlist; a plain `--presenter-only` run in an ordinary voice channel never starts one |
+| `--low-latency` | off | With `--presenter-only` against a `--watch-party` manifest: go live requesting the LL-HLS ladder |
 | `PQP_LOAD_SIZE_OVERRIDE=1` | | Hosted counts from 2 to 2000 and holds from 5 s to 30 min, for calibration and the stall check. The production refusals are untouched |
 | `PQP_LOAD_TRACE=1` | | Per-participant event lines on stderr without the `wpdiag-` run-id rule |
 
@@ -304,8 +314,13 @@ path was never measured."
 
 It reads the manifest `index.ts prepare` already wrote (any `--participants`
 value is fine — seat-churn does not reuse `index.ts`'s 500-person RTC
-contract, only the manifest's server/channel/invite), ramps `--seats`
-accounts up to a steady seated population, then:
+contract, only the manifest's server/channel/invite). Seats join the
+manifest's `watchPartyChannelId` when `prepare --watch-party` made one, the
+plain `voiceChannelId` otherwise — the same room a presenter from `index.ts
+shard --presenter-only` is sharing into, which is the point: a seated
+population churning in the room a party is actually live in, not a separate
+empty voice channel. It ramps `--seats` accounts up to a steady seated
+population, then:
 
 - every seat sends `set-voice-state` (mute/unmute) on its own clock
   (`--presence-every-ms`), exercising the roster-broadcast path;
@@ -364,10 +379,18 @@ PQP_LOAD_SFU_HOST=staging-sfu.example.test
 
 ### The recommended event rehearsal
 
-Run all three at once against the same manifest, on staging:
+Prepare the manifest with `--watch-party` first, or step 1 below never
+produces a playlist for step 3 to poll:
 
-1. `index.ts shard --manifest wp-event.json --shard-index 0 --shard-count 1 --presenter-only --hold-seconds 1800 --start-at-ms <T+60s>` — the presenter's share.
-2. `seat-churn.ts --manifest wp-event.json --out seat-churn-report.json --seats 80 --churn-per-minute 5 --duration-seconds 1800` — 60 to 100 seated, churning at 5 joins/min, for 30 minutes (the postmortem's own event shape).
+```sh
+TEST_RUN_ID=wp-event PQP_LOAD_TARGET=staging PQP_LOAD_SFU_HOST=staging-sfu.example.test \
+LOAD_TEST_TOKEN=... pnpm exec tsx src/index.ts prepare --manifest wp-event.json --participants 500 --watch-party
+```
+
+Then run all three at once against that manifest, on staging:
+
+1. `index.ts shard --manifest wp-event.json --shard-index 0 --shard-count 1 --presenter-only --hold-seconds 1800 --start-at-ms <T+60s>` — the presenter's share. Because the manifest has a `watchPartyChannelId`, this joins that channel instead of the plain voice one, creates the party as the presenter, goes live before joining (add `--low-latency` to request the LL-HLS ladder), and ends it (`state: ended`) once the hold is over.
+2. `seat-churn.ts --manifest wp-event.json --out seat-churn-report.json --seats 80 --churn-per-minute 5 --duration-seconds 1800` — 60 to 100 seated, churning at 5 joins/min, for 30 minutes (the postmortem's own event shape). Prefers the manifest's `watchPartyChannelId` automatically, so these seats land in the same room the presenter is sharing into.
 3. `hls-audience.ts --url <the channel's playlist URL> --tokens 300-tokens.txt --viewers 300 --seconds 1800 --ramp-seconds 120` — 300 watchers.
 
 **Pass criteria** (seat-churn's own report already judges itself against
@@ -381,3 +404,86 @@ seconds, and seat-churn's own join/leave failure rate stays under 1%. A
 failed `hls-audience.ts` run judges itself by its own existing
 window-miss/stuck-event numbers (see above); there is no combined verdict
 across all three processes, read each report on its own.
+
+## Full-stack party storm, presenter-free (`src/party-storm.ts`)
+
+A single, zero-npm-dependency orchestrator (Node 22+/24 global `WebSocket` +
+`fetch`, native TS stripping — run with `node src/party-storm.ts`) for the
+watch-party tiers that do **not** need a live SFU/egress. Built for the
+2026-09-12 post-mortem's A3 (DB reconnect storm) and CLAUDE.md pitfall 17 (the
+DB circuit breaker). Complements the media rig in `index.ts` (synthetic 720p30
+presenter + real SFU receivers) and the viewer poller in `hls-audience.ts`.
+
+**Target is fully configurable, with a hard isolation gate.** `PQP_LOAD_TARGET`
+(any non-empty string, e.g. `staging` / `shadow`), `PQP_LOAD_API_URL`,
+`PQP_LOAD_WS_URL`, `PQP_LOAD_HLS_BASE_URL`. The gate refuses `pqp.gg`,
+`*.pqp.gg` (so api./hls./www.) and any Postgres host, unconditionally, before
+any network call. It also requires `https://` / `wss://` for every target and
+refuses private-use, link-local and cloud-metadata addresses (an env var this
+harness's `LOAD_TEST_TOKEN` and `ADMIN_METRICS_TOKEN` should never reach),
+except loopback, which stays on plain `http:`/`ws:` for local dev; set
+`PQP_LOAD_ALLOW_PRIVATE_HOST=1` to opt a genuinely private shadow box back in.
+It speaks only HTTP/WS — never SQL — so the database it hits never sees more
+than the server's own pool no matter how hard this pushes. Point it at
+staging today or a Vultr shadow-prod box later (note: a shadow box running
+`NODE_ENV=production` and not named `-staging` on Fly will make
+`LOAD_TEST_TOKEN` inert — the identity path needs a `-staging` Fly app name or
+non-production `NODE_ENV`; see `server/src/auth/load-test.ts`).
+
+```bash
+set -a; . ~/.config/pqp/staging-load-test.env; set +a   # LOAD_TEST_TOKEN + ADMIN_METRICS_TOKEN
+export PQP_LOAD_TARGET=staging
+
+# 1. Provision a load server (HTTP only; pins the voice channel to LiveKit so a
+#    presence room can exceed MESH_VOICE_LIMIT=8):
+node src/party-storm.ts provision --out /tmp/manifest.json
+
+# 2. DB reconnect storm — distinct identities run the cold-browser bootstrap in
+#    a loop to saturate the Postgres pool. Samples runtime.db.breaker / pool /
+#    readCache + /health + /ready + a fresh-identity canary every second:
+node src/party-storm.ts db-storm --manifest /tmp/manifest.json \
+  --concurrency 100 --ramp-seconds 8 --seconds 45 --out /tmp/db.json
+
+# 3. WS presence storm + synchronized reconnect wave (the 09-12 failure mode):
+node src/party-storm.ts ws-storm --manifest /tmp/manifest.json \
+  --sockets 150 --ramp-seconds 40 --hold 25 --reconnect-at 15 --out /tmp/ws.json
+
+# 3b. Same reconnect wave, viewer-shaped: `ws-storm` normally seats every
+#     socket in the voice room (join-channel AND join-voice-room, the
+#     heaviest write path, voice-registry rows). A real watch-party audience
+#     is not that: hundreds of viewers hold an app socket, join the text
+#     channel, and watch the HLS stream with NO voice seat at all
+#     (server/src/ws/hls-audience.ts). `--no-voice` models exactly that: auth
+#     + join-channel only, no join-voice-room, no `welcome` wait, no
+#     `set-voice-state` presence ticks. A reconnect wave of 500 viewers is
+#     the real Saturday risk shape, and it stresses a different path than a
+#     mesh-sized voice room does:
+node src/party-storm.ts ws-storm --manifest /tmp/manifest.json \
+  --sockets 500 --ramp-seconds 60 --hold 300 --reconnect-at 120 --no-voice \
+  --out /tmp/ws-viewers.json
+
+# 4. HLS viewer poll (needs a LIVE presenter+egress for real playlists; without
+#    --channel/--started it probes the path only). Point --hls base at the API
+#    origin proxy OR the hls.pqp.gg edge to compare origin coalescing:
+node src/party-storm.ts hls --channel <id> --started <ms> --tokens ./tokens.txt --viewers 500
+```
+
+What it proves without a presenter: the breaker (pitfall 17) opens under pool
+saturation and sheds DB-dependent routes with fast ~250ms 503s
+(`database_unavailable`) while `/health` stays 200 and `/ready` goes 503, then
+recovers within ~1–2s of load easing. Saturation edge on staging (`PG_POOL_MAX`
+10): healthy below ~12 concurrent bootstrappers, a brownout band ~12–18 (pool
+queues, p99 to multiple seconds, breaker flaps), clean shed at ≥~25–30. Scales
+~linearly with `PG_POOL_MAX`, so prod's 70 ≈ 7×.
+
+What still needs the live SFU/egress (coordinate separately): real HLS segments
+and playlists, hence any true end-to-end HLS viewer / segment-GET / edge-vs-
+origin coalescing measurement. Feed the egress with `index.ts`'s synthetic
+720p30 presenter (`shard --presenter-only`), then drive viewers here or with
+`hls-audience.ts`. The edge path also needs `LIVE_HLS_PLAYLIST_BASE_URL` set +
+a deployed edge Worker (empty on staging today).
+
+**Residue:** every identity is `load_test_user_{st,ws,canary,owner}_*`; the run
+also leaves a `Load <runId>` server unless deleted via `DELETE /api/servers/:id`
+with the owner token. Clean both with the one-liners in `docs/STAGING.md`
+§"Resetting the staging database".

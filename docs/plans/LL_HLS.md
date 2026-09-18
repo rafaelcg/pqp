@@ -114,9 +114,9 @@ ms parts served from the box. Neither is measured end to end yet, which is what
 | Publish to where a viewer can reach it | R2 PUT 600 to 1000 ms, then two serialised playlist PUTs of 600 to 1000 ms each before the segment is listed | tmpfs write, served by Caddy: under 5 ms | `hls-egress.ts:534-545`, measured |
 | Playlist discovery | poll every 4 s plus up to 2 s of edge cache: 0 to 6000, mean 3000 | blocking reload, the request is already open: 0 | `RELOAD_STORM.md`, RFC 8216bis |
 | Byte fetch | segment from R2 through a cache miss, ~200 ms | part (~200 KB) from a warm colo, 20 to 60 ms | R2 under 200 ms, 2026-09-12 |
-| Player hold-back | `liveSyncDurationCount` 5 x 4 s = **20 000 ms** | `PART-HOLD-BACK` 3 x 500 ms = **1500 ms** | `hls-live-edge.ts:25-38`; RFC 8216bis 4.4.3.8 |
-| **Total, p50** | **~26 s** | **~2.0 s** | |
-| **Total, p95** | **~32 s** | **~3.5 s** | |
+| Player hold-back | `liveSyncDurationCount` 5 x 4 s = **20 000 ms** | `PART-HOLD-BACK` 6 x 500 ms = **3000 ms** (was 3 x, see below) | `hls-live-edge.ts:25-38`; RFC 8216bis 4.4.3.8 |
+| **Total, p50** | **~26 s** | **~3.5 s** | |
+| **Total, p95** | **~32 s** | **~5.0 s** | |
 
 The target is **2 to 4 s**, and the honest reading of the table is that **the
 cushion is 20 of today's 26 seconds**. LL-HLS is worth building only because that
@@ -124,7 +124,21 @@ cushion cannot simply be lowered on the conventional path: it is 5 segments of s
 against a 60 s window, and 2026-09-12 measured seventeen window misses in four
 minutes when it was tighter. A 1.5 s hold-back is safe only because a part arrives
 every 500 ms, so three parts of slack is three chances to recover inside a second
-and a half instead of one inside twenty. If the part target falls back to 1 s
+and a half instead of one inside twenty.
+
+**The hold-back went to six parts on 2026-09-15**, which is the 1.5 s the p50 and
+p95 rows above gained. Three is RFC 8216bis 4.4.3.8's FLOOR, not its
+recommendation, and the floor only holds when the player is near the origin.
+Production is not: viewers in the UK, the remux box in Sao Paulo, ~200 ms of round
+trip, parts fetched by the edge Worker in ~170 ms and blocking reloads answered in
+~400 ms. Three parts of budget against a 400 ms reload leaves nothing for one
+retransmit, and the symptom was the viewer "struggling until it settles" at the
+start of every stream. Six parts is 3.0 s, still a seventh of the conventional
+ladder's hold-back and still inside the 2-to-4 s target at p50. It is
+`LL_PART_HOLD_BACK_PARTS` on the Worker (`tools/hls-edge/wrangler.jsonc`), not a
+constant, because the right number is a property of where the audience is.
+
+If the part target falls back to 1 s
 (section 3), the container-close and hold-back lines roughly double: p50 ~3.5 s, p95
 ~5.5 s. Better than 26, outside "2 to 4", and the go-live copy must say so rather
 than ship a different promise.
@@ -247,9 +261,28 @@ and not for a film should not change a setting twice. It is stored on the
 `hls_sessions` row, stated in the go-live summary, and while live the stage carries
 a "baixa latência" badge.
 
-**The audience needs no signal.** hls.js 1.7 enables `lowLatencyMode` from
-`EXT-X-SERVER-CONTROL`, and AVPlayer and Media3 read it natively. The client work is
-not "turn LL on", it is **stop overriding it**. Web: `hlsLivePlayerConfig()` pins
+**The audience needs no signal.** ~~hls.js 1.7 enables `lowLatencyMode` from
+`EXT-X-SERVER-CONTROL`, and AVPlayer and Media3 read it natively.~~
+
+**Wrong, and it cost four production attempts (2026-09-15).** That paragraph is
+true about the PLAYER and false about the DELIVERY, and the difference is the
+whole bug. The manifest can only configure a player that has the manifest; what
+decides WHICH manifest a viewer is handed is the edge Worker's master route, and
+with no signal on the wire that route was left inferring the mode by probing the
+remux for `state.json` and reading "not written yet" as "this party is
+conventional". A session two hundred milliseconds old has no state and IS
+low-latency. Low latency was enabled four times that day and no viewer was ever
+handed the low-latency stream; in the last attempt the audience's only master
+request landed 300 ms in, got the conventional ladder's master — for a party
+whose conventional ladder the API had deliberately not started — fetched
+`/720p30`, got nothing, and read "A transmissão caiu" for five minutes.
+
+So the mode IS on the wire now, in both halves of one statement: `?mode=ll` on
+`hlsUrl` (`LIVE_HLS_MODE_PARAM`, read by `requestsLlMode` at the edge) and
+`mode: "ll"` plus `partTargetMs` on the stream frame. The Worker serves the LL
+master because the request says so; a warming remux is a `503 Retry-After: 1`,
+never the other ladder. The rest of this section still holds: **the client work
+is not "turn LL on", it is stop overriding it** — Web: `hlsLivePlayerConfig()` pins
 `liveSyncDurationCount` to 5, which on an LL manifest fights `PART-HOLD-BACK`, so it
 must defer to the manifest when one is present. iOS: `WatchLiveEdge.swift:118-128`
 clamps `recommendedTimeOffsetFromLive` to a 1 to 8 s band **precisely because** a
@@ -258,12 +291,81 @@ that clamp fires on a correct reading; the file already names LL-HLS as the case
 guards against, and that guard becomes a branch. Android: `HlsLiveEdge.kt` and
 `HlsWatchdog.kt` get the same treatment.
 
-**Fallback is a rendition, not a reload.** The conventional ladder keeps running for
+**Fallback is a rendition, not a reload.** *(Not what shipped. `L2.2` serves an
+LL-only master — the API stops one driver when it starts the other, so there is
+no conventional ladder running underneath an LL session to switch down to, and a
+demotion is therefore a reload: `sweepLlDemotions` starts the conventional
+ladder and `pushLiveHls` publishes a fresh frame whose `hlsUrl` and `mode` have
+both changed, which is what `liveHlsFrameChanged` exists to notice. Kept here as
+written because the paragraph below it, the pin rule, did ship.)* The
+conventional ladder keeps running for
 the whole rollout, so the master playlist lists the LL rung beside the 720p30 rung
 and a failure is an ordinary ABR switch: no new session, no torn-down player. Plus
 one explicit rule: **two part-load errors inside 10 s pin the player to a
 conventional rung for the rest of the session.** A viewer who cannot hold the edge
 should stop trying, not oscillate.
+
+**And the recovery has to land at the edge, which is not what `-1` means
+(2026-09-15, the first sustained LL run).** Five sporadic 500s from the edge
+Worker on media parts were the trigger; what followed was the bug. Every step
+of the player's recovery ladder called `hls.startLoad(-1)` on the strength of
+the name, and `StreamController.startLoad` overrides a `-1` with
+`lastCurrentTime` whenever the player has played at all — so each recovery
+resumed at the FROZEN playhead. On a conventional stream that is harmless
+inside a 60 s window. Against a ring of six segments with parts on the newest
+three it is fatal: at 21:37:47 and again at 21:40:59 the player requested
+`ll/part-699.m4s` with the live edge at part ~1,400 and ~1,600, the Worker
+answered 404 (`hlsEdge.llPartMissing`), hls.js never retries a 4xx and an
+LL-only master has no second level to fail over to, and the audience read "A
+transmissão caiu" about a broadcast that was still running. Three rules now,
+all client-side and **every one of them gated on `mode === "ll"`**: an LL
+recovery passes the live edge it is about to seek to
+(`applyHlsRecoveryStep`'s `startPosition`), so the loader and the element
+agree instead of the loader firing one doomed request first; **a 404/410 on a
+part or segment is "you fell behind", not "the stream is gone"** — one bounded
+jump to live (`isMissingFragmentError`, `canJumpToLiveEdge`, at most
+`LL_HLS_EDGE_JUMP_MAX` per attach), and past the budget, or with no edge to
+jump to, or on a 404 of the PLAYLIST itself, it escalates exactly as before;
+and `fragLoadPolicy` is paced to a part rather than to a 4 s segment, because
+hls.js's stock 1/2/4/8 s backoff spends a whole ring waiting to retry
+something that is already gone. The lesson is pitfall 12's shape one layer
+out: **a config value that reads like an intention is not one.** `-1` is
+documented, tested and named "default start position", and it means "resume
+where you were".
+
+**A player that is still starting is not a player that is stuck.** The same
+run's other symptom was viewers "struggling until it settles". The part-stuck
+rule is four parts, two seconds at a 500 ms target, and the first two seconds
+of an LL attach are spent waiting out the Worker's `503 Retry-After: 1` while
+the remux subscribes — so the watchdog nudged (`startLoad`) a load that was
+going fine, before one part had ever arrived. `HlsStallWatch` now requires a
+part to have actually advanced before it can be stuck at all, and holds its
+two SOFT rules for `LL_HLS_STARTUP_GRACE_MS` after an attach. A fatal error is
+never graced: a source that is gone at second two is gone. And the latency
+CEILING follows the manifest now rather than the part target alone
+(`llLatencyCeilingSeconds`): the edge raising `PART-HOLD-BACK` to ~3 s under
+the old part-derived 4 s ceiling would leave one second of slack, after which
+`synchronizeToLiveEdge` force-seeks — which empties a 6 s buffer, which is the
+next stall.
+
+**The first cut of all of that (#646) was reverted the same night (#650), and
+the gate above is why.** Ten minutes after it shipped a CONVENTIONAL party
+went black and then looped a second of content. The cause turned out to be
+the LiveKit egress dying — "playlist stuck for 20000 ms", libav decode errors
+from the presenter's packet loss — and not the PR at all, but #646 had
+applied "restart the loader at the live edge on every recovery step" to
+conventional streams too, and nothing in the repo could prove that had not
+turned a frozen playlist into a seek loop. It could not have, and now there
+is a test that says so:
+`client/src/components/voice/hls-watch-player-conventional-recovery.test.tsx`
+drives the conventional ladder with the same fake and asserts the exact
+`startLoad` arguments, seeks and merged hls.js config recorded off
+post-revert `main` — including thirty seconds of a frozen
+`EXT-X-MEDIA-SEQUENCE`, which spends three in-place steps with one seek each
+and then only polls for a fresher session. The lesson is the cheaper half of
+pitfall 12: **when a change is for one mode, gate it on that mode and pin the
+other one, or the next incident on the path you did not touch is still
+yours to disprove.**
 
 **Recordings are unaffected.** The LL rung PUTs the same full 4 s segments to R2 on
 the same prefix layout, and its `hls_sessions` row carries `rung = 'll'` as the
@@ -301,6 +403,49 @@ LL rung and demote**. Never close a segment on a non-IDR boundary: that is a
 player-dependent failure that looks like a corrupt stream, and a viewer would find
 it before we did.
 
+**A quiet source is not a stall (2026-09-15).** The rules above are all
+written in terms of parts, and a part boundary is decided by the arrival of
+the NEXT access unit — so a publisher that stops sending frames stops
+`lastPartAt` dead, and looks identical to a wedged muxer. A Chrome **tab**
+share does exactly that whenever the page is not repainting. A production
+session on 2026-09-15 was therefore restarted at 42 s (`part-stuck`) and
+demoted four minutes later (`part-stuck-second-stall`) for a share that was
+working, and the whole five-minute service log held fourteen depacketize
+warnings and nothing else to say otherwise. Three changes, all in
+`tools/pqp-remux` (see its README, "Keep-alive" and "Observability"):
+`sourceIdleFor` in `internal/control/watchdog.go` reads the RTP stream itself
+and treats "no frame AND no packet" as a quiet source — one log line per
+quiet episode and no action, while "packets but no frames" and "frames but
+no parts" still run the ladder unchanged. The forgiveness is bounded by
+`VIDEO_IDLE_MAX_MS` (default 2 minutes), because the same silence is also
+what a quietly dead RECEIVE path looks like — an ICE/DTLS failure with no
+track-ended event — and that one is fixed by exactly the restart the ladder
+would do; `Fragmenter.IdleFlush` publishes the held access unit so the
+playlist and a viewer's buffer cover the freeze rather than ending at the
+start of it (one part per episode — past that the video timeline is held
+and the wall-clock-paced audio track keeps producing parts); and every
+session writes one stats line every five seconds carrying packets, frames,
+keyframes, PLIs, parts, segments, depacketizer drops and upload latency, so
+the next one of these is read off a line instead of guessed at.
+
+**The keep-alive's first version stole media time, and the same afternoon
+showed it.** It fired on the PART target and re-derived `ptsOffset` on
+resume, which lands the frame that ends a gap exactly on the guess and
+deletes the rest of the gap. A Chrome tab share at ~1.4 frames/s has gaps
+between the 500 ms part target and a second, so every one of them was
+guessed: 15:10–15:15 UTC the video timeline advanced **29.0 s of media in
+53.8 s of wall clock** (0.54) beside audio at 0.98, and every viewer's
+blocking playlist reload eventually timed out. The rule now is that the
+publisher's clock IS the timeline — `ptsOffset` only ever rises, a quiet
+source's part waits for the frame that really ends it and carries that
+frame's true duration (so parts may exceed `PART_MS`, and `state.json`
+reports the real `partTargetMs`), and a keep-alive's guess is paid back
+through the duration of the frame that follows it. `timelineRatio` is on
+the stats line per track, and belongs at 1.00. The watchdog learned the
+same day that a quiet episode ending is not a stall: `idleEndedAt` restarts
+the part-stuck and IDR-gap clocks when the source comes back, because a
+part cannot close until the frame AFTER the first one back arrives.
+
 **Both sweeps get a case for their own rows**, pitfall 13's lesson, which this plan
 may not re-learn. The remux tears down any session in its map whose channel the API
 has not heartbeat about for 60 s; the API tears down any session `/healthz` reports
@@ -332,13 +477,62 @@ process memory and a stale entry acted on after another machine took the
 party over would kill the new owner's stream through the one path with no
 claim in front of it. **And the fallback sticks**: the demotion clears the party's
 `low_latency_requested` (logged as `voice.hlsLlRequestCleared`) and memoes the
-channel for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
+PARTY for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
 the next reconcile cannot start a second LL session on top of the one just
 given up on. That write is scoped to the party the session
 RECORDED (`hls_sessions.watch_party_session_id`, written at start, which is
 the one moment "the party that asked" and "the party that is live" are
 certainly the same), never to the channel, so a cleanup that runs late cannot
 clear a newer party's request.
+
+**The memo is keyed by party too, and that took two machines to learn.**
+Channel `d5559e70`, 2026-09-15: instance A demoted a session at 15:23:14 and
+memoed the CHANNEL. At 15:26:52 the host created a new party with the switch
+on; that request landed on instance B, which wrote `low_latency_requested =
+true` and cleared its own (empty) memo. The share seconds later reconciled on
+A, whose channel memo was still set, so the API started the conventional
+ladder for a party whose row said `true` — and logged nothing about it, the
+same per-process-state shape as #603/#605/#606/#618/#625. Keyed by the demoted
+party's own `channel_sessions.id` there is nothing to invalidate across
+machines: a new party is a new row with a new id and was never in the map, so
+the memo can only ever veto the one party it is a verdict about, on the one
+machine that reached that verdict. `forgetLlDemotion` is gone with the hole it
+patched.
+
+**A demotion whose party is not yet known still vetoes the channel.** Keying
+the memo by party opens a window the channel-keyed one covered by covering
+everything: a row with `watch_party_session_id = NULL` has no party to key by
+until `attributeDemotion` resolves one, and a reconcile in between would start
+LL straight back into the session the box just gave up on. So while attribution
+is outstanding, `llDemotionPendingAttribution` refuses LL for the channel — but
+only for a party that could BE the demoted one, bounded by the demoted
+session's own start, so a party created afterwards is never caught by it. It is
+self-limiting: attribution runs at the bottom of the same sweep and fails
+closed onto the live party after three attempts, which is what ends the veto.
+It lasts as long as the queued demotion does rather than five minutes, because
+a prolonged attribution failure is exactly the condition that produces an
+unattributed demotion in the first place, and an expiry shorter than the
+repair reopens the window mid-failure.
+
+Both memos are bounded in constant time rather than by sweeping on the write,
+and the full sweep runs only on the health tick and a lazy unref'd timer. The
+log memo evicts the least recently written key at its cap, because losing one
+costs an extra line. The demotion memo may only evict an EXPIRED entry (one
+constant-time look: insertion order is write order, so if the least recently
+written entry is live, none is) -- dropping a live veto would hand the party it
+is about straight back onto LL inside the window the memo covers. A memo full
+of live vetoes fails closed instead: `voice.hlsLlDemotionMemoFull`, and every
+party is refused LL until a sweep makes room. A threshold-triggered sweep on the
+write path is the same quadratic shape one threshold further out, which is
+what two rounds of Farol on this change were about.
+
+**And the decision says why.** `resolveHlsModeForChannel` (`hls-remux.ts`) is
+the whole mode branch in one place — the party's request, the party-scoped
+demotion veto, the allowlist — and logs `voice.hlsModeResolved` with
+`requested`, `partyDemoted`, `llAvailable`, `mode` and the party id.
+`reconcileLiveHlsNow` runs on every roster event, so the line is emitted when
+the decision CHANGES for a channel (a share starting, a mode flipping, a
+demotion landing) and restated at most once per five minutes otherwise.
 
 **A NULL attribution is unknown, not "no party".** The column is NULL for two
 different reasons a row cannot tell apart: the session genuinely started with
@@ -385,6 +579,18 @@ would each read the other as dead and take the row back in turn: "could not
 say I am alive" is not "I am alive". A row another process wrote in the last 60 s (the window
 between `startLlSession`'s INSERT and its POST) is left alone whatever the
 heartbeats say, which is this section's own grace, now enforced.
+
+**And the owner has to change hands on a RESUME, not only at boot.** Boot
+adoption covers the machine that comes up; it does not cover the machine that
+was already up when the presenter landed on it. `#625` closed that for the
+conventional ladder. LL was left out on purpose (no `egress_id` to ask LiveKit
+about), and `startLlSession`'s claim-before-act was not the same shape: a
+transient `GET /sessions` failure looked like "gone" and POSTed a second
+start, and a lost claim had no `stand-down` answer. `adoptRunningLlHlsSession`
+is the LL twin — same moment as the seat adoption, asks the remux box, claims
+the row, adopts into `llRooms` with no `POST` and no `DELETE`. `fresh` vs
+`stand-down` is the same split: the loser of a two-machine race starts
+nothing and stops nothing.
 
 **The mode re-check has to run where the transcode is.** Every path into
 `pushLiveHls` reads this process's own maps, so on the machine a viewer's
@@ -551,6 +757,18 @@ alphanumeric, so **`ll-audio` matched no route at all** and the LL audio
 rendition had been 404ing from the edge since `L2.2` while the video rung
 worked. What is left in `L2` before a viewer can actually play an LL session is
 `L2.4`, the three players.
+
+**Status, 2026-09-15 (evening): `L2.2` decided the mode by probing, and that was
+the bug.** Four production attempts, no viewer ever handed the low-latency
+stream. The Worker asked the remux whether a `state.json` existed and read "not
+yet" as "this party is conventional" — for sessions that were milliseconds old.
+Fixed by putting the mode ON THE WIRE: `?mode=ll` on `hlsUrl`
+(`LIVE_HLS_MODE_PARAM`), `mode` + `partTargetMs` on the stream frame, the
+Worker's master route keyed on the marker and answering `503 Retry-After: 1`
+(never the conventional ladder) while the remux warms up. §4's "the audience
+needs no signal" is struck through with the reasoning. The conventional master
+route no longer probes at all, which also retires the two Farol findings about
+what the probe cost a conventional viewer.
 
 **L2.1 Blocking playlist reload in the Worker** (2 d). `_HLS_msn`/`_HLS_part`
 parsing, one in-flight origin request per (session, rung, part) per colo with every

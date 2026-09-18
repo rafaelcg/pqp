@@ -612,6 +612,22 @@ export const serverSchema = z.object({
   /** Whether this server has opted into the rollout-gated Baú / Home feed. */
   communityHomeEnabled: z.boolean().default(false),
   /**
+   * In-app Overview identity. Defaulted so a payload from an API that
+   * predates them still parses. Featured lives only on the public `/c/`
+   * poster, not here — in-app the pinned Baú post is the featured moment.
+   */
+  communityTagline: z.string().nullable().default(null),
+  communityAbout: z.string().nullable().default(null),
+  communityLinks: z
+    .array(
+      z.object({
+        kind: z.enum(["youtube", "twitch", "instagram", "tiktok", "x", "site"]),
+        url: z.string(),
+      }),
+    )
+    .default([]),
+  communitySlug: z.string().nullable().default(null),
+  /**
    * This membership's profile-badge opt-out, TRUE by default. Meaningless
    * unless `isCommunity`; see `server_members.show_on_profile` in schema.sql.
    */

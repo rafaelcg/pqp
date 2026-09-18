@@ -1568,11 +1568,29 @@ mode: host-only, and present only when `GET /api/live-hls/config` says this
 server may ask at all (`lowLatency.available`), so a self-host with the flag
 off never sees a switch it cannot honour. The preference saves like any other
 option, but it only ever reaches the server at the next "Ir ao vivo" — the one
-moment `requestedHlsModeForChannel` is read (`server/src/voice/hls-remux.ts`)
+moment `setRequestedHlsMode` writes it (`server/src/voice/hls-remux.ts`)
 — so flipping it on a party that is already live shows its own note ("vale a
 partir da próxima transmissão") instead of silently doing nothing. The server
-still has the final word: off deployment-wide, or this server not on the
-allowlist, downgrades the request to conventional without complaint.
+still has the final word: off deployment-wide, this server not on the
+allowlist, or **no `LIVE_HLS_PLAYLIST_BASE_URL`** — the edge Worker is the
+only thing that renders an LL playlist, so an API with no edge front never
+picks the mode at all — downgrades the request to conventional without
+complaint.
+
+**The delivery mode is stated on the wire, not inferred.** An `ll` session's
+`hlsUrl` carries `?mode=ll` (`LIVE_HLS_MODE_PARAM`,
+`packages/shared/src/live-hls.ts`) and the stream frame carries `mode: "ll"`
+beside it, plus `partTargetMs` so the player sizes its hold-back to the
+cadence the remux actually writes at. The Worker serves the LL master because
+the request says so; when the remux has not written its first state yet it
+answers `503 Retry-After: 1` and the player comes back, rather than being
+handed the conventional ladder's master for a ladder nothing is writing.
+That last sentence is the whole of 2026-09-15: low latency was enabled four
+times, the Worker probed for state, a session 300 ms old had none, and every
+viewer got a conventional master and then "A transmissão caiu". A demotion
+(§"A low-latency session the remux box gives up on") reaches viewers as a
+fresh frame with the conventional URL and mode, because `liveHlsFrameChanged`
+(`server/src/ws/voice.ts`) counts `mode` as a change.
 
 ## What the stream carries, and what it does not
 
@@ -1842,9 +1860,19 @@ already cover it; a future stitch of face-plus-film side by side reads the
 A stalling stream and a healthy one look identical from the API. Read this
 before diagnosing one.
 
+**The state map is its own document now.** [`docs/WATCH_PARTY_LIFECYCLE.md`](./WATCH_PARTY_LIFECYCLE.md)
+lists the three machines (the party session, the HLS session and its LL
+substate, and what the viewer's player shows), who moves each one, and the
+invariants between them -- including the five that broke together on
+2026-09-17 and produced a zombie session, a restart for a party that was
+over, and a viewer stuck on "reconnecting" with the truth in the sidebar
+beside it. Read that first when a party is in a state nobody can explain;
+this section is the restart machinery underneath it.
+
 **Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
 `no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
-`playlist-not-ready`. It did not, and on 2026-09-09 a live party logged two
+`playlist-not-ready`, `presenter-gone` (the presenter left while this session
+was still inside its readiness probe, 2026-09-17), `ll-mode-selected`. It did not, and on 2026-09-09 a live party logged two
 `voice.hlsStarted` for one channel nine minutes apart, same presenter, with
 nothing at all in between. Three of `stopRoom`'s callers logged nothing and the
 fourth logged only in a branch a silent one pre-empted, so there was no way to
@@ -1864,6 +1892,40 @@ monitor reads that every tick, ends the `hls_sessions` row, counts
 `liveHls.llDemoted`, logs `voice.hlsLlDemoted channelId reason`, clears the
 party's `low_latency_requested` and reconciles the channel so the rungs start.
 See `docs/plans/LL_HLS.md` §5.
+
+**An LL session ending has to reach the audience the same way a conventional
+one does, and for eighteen minutes on 2026-09-15 it did not.** `pushLiveHls`
+took its "what was playing a moment ago" from `liveHlsStreamFor`, which is the
+conventional ladder's `rooms` map and nothing else; an LL session lives in
+`llRooms` (`hls-remux.ts`). So on the push that ENDED one, `prev` was already
+null, `next` was null, `liveHlsFrameChanged(null, null)` was false, and every
+step under it was skipped: the per-peer `voice-stream`, the `channel-live`
+carrying `ended`, `hlsAudience.setStream(null)` (which is what stops the
+thirty-second keyframe and the viewer-token re-mint), and `publishChannelLive`
+on the bus, which is the only thing that would have cleared the OTHER machine's
+audience cache. Channel `d5559e70`'s session ran 18:14:47 to 18:33:11 UTC; at
+19:36 the host's own freshly loaded page was still being handed it every thirty
+seconds, the edge Worker answered 503 `no-state` for the dead session
+(correctly), the player read "A transmissão travou, reconectando", and the host
+could not get past the watch surface to set a new party up. `prev` reads both
+drivers now, which also stops the mirror-image waste on the way in: with it
+pinned at null, every push for a LIVE LL party re-minted a token for every peer
+and every member of the channel's audience on every roster event.
+
+**And a cached stream must not outlive its session even if the stop is lost.**
+The bus is best-effort, so a `mode: "ll"` stream a machine holds in
+`hlsAudience` and in neither driver's map is re-checked against its
+`hls_sessions` row at most every `LL_SESSION_VERIFY_MS` (15 s) — one narrow
+read, `isHlsSessionOpen`, that answers "could not ask" as "assume it is fine"
+so a query timeout never takes a live party's playlist away. A row that has
+ended clears the entry, fences the session against a straggling `voice.live`,
+and fans the truth out. That gate is `resolveChannelStream`, which is what the
+audience keyframe, the token re-mint, the welcome, `watch-live` and
+`GET /api/channels/:id/live` all pass through, so all five converge together.
+Every teardown logs one `voice.hlsLlStreamCleared` with a reason
+(`no-share`, `party-over`, `replaced`, `row-ended`) and how many sockets were
+told. Pinned by `server/src/ws/voice-live-cluster.test.ts` §"a low-latency
+session ending".
 
 **A rung the monitor declares dead may still be running.** `rungHealth` says
 "ended" for two different reasons and only one of them means the handler is

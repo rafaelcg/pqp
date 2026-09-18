@@ -26,10 +26,23 @@ final class VoiceModel {
         didSet {
             guard status != oldValue else { return }
             if status == .connected { noteCallProgress() } else { endCallRating() }
+            reportCallKitTransition(from: oldValue, to: status)
         }
     }
     private(set) var channelId: String?
     private(set) var channelName: String?
+    /// Bumped once at the start of every `join()` attempt, retries included.
+    /// A cleanup `Task` spawned by a moderation/refusal event captures the
+    /// generation it belongs to and checks it back after its first `await`,
+    /// so a retry that already established a NEW session by the time the old
+    /// cleanup resumes is left alone instead of being torn down by a task
+    /// that no longer speaks for the current call (Farol review, PR 674).
+    private var callGeneration = 0
+    /// The server this channel belongs to, for CallKit's display name
+    /// ("#general @ pqp HQ"), passed in by `join`'s caller (`ChatView`
+    /// already has the `Server` object) rather than looked up here, which
+    /// has no server list of its own to search.
+    private(set) var serverName: String?
     /// The room this session is in or joining, for the stage that is presented
     /// from the app root. Nil once left. Distinct from `intendedChannel`, which
     /// is cleared on eviction while the screen is still up.
@@ -218,6 +231,11 @@ final class VoiceModel {
     /// socket drop so the server reattaches our seat instead of minting a new one.
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
+    /// Reports this room to CallKit and carries out what CallKit asks back.
+    /// See `CallKitCoordinator` and `docs/IOS_CALLKIT.md`. Attached once, at
+    /// app start (`attachCallKit`), not per join: this model outlives any one
+    /// room.
+    private weak var callKit: CallKitCoordinator?
     private let handlerKey = "voice-" + UUID().uuidString
     /// Accumulates the shape of the call while it runs. Ignored by Observation
     /// on purpose: it changes on nearly every peer event and nothing should
@@ -433,7 +451,10 @@ final class VoiceModel {
         }
     }
 
-    func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
+    func join(
+        channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil,
+        serverName: String? = nil
+    ) async {
         // One session per app, so a join from another room is a move, and the
         // room being left must hear about it before this one is entered. The
         // same room is a no-op: the stage was reopened, not rejoined.
@@ -441,12 +462,14 @@ final class VoiceModel {
             if channelId == channel.id { return }
             await leave()
         }
+        callGeneration += 1
         self.session = session
         self.ratings = ratings
         configureScreenShare()
         self.channel = channel
         channelId = channel.id
         channelName = channel.name
+        self.serverName = serverName
         intendedChannel = channel
         status = .joining
 
@@ -567,6 +590,7 @@ final class VoiceModel {
         isCollapsed = false
         channelId = nil
         channelName = nil
+        serverName = nil
         peers = []
         video = [:]
         roster = [:]
@@ -582,6 +606,51 @@ final class VoiceModel {
         canSpeak = true
         canStream = true
         transportNotice = nil
+    }
+
+    // MARK: - CallKit
+
+    /// Wires this model to the app's one `CallKitCoordinator`. Called once at
+    /// app start, unlike `CallModel.attach`'s per-session shape, because this
+    /// model is app-wide already and has no per-session state of its own to
+    /// reset.
+    func attachCallKit(_ callKit: CallKitCoordinator) {
+        self.callKit = callKit
+        callKit.channelDelegate = self
+    }
+
+    /// "#general @ pqp HQ", falls back gracefully when a caller has no
+    /// server name handy. No new copy: CallKit's call screen is system
+    /// chrome, not app UI, so this stays a plain value rather than a string
+    /// this build has to carry in pt-BR too.
+    private var callKitDisplayName: String {
+        guard let channelName else { return channelId ?? "" }
+        guard let serverName else { return "#\(channelName)" }
+        return "#\(channelName) @ \(serverName)"
+    }
+
+    /// Reports this room to CallKit at the same three moments `CallModel`
+    /// does, centralised here (rather than at each call site, the way
+    /// `CallModel` does it) because `status` only ever changes through this
+    /// one `didSet`. Unlike `CallModel.hangUp`, which clears `conversationId`
+    /// before its `phase` transition, `leave()` sets `status = .idle` BEFORE
+    /// it clears `channelId`, so reading it here for the "ended" report is
+    /// safe. See `leave()`.
+    private func reportCallKitTransition(from oldValue: VoiceStatus, to next: VoiceStatus) {
+        guard let channelId else { return }
+        let room = CallKitRoom.channel(channelId)
+        switch next {
+        case .joining where oldValue == .idle:
+            callKit?.reportOutgoingCall(room: room, displayName: callKitDisplayName)
+        case .connected:
+            callKit?.reportConnected(room: room)
+        case .idle:
+            callKit?.reportCallEnded(room: room, reason: .remoteEnded)
+        case .failed:
+            callKit?.reportCallEnded(room: room, reason: .failed)
+        case .joining:
+            break
+        }
     }
 
     /// Apply the server's SPEAK and STREAM rules to the local media.
@@ -1060,6 +1129,64 @@ final class VoiceModel {
             isCameraOn = false
             localCamera = nil
 
+        /**
+         A MODERATOR ACTED ON THIS SEAT.
+
+         `disconnectVoiceUser` on the server sends this notice and THEN drops
+         the peer, so by the time it arrives here the seat is already gone.
+         Nothing else says so: a mesh peer removal does not single the target
+         out with its own frame, so without this the local call screen and
+         microphone kept running against a room that no longer held us —
+         "ends the call with no reason given" for a disconnect, and for a
+         move, the person the moderator sent elsewhere never reappears
+         anywhere, because nothing here ever asked to go.
+
+         `message` is the whole sentence, server-written and already correct
+         (for `moved`, it names the destination channel) — rendered verbatim,
+         the same rule as `sanctionNotice`. `movedToChannelId` is not
+         followed automatically: doing that needs a `Channel` to hand `join`,
+         which this model has no way to resolve from an id alone, so the
+         person taps their way there themselves for now.
+
+         "muted" / "unmuted" fall through undone on purpose: the roster's
+         `serverMuted` flag is what enforces those (`RemoteAudioMixer` and
+         every frame that carries the participant), and this model has no
+         banner surface yet for the explanation the web shows alongside it.
+         */
+        case .voiceModeration(let voiceChannelId, let action, _, let message):
+            // Matches both `channelId` and `intendedChannel?.id`, the same as
+            // `voiceJoinRefused` above: during a rejoin the channel this event
+            // is about can be sitting in `intendedChannel` rather than
+            // `channelId` yet, and without this a moderation frame that
+            // arrives in that window was silently dropped, leaving the call
+            // screen and microphone live against a room that already dropped
+            // the seat (Farol review, PR 674).
+            guard voiceChannelId == channelId || voiceChannelId == intendedChannel?.id,
+                  action == "disconnected" || action == "moved" else { return }
+            intendedChannel = nil
+            resumeClaim = nil
+            status = .failed(message)
+            let generation = callGeneration
+            Task {
+                await screenShare.disarm()
+                // A retry (`join()`) bumps `callGeneration`; if one has
+                // already started a new session by the time `disarm()`
+                // returns, this cleanup belongs to the OLD session and must
+                // not tear down the new one's mesh/SFU connection (Farol
+                // review, PR 674).
+                guard generation == callGeneration else { return }
+                await voice.disconnectAll()
+                await sfu.disconnect()
+            }
+            sfuJoin?.cancel()
+            sfuJoin = nil
+            sfuIsConnected = false
+            peers = []
+            video = [:]
+            selfPeerId = nil
+            isCameraOn = false
+            localCamera = nil
+
         case .voiceTransportUnsupported(let voiceChannelId, let transport, let reason):
             guard voiceChannelId == channelId else { return }
             intendedChannel = nil
@@ -1291,5 +1418,26 @@ final class VoiceModel {
             iceServers: iceServers
         )
         if isDeafened { await sfu.setDeafened(true) }
+    }
+}
+
+// MARK: - CallKitRoomHandling
+
+/// What CallKit asks this device to do to a voice channel, from the lock
+/// screen, CarPlay, Apple Watch or Siri. See `CallKitCoordinator`.
+extension VoiceModel: CallKitRoomHandling {
+    /// A voice channel is never rung (`reportOutgoingCall` is the only
+    /// report this model ever makes), so CallKit has no reason to ask this to
+    /// answer. Present only to satisfy the shared protocol.
+    func callKitAnswer(_ room: CallKitRoom) {}
+
+    func callKitEnd(_ room: CallKitRoom) {
+        guard case .channel(let id) = room, channelId == id else { return }
+        Task { await leave() }
+    }
+
+    func callKitSetMuted(_ room: CallKitRoom, muted: Bool) {
+        guard case .channel(let id) = room, channelId == id else { return }
+        isMuted = muted
     }
 }

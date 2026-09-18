@@ -36,6 +36,11 @@ struct WatchStageView: View {
     @Environment(VoiceModel.self) private var voice
 
     let channel: Channel
+    /// Only used in the theater, where the system nav bar's own back
+    /// chevron is hidden so it does not sit over the film immune to the
+    /// autohide the rest of the chrome follows. `ChatView` hands in its own
+    /// dismiss action; nil elsewhere leaves the system bar's button alone.
+    var onBack: (() -> Void)?
     @State private var model = WatchModel()
     @State private var player: AVPlayer?
     /// The URL currently handed to the player, and when. `WatchStreamSwap`
@@ -134,6 +139,9 @@ struct WatchStageView: View {
             key: WatchHeroPreference.self,
             value: model.phase == .live && !isMinimised && !isSeated
         )
+        // Landscape, live, not minimised, not seated: exactly `isLandscape`
+        // below, which is already precisely that condition.
+        .preference(key: WatchTheaterPreference.self, value: isLandscape)
         .task(id: channel.id) { await model.open(channelId: channel.id, session: session) }
         .task { await watchdog() }
         .onDisappear {
@@ -505,11 +513,11 @@ struct WatchStageView: View {
             isPlaying: isPlaying,
             isTheater: isTheater,
             behindLive: behindLive,
-            delaySeconds: delaySeconds ?? model.stream?.delaySeconds,
             audienceCount: model.audienceCount,
             audienceLabel: viewerLabel,
                     pipAvailable: isTheater ? false : pip.canStart,
             chromeInsets: isTheater ? chromeInsets : .init(),
+            onBack: isTheater ? onBack : nil,
             onTogglePlay: togglePlay,
             onJumpToLive: jumpToLive,
             onStartPip: { pip.start() },

@@ -9,6 +9,7 @@ import {
   VideoOff,
   Volume2,
 } from "lucide-react";
+import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -80,12 +81,20 @@ interface VoiceStatusBarProps {
   onLeave: () => void;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
   shareHintEnabled?: boolean;
+  /** One-shot bring-friends coachmark when the stage is not on screen. */
+  bringFriendsHintEnabled?: boolean;
   /**
    * The sidebar is 72px of icons. Only the two things that cannot wait survive
    * the squeeze: the call you are in, and the way out of it. Camera and share
    * are on the stage, which is what the collapsed sidebar made room for.
    */
   compact?: boolean;
+  /**
+   * The call's own bar is on screen (docked in the composer, see
+   * `call-dock.tsx`), with these same camera and share buttons on it. This
+   * strip then keeps the sentence and the way out and drops the second copy.
+   */
+  hideActions?: boolean;
 }
 
 const ACTION = "h-9 w-full shrink-0 rounded-lg";
@@ -117,7 +126,9 @@ export function VoiceStatusBar({
   onOpen,
   onLeave,
   shareHintEnabled = false,
+  bringFriendsHintEnabled = false,
   compact = false,
+  hideActions = false,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
   const connected = status === "connected";
@@ -134,7 +145,7 @@ export function VoiceStatusBar({
   const showCamera = showVideoActions && onToggleCamera != null;
   const showShare =
     showVideoActions && onToggleScreenShare != null && platformCanShare;
-  const showActionRow = showCamera || showShare;
+  const showActionRow = (showCamera || showShare) && !hideActions;
   const cameraLabel = isCameraOn
     ? t("voice.bar.cameraOff")
     : t("voice.bar.cameraOn");
@@ -221,6 +232,11 @@ export function VoiceStatusBar({
             enabled
             body={t("featureHint.watchParty.strip")}
           />
+        </div>
+      )}
+      {bringFriendsHintEnabled && (
+        <div className="mb-2">
+          <BringFriendsHint enabled />
         </div>
       )}
       <div className="flex items-center gap-1">

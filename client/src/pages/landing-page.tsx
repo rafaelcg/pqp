@@ -334,6 +334,14 @@ export function LandingPage() {
             <p className={EYEBROW}>{t("landing.discord.eyebrow")}</p>
             <h2 className={cn(H2, "mt-3")}>{t("landing.discord.title")}</h2>
             <p className="mt-4 text-lg text-paper-muted">{t("landing.discord.body")}</p>
+            <p className="mt-3">
+              <Link
+                to="/tela"
+                className="text-sm text-paper-muted underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+              >
+                {t("landing.discord.tela")}
+              </Link>
+            </p>
           </div>
           <ul className="mt-14 grid gap-5 md:grid-cols-3">
             {DISCORD_CARDS.map((card) => (

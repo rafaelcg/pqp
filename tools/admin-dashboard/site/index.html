@@ -4470,9 +4470,22 @@
     var peakBusy = Number(rt.peakPoolBusy) || 0;
     var hitCeiling = max > 0 && peakBusy >= max;
 
+    // "busy" sozinho não separa carga de vazamento: 22 conexões ocupadas são
+    // iguais quer sejam 22 consultas de 3 ms, quer sejam as mesmas 22 paradas
+    // há quatro minutos esperando resposta que não vem (foi exatamente isso na
+    // staging em 2026-09-17). Estas duas contam há quanto tempo cada conexão
+    // está em uso, e é a idade que separa os dois casos.
+    var stuck = Number(pool.checkedOutOver10s) || 0;
+    var oldestMs = Number(pool.longestCheckoutMs) || 0;
+    var oldestLabel = oldestMs >= 60000
+      ? Math.round(oldestMs / 60000) + " min"
+      : Math.round(oldestMs / 1000) + " s";
+
     setText("rtBusy", fmt(busy) + (max ? " / " + fmt(max) : ""));
     setText("rtBusyNote", max
-      ? "pico " + fmt(peakBusy) + (hitCeiling ? " · encostou no teto" : " · teto PG_POOL_MAX")
+      ? (stuck
+          ? fmt(stuck) + (stuck === 1 ? " presa" : " presas") + " · mais antiga há " + oldestLabel
+          : "pico " + fmt(peakBusy) + (hitCeiling ? " · encostou no teto" : " · teto PG_POOL_MAX"))
       : "nenhum pool aberto");
     setText("rtWaiting", fmt(waiting));
     setText("rtPeakWaiting", fmt(peakWaiting));
@@ -4482,7 +4495,9 @@
     // to open. A queue below the ceiling is amber: pg queues whenever it cannot
     // hand over a connection in the same tick, which happens on every cold
     // start, and a red that shows up on every deploy stops being read.
-    tone("rtBusyTile", pressure === "saturated" ? "bad" : pressure === "tight" ? "attn" : "good");
+    // Uma conexão presa há mais de 10 s é vermelha mesmo com o pool folgado:
+    // é a única leitura que aparece ANTES de o pool encher.
+    tone("rtBusyTile", (pressure === "saturated" || stuck) ? "bad" : pressure === "tight" ? "attn" : "good");
     tone("rtWaitingTile", pressure === "saturated" ? "bad" : waiting ? "attn" : "good");
     tone("rtPeakWaitingTile", peakWaiting && hitCeiling ? "bad" : peakWaiting ? "attn" : "good");
 
@@ -4505,11 +4520,13 @@
       : "leitura ao vivo, fora do cache");
 
     sigState.capacity = {
-      state: pressure === "saturated" ? "bad"
+      state: (pressure === "saturated" || stuck) ? "bad"
         : (pressure === "tight" || hitCeiling) ? "warn" : "ok",
       label: "capacidade",
       value: fmt(sockets) + (sockets === 1 ? " conexão" : " conexões"),
-      note: pressure === "saturated"
+      note: stuck
+        ? fmt(stuck) + (stuck === 1 ? " conexão presa" : " conexões presas") + " há mais de 10 s, a mais antiga há " + oldestLabel
+        : pressure === "saturated"
         ? "pool cheio com " + fmt(waiting) + " na fila"
         : waiting
           ? fmt(waiting) + (waiting === 1 ? " pedido na fila" : " pedidos na fila") + ", pool com folga"

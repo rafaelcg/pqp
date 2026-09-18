@@ -1,0 +1,363 @@
+name: Android release
+
+# Ships a signed Android App Bundle to Google Play. A separate file from
+# android.yml on purpose: that workflow builds and tests on every push and
+# publishes a sideload APK, signed with a key Play has never seen, to
+# pqp.gg/android. This one runs far less often, touches Play itself, and needs
+# two credentials android.yml never holds: the Play upload keystore and a Play
+# Console service account. See docs/ANDROID.md "Shipping to Google Play" and
+# docs/ANDROID_RELEASE.md for the one-time setup and the per-release flow.
+#
+# Triggers: a tag `android-vX.Y.Z` (the ordinary path), or workflow_dispatch
+# for a manual run or a production promotion. Both build the same way; only
+# the target track differs.
+on:
+  push:
+    tags:
+      - "android-v*"
+  workflow_dispatch:
+    inputs:
+      track:
+        description: "Play track to release to"
+        type: choice
+        options:
+          - internal
+          - production
+        default: internal
+        required: true
+      draft_only:
+        description: >-
+          Commit the upload without sending it for review (Play API
+          changesNotSentForReview). Use when Play rejects the commit with
+          "You must let us know whether your app uses ..." because a new
+          permission needs a console declaration first: the release lands
+          as a draft, the declaration form then shows the new permission,
+          and the release is sent for review from the console.
+        type: boolean
+        default: false
+      release_notes:
+        description: >-
+          What's new, plain text. Optional. Used for both en-US and pt-BR
+          (write it in Portuguese; see AGENTS.md "PT-BR voice" if this reaches
+          testers). Left blank, a generic line is used.
+        type: string
+        required: false
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  # Never cancel a run already talking to the Play Developer API: a cancelled
+  # upload can leave a release half-created on the track.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Same platform as android.yml. Named here for the same reason: the
+  # compile target is a fact of the repo, not of whichever runner happens to
+  # have it installed.
+  COMPILE_SDK: "37"
+  BUILD_TOOLS: "36.0.0"
+
+jobs:
+  release:
+    name: Build and publish to Play
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # `production` reaches real users immediately (status: completed on the
+    # Upload to Google Play step below); `internal` is Play's own low-stakes
+    # track. Two separate GitHub Environments so a required-reviewer rule on
+    # `play-production` (configured once in repo Settings → Environments, see
+    # docs/ANDROID_RELEASE.md) actually gates a production publish, rather
+    # than any account with workflow_dispatch access being able to pick
+    # `production` from the dropdown and publish unattended (Farol review,
+    # PR 679).
+    environment: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.track == 'production') && 'play-production' || 'play-internal' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history: "Verify the tag is reachable from main" below needs
+          # to walk it.
+          fetch-depth: 0
+
+      # An `android-v*` TAG is enough to trigger this credentialed job by
+      # itself. Creating a tag is not creating a commit, and nothing about it
+      # implies the review a merged PR gets — unlike main, tag creation is
+      # not (by default) branch-protected, so any account able to push a tag
+      # could point `android-v*` at an unreviewed or modified commit and have
+      # this job build and sign it with the Play upload keystore (Farol
+      # review, PR 679). Refuse unless the tagged commit is actually
+      # reachable from `main`. This is a code-level backstop, not a
+      # replacement for a repository ruleset restricting who may create
+      # `android-v*` tags — see docs/ANDROID_RELEASE.md.
+      - name: Verify the tag is reachable from main
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::${{ github.ref }} (${{ github.sha }}) is not reachable from main. Refusing to build and sign a release from a ref that did not go through the ordinary PR/review path. Push android-v* tags only at a commit already on main."
+            exit 1
+          fi
+          echo "Tag commit is reachable from main."
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+          cache-read-only: true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      - name: Install the compile SDK
+        shell: bash
+        run: |
+          set -uo pipefail
+          sdkmanager "platform-tools" "build-tools;${BUILD_TOOLS}" || true
+          sdkmanager "platforms;android-${COMPILE_SDK}.0" \
+            || sdkmanager "platforms;android-${COMPILE_SDK}" \
+            || echo "::warning::No platforms;android-${COMPILE_SDK} package resolved; letting AGP fetch it."
+
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Lint
+        working-directory: android
+        run: ./gradlew :app:lint --stacktrace
+
+      # Resolves the track (workflow_dispatch has one; a tag push does not
+      # and defaults to internal, matching "promote from Play Console rather
+      # than re-upload" below) and reads versionName/versionCode straight out
+      # of build.gradle.kts, which is the one place they are bumped. See "The
+      # versionCode scheme" in docs/ANDROID.md: it is a hand-bumped literal
+      # on purpose, so this step verifies it rather than deriving a new one.
+      - name: Resolve track and version
+        id: params
+        shell: bash
+        env:
+          # Passed through env, not interpolated into the script text: a
+          # crafted workflow_dispatch API call controls this string, and
+          # `${{ }}` inside `run:` is substituted before bash ever parses the
+          # line, so a value that closes the quote runs as shell code with
+          # the Play/keystore credentials this job later loads into its
+          # environment (Farol review, PR 679).
+          TRACK_INPUT: ${{ github.event.inputs.track }}
+        run: |
+          set -euo pipefail
+          track="${TRACK_INPUT:-internal}"
+          case "$track" in
+            internal|production) ;;
+            *)
+              echo "::error::Unrecognized track \"$track\" (expected internal or production)."
+              exit 1
+              ;;
+          esac
+          echo "track=${track}" >> "$GITHUB_OUTPUT"
+
+          version_name=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
+          version_code=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' android/app/build.gradle.kts)
+          echo "version_name=${version_name}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${version_code}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${GITHUB_REF}" == refs/tags/android-v* ]]; then
+            tag_version="${GITHUB_REF#refs/tags/android-v}"
+            if [ "$tag_version" != "$version_name" ]; then
+              echo "::error::Tag android-v${tag_version} does not match versionName \"${version_name}\" in android/app/build.gradle.kts. Bump versionName (and versionCode, it must strictly increase) and push a tag that matches, or retag once it does."
+              exit 1
+            fi
+          fi
+
+      # The upload keystore is the credential a Play submission cannot exist
+      # without: Play refuses anything not signed by the app's upload key,
+      # and the key that signs the FIRST accepted upload is permanent for
+      # the life of the listing. It is deliberately not the same key as
+      # android.yml's sideload keystore (see docs/ANDROID.md "The sideload
+      # signing key"); Play has never seen that one and must not.
+      - name: Check for the Play upload keystore
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANDROID_UPLOAD_KEYSTORE_B64 is not set. Building an UNSIGNED bundle to prove the build is healthy; nothing will be uploaded to Play. See docs/ANDROID.md 'Shipping to Google Play' for the one-time secret setup."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            install -d -m 700 "$RUNNER_TEMP/android-signing"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/android-signing/upload.jks"
+            chmod 600 "$RUNNER_TEMP/android-signing/upload.jks"
+            echo "keystore=$RUNNER_TEMP/android-signing/upload.jks" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release bundle (.aab)
+        working-directory: android
+        env:
+          # The production Clerk key, the same secret deploy-web.yml already
+          # uses for Pages. A bundle built without it compiles cleanly and
+          # then cannot sign anybody in, which is a wasted upload rather than
+          # a build failure, so this fails loudly instead. See
+          # docs/ANDROID_RELEASE.md "The fifth property is not optional".
+          PQP_CLERKPUBLISHABLEKEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          # Empty when the keystore secret is absent, and build.gradle.kts
+          # then creates no release signing config at all rather than
+          # falling back to a key Play would reject. See the comment on
+          # `releaseKeystore` there.
+          PQP_KEYSTOREFILE: ${{ steps.signing.outputs.keystore }}
+          PQP_KEYSTOREPASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          PQP_KEYALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          PQP_KEYPASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PQP_CLERKPUBLISHABLEKEY}" ]; then
+            echo "::error::VITE_CLERK_PUBLISHABLE_KEY is empty. A release bundle built without it compiles and then cannot sign anybody in (AuthMode.Misconfigured). Set the Actions secret (same value the Pages build uses) before releasing."
+            exit 1
+          fi
+          # Also runs verifyReleaseBundleNativeJniClasses, wired onto
+          # bundleRelease in build.gradle.kts: it fails the build if R8
+          # stripped a class libwebrtc resolves by name from native code,
+          # the crash that reached the Play internal track once already.
+          ./gradlew :app:bundleRelease --stacktrace
+
+      # Checks the artifact rather than the config that produced it, the
+      # same reasoning as android.yml's sideload signature check: a secret
+      # can be silently empty in a way a green build does not reveal, and
+      # the artifact is the one thing that cannot be wrong about what would
+      # actually be uploaded. An App Bundle is JAR-signed, not
+      # apksigner-signed like an APK, so this looks for the signature block
+      # jarsigner leaves rather than shelling out to apksigner.
+      - name: Verify the bundle is signed
+        if: steps.signing.outputs.ready == 'true'
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          aab="app/build/outputs/bundle/release/app-release.aab"
+          # Captured, not piped straight into grep -q: with `set -o
+          # pipefail`, grep -q exits the instant it finds a match, unzip -l
+          # can then receive SIGPIPE while still writing the rest of the
+          # listing, and the pipeline's exit status becomes unzip's nonzero
+          # SIGPIPE code even though grep found exactly what it was looking
+          # for -- reporting a signed bundle as unsigned (Farol review, PR
+          # 679). unzip runs to completion here; the `<<<` here-string below
+          # is not a pipe, so grep exiting early has nothing to SIGPIPE.
+          listing=$(unzip -l "$aab")
+          if ! grep -qE 'META-INF/[^/]+\.(RSA|DSA|EC)$' <<< "$listing"; then
+            echo "::error::${aab} has no JAR signature block even though ANDROID_UPLOAD_KEYSTORE_B64 was set. The signing config likely did not apply; check ANDROID_UPLOAD_KEY_ALIAS and the two passwords."
+            exit 1
+          fi
+          echo "$aab is signed."
+
+      - name: Upload bundle as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-android-release-bundle
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Check for the Play service account
+        id: play
+        shell: bash
+        env:
+          # Through env, not `${{ }}` interpolated straight into the script:
+          # the real secret is the normal Google service-account JSON, whose
+          # embedded quotes and newlines would land inside `if [ -z "..." ]`
+          # before bash ever parses the line, breaking the test (and, unlike
+          # the read-only check here, the credential this same shape would
+          # have handed to `run:` blocks that actually use it — Farol review,
+          # PR 679).
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set. Nothing will be uploaded to Play. See docs/ANDROID.md 'Shipping to Google Play'."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Play wants release notes per locale, as files named
+      # whatsnew-<locale> in a directory. There is no translation step here,
+      # so the same text goes in both; write it in Portuguese per
+      # AGENTS.md "PT-BR voice" if testers will actually read it, or leave
+      # the input blank and this falls back to a generic line rather than
+      # failing the upload over missing prose.
+      - name: Prepare release notes
+        if: steps.signing.outputs.ready == 'true' && steps.play.outputs.ready == 'true'
+        id: notes
+        shell: bash
+        env:
+          NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/whatsnew"
+          mkdir -p "$dir"
+          text="${NOTES:-Melhorias e correções. / Improvements and fixes.}"
+          printf '%s' "$text" | head -c 500 > "$dir/whatsnew-en-US"
+          printf '%s' "$text" | head -c 500 > "$dir/whatsnew-pt-BR"
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+
+      # Pinned to a commit SHA, not the mutable `v1` tag: this action receives
+      # the Play service-account JSON in full and can publish under it; a
+      # compromised or retargeted tag would be able to exfiltrate the
+      # credential or ship an attacker-controlled release (Farol review, PR
+      # 679). `# v1` names what is pinned; bump only through a deliberate
+      # review of the new commit.
+      - name: Upload to Google Play
+        id: play_upload
+        if: steps.signing.outputs.ready == 'true' && steps.play.outputs.ready == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: gg.pqp.app
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: ${{ steps.params.outputs.track }}
+          status: completed
+          whatsNewDirectory: ${{ steps.notes.outputs.dir }}
+          changesNotSentForReview: ${{ github.event.inputs.draft_only == 'true' }}
+
+      - name: Note why Play was skipped
+        if: steps.signing.outputs.ready != 'true' || steps.play.outputs.ready != 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Not uploaded to Play"
+            echo
+            missing=""
+            if [ "${{ steps.signing.outputs.ready }}" != "true" ]; then missing="${missing}- the four \`ANDROID_UPLOAD_KEY*\` secrets"$'\n'; fi
+            if [ "${{ steps.play.outputs.ready }}" != "true" ]; then missing="${missing}- \`PLAY_SERVICE_ACCOUNT_JSON\`"$'\n'; fi
+            echo "Missing:"
+            echo
+            echo "$missing"
+            echo "The bundle still built and is attached as the **pqp-android-release-bundle** workflow artifact, so it can be uploaded to Play Console by hand. See docs/ANDROID.md \"Shipping to Google Play\" for the one-time setup, then re-run this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Play upload skipped; see the job summary. The .aab is still attached as a workflow artifact."
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Android release"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| versionName | ${{ steps.params.outputs.version_name }} |"
+            echo "| versionCode | ${{ steps.params.outputs.version_code }} |"
+            echo "| track requested | ${{ steps.params.outputs.track }} |"
+            echo "| uploaded to Play | ${{ steps.play_upload.outcome == 'success' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

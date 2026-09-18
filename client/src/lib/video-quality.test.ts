@@ -488,12 +488,13 @@ describe("the presenter as the ladder's source", () => {
     ).toBe(true);
   });
 
-  it("holds HLS ingest pixels: maintain-resolution and scale 1", () => {
-    // Mesh DMs and ordinary SFU shares still spend resolution first.
-    // HLS ingest cannot: egress transcodes whatever pixels arrive, and
-    // Chrome's maintain-framerate walk 1080 → 180 is what every viewer gets.
-    expect(screenShareDegradationPreference(LIVE)).toBe("maintain-resolution");
-    expect(screenShareScaleResolutionDownBy(LIVE)).toBe(1);
+  it("holds framerate for an HLS ingest, spending resolution (maintain-framerate, no pin)", () => {
+    // A watch party is motion content. maintain-resolution + scale-1 (PR 475)
+    // froze the encoder to 1-3 fps under an uplink dip and stalled every
+    // viewer; the HLS source now behaves like an ordinary SFU share — hold
+    // framerate, let resolution fall — so the picture keeps moving.
+    expect(screenShareDegradationPreference(LIVE)).toBe("maintain-framerate");
+    expect(screenShareScaleResolutionDownBy(LIVE)).toBeUndefined();
     expect(screenShareDegradationPreference(null)).toBe("maintain-framerate");
     expect(screenShareScaleResolutionDownBy(null)).toBeUndefined();
     expect(

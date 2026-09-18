@@ -104,10 +104,18 @@ export function LivePartyBlock({
   onPurge,
   historyChannels = [],
   onOpenHistory,
+  recoveringChannelId = null,
 }: {
   /** Live parties in this server, newest first. Usually exactly one. */
   parties: readonly WatchParty[];
   selectedChannelId: string | null;
+  /**
+   * The party whose card should say "reconnecting" instead of "AO VIVO": the
+   * one this viewer is presenting whose screen publish has dropped. Only ever
+   * this viewer's own channel (`use-voice`'s `sharePublishRecovering`), so a
+   * genuine audience card is never touched. Null when nothing is recovering.
+   */
+  recoveringChannelId?: string | null;
   /** This person holds `START_WATCH_PARTY` somewhere in this server. */
   canStart?: boolean;
   /**
@@ -232,6 +240,7 @@ export function LivePartyBlock({
       <ul className="flex flex-col gap-1.5">
         {parties.map((party) => {
           const selected = selectedChannelId === party.channelId;
+          const recovering = recoveringChannelId === party.channelId;
           const watching = audience?.[party.channelId];
           const liveFor = formatLiveFor(party.wentLiveAt, now);
           // Same two items a text channel's row offers a moderator: this
@@ -303,7 +312,10 @@ export function LivePartyBlock({
                     rounded="full"
                     className="h-8 w-8 shrink-0"
                   />
-                  <LivePill className="mt-0.5" />
+                  <LivePill
+                    className="mt-0.5"
+                    variant={recovering ? "recovering" : "live"}
+                  />
                 </span>
                 <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
                   {party.name}
@@ -314,7 +326,7 @@ export function LivePartyBlock({
                       name: party.hostDisplayName,
                     })}
                   </span>
-                  {typeof watching === "number" && (
+                  {!recovering && typeof watching === "number" && (
                     <span
                       className="flex shrink-0 items-center gap-1 tabular-nums"
                       data-live-party-audience={watching}

@@ -1,0 +1,26 @@
+pqp é chat de voz e texto de código aberto pro seu grupo, no estilo Discord: comunidades com servidor, canais de voz e texto, mensagem direta e um diretório público pra descobrir comunidades novas.
+
+Já rolou watch party com mais de 100 pessoas assistindo juntas numa sala só, em setembro de 2026. Grátis, sem anúncio, e o código é todo público no GitHub.
+
+VOZ E VÍDEO
+Entra num canal de voz e conversa com áudio limpo: conexão direta entre os participantes pra grupos pequenos, ou servidor de mídia dedicado pra salas maiores, escolhido sozinho pelo app, sem você precisar pensar nisso. Liga a câmera, assiste a tela que alguém compartilhou, vê quem tá falando, silencia o microfone ou o áudio, e avalia a chamada ao desligar. Liga direto pra um amigo pra uma chamada só entre vocês dois.
+
+CHAT DE TEXTO
+Manda mensagem com reação, resposta, tópico, mensagem fixada e GIF. Cola um link e vê a prévia. Busca no histórico de um servidor inteiro. O que você manda chega na hora pra todo mundo no canal, em qualquer plataforma.
+
+WATCH PARTY
+Entra num watch party que já tá rolando e assiste a transmissão compartilhada junto com o chat da sala, com o vídeo já começando no ponto em que o grupo tá.
+
+COMUNIDADES
+Explora um diretório público de comunidades e entra nas que te interessam com um toque. Cada comunidade tem seus próprios canais de texto e voz, igual um servidor privado.
+
+AMIGOS E PERFIS
+Adiciona amigos pela tag ou pelo @ público deles, vê quem tá online, e bloqueia quem preferir não ouvir. Reivindica o seu próprio @ pra ter uma página de perfil que dá pra compartilhar.
+
+PRIVACIDADE E MODERAÇÃO
+Denuncia uma mensagem, uma pessoa ou uma comunidade em poucos toques. Donos de servidor têm expulsão, banimento, timeout e um registro de auditoria. Apaga a sua conta ou exporta os seus dados quando quiser.
+
+CÓDIGO ABERTO
+O pqp é de graça, não tem anúncio, e o código inteiro é público no GitHub (rafaelcg/pqp) sob licença AGPL. Qualquer pessoa pode ler o código, hospedar a própria instância ou contribuir.
+
+Essa versão é uma beta. Algumas coisas ainda estão chegando no iOS: DM em grupo, levantar a mão numa chamada de voz e iniciar seu próprio watch party ainda não estão por aqui, embora já funcionem no site e no app de desktop do pqp. A gente lança melhorias com frequência, iOS incluso.

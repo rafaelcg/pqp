@@ -18,6 +18,9 @@ type fakeUploader struct {
 	failN    map[string]int // key -> remaining failures before success
 	attempts map[string]int
 	blockCh  chan struct{} // if non-nil, PutObject waits on it before returning
+	// delay, if non-zero, makes every PutObject take that long -- a slow
+	// bucket, which is what the latency counters exist to make visible.
+	delay time.Duration
 }
 
 type fakePut struct {
@@ -34,6 +37,14 @@ func (f *fakeUploader) PutObject(ctx context.Context, key string, body []byte, c
 	f.mu.Lock()
 	f.attempts[key]++
 	f.mu.Unlock()
+
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	if f.blockCh != nil {
 		select {
@@ -290,5 +301,41 @@ func TestWriterConcurrentEnqueueIsRace_Free(t *testing.T) {
 	}
 	if w.Uploaded()+w.Failed()+w.Dropped() != 50 {
 		t.Fatalf("uploaded+failed+dropped = %d, want 50", w.Uploaded()+w.Failed()+w.Dropped())
+	}
+}
+
+// Hypothesis (d) of the 2026-09-15 investigation -- "the writer or the S3
+// path is blocking" -- was unanswerable from this Writer's counters:
+// Uploaded going up says nothing about how long each PUT took, and a
+// bucket that has gone slow looks exactly like a healthy one until the
+// queue overflows. These are the numbers that tell them apart.
+func TestWriter_RecordsUploadLatencyAndInFlight(t *testing.T) {
+	const delay = 40 * time.Millisecond
+	up := newFakeUploader()
+	up.delay = delay
+	w := NewWriter(up, WriterConfig{Workers: 1, QueueDepth: 4})
+
+	if w.LastLatencyMs() != 0 || w.MaxLatencyMs() != 0 {
+		t.Fatal("latency is reported before any upload has happened")
+	}
+
+	w.Enqueue("a.m4s", []byte("a"), "video/mp4")
+	w.Enqueue("b.m4s", []byte("b"), "video/mp4")
+	w.Close()
+
+	if got := w.Uploaded(); got != 2 {
+		t.Fatalf("Uploaded = %d, want 2", got)
+	}
+	if got := w.LastLatencyMs(); got < int64(delay/time.Millisecond)-5 {
+		t.Fatalf("LastLatencyMs = %d, want roughly %d", got, delay/time.Millisecond)
+	}
+	if w.MaxLatencyMs() < w.LastLatencyMs() {
+		t.Fatalf("MaxLatencyMs (%d) is below LastLatencyMs (%d)", w.MaxLatencyMs(), w.LastLatencyMs())
+	}
+	if got := w.InFlight(); got != 0 {
+		t.Fatalf("InFlight = %d after Close, want 0", got)
+	}
+	if got := w.Queued(); got != 0 {
+		t.Fatalf("Queued = %d after Close, want 0", got)
 	}
 }

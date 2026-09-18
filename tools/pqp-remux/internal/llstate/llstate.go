@@ -129,10 +129,19 @@ type Segment struct {
 	// DurationSecs and URI are present only when Complete -- the Worker's
 	// parser refuses an in-progress segment that carries a URI, since
 	// there is no sealed object to point at yet.
-	DurationSecs    *float64 `json:"durationSecs,omitempty"`
-	URI             *string  `json:"uri,omitempty"`
-	ProgramDateTime string   `json:"programDateTime"`
-	Parts           []Part   `json:"parts"`
+	DurationSecs *float64 `json:"durationSecs,omitempty"`
+	URI          *string  `json:"uri,omitempty"`
+	// InitURI is the CMAF init segment this segment's samples were built
+	// against. May differ from Track.InitURI (the newest) after a
+	// mid-session parameter-set change; the edge Worker re-emits
+	// #EXT-X-MAP when it changes.
+	InitURI string `json:"initUri"`
+	// Discontinuity is true on the first segment that uses a new InitURI
+	// after a parameter-set change. The Worker emits #EXT-X-DISCONTINUITY
+	// before that segment's lines.
+	Discontinuity   bool   `json:"discontinuity"`
+	ProgramDateTime string `json:"programDateTime"`
+	Parts           []Part `json:"parts"`
 }
 
 // PreloadHint names the part the fragmenter has NOT emitted yet.
@@ -144,9 +153,14 @@ type PreloadHint struct {
 
 // Track is one rendition's half of the document.
 type Track struct {
-	InitURI     string       `json:"initUri"`
-	Segments    []Segment    `json:"segments"`
-	PreloadHint *PreloadHint `json:"preloadHint"`
+	// InitURI is the NEWEST init segment file name. Per-segment InitURI
+	// may still name an older generation retained in the window.
+	InitURI string `json:"initUri"`
+	// DiscontinuitySequence is how many discontinuous segments have aged
+	// out of the listed window — #EXT-X-DISCONTINUITY-SEQUENCE.
+	DiscontinuitySequence int          `json:"discontinuitySequence"`
+	Segments              []Segment    `json:"segments"`
+	PreloadHint           *PreloadHint `json:"preloadHint"`
 }
 
 // State is the whole document.
@@ -183,7 +197,7 @@ type State struct {
 // parser would reject instead would cost an `hlsEdge.llStateFetchFailed`
 // on every probe and teach nobody anything.
 func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
-	videoTrack, ok := buildTrack(video, videoNames, false)
+	videoTrack, longestPartMs, ok := buildTrack(video, videoNames, false)
 	if !ok {
 		return State{}, false
 	}
@@ -200,12 +214,92 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 		// reason to fail the whole document: video-only is a legal LL
 		// session, and an audio ring that has not produced a part yet is
 		// the ordinary state of every party before somebody speaks.
-		if audioTrack, audioOK := buildTrack(*audio, audioNames, true); audioOK {
+		if audioTrack, audioLongestMs, audioOK := buildTrack(*audio, audioNames, true); audioOK {
 			state.Audio = audioTrack
+			if audioLongestMs > longestPartMs {
+				longestPartMs = audioLongestMs
+			}
 		}
 	}
+	state.PartTargetMs = partTargetMs(meta.PartTargetMs, meta.SegmentTargetMs, longestPartMs, video.PeakPartMs, audioPeakPartMs(audio))
 	state.TargetDurationSecs = targetDuration(videoTrack, state.Audio, video.TargetSecs, audioTargetSecs(audio))
 	return state, true
+}
+
+func audioPeakPartMs(audio *ring.Snapshot) int {
+	if audio == nil {
+		return 0
+	}
+	return audio.PeakPartMs
+}
+
+// partTargetMs is what #EXT-X-PART-INF:PART-TARGET is rendered from: the
+// configured PART_MS, raised to cover the longest part this session has
+// ever observed (and never lowered mid-playlist — RFC 8216bis requires
+// PART-TARGET to be fixed for the playlist; a target that shrinks when a
+// long part ages out of the window made hls.js recompute its latency and
+// seek), then bounded by the segment target.
+//
+// WHY IT RISES. A PART-TARGET is a promise about the MAXIMUM part duration
+// (RFC 8216bis section 4.4.3.7), and a part may legitimately run past
+// PART_MS in two ways. The small one has always been there: a part is cut
+// on the first access unit at or past the target, so a 30fps source
+// overshoots by up to one frame. The large one arrived with the
+// 2026-09-15 drift fix: a quiet source's part now waits for the frame that
+// really ends the gap and carries that frame's TRUE duration rather than a
+// guessed one, so a Chrome tab share at 1.4 frames/s publishes parts of
+// about a second against a 500ms PART_MS. Understating the target there is
+// not a cosmetic lie: the edge Worker times its blocking playlist reloads
+// at three part targets, so a stale 500ms would hold a viewer's request
+// for 1.5s against a part that cannot arrive for a wall second, and time
+// out on a stream that is perfectly healthy.
+//
+// WHY IT NEVER FALLS. Production 2026-09-16 measured PART-TARGET mutate
+// mid-stream (2.534 -> 0.55) when the longest listed part aged out of the
+// window. hls.js recomputed target latency from it and forced seeks. The
+// ring's PeakPartMs is the session high-water mark; peaks listed here are
+// max'd with the currently-listed longest so a brand-new snapshot that
+// has not yet updated the ring's peak still covers what it shows.
+//
+// WHY IT IS BOUNDED. Every part duration here descends from the
+// PUBLISHER's own access-unit timestamps, and the browser on the other end
+// of the SFU is not a trusted input: two frames stamped hours apart
+// produce an hours-long part, and without a ceiling that number would
+// become the edge's blocking-reload deadline for every viewer of the
+// session (Farol review, PR #629). A part is never usefully longer than a
+// segment, so the segment target is the ceiling. Past it the advertised
+// target understates a real part, which is the SAFE direction to be wrong
+// in: a viewer's hold times out and falls back to the ordinary reload
+// cadence, rather than being held for as long as a hostile timestamp says.
+func partTargetMs(configured, segmentMs, longestListedMs int, peaks ...int) int {
+	target := configured
+	if longestListedMs > target {
+		target = longestListedMs
+	}
+	for _, peak := range peaks {
+		if peak > target {
+			target = peak
+		}
+	}
+	ceiling := segmentMs
+	if ceiling < configured {
+		// A configured PART_MS larger than SEGMENT_MS is refused by
+		// config.Validate, so this is only reachable through a
+		// hand-built Meta. Never let the ceiling cut below what was
+		// asked for.
+		ceiling = configured
+	}
+	if target > ceiling {
+		target = ceiling
+	}
+	if target <= 0 {
+		// parseLlState refuses a document whose partTargetMs is not a
+		// positive integer, and refusing the whole document stalls every
+		// viewer. A caller that configured nothing sensible gets a
+		// millisecond rather than a blank stream.
+		target = 1
+	}
+	return target
 }
 
 // buildTrack renders one rendition. allIndependent is the audio override:
@@ -214,11 +308,28 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 // IsSegmentStart flag (which is what the ring records) is true only on a
 // segment boundary, so taking it literally would understate independence
 // for every other audio part.
-func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool) {
+func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, int, bool) {
 	if !snap.HasInit || len(snap.Segments) == 0 || snap.Timescale == 0 {
-		return nil, false
+		return nil, 0, false
 	}
-	track := &Track{InitURI: n.initURI}
+	initURI := n.initURI
+	// Video may publish init-2.mp4 mid-session; the ring's CurrentInitURI
+	// is the newest. Audio keeps the fixed audio-init.mp4 name from
+	// names (SetInit on an audio ring still stores DefaultInitURI
+	// internally for the conventional playlist's "init.mp4" suffix).
+	if n.prefix == "" && snap.InitURI != "" {
+		initURI = snap.InitURI
+	}
+	track := &Track{
+		InitURI:               initURI,
+		DiscontinuitySequence: snap.DiscontinuitySequence,
+	}
+	// longestPartMs is counted HERE, inside the pass this function
+	// already makes over every part, rather than by a second traversal
+	// afterwards: state.json is served no-store and re-fetched by the
+	// edge's blocking-reload loop, so a second O(parts) scan per request
+	// is paid per viewer poll (Farol review, PR #629).
+	longestPartMs := 0
 	for _, seg := range snap.Segments {
 		if len(seg.Parts) == 0 {
 			// Unreachable through Ring.Push (a segment is opened BY its
@@ -226,19 +337,38 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 			// with no parts breaks the "live edge has something to play"
 			// rule if it is last, and renders an EXTINF with no media if
 			// it is not.
-			return nil, false
+			return nil, 0, false
+		}
+		segInit := initURI
+		// Audio never mid-session-rebuilds its init. The ring still stamps
+		// segments with whatever URI SetInit/SetNamedInit stored
+		// (historically DefaultInitURI "init.mp4" via SetInit's path, or
+		// "audio-init.mp4" after SetNamedInit). Advertising the ring's
+		// internal "init.mp4" on an audio segment makes the Worker emit
+		// EXT-X-MAP …/ll-audio/init.mp4, which nameBelongsToRung refuses
+		// (audio rung requires the audio- prefix) — a silent audio MAP
+		// 404 after an otherwise healthy state.json (Farol, PR #656).
+		// Prefixed tracks always publish n.initURI on every segment.
+		if n.prefix == "" && seg.InitURI != "" {
+			segInit = seg.InitURI
 		}
 		out := Segment{
 			MSN:             seg.Index,
 			Complete:        seg.Sealed,
+			InitURI:         segInit,
+			Discontinuity:   seg.Discontinuity,
 			ProgramDateTime: seg.OpenedAt.UTC().Format(pdtLayout),
 		}
 		var totalTicks uint64
 		for i, p := range seg.Parts {
 			totalTicks += uint64(p.DurationTicks)
+			durationSecs := secs(uint64(p.DurationTicks), snap.Timescale)
+			if ms := int(math.Ceil(durationSecs * 1000)); ms > longestPartMs {
+				longestPartMs = ms
+			}
 			out.Parts = append(out.Parts, Part{
 				Index:        i,
-				DurationSecs: secs(uint64(p.DurationTicks), snap.Timescale),
+				DurationSecs: durationSecs,
 				Independent:  allIndependent || p.Independent,
 				URI:          n.part(p.Seq),
 			})
@@ -258,13 +388,13 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 	// there (llStateFetchFailed on every poll).
 	for i := 1; i < len(track.Segments); i++ {
 		if track.Segments[i].MSN != track.Segments[i-1].MSN+1 {
-			return nil, false
+			return nil, 0, false
 		}
 	}
 	// Only the LAST segment may be incomplete.
 	for i := 0; i < len(track.Segments)-1; i++ {
 		if !track.Segments[i].Complete {
-			return nil, false
+			return nil, 0, false
 		}
 	}
 	if snap.HaveParts {
@@ -278,7 +408,7 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 		}
 		track.PreloadHint = &hint
 	}
-	return track, true
+	return track, longestPartMs, true
 }
 
 func audioTargetSecs(audio *ring.Snapshot) int {

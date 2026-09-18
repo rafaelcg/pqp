@@ -6,6 +6,7 @@ import {
   formatCallDuration,
   hasWatchableVideo,
   isCameraSoloId,
+  isMusicPictureOnlyStage,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -66,6 +67,37 @@ describe("shouldShowExpandedStage", () => {
   it("expands an outgoing ring so Calling and declined stay on the stage", () => {
     expect(shouldShowExpandedStage(false, false, true)).toBe(true);
     expect(shouldShowExpandedStage(false, true, true)).toBe(false);
+  });
+});
+
+describe("isMusicPictureOnlyStage", () => {
+  it("is the Assistir na tela layout: picture on stage, composer dock kept", () => {
+    expect(
+      isMusicPictureOnlyStage({ musicOnStage: true, hasLiveVideo: false }),
+    ).toBe(true);
+  });
+
+  it("gives cameras, a share, a ring and a watch party the overlay chrome", () => {
+    expect(
+      isMusicPictureOnlyStage({ musicOnStage: true, hasLiveVideo: true }),
+    ).toBe(false);
+    expect(
+      isMusicPictureOnlyStage({
+        musicOnStage: true,
+        hasLiveVideo: false,
+        ringing: true,
+      }),
+    ).toBe(false);
+    expect(
+      isMusicPictureOnlyStage({
+        musicOnStage: true,
+        hasLiveVideo: false,
+        watchPartyChrome: true,
+      }),
+    ).toBe(false);
+    expect(
+      isMusicPictureOnlyStage({ musicOnStage: false, hasLiveVideo: false }),
+    ).toBe(false);
   });
 });
 

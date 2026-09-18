@@ -52,6 +52,20 @@ export interface PoolStats {
 }
 
 /**
+ * Checkout ages, registered separately from {@link PoolStats} on purpose.
+ *
+ * `poolPressure` below is a pure function of how full the pool is, and how
+ * *long* a connection has been held is a different question with a different
+ * answer (see `lib/pool-checkouts.ts`'s header: `busy: 22` reads the same for
+ * twenty-two queries 3 ms old and twenty-two that will never return). Keeping
+ * them apart means the pressure rule keeps taking exactly the four numbers it
+ * has always taken, and `services/ready.ts`, which samples `PoolStats` for
+ * its own saturation check, is untouched by a diagnostic it does not use.
+ */
+export type { PoolCheckoutStats } from "./pool-checkouts.js";
+import type { PoolCheckoutStats } from "./pool-checkouts.js";
+
+/**
  * Three states, not a percentage, because the interesting distinction is not
  * "how full" but "how close to the wall".
  */
@@ -120,11 +134,12 @@ export interface RuntimeMetrics {
    * happen between two observations.
    */
   peakSockets: number;
-  pool: PoolStats & {
-    /** `total - idle`: connections checked out right now. */
-    busy: number;
-    pressure: PoolPressure;
-  };
+  pool: PoolStats &
+    PoolCheckoutStats & {
+      /** `total - idle`: connections checked out right now. */
+      busy: number;
+      pressure: PoolPressure;
+    };
   /**
    * Highest `waiting` since `peakTrackedSince`: the deepest queue seen.
    *
@@ -170,6 +185,7 @@ export interface RuntimeMetrics {
 let readSocketCount: (() => number) | null = null;
 let readCompressedSocketCount: (() => number) | null = null;
 let readPoolStats: (() => PoolStats) | null = null;
+let readPoolCheckoutStats: (() => PoolCheckoutStats) | null = null;
 let readDbBreakerStats:
   | (() => { state: "closed" | "open" | "half-open"; opened: number; rejected: number })
   | null = null;
@@ -193,9 +209,15 @@ export function registerPoolStats(read: () => PoolStats): void {
   readPoolStats = read;
 }
 
+/** Called by `db.ts` when it creates the pool, with `poolCheckoutStats`. */
+export function registerPoolCheckoutStats(read: () => PoolCheckoutStats): void {
+  readPoolCheckoutStats = read;
+}
+
 /** Called by `closePool`, so a torn-down pool is never read from. */
 export function clearPoolStats(): void {
   readPoolStats = null;
+  readPoolCheckoutStats = null;
 }
 
 /** Called once by `db.ts` when it creates the breaker. */
@@ -263,6 +285,16 @@ function safeStats(): PoolStats {
     return readPoolStats?.() ?? emptyStats();
   } catch {
     return emptyStats();
+  }
+}
+
+function safeCheckoutStats(): PoolCheckoutStats {
+  try {
+    return (
+      readPoolCheckoutStats?.() ?? { longestCheckoutMs: 0, checkedOutOver10s: 0 }
+    );
+  } catch {
+    return { longestCheckoutMs: 0, checkedOutOver10s: 0 };
   }
 }
 
@@ -335,6 +367,7 @@ export function runtimeSnapshot(): RuntimeMetrics {
     peakSockets,
     pool: {
       ...stats,
+      ...safeCheckoutStats(),
       busy: Math.max(0, stats.total - stats.idle),
       pressure: poolPressure(stats),
     },
@@ -350,6 +383,7 @@ export function resetRuntimeMetrics(): void {
   readSocketCount = null;
   readCompressedSocketCount = null;
   readPoolStats = null;
+  readPoolCheckoutStats = null;
   readDbBreakerStats = null;
   peakSockets = 0;
   peakPoolWaiting = 0;

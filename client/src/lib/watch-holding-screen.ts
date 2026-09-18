@@ -10,9 +10,11 @@ import type { HlsStallReason } from "@/lib/hls-stall";
  * presenter had not started, the egress restarted, the network dropped, or
  * nothing at all was wrong. Four different situations, one silent spinner.
  *
- * - `restarting`: the stall watchdog's `sequence-stuck` reason — the playlist
- *   answers but its media sequence has not moved for 20s, which is what a
- *   dead egress that is about to be replaced looks like (see `hls-stall.ts`).
+ * - `restarting`: the stall watchdog's `sequence-stuck` or `playlist-gone`
+ *   reason — either the playlist answers but its media sequence has not
+ *   moved for 20s (a dead egress about to be replaced; see `hls-stall.ts`),
+ *   or our own playlist proxy answered 404/410 (the previous session is
+ *   already gone and a fresh master is what reconnect is polling for).
  *   The reconnect that follows fetches a fresh session, typically inside the
  *   restart window the copy names.
  * - `reconnecting`: any other stall (a network drop) or a fatal media error.
@@ -59,6 +61,28 @@ export type HoldingScreenReason =
   | "dead"
   | "buffering"
   | "unavailable"
+  /**
+   * THE SERVER SAYS THERE IS NOTHING LIVE HERE, and the two ways that can be
+   * true want different words.
+   *
+   * `over`: no stream, and no party either. The show finished. Nothing is
+   * coming back on its own and the person should be told so rather than
+   * left watching a spinner.
+   *
+   * `awaiting`: no stream, and the party is still live. The presenter stopped
+   * sharing, dropped their publish, or is switching windows; the session they
+   * are watching is genuinely expected back.
+   *
+   * Both come from `GET /api/channels/:id/live` answering `stream: null` with
+   * `ended: true` -- a null the server explicitly vouches for, never a failed
+   * query -- so neither can be reached by an API blip. They are the answer to
+   * the 2026-09-17 incident's viewer half: a tab that sat on "A transmissão
+   * travou, reconectando" for minutes after the party had ended, because the
+   * only thing the watchdog could conclude from a playlist that never came
+   * back was "still trying", forever, and then "A transmissão caiu".
+   */
+  | "over"
+  | "awaiting"
   | null;
 
 /** How long a fresh auth failure is given to resolve itself before the
@@ -77,9 +101,29 @@ export function resolveHoldingScreenReason(input: {
   /** A finished broadcast's replay, not a live watch party. Defaults to
    *  `"live"` so every existing caller keeps today's vocabulary. */
   mode?: "live" | "vod";
+  /**
+   * What the server said when the player last asked it directly: `"over"`
+   * (nothing live, no party), `"awaiting"` (nothing live, party still on),
+   * `null` for every caller and every moment that never asked. See the two
+   * reasons of the same names above.
+   */
+  sessionOver?: "over" | "awaiting" | null;
 }): HoldingScreenReason {
   if (input.phase === "dead") {
     return input.mode === "vod" ? "unavailable" : "dead";
+  }
+  // BEFORE the auth grace and before the stall vocabulary, and after nothing
+  // except the retry-button state a person is already looking at. This is the
+  // only input here that is a FACT rather than an inference: the watchdog's
+  // reasons are all "what this player can tell from the outside", while this
+  // is the server answering the actual question. A stall episode that is
+  // still open when the truth arrives is no longer worth describing.
+  //
+  // A replay is exempt: a VOD player never asks, so `sessionOver` is null on
+  // that path by construction, and the guard makes that explicit rather than
+  // leaving it to the caller.
+  if (input.mode !== "vod" && input.sessionOver) {
+    return input.sessionOver;
   }
   if (input.authGraceActive) {
     return "silent";
@@ -92,7 +136,7 @@ export function resolveHoldingScreenReason(input: {
     }
     return "buffering";
   }
-  if (input.stallReason === "sequence-stuck") {
+  if (input.stallReason === "sequence-stuck" || input.stallReason === "playlist-gone") {
     return "restarting";
   }
   if (input.phase === "playing" && input.hasFrame) {
