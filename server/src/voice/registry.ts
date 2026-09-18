@@ -1758,6 +1758,13 @@ export function startVoiceInstanceHeartbeat(
   return async () => {
     clearInterval(timer);
     await running?.catch(() => {});
+    // Anything the coalescer is still holding goes out BEFORE the lease is
+    // withdrawn. A deploy drains sockets in batches, so the last hundred
+    // milliseconds of a shutdown are mostly leaves, and a window's worth of
+    // them queued at the moment the process exits would be rows nobody
+    // deletes until the reconcile spends the whole resume window on them.
+    // A no-op with `VOICE_REGISTRY_BATCH` off: the queue is always empty.
+    await flushVoiceRegistryBatch().catch(() => {});
     await withdrawVoiceInstance().catch(() => {});
   };
 }
