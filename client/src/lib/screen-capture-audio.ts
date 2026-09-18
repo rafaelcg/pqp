@@ -492,6 +492,24 @@ export async function ensureOsCanExcludeCallAudio(): Promise<boolean> {
  * Without that, offering "share this computer's sound" is offering the
  * 23 Aug 2026 echo. Chrome 141+ and Electron 43.4+ can; older engines cannot,
  * so they keep the exclude default and a tab share is the only clean path.
+ *
+ * TWO GATES, NOT THREE (2026-09-18). A browser answers this from
+ * `supportsRestrictOwnAudio` alone. The version probe
+ * (`osCanExcludeCallAudio`) is a UA-Client-Hints *guess* about the OS
+ * underneath, and adding it here as a third gate turned every host that is
+ * not Windows 11 into "no computer sound at all": a whole-screen or window
+ * watch party went out with no film on it, and the audience was left with
+ * the presenter's microphone branch alone, which is what "everything is very
+ * low" sounds like from the other end. It bought no safety it did not
+ * already have, because the browser path is belt AND braces: we ASK with
+ * `restrictOwnAudio: true`, and `stripLeakedSystemAudioTracks` then reads
+ * back what the engine actually applied and drops the track when exclude is
+ * known not to have taken. A guess about the OS cannot be more reliable than
+ * the track's own `getSettings()`, and it fails in the expensive direction.
+ *
+ * The SHELL keeps the gate, and there it is not a guess: `desktopShareCapabilities`
+ * is the binary stating what its own loopback tap can do, and an old shell
+ * that taps and cannot strip is exactly the build every share echoed on.
  */
 export function canExcludeCallFromSystemAudio(
   env: ScreenCaptureEnvironment,
@@ -501,6 +519,9 @@ export function canExcludeCallFromSystemAudio(
   }
   if (env.shellRestrictOwnAudio === false) {
     return false;
+  }
+  if (!env.isDesktopShell) {
+    return true;
   }
   return env.osCanExcludeCallAudio;
 }
@@ -647,18 +668,29 @@ export function screenCaptureOptions(
     audio: env.isDesktopShell && !carriesAudio ? false : audio,
     systemAudio: carriesAudio ? "include" : "exclude",
     // Window pane: Chrome's default is `system` (the mixer, the call). We
-    // never send that. Win11 Chrome gets per-app `"window"`. Watch party
-    // and every other browser get `"exclude"`. The shell is omitted: the
-    // handler names loopback, and this member would fight it.
+    // never send that. An engine that knows `restrictOwnAudio` gets per-app
+    // `"window"`, which is that window's own audio and therefore cannot
+    // contain the call by construction; everything older gets `"exclude"`.
+    // The shell is omitted: the handler names loopback, and this member
+    // would fight it.
+    //
+    // NOT gated on `osCanExcludeCallAudio`, and NOT excluded for a watch
+    // party (2026-09-18). Both gates were silencing the case they were
+    // written to protect: a watch party whose picture is a window or a
+    // screen rather than a tab went out with no film on it on every host
+    // that is not Windows 11. `"window"` is not the mixer, so there is
+    // nothing here to protect against; where an engine cannot honour it,
+    // it degrades to what `"exclude"` already gave us, and a mixer tap that
+    // somehow arrives anyway is still caught by `stripLeakedSystemAudioTracks`
+    // before publish. A tab share still asks for `"exclude"`: the tab's own
+    // sound is the clean path and the window pane is not in play.
     ...(env.isDesktopShell
       ? {}
       : {
           windowAudio:
-            tabSteer || intent.watchParty
+            tabSteer || !env.supportsRestrictOwnAudio
               ? ("exclude" as const)
-              : env.osCanExcludeCallAudio
-                ? ("window" as const)
-                : ("exclude" as const),
+              : ("window" as const),
         }),
     // Sharing the pqp tab itself would put the call's own picture back into the
     // call, and the loop gets louder every trip; the picker not offering that

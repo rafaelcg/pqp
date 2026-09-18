@@ -568,8 +568,8 @@ The capture is requested with `audio` plus **`systemAudio: "exclude"`**, and mos
 | Browser / OS | Sound in a screen share? |
 |---|---|
 | Chrome or Edge, any OS, sharing a **tab** | Yes, when the user ticks "share tab audio" |
-| Chrome or Edge on **Windows 11**, sharing the **whole screen** or a **window** | Computer sound is offered only after a UA-CH Win11 check (`platformVersion` major ≥ 13). `restrictOwnAudio` strips this document. A window share asks `windowAudio: "window"` (that app only). Windows 10 reports the constraint and cannot exclude us, so we send `systemAudio: "exclude"` and `windowAudio: "exclude"` |
-| Chrome on **macOS, Linux, or ChromeOS**, sharing a screen or a window | No mixer. Missing Win11 hint is exclude |
+| Chrome or Edge sharing the **whole screen** or a **window** | Computer sound is offered wherever `getSupportedConstraints().restrictOwnAudio` is known. `restrictOwnAudio: true` strips this document, and the post-picker strip drops a track whose settings say it did not apply. A window share asks `windowAudio: "window"` (that app only) |
+| Chrome on **macOS, Linux, or ChromeOS**, sharing a screen or a window | Usually no mixer to capture. The request is the same; what arrives is whatever the platform can give |
 | **Safari**, anything | No display audio at all |
 | **Firefox**, anything | No display audio at all |
 
@@ -591,8 +591,8 @@ A 3-star call rating on 23 Aug 2026: *"Quando alguém transmite, ele repete a Ca
 
 What is done instead, in `client/src/lib/screen-capture-audio.ts`:
 
-1. **`systemAudio: "exclude"` unless this OS can strip the call.** The spec scopes that member to monitor surfaces, so a tab share still carries its own sound. `getSupportedConstraints().restrictOwnAudio` is true on Windows 10; Chromium only honours exclude on Windows 11 (build ≥ 22000). The page offers computer sound only after a UA-CH Win11 check. Missing hint is exclude.
-2. **`windowAudio: "window"` on Windows 11 Chrome**, `"exclude"` everywhere else and always for a watch party. Chrome's default is `system`, so a window share can carry the mixer. A window-plus-audio capture is treated as system audio (`capturesSystemAudio`).
+1. **`systemAudio: "include"` wherever the browser knows `restrictOwnAudio`.** The spec scopes `"exclude"` to monitor surfaces, so a tab share carries its own sound either way. The echo protection is the constraint plus the post-picker strip (3 below), not a guess about the OS: a UA-CH Win11 gate here silenced every screen and window watch party off Windows 11 on 2026-09-18, and bought nothing the strip did not already cover. The **shell** still gates on what the binary says its own loopback tap can do.
+2. **`windowAudio: "window"` wherever the browser knows `restrictOwnAudio`**, `"exclude"` on older engines and on a tab-steered share. Chrome's default is `system`, which is the mixer and therefore the call; `"window"` is that app's own sound and cannot contain it. A window-plus-audio capture is still treated as system audio (`capturesSystemAudio`) and still faces the strip.
 3. **`restrictOwnAudio: true`** whenever the browser knows the constraint. After the picker, if a monitor or window track still has audio and `getSettings().restrictOwnAudio` is **false** (or capabilities cannot include true), the track is stripped before publish. Undefined settings are not stripped.
 4. **Electron loopback only on Windows 11.** `os.release()` is `10.0.BUILD`. Loopback only if BUILD ≥ 22000. The handler still returns `"loopback"`; Electron 43.4+ remaps it when `restrictOwnAudio` is on the page request. Passing `"loopbackWithoutChrome"` fails the whole capture on Windows 10.
 5. **A warning while it is live**, when the capture came back as `displaySurface: "monitor"` or `"window"` with an audio track. Dual process (app in the call, Chrome sharing) cannot exclude Electron's speakers. One client.
