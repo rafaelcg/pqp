@@ -573,14 +573,21 @@ describe("screen share audio", () => {
     });
   });
 
-  it("does not offer computer sound when this OS cannot exclude the call", async () => {
+  it("still offers computer sound in a browser the OS probe says is not Win11", async () => {
+    // REGRESSION, 2026-09-18. The probe is a UA hint about the OS; the strip
+    // above ("strips a monitor share whose restrictOwnAudio came back false")
+    // is what the track itself reports, and it is the one that decides. When
+    // the probe was allowed to veto the request, a watch party shared as a
+    // window or a screen went out silent on every host that is not Windows 11
+    // and the audience was left with the presenter's mic branch alone.
     setOsCanExcludeCallAudioForTests(false);
     const { voice } = await connectedMesh();
     await voice.startScreenShare();
 
     expect(displayMediaCalls[0]).toMatchObject({
-      systemAudio: "exclude",
-      windowAudio: "exclude",
+      systemAudio: "include",
+      windowAudio: "window",
+      audio: { restrictOwnAudio: true },
     });
   });
 

@@ -119,20 +119,70 @@ describe("screenCaptureOptions", () => {
     expect(screenCaptureOptions(true, oldBrowser).systemAudio).toBe("exclude");
   });
 
-  it("refuses computer sound on Windows 10 even when the constraint flag is on", () => {
-    // getSupportedConstraints().restrictOwnAudio is true on Win10. Chromium
-    // still cannot exclude this document. Offering the mixer is the echo.
+  it("still offers computer sound off Windows 11, because the strip is the backstop", () => {
+    // REGRESSION, 2026-09-18. The UA-Client-Hints version probe used to gate
+    // this as a third door, and it shut the machine's sound off on every host
+    // that is not Windows 11: a whole-screen or window watch party went out
+    // with no film on it, and the audience heard the presenter's mic branch
+    // alone. The browser path is belt and braces without the guess — we ask
+    // with `restrictOwnAudio: true`, and `stripLeakedSystemAudioTracks` reads
+    // back what the engine applied and drops the track when exclude did not
+    // take. `osCanExcludeCallAudio` is the SHELL's gate, where it is a
+    // capability the binary states rather than an OS version we infer.
     expect(screenCaptureOptions(false, win10Browser).systemAudio).toBe(
-      "exclude",
+      "include",
     );
-    expect(offersBrowserSystemAudio(win10Browser)).toBe(false);
-    expect(screenCaptureOptions(false, win10Browser).windowAudio).toBe(
-      "exclude",
-    );
+    expect(offersBrowserSystemAudio(win10Browser)).toBe(true);
+    expect(screenCaptureOptions(false, win10Browser).audio).toMatchObject({
+      restrictOwnAudio: true,
+    });
   });
 
-  it("asks Win11 Chrome for per-app window audio, not the mixer", () => {
+  it("asks a restrictOwnAudio browser for per-app window audio, not the mixer", () => {
+    // `"window"` is that window's own sound and cannot carry the call, so it
+    // is asked for wherever the engine knows the constraint — not only on
+    // Windows 11, and not withheld from a watch party, which is the share
+    // that loses the most when the window pane goes silent.
     expect(screenCaptureOptions(false, browser).windowAudio).toBe("window");
+    expect(screenCaptureOptions(false, win10Browser).windowAudio).toBe(
+      "window",
+    );
+    expect(
+      screenCaptureOptions(false, browser, { watchParty: true }).windowAudio,
+    ).toBe("window");
+    // An engine that never heard of the constraint keeps Chrome's mixer out
+    // the only way it can.
+    expect(screenCaptureOptions(false, oldBrowser).windowAudio).toBe("exclude");
+  });
+
+  it("asks for every sound a web watch-party host can carry", () => {
+    // THE WHOLE REQUEST, in one place, for the one capture whose audio an
+    // audience listens to. Each member is here because losing it has cost a
+    // party its sound: `audio` is a dictionary and not `false` (the tab's own
+    // sound), `restrictOwnAudio` keeps the call out of a mixer tap,
+    // `systemAudio: "include"` is what a whole-screen share carries, and
+    // `windowAudio: "window"` is what a window share carries. The three
+    // processing flags stay off because a film is not a phone call.
+    const options = screenCaptureOptions(false, win10Browser, {
+      watchParty: true,
+    });
+    expect(options.audio).toMatchObject({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      restrictOwnAudio: true,
+    });
+    expect(options.systemAudio).toBe("include");
+    expect(options.windowAudio).toBe("window");
+  });
+
+  it("keeps the window pane out of a tab-steered share", () => {
+    // A tab share's clean path is the tab's own sound; the window pane is not
+    // in play and asking for it would only widen the picker.
+    expect(
+      screenCaptureOptions(false, browser, { preferBrowserTab: true })
+        .windowAudio,
+    ).toBe("exclude");
   });
 
   it("never sends windowAudio in the desktop shell", () => {
