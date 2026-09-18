@@ -2151,7 +2151,15 @@ function ActiveCall({
           // `dm-call-screen-share.spec.ts` pins on purpose (a hand parked
           // at the bottom of the screen is how people watch). The player's
           // bars went inert on their gradients in pass 5; this one did not.
-          "absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 bg-gradient-to-t from-ink/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
+          // UNDER THE PARTY CHROME THIS BAR HAS NO BUTTONS (`controls` is
+          // null below), so it must not paint or take the pointer either:
+          // on staging it faded in on hover as a dark band over the party
+          // bar and made Trocar / Parar / Áudio unclickable. It keeps only
+          // the notices, which take their own clicks.
+          watchPartyChrome
+            ? "pointer-events-none [&>*]:pointer-events-auto"
+            : "bg-gradient-to-t from-ink/80 to-transparent",
+          "absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
           chromeClass,
         )}
         onPointerEnter={(event) => {

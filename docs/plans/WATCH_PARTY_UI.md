@@ -649,6 +649,7 @@ The complete set, one row per element, after that change:
 | "Preparando a transmissão" line | bottom centre, above the bar | in stage | no |
 | The bar (mic, seat, share / Trocar / Parar, Áudio, No ar, guests) | bottom, stage slot | chrome | no |
 | Audience view player | the picture | picture | draws nothing |
+| Call stage's own bar (empty under the party chrome) | bottom | chrome | inert: no gradient, no pointer, only its notices |
 
 **Seatless viewer** (`WatchChannelStage`, the player in `cinema` layout):
 
@@ -669,7 +670,7 @@ The complete set, one row per element, after that change:
 | Zoom target | whole tile, bottom of the stack | tileTarget | no |
 | Participant chips | above the bar | above chrome | with the bar |
 | The bar (mic, Falar, Sair do palco, on-air strip) | bottom, stage slot | chrome | no |
-| Call chrome (top status, control bar) | hidden under `watchPartyChrome` | | |
+| Call chrome (top status, control bar) | hidden under `watchPartyChrome`; the bar's box stays for its notices but paints nothing and takes no pointer | | |
 
 Anything not in these three tables is a bug against §10.4.
 
