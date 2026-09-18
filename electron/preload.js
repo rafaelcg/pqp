@@ -12,34 +12,16 @@ const { contextBridge, ipcRenderer } = require("electron");
  * attached to that main did not configure. Null is "unknown", never "old": the
  * capability booleans below are what the client decides anything on.
  */
-function argvValue(prefix) {
+function shellVersion() {
+  const prefix = "--pqp-shell-version=";
   const argv = Array.isArray(process.argv) ? process.argv : [];
   for (const arg of argv) {
     if (typeof arg === "string" && arg.startsWith(prefix)) {
-      return arg.slice(prefix.length).trim();
+      const value = arg.slice(prefix.length).trim();
+      return value || null;
     }
   }
   return null;
-}
-
-function shellVersion() {
-  return argvValue("--pqp-shell-version=") || null;
-}
-
-/**
- * Main parsed `os.release()` and handed us the answer. A sandboxed preload
- * cannot require `os` or `./lib/display-sources`. Missing on Windows is
- * fail-closed: an old argument list must not unlock the mixer.
- */
-function canExcludeOwnAudioFromArg() {
-  const value = argvValue("--pqp-can-exclude-own-audio=");
-  if (value === "1") {
-    return true;
-  }
-  if (value === "0") {
-    return false;
-  }
-  return process.platform !== "win32";
 }
 
 /**
@@ -66,26 +48,21 @@ function canExcludeOwnAudioFromArg() {
  *   `getDisplayMedia({ audio: { restrictOwnAudio: true } })` by remapping
  *   Windows loopback to `loopbackWithoutChrome`, which is what keeps the call
  *   playing in this window out of the tap (the 23 Aug 2026 echo). True from
- *   Electron 43.4 on Windows 11 (NT build ≥ 22000). False on Windows 10:
- *   the remap cannot run and offering the mixer is the echo. package.json
- *   pins 44 and `lib/share-capabilities.test.mjs` fails if that pin ever
- *   drops below the version that honours the constraint.
+ *   Electron 43.4; package.json pins 44 and `lib/share-capabilities.test.mjs`
+ *   fails if that pin ever drops below the version that honours it.
  * - `pickerOffersAudio`: the picker window asks "share this computer's sound?"
- *   itself, so the page does not have to ask first. Off on Windows 10.
+ *   itself, so the page does not have to ask first.
  *
  * `loopbackWithMute` is deliberately NOT used anywhere. It captures the same
  * tap and silences the machine's own output while it does, so the presenter
  * stops hearing both the call and the thing they are presenting. Excluding our
  * own output from the tap is `restrictOwnAudio`, and that is a different device.
  */
-const canExcludeOwnAudio = canExcludeOwnAudioFromArg();
-
 const SHARE_CAPABILITIES = Object.freeze({
   displayMedia: true,
-  systemAudio:
-    process.platform === "win32" && canExcludeOwnAudio ? "loopback" : "none",
-  restrictOwnAudio: process.platform !== "win32" || canExcludeOwnAudio,
-  pickerOffersAudio: process.platform === "win32" && canExcludeOwnAudio,
+  systemAudio: process.platform === "win32" ? "loopback" : "none",
+  restrictOwnAudio: true,
+  pickerOffersAudio: process.platform === "win32",
   version: shellVersion(),
 });
 

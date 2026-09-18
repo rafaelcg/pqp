@@ -35,8 +35,6 @@ import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { UpdatePrompt } from "./components/layout/update-prompt";
-import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
-import { installShareAudioProbe } from "./lib/share-audio-probe";
 import "./index.css";
 
 // The chat client, the emoji picker's data, and the legal pages are all dead
@@ -373,8 +371,6 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // account exists (see `lib/acquisition.ts` and the arrival effect in App.tsx).
 // Nothing is stripped from the address bar here; the URL is the page's to own.
 rememberAcquisitionFromLocation(browserStorage(), window.location);
-void ensureOsCanExcludeCallAudio();
-installShareAudioProbe();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
