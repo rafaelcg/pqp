@@ -263,6 +263,7 @@ export function HlsWatchPlayer({
   chatOverlay,
   meta,
   actions,
+  bottomActions,
   layout = "tile",
   forceMuted = false,
   dualDeviceWarning = false,
@@ -323,6 +324,14 @@ export function HlsWatchPlayer({
   meta?: ReactNode;
   /** Leave / join / host extras, same overlay as the player chrome. */
   actions?: ReactNode;
+  /**
+   * The watch party's own controls, at the right end of the bottom bar
+   * (`docs/plans/WATCH_PARTY_UI.md` pass 2): the bar slot the party panel
+   * and the guests overlay portal into, plus Parar de assistir. In the
+   * bottom bar rather than the top one so that a viewer has ONE row of
+   * controls on the picture, and it fades with the rest.
+   */
+  bottomActions?: ReactNode;
   /**
    * `cinema` is the watch-party viewer: full-bleed film, Twitch-like bar that
    * autohides. `tile` is a share in the call grid, where that bar would eat
@@ -2833,6 +2842,7 @@ export function HlsWatchPlayer({
                 )}
               </button>
             ) : null}
+            {bottomActions}
           </div>
         </div>
       </div>

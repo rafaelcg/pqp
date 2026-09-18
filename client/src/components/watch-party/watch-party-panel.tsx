@@ -6,6 +6,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Bell,
   BellOff,
@@ -133,6 +134,17 @@ export interface WatchPartyPanelProps {
    */
   headerLeading?: ReactNode;
   headerTrailing?: ReactNode;
+  /**
+   * THE ONE BAR (2026-09-18, pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
+   * The element the live surface portals its controls into: the mic pill
+   * and meter, the seat controls, share / Trocar / Parar, the mixer, the
+   * legacy raise and the seat's exit. `App` hands over either the slot it
+   * draws over the bottom of the stage pane or, for a seatless viewer with
+   * a picture, the span in the player's own bottom bar. `null` (tests, a
+   * party with no stage yet) draws the same row inline above the split, the
+   * way the dock used to.
+   */
+  barSlot?: HTMLElement | null;
   /** START_WATCH_PARTY on this channel: may create one, may take the stage. */
   canStart: boolean;
   /** True while this person holds a seat in this channel's voice room. */
@@ -2497,20 +2509,50 @@ function LiveSurface(
    * bottom of the chrome column, directly above the split, because the
    * picture itself belongs to the call stage and not to this panel.
    */
-  const presenterDock = runsTheShow && (
+  /**
+   * THE BAR, FOR EVERYBODY WITH SOMETHING TO PRESS (2026-09-18, pass 2 of
+   * `docs/plans/WATCH_PARTY_UI.md`). The dock above the split (host only)
+   * and the audience bar's own seat controls were two rows saying the same
+   * kind of thing to two kinds of person. Now there is one row, at the
+   * bottom of the picture, and every role gets its own subset of it: the
+   * host and co-hosts their mic, share and mixer; a seated guest their mic,
+   * Falar and Sair do palco; a plain viewer the raise and, when invited,
+   * Entrar no palco. The guests overlay portals its own group into the same
+   * element between these two (`data-watch-party-bar-people`, order-2).
+   *
+   * Nobody with nothing to press gets a row: a seatless viewer of a party
+   * with hands off sees no bar at all, which is the seatless promise.
+   */
+  const hasBarContent =
+    runsTheShow || props.inCall || showRequestToSpeak || showEnterPalco;
+  const barControls = hasBarContent && (
     <div
-      data-testid="watch-party-dock"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-4/60 bg-ink px-3 py-1.5"
+      data-testid="watch-party-bar-controls"
+      className={
+        props.barSlot
+          ? "contents"
+          : // Inline fallback: no slot to portal into, so draw the row itself
+            // above the split, the way the dock used to.
+            "flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-4/60 bg-ink px-3 py-1.5"
+      }
     >
-      {micPill}
-      {micLevelDb && <DockMicLevel micLevelDb={micLevelDb} />}
-      {seatControls}
-      {audienceActions}
-      <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+      <span className="order-1 flex min-w-0 flex-wrap items-center gap-1.5">
+        {micPill}
+        {micLevelDb && <DockMicLevel micLevelDb={micLevelDb} />}
+        {seatControls}
+        {audienceActions}
+        {leaveSeat}
+      </span>
+      <span className="order-3 ml-auto flex flex-wrap items-center justify-end gap-1.5">
         {presenterActions}
       </span>
     </div>
   );
+  const presenterDock = barControls
+    ? props.barSlot
+      ? createPortal(barControls, props.barSlot)
+      : barControls
+    : null;
 
   /* `canClaim` is the one presenter action an audience member can hold: a
      co-host is `runsTheShow`, but a viewer with the right to take over a
@@ -2523,11 +2565,7 @@ function LiveSurface(
     >
       {props.headerLeading}
       {identity}
-      {micPill}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-        {seatControls}
-        {audienceActions}
-        {leaveSeat}
         <WatchPartyShareButton party={party} />
         {canClaim && (
           <Button

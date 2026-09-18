@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
+import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -1271,6 +1272,17 @@ function MainAppContent({
     active: false,
     canSideBySide: false,
   });
+  /**
+   * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
+   * Two candidate elements, one handed out: the slot this file draws over
+   * the bottom of the stage pane, and the span `HlsWatchPlayer` draws in
+   * its own bottom bar for a seatless viewer. The player's wins while it
+   * exists, so a viewer with a picture never gets two bars. See
+   * `WatchPartyBarSlot`.
+   */
+  const [stageBarEl, setStageBarEl] = useState<HTMLDivElement | null>(null);
+  const [playerBarEl, setPlayerBarEl] = useState<HTMLDivElement | null>(null);
+  const watchPartyBarSlot = playerBarEl ?? stageBarEl;
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
@@ -7198,6 +7210,7 @@ function MainAppContent({
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
             slot="chrome"
+            barSlot={watchPartyBarSlot}
             headerLeading={
               partyOwnsHeader ? (
                 <button
@@ -7315,6 +7328,7 @@ function MainAppContent({
             }
             onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
             onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
+            barSlot={watchPartyBarSlot}
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
@@ -7489,6 +7503,12 @@ function MainAppContent({
             onShapeChange={handleWatchPartyShape}
           />
         )}
+      {/* THE BAR'S HOME ON THE STAGE PANE, while a party is live. The
+          party panel (chrome slot, above the split) and the guests overlay
+          portal their controls here. Empty, it draws nothing. */}
+      {partyOwnsHeader && (
+        <WatchPartyBarSlot placement="stage" onElement={setStageBarEl} />
+      )}
       {/* THE STAGE IS NOT MOUNTED HERE ANY MORE, only addressed. The watch
           surface lives at the root of this component so that clicking another
           channel cannot unmount it (and destroy hls.js with it); this is the
@@ -9056,6 +9076,12 @@ function MainAppContent({
               }
               onReturn={returnToWatchChannel}
               onDismiss={watchDock.dismiss}
+              /* A seatless viewer's bar lives on the player (pass 2). Only
+                 for a watch party session: a plain voice channel with an
+                 ad-hoc share has no party controls to place. */
+              onBarSlot={
+                watchDock.session.isWatchParty ? setPlayerBarEl : undefined
+              }
               onSetWatchingLive={(channelId, watching) =>
                 voice.setWatchingLive(channelId, watching)
               }

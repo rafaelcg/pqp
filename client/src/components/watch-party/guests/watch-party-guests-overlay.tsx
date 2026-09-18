@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Users } from "lucide-react";
 import { WATCH_PARTY_MAX_GUESTS, type WatchParty } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ export function WatchPartyGuestsOverlay({
   onGoOnAir,
   onGoOffAir,
   className,
+  barSlot = null,
 }: {
   party: WatchParty | null;
   currentUserId: string | null;
@@ -66,6 +68,15 @@ export function WatchPartyGuestsOverlay({
   /** `leave`: confirm, then leave the room and resume the player. */
   onGoOffAir: () => Promise<void>;
   className?: string;
+  /**
+   * THE BAR (2026-09-18, `docs/plans/WATCH_PARTY_UI.md` pass 2). The on-air
+   * strip, the request button and the host's "No ar" button are portalled
+   * into this element, the party's one control bar (`WatchPartyBarSlot`),
+   * instead of floating at the top right of the stage. The invite dialog
+   * (modal) and the header avatars stay where they are. `null` draws them
+   * in place, which is what the tests and a party with no bar yet see.
+   */
+  barSlot?: HTMLElement | null;
 }) {
   const { t } = useTranslation();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -151,21 +162,16 @@ export function WatchPartyGuestsOverlay({
     );
   }
 
-  return (
-    <div
-      data-watch-party-guests-overlay
-      className={className}
+  /* THE BAR ITEMS: everything here that is a control rather than a modal
+     or a badge. Portalled into the party's one bar when there is one (pass
+     2 of `docs/plans/WATCH_PARTY_UI.md`); drawn in place otherwise. The
+     `order-2` group sits between the panel's mic/share group (order-1) and
+     its mixer group (order-3) whatever order the two owners mounted in. */
+  const barItems = (
+    <span
+      data-watch-party-bar-people
+      className="order-2 flex min-w-0 flex-wrap items-center gap-1.5"
     >
-      {isInvited && !answered && (
-        <GuestInviteDialog
-          open
-          hostName={party.hostDisplayName}
-          busy={accepting}
-          onAccept={accept}
-          onDecline={decline}
-        />
-      )}
-
       {isOnAir && inRoom && (
         <GuestOnAirStrip
           micOn={micOn}
@@ -178,10 +184,6 @@ export function WatchPartyGuestsOverlay({
             )
           }
         />
-      )}
-
-      {!runsTheParty && !isOnAir && !isInvited && guests.onAir.length > 0 && (
-        <GuestHeaderAvatars onAir={guests.onAir} className="mb-1" />
       )}
 
       {!runsTheParty && !isOnAir && party.options.guests === "request" && (
@@ -225,6 +227,29 @@ export function WatchPartyGuestsOverlay({
           />
         </>
       )}
+    </span>
+  );
+
+  return (
+    <div
+      data-watch-party-guests-overlay
+      className={className}
+    >
+      {isInvited && !answered && (
+        <GuestInviteDialog
+          open
+          hostName={party.hostDisplayName}
+          busy={accepting}
+          onAccept={accept}
+          onDecline={decline}
+        />
+      )}
+
+      {!runsTheParty && !isOnAir && !isInvited && guests.onAir.length > 0 && (
+        <GuestHeaderAvatars onAir={guests.onAir} className="mb-1" />
+      )}
+
+      {barSlot ? createPortal(barItems, barSlot) : barItems}
     </div>
   );
 }

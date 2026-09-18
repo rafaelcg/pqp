@@ -17,6 +17,7 @@ import { isSeatedOnAnotherDevice } from "@/lib/dual-device-watch";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
+import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 
 /**
  * Watch mode without a seat.
@@ -48,6 +49,7 @@ export function WatchStage({
   onJoin,
   fullscreen,
   onLeaveParty,
+  onBarSlot,
   mediaTitle,
   communityName,
   coverUrl,
@@ -118,6 +120,12 @@ export function WatchStage({
   };
   /** How to stop watching, when leaving the room is a thing this person can do. */
   onLeaveParty?: () => void;
+  /**
+   * Where the watch party's bar goes while this person has a picture (see
+   * `WatchPartyBarSlot`): a span in the player's bottom bar. Omitted when
+   * docked, where a 240px box has no room for it.
+   */
+  onBarSlot?: (element: HTMLDivElement | null) => void;
   mediaTitle?: string;
   communityName?: string | null;
   coverUrl?: string | null;
@@ -234,7 +242,21 @@ export function WatchStage({
               : undefined
           }
           meta={docked ? null : audienceMeta}
-          actions={docked ? miniActions : overlayActions}
+          /* PARAR DE ASSISTIR IS ON THE BOTTOM BAR NOW (pass 2), beside the
+             party's own controls, so the viewer has one row to read. The
+             top overlay keeps the audience count and, docked, the mini
+             chrome. */
+          actions={docked ? miniActions : undefined}
+          bottomActions={
+            docked ? undefined : (
+              <>
+                {onBarSlot ? (
+                  <WatchPartyBarSlot placement="player" onElement={onBarSlot} />
+                ) : null}
+                {overlayActions}
+              </>
+            )
+          }
           dualDeviceWarning={dualDeviceWarning}
         />
       ) : (
@@ -348,6 +370,7 @@ export function WatchChannelStage({
   voiceState,
   onJoin,
   onLeaveParty,
+  onBarSlot,
   onSetWatchingLive,
   onSeedChannelLive,
   fill = false,
@@ -376,6 +399,8 @@ export function WatchChannelStage({
    * means leaving the room, which only the caller knows how to do.
    */
   onLeaveParty?: () => void;
+  /** See `WatchStage`'s `onBarSlot`. */
+  onBarSlot?: (element: HTMLDivElement | null) => void;
   onSetWatchingLive: (channelId: string, watching: boolean) => void;
   /** Where the one-time `GET /api/channels/:id/live` answer goes. */
   onSeedChannelLive: (
@@ -566,6 +591,7 @@ export function WatchChannelStage({
         ended={ended}
         onJoin={docked ? undefined : onJoin}
         onLeaveParty={docked ? undefined : onLeaveParty}
+        onBarSlot={docked ? undefined : onBarSlot}
         docked={docked}
         onReturn={onReturn}
         onDismiss={onDismiss}
