@@ -121,6 +121,18 @@ export interface WatchPartyPanelProps {
   party: WatchParty | null;
   channelId: string;
   channelName: string;
+  /**
+   * THE LIVE BAR IS THE CHANNEL HEADER (2026-09-18,
+   * `docs/plans/WATCH_PARTY_UI.md` pass 1). While a party is live the app
+   * draws no channel header of its own above this panel; the bar takes its
+   * row and its height. These two slots carry what the header owned that
+   * the party has no words for: the phone's nav button on the left, and a
+   * `...` menu (pins, past broadcasts, channel settings, members) on the
+   * right. Both optional, both rendered on the presenter and the audience
+   * bar alike.
+   */
+  headerLeading?: ReactNode;
+  headerTrailing?: ReactNode;
   /** START_WATCH_PARTY on this channel: may create one, may take the stage. */
   canStart: boolean;
   /** True while this person holds a seat in this channel's voice room. */
@@ -2066,7 +2078,11 @@ function LiveSurface(
        reach. The actions drop to a second row instead of overflowing, and
        the identity keeps `min-w-0` so the party's name truncates rather
        than pushing them off. */
-    "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink-2 px-3 py-2";
+    /* AND IT IS THE HEADER NOW (2026-09-18, pass 1 of
+       `docs/plans/WATCH_PARTY_UI.md`): same minimum height, same ground
+       and same gutters as the channel header it replaces, so the row does
+       not read as a second header under an empty one. */
+    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4";
 
   const identity = (
     /* A REAL MINIMUM, so the wrap happens instead of the name vanishing.
@@ -2096,29 +2112,47 @@ function LiveSurface(
         const mic = props.micState;
 
         const inCall = mic !== "off";
+        // THE WARNING IS THE PILL (2026-09-18, pass 1 of
+        // `docs/plans/WATCH_PARTY_UI.md`). "Mic mudo: ninguém te ouve" used
+        // to be a sentence with an "Ativar mic" link at the end of the
+        // status row, one row below the pill that already said "Mic
+        // mutado" and already unmuted on press: the same fact and the same
+        // action twice, a row apart. Now the pill goes amber, says the
+        // sentence, and is the fix. Same rule behind it
+        // (`presenterMicWarning`), same test ids, one control.
         const label =
           mic === "everyone"
             ? t("watchParty.live.micEveryone")
             : mic === "room"
               ? t("watchParty.live.micRoom")
               : mic === "muted"
-                ? t("watchParty.live.micMuted")
+                ? micMutedWarning
+                  ? t("watchParty.live.micMutedShort")
+                  : t("watchParty.live.micMuted")
                 : t("watchParty.live.micOff");
         const hint =
           mic === "everyone"
             ? t("watchParty.live.micEveryoneHint")
             : mic === "room"
               ? t("watchParty.live.micRoomHint")
-              : undefined;
+              : micMutedWarning
+                ? t("watchParty.live.activateMic")
+                : undefined;
         const className = cn(
           "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
           mic === "everyone"
             ? "border-success/40 bg-success/15 text-success"
-            : mic === "room"
+            : mic === "room" || micMutedWarning
               ? "border-warning/40 bg-warning/10 text-warning"
               : "border-border bg-surface-0 font-normal text-text-tertiary",
           inCall && props.onToggleMute && "hover:bg-surface-2",
         );
+        const warningAttrs = micMutedWarning
+          ? {
+              "data-testid": "watch-party-mic-muted-warning",
+              "data-watch-party-activate-mic": "",
+            }
+          : {};
         const icon =
           mic === "everyone" || mic === "room" ? (
             <Mic className="h-3 w-3" aria-hidden />
@@ -2132,6 +2166,7 @@ function LiveSurface(
           <button
             type="button"
             data-watch-party-mic={mic}
+            {...warningAttrs}
             aria-pressed={mic === "muted"}
             aria-label={
               mic === "muted"
@@ -2146,7 +2181,12 @@ function LiveSurface(
             {label}
           </button>
         ) : (
-          <span data-watch-party-mic={mic} title={hint} className={className}>
+          <span
+            data-watch-party-mic={mic}
+            {...warningAttrs}
+            title={hint}
+            className={className}
+          >
             {icon}
             {label}
           </span>
@@ -2395,6 +2435,7 @@ function LiveSurface(
       data-watch-party-bar="presenter"
       className={barClassName}
     >
+      {props.headerLeading}
       {identity}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
         <WatchPartyShareButton party={party} iconOnly />
@@ -2433,6 +2474,7 @@ function LiveSurface(
             {t("watchParty.live.end")}
           </Button>
         )}
+        {props.headerTrailing}
       </span>
       <ConfirmDialog
         open={confirmEnd}
@@ -2479,6 +2521,7 @@ function LiveSurface(
       data-watch-party-bar="audience"
       className={barClassName}
     >
+      {props.headerLeading}
       {identity}
       {micPill}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
@@ -2497,6 +2540,7 @@ function LiveSurface(
             {t("watchParty.live.claim")}
           </Button>
         )}
+        {props.headerTrailing}
       </span>
     </div>
   );
@@ -2534,31 +2578,9 @@ function LiveSurface(
    * and every change lands immediately for the people already watching (the
    * server re-reconciles the channel on every edit).
    */
-  // "SEU MIC ESTÁ MUDO", ON THE STATUS LINE (2026-09-13). It used to be a
-  // full-width red strip of its own between the header and the dock, one of
-  // five stacked rows. It is the amber end of the status row now, with the
-  // fix beside it, so the muted state reads with the health dot rather than
-  // as an alarm above everything. Still exists only in the state a recording
-  // was lost to (`presenterMicWarning`).
-  const micMutedInline = micMutedWarning ? (
-    <span
-      data-testid="watch-party-mic-muted-warning"
-      className="flex shrink-0 items-center gap-1.5 text-[11px] text-warning"
-    >
-      <MicOff className="h-3 w-3 shrink-0" aria-hidden />
-      <span className="hidden sm:inline">{t("watchParty.live.micMutedShort")}</span>
-      {props.onToggleMute && (
-        <button
-          type="button"
-          className="rounded-sm font-semibold text-warning underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
-          onClick={props.onToggleMute}
-          data-watch-party-activate-mic
-        >
-          {t("watchParty.live.activateMic")}
-        </button>
-      )}
-    </span>
-  ) : null;
+  // "SEU MIC ESTÁ MUDO" moved twice: a red strip of its own (2026-09-12),
+  // the amber end of the status row (2026-09-13), and now the mic pill
+  // itself (2026-09-18, `micPill` above), which was already the fix.
 
   /* HOST SIDE ONLY, and `runsTheShow` is the gate rather than `canStart`: a
      co-host running the show wants this too, and a moderator who merely holds
@@ -2585,7 +2607,6 @@ function LiveSurface(
       onStreamQualityChange={setLiveQuality}
       onOpenMixer={() => setMixerOpen(true)}
       detailsInDialog
-      trailing={micMutedInline}
     />
   );
 

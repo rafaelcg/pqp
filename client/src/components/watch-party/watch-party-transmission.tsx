@@ -165,7 +165,6 @@ export function WatchPartyTransmission({
   onStreamQualityChange,
   onOpenMixer,
   detailsInDialog = false,
-  trailing,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -253,13 +252,6 @@ export function WatchPartyTransmission({
    * the row unfolds inline exactly as it did, which is what the tests pin.
    */
   detailsInDialog?: boolean;
-  /**
-   * Drawn at the right end of the status row, outside the toggle (a button
-   * cannot hold a button). The panel puts the mic warning and its Ativar
-   * mic here, so the muted state is part of the same line as the health
-   * dot instead of a red strip of its own (2026-09-13).
-   */
-  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -616,7 +608,6 @@ export function WatchPartyTransmission({
           />
         )}
       </button>
-      {trailing}
       </div>
 
       {open && detailsInDialog && (

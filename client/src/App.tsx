@@ -10,6 +10,7 @@ import {
   History,
   Lock,
   Menu,
+  MoreHorizontal,
   Phone,
   Pin,
   Settings,
@@ -17,6 +18,8 @@ import {
   Video,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu as ActionMenu } from "@/components/ui/menu";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -6376,6 +6379,38 @@ function MainAppContent({
    * all", not which of its two surfaces is currently up. */
   const isWatchPartySplit =
     splitKind === "watch" || splitKind === "watch-audience";
+  /**
+   * THE PARTY BAR IS THE CHANNEL HEADER WHILE A PARTY IS LIVE (2026-09-18,
+   * `docs/plans/WATCH_PARTY_UI.md` pass 1). Eight regions were counted on
+   * the host's screen and four of them were bars; the first two said the
+   * channel's name and then the party's name, one under the other. So the
+   * header below is not drawn while `WatchPartyPanel` draws its live bar,
+   * and what the header owned that the bar has no words for (the phone nav
+   * button, pins, past broadcasts, channel settings, members) rides into
+   * the bar through `headerLeading` / `headerTrailing`. Same condition as
+   * `watchPartySurface`'s "live" branch, so the two can never both be up
+   * or both be missing.
+   */
+  const partyOwnsHeader = (() => {
+    if (
+      !selectedChannel ||
+      selectedChannel.kind !== "server" ||
+      !isWatchPartyChannelType(selectedChannel.type) ||
+      !isWatchPartyChannelsEnabled() ||
+      !user
+    ) {
+      return false;
+    }
+    const party = watchParties.byChannel[selectedChannel.id];
+    if (!party) {
+      return false;
+    }
+    const hasStream =
+      voiceState.channelLive[selectedChannel.id]?.stream != null;
+    return (
+      party.state === "live" || (party.state === "scheduled" && hasStream)
+    );
+  })();
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -6774,6 +6809,7 @@ function MainAppContent({
           </p>
         </div>
       )}
+      {!partyOwnsHeader && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -7008,6 +7044,7 @@ function MainAppContent({
           )}
         </div>
       </header>
+      )}
       {/* Straight under the header, above everything a message could push
           around: an invited stranger's first screen otherwise says "Start the
           thread" over a markdown cheatsheet and nothing else. */}
@@ -7161,6 +7198,89 @@ function MainAppContent({
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
             slot="chrome"
+            headerLeading={
+              partyOwnsHeader ? (
+                <button
+                  type="button"
+                  className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+                  aria-label={t("chrome.openNav")}
+                  onClick={() => setMobileNavOpen(true)}
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              ) : undefined
+            }
+            headerTrailing={
+              partyOwnsHeader ? (
+                <ActionMenu
+                  items={
+                    [
+                      {
+                        id: "pins",
+                        label: t("chrome.pins"),
+                        icon: Pin,
+                        onSelect: () => setPinsOpen(true),
+                      },
+                      canViewWatchPartyHistory
+                        ? {
+                            id: "history",
+                            label: t("chrome.watchPartyHistory"),
+                            icon: History,
+                            onSelect: () =>
+                              setWatchPartyHistoryChannelId(
+                                selectedChannel.id,
+                              ),
+                          }
+                        : null,
+                      canManageChannels || canManageRoles
+                        ? {
+                            id: "settings",
+                            label: t("chrome.channelSettings"),
+                            icon: Settings,
+                            onSelect: () =>
+                              setChannelSettings({
+                                channelId: selectedChannel.id,
+                                section: canManageChannels
+                                  ? "overview"
+                                  : "permissions",
+                                forceAdvanced: false,
+                              }),
+                          }
+                        : null,
+                      memberSidebarAvailable
+                        ? {
+                            id: "members",
+                            label: t("memberList.toggle"),
+                            icon: Users,
+                            checked: memberSidebar.open && !openThread,
+                            onSelect: () => {
+                              if (openThread) {
+                                closeThreadPanel();
+                                if (!memberSidebar.open) {
+                                  memberSidebar.toggle();
+                                }
+                                return;
+                              }
+                              memberSidebar.toggle();
+                            },
+                          }
+                        : null,
+                    ].filter(Boolean) as ContextMenuItemDef[]
+                  }
+                  align="end"
+                >
+                  <button
+                    type="button"
+                    className={HEADER_ACTION_TILE}
+                    aria-label={t("chrome.moreActions")}
+                    title={t("chrome.moreActions")}
+                    data-channel-header-more=""
+                  >
+                    <MoreHorizontal className="h-4 w-4" aria-hidden />
+                  </button>
+                </ActionMenu>
+              ) : undefined
+            }
           />
         )}
       {/* CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md). One mount line: every

@@ -2051,6 +2051,7 @@
   "time.yesterday": "Yesterday",
   "chrome.pins": "Pins",
   "chrome.channelSettings": "Channel settings",
+  "chrome.moreActions": "More actions",
   "chrome.watchPartyHistory": "Past broadcasts",
   "chrome.watchPartyHistoryNamed": "Past broadcasts · {name}",
   "chrome.searchMessages": "Search messages",
