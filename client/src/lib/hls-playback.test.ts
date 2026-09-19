@@ -98,6 +98,25 @@ describe("isOwnHlsPlaylistProxyUrl", () => {
     expect(naiveCheck).toBe(true);
     expect(isOwnHlsPlaylistProxyUrl(decoy)).toBe(false);
   });
+
+  it("recognises the proxy path on the edge host, not only the API origin", () => {
+    // Production moved playlist delivery to hls.pqp.gg
+    // (LIVE_HLS_PLAYLIST_BASE_URL), a DIFFERENT host from getApiBaseUrl().
+    // The old getApiBaseUrl()-prefix rule returned false for it, which
+    // silently disabled the restart fast path and the loader token swap and
+    // stranded every viewer on a dead session (2026-09-19, channel
+    // d5559e70). Keyed on the path, the edge host is our own proxy too.
+    expect(
+      isOwnHlsPlaylistProxyUrl(
+        "https://hls.pqp.gg/api/voice/hls-playlist/c1/1789827233443/720p30?t=tok",
+      ),
+    ).toBe(true);
+    // A raw public bucket master (LIVE_HLS_SIGNED_URLS=false) has no such
+    // path and stays excluded -- its own session key, never a Bearer.
+    expect(
+      isOwnHlsPlaylistProxyUrl("https://bucket.r2.dev/live/c1/1789827233443.m3u8"),
+    ).toBe(false);
+  });
 });
 
 describe("isAutoplayRefusal", () => {

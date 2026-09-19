@@ -216,9 +216,37 @@ export function hlsViewerTokenFromUrl(url: string): string | null {
  * bucket URL and must NOT get our Authorization header attached: that would
  * leak a user's Clerk-derived token to a third-party origin (R2) and, for a
  * SigV4-signed request, would not even be the right kind of credential.
+ *
+ * KEYED ON THE PATH, NOT THE HOST, and that is the fix for a stall rather
+ * than a tidy-up (2026-09-19, channel d5559e70). The proxy path
+ * (`/api/voice/hls-playlist/`) is what identifies our playlist on whatever
+ * host serves it: the API origin (`VITE_API_URL`) by default, OR an edge host
+ * (`LIVE_HLS_PLAYLIST_BASE_URL`, e.g. `hls.pqp.gg`) once an operator has moved
+ * playlist delivery off the API box, which production has. The old rule
+ * matched `getApiBaseUrl()` (the API origin) as a prefix, so every
+ * `hls.pqp.gg` playlist URL returned FALSE — and with it the conventional
+ * restart fast path (`isPlaylistGoneError` -> hold -> discover) and the
+ * loader token swap both silently stopped running, so a viewer whose egress
+ * restarted hammered the DEAD `startedAt` for minutes (502/503/404 in a loop)
+ * instead of adopting the new session. A raw public bucket URL
+ * (`LIVE_HLS_SIGNED_URLS=false`) carries no such path and stays excluded,
+ * exactly as before — it is its own session key and never takes a Bearer.
  */
 export function isOwnHlsPlaylistProxyUrl(url: string): boolean {
-  return url.startsWith(`${getApiBaseUrl()}${HLS_PLAYLIST_PROXY_PATH}`);
+  try {
+    // Resolve relative URLs (dev, empty `VITE_API_URL`) against a real base;
+    // an absolute URL ignores the base, so the edge host is matched on path.
+    const base =
+      getApiBaseUrl() ||
+      (typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    return new URL(url, base).pathname.startsWith(HLS_PLAYLIST_PROXY_PATH);
+  } catch {
+    // Not a parseable URL: fall back to the old prefix rule and a bare path.
+    return (
+      url.startsWith(`${getApiBaseUrl()}${HLS_PLAYLIST_PROXY_PATH}`) ||
+      url.startsWith(HLS_PLAYLIST_PROXY_PATH)
+    );
+  }
 }
 
 export interface HlsPlaybackStats {

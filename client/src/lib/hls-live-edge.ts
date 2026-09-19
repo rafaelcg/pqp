@@ -1035,6 +1035,62 @@ export function isPlaylistGoneError(input: {
 }
 
 /**
+ * A master/level playlist load that is failing in a way that means the
+ * session URL this player is pointed at is no longer serving good playlists:
+ * gone (404/410), or a server error (>=500 -- the 502/503 an edge host like
+ * `hls.pqp.gg` returns while the origin object for a restarted session
+ * disappears). Never a fragment/part load (that is a segment problem the
+ * retry budget owns) and never a timeout (a slow playlist is not a gone one).
+ *
+ * WHY THIS IS A SEPARATE, WIDER RULE THAN `isPlaylistGoneError`. That one is
+ * the precise 404/410 fast path, and it fires only for a URL this build
+ * recognises as our own proxy. When production moved playlist delivery to an
+ * edge host the host-keyed recognition silently stopped matching, and every
+ * 5xx/404 there fell through to the FATAL ladder, which rebuilds in place and
+ * never asks the server what is live. This is the classification-independent
+ * SAFETY NET the watch player uses (2026-09-19): a run of these, or one fatal
+ * one, drives the SAME bounded "ask the server what is live and adopt it"
+ * path regardless of which host served the playlist.
+ */
+export function isPlaylistUnavailableError(input: {
+  details?: string | null;
+  responseCode?: number | null;
+  fatal?: boolean;
+}): boolean {
+  const details = input.details;
+  if (typeof details !== "string" || !PLAYLIST_GONE_DETAILS.has(details)) {
+    return false;
+  }
+  const code = input.responseCode;
+  if (typeof code === "number" && (code === 404 || code === 410 || code >= 500)) {
+    return true;
+  }
+  // A fatal master/level load with no usable status (hls.js gave up on the
+  // playlist after its retry budget) is also "cannot follow this session".
+  return Boolean(input.fatal);
+}
+
+/** A run of playlist failures long enough to warrant session discovery. */
+export const PLAYLIST_DISCOVERY_THRESHOLD = 2;
+export const PLAYLIST_DISCOVERY_WINDOW_MS = 15_000;
+
+/**
+ * Whether recent master/level playlist failures are enough to stop retrying
+ * the current session and ask the server what is live. Bounded by a short
+ * window so two isolated blips minutes apart never add up to a re-adopt on a
+ * stream that is otherwise fine. One FATAL failure trips discovery on its own
+ * at the call site; this is the non-fatal-run half.
+ */
+export function playlistErrorsWarrantDiscovery(
+  timestampsMs: readonly number[],
+  now: number,
+  windowMs: number = PLAYLIST_DISCOVERY_WINDOW_MS,
+  threshold: number = PLAYLIST_DISCOVERY_THRESHOLD,
+): boolean {
+  return timestampsMs.filter((at) => now - at < windowMs).length >= threshold;
+}
+
+/**
  * Where "jump to live" should land. Seeking onto the exact live edge
  * sits inside the newest segment and often `waiting` immediately.
  */

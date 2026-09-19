@@ -71,6 +71,8 @@ import {
   isMissingFragmentError,
   isPipAvailable,
   isPlaylistGoneError,
+  isPlaylistUnavailableError,
+  playlistErrorsWarrantDiscovery,
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
@@ -1514,6 +1516,14 @@ export function HlsWatchPlayer({
     // before, which is what still gets a person a holding screen and a retry
     // button when the session really has ended.
     const edgeJumps: number[] = [];
+    // SAFETY NET, host- and classification-independent (2026-09-19, channel
+    // d5559e70). Timestamps of recent master/level playlist load failures on
+    // THIS attach. A run of them (or one fatal one) means the session URL is
+    // no longer serving playlists, whatever the host or the exact status --
+    // the case the host-keyed fast path silently stopped catching when
+    // playlist delivery moved to `hls.pqp.gg`. Reset when a fragment loads
+    // (the playlist is serving again) so isolated blips never accumulate.
+    const playlistUnavailableTimes: number[] = [];
     const jumpToLiveEdgeAfterError = (what: string): boolean => {
       const now = Date.now();
       if (!canJumpToLiveEdge(edgeJumps, now)) {
@@ -1993,6 +2003,18 @@ export function HlsWatchPlayer({
       }
       hls = player as unknown as HlsHandle;
       hlsRef.current = hls;
+      // Enter the conventional restart dead window: stop the in-flight
+      // playlist storm, keep the restarting overlay up, and let the next
+      // ticks' bounded `"reconnect"` polls (`gateReconnect`) ask the server
+      // what is live and adopt a fresh `startedAt`. Shared by the precise
+      // 404/410 fast path below and the host-independent safety net beside
+      // it, so the two can never drift into different hold behaviour.
+      const enterRestartHold = () => {
+        watch.onPlaylistGone();
+        player.stopLoad();
+        setStallReason("playlist-gone");
+        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+      };
       player.on(Hls.Events.ERROR, (_event, data) => {
         // Fatal network/media errors: hls.js has given up on this source;
         // non-fatal ones it retries on its own and the watchdog only notes.
@@ -2030,17 +2052,53 @@ export function HlsWatchPlayer({
                 : null,
           })
         ) {
-          watch.onPlaylistGone();
           // Stop the in-flight 404 storm immediately rather than waiting
           // for the next stall tick to return `"hold"`.
-          player.stopLoad();
-          setStallReason("playlist-gone");
-          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          enterRestartHold();
           // Nothing else in this handler applies: the pin rule and the
           // live-edge jump are both LL-only, a 404 is never the 401 the
           // auth grace exists for, and telling the watchdog `onError` too
           // would start the very ladder the hold replaces.
           return;
+        }
+        // THE HOST-INDEPENDENT SAFETY NET (2026-09-19, channel d5559e70).
+        // The precise fast path above fires only for a 404/410 on a URL this
+        // build recognises as our own proxy. Production moved playlist
+        // delivery to an edge host (`hls.pqp.gg`), the host-keyed check
+        // silently stopped matching, and every 5xx/404 there fell through to
+        // the FATAL ladder below -- which rebuilds in place and NEVER asks
+        // the server what is live, so a viewer hammered the dead `startedAt`
+        // (502 -> 503 -> 404, on a loop) for minutes while a newer session
+        // was already up. This drives the SAME bounded hold+discover path off
+        // a RUN of master/level failures (404/410 or 5xx), or one fatal such
+        // error, for any URL whose channel we can look up -- whatever host
+        // served it, and whatever the WS `channel-live` frame did or did not
+        // deliver. Conventional live only; LL and VOD keep their own paths.
+        if (
+          !cancelled &&
+          !isVod &&
+          effectiveMode === "conventional" &&
+          channelIdFromHlsUrl(activeSrc) !== null &&
+          isPlaylistUnavailableError({
+            details: typeof data.details === "string" ? data.details : null,
+            responseCode:
+              typeof data.response?.code === "number"
+                ? data.response.code
+                : null,
+            fatal,
+          })
+        ) {
+          const now = Date.now();
+          playlistUnavailableTimes.push(now);
+          if (fatal || playlistErrorsWarrantDiscovery(playlistUnavailableTimes, now)) {
+            console.warn(
+              `[hls] playlist unavailable (${data.details} ${
+                data.response?.code ?? "?"
+              }), discovering the current session`,
+            );
+            enterRestartHold();
+            return;
+          }
         }
         if (!canJumpOnThisAttach) {
           watch.onError(hlsErrorPayload(data, fatal));
@@ -2226,6 +2284,10 @@ export function HlsWatchPlayer({
       });
       player.on(Hls.Events.FRAG_LOADED, () => {
         hlsFragmentLoaded = true;
+        // The playlist is serving fragments again: forget any earlier
+        // master/level failures so isolated blips can never accumulate into
+        // a spurious session re-discovery on a stream that is otherwise fine.
+        playlistUnavailableTimes.length = 0;
       });
       // BROADCAST_PIPELINE B0.3: which fragment is the one about to be
       // painted, and its own wall clock (`#EXT-X-PROGRAM-DATE-TIME`, real
