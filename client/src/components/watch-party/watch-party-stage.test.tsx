@@ -67,12 +67,15 @@ describe("WatchPartyStage states", () => {
     expect(html).toContain("footer here");
   });
 
-  it("draws the audience view as the picture once a playlist exists", () => {
+  it("draws the audience view as the picture for a presenter who is not sharing", () => {
+    // No capture of our own (a co-host who took over): the audience feed is
+    // the only picture there is, so it becomes the primary panel.
     playerProps.length = 0;
-    const html = render({ state: "live", liveStream: LIVE });
+    const html = render({ state: "live", hostSide: true, liveStream: LIVE });
     expect(html).toContain("mock-hls-watch-player");
     expect(playerProps[0]?.forceMuted).toBe(true);
     expect(html).not.toContain("watch-party-waiting");
+    expect(html).not.toContain("watch-party-presenter-preview");
   });
 
   it("pins the reconnecting pill over the picture", () => {
@@ -127,7 +130,7 @@ describe("WatchPartyStage audience view LL mode", () => {
   });
 });
 
-describe("WatchPartyStage: the host's own capture", () => {
+describe("WatchPartyStage: the host's own preview is the primary panel", () => {
   let container: HTMLDivElement;
   let root: Root;
   const stream = {} as unknown as MediaStream;
@@ -137,6 +140,7 @@ describe("WatchPartyStage: the host's own capture", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     window.localStorage.clear();
+    playerProps.length = 0;
   });
 
   afterEach(() => {
@@ -159,35 +163,60 @@ describe("WatchPartyStage: the host's own capture", () => {
     });
   }
   const toggle = () =>
-    container.querySelector<HTMLButtonElement>("[data-watch-party-self-monitor]");
-  const video = () =>
+    container.querySelector<HTMLButtonElement>(
+      "[data-watch-party-audience-monitor]",
+    );
+  const preview = () =>
     container.querySelector<HTMLVideoElement>(
       '[data-testid="watch-party-presenter-preview"]',
     );
+  const audiencePlayer = () =>
+    container.querySelector('[data-testid="mock-hls-watch-player"]');
 
-  it("fills the stage with the capture while there is no audience view, no toggle", () => {
+  it("fills the stage with the host's own capture, no audience monitor, when there is no playlist yet", () => {
     renderStage(null);
-    expect(video()).not.toBeNull();
+    expect(preview()).not.toBeNull();
+    expect(audiencePlayer()).toBeNull();
     expect(toggle()).toBeNull();
   });
 
-  it("is a picture-in-picture, off by default, once the audience view is up", () => {
+  it("keeps the host's own capture primary and shows the audience feed as a smaller monitor by default", () => {
     renderStage(LIVE);
-    expect(video()).toBeNull();
+    // The host's real-time capture is the video element (the primary panel).
+    expect(preview()).not.toBeNull();
+    // The delayed audience feed is present too, by default, and muted.
+    expect(audiencePlayer()).not.toBeNull();
+    expect(playerProps[playerProps.length - 1]?.forceMuted).toBe(true);
+    // And there is a control to close it (not to reveal it: it is already on).
     expect(toggle()).not.toBeNull();
   });
 
-  it("switching the PiP on mounts the video and persists the choice", () => {
+  it("closing the audience monitor hides it and persists the choice, and reopening restores it", () => {
     renderStage(LIVE);
     act(() => {
       toggle()?.click();
     });
-    expect(video()).not.toBeNull();
-    expect(window.localStorage.getItem("pqp:watch-party-self-monitor")).toBe("1");
+    expect(audiencePlayer()).toBeNull();
+    expect(window.localStorage.getItem("pqp:watch-party-audience-monitor")).toBe(
+      "0",
+    );
+    // The host's own preview is still the primary panel while it is hidden.
+    expect(preview()).not.toBeNull();
     act(() => {
       toggle()?.click();
     });
-    expect(video()).toBeNull();
-    expect(window.localStorage.getItem("pqp:watch-party-self-monitor")).toBe("0");
+    expect(audiencePlayer()).not.toBeNull();
+    expect(window.localStorage.getItem("pqp:watch-party-audience-monitor")).toBe(
+      "1",
+    );
+  });
+
+  it("honours a stored 'hidden' preference on first render", () => {
+    window.localStorage.setItem("pqp:watch-party-audience-monitor", "0");
+    renderStage(LIVE);
+    expect(preview()).not.toBeNull();
+    expect(audiencePlayer()).toBeNull();
+    // The reopen control is still there.
+    expect(toggle()).not.toBeNull();
   });
 });
