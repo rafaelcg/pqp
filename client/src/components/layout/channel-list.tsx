@@ -1612,7 +1612,41 @@ export function ChannelList({
                       {!isCollapsed && (
                         <div className="ml-2 border-l border-ink-4/70 pl-2">
                           {kids.length === 0 ? (
-                            <p className="px-2 py-1 text-xs italic text-paper-muted">
+                            // The empty-category placeholder is itself a drop
+                            // target. Without these handlers a channel dragged
+                            // onto the "drag a channel here" hint fell through
+                            // to nothing: only the CategoryHeader accepted the
+                            // drop, so the one spot the copy points at was inert.
+                            <p
+                              data-testid="empty-category-drop"
+                              className={cn(
+                                "rounded px-2 py-1 text-xs italic text-paper-muted",
+                                dragOverId === category.id &&
+                                  !draggedOccupant &&
+                                  "bg-ink-3/60 text-paper",
+                              )}
+                              onDragOver={(event) => {
+                                if (draggedOccupant || !draggedId) {
+                                  return;
+                                }
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                                setDragOverId(category.id);
+                              }}
+                              onDragLeave={() => {
+                                if (dragOverId === category.id) {
+                                  setDragOverId(null);
+                                }
+                              }}
+                              onDrop={() => {
+                                if (draggedOccupant) {
+                                  showDropHint("category");
+                                  clearDrag();
+                                  return;
+                                }
+                                handleDrop(category);
+                              }}
+                            >
                               {t("chrome.emptyCategory")}
                             </p>
                           ) : (
