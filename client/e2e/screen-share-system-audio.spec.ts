@@ -305,12 +305,17 @@ test("a share excludes the mixer, and strips monitor audio the OS cannot exclude
       .toBe(1);
     const first = (await captureRequests(page))[0]!;
 
-    // Computer sound is Windows 11 only. CI is macOS or Linux, so the request
-    // must exclude the mixer. Audio is still REQUESTED: dropping that would
-    // silence a tab share's own sound. restrictOwnAudio stays on the request
-    // so a Win11 box that later honours it still strips this document.
-    expect(first.systemAudio).toBe("exclude");
-    expect(first.windowAudio).toBe("exclude");
+    // The request OFFERS computer sound wherever the browser knows
+    // restrictOwnAudio (belt), and the readback strip below is what actually
+    // keeps the mixer out (braces) - see PR 723. The UA-CH "Windows 11 only"
+    // gate that used to force exclude HERE was the revert's bug: on CI (Linux)
+    // and on every host that is not Windows 11 it silenced a whole screen or
+    // window share. So a monitor share now asks include + per-app window
+    // audio; a tab share still asks exclude (its own sound is the clean path,
+    // pinned in screen-capture-audio.test.ts). restrictOwnAudio stays on the
+    // request so a box that honours it strips this document at the source.
+    expect(first.systemAudio).toBe("include");
+    expect(first.windowAudio).toBe("window");
     expect(first.audio).toMatchObject({ restrictOwnAudio: true });
     // Audio is still REQUESTED. Dropping the constraint would silence a tab
     // share's own sound, which is the path that never needed this opt-in.
