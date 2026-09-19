@@ -78,6 +78,7 @@ import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
@@ -1159,6 +1160,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // used to build its own and leave out the shell's picker flag, so a
       // Windows desktop host was asked for a capture with no audio at all while
       // the shell's own picker stood ready to offer the box. One reader now.
+      await ensureOsCanExcludeCallAudio();
       const options = screenCaptureOptions(
         false,
         liveScreenCaptureEnvironment(),

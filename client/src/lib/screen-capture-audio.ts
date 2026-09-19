@@ -28,42 +28,39 @@
  *
  * WHAT ACTUALLY FIXES IT, in the order the platform gives them to us:
  *
- * - `systemAudio: "exclude"` is the default here now. Per the Screen Capture
- *   spec it applies to monitor surfaces only, so a whole-screen share can no
- *   longer carry the machine's output, and a **tab** share still can. Tab audio
- *   is the clean path (a tab share captures that tab and nothing else, so the
- *   call in another tab is not in it) and it stays fully available. Measured on
- *   Chrome 151: with `systemAudio: "exclude"` a tab capture still hands over a
- *   "Tab audio" track.
+ * - `systemAudio: "exclude"` is the default. The spec scopes that member to
+ *   **monitor** surfaces. A tab share still carries that tab's own sound.
+ *   A **window** share is not silent: Chrome's default `windowAudio` is
+ *   system, so the window pane can offer the same mixer. We send
+ *   `windowAudio: "window"` only on Windows 11 Chrome (per-app loopback) and
+ *   `"exclude"` everywhere else, including every watch party.
  *
- * - `restrictOwnAudio: true`, for the person who deliberately opts back in.
- *   Chrome desktop 141 shipped it and the spec is explicit: "the user agent
- *   MUST attempt to remove any audio from the audio being captured that was
- *   produced by the document that performed getDisplayMedia()". Our document is
- *   the one playing everybody's voices, so this is the per-source exclusion that
- *   Chromium was long assumed not to expose. Feature-detected, because it is
- *   young: a browser that does not know the name would be handed a constraint it
- *   cannot honour, and this is not a promise worth risking a whole capture on.
- *   On Chrome this is the path that already stops the call coming back (heard
- *   on a Windows Chrome share, 30 Aug 2026). On the desktop app it needs
- *   Electron 43.4+, where the handler started honouring the constraint.
+ * - `restrictOwnAudio: true` when the engine knows the name. The spec: drop
+ *   audio this document produced. Chromium only honours that on Windows 11
+ *   (build ≥ 22000). `getSupportedConstraints().restrictOwnAudio` is a
+ *   stable flag, true on Windows 10 too, so it is not proof the OS can
+ *   exclude us. We offer computer sound only after a UA-CH Win11 check
+ *   (`platformVersion` major ≥ 13, or NT build ≥ 22000). Missing hint →
+ *   exclude. Electron loopback is the same gate, parsed from `os.release()`
+ *   as `10.0.BUILD`, never `major === 11`.
  *
- * - `audio: false` in the Electron shell, unless the user opted in. The shell
- *   answers `setDisplayMediaRequestHandler` itself and returns
- *   `{ video: source, audio: "loopback" }` on Windows (`electron/lib/display-
- *   sources.js`). From Electron 43.4 / 44 that `"loopback"` is remapped to
- *   `loopbackWithoutChrome` when this file asked `restrictOwnAudio: true`, so
- *   the call playing in this window is kept out of the tap. Electron 34
- *   (v0.1.3) ignores the constraint, which is why a new desktop binary is the
- *   remaining fix. The page not asking for audio is still the off switch, and
- *   the picker lists screens and windows only, never tabs, so there is no
- *   tab-audio path for `audio: false` to take away.
+ * - After the picker, if a monitor or window track still has audio and
+ *   `getSettings().restrictOwnAudio` is **false** (or capabilities cannot
+ *   include true), we strip that track before publish. Undefined settings are
+ *   not a leak: stripping those would silence a working Win11 share.
+ *
+ * - `audio: false` in the Electron shell unless the user opted in AND this
+ *   Windows build can exclude us. The handler still returns `"loopback"`;
+ *   Electron 43.4+ remaps it to `loopbackWithoutChrome` when this file asked
+ *   `restrictOwnAudio`. Passing `"loopbackWithoutChrome"` ourselves fails the
+ *   whole capture on Windows 10.
  */
 
 import {
   desktopShareCapabilities,
   getDesktop,
   isDesktopApp,
+  type DesktopShareCapabilities,
 } from "./desktop";
 import {
   cursorConstraintFor,
@@ -86,6 +83,12 @@ export interface ScreenCaptureOptions
   video?: boolean | ScreenVideoConstraints;
   /** Chromium: offer the machine's own output as a capturable source. */
   systemAudio?: "include" | "exclude";
+  /**
+   * Chromium: what a **window** share may capture. `"system"` is the mixer
+   * (the call). `"window"` is that app only, and only on Windows 11.
+   * `"exclude"` is silent besides tab audio.
+   */
+  windowAudio?: "exclude" | "system" | "window";
   /** Chromium: whether the tab running this app may be picked. */
   selfBrowserSurface?: "include" | "exclude";
   /** Chromium: offer "share this tab instead" while a share is running. */
@@ -193,8 +196,16 @@ export interface ScreenCaptureEnvironment {
   /**
    * Whether this browser knows the `restrictOwnAudio` constraint, i.e.
    * `navigator.mediaDevices.getSupportedConstraints().restrictOwnAudio`.
+   * Not proof the OS will honour it. That is `osCanExcludeCallAudio`.
    */
   supportsRestrictOwnAudio: boolean;
+  /**
+   * True only when this OS can actually strip this document from a mixer
+   * tap: Windows 11 (UA-CH `platformVersion` major ≥ 13, or NT build ≥
+   * 22000). Missing hint is false. Windows 10 reports the constraint and
+   * cannot exclude us.
+   */
+  osCanExcludeCallAudio: boolean;
   /**
    * True when the desktop share picker itself asks about computer audio.
    * Absence means an older shell that treats `audioRequested` as the whole
@@ -293,6 +304,7 @@ export function screenCaptureEnvironment(
     sharePickerOffersAudio?: boolean;
     shellSystemAudio?: "loopback" | "none" | null;
     shellRestrictOwnAudio?: boolean | null;
+    osCanExcludeCallAudio?: boolean;
   } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
@@ -308,6 +320,9 @@ export function screenCaptureEnvironment(
     isDesktopShell,
     shellPlatform,
     supportsRestrictOwnAudio,
+    osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(
+      extras.osCanExcludeCallAudio,
+    ),
     sharePickerOffersAudio: extras.sharePickerOffersAudio === true,
     shellSystemAudio: extras.shellSystemAudio ?? null,
     shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
@@ -336,7 +351,139 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
       getDesktop()?.sharePickerOffersAudio === true,
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
+    osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
   });
+}
+
+/**
+ * Chromium's UA-CH Windows 11 signal.
+ *
+ * `platformVersion` major ≥ 13 is what Chrome reports for Windows 11. A
+ * thawed 10.0.BUILD with BUILD ≥ 22000 is accepted if a browser ever stops
+ * freezing the NT version. Missing or unparsable is not Win11.
+ */
+export const WINDOWS_11_NT_BUILD = 22000;
+
+let osCanExcludeCallAudioCache: boolean | undefined;
+
+/**
+ * What the Electron shell already decided from `os.release()`.
+ *
+ * UA-CH is a browser hint. In the shell the main process parsed the NT
+ * build and published loopback only when exclude can run. Trust that
+ * object when it exists: Electron often has no `userAgentData`, and a
+ * false cache would hide computer sound on Windows 11.
+ *
+ * `undefined` means this is not a current shell. The UA-CH cache stays
+ * the source.
+ */
+export function osCanExcludeCallAudioFromCapabilities(
+  capabilities: Pick<
+    DesktopShareCapabilities,
+    "systemAudio" | "restrictOwnAudio"
+  > | null,
+): boolean | undefined {
+  if (!capabilities) {
+    return undefined;
+  }
+  return (
+    capabilities.systemAudio === "loopback" &&
+    capabilities.restrictOwnAudio === true
+  );
+}
+
+function resolveOsCanExcludeCallAudio(
+  override?: boolean,
+  capabilities: DesktopShareCapabilities | null = desktopShareCapabilities(),
+): boolean {
+  if (override !== undefined) {
+    return override;
+  }
+  const fromShell = osCanExcludeCallAudioFromCapabilities(capabilities);
+  if (fromShell !== undefined) {
+    return fromShell;
+  }
+  return osCanExcludeCallAudioCache === true;
+}
+
+export function resetOsCanExcludeCallAudioForTests(): void {
+  osCanExcludeCallAudioCache = undefined;
+}
+
+export function setOsCanExcludeCallAudioForTests(value: boolean): void {
+  osCanExcludeCallAudioCache = value;
+}
+
+export function osCanExcludeCallFromUa(
+  platform: string | undefined,
+  platformVersion: string | undefined,
+): boolean {
+  if (platform !== "Windows") {
+    return false;
+  }
+  if (!platformVersion) {
+    return false;
+  }
+  const parts = platformVersion.split(".");
+  const major = Number.parseInt(parts[0] ?? "", 10);
+  if (!Number.isFinite(major)) {
+    return false;
+  }
+  if (major >= 13) {
+    return true;
+  }
+  if (major === 10 && parts.length >= 3) {
+    const build = Number.parseInt(parts[2] ?? "", 10);
+    return Number.isFinite(build) && build >= WINDOWS_11_NT_BUILD;
+  }
+  return false;
+}
+
+type NavigatorWithUaData = Navigator & {
+  userAgentData?: {
+    platform?: string;
+    getHighEntropyValues?: (
+      hints: string[],
+    ) => Promise<{ platformVersion?: string }>;
+  };
+};
+
+async function probeOsCanExcludeCallAudio(): Promise<boolean | "failed"> {
+  try {
+    const ua = (navigator as NavigatorWithUaData).userAgentData;
+    if (!ua || typeof ua.getHighEntropyValues !== "function") {
+      return false;
+    }
+    const values = await ua.getHighEntropyValues(["platformVersion"]);
+    return osCanExcludeCallFromUa(ua.platform, values.platformVersion);
+  } catch {
+    // A thrown probe is not "this OS cannot exclude us". Caching that as
+    // false would hide computer sound for the rest of the tab.
+    return "failed";
+  }
+}
+
+/**
+ * Warm the Win11 hint. Missing `userAgentData` is false: we do not offer
+ * computer sound until we know this OS can exclude the call.
+ */
+export async function ensureOsCanExcludeCallAudio(): Promise<boolean> {
+  const fromShell = osCanExcludeCallAudioFromCapabilities(
+    desktopShareCapabilities(),
+  );
+  if (fromShell !== undefined) {
+    osCanExcludeCallAudioCache = fromShell;
+    return fromShell;
+  }
+  if (osCanExcludeCallAudioCache !== undefined) {
+    return osCanExcludeCallAudioCache;
+  }
+  const probed = await probeOsCanExcludeCallAudio();
+  if (probed === "failed") {
+    return false;
+  }
+  osCanExcludeCallAudioCache = probed;
+  return probed;
 }
 
 /**
@@ -345,11 +492,38 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
  * Without that, offering "share this computer's sound" is offering the
  * 23 Aug 2026 echo. Chrome 141+ and Electron 43.4+ can; older engines cannot,
  * so they keep the exclude default and a tab share is the only clean path.
+ *
+ * TWO GATES, NOT THREE (2026-09-18). A browser answers this from
+ * `supportsRestrictOwnAudio` alone. The version probe
+ * (`osCanExcludeCallAudio`) is a UA-Client-Hints *guess* about the OS
+ * underneath, and adding it here as a third gate turned every host that is
+ * not Windows 11 into "no computer sound at all": a whole-screen or window
+ * watch party went out with no film on it, and the audience was left with
+ * the presenter's microphone branch alone, which is what "everything is very
+ * low" sounds like from the other end. It bought no safety it did not
+ * already have, because the browser path is belt AND braces: we ASK with
+ * `restrictOwnAudio: true`, and `stripLeakedSystemAudioTracks` then reads
+ * back what the engine actually applied and drops the track when exclude is
+ * known not to have taken. A guess about the OS cannot be more reliable than
+ * the track's own `getSettings()`, and it fails in the expensive direction.
+ *
+ * The SHELL keeps the gate, and there it is not a guess: `desktopShareCapabilities`
+ * is the binary stating what its own loopback tap can do, and an old shell
+ * that taps and cannot strip is exactly the build every share echoed on.
  */
 export function canExcludeCallFromSystemAudio(
   env: ScreenCaptureEnvironment,
 ): boolean {
-  return env.supportsRestrictOwnAudio;
+  if (!env.supportsRestrictOwnAudio) {
+    return false;
+  }
+  if (env.shellRestrictOwnAudio === false) {
+    return false;
+  }
+  if (!env.isDesktopShell) {
+    return true;
+  }
+  return env.osCanExcludeCallAudio;
 }
 
 /**
@@ -493,6 +667,31 @@ export function screenCaptureOptions(
     // request to a platform that will reject the whole capture over it.
     audio: env.isDesktopShell && !carriesAudio ? false : audio,
     systemAudio: carriesAudio ? "include" : "exclude",
+    // Window pane: Chrome's default is `system` (the mixer, the call). We
+    // never send that. An engine that knows `restrictOwnAudio` gets per-app
+    // `"window"`, which is that window's own audio and therefore cannot
+    // contain the call by construction; everything older gets `"exclude"`.
+    // The shell is omitted: the handler names loopback, and this member
+    // would fight it.
+    //
+    // NOT gated on `osCanExcludeCallAudio`, and NOT excluded for a watch
+    // party (2026-09-18). Both gates were silencing the case they were
+    // written to protect: a watch party whose picture is a window or a
+    // screen rather than a tab went out with no film on it on every host
+    // that is not Windows 11. `"window"` is not the mixer, so there is
+    // nothing here to protect against; where an engine cannot honour it,
+    // it degrades to what `"exclude"` already gave us, and a mixer tap that
+    // somehow arrives anyway is still caught by `stripLeakedSystemAudioTracks`
+    // before publish. A tab share still asks for `"exclude"`: the tab's own
+    // sound is the clean path and the window pane is not in play.
+    ...(env.isDesktopShell
+      ? {}
+      : {
+          windowAudio:
+            tabSteer || !env.supportsRestrictOwnAudio
+              ? ("exclude" as const)
+              : ("window" as const),
+        }),
     // Sharing the pqp tab itself would put the call's own picture back into the
     // call, and the loop gets louder every trip; the picker not offering that
     // tab is a cheaper answer than a hall of mirrors nobody can locate.
@@ -512,24 +711,21 @@ export function screenCaptureOptions(
 }
 
 /**
- * Is this live capture carrying the machine's whole output?
+ * Is this live capture carrying the machine's mixer (or a window's stand-in
+ * for it)?
  *
  * Answered from what the browser says was ACTUALLY picked, not from what we
- * asked for, which is the difference between a guess and a fact: the user may
- * have opted in and then chosen a tab, or the shell may have handed over
- * loopback we did not expect. `displaySurface: "monitor"` plus a live audio
- * track is the only combination that can put the call back into the call, and
- * it is decided the moment the picker closes, which is when the person can
- * still do something about it.
+ * asked for. A tab share ("browser") captures that tab and nothing else, so
+ * the call is not in it. A **window** share can carry system audio: Chrome's
+ * default `windowAudio` is the mixer, and Electron attaches loopback to window
+ * sources the same as screens. That is Gio's Pocket Bard path, and it can
+ * echo. `monitor` and `window` with a live audio track are the shapes that
+ * can put the call back into the call.
  *
- * A tab share ("browser") captures that tab and nothing else, so the call,
- * which is in another tab or is this very document, is not in it. A window
- * share carries no audio on any platform this ships to. Neither can echo.
- *
- * An absent `displaySurface` counts as NOT a monitor on purpose. The browsers
- * that omit it are the ones with no system-audio capture to begin with, and
- * warning about an echo the platform cannot produce is how a true warning gets
- * trained into background noise.
+ * An absent `displaySurface` counts as NOT a mixer tap on purpose. The
+ * browsers that omit it are the ones with no system-audio capture to begin
+ * with, and warning about an echo the platform cannot produce is how a true
+ * warning gets trained into background noise.
  */
 export function capturesSystemAudio(input: {
   /** `videoTrack.getSettings().displaySurface`, absent on browsers that omit it. */
@@ -537,7 +733,102 @@ export function capturesSystemAudio(input: {
   /** Whether the capture handed over an audio track. */
   hasAudio: boolean;
 }): boolean {
-  return input.hasAudio && input.displaySurface === "monitor";
+  return (
+    input.hasAudio &&
+    (input.displaySurface === "monitor" || input.displaySurface === "window")
+  );
+}
+
+/**
+ * Strip leaked mixer audio only when we know exclude did not apply.
+ *
+ * `restrictOwnAudio === false`, or capabilities that cannot include `true`.
+ * Undefined settings are not a leak: Chrome may omit the member when
+ * exclude is on, and stripping those would silence a working Win11 share.
+ */
+export function shouldStripLeakedSystemAudio(input: {
+  displaySurface?: string | null;
+  hasAudio: boolean;
+  restrictOwnAudio?: boolean;
+  restrictOwnAudioCaps?: readonly boolean[];
+}): boolean {
+  if (
+    !capturesSystemAudio({
+      displaySurface: input.displaySurface,
+      hasAudio: input.hasAudio,
+    })
+  ) {
+    return false;
+  }
+  if (input.restrictOwnAudio === false) {
+    return true;
+  }
+  if (
+    Array.isArray(input.restrictOwnAudioCaps) &&
+    !input.restrictOwnAudioCaps.includes(true)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+type RestrictOwnAudioTrack = {
+  getSettings?: () => { restrictOwnAudio?: boolean; displaySurface?: string };
+  getCapabilities?: () => { restrictOwnAudio?: boolean[] };
+  stop: () => void;
+};
+
+/**
+ * Remove mixer audio we know still contains the call, before publish.
+ * Returns true when a track was removed.
+ */
+export function stripLeakedSystemAudioTracks(stream: MediaStream): boolean {
+  const video = stream.getVideoTracks()[0] as RestrictOwnAudioTrack | undefined;
+  const audioTracks = stream.getAudioTracks() as RestrictOwnAudioTrack[];
+  if (audioTracks.length === 0) {
+    return false;
+  }
+  let displaySurface: string | undefined;
+  try {
+    displaySurface = video?.getSettings?.()?.displaySurface;
+  } catch {
+    // Unknown surface: do not strip. Same rule as capturesSystemAudio.
+  }
+  let stripped = false;
+  for (const track of audioTracks) {
+    let restrictOwnAudio: boolean | undefined;
+    let restrictOwnAudioCaps: boolean[] | undefined;
+    try {
+      const settings = track.getSettings?.();
+      if (settings && "restrictOwnAudio" in settings) {
+        restrictOwnAudio = settings.restrictOwnAudio;
+      }
+    } catch {
+      // Omit.
+    }
+    try {
+      const caps = track.getCapabilities?.()?.restrictOwnAudio;
+      if (Array.isArray(caps)) {
+        restrictOwnAudioCaps = caps;
+      }
+    } catch {
+      // Omit.
+    }
+    if (
+      !shouldStripLeakedSystemAudio({
+        displaySurface,
+        hasAudio: true,
+        restrictOwnAudio,
+        restrictOwnAudioCaps,
+      })
+    ) {
+      continue;
+    }
+    stream.removeTrack(track as MediaStreamTrack);
+    track.stop();
+    stripped = true;
+  }
+  return stripped;
 }
 
 /**

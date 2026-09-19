@@ -4,6 +4,7 @@ import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 import { defaultMicProcessing } from "@/lib/audio-devices";
+import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 
@@ -231,7 +232,8 @@ interface FakeCaptureTrack {
    * `displaySurface`, and older engines have no `getSettings` on a capture
    * track at all.
    */
-  getSettings?: () => { displaySurface?: string };
+  getSettings?: () => { displaySurface?: string; restrictOwnAudio?: boolean };
+  getCapabilities?: () => { restrictOwnAudio?: boolean[] };
 }
 
 interface FakeCapture {
@@ -252,6 +254,7 @@ function fakeCapture(
   id: string,
   withAudio: boolean,
   displaySurface?: string,
+  audioRestrict?: { restrictOwnAudio?: boolean; caps?: boolean[] },
 ): FakeCapture {
   let tracks: FakeCaptureTrack[] = [
     {
@@ -266,6 +269,20 @@ function fakeCapture(
       kind: "audio",
       onended: null,
       stop: () => stoppedTracks.push(`${id}:audio`),
+      ...(audioRestrict
+        ? {
+            getSettings: () => ({
+              restrictOwnAudio: audioRestrict.restrictOwnAudio,
+            }),
+            ...(audioRestrict.caps
+              ? {
+                  getCapabilities: () => ({
+                    restrictOwnAudio: audioRestrict.caps,
+                  }),
+                }
+              : {}),
+          }
+        : {}),
     });
   }
   return {
@@ -290,6 +307,7 @@ function installBrowserStubs() {
   g.cancelAnimationFrame = () => {};
   g.setInterval = () => 1;
   g.clearInterval = () => {};
+  setOsCanExcludeCallAudioForTests(true);
   const pagehideHandlers: Array<() => void> = [];
   g.window = {
     addEventListener: (type: string, handler: () => void) => {
@@ -467,6 +485,7 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).toMatchObject({
       audio: { echoCancellation: false, restrictOwnAudio: true },
       systemAudio: "include",
+      windowAudio: "window",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",
@@ -489,6 +508,7 @@ describe("screen share audio", () => {
 
     expect(displayMediaCalls[0]).toMatchObject({
       systemAudio: "exclude",
+      windowAudio: "exclude",
       monitorTypeSurfaces: "exclude",
       selfBrowserSurface: "exclude",
       video: { displaySurface: "browser" },
@@ -515,6 +535,99 @@ describe("screen share audio", () => {
 
     expect(voice.getState().isSharingScreenAudio).toBe(true);
     expect(voice.getState().isSharingSystemAudio).toBe(false);
+  });
+
+  it("flags a window share that carries sound", async () => {
+    displayMedia = async () => fakeCapture("cap-win", true, "window");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingSystemAudio).toBe(true);
+  });
+
+  it("strips mixer audio when restrictOwnAudio came back false", async () => {
+    displayMedia = async () =>
+      fakeCapture("cap-leak", true, "monitor", { restrictOwnAudio: false });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(false);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: null,
+    });
+    expect(voice.getState().notice).toBeTruthy();
+  });
+
+  it("does not strip when restrictOwnAudio is omitted from settings", async () => {
+    displayMedia = async () => fakeCapture("cap-ok", true, "monitor");
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      audioStreamId: "cap-ok",
+    });
+  });
+
+  it("publishes a tab share's audio even when restrictOwnAudio came back false", async () => {
+    // THE MACOS TAB, end to end. The constraint is a Windows-shaped thing and
+    // a Mac reports it false; on a monitor that reading is a strip, and the
+    // question asked of this commit on 2026-09-18 was whether it could
+    // therefore silence the one share every watch party actually uses. It
+    // cannot: the surface is read off the VIDEO track and gates everything
+    // after it, so a `"browser"` capture never reaches the restrict reading
+    // at all. There is no gain on this path either, so the only two outcomes
+    // it can produce are "published whole" and "removed whole".
+    displayMedia = async () =>
+      fakeCapture("cap-tab", true, "browser", { restrictOwnAudio: false });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: "cap-tab",
+    });
+    // No mixer-strip banner either: nothing was taken, so there is nothing to
+    // tell the presenter about.
+    expect(voice.getState().notice).toBeFalsy();
+  });
+
+  it("publishes a tab share's audio when its capabilities cannot include true", async () => {
+    displayMedia = async () =>
+      fakeCapture("cap-tab2", true, "browser", {
+        restrictOwnAudio: false,
+        caps: [false],
+      });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(sent.at(-1)).toMatchObject({ audioStreamId: "cap-tab2" });
+  });
+
+  it("still offers computer sound in a browser the OS probe says is not Win11", async () => {
+    // REGRESSION, 2026-09-18. The probe is a UA hint about the OS; the strip
+    // above ("strips a monitor share whose restrictOwnAudio came back false")
+    // is what the track itself reports, and it is the one that decides. When
+    // the probe was allowed to veto the request, a watch party shared as a
+    // window or a screen went out silent on every host that is not Windows 11
+    // and the audience was left with the presenter's mic branch alone.
+    setOsCanExcludeCallAudioForTests(false);
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      systemAudio: "include",
+      windowAudio: "window",
+      audio: { restrictOwnAudio: true },
+    });
   });
 
   it("does not flag a silent whole-screen share", async () => {
