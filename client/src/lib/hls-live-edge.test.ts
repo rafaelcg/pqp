@@ -61,6 +61,8 @@ import {
   isLlPartLoadErrorDetail,
   isMissingFragmentError,
   isPlaylistGoneError,
+  isPlaylistUnavailableError,
+  playlistErrorsWarrantDiscovery,
   isPipAvailable,
   jumpToLiveTime,
   liveSeekOffsetSeconds,
@@ -1020,6 +1022,58 @@ describe("isPlaylistGoneError (conventional restart dead window)", () => {
     expect(isPlaylistGoneError({ details: "manifestLoadError" })).toBe(false);
     expect(isPlaylistGoneError({ responseCode: 404 })).toBe(false);
     expect(isPlaylistGoneError({})).toBe(false);
+  });
+});
+
+describe("isPlaylistUnavailableError (host-independent safety net)", () => {
+  it("catches 5xx on the master/level, which isPlaylistGoneError does not", () => {
+    // The 502/503 an edge host returns for a restarted session's vanished
+    // origin object -- the exact codes the production stall began with.
+    expect(
+      isPlaylistUnavailableError({ details: "levelLoadError", responseCode: 502 }),
+    ).toBe(true);
+    expect(
+      isPlaylistUnavailableError({ details: "manifestLoadError", responseCode: 503 }),
+    ).toBe(true);
+  });
+
+  it("catches a gone (404/410) master/level too", () => {
+    expect(
+      isPlaylistUnavailableError({ details: "levelLoadError", responseCode: 404 }),
+    ).toBe(true);
+    expect(
+      isPlaylistUnavailableError({ details: "manifestLoadError", responseCode: 410 }),
+    ).toBe(true);
+  });
+
+  it("catches a fatal master/level load with no usable code", () => {
+    expect(
+      isPlaylistUnavailableError({ details: "levelLoadError", fatal: true }),
+    ).toBe(true);
+    // Non-fatal with no code is not, on its own, an unavailable session.
+    expect(isPlaylistUnavailableError({ details: "levelLoadError" })).toBe(false);
+  });
+
+  it("is never a fragment/part load — that is the retry budget's problem", () => {
+    expect(
+      isPlaylistUnavailableError({
+        details: "fragLoadError",
+        responseCode: 502,
+        fatal: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("playlistErrorsWarrantDiscovery", () => {
+  it("needs a run within the window, not one isolated blip", () => {
+    expect(playlistErrorsWarrantDiscovery([1_000], 1_500)).toBe(false);
+    expect(playlistErrorsWarrantDiscovery([1_000, 1_400], 1_500)).toBe(true);
+  });
+
+  it("does not count failures that fell out of the window", () => {
+    // Two blips 20 s apart: only the recent one is still in a 15 s window.
+    expect(playlistErrorsWarrantDiscovery([1_000, 21_000], 21_500)).toBe(false);
   });
 });
 
