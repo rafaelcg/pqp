@@ -464,6 +464,11 @@ export async function listCommunityHomePosts(
   viewerId: string,
 ): Promise<CommunityHomePost[]> {
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
+  // A scheduled post whose time has passed is published as far as the clock is
+  // concerned, even if the 30s sweep has not fired yet. Flip those first so the
+  // feed cannot hide a post the schedule says is live (the reported "it never
+  // went up" bug), then read published-only as before.
+  await flushDueScheduledPosts(serverId);
   // Feed is published-only for everyone. Drafts/scheduled live in the staff
   // overflow via listCommunityHomeDrafts — never mixed into the member feed.
   // With VIP off, members-only rows stay out of the feed for everybody,
@@ -561,6 +566,9 @@ export async function countUnreadCommunityHomePosts(
   serverId: string,
   viewerId: string,
 ): Promise<number> {
+  // Same catch-up as the feed read: a due scheduled post counts toward unread
+  // the moment its time passes, so the badge and the feed never disagree.
+  await flushDueScheduledPosts(serverId);
   const visibilityFilter = isCommunityHomeVipEnabled()
     ? ""
     : " AND p.visibility = 'free'";
@@ -1552,8 +1560,18 @@ export async function claimCommunityHomeMediaUpload(input: {
 /**
  * Publish every scheduled post whose time has arrived. Returns the server ids
  * that got at least one newly published post (for WS fanout).
+ *
+ * Pass `serverId` to scope the flip to one server. That scoped form is what the
+ * feed and unread reads call before they query (see `flushDueScheduledPosts`),
+ * so a post whose scheduled time has passed is visible the instant anyone loads
+ * the Baú, not only after the 30s background tick happens to run. The tick
+ * still exists, and is still the only thing that fans a publish out to members
+ * already sitting on another channel; this just stops the feed read itself from
+ * hiding a post the clock says is live.
  */
-export async function publishDueCommunityHomePosts(): Promise<string[]> {
+export async function publishDueCommunityHomePosts(
+  serverId?: string,
+): Promise<string[]> {
   const result = await getPool().query<{ server_id: string }>(
     `UPDATE community_home_posts
         SET status = 'published',
@@ -1562,9 +1580,30 @@ export async function publishDueCommunityHomePosts(): Promise<string[]> {
       WHERE status = 'scheduled'
         AND scheduled_at IS NOT NULL
         AND scheduled_at <= NOW()
+        ${serverId ? "AND server_id = $1" : ""}
       RETURNING server_id`,
+    serverId ? [serverId] : [],
   );
   return [...new Set(result.rows.map((r) => r.server_id))];
+}
+
+/**
+ * Read-time catch-up for one server: flip its due scheduled posts to published
+ * before a feed/unread read runs, so the read never depends on the background
+ * sweep having fired. A 0-row UPDATE in the common case (nothing is due, or the
+ * sweep already caught it), and idempotent with the sweep. Failures are
+ * swallowed: making a post visible a little late is better than 500ing the feed
+ * because one catch-up write lost a race.
+ */
+async function flushDueScheduledPosts(serverId: string): Promise<void> {
+  try {
+    await publishDueCommunityHomePosts(serverId);
+  } catch (error) {
+    console.error(
+      "[community-home] read-time schedule flush failed:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 export async function sweepOrphanedCommunityHomeMedia(): Promise<number> {

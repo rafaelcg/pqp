@@ -247,6 +247,19 @@ worker. A missed tick is caught by the next one. Each flip fans out a
 `community-home-update` frame (server-scoped, per member, never a channel
 relay) and clients refetch. Likes deliberately do **not** fan out.
 
+**The feed does not wait for that tick.** The 30 s sweep is only how a publish
+is _pushed_ to a member already sitting on another channel. The feed and unread
+reads themselves flip this server's due rows first (`flushDueScheduledPosts`,
+the same UPDATE scoped to one `server_id`), so a post whose scheduled time has
+passed is live the instant anyone loads the Baú, and stays hidden only while the
+clock says it is still in the future. Before this, a due post was invisible
+until the sweep happened to run, and on any deployment where the sweep never
+ran it never appeared at all — a community owner reported exactly that ("posted
+it, refreshed, it was gone, members never saw it"). The read-time flip is a
+0-row UPDATE once the sweep or an earlier reader has caught it, and idempotent
+with both. It never fans out (the reader is already reading); the sweep stays
+the only thing that nudges everyone else.
+
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
@@ -261,8 +274,9 @@ the expected shape of a self-host without storage, not a bug.
   replaces the previous pin, a draft cannot be pinned, a member cannot pin,
   unread counts and clears on read and never counts your own; flag off 404s,
   config answers 200, member vs staff vs VIP visibility (including comment words), VIP flag
-  off refuses and hides, drafts never reach members, schedule sweep, teaser
-  survives an edit, comments and likes.
+  off refuses and hides, drafts never reach members, schedule sweep, a due
+  scheduled post surfaces in the feed and unread without the sweep while a
+  future one stays out, teaser survives an edit, comments and likes.
 - `packages/shared/src/community-home.test.ts`: YouTube / Twitch / TikTok /
   Instagram URL classifiers (profiles, stories and short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
