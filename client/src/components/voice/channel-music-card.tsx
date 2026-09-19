@@ -1,4 +1,5 @@
 import { Music, Pause, Play, SkipForward } from "lucide-react";
+import { useSyncExternalStore } from "react";
 import type { ChannelMusicTrack } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { MarqueeText } from "@/components/ui/marquee-text";
@@ -6,33 +7,66 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import {
   advance,
+  musicSkipVotesNeeded,
   setMusicOpen,
   setPlaying,
   useMusic,
+  voteSkip,
 } from "@/lib/music-store";
+import { cn } from "@/lib/utils";
+import {
+  getChannelMusicCardRights,
+  subscribeChannelMusicCardRights,
+} from "@/components/voice/channel-music-card-rights";
+
+export type { ChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
+export {
+  getChannelMusicCardRights,
+  resetChannelMusicCardRightsForTests,
+  setChannelMusicCardRights,
+} from "@/components/voice/channel-music-card-rights";
 
 /**
  * What a voice channel is playing, as a small card under its occupants.
  *
- * Two audiences. Somebody IN this call gets play/pause and skip on the card
- * (the same writes the panel makes) and a click on the title opens the
- * queue. Somebody outside it sees artwork, the title and an accent "Ouvir"
+ * Two audiences. Somebody IN this call who holds MANAGE_MUSIC gets
+ * play/pause and skip. A seated member without that bit gets vote-skip.
+ * Somebody outside it sees artwork, the title and an accent "Ouvir"
  * that joins the call.
  */
+
 export function ChannelMusicCard({
   channelId,
   track,
   inCall,
   onJoin,
+  canManageMusic,
+  userId,
+  roomSize,
 }: {
   channelId: string;
   track: ChannelMusicTrack;
   inCall: boolean;
   onJoin?: () => void;
+  canManageMusic?: boolean;
+  userId?: string | null;
+  roomSize?: number;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
+  const published = useSyncExternalStore(
+    subscribeChannelMusicCardRights,
+    getChannelMusicCardRights,
+    getChannelMusicCardRights,
+  );
+  const manage = canManageMusic ?? published.canManageMusic;
+  const voterId = userId ?? published.userId;
+  const size = roomSize ?? published.roomSize;
   const playing = inCall && music.channelId === channelId && music.state?.status === "playing";
+  const skipVotes =
+    music.channelId === channelId ? (music.state?.skipVotes ?? []) : [];
+  const needed = musicSkipVotesNeeded(Math.max(1, size));
+  const voted = voterId !== null && skipVotes.includes(voterId);
   const onTitleClick = () => {
     if (inCall) {
       setMusicOpen(true);
@@ -67,30 +101,54 @@ export function ChannelMusicCard({
         ) : null}
       </button>
       {inCall ? (
-        <>
-          <Tooltip label={playing ? t("music.pause") : t("music.play")}>
+        manage ? (
+          <>
+            <Tooltip label={playing ? t("music.pause") : t("music.play")}>
+              <button
+                type="button"
+                data-music-card-play=""
+                className="rounded-[var(--radius-control)] p-0.5 text-text-secondary hover:bg-surface-3 hover:text-text"
+                onClick={() => setPlaying(!playing)}
+              >
+                {playing ? (
+                  <Pause className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <Play className="h-3 w-3" aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
+            <Tooltip label={t("music.skip")}>
+              <button
+                type="button"
+                data-music-card-skip=""
+                className="rounded-[var(--radius-control)] p-0.5 text-text-secondary hover:bg-surface-3 hover:text-text"
+                onClick={() => advance()}
+              >
+                <SkipForward className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </Tooltip>
+          </>
+        ) : (
+          <Tooltip
+            label={t("music.voteSkip")}
+            detail={t("music.voteSkip.hint", { needed })}
+          >
             <button
               type="button"
-              className="rounded-[var(--radius-control)] p-0.5 text-text-secondary hover:bg-surface-3 hover:text-text"
-              onClick={() => setPlaying(!playing)}
-            >
-              {playing ? (
-                <Pause className="h-3 w-3" aria-hidden="true" />
-              ) : (
-                <Play className="h-3 w-3" aria-hidden="true" />
+              data-music-vote-skip=""
+              className={cn(
+                "rounded-[var(--radius-control)] p-0.5 text-text-secondary hover:bg-surface-3 hover:text-text",
+                voted && "text-accent",
               )}
-            </button>
-          </Tooltip>
-          <Tooltip label={t("music.skip")}>
-            <button
-              type="button"
-              className="rounded-[var(--radius-control)] p-0.5 text-text-secondary hover:bg-surface-3 hover:text-text"
-              onClick={() => advance()}
+              disabled={voted || !voterId}
+              aria-label={`${t("music.voteSkip")} ${t("music.voteSkip.count", { count: skipVotes.length, needed })}`}
+              aria-pressed={voted}
+              onClick={() => voteSkip(Math.max(1, size))}
             >
               <SkipForward className="h-3 w-3" aria-hidden="true" />
             </button>
           </Tooltip>
-        </>
+        )
       ) : (
         <Button
           type="button"

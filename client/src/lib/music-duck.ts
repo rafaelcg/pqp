@@ -60,6 +60,14 @@ export function musicShouldDuck(input: {
   return input.speakingPeerCount > 0 || input.transmitting;
 }
 
+/**
+ * Volume to send to YouTube `setVolume` while unmuted. Mute is
+ * `mute()` / `unMute()`, never this going to 0.
+ */
+export function duckedMusicVolume(volume: number, gain: number): number {
+  return Math.min(100, Math.max(0, volume * gain));
+}
+
 function clampGain(value: number): number {
   return Math.min(1, Math.max(MUSIC_DUCK_TARGET, value));
 }

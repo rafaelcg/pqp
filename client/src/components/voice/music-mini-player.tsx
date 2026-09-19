@@ -1,11 +1,13 @@
 import { ChevronDown, Music } from "lucide-react";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import {
+  musicPictureMode,
   setMusicDucking,
   setMusicPlacement,
+  setMusicShowVideo,
   useMusicJoinGate,
   useMusicPrefs,
 } from "@/lib/music-prefs";
@@ -17,15 +19,24 @@ import {
   toggleMusicOpen,
   useMusic,
 } from "@/lib/music-store";
+import { setChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
 import { effectiveCanManageMusic } from "@/components/voice/music-extras";
 import {
   ghostIconButton,
   MusicNowPlaying,
 } from "@/components/voice/music-now-playing";
 import { MusicPanel } from "@/components/voice/music-panel";
-import { MusicPlayer, shouldKeepMusicEmbed } from "@/components/voice/music-player-embed";
+import {
+  MusicPlayer,
+  readMusicVolume,
+  shouldKeepMusicEmbed,
+  writeMusicVolume,
+} from "@/components/voice/music-player-embed";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
-import { MusicEmbedOutlet, useMusicEmbedDock } from "@/components/voice/music-embed-host";
+import {
+  useMusicEmbedDock,
+  useMusicEmbedOverlay,
+} from "@/components/voice/music-embed-host";
 import { cn } from "@/lib/utils";
 import type { YTPlayer } from "@/lib/youtube-iframe";
 
@@ -36,35 +47,12 @@ import type { YTPlayer } from "@/lib/youtube-iframe";
  * the add box (the sheet). A track on is the compact bar by default; adding
  * a song or tapping art/title/chevron opens the sheet. "Parar de ouvir"
  * leaves a one-line pill. The embed stays mounted after the queue is
- * cleared (the iframe is stopped, not destroyed) and is portalled between
- * this dock, the panel's video slot, and the call-stage tile. The dock is
- * the first child of every listening branch, so React does not throw the
- * player away when the idle row comes back.
+ * cleared (the iframe is stopped, not destroyed). Show/hide video overlays
+ * the body paint dock onto this sizer. "Assistir na tela" overlays that
+ * same dock on the stage slot. The sizer is the first child of every
+ * listening branch, so React does not throw the player away when the idle
+ * row comes back.
  */
-
-const VOLUME_KEY = "pqp:music-volume";
-const VIDEO_KEY = "pqp:music-video";
-
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // per-viewer convenience only
-  }
-}
-
-function readVolume(): number {
-  const parsed = Number(readStored(VOLUME_KEY) ?? NaN);
-  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
-}
 
 export function MusicMiniPlayer({
   voiceState,
@@ -79,9 +67,14 @@ export function MusicMiniPlayer({
   const prefs = useMusicPrefs();
   useMusicJoinGate();
   const dockRef = useMusicEmbedDock();
-  const [volume, setVolume] = useState(readVolume);
+  const showPanelVideo =
+    music.open &&
+    musicPictureMode(prefs) === "panel" &&
+    Boolean(music.state?.current) &&
+    music.listening;
+  useMusicEmbedOverlay(dockRef, showPanelVideo);
+  const [volume, setVolume] = useState(readMusicVolume);
   const [muted, setMuted] = useState(false);
-  const [showVideo, setShowVideo] = useState(() => readStored(VIDEO_KEY) === "1");
   const [needsTap, setNeedsTap] = useState(false);
   const playerRef = useRef<YTPlayer | null>(null);
   const inCall =
@@ -91,7 +84,9 @@ export function MusicMiniPlayer({
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, state);
-  const onStage = prefs.placement === "stage" && Boolean(current) && music.listening;
+  const picture = musicPictureMode(prefs);
+  const onStage =
+    picture === "stage" && Boolean(current) && music.listening;
   const embedHeldRef = useRef(false);
   embedHeldRef.current = shouldKeepMusicEmbed({
     inCall,
@@ -99,6 +94,30 @@ export function MusicMiniPlayer({
     hasCurrent: current !== null,
     previouslyHeld: embedHeldRef.current,
   });
+
+  useLayoutEffect(() => {
+    if (voiceState.status !== "connected" || !voiceState.voiceChannelId) {
+      return;
+    }
+    const channelId = voiceState.voiceChannelId;
+    const seated = voiceState.occupancy[channelId] ?? [];
+    const self = voiceState.self;
+    const room =
+      self && !seated.some((person) => person.peerId === self.peerId)
+        ? [...seated, self]
+        : seated;
+    setChannelMusicCardRights({
+      canManageMusic: voiceState.canManageMusic,
+      userId: self?.userId ?? null,
+      roomSize: room.length,
+    });
+  }, [
+    voiceState.status,
+    voiceState.voiceChannelId,
+    voiceState.canManageMusic,
+    voiceState.occupancy,
+    voiceState.self,
+  ]);
 
   if (!inCall) {
     return null;
@@ -109,7 +128,8 @@ export function MusicMiniPlayer({
     <MusicPlayer
       music={music}
       isActor={isActor}
-      volume={muted ? 0 : volume}
+      volume={volume}
+      muted={muted}
       playerRef={playerRef}
       onNeedsTap={setNeedsTap}
       duckEnabled={prefs.ducking}
@@ -119,7 +139,15 @@ export function MusicMiniPlayer({
     />
   ) : null;
   const dock = (
-    <div ref={dockRef} data-music-embed-dock="" className="h-0 overflow-hidden">
+    <div
+      ref={dockRef}
+      data-music-embed-dock=""
+      className={
+        showPanelVideo
+          ? "mx-2 mt-2 aspect-video overflow-hidden rounded-[var(--radius-card)] bg-surface-0"
+          : "h-0 overflow-hidden"
+      }
+    >
       {embed}
     </div>
   );
@@ -215,15 +243,7 @@ export function MusicMiniPlayer({
     );
   }
 
-  const toggleVideo = () => {
-    setShowVideo((value) => {
-      writeStored(VIDEO_KEY, value ? "0" : "1");
-      return !value;
-    });
-  };
-
-  const showPanelVideo = music.open && showVideo && !onStage;
-  const showStagePlaceholder = music.open && onStage;
+  const toggleVideo = () => setMusicShowVideo(!prefs.showVideo);
 
   return (
     <div
@@ -233,7 +253,7 @@ export function MusicMiniPlayer({
       className="border-t border-border bg-surface-0 text-xs"
     >
       {dock}
-      {showStagePlaceholder && (
+      {onStage && (
         <p
           data-music-stage-placeholder=""
           className="px-3 pt-2 text-[11px] text-text-secondary"
@@ -241,17 +261,6 @@ export function MusicMiniPlayer({
           {t("music.stage.playing")}
         </p>
       )}
-      <div
-        className={
-          showPanelVideo
-            ? "max-h-[135px] overflow-hidden px-2 pt-2"
-            : "h-0 overflow-hidden"
-        }
-      >
-        <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
-          {showPanelVideo ? <MusicEmbedOutlet home={dockRef} /> : null}
-        </div>
-      </div>
 
       {music.open ? (
         <MusicPanel
@@ -261,7 +270,7 @@ export function MusicMiniPlayer({
           canManage={canManage}
           playing={playing}
           needsTap={needsTap}
-          showVideo={showVideo}
+          showVideo={prefs.showVideo}
           volume={volume}
           muted={muted}
           onStage={onStage}
@@ -269,14 +278,18 @@ export function MusicMiniPlayer({
           onPlayPause={() => setPlaying(!playing)}
           onSkip={() => advance()}
           onTapToPlay={() => {
-            playerRef.current?.playVideo();
+            const player = playerRef.current;
+            if (player && !muted) {
+              player.unMute();
+            }
+            player?.playVideo();
             setNeedsTap(false);
           }}
           onMute={() => setMuted((value) => !value)}
           onVolume={(next) => {
             setMuted(false);
             setVolume(next);
-            writeStored(VOLUME_KEY, String(next));
+            writeMusicVolume(next);
           }}
           onToggleVideo={toggleVideo}
           onWatchOnStage={() => setMusicPlacement(onStage ? "panel" : "stage")}
@@ -294,7 +307,11 @@ export function MusicMiniPlayer({
           onPlayPause={() => setPlaying(!playing)}
           onSkip={() => advance()}
           onTapToPlay={() => {
-            playerRef.current?.playVideo();
+            const player = playerRef.current;
+            if (player && !muted) {
+              player.unMute();
+            }
+            player?.playVideo();
             setNeedsTap(false);
           }}
         />

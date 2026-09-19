@@ -15,6 +15,7 @@ import {
 } from "@/lib/music-store";
 import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
+import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-music-card-rights";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { effectiveCanManageMusic, musicOverflowItems } from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
@@ -26,6 +27,7 @@ import {
 import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
 import { MusicDock } from "@/components/voice/music-dock";
 import {
+  applyYouTubeVolume,
   musicEmbedCommand,
   playerNeedsRoomSeek,
   shouldAdvanceOnEnded,
@@ -273,6 +275,21 @@ describe("shouldCallPlayVideo", () => {
   it("plays a paused or cued matching video", () => {
     expect(shouldCallPlayVideo(base)).toBe(true);
     expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.CUED })).toBe(true);
+  });
+});
+
+describe("applyYouTubeVolume", () => {
+  it("ducks with setVolume and never unMute", () => {
+    const calls: string[] = [];
+    const player = {
+      setVolume: (value: number) => calls.push(`vol:${value}`),
+      mute: () => calls.push("mute"),
+      unMute: () => calls.push("unMute"),
+    };
+    applyYouTubeVolume(player, { volume: 40, muted: false, duckGain: 0.35 });
+    expect(calls).toEqual(["vol:14"]);
+    applyYouTubeVolume(player, { volume: 40, muted: true, duckGain: 0.35 });
+    expect(calls).toEqual(["vol:14", "vol:40", "mute"]);
   });
 });
 
@@ -657,6 +674,11 @@ describe("MusicPanel", () => {
 });
 
 describe("ChannelMusicCard", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    resetChannelMusicCardRightsForTests();
+  });
+
   it("offers Ouvir when the viewer is outside the call", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
@@ -670,6 +692,45 @@ describe("ChannelMusicCard", () => {
     expect(html).toContain("data-channel-music");
     expect(html).toContain("Legião");
     expect(html).toContain("3");
+    expect(html).not.toContain("data-music-card-play");
+    expect(html).not.toContain("data-music-card-skip");
+    expect(html).not.toContain("data-music-vote-skip");
+  });
+
+  it("hides play and skip unless the viewer can manage music", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <ChannelMusicCard
+          channelId={CHANNEL}
+          track={{ videoId: "aaaaaaaaaaa", title: "Legião", thumbnailUrl: null, listeners: 1 }}
+          inCall
+          canManageMusic={false}
+          userId="33333333-3333-4333-8333-333333333333"
+          roomSize={2}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-vote-skip");
+    expect(html).not.toContain("data-music-card-play");
+    expect(html).not.toContain("data-music-card-skip");
+  });
+
+  it("keeps play and skip for a manager already in the call", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <ChannelMusicCard
+          channelId={CHANNEL}
+          track={{ videoId: "aaaaaaaaaaa", title: "Legião", thumbnailUrl: null, listeners: 1 }}
+          inCall
+          canManageMusic
+          userId="33333333-3333-4333-8333-333333333333"
+          roomSize={2}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-card-play");
+    expect(html).toContain("data-music-card-skip");
+    expect(html).not.toContain("data-music-vote-skip");
   });
 });
 
@@ -699,6 +760,7 @@ describe("MusicMiniPlayer", () => {
     resetMusicStoreForTests();
     resetMusicPrefsForTests();
     resetMusicEmbedHostForTests();
+    resetChannelMusicCardRightsForTests();
     setMusicSession({
       channelId: CHANNEL,
       peerId: "peer-me",
