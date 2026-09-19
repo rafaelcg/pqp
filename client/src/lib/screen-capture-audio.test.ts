@@ -766,6 +766,87 @@ describe("stripLeakedSystemAudioTracks on a tab share", () => {
 });
 
 /**
+ * RE-LAND GUARDRAILS. #537 was reverted (#724) because a tab share went quiet
+ * off Windows 11, and re-landed with the OS-version-probe fix on top. These
+ * two are the named regression/protection guards the re-land turns on, each
+ * written to fail if its one thing were absent. The runtime backstop's own
+ * guard ((c), the third the re-land owes) lives in `share-audio-probe.test.ts`,
+ * where a `window` can be stubbed to prove `installShareAudioProbe` wires the
+ * console handle up.
+ */
+describe("re-land guardrails (no regressions)", () => {
+  function fakeStream(
+    surface: string | undefined,
+    audioSettings: { restrictOwnAudio?: boolean },
+  ) {
+    const audio = {
+      kind: "audio",
+      stopped: false,
+      stop() {
+        this.stopped = true;
+      },
+      getSettings: () => audioSettings,
+      getCapabilities: () => ({}),
+    };
+    const video = {
+      kind: "video",
+      stop() {},
+      getSettings: () => ({ displaySurface: surface }),
+    };
+    const removed: unknown[] = [];
+    const stream = {
+      getVideoTracks: () => [video],
+      getAudioTracks: () => [audio],
+      removeTrack: (track: unknown) => removed.push(track),
+    };
+    return { stream: stream as unknown as MediaStream, audio, removed };
+  }
+
+  it("(a) REGRESSION: a tab share keeps its audio on a non-Windows-11 browser", () => {
+    // The revert's bug. `win10Browser` is a UA the OS probe rejects
+    // (`osCanExcludeCallAudio: false`); the pre-fix re-land refused it system
+    // audio and would have starved a screen/window party. A TAB share must
+    // NOT be touched either way: its own sound is the clean path.
+    //
+    // Fail modes this catches: the request turning tab audio off
+    // (`audio: false`), and the strip removing a browser-surface track.
+    const tab = screenCaptureOptions(false, win10Browser, {
+      preferBrowserTab: true,
+    });
+    expect(tab.audio).not.toBe(false);
+    expect(tab.audio).toMatchObject({ echoCancellation: false });
+
+    const { stream, audio, removed } = fakeStream("browser", {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("(b) ECHO PROTECTION: a screen/window share excludes the call, twice over", () => {
+    // The reason #537 exists. Belt: the request asks the engine to keep this
+    // document out of any mixer tap (`restrictOwnAudio: true`) and asks a
+    // window for its OWN audio, never the machine mixer (`windowAudio:
+    // "window"`, which cannot contain the call by construction). Braces: if
+    // the engine ignored exclude and handed back a monitor/window track that
+    // still carries the call, the readback strips it before publish.
+    const screen = screenCaptureOptions(false, win10Browser);
+    expect(screen.audio).toMatchObject({ restrictOwnAudio: true });
+    expect(screen.windowAudio).toBe("window");
+
+    for (const surface of ["monitor", "window"]) {
+      const { stream, audio, removed } = fakeStream(surface, {
+        restrictOwnAudio: false,
+      });
+      expect(stripLeakedSystemAudioTracks(stream)).toBe(true);
+      expect(removed).toEqual([audio]);
+      expect(audio.stopped).toBe(true);
+    }
+  });
+});
+
+/**
  * THE READER, AND THE BUG THAT MADE IT ONE FUNCTION.
  *
  * Four call sites used to assemble the environment themselves, and the watch
