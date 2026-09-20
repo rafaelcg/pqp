@@ -169,6 +169,7 @@ import {
   stepUnreadChannelId,
   type ShortcutAction,
 } from "@/lib/keyboard-shortcuts";
+import { globalVoiceHotkeyAccelerators } from "@/lib/global-voice-hotkeys";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
@@ -3943,6 +3944,54 @@ function MainAppContent({
     isMac: isApplePlatform(),
     onAction: handleShortcut,
   });
+
+  /**
+   * Electron: global mute/deafen hotkeys, so they still work when the app
+   * window is not focused (alt-tabbed into a game, say).
+   *
+   * ARBITRATION, so this never fires twice for one press. The main process
+   * (see `syncGlobalVoiceHotkeys` in `electron/main.js`) holds the global
+   * accelerator only while the window is unfocused, exactly like push-to-talk
+   * above: while focused it lets go, and whichever in-window path already
+   * owns the chord handles it instead: the app menu's fixed
+   * Cmd/Ctrl+Shift+M/D for the default binding (`desktopOwnsDefault` in
+   * `use-keyboard-shortcuts.ts` skips the renderer's own listener for
+   * exactly that chord), or the renderer's key listener for a remap. So a
+   * given press is live on at most one of "global" and "in-window" at a
+   * time, never both.
+   *
+   * GATED TO CALLS ONLY. Registering a global accelerator swallows it
+   * system-wide, so the shell is asked to hold Cmd/Ctrl+Shift+M only while
+   * `inCall`, and told to let go (both `null`) the moment it is not: on
+   * leave, on disconnect, on unmount. Nobody who is not even in a voice
+   * channel should lose that chord to another application.
+   *
+   * Both bound actions land on the same `pqp:voice-command` /
+   * `onVoiceCommand` handler the tray menu already uses, so there is one
+   * place in the renderer that acts on a global mute/deafen toggle.
+   */
+  const toggleMuteBinding = shortcutBindings.toggleMute;
+  const toggleDeafenBinding = shortcutBindings.toggleDeafen;
+  useEffect(() => {
+    const desktop = getDesktop();
+    const bind = desktop?.bindGlobalVoiceHotkeys?.bind(desktop);
+    if (!bind) {
+      return;
+    }
+    if (!inCall) {
+      void bind({ toggleMute: null, toggleDeafen: null });
+      return;
+    }
+    void bind(
+      globalVoiceHotkeyAccelerators({
+        toggleMute: toggleMuteBinding,
+        toggleDeafen: toggleDeafenBinding,
+      }),
+    );
+    return () => {
+      void bind({ toggleMute: null, toggleDeafen: null });
+    };
+  }, [inCall, toggleMuteBinding, toggleDeafenBinding]);
 
   const handleForwardPick = useCallback(
     async (target: ForwardTarget) => {
