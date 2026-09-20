@@ -79,6 +79,19 @@ export interface PqpDesktop {
   /** Presses and releases of the bound key while another app is focused. */
   onPushToTalk?(cb: (held: boolean) => void): () => void;
   /**
+   * Global mute / deafen toggle hotkeys. Same idea as `bindPushToTalk` but
+   * two accelerators at once and no hold state: each fires once per press,
+   * only while the window is unfocused, and lands back on `onVoiceCommand`
+   * ("toggleMute" / "toggleDeafen"), the same channel the tray menu uses.
+   * Pass `null` for an accelerator (or the whole call) to let it go, which
+   * the caller does on leaving the call as well as on rebind. Resolves with
+   * which of the two the OS actually took. Older shells predate the bridge.
+   */
+  bindGlobalVoiceHotkeys?(accelerators: {
+    toggleMute: string | null;
+    toggleDeafen: string | null;
+  }): Promise<{ toggleMute: boolean; toggleDeafen: boolean }>;
+  /**
    * Mirror the call state into the main process so the tray icon and menu
    * can say it. Idle is all three false.
    */

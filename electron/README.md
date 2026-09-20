@@ -98,6 +98,36 @@ shortcuts most often; the default `` ` `` binding does not.
 **Modifier-only bindings** (Left Ctrl on its own) cannot be global: an
 accelerator needs a non-modifier key. Those keep working in-window.
 
+## Global mute/deafen hotkeys
+
+Toggle Mute and Toggle Deafen (`pqpDesktop.bindGlobalVoiceHotkeys`) work the
+same way, minus the hold-tracking PTT needs:
+
+- While connected to a call, the renderer converts its current toggle-mute
+  and toggle-deafen key bindings into Electron accelerators (the same
+  `push-to-talk-accelerator.ts` conversion, generalized in
+  `client/src/lib/global-voice-hotkeys.ts`) and calls
+  `bindGlobalVoiceHotkeys({ toggleMute, toggleDeafen })`. Leaving the call, or
+  a rebind in Settings, sends `null` for whichever accelerator no longer
+  applies.
+- **Held only while the app window is NOT focused**, exactly like
+  push-to-talk, and for the same reason: a registered `globalShortcut` is
+  swallowed system-wide. While focused, the app menu's fixed
+  Cmd/Ctrl+Shift+M/D or the renderer's own key listener (for a remap) already
+  owns the chord, so letting the global registration go is what stops one
+  press from toggling twice.
+- **No release to infer.** These are plain toggles: each accelerator is a
+  single `globalShortcut.register(accel, cb)` that fires `pqp:voice-command`
+  once per press (`main.js` `syncGlobalVoiceHotkeys` / `setGlobalVoiceHotkeys`),
+  the same channel the tray menu already sends. There is no hold tracker
+  involved, unlike push-to-talk's auto-repeat inference above.
+- **Gated to calls.** Registering a global accelerator swallows it for every
+  other application too, so the shell only holds it while `inCall`. Someone
+  who is not in a voice channel never loses Cmd/Ctrl+Shift+M to pqp.
+- A key another app already owns, or a modifier-only remap, behaves exactly
+  like push-to-talk's equivalent case: `register` (or the probe while
+  focused) returns `false` for that action and it stays in-window only.
+
 ## Tray
 
 `lib/tray-icon.js` paints four 16 px glyphs (idle, live, muted, deafened) at 1x
@@ -237,7 +267,7 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 - No `window`-only assumptions in core hooks (`lib/api.ts`, `lib/realtime.ts`)
 - Clerk: add the desktop origin (and `http://127.0.0.1:*` for static mode if used) to allowed origins
 - Detect `window.pqpDesktop?.isElectron` for desktop-only UX (title bar, mute IPC, deep links)
-- Feature-detect each bridge method, never the shell version: `bindPushToTalk`, `onPushToTalk`, `setVoiceState` and `onVoiceCommand` are absent in a browser **and** in shells built before they landed, and the packaged shell loads the hosted client, so a client deployed today runs inside a shell built weeks ago
+- Feature-detect each bridge method, never the shell version: `bindPushToTalk`, `onPushToTalk`, `bindGlobalVoiceHotkeys`, `setVoiceState` and `onVoiceCommand` are absent in a browser **and** in shells built before they landed, and the packaged shell loads the hosted client, so a client deployed today runs inside a shell built weeks ago
 
 ## Remaining gaps
 
@@ -251,6 +281,7 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 | Bundled client origin | Loopback static mode cannot satisfy a production CORS allowlist; the fix is a stable `app://` protocol |
 | Tray, minimize to tray during a call | Implemented (`lib/tray-icon.js`, `lib/tray-menu.js`, `lib/tray-state.js`) |
 | Global push-to-talk | Implemented (`lib/global-ptt.js`); release is inferred from auto-repeat, see above |
+| Global mute/deafen hotkeys | Implemented; plain toggles, no release to infer, gated to calls, see above |
 | Start at login | Implemented (`lib/login-item.js`, Settings → Appearance). macOS and Windows only, Electron has no Linux login-item API |
 | Native notifications, click-through, taskbar/dock flash | Implemented (`showNotification` in `main.js`, IPC via `pqpDesktop.notify` / `onNotificationClick`). Message and mention banners were already wired end to end (`client/src/lib/notifications.ts`); an incoming DM/group call rang the in-app card and the ringtone only, with nothing for a backgrounded window — `notifyIncomingCall` closes that gap. `flashFrame` bounces the dock / flashes the taskbar on any native banner shown while unfocused, cleared on refocus |
 | Deep-link → select server/channel state | Path navigates to `/app/...`; selection state still in-memory |
