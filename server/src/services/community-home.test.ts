@@ -294,6 +294,71 @@ describeDb("community home (Baú)", () => {
     expect(feed.body.posts.map((p) => p.title)).toEqual(["já era pra ter subido"]);
   });
 
+  it("a scheduled post whose time has passed shows in the feed WITHOUT waiting for the sweep", async () => {
+    // The bug a community owner reported: a scheduled post is created, the clock
+    // reaches its time, but the 30s background sweep has not fired (or, on a
+    // deployment where it never runs, will not fire) — so the feed read still
+    // hides it and "members never see it". The feed read must catch up on its own.
+    const res = await call<{ post: PostBody }>(owner, "POST", `${base()}/posts`, {
+      title: "no horário",
+      body: "conteúdo",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      scheduleTimezone: "America/Sao_Paulo",
+    });
+    expect(res.status).toBe(201);
+    // Its time arrives. Note: the sweep is deliberately NOT called here.
+    await getPool().query(
+      `UPDATE community_home_posts SET scheduled_at = NOW() - INTERVAL '1 minute' WHERE id = $1`,
+      [res.body.post.id],
+    );
+    const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(feed.body.posts.map((p) => p.title)).toEqual(["no horário"]);
+    expect(feed.body.posts[0]!.status).toBe("published");
+    // And the read left the row genuinely published, so every later read agrees.
+    const staff = await call<{ posts: PostBody[] }>(owner, "GET", `${base()}/drafts`);
+    expect(staff.body.posts.map((p) => p.title)).toEqual([]);
+  });
+
+  it("a due scheduled post counts toward unread before the sweep runs", async () => {
+    const res = await call<{ post: PostBody }>(owner, "POST", `${base()}/posts`, {
+      title: "conta pra mim",
+      body: "corpo",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      scheduleTimezone: "UTC",
+    });
+    expect(res.status).toBe(201);
+    // Before it is due: not counted.
+    expect(
+      (await call<{ count: number }>(member, "GET", `${base()}/unread`)).body.count,
+    ).toBe(0);
+    // Its time arrives, still no sweep.
+    await getPool().query(
+      `UPDATE community_home_posts SET scheduled_at = NOW() - INTERVAL '1 minute' WHERE id = $1`,
+      [res.body.post.id],
+    );
+    expect(
+      (await call<{ count: number }>(member, "GET", `${base()}/unread`)).body.count,
+    ).toBe(1);
+  });
+
+  it("a future scheduled post still stays out of the feed and unread", async () => {
+    const res = await call<{ post: PostBody }>(owner, "POST", `${base()}/posts`, {
+      title: "amanhã de verdade",
+      body: "corpo",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      scheduleTimezone: "UTC",
+    });
+    expect(res.status).toBe(201);
+    const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(feed.body.posts).toEqual([]);
+    expect(
+      (await call<{ count: number }>(member, "GET", `${base()}/unread`)).body.count,
+    ).toBe(0);
+  });
+
   // ----------------------------------------------------------- visibility
 
   it("a members-only post is stripped for a member and whole for staff and VIP", async () => {
