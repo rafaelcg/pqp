@@ -252,5 +252,5 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 | Tray, minimize to tray during a call | Implemented (`lib/tray-icon.js`, `lib/tray-menu.js`, `lib/tray-state.js`) |
 | Global push-to-talk | Implemented (`lib/global-ptt.js`); release is inferred from auto-repeat, see above |
 | Start at login | Implemented (`lib/login-item.js`, Settings → Appearance). macOS and Windows only, Electron has no Linux login-item API |
-| Native notifications deep-link | Future |
+| Native notifications, click-through, taskbar/dock flash | Implemented (`showNotification` in `main.js`, IPC via `pqpDesktop.notify` / `onNotificationClick`). Message and mention banners were already wired end to end (`client/src/lib/notifications.ts`); an incoming DM/group call rang the in-app card and the ringtone only, with nothing for a backgrounded window — `notifyIncomingCall` closes that gap. `flashFrame` bounces the dock / flashes the taskbar on any native banner shown while unfocused, cleared on refocus |
 | Deep-link → select server/channel state | Path navigates to `/app/...`; selection state still in-memory |

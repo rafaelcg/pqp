@@ -4,6 +4,7 @@ import {
   describeActivity,
   formatBadge,
   notifyChannelActivity,
+  notifyIncomingCall,
   rememberActivityChannel,
   rememberChannels,
   rememberServers,
@@ -366,6 +367,55 @@ describe("toast / OS banner dedupe (§4.2)", () => {
     });
 
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("notifyIncomingCall", () => {
+  const call = {
+    conversationId: "bbbbbbbb-0001-4bbb-8bbb-bbbbbbbbbbbb",
+    kind: "dm" as const,
+    callerName: "Ana",
+  };
+
+  beforeEach(() => {
+    setDesktopNotificationsEnabled(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stays quiet while the window is focused — the ringing card already covers it", () => {
+    const { notify } = withFakeNotification();
+    notifyIncomingCall(call, { windowFocused: true });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("rings an OS banner when the window is not in front", () => {
+    const { notify } = withFakeNotification();
+    notifyIncomingCall(call, { windowFocused: false });
+    expect(notify).toHaveBeenCalledTimes(1);
+    const [title, options] = notify.mock.calls[0] as [string, { tag?: string }];
+    expect(title).toBe("Ana");
+    expect(options).toMatchObject({ tag: `call:${call.conversationId}` });
+  });
+
+  it("prefers the shell bridge over the web Notification — never both", () => {
+    const { notify } = withFakeNotification();
+    const desktopNotify = vi.fn();
+    (window as unknown as { pqpDesktop: unknown }).pqpDesktop = {
+      notify: desktopNotify,
+    };
+    notifyIncomingCall(call, { windowFocused: false });
+    expect(desktopNotify).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not ring while the account has desktop notifications off", () => {
+    setDesktopNotificationsEnabled(false);
+    const { notify } = withFakeNotification();
+    notifyIncomingCall(call, { windowFocused: false });
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 
