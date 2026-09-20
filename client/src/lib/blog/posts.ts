@@ -72,8 +72,8 @@ export const POSTS: readonly BlogPost[] = [
     },
     summary: {
       "pt-BR":
-        "Chamada agora te avisa mesmo com o app no fundo ou a notificação desligada. No iPhone o som da DM call voltou e ela toca uma vez, não duas. E watch party e call mais firmes: música igual pra todo mundo, sem gente dobrada na sala, sem cair com duas telas.",
-      en: "A call now reaches you even with the app in the background or notifications off. On iPhone the DM call sound is back and it rings once, not twice. Plus steadier watch party and calls: same music for everyone, no doubled people in the room, no drop with two screens.",
+        "A call te avisa mesmo com o app no fundo. No iPhone o som da DM voltou. E watch party e call mais firmes: música igual pra todos, sem gente dobrada na sala, sem cair com duas telas.",
+      en: "A call reaches you even with the app backgrounded. On iPhone the DM sound is back. Steadier watch party and calls: same music for all, no doubled people, no drop with two screens.",
     },
   },
   {
