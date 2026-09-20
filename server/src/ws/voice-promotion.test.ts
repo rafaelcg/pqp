@@ -67,20 +67,31 @@ const rows = vi.hoisted(() => ({
   memberCount: 5,
   /** `channels.voice_transport`: the operator's explicit choice, or null. */
   voiceTransport: null as "mesh" | "livekit" | null,
+  /**
+   * `channels.kind`. Every group above holds this at `"server"`, which is
+   * the whole channel this suite was written to exercise. The
+   * "conversation calls never promote" group flips it to `"dm"` — a DM or
+   * group call, same table, same trigger code — and is the only place that
+   * matters.
+   */
+  kind: "server" as "server" | "dm" | "group",
 }));
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async () => ({
-    kind: "server",
-    type: "voice",
-    server_id: "22222222-2222-4222-8222-222222222222",
+    kind: rows.kind,
+    type: rows.kind === "server" ? "voice" : null,
+    server_id:
+      rows.kind === "server"
+        ? "22222222-2222-4222-8222-222222222222"
+        : null,
     voice_transport: rows.voiceTransport,
   }),
   // Everybody can see the channel, so the rosters this suite counts cameras
   // from actually reach the sockets.
   getChannelAudience: async () => ({
     serverId: null,
-    kind: "server",
+    kind: rows.kind,
     has: () => true,
   }),
   getServerVoiceProfile: async () => ({
@@ -262,6 +273,7 @@ describe("promoting a mesh room so more cameras fit", () => {
     resetVoicePinRechecks();
     backend.configured = "livekit";
     rows.memberCount = 5;
+    rows.kind = "server";
     rows.voiceTransport = null;
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
@@ -927,6 +939,7 @@ describe("a room that reached the SFU by being full", () => {
     resetVoicePromotions();
     backend.configured = "livekit";
     rows.memberCount = 5;
+    rows.kind = "server";
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
     // This whole block is about the room-FULL trigger, so the room-SIZE one
@@ -1009,6 +1022,7 @@ describe("more cameras on a room already on the SFU", () => {
     // Ten or more members pins the room to the voice server on the first join,
     // so nothing here is a promotion.
     rows.memberCount = 40;
+    rows.kind = "server";
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
   });
@@ -1138,6 +1152,7 @@ describe("screens and the measured mesh limit", () => {
     resetVoicePromotions();
     backend.configured = "livekit";
     rows.memberCount = 5;
+    rows.kind = "server";
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
     // The room-SIZE trigger is off here for the same reason as in the caps
@@ -1469,5 +1484,151 @@ describe("screens and the measured mesh limit", () => {
       expect(getRoomTransport(channel)).toBe("livekit");
       expect(camerasOn(people[0]!)).toBe(4);
     });
+  });
+});
+
+/**
+ * A DM OR GROUP CALL NEVER MOVES OFF MESH.
+ *
+ * Reported 2026-09-16, in Portuguese, as a 3-star review: "está caindo a
+ * chamada quando duas telas estão sendo compartilhadas" — the call drops
+ * when two screens are shared at once. `resolveVoiceTransport` in
+ * `transport-policy.ts` pins every conversation to mesh for its whole life
+ * (reason `"dm"`) and never reconsiders, which is the documented invariant:
+ * DM and group calls stay peer to peer, period. But the four in-call
+ * promotion triggers (`room-size`, `room-full`, `cameras`, `screens`) never
+ * checked what kind of channel they were pricing — only the `"stale-pin"`
+ * trigger re-asks `resolveVoiceTransport`, which is why it was already safe.
+ *
+ * On a weak or simply un-measured uplink two people in a DM voice call is
+ * exactly the shape that used to trip `screens`: `meshVideoLimit` can return
+ * 1 for a two-person room, so a second simultaneous share is the SAME
+ * click a small server's fourth camera makes, and on this deployment
+ * (LiveKit configured) it silently promoted a private call — a policy
+ * violation with no test coverage, and the room's whole media path moving
+ * mid-call is the most likely explanation for a user seeing their call end.
+ *
+ * Every case here mirrors an existing "promotes instead of refusing" test
+ * above, on the identical numbers, with `rows.kind` flipped to `"dm"` (and
+ * once to `"group"`, since a group DM is the same channel kind and the more
+ * likely shape of "two screens" in the first place) — and asserts the
+ * opposite: the room never leaves mesh, and the old, pre-promotion refusal
+ * frame is exactly what a participant gets.
+ */
+describe("conversation calls never promote past a mesh cap", () => {
+  let channel: string;
+
+  beforeEach(() => {
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    resetVoicePinRechecks();
+    backend.configured = "livekit";
+    rows.memberCount = 5;
+    rows.voiceTransport = null;
+    rows.kind = "dm";
+    channel = randomUUID();
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
+  });
+
+  afterEach(() => {
+    rows.kind = "server";
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    } else {
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+    if (ORIGINAL_ROOM_SIZE === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL_ROOM_SIZE;
+    }
+  });
+
+  it("denies the second simultaneous share instead of moving the call to the SFU", async () => {
+    // The reported shape exactly: two people in a DM call, an unmeasured (or
+    // weak) uplink on one of them. `promotes at the measured limit rather
+    // than refusing` (the server-channel twin of this test, above) shows the
+    // SAME 2 Mbit/s reading promoting a small server's room; here it must not.
+    const people = [await seat(channel), await seat(channel)];
+    await shareOn(people[0]!, 1_000_000);
+    expect(sharesOn(people[0]!)).toBe(1);
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    await shareOn(people[1]!, 1_000_000);
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(typesOf(people[1]!)).toContain("screen-share-denied");
+    expect(sharesOn(people[0]!)).toBe(1);
+  });
+
+  it("still denies it in a group DM, not only a 1:1", async () => {
+    rows.kind = "group";
+    const people = [
+      await seat(channel),
+      await seat(channel),
+      await seat(channel),
+    ];
+    await shareOn(people[0]!, 1_000_000);
+    await shareOn(people[1]!, 1_000_000);
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    await shareOn(people[2]!, 1_000_000);
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(typesOf(people[2]!)).toContain("screen-share-denied");
+  });
+
+  it("stops a weak link's camera at the measured limit instead of moving the call", async () => {
+    const people = [
+      await seat(channel),
+      await seat(channel),
+      await seat(channel),
+      await seat(channel),
+      await seat(channel),
+    ];
+    await cameraOn(people[0]!, channel, 2_000_000);
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    await cameraOn(people[1]!, channel, 2_000_000);
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(typesOf(people[1]!)).toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(1);
+  });
+
+  it("never moves at MESH_ROOM_PROMOTION_SIZE — a group call of four stays mesh", async () => {
+    process.env.VOICE_PROMOTION_ROOM_SIZE = String(MESH_ROOM_PROMOTION_SIZE);
+    rows.kind = "group";
+    const people = [
+      await seat(channel),
+      await seat(channel),
+      await seat(channel),
+    ];
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    people.push(await seat(channel));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+  });
+
+  it("refuses the ninth person exactly as before, rather than moving the call", async () => {
+    const people: Seat[] = [];
+    for (let at = 0; at < MESH_VOICE_LIMIT; at += 1) {
+      people.push(await seat(channel));
+    }
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    const ninth = await knock(channel);
+
+    expect(ninth.peerId).toBeNull();
+    expect(ninth.frames.map((f) => f.type)).toContain("voice-room-full");
+    expect(getRoomTransport(channel)).toBe("mesh");
   });
 });

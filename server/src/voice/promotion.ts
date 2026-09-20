@@ -205,7 +205,16 @@ export type PromotionRefusal =
   /** The channel is pinned to mesh by hand. An operator chose that. */
   | "mesh-override"
   /** The client at the door cannot run LiveKit, so the move would not seat it. */
-  | "joiner-cannot-follow";
+  | "joiner-cannot-follow"
+  /**
+   * The channel is a DM or group call, not a server voice channel.
+   * `resolveVoiceTransport` in `transport-policy.ts` pins every conversation
+   * to mesh for the room's whole life — that is the entire meaning of its
+   * `"dm"` reason — and none of the five promotion triggers may second-guess
+   * it. Checked ahead of the budget so a conversation is never priced or
+   * pinned to the SFU at all.
+   */
+  | "conversation";
 
 export interface JoinPromotionGate {
   /** `channels.voice_transport`: the operator's explicit choice, or null. */
