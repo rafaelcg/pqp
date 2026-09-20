@@ -23,7 +23,16 @@ while the app is hidden" row.
   WebSocket, the app running or backgrounded with the socket alive, reports a
   `CXCallUpdate` via `reportNewIncomingCall`. The system rings it with pqp's
   own caller name, on the lock screen, on a paired CarPlay head unit, and on
-  Apple Watch, alongside the in-app `IncomingCallBanner` this already had.
+  Apple Watch. While CallKit is presenting the ring, the in-app
+  `IncomingCallBanner` is **suppressed** rather than drawn alongside it: two
+  incoming-call surfaces for one call is the "double ring" a caller saw (the
+  system call pill with Accept/Decline *and* a separate in-app banner at
+  once). The ring still lives in `CallModel.incoming` so a lock-screen
+  answer/decline can find it; the presentation rule is `incomingCallBannerRing`
+  in `CallState.swift`, driven by `CallModel.presentedByCallKit`, which
+  `reportIncomingCall`'s completion fills. If CallKit *refuses* the report
+  (Screen Time, every call slot in use, the simulator, or no coordinator), the
+  in-app banner takes over as the fallback ring exactly as before.
 - **Answer, end and mute, system to app.** `CXProviderDelegate`'s
   `performAnswerCallAction`, `performEndCallAction` and
   `performSetMutedCallAction` are the only door the lock screen, CarPlay,

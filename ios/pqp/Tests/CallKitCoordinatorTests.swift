@@ -107,6 +107,50 @@ final class CallKitCoordinatorTests: XCTestCase {
         XCTAssertEqual(provider.newIncomingCalls.count, 1)
     }
 
+    /// A successful report tells the caller CallKit is presenting the ring, so
+    /// the room owner suppresses its own in-app banner: no double ring.
+    @MainActor
+    func testReportIncomingCallReportsPresentedOnSuccess() {
+        let (coordinator, _, _) = makeCoordinator()
+        var presented: Bool?
+        coordinator.reportIncomingCall(room: .conversation("c1"), callerName: "Alice") {
+            presented = $0
+        }
+        XCTAssertEqual(presented, true)
+    }
+
+    /// CallKit refusing the report must tell the caller it is NOT presenting,
+    /// so the in-app banner takes over as the fallback ring rather than the
+    /// call ringing nowhere at all.
+    @MainActor
+    func testReportIncomingCallReportsNotPresentedWhenCallKitRefuses() {
+        let (coordinator, provider, _) = makeCoordinator()
+        provider.nextIncomingError = NSError(domain: "test", code: 1)
+        var presented: Bool?
+        coordinator.reportIncomingCall(room: .conversation("c1"), callerName: "Alice") {
+            presented = $0
+        }
+        XCTAssertEqual(presented, false)
+        // Forgotten too, so a later real report for the same room is not
+        // deduplicated away against a call CallKit never actually held.
+        provider.nextIncomingError = nil
+        coordinator.reportIncomingCall(room: .conversation("c1"), callerName: "Alice")
+        XCTAssertEqual(provider.newIncomingCalls.count, 2)
+    }
+
+    /// A room already reported still counts as presented, so a duplicate ring
+    /// frame does not un-suppress the in-app banner mid-ring.
+    @MainActor
+    func testReportIncomingCallReportsPresentedForAnAlreadyReportedRoom() {
+        let (coordinator, _, _) = makeCoordinator()
+        coordinator.reportIncomingCall(room: .conversation("c1"), callerName: "Alice")
+        var presented: Bool?
+        coordinator.reportIncomingCall(room: .conversation("c1"), callerName: "Alice") {
+            presented = $0
+        }
+        XCTAssertEqual(presented, true)
+    }
+
     // MARK: - Connected
 
     @MainActor

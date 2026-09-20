@@ -11,6 +11,48 @@ import XCTest
 /// frame, not an error — a phone that simply never rings.
 final class CallStateTests: XCTestCase {
 
+    // MARK: - In-app banner suppression (the double-ring fix)
+
+    private func ring(_ id: String) -> IncomingCall {
+        IncomingCall(
+            conversationId: id, kind: "dm", callerUserId: "u-\(id)",
+            callerName: "Caller \(id)", callerAvatarUrl: nil
+        )
+    }
+
+    /// With no CallKit presentation, the in-app banner shows the oldest ring,
+    /// exactly as `incoming.first` did before the fix.
+    func testBannerShowsOldestRingWhenCallKitIsNotPresenting() {
+        let incoming = [ring("a"), ring("b")]
+        XCTAssertEqual(
+            incomingCallBannerRing(incoming: incoming, presentedByCallKit: []),
+            ring("a")
+        )
+    }
+
+    /// The whole point: a ring CallKit is presenting as a system call is kept
+    /// off the in-app banner, so a call is not two competing surfaces at once.
+    func testBannerIsSuppressedWhileCallKitPresentsTheRing() {
+        let incoming = [ring("a")]
+        XCTAssertNil(
+            incomingCallBannerRing(incoming: incoming, presentedByCallKit: ["a"])
+        )
+    }
+
+    /// A second ring CallKit could not take (one call slot, and it is in use)
+    /// still gets the in-app banner while the first rings on the lock screen.
+    func testBannerFallsBackToARingCallKitDidNotTake() {
+        let incoming = [ring("a"), ring("b")]
+        XCTAssertEqual(
+            incomingCallBannerRing(incoming: incoming, presentedByCallKit: ["a"]),
+            ring("b")
+        )
+    }
+
+    func testNoBannerWhenThereAreNoRings() {
+        XCTAssertNil(incomingCallBannerRing(incoming: [], presentedByCallKit: []))
+    }
+
     // MARK: - Stage layout
 
     func testLayoutIsRingWhenAloneAndSpotlightForOne() {

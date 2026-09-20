@@ -56,6 +56,12 @@ final class CallModel {
     /// Rings arriving at this device, oldest first. Not call state of ours until
     /// one is accepted, so it survives starting/ending unrelated calls.
     private(set) var incoming: [IncomingCall] = []
+    /// Conversation ids CallKit is currently presenting as a system incoming
+    /// call. A ring in here still lives in `incoming` (so a lock-screen
+    /// answer/decline finds it) but is kept off the in-app banner, which
+    /// would otherwise be a second, redundant incoming-call surface — the
+    /// double ring users reported. See `incomingCallBannerRing`.
+    private(set) var presentedByCallKit: Set<String> = []
     private(set) var declinedUserIds: Set<String> = []
     /// When the *conversation* became a call — i.e. when somebody else arrived.
     /// Ringing has no duration worth showing.
@@ -268,6 +274,16 @@ final class CallModel {
     /// ringing and the call stays joinable from the conversation.
     func dismiss(_ conversationId: String) {
         incoming.removeAll { $0.conversationId == conversationId }
+        presentedByCallKit.remove(conversationId)
+    }
+
+    /// The ring the in-app `IncomingCallBanner` should draw, if any: the
+    /// oldest pending ring CallKit is not already presenting as a system call.
+    /// While CallKit has the ring, our own banner would be the second half of
+    /// the double notification, so it is held back here even though the ring
+    /// stays in `incoming` for the lock-screen answer/decline path.
+    var bannerRing: IncomingCall? {
+        incomingCallBannerRing(incoming: incoming, presentedByCallKit: presentedByCallKit)
     }
 
     /// `cxEndReason` is CallKit's own call-log reason, distinct from `reason`
@@ -644,9 +660,21 @@ final class CallModel {
             guard !incoming.contains(where: { $0.conversationId == call.conversationId })
             else { return }
             incoming.append(call)
-            callKit?.reportIncomingCall(
-                room: .conversation(call.conversationId), callerName: call.callerName
-            )
+            if let callKit {
+                // CallKit is the system incoming-call UI (lock screen,
+                // CarPlay, and a presentation over this app even when it is
+                // foregrounded). Suppress our own banner while CallKit has
+                // the ring, optimistically, so a call is never two competing
+                // surfaces at once. If CallKit refuses the report, the
+                // completion clears this and the in-app banner takes over.
+                presentedByCallKit.insert(call.conversationId)
+                callKit.reportIncomingCall(
+                    room: .conversation(call.conversationId), callerName: call.callerName
+                ) { [weak self] presented in
+                    guard let self, !presented else { return }
+                    self.presentedByCallKit.remove(call.conversationId)
+                }
+            }
             // Belt to the server's own 45s timer: if the cancellation frame is
             // lost to a reconnect, the banner must still go away. The CallKit
             // ring has to go with it -- the mirror of the same guard

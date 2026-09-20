@@ -62,6 +62,32 @@ struct IncomingCall: Identifiable, Equatable, Sendable {
     var id: String { conversationId }
 }
 
+/// Which pending ring, if any, the in-app `IncomingCallBanner` should draw.
+///
+/// On iOS CallKit is the system incoming-call surface: a full-screen (or
+/// compact banner) presentation on the lock screen, CarPlay, the Watch, and
+/// even over this app when it is foregrounded. Drawing our own banner *on top
+/// of* that is the "double notification" a caller saw — the system call pill
+/// with Accept/Decline AND a separate in-app "Incoming call" banner at once.
+///
+/// So a ring CallKit is presenting is suppressed here, while still living in
+/// `CallModel.incoming` so a lock-screen answer/decline can find it. The
+/// banner is only for rings CallKit is NOT showing: CallKit unavailable (no
+/// coordinator, a test), or CallKit refused the report (Screen Time, every
+/// call slot already in use, the simulator), which is exactly the case a
+/// fallback in-app banner exists for. Oldest-first, matching the old
+/// `incoming.first`.
+///
+/// Pure, and tested in `CallStateTests`, because the rule *is* the fix: it
+/// cannot be exercised on a device the way the double ring was seen, so the
+/// decision lives here rather than inline in the view.
+func incomingCallBannerRing(
+    incoming: [IncomingCall],
+    presentedByCallKit: Set<String>
+) -> IncomingCall? {
+    incoming.first { !presentedByCallKit.contains($0.conversationId) }
+}
+
 /// Where a call is in its life.
 ///
 /// `ringing` and `active` are deliberately distinct even though both mean "we
