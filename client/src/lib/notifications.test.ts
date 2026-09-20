@@ -301,10 +301,12 @@ describe("activityRoutePath", () => {
 // the dedupe rule in §4.2 — the OS banner and the toast never both fire for
 // the same burst — and the badge surfaces `setUnreadBadge` itself owns.
 
-function withFakeNotification(): { notify: ReturnType<typeof vi.fn> } {
+function withFakeNotification(
+  permission: NotificationPermission = "granted",
+): { notify: ReturnType<typeof vi.fn> } {
   const notify = vi.fn();
   class FakeNotification {
-    static permission = "granted";
+    static permission = permission;
     constructor(title: string, options?: unknown) {
       notify(title, options);
     }
@@ -411,9 +413,16 @@ describe("notifyIncomingCall", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("does not ring while the account has desktop notifications off", () => {
+  it("still rings with desktop notifications off — a call bypasses the opt-in", () => {
     setDesktopNotificationsEnabled(false);
     const { notify } = withFakeNotification();
+    notifyIncomingCall(call, { windowFocused: false });
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays quiet when the OS has not granted notification permission", () => {
+    setDesktopNotificationsEnabled(true);
+    const { notify } = withFakeNotification("denied");
     notifyIncomingCall(call, { windowFocused: false });
     expect(notify).not.toHaveBeenCalled();
   });
