@@ -925,19 +925,31 @@ replica every run, so the single Prometheus series bounced between each
 replica's own count, Prometheus read every drop as a counter reset, and
 `increase()`/`rate()` inflated wildly, which produced a false "call failure
 rate 20%" alert from a cluster that had actually answered about 18 calls.
-The exporter now scrapes both replicas directly, through the token-protected
-`/_replica/a` / `/_replica/b` Caddy routes that pin straight to one
-container (`PQP_API_METRICS_ENDPOINTS`, unset falls back to the old single
-scrape), and merges them with `merge_admin_metrics()` before `render()` runs:
-the process-local counters below are summed across replicas, while
-DB-derived blocks (`users`, `messages`, `activation`, `servers`, `cluster`)
-are taken from one and never doubled. See `tools/monitoring/README.md`
-"Replica-split metrics" for the full classification and
-`pqp-api-metrics-exporter.py`'s own module docstring for the source-file
-citations behind each rule. **Adding a new process-local counter needs a
-merge rule too**, not just a `render()` line: an unclassified block
-defaults to take-from-first (safe, but undercounts an additive one) and logs
-a warning to stderr rather than failing silently.
+
+A first fix added `/_replica/a` / `/_replica/b` routes to
+`tools/api-host/Caddyfile` meant to pin a scrape to one container directly.
+It did not work in production: every request to those routes returned the
+SPA's catch-all instead of the metrics JSON. Those routes are gone.
+
+The exporter now scrapes the SAME load-balanced endpoint it always did, but
+repeatedly, and dedups the responses by the payload's own top-level
+`instanceId` (a per-process UUID regenerated every boot,
+`server/src/lib/bus.ts`'s `INSTANCE_ID`), stopping once as many distinct ids
+have been seen as `instanceCount` claims, or after
+`PQP_API_METRICS_MAX_SCRAPES` attempts (default 8). This
+(`collect_admin_metrics_snapshots()` in `pqp-api-metrics-exporter.py`) turns
+an unpredictable sequence of scrapes against one endpoint into one snapshot
+per live replica, with no Caddy route or per-replica URL required. The
+distinct snapshots are then merged with `merge_admin_metrics()` before
+`render()` runs: the process-local counters below are summed across
+replicas, while DB-derived blocks (`users`, `messages`, `activation`,
+`servers`, `cluster`) are taken from one and never doubled. See
+`tools/monitoring/README.md` "Replica-split metrics" for the full
+classification and `pqp-api-metrics-exporter.py`'s own module docstring for
+the source-file citations behind each rule. **Adding a new process-local
+counter needs a merge rule too**, not just a `render()` line: an
+unclassified block defaults to take-from-first (safe, but undercounts an
+additive one) and logs a warning to stderr rather than failing silently.
 
 ### What is counted, and where it increments
 
@@ -945,9 +957,9 @@ On the raw `GET /api/admin/metrics` payload these are all per instance
 (whichever machine answered a given request) and, where noted as a total,
 cumulative since that instance's last deploy: a real counter reset, which is
 why they are exported as Prometheus `counter` type. The Prometheus series the
-exporter writes is the CLUSTER total, not one instance's number: with
-`PQP_API_METRICS_ENDPOINTS` configured it scrapes every replica and sums
-these process-local counters across them (see "Two replicas, one series,
+exporter writes is the CLUSTER total, not one instance's number: it scrapes
+the endpoint repeatedly, dedups by `instanceId` and sums these process-local
+counters across the distinct instances found (see "Two replicas, one series,
 correctly merged" above) before `render()` runs. Reading the raw payload
 directly (`curl .../api/admin/metrics`, or the operator dashboard, which
 reads the load-balanced host itself rather than through this exporter) still
