@@ -55,6 +55,20 @@ Allow: /app/invite/
 # header a crawler reads before it parses a single byte of the sign-in screen
 # it would otherwise index.
 
+# Public images live under /api, and this file is served on api.pqp.gg too,
+# where /api is the real API. A profile's og:image is its avatar at
+# /api/avatars/<id>, and profile and community banners sit under /api as well,
+# so an unfurler or Google that respects this file has to be allowed to FETCH
+# them or a shared card shows no picture. These routes are public and
+# unauthenticated by design (the public-route list in server/src/api). Allow
+# comes first so a longest-match parser lets the image through while the rest
+# of /api stays fenced below. The avatar path is a plain prefix every parser
+# honours; the banner paths use a wildcard Google honours and others fall back
+# to the fence on, which is no worse than today.
+Allow: /api/avatars/
+Allow: /api/users/*/banner
+Allow: /api/servers/*/banner
+
 # There is no API on this host (it lives on api.pqp.gg), so this is a fence
 # against a crawler that guesses; it costs nothing and reads as intended.
 Disallow: /api
@@ -93,6 +107,9 @@ Allow: /
 Allow: /@
 Allow: /c/
 Allow: /app/invite/
+Allow: /api/avatars/
+Allow: /api/users/*/banner
+Allow: /api/servers/*/banner
 Disallow: /api
 Content-Signal: search=yes, ai-input=yes, ai-train=no
 
