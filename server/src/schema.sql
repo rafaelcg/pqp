@@ -4454,3 +4454,65 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
+
+-- ---------------------------------------------------------------------------
+-- ACTIVATION FUNNEL (services/activation.ts, docs/MONITORING.md)
+--
+-- One row per account, one nullable TIMESTAMPTZ per funnel step, each stamped
+-- the FIRST time that step happens for the account and never overwritten. It
+-- is the durable, authoritative record behind the operator dashboard's
+-- activation funnel and the Grafana `pqp API activation` dashboard: signup ->
+-- age gate -> handle -> first server/community join -> first message -> first
+-- voice join -> first watch party, read as a cohort by `signup_at`.
+--
+-- WHY A SEPARATE TABLE AND NOT COLUMNS ON `users`. Three reasons, all the same
+-- one: this is write-once telemetry, not account state. `users` is on the hot
+-- read path of every request and every member list; these seven columns are
+-- read only by the metrics snapshot (a handful of times a minute) and written
+-- once per step per lifetime. Keeping them off `users` keeps that row narrow,
+-- lets the funnel be dropped or reshaped without a lock on the busiest table,
+-- and puts the whole funnel in one place a future product-analytics sink
+-- (PostHog) can be pointed at without hunting columns across `users`.
+--
+-- IDEMPOTENCE lives in `recordActivationStep`: every stamp is an
+-- INSERT ... ON CONFLICT (user_id) DO UPDATE SET col = COALESCE(col, now()),
+-- so the earliest timestamp wins and a second call is a no-op. The row exists
+-- only for genuine human accounts, because the only writer is that function
+-- and it is called only from the human fire sites (a signup through Clerk, a
+-- WS message, a voice join); characters and webhooks never reach it, so the
+-- funnel needs no is_character / is_webhook filter to stay honest.
+--
+-- ON DELETE CASCADE: an account's deletion takes its funnel row with it, the
+-- same as every other per-user table. The funnel is aggregate-only downstream
+-- (counts, never a person), so nothing depends on a row outliving its account.
+CREATE TABLE IF NOT EXISTS user_activation (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  -- Clerk/user creation (services/users.ts insertNewUser). The cohort key:
+  -- every window below is "accounts whose signup_at falls in the last N days".
+  signup_at TIMESTAMPTZ,
+  -- POST /api/me/age-check, stamped only on a PASS (an underage declaration is
+  -- blocked from the product and drops out of the funnel here on purpose).
+  age_gate_at TIMESTAMPTZ,
+  -- A public handle claimed via PATCH /api/me (services/profiles.ts claimHandle).
+  handle_at TIMESTAMPTZ,
+  -- First membership in ANY server or community: an invite redeem, an SSO join,
+  -- a community/default-community join, or creating one's own server.
+  first_join_at TIMESTAMPTZ,
+  -- First human message ever sent (ws/chat.ts). TRUE first, not first in a window.
+  first_message_at TIMESTAMPTZ,
+  -- First voice room join ever (ws/voice.ts).
+  first_voice_at TIMESTAMPTZ,
+  -- First watch party HOSTED (createWatchParty). Watching was considered and
+  -- rejected as the signal: the live-view path (stampViewerStream) is called
+  -- many times per viewer per session, a bad place for a stamp; hosting is the
+  -- one discrete, low-frequency, unambiguous action. See docs/MONITORING.md.
+  first_watch_party_at TIMESTAMPTZ
+);
+
+-- The funnel is read as a cohort by signup date, so the window scan lands on an
+-- index rather than the whole table. Partial: a row with a NULL signup_at is a
+-- step stamped for an account whose signup was never recorded (not expected in
+-- practice) and is never part of a cohort, so it does not belong in the index.
+CREATE INDEX IF NOT EXISTS idx_user_activation_signup
+  ON user_activation (signup_at)
+  WHERE signup_at IS NOT NULL;

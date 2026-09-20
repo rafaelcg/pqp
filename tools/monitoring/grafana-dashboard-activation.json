@@ -1,0 +1,487 @@
+{
+ "_comment": [
+  "The 'Activation' dashboard: the new-user funnel, from GET /api/admin/metrics",
+  "(payload.activation) via the textfile exporter in this directory",
+  "(pqp-api-metrics-exporter.py). Standard Grafana dashboard JSON model:",
+  "Dashboards > New > Import, paste this file.",
+  "",
+  "Replace <PROMETHEUS_DATASOURCE_UID> with the real UID from Administration >",
+  "Data sources (the Grafana Cloud Prometheus stack the pqp-sfu-box dashboard",
+  "already uses); the import dialog also offers to remap it.",
+  "",
+  "EVERY panel needs pqp-api-metrics-exporter.py installed and running (see this",
+  "directory's README) -- without it they read 'No data', the honest state.",
+  "",
+  "THE FUNNEL IS A COHORT BY SIGNUP DATE. A window's Signup bar is the accounts",
+  "that signed up in the last 7 / 30 days; each later bar is how many of THAT",
+  "cohort have reached the step since. Steps only happen after signup, so a bar",
+  "is always <= the one above it and step/signup is a real conversion. The seam",
+  "that stamps every step is recordActivationStep in server/src/services/",
+  "activation.ts; the same seam is where a per-user sink (PostHog) would attach.",
+  "See docs/MONITORING.md."
+ ],
+ "title": "pqp Activation",
+ "uid": "pqp-api-activation",
+ "tags": [
+  "pqp",
+  "activation",
+  "growth"
+ ],
+ "timezone": "utc",
+ "editable": true,
+ "graphTooltip": 1,
+ "time": {
+  "from": "now-30d",
+  "to": "now"
+ },
+ "refresh": "5m",
+ "schemaVersion": 39,
+ "version": 1,
+ "panels": [
+  {
+   "id": 1,
+   "title": "Activation funnel (30-day signup cohort)",
+   "type": "bargauge",
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "<PROMETHEUS_DATASOURCE_UID>"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "min": 0,
+     "color": {
+      "mode": "continuous-GrYlRd"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "displayMode": "gradient",
+    "orientation": "horizontal",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"signup\"}",
+     "legendFormat": "1 Signup",
+     "instant": true
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"age_gate\"}",
+     "legendFormat": "2 Age gate",
+     "instant": true
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"handle\"}",
+     "legendFormat": "3 Handle",
+     "instant": true
+    },
+    {
+     "refId": "D",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"first_join\"}",
+     "legendFormat": "4 First join",
+     "instant": true
+    },
+    {
+     "refId": "E",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"first_message\"}",
+     "legendFormat": "5 First message",
+     "instant": true
+    },
+    {
+     "refId": "F",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"first_voice\"}",
+     "legendFormat": "6 First voice",
+     "instant": true
+    },
+    {
+     "refId": "G",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"30d\",step=\"first_watch_party\"}",
+     "legendFormat": "7 First watch party",
+     "instant": true
+    }
+   ],
+   "description": "Of the accounts whose signup_at is in the last 30 days, how many have reached each step (pqp_api_activation_cohort{window=\"30d\"}). Each bar is <= the one above; the drop between two bars is the funnel drop-off. step 1 (Signup) is the cohort size. Read this window for a settled picture."
+  },
+  {
+   "id": 2,
+   "title": "Activation funnel (7-day signup cohort)",
+   "type": "bargauge",
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "<PROMETHEUS_DATASOURCE_UID>"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "min": 0,
+     "color": {
+      "mode": "continuous-GrYlRd"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "displayMode": "gradient",
+    "orientation": "horizontal",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"signup\"}",
+     "legendFormat": "1 Signup",
+     "instant": true
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"age_gate\"}",
+     "legendFormat": "2 Age gate",
+     "instant": true
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"handle\"}",
+     "legendFormat": "3 Handle",
+     "instant": true
+    },
+    {
+     "refId": "D",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"first_join\"}",
+     "legendFormat": "4 First join",
+     "instant": true
+    },
+    {
+     "refId": "E",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"first_message\"}",
+     "legendFormat": "5 First message",
+     "instant": true
+    },
+    {
+     "refId": "F",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"first_voice\"}",
+     "legendFormat": "6 First voice",
+     "instant": true
+    },
+    {
+     "refId": "G",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"first_watch_party\"}",
+     "legendFormat": "7 First watch party",
+     "instant": true
+    }
+   ],
+   "description": "The same funnel over the last 7 days of signups (pqp_api_activation_cohort{window=\"7d\"}). A recent cohort's later steps are still filling in, so read this for a recent-trend signal and the 30-day panel for a settled one."
+  },
+  {
+   "id": 3,
+   "title": "Activation rate (signup -> first message, 30d)",
+   "type": "stat",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "<PROMETHEUS_DATASOURCE_UID>"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "min": 0,
+     "max": 1,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.15
+       },
+       {
+        "color": "green",
+        "value": 0.3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"signup_to_first_message\"}",
+     "legendFormat": "signup -> first message"
+    }
+   ],
+   "description": "The share of the 30-day signup cohort that has sent a message: the closest single number to 'this account became a real user'. The alert in grafana-alert-rules-activation.json watches this. A denominator of zero reads 0."
+  },
+  {
+   "id": 4,
+   "title": "Step-to-step conversion (30-day cohort)",
+   "type": "bargauge",
+   "gridPos": {
+    "h": 6,
+    "w": 16,
+    "x": 8,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "<PROMETHEUS_DATASOURCE_UID>"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "min": 0,
+     "max": 1,
+     "color": {
+      "mode": "continuous-RdYlGr"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "displayMode": "gradient",
+    "orientation": "horizontal",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"signup_to_age_gate\"}",
+     "legendFormat": "signup -> age gate",
+     "instant": true
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"age_gate_to_handle\"}",
+     "legendFormat": "age gate -> handle",
+     "instant": true
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"handle_to_first_join\"}",
+     "legendFormat": "handle -> first join",
+     "instant": true
+    },
+    {
+     "refId": "D",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"first_join_to_first_message\"}",
+     "legendFormat": "first join -> first message",
+     "instant": true
+    },
+    {
+     "refId": "E",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"first_message_to_first_voice\"}",
+     "legendFormat": "first message -> first voice",
+     "instant": true
+    },
+    {
+     "refId": "F",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"first_voice_to_first_watch_party\"}",
+     "legendFormat": "first voice -> first watch party",
+     "instant": true
+    }
+   ],
+   "description": "Each step as a share of the previous one (pqp_api_activation_conversion_30d). The lowest bar is where the funnel leaks most. handle -> first join can exceed 1: joining does not require a handle, so the join count is not bounded by the (smaller) handle count."
+  },
+  {
+   "id": 5,
+   "title": "Activation rate over time (30-day cohort)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 15
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "<PROMETHEUS_DATASOURCE_UID>"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "min": 0,
+     "max": 1,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 5,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"signup_to_first_message\"}",
+     "legendFormat": "signup -> first message"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"signup_to_age_gate\"}",
+     "legendFormat": "signup -> age gate"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "<PROMETHEUS_DATASOURCE_UID>"
+     },
+     "expr": "pqp_api_activation_conversion_30d{step=\"first_join_to_first_message\"}",
+     "legendFormat": "first join -> first message"
+    }
+   ],
+   "description": "How the 30-day cohort's conversions move day to day. A cliff here is a regression in one of the steps (a broken age gate, a join flow that stopped landing people in a room), not just a quiet week."
+  }
+ ]
+}

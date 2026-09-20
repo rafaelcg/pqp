@@ -9,6 +9,7 @@ import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import { countedQuery } from "../lib/db-tx-metrics.js";
 import { logEvent } from "../lib/log.js";
+import { recordActivationStep } from "./activation.js";
 import type { AuthUser } from "../auth/clerk.js";
 import { HttpError } from "../lib/http.js";
 // One direction only: avatars.ts knows about storage and keys, this file knows
@@ -541,6 +542,10 @@ async function insertNewUser(auth: AuthUser): Promise<DbUser> {
         // signups per hour and outlives `turma1000.stamped`, which stops after
         // the 1000th account. No email, tag or clerk id — just the row id.
         logEvent("user.created", { userId: inserted.id });
+        // The head of the activation funnel. This is the ONE branch where a
+        // genuinely new account was created (the conflict branch below is a
+        // row somebody else inserted), so it is where `signup` is stamped.
+        await recordActivationStep(inserted.id, "signup");
         tryStampTurma1000();
         return inserted;
       }

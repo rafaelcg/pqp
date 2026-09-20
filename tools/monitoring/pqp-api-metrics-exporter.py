@@ -180,6 +180,7 @@ def render(payload: dict, ready_payload: dict | None = None) -> str:
     cluster = payload.get("cluster", {})
     users = payload.get("users", {})
     servers = payload.get("servers", {})
+    activation = payload.get("activation", {})
     messages = payload.get("messages", {})
     calls = payload.get("calls", {})
     product = payload.get("product", {})
@@ -358,6 +359,68 @@ def render(payload: dict, ready_payload: dict | None = None) -> str:
             "(messages.byScope24h): dm, group, server. Sums to pqp_api_messages_24h.",
             [({"scope": scope}, by_scope.get(scope, 0)) for scope in ("dm", "group", "server")],
         )
+
+    # Activation funnel (payload.activation). A GAUGE, not a counter: each value
+    # is how many of a signup COHORT have reached a step, and the cohort is a
+    # sliding window (accounts whose signup_at is in the last 7 / 30 days), so
+    # the number goes both up (as people progress) and down (as the window
+    # slides past them) -- a counter's rate()/increase() would be nonsense on
+    # it. Every window x step pair is emitted always, zero included, so the
+    # funnel panel has a full series set before the first signup and never reads
+    # "no data" for a step nobody has reached yet. `signup` is the cohort size
+    # (the funnel's denominator). The JS keys are camelCase; the label values
+    # are the snake_case step names services/activation.ts calls the events.
+    if isinstance(activation, dict) and activation:
+        step_keys = (
+            ("signup", "signup"),
+            ("age_gate", "ageGate"),
+            ("handle", "handle"),
+            ("first_join", "firstJoin"),
+            ("first_message", "firstMessage"),
+            ("first_voice", "firstVoice"),
+            ("first_watch_party", "firstWatchParty"),
+        )
+        cohort_samples: list[tuple[dict[str, str], object]] = []
+        for window_label, window_key in (("7d", "window7d"), ("30d", "window30d")):
+            counts = activation.get(window_key) or {}
+            for step_label, step_key in step_keys:
+                cohort_samples.append(
+                    (
+                        {"window": window_label, "step": step_label},
+                        counts.get(step_key, 0) if isinstance(counts, dict) else 0,
+                    )
+                )
+        labeled_gauge(
+            lines,
+            "pqp_api_activation_cohort",
+            "Activation funnel: accounts in a signup cohort (window=7d|30d) that have "
+            "reached each step (activation.window7d / window30d). step=signup is the cohort "
+            "size and the funnel denominator; every step is <= the one before it, so "
+            "step/signup is a conversion. Gauge, because the cohort window slides.",
+            cohort_samples,
+        )
+        conversion = activation.get("conversion30d") or {}
+        if isinstance(conversion, dict):
+            conversion_keys = (
+                ("signup_to_age_gate", "signupToAgeGate"),
+                ("age_gate_to_handle", "ageGateToHandle"),
+                ("handle_to_first_join", "handleToFirstJoin"),
+                ("first_join_to_first_message", "firstJoinToFirstMessage"),
+                ("first_message_to_first_voice", "firstMessageToFirstVoice"),
+                ("first_voice_to_first_watch_party", "firstVoiceToFirstWatchParty"),
+                ("signup_to_first_message", "signupToFirstMessage"),
+            )
+            labeled_gauge(
+                lines,
+                "pqp_api_activation_conversion_30d",
+                "Step-to-step conversion for the 30-day signup cohort (activation.conversion30d), "
+                "each a share 0..1 of the PREVIOUS step. step=signup_to_first_message is the "
+                "headline activation rate, and the one an alert watches.",
+                [
+                    ({"step": label}, conversion.get(key, 0))
+                    for label, key in conversion_keys
+                ],
+            )
 
     # Calls: attempts, connected (by transport and scope), refusals by reason,
     # and the DM/group ring outcomes. Server-truth, cumulative -> counters.

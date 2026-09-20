@@ -964,6 +964,122 @@ Build-time source-map upload (`@grafana/faro-rollup-plugin` in
 upload and the build still succeeds. Faro is a separate Grafana product from the
 Prometheus/Loki stack here and has its own UI; there is nothing to import.
 
+## The activation funnel
+
+The growth counters above say how much is happening. The **activation funnel**
+says whether a *new account* gets anywhere: of the people who signed up, how
+many cleared the age gate, claimed a handle, joined something, said something,
+joined a call, ran a watch party -- and where they fall off. It is in-house,
+authoritative and free: the timestamps live in our own Postgres, and the counts
+ride on the admin-metrics snapshot the operator dashboard already polls.
+
+### The steps and where each one fires
+
+Seven steps, in order. Each is stamped the **first** time it happens for an
+account and never overwritten, so the funnel reads a person's furthest point,
+not their latest action.
+
+| Step | Event name | Fires at |
+|---|---|---|
+| Signup | `signup` | `insertNewUser`, `server/src/services/users.ts` -- the one branch that creates a genuinely new account (beside the existing `user.created` log line). |
+| Age gate passed | `age_gate` | `POST /api/me/age-check` in `server/src/api/index.ts`, on a **pass** only -- an underage declaration is final and blocked from the product, so it drops out here rather than counting. |
+| Handle claimed | `handle` | `PATCH /api/me` in `server/src/api/index.ts`, after `claimHandle` returns (a collision or cooldown threw before this). |
+| First server/community join | `first_join` | Every real join path: `redeemInvite` (`services/invites.ts`), `joinCommunity` (`services/communities.ts`, which is also the default-community landing), `joinServerBySso` and `createServer` (`services/servers.ts`). Stamped only on a fresh membership; creating your own server counts. |
+| First message | `first_message` | `postChannelMessageAttempt` in `server/src/ws/chat.ts`, once a genuinely new (non-duplicate) message commits. The human WS send path only -- characters, webhooks and the bot HTTP send never reach it. |
+| First voice join | `first_voice` | Just after `noteJoinConnected` in `server/src/ws/voice.ts` -- a seated peer. |
+| First watch party | `first_watch_party` | Hosting: the two `createWatchParty` routes in `server/src/api/index.ts`. **Hosting, not watching, is the signal** -- the live-view path (`stampViewerStream`) is called many times per viewer per session, a bad place for a stamp, whereas hosting is one discrete, unambiguous action. If a "watched" signal is ever wanted it belongs on a once-per-session hook, never on `stampViewerStream`. |
+
+Storage is one row per account in `user_activation` (schema.sql), a nullable
+`TIMESTAMPTZ` per step, `ON DELETE CASCADE` with the account. It is deliberately
+its own table, not columns on the busy `users` row: this is write-once telemetry
+read a few times a minute, and keeping it separate keeps `users` narrow and puts
+the whole funnel in one place.
+
+### `recordActivationStep` -- the seam
+
+Every step is stamped through **one** function,
+`recordActivationStep(userId, step)` in `server/src/services/activation.ts`. The
+fire sites are dumb: they call it and move on. That is the point -- it is the
+single seam where the funnel is defined, and the single place a future per-user
+event sink would attach (see "Adding PostHog later" below).
+
+It is safe to wire anywhere:
+
+- **Idempotent.** Each stamp is `INSERT ... ON CONFLICT (user_id) DO UPDATE SET
+  col = COALESCE(col, now())`, so the earliest timestamp wins and a second call
+  is a no-op. The guarantee lives in the row, so it holds across instances and
+  restarts.
+- **Never throws, never blocks the caller's own work.** A telemetry write must
+  not be able to fail a message send or a voice join; errors are swallowed with
+  an `[activation] … failed` log line the error heartbeat still sees.
+- **Cheap on the hot paths.** `first_message` and `first_voice` sit on a WS send
+  and a voice join -- a watch party runs the latter several hundred times an
+  evening. The DB write is a single indexed upsert that no-ops after the first
+  time, and an in-process memo of already-stamped `(userId, step)` pairs
+  short-circuits before even that: after a user's first message on a process,
+  every later message skips the query entirely. **The per-message / per-join
+  cost is therefore one indexed upsert once per user per process lifetime, and
+  nothing after** -- acceptable, and the reason these steps could be wired into
+  the hot paths at all. The memo is a cost optimisation only; losing it on a
+  restart or across instances is correct, because the upsert catches those.
+
+### What the funnel exposes, and the dashboard
+
+`GET /api/admin/metrics` carries an `activation` block (bounded, aggregate-only,
+never a per-user row): per-step counts for the **7-day** and **30-day** signup
+cohorts, plus the 30-day step-to-step conversion and the headline
+`signupToFirstMessage`. A window's cohort is "accounts whose `signup_at` is in
+the last N days", and each step counts the members of that cohort who have
+reached it -- steps only happen after signup, so a step is always <= the one
+before and `step / signup` is a real conversion. A recent cohort's later steps
+are still filling in; read 30 days for a settled picture and 7 for a recent
+trend.
+
+The exporter hand-picks fields (same rule as the growth counters above), so the
+funnel is wired into `render()` as `pqp_api_activation_cohort{window,step}` (a
+gauge -- the cohort window slides, so a counter's `rate()` would be nonsense) and
+`pqp_api_activation_conversion_30d{step}`. A field added to the `activation`
+block does not appear in Grafana until it is added there and to
+`tools/monitoring/test_exporter.py`.
+
+- **pqp Activation** dashboard:
+  `tools/monitoring/grafana-dashboard-activation.json` (import, replace
+  `<PROMETHEUS_DATASOURCE_UID>`). Bar-funnels for both cohorts, the activation
+  rate, step-to-step conversion, and conversion over time.
+- **pqp-activation** alert group:
+  `tools/monitoring/grafana-alert-rules-activation.json` -- **one** rule,
+  "activation funnel stalled at the age gate", firing only when signups keep
+  arriving (> 20 in 7 days) while the first gated step after signup is near zero
+  for an hour. That is a *broken step*, not a slow week. It is deliberately the
+  only funnel alert: a conversion floor ("signup → first message must stay above
+  X") is a threshold guess with no day-0 baseline and a fresh cohort's later
+  steps are still filling in, so such a rule would cry wolf. The deeper
+  drop-offs are on the dashboard to read, not to page on, until there is a
+  measured baseline.
+
+### Adding PostHog later
+
+The funnel above answers the always-on question -- how many reach each step, and
+where the drop-off is -- which is exactly what an aggregate Grafana series is
+good at. It cannot answer ad-hoc, per-user questions: "of the people who joined
+a community but never sent a message, how many linked Steam", "what does the
+7-day retention curve look like split by acquisition source", "show me the
+sessions of everyone who bounced at the age gate". Those need a per-user event
+store with cohort and retention tooling -- a product-analytics tool such as
+PostHog.
+
+**Nothing here is PostHog today, and this is not a request to add it.** The
+point is that the seam is already the right shape for it. When it is wanted, it
+plugs in at exactly one place -- `recordActivationStep` in
+`server/src/services/activation.ts` -- as a `capture(userId, step)` call beside
+the DB write, with **no fire site touched**: the seven fire sites already funnel
+through that one function, and it already receives the user id and the step name
+(the step strings are deliberately the event names a `capture()` would send).
+The in-house table and Grafana funnel stay as the free, authoritative,
+always-on view; PostHog would be the ad-hoc exploration layer on top, fed from
+the same seam. Keep new steps flowing through `recordActivationStep` and that
+stays true.
+
 ## The SFU box (Vultr, São Paulo)
 
 Production voice runs on a self-hosted LiveKit at `wss://sfu.pqp.gg`, with TURN
@@ -1162,6 +1278,10 @@ restart and would churn the series set for nothing.
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
 | `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |
+| `tools/monitoring/grafana-alert-rules-activation.json` | The one funnel alert: "activation funnel stalled at the age gate" |
+| `server/src/services/activation.ts` | `recordActivationStep` (the funnel seam) and `activationFunnel` (the cohort report on `/api/admin/metrics`) |
+| `server/src/services/activation.test.ts` | Idempotency of every step, the cohort/conversion maths, and the fire-site wiring, on a real Postgres |
 | `client/src/lib/faro.ts` | Grafana Faro init (frontend errors + RUM), gated on `VITE_FARO_URL`; inert on a self-host |
 | `.github/workflows/monitor-uptime.yml` | Every 10 min; availability |
 | `.github/workflows/monitor-errors.yml` | Every 15 min; production log error rate and support-bot liveness |

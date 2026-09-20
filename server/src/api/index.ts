@@ -245,6 +245,7 @@ import {
   parseCalendarDate,
   recordAgeDeclaration,
 } from "../services/age-gate.js";
+import { recordActivationStep } from "../services/activation.js";
 import type { DbUser, MemberRole } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
 import {
@@ -1271,6 +1272,12 @@ router.post("/api/me/age-check", async ({ req, user }) => {
       "This account has already answered the age question. It cannot be answered again.",
     );
   }
+  // Funnel step `age_gate`, stamped only on a PASS. An underage declaration is
+  // recorded and final, but it is blocked from the product, so it drops out of
+  // the funnel here rather than counting as a passed gate.
+  if (result.status === "passed") {
+    await recordActivationStep(user.id, "age_gate");
+  }
   return { ageGate: result.status };
 });
 
@@ -1297,6 +1304,9 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
   // handful of times per account, ever.
   if (body.handle !== undefined) {
     await claimHandle(user.id, body.handle);
+    // Funnel step `handle`. `claimHandle` threw on a collision or a cooldown,
+    // so reaching here means the word is this account's now.
+    await recordActivationStep(user.id, "handle");
   }
   // Write-only and first-touch: the service refuses it for an account that
   // already has one, or that is older than a day. Nothing below reads it back,
@@ -5381,6 +5391,10 @@ router.post(
         options: body.options ?? {},
         hostUserId: user.id,
       });
+      // Funnel step `first_watch_party` -- the host created a party. See the
+      // note on `first_watch_party_at` in schema.sql for why hosting, not
+      // watching, is the signal.
+      await recordActivationStep(user.id, "first_watch_party");
       const actor = await watchPartyActor(channel, user.id);
       const party = await presentWatchParty(row, actor);
       void broadcastWatchParty(row.id);
@@ -5415,6 +5429,10 @@ router.post(
         options: body.options ?? {},
         hostUserId: user.id,
       });
+      // Funnel step `first_watch_party` -- the host created a party (a draft
+      // counts: the intent is the signal). See `first_watch_party_at` in
+      // schema.sql for why hosting, not watching, is what the funnel measures.
+      await recordActivationStep(user.id, "first_watch_party");
       const actor = await watchPartyActor(channel, user.id);
       const party = await presentWatchParty(row, actor);
       // A draft is announced to nobody. `broadcastWatchParty` re-resolves the

@@ -170,6 +170,35 @@ class RenderGrowthMetricsTests(unittest.TestCase):
                 "last24h": 100,
                 "byScope24h": {"dm": 40, "group": 10, "server": 50},
             },
+            activation={
+                "window7d": {
+                    "signup": 12,
+                    "ageGate": 10,
+                    "handle": 4,
+                    "firstJoin": 8,
+                    "firstMessage": 6,
+                    "firstVoice": 3,
+                    "firstWatchParty": 1,
+                },
+                "window30d": {
+                    "signup": 400,
+                    "ageGate": 360,
+                    "handle": 120,
+                    "firstJoin": 300,
+                    "firstMessage": 220,
+                    "firstVoice": 90,
+                    "firstWatchParty": 20,
+                },
+                "conversion30d": {
+                    "signupToAgeGate": 0.9,
+                    "ageGateToHandle": 0.333,
+                    "handleToFirstJoin": 2.5,
+                    "firstJoinToFirstMessage": 0.733,
+                    "firstMessageToFirstVoice": 0.409,
+                    "firstVoiceToFirstWatchParty": 0.222,
+                    "signupToFirstMessage": 0.55,
+                },
+            },
             calls={
                 "joinAttempts": 20,
                 "joinConnected": 17,
@@ -231,12 +260,42 @@ class RenderGrowthMetricsTests(unittest.TestCase):
         self.assertIn('pqp_api_push_delivery_total{platform="web",outcome="sent"} 30', body)
         self.assertIn('pqp_api_push_delivery_total{platform="fcm",outcome="failed"} 1', body)
 
+    def test_activation_funnel_cohort_and_conversion(self):
+        body = exporter.render(self._payload())
+        # Both windows, every step, are emitted.
+        self.assertIn('pqp_api_activation_cohort{window="7d",step="signup"} 12', body)
+        self.assertIn('pqp_api_activation_cohort{window="7d",step="first_message"} 6', body)
+        self.assertIn('pqp_api_activation_cohort{window="7d",step="first_watch_party"} 1', body)
+        self.assertIn('pqp_api_activation_cohort{window="30d",step="signup"} 400', body)
+        self.assertIn('pqp_api_activation_cohort{window="30d",step="first_voice"} 90', body)
+        # The headline conversion the alert watches.
+        self.assertIn(
+            'pqp_api_activation_conversion_30d{step="signup_to_first_message"} 0.55',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_activation_conversion_30d{step="signup_to_age_gate"} 0.9', body
+        )
+
+    def test_activation_missing_steps_default_to_zero(self):
+        # A window present but a step key absent still emits a zero series, so
+        # the funnel panel is never a hole while a step has no data yet.
+        payload = _base_payload(
+            activation={"window7d": {"signup": 5}, "window30d": {}}
+        )
+        body = exporter.render(payload)
+        self.assertIn('pqp_api_activation_cohort{window="7d",step="signup"} 5', body)
+        self.assertIn('pqp_api_activation_cohort{window="7d",step="first_voice"} 0', body)
+        self.assertIn('pqp_api_activation_cohort{window="30d",step="signup"} 0', body)
+
     def test_absent_blocks_do_not_crash_render(self):
         # An older payload with none of the growth blocks still renders (the
         # optional blocks are skipped, the always-present ones default).
         body = exporter.render(_base_payload())
         self.assertIn("pqp_api_metrics_scrape_ok 1", body)
         self.assertIn("pqp_api_hls_starts_total 0", body)
+        # No activation block at all -> no funnel series, and no crash.
+        self.assertNotIn("pqp_api_activation_cohort", body)
 
 
 class RenderFailureTests(unittest.TestCase):

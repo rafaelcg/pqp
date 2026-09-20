@@ -36,6 +36,7 @@ import {
   mapMessage,
 } from "../services/messages.js";
 import { enqueueOutgoingMessageCreated } from "../services/outgoing-webhooks.js";
+import { recordActivationStep } from "../services/activation.js";
 import { closePoll, votePoll } from "../services/polls.js";
 import {
   getMessageChannelId,
@@ -1627,6 +1628,17 @@ async function postChannelMessageAttempt(
   // from here on is a bug in a post-creation step, not "nothing happened yet",
   // and must not come back as the retriable `database-unavailable` rejection.
   created.id = dbMessage.id;
+
+  // Funnel step `first_message`: a genuinely new, non-duplicate message just
+  // committed. This is the human WS send path (the author is a connected
+  // socket's user), so a character-driven send is not counted; webhooks and
+  // the bot HTTP send never reach here at all. `recordActivationStep` swallows
+  // its own errors, so it cannot turn into the post-creation
+  // `DatabaseUnavailableError` the boundary above warns about. Cheap on repeat:
+  // the in-process memo skips the DB after this user's first message.
+  if (!input.author.is_character) {
+    await recordActivationStep(input.author.id, "first_message");
+  }
 
   try {
     await enqueueOutgoingMessageCreated({
