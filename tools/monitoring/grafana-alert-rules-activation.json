@@ -1,0 +1,94 @@
+{
+ "_comment": [
+  "Grafana Alerting file-provisioning format (apiVersion 1): ONE always-on",
+  "activation rule -- the funnel's first gated step (the age gate) stalling",
+  "while signups keep arriving -- reading the textfile exporter in this",
+  "directory (pqp-api-metrics-exporter.py). Same handling as",
+  "grafana-alert-rules-growth.json: this repo's Grafana is managed by hand",
+  "(docs/MONITORING.md: 'the UI is the source of truth'), so paste this into",
+  "Alerting > Alert rules > 'Import from file', not via CI.",
+  "",
+  "Replace <PROMETHEUS_DATASOURCE_UID> before import (Administration > Data",
+  "sources, the Grafana Cloud Prometheus stack the pqp-sfu-box dashboard uses).",
+  "",
+  "WHY ONLY ONE RULE. A conversion FLOOR (say 'signup -> first message must",
+  "stay above X') is a threshold guess on a day-0 product with no baseline,",
+  "and a fresh cohort's later steps are still filling in, so such a rule cries",
+  "wolf. This rule guesses no baseline: it fires only when signups keep",
+  "arriving (> 20 in 7 days) AND the step that should follow every one of them",
+  "immediately (the age gate) is near zero for an hour -- a broken step, not a",
+  "slow week. The deeper drop-offs are on the pqp Activation dashboard to read,",
+  "not to page on, until there is a measured baseline to alert against.",
+  "",
+  "The volume floor is inside the query (`and (signups > 20)`), so below it the",
+  "rule returns nothing and noDataState=OK keeps it silent -- the same",
+  "no-crying-wolf shape as the growth rules. Install the exporter first, or it",
+  "sits on 'no data' (silent)."
+ ],
+ "apiVersion": 1,
+ "groups": [
+  {
+   "orgId": 1,
+   "name": "pqp-activation",
+   "folder": "pqp",
+   "interval": "1m",
+   "rules": [
+    {
+     "uid": "pqp-activation-age-gate-stalled",
+     "title": "Activation funnel stalled at the age gate",
+     "condition": "C",
+     "data": [
+      {
+       "refId": "A",
+       "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+       "relativeTimeRange": {
+        "from": 900,
+        "to": 0
+       },
+       "model": {
+        "refId": "A",
+        "expr": "pqp_api_activation_cohort{window=\"7d\",step=\"age_gate\"} / clamp_min(pqp_api_activation_cohort{window=\"7d\",step=\"signup\"}, 1) and (pqp_api_activation_cohort{window=\"7d\",step=\"signup\"} > 20)",
+        "instant": true,
+        "range": false
+       }
+      },
+      {
+       "refId": "C",
+       "datasourceUid": "__expr__",
+       "model": {
+        "refId": "C",
+        "type": "threshold",
+        "expression": "A",
+        "conditions": [
+         {
+          "evaluator": {
+           "type": "lt",
+           "params": [
+            0.2
+           ]
+          }
+         }
+        ]
+       }
+      }
+     ],
+     "noDataState": "OK",
+     "execErrState": "OK",
+     "for": "1h",
+     "labels": {
+      "severity": "warning",
+      "area": "activation"
+     },
+     "annotations": {
+      "summary": "New accounts are signing up but almost none are clearing the age gate.",
+      "description": "Fewer than 20% of the last 7 days' signups have passed the age gate, with more than 20 signups in that window, sustained for an hour. The age gate is the first step every new account must clear, so this is the funnel's first gated step failing (POST /api/me/age-check) rather than a quiet week. It is a real break, not a threshold guess: the ratio only reaches here if signups keep landing while the very next step does not. See the pqp Activation dashboard and services/activation.ts.",
+      "runbook": "docs/MONITORING.md#the-activation-funnel"
+     },
+     "notification_settings": {
+      "receiver": "rafael-email"
+     }
+    }
+   ]
+  }
+ ]
+}

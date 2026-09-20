@@ -14,6 +14,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
+import { recordActivationStep } from "./activation.js";
 
 /**
  * Communities — a public page per room, a directory of the rooms that asked to
@@ -393,6 +394,11 @@ export async function joinCommunity(
       // it costs a few silent seconds rather than a leak — and "you joined and
       // the room went quiet" is a bad first minute.
       invalidateServerAudience(serverId);
+      // Funnel step `first_join`, after the commit and on the pool, not inside
+      // the transaction. This is also the default-community landing path
+      // (services/default-community.ts calls joinCommunity), so a first-run
+      // placement counts as the first join too.
+      await recordActivationStep(userId, "first_join");
     }
     return { ok: true, serverId, serverName: server.name, joinedNow };
   } catch (error) {

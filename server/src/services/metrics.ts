@@ -48,6 +48,7 @@ import {
   type AcquisitionReport,
   type RetentionReport,
 } from "./acquisition.js";
+import { activationFunnel, type ActivationFunnel } from "./activation.js";
 import {
   dbQueriesByRoute,
   dbQueryTotal,
@@ -661,6 +662,16 @@ export interface AdminMetrics {
   }[];
   acquisition: AcquisitionReport;
   /**
+   * The activation funnel: of the accounts that signed up in a window, how many
+   * reached each step (age gate, handle, first join, first message, first
+   * voice, first watch party), and the step-to-step conversion. Sits beside
+   * `acquisition` and `retention` because it is the third face of the same
+   * question -- arrivals, the ones who stayed, and the ones who got going. Built
+   * from `user_activation` in one query inside this same snapshot. Aggregate
+   * only, never a person; see services/activation.ts and docs/MONITORING.md.
+   */
+  activation: ActivationFunnel;
+  /**
    * Which channels bring people who stay, over a 30-day cohort.
    *
    * Sits beside `acquisition` because it is the other half of the same
@@ -878,6 +889,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     topServers,
     acquisition,
     retention,
+    activation,
     callRatings,
     connections,
   ] = await Promise.all([
@@ -977,6 +989,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     ),
     acquisitionReport(7),
     retentionBySource(30),
+    activationFunnel(),
     callRatingSummary(7),
     connectionAdoption(),
   ]);
@@ -1355,6 +1368,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       messages24h: Number(row.messages_24h),
     })),
     acquisition,
+    activation,
     retention,
     callRatings,
     // The denominator travels with the numerators rather than leaving the

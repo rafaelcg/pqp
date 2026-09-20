@@ -58,6 +58,7 @@ import {
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { listBlockersOf } from "../services/blocks.js";
+import { recordActivationStep } from "../services/activation.js";
 import {
   isDmSendBlocked,
   resolveRingableConversation,
@@ -6683,6 +6684,12 @@ export async function handleVoiceMessage(
           ? "group"
           : "dm";
     noteJoinConnected(transport, joinScope);
+    // Funnel step `first_voice`: a peer is seated. A resume can also reach here,
+    // but a resume by definition follows an earlier join, so stamp-if-null on
+    // the first real join is what wins; a resume is a harmless no-op. Cheap on
+    // repeat (the in-process memo skips the DB after this user's first join),
+    // which matters on the path a watch party runs several hundred times a night.
+    await recordActivationStep(user.id, "first_voice");
     logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
       peerId,
       userId: user.id,

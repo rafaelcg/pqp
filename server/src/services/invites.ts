@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool, type DbInvite } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
+import { recordActivationStep } from "./activation.js";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -129,6 +130,11 @@ export async function redeemInvite(
     await client.query("COMMIT");
     if (joinedNow) {
       invalidateServerAudience(invite.server_id);
+      // Funnel step `first_join`, and AFTER the commit on purpose: the stamp is
+      // its own statement on the pool, never inside this transaction. Only a
+      // real join (a fresh membership row) counts; re-opening an invite you
+      // already used is not a join and does not stamp.
+      await recordActivationStep(userId, "first_join");
     }
     return {
       serverId: invite.server_id,

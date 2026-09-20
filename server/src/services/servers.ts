@@ -12,6 +12,7 @@ import {
 } from "../lib/bus.js";
 import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
+import { recordActivationStep } from "./activation.js";
 import {
   applyPrivateChannelOverwrites,
   bumpPermissionsVersion,
@@ -220,6 +221,10 @@ export async function createServer(
     );
 
     await client.query("COMMIT");
+    // Funnel step `first_join`: the owner now belongs to a server. Creating one
+    // counts, so a user whose first act is making their own server is not a
+    // hole in the funnel. On the pool, after the commit.
+    await recordActivationStep(ownerId, "first_join");
     return { server, channels: channelsResult.rows };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -931,6 +936,8 @@ export async function joinServerBySso(
       // get for a few seconds rather than one they should not have. Done
       // anyway: "you joined and the server went quiet" is a bad first minute.
       invalidateServerAudience(serverId);
+      // Funnel step `first_join`, after the commit and on the pool.
+      await recordActivationStep(userId, "first_join");
     }
     return { ok: true, server, joinedNow };
   } catch (error) {
