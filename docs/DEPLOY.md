@@ -39,7 +39,17 @@ restarted `pqp-api`, disconnecting everyone who was in a voice call at the time.
 Nothing was broken and the gate behaved correctly; the PR simply did not look
 like a server change to anyone reading it.
 
-A Fly deploy is a rolling restart of a single machine, so every WebSocket goes
+Production moved off Fly on 17 September 2026. The API now runs as two
+containers, `api-a` and `api-b`, behind Caddy on one Vultr box (São Paulo),
+sharing chat fan-out and the voice peer map through Postgres (`CLUSTER_BUS` /
+`VOICE_REGISTRY`). A deploy is rolling *per container*: `pqp-deploy.sh`
+recreates `api-a`, waits for it to report healthy on the new commit, and only
+then touches `api-b`, so one container is always serving and a redeploy no
+longer takes every WebSocket down at once. Sockets on the container being
+recycled drop and reconnect onto its sibling; losing the whole box is still
+full downtime. The Fly path (`deploy-api-fly.yml`, one machine) is dormant, its
+apps kept at zero machines as the rollback target rather than the live deploy;
+see `docs/deploy-vultr.md` and `tools/api-host/compose.yaml`. When the container a socket is on is the one recycled, that socket still goes
 with it. Open chats reconnect on their own. **Web and Electron** keep the media
 session and reattach the same peer id. In the same process that is a 90-second
 orphan window. After a Fly restart the map is empty, so reconstruct uses the
