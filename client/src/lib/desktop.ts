@@ -79,6 +79,45 @@ export interface PqpDesktop {
   /** Presses and releases of the bound key while another app is focused. */
   onPushToTalk?(cb: (held: boolean) => void): () => void;
   /**
+   * The Tier 2 push-to-talk path: a native global keyboard/mouse hook
+   * (`uiohook-napi`, `electron/lib/native-ptt-hook.js`) instead of
+   * `globalShortcut`'s auto-repeat inference. Absent in a browser and in a
+   * shell built before it landed. `usePushToTalk` (`use-push-to-talk.ts`)
+   * feature-detects it and falls all the way back to `bindPushToTalk` /
+   * `onPushToTalk` above when it is missing, which is the exact behaviour
+   * this bridge method superseded, not a degraded stand-in for it.
+   *
+   * Handles BOTH mechanisms behind one call: the main process tries the
+   * native hook first and falls back to `globalShortcut` itself when the
+   * hook is unavailable, denied, or the binding is a mouse button on a
+   * platform where only the hook can express that (`result.via` says
+   * which, or `"none"` when neither could take it (always `"none"` for a
+   * mouse binding without the hook). `null` releases the binding.
+   */
+  bindPushToTalkNative?(
+    binding: DesktopPttBinding | null,
+    releaseDelayMs: number,
+  ): Promise<DesktopPttBindResult>;
+  /** Presses and releases of the bound key/button while another app is focused, via the native hook or its `globalShortcut` fallback. */
+  onPushToTalkNative?(cb: (held: boolean) => void): () => void;
+  /**
+   * macOS only: whether Input Monitoring/Accessibility looks granted, so
+   * far as Electron can see (`systemPreferences.isTrustedAccessibilityClient`
+   * is the Accessibility half; there is no Electron API for Input
+   * Monitoring at all, so `"granted"` here is a necessary condition for the
+   * hook to work, not a sufficient one). `"not-required"` off macOS.
+   */
+  getPttPermissionStatus?(): Promise<PttPermissionStatus>;
+  /** Opens the macOS Accessibility and Input Monitoring panes. No-op elsewhere. */
+  openPttPermissionSettings?(): void;
+  /**
+   * Whether this platform can run the native hook at all, independent of any
+   * binding), so the settings UI can explain the ceiling (Linux/Wayland has
+   * none; see `docs/PARITY.md`) before anyone has joined a call to actually
+   * try it.
+   */
+  getPttNativeCapability?(): Promise<DesktopPttNativeCapability>;
+  /**
    * Mirror the call state into the main process so the tray icon and menu
    * can say it. Idle is all three false.
    */
@@ -133,6 +172,55 @@ export interface DesktopVoiceState {
 }
 
 export type DesktopVoiceCommand = "toggleMute" | "toggleDeafen" | "leave";
+
+/**
+ * A push-to-talk binding as sent to the native-hook bridge. Same fields as
+ * the renderer's `PttBinding` (`components/voice/push-to-talk.ts`). This is
+ * a separate type rather than a re-export because it crosses the preload
+ * bridge as plain IPC-serializable data, not a shared module.
+ */
+export interface DesktopPttBinding {
+  device: "keyboard" | "mouse";
+  code: string;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  meta: boolean;
+  /**
+   * The Electron accelerator equivalent, for the `globalShortcut` fallback.
+   * `null` for a mouse binding (no such thing exists) or a keyboard code
+   * `bindingToAccelerator` has no spelling for (a modifier held alone).
+   */
+  accelerator: string | null;
+}
+
+export interface DesktopPttBindResult {
+  /** Whether *something* is holding this binding globally right now. */
+  registered: boolean;
+  /** Which mechanism is backing `registered`. */
+  via: "native" | "shortcut" | "none";
+  /**
+   * Why `via` is `"none"` (or `"shortcut"` when the hook would have been
+   * preferred), for the settings UI to explain rather than just say no:
+   * `"wayland"` (Linux, no global capture at all), `"denied"` (macOS
+   * permission), `"unavailable"` (module missing / platform prebuild
+   * missing / hook failed to start for an unrecognized reason), or absent
+   * when there is nothing to explain.
+   */
+  reason?: "wayland" | "denied" | "unavailable";
+}
+
+export type PttPermissionStatus =
+  | "not-required"
+  | "granted"
+  | "denied"
+  | "unknown";
+
+export interface DesktopPttNativeCapability {
+  supported: boolean;
+  /** Set when `supported` is false. `"wayland"` is the one an operator can act on (switch session type); `"platform"` means the prebuild does not cover this OS at all. */
+  reason?: "wayland" | "platform";
+}
 
 export function getDesktop(): PqpDesktop | undefined {
   if (typeof window === "undefined") {

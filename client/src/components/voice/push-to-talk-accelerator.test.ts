@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  captureMouseBinding,
   defaultPushToTalkBinding,
   type KeyBinding,
 } from "@/components/voice/push-to-talk";
@@ -52,5 +53,13 @@ describe("bindingToAccelerator", () => {
     expect(bindingToAccelerator(binding("IntlBackslash"))).toBeNull();
     expect(bindingToAccelerator(binding("F25"))).toBeNull();
     expect(bindingToAccelerator(binding(""))).toBeNull();
+  });
+
+  it("refuses a mouse binding, since globalShortcut has no concept of a mouse button", () => {
+    const outcome = captureMouseBinding(3);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(bindingToAccelerator(outcome.binding)).toBeNull();
+    }
   });
 });

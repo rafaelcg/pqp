@@ -2158,6 +2158,7 @@ function MainAppContent({
   const { windowFocused } = usePushToTalk({
     enabled: inPushToTalk,
     binding: localSettings.pushToTalkKey,
+    releaseDelayMs: localSettings.pttReleaseDelayMs,
     onHeldChange: handlePushToTalk,
   });
 

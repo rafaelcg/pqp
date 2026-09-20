@@ -328,6 +328,52 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     };
   },
 
+  /**
+   * Tier 2 push-to-talk: a native global keyboard/mouse hook, with the
+   * `globalShortcut` fallback handled inside main for us (see
+   * `setNativePushToTalkBinding` / `syncNativePushToTalk` in `main.js`).
+   * `null` releases the binding. Main validates the shape; this only types
+   * it and refuses an obviously wrong call before it crosses the bridge.
+   */
+  bindPushToTalkNative(binding, releaseDelayMs) {
+    if (binding !== null && typeof binding !== "object") {
+      return Promise.resolve({ registered: false, via: "none" });
+    }
+    if (typeof releaseDelayMs !== "number") {
+      return Promise.resolve({ registered: false, via: "none" });
+    }
+    return ipcRenderer.invoke("pqp:ptt-bind-native", binding, releaseDelayMs);
+  },
+
+  /** Presses and releases of the native-path push-to-talk binding. */
+  onPushToTalkNative(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, held) => {
+      callback(held === true);
+    };
+    ipcRenderer.on("pqp:ptt-held-native", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:ptt-held-native", handler);
+    };
+  },
+
+  /** macOS Accessibility permission status, a proxy for the hook working; see `main.js`. */
+  getPttPermissionStatus() {
+    return ipcRenderer.invoke("pqp:ptt-permission-status");
+  },
+
+  /** Opens the macOS Accessibility and Input Monitoring panes. No-op elsewhere. */
+  openPttPermissionSettings() {
+    ipcRenderer.send("pqp:ptt-open-permission-settings");
+  },
+
+  /** Whether this platform can run the native hook at all (binds nothing). */
+  getPttNativeCapability() {
+    return ipcRenderer.invoke("pqp:ptt-native-capability");
+  },
+
   /** Call state for the tray icon and menu. */
   setVoiceState(state) {
     if (!state || typeof state !== "object") {

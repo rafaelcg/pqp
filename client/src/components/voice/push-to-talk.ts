@@ -299,6 +299,182 @@ export function formatBinding(binding: KeyBinding): string {
   return parts.join(" + ");
 }
 
+/**
+ * A push-to-talk binding: a `KeyBinding` (keyboard) tagged with `device`, or
+ * a mouse button. Every field `KeyBinding` has is still here (`ctrl` /
+ * `alt` / `shift` / `meta` stay `false` and unused for a mouse binding),
+ * which is what lets `formatBinding` and the conflict-detection machinery in
+ * `lib/keyboard-shortcuts.ts` (`bindingsEqual`, `findBindingConflict`) keep
+ * working on a `PttBinding` with no changes at all: they only ever read
+ * `code` plus the four chord flags, and a mouse code never collides with a
+ * real `KeyboardEvent.code` string (see `BINDABLE_MOUSE_CODES`).
+ *
+ * This type is deliberately narrower in scope than `KeyBinding` itself.
+ * Regular app shortcuts (`lib/keyboard-shortcuts.ts`) stay keyboard-only,
+ * binding "open new DM" to a mouse button is not a thing Discord offers
+ * either, and every one of those call sites keeps using plain `KeyBinding`
+ * untouched. Only push-to-talk's own field gets the wider type.
+ */
+export interface PttBinding extends KeyBinding {
+  device: "keyboard" | "mouse";
+}
+
+/**
+ * The mouse buttons push-to-talk can bind. Deliberately excludes left and
+ * right click, since binding either would make ordinary clicking a transmission,
+ * which is a worse failure than not offering the option at all. Middle click
+ * and the two "extra" side buttons most mice ship (usually labelled 4 and 5
+ * on the hardware itself, back/forward in a browser) are what is left, and
+ * that is exactly what Discord itself offers.
+ */
+export const BINDABLE_MOUSE_CODES = [
+  "MouseMiddle",
+  "MouseButton4",
+  "MouseButton5",
+] as const;
+
+export type PttMouseCode = (typeof BINDABLE_MOUSE_CODES)[number];
+
+export function isBindableMouseCode(value: unknown): value is PttMouseCode {
+  return (
+    typeof value === "string" &&
+    (BINDABLE_MOUSE_CODES as readonly string[]).includes(value)
+  );
+}
+
+/** What the settings UI prints for each bindable mouse button. */
+export const MOUSE_BUTTON_LABELS: Record<PttMouseCode, string> = {
+  MouseMiddle: "Middle Click",
+  MouseButton4: "Mouse Button 4",
+  MouseButton5: "Mouse Button 5",
+};
+
+/**
+ * DOM `MouseEvent.button` → our mouse code. Standard DOM numbering: 0 left,
+ * 1 middle, 2 right, 3 "back", 4 "forward". Matches what a native global
+ * hook reports too (`electron/lib/uiohook-key-map.js`), independently, by
+ * design; the two run in different processes and neither imports the
+ * other.
+ */
+const BUTTON_NUMBER_TO_CODE: Record<number, PttMouseCode> = {
+  1: "MouseMiddle",
+  3: "MouseButton4",
+  4: "MouseButton5",
+};
+
+export function mouseCodeFromButton(button: number): PttMouseCode | null {
+  return BUTTON_NUMBER_TO_CODE[button] ?? null;
+}
+
+/** The minimum of `MouseEvent` this module reads. */
+export interface MouseEventLike {
+  button: number;
+  target?: unknown;
+}
+
+export function defaultPttBinding(): PttBinding {
+  return { ...defaultPushToTalkBinding, device: "keyboard" };
+}
+
+export type PttCaptureOutcome =
+  | { ok: true; binding: PttBinding }
+  | { ok: false; reason: "refused" };
+
+/**
+ * Turn a captured mousedown into a mouse `PttBinding`, or refuse it (left /
+ * right click, or a button this app does not recognize, a mouse with more
+ * than five buttons reports higher numbers uiohook and the DOM both leave
+ * undefined here).
+ */
+export function captureMouseBinding(button: number): PttCaptureOutcome {
+  const code = mouseCodeFromButton(button);
+  if (!code) {
+    return { ok: false, reason: "refused" };
+  }
+  return {
+    ok: true,
+    binding: {
+      device: "mouse",
+      code,
+      label: MOUSE_BUTTON_LABELS[code],
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    },
+  };
+}
+
+/** `captureBinding`, tagged for a `PttBinding` field. */
+export function capturePttKeyboardBinding(event: KeyEventLike): PttCaptureOutcome {
+  const outcome = captureBinding(event);
+  if (!outcome.ok) {
+    return outcome;
+  }
+  return { ok: true, binding: { ...outcome.binding, device: "keyboard" } };
+}
+
+/** `captureModifier`, tagged for a `PttBinding` field. */
+export function capturePttModifierBinding(event: KeyEventLike): PttBinding {
+  return { ...captureModifier(event), device: "keyboard" };
+}
+
+/** Does this mousedown match a mouse `PttBinding`? No chord, code only. */
+export function matchesMouseBinding(
+  event: MouseEventLike,
+  binding: PttBinding,
+): boolean {
+  if (binding.device !== "mouse") {
+    return false;
+  }
+  return mouseCodeFromButton(event.button) === binding.code;
+}
+
+/** Does this mouseup end the transmission? Same rule as engaging: code only. */
+export function shouldReleaseMouse(
+  event: MouseEventLike,
+  binding: PttBinding,
+): boolean {
+  return matchesMouseBinding(event, binding);
+}
+
+/**
+ * Narrow whatever came back out of `localStorage` to a usable `PttBinding`.
+ *
+ * Absent `device` reads as `"keyboard"`: every binding stored before this
+ * change has no such field, and defaulting it that way is what makes an
+ * old blob parse into exactly the binding it always meant.
+ */
+export function parsePttBinding(value: unknown): PttBinding | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Partial<PttBinding>;
+  const device = raw.device === "mouse" ? "mouse" : "keyboard";
+  if (device === "mouse") {
+    if (!isBindableMouseCode(raw.code)) {
+      return null;
+    }
+    return {
+      device: "mouse",
+      code: raw.code,
+      label:
+        typeof raw.label === "string" && raw.label
+          ? raw.label
+          : MOUSE_BUTTON_LABELS[raw.code],
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    };
+  }
+  const keyboard = parseBinding(raw);
+  if (!keyboard) {
+    return null;
+  }
+  return { ...keyboard, device: "keyboard" };
+}
+
 /** Narrow whatever came back out of `localStorage` to a usable binding. */
 export function parseBinding(value: unknown): KeyBinding | null {
   if (!value || typeof value !== "object") {

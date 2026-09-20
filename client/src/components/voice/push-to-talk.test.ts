@@ -1,16 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
+  BINDABLE_MOUSE_CODES,
   captureBinding,
   captureModifier,
+  captureMouseBinding,
+  capturePttKeyboardBinding,
+  capturePttModifierBinding,
+  defaultPttBinding,
   defaultPushToTalkBinding,
   formatBinding,
+  isBindableMouseCode,
   isTextEntryTarget,
   matchesBinding,
+  matchesMouseBinding,
+  mouseCodeFromButton,
   parseBinding,
+  parsePttBinding,
   shouldEngage,
   shouldRelease,
+  shouldReleaseMouse,
   type KeyBinding,
   type KeyEventLike,
+  type MouseEventLike,
+  type PttBinding,
 } from "./push-to-talk";
 
 function keyEvent(partial: Partial<KeyEventLike> & { code: string }): KeyEventLike {
@@ -256,5 +268,150 @@ describe("parsing stored bindings", () => {
     expect(parseBinding({ code: "" })).toBeNull();
     // A key an older build allowed and this one refuses.
     expect(parseBinding({ code: "Tab", label: "Tab" })).toBeNull();
+  });
+});
+
+function mouseEvent(button: number): MouseEventLike {
+  return { button };
+}
+
+describe("mouse-button push-to-talk bindings", () => {
+  it("only offers middle click and the two extra side buttons", () => {
+    expect(BINDABLE_MOUSE_CODES).toEqual([
+      "MouseMiddle",
+      "MouseButton4",
+      "MouseButton5",
+    ]);
+  });
+
+  it("mouseCodeFromButton maps the DOM button numbers that matter", () => {
+    expect(mouseCodeFromButton(1)).toBe("MouseMiddle");
+    expect(mouseCodeFromButton(3)).toBe("MouseButton4");
+    expect(mouseCodeFromButton(4)).toBe("MouseButton5");
+  });
+
+  it("refuses left and right click, never a valid mouse code", () => {
+    expect(mouseCodeFromButton(0)).toBeNull();
+    expect(mouseCodeFromButton(2)).toBeNull();
+    expect(mouseCodeFromButton(99)).toBeNull();
+  });
+
+  it("captureMouseBinding produces a labeled, device-tagged binding", () => {
+    const outcome = captureMouseBinding(3);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.binding).toEqual({
+        device: "mouse",
+        code: "MouseButton4",
+        label: "Mouse Button 4",
+        ctrl: false,
+        alt: false,
+        shift: false,
+        meta: false,
+      });
+    }
+  });
+
+  it("captureMouseBinding refuses left/right click", () => {
+    expect(captureMouseBinding(0)).toEqual({ ok: false, reason: "refused" });
+    expect(captureMouseBinding(2)).toEqual({ ok: false, reason: "refused" });
+  });
+
+  it("isBindableMouseCode narrows correctly", () => {
+    expect(isBindableMouseCode("MouseMiddle")).toBe(true);
+    expect(isBindableMouseCode("MouseButton6")).toBe(false);
+    expect(isBindableMouseCode(42)).toBe(false);
+    expect(isBindableMouseCode(undefined)).toBe(false);
+  });
+
+  it("matchesMouseBinding matches on code alone", () => {
+    const binding = captureMouseBinding(4);
+    expect(binding.ok).toBe(true);
+    if (!binding.ok) return;
+    expect(matchesMouseBinding(mouseEvent(4), binding.binding)).toBe(true);
+    expect(matchesMouseBinding(mouseEvent(3), binding.binding)).toBe(false);
+  });
+
+  it("matchesMouseBinding refuses a keyboard-device binding", () => {
+    const keyboardBinding: PttBinding = { ...defaultPttBinding() };
+    expect(matchesMouseBinding(mouseEvent(1), keyboardBinding)).toBe(false);
+  });
+
+  it("shouldReleaseMouse is the same rule as matching, no chord to lose", () => {
+    const binding = captureMouseBinding(4);
+    expect(binding.ok).toBe(true);
+    if (!binding.ok) return;
+    expect(shouldReleaseMouse(mouseEvent(4), binding.binding)).toBe(true);
+    expect(shouldReleaseMouse(mouseEvent(3), binding.binding)).toBe(false);
+  });
+
+  it("formatBinding prints a mouse binding's label untouched, no phantom chord", () => {
+    const outcome = captureMouseBinding(3);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(formatBinding(outcome.binding)).toBe("Mouse Button 4");
+    }
+  });
+});
+
+describe("capturePttKeyboardBinding / capturePttModifierBinding", () => {
+  it("tags a captured key with device: keyboard", () => {
+    const outcome = capturePttKeyboardBinding(keyEvent({ code: "KeyT", key: "t" }));
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.binding.device).toBe("keyboard");
+      expect(outcome.binding.code).toBe("KeyT");
+    }
+  });
+
+  it("still refuses reserved codes", () => {
+    expect(capturePttKeyboardBinding(keyEvent({ code: "Escape" }))).toEqual({
+      ok: false,
+      reason: "refused",
+    });
+  });
+
+  it("tags a captured modifier with device: keyboard", () => {
+    const binding = capturePttModifierBinding(keyEvent({ code: "ControlLeft" }));
+    expect(binding.device).toBe("keyboard");
+    expect(binding.code).toBe("ControlLeft");
+  });
+});
+
+describe("parsePttBinding", () => {
+  it("defaults a device-less stored blob to keyboard, old localStorage, pre-native-hook", () => {
+    const stored = { code: "KeyT", label: "T", ctrl: true, alt: false, shift: false, meta: false };
+    expect(parsePttBinding(stored)).toEqual({ ...stored, device: "keyboard" });
+  });
+
+  it("round-trips defaultPttBinding()", () => {
+    expect(parsePttBinding(defaultPttBinding())).toEqual(defaultPttBinding());
+  });
+
+  it("parses a stored mouse binding", () => {
+    const stored = { device: "mouse", code: "MouseButton5" };
+    expect(parsePttBinding(stored)).toEqual({
+      device: "mouse",
+      code: "MouseButton5",
+      label: "Mouse Button 5",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+
+  it("refuses a mouse binding with an unrecognized code", () => {
+    expect(parsePttBinding({ device: "mouse", code: "MouseLeft" })).toBeNull();
+  });
+
+  it("refuses a keyboard binding on a reserved code, same as parseBinding", () => {
+    expect(parsePttBinding({ device: "keyboard", code: "Tab" })).toBeNull();
+  });
+
+  it("rejects junk", () => {
+    expect(parsePttBinding(null)).toBeNull();
+    expect(parsePttBinding("nope")).toBeNull();
+    expect(parsePttBinding({})).toBeNull();
   });
 });

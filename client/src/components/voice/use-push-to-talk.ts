@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  matchesMouseBinding,
   shouldEngage,
   shouldRelease,
-  type KeyBinding,
+  shouldReleaseMouse,
+  type PttBinding,
 } from "@/components/voice/push-to-talk";
 import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerator";
-import { getDesktop } from "@/lib/desktop";
+import { getDesktop, type DesktopPttBinding } from "@/lib/desktop";
 import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
+import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
   enabled: boolean;
-  binding: KeyBinding;
+  binding: PttBinding;
+  /**
+   * Desktop-only, ignored on the web (there is no native hook there). See
+   * `LocalSettings.pttReleaseDelayMs` in `settings-modal.tsx`.
+   */
+  releaseDelayMs?: number;
   /** Idempotent — this hook calls it with `false` more often than with `true`. */
   onHeldChange: (held: boolean) => void;
 }
@@ -40,21 +48,37 @@ interface PushToTalkOptions {
  * The hook reports `windowFocused` so the UI can say so out loud rather than
  * leaving someone pressing a key at a screen that is not listening.
  *
- * WHAT THE DESKTOP SHELL ADDS. In Electron the same binding is also handed to
- * the main process as a `globalShortcut` accelerator (`bindPushToTalk`), which
- * fires while another application is focused. The shell only holds that
- * registration while this window is *not* focused: a registered global
- * shortcut swallows the key before the renderer sees it, and the renderer's
- * own keydown / keyup pair is the precise one. So in-window behaviour is
- * exactly what it is on the web, and out of the window the shell reports
- * presses and releases over `onPushToTalk`. Both feed the same `held`. When
- * the shell has the key, `windowFocused` reads true, because the thing that
- * flag exists to warn about is no longer true. Everything is feature-detected:
- * a browser, or a shell built before the bridge existed, takes the web path.
+ * WHAT THE DESKTOP SHELL ADDS. A current shell offers `bindPushToTalkNative`
+ * (Tier 2): a real global keyboard/mouse hook, or its own `globalShortcut`
+ * fallback when the hook is unavailable or denied, chosen inside the main
+ * process, see `electron/lib/native-ptt-hook.js` and `bindPushToTalkNative`'s
+ * own doc in `lib/desktop.ts`. This hook prefers that bridge whenever it
+ * exists and otherwise falls all the way back to the older `bindPushToTalk` /
+ * `onPushToTalk` pair (`globalShortcut` with an auto-repeat-inferred release,
+ * keyboard bindings only), which is exactly what every shell before this
+ * landed already did; nothing here narrows what an old shell could do, only
+ * widens what a current one can. Either way, the registration is held only
+ * while this window is *not* focused: a registered global hook or shortcut
+ * swallows the key/button before the renderer sees it, and the renderer's own
+ * keydown/keyup (or mousedown/mouseup) pair is the precise one, so in-window
+ * behaviour is exactly what it is on the web. Out of the window, the shell
+ * reports presses and releases over IPC; both paths feed the same `held`.
+ * When the shell has the binding, `windowFocused` reads true, because the
+ * thing that flag exists to warn about is no longer true. Everything is
+ * feature-detected: a browser, or a shell built before either bridge
+ * existed, takes the web path (or the older desktop path) automatically.
+ *
+ * MOUSE BINDINGS have no web-focused equivalent to `globalShortcut` at all:
+ * there is no such thing as a "global mouse shortcut" API, so a mouse
+ * binding on a shell without `bindPushToTalkNative` simply has no
+ * out-of-window reach; in-window `mousedown`/`mouseup` still work everywhere,
+ * including the web, for whatever middle-click or back/forward-button
+ * behaviour the browser itself does not already claim.
  */
 export function usePushToTalk({
   enabled,
   binding,
+  releaseDelayMs = DEFAULT_RELEASE_DELAY_MS,
   onHeldChange,
 }: PushToTalkOptions): { held: boolean; windowFocused: boolean } {
   const [held, setHeld] = useState(false);
@@ -74,10 +98,10 @@ export function usePushToTalk({
    * cut a transmission already in progress. The binding is what this effect
    * depends on; nothing else about the settings should reach it.
    */
-  const { code, label, ctrl, alt, shift, meta } = binding;
+  const { device, code, label, ctrl, alt, shift, meta } = binding;
   const stableBinding = useMemo(
-    () => ({ code, label, ctrl, alt, shift, meta }),
-    [code, label, ctrl, alt, shift, meta],
+    () => ({ device, code, label, ctrl, alt, shift, meta }),
+    [device, code, label, ctrl, alt, shift, meta],
   );
 
   useEffect(() => {
@@ -123,6 +147,48 @@ export function usePushToTalk({
       return;
     }
 
+    const releaseNow = () => set(false);
+
+    function onVisibility() {
+      if (document.visibilityState === "hidden") {
+        releaseNow();
+      }
+    }
+
+    // Same release paths either way (blur, tab hidden, page hidden), only the
+    // press/release detection itself differs by device.
+    window.addEventListener("blur", releaseNow);
+    window.addEventListener("pagehide", releaseNow);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    if (stableBinding.device === "mouse") {
+      function onMouseDown(event: MouseEvent) {
+        if (!matchesMouseBinding(event, stableBinding)) {
+          return;
+        }
+        // Stops a middle-click auto-scroll or a back/forward navigation from
+        // riding along with the bind.
+        event.preventDefault();
+        set(true);
+      }
+      function onMouseUp(event: MouseEvent) {
+        if (shouldReleaseMouse(event, stableBinding)) {
+          set(false);
+        }
+      }
+      window.addEventListener("mousedown", onMouseDown, true);
+      window.addEventListener("mouseup", onMouseUp, true);
+      return () => {
+        window.removeEventListener("mousedown", onMouseDown, true);
+        window.removeEventListener("mouseup", onMouseUp, true);
+        window.removeEventListener("blur", releaseNow);
+        window.removeEventListener("pagehide", releaseNow);
+        document.removeEventListener("visibilitychange", onVisibility);
+        releaseNow();
+        resetPttHeld();
+      };
+    }
+
     function onKeyDown(event: KeyboardEvent) {
       if (!shouldEngage(event, stableBinding)) {
         return;
@@ -142,22 +208,11 @@ export function usePushToTalk({
       }
     }
 
-    const releaseNow = () => set(false);
-
-    function onVisibility() {
-      if (document.visibilityState === "hidden") {
-        releaseNow();
-      }
-    }
-
     // Capture phase: a keyup must reach us even if something downstream stops
     // propagation, and it must reach us before any handler that could move
     // focus and change what the event looks like.
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp, true);
-    window.addEventListener("blur", releaseNow);
-    window.addEventListener("pagehide", releaseNow);
-    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
@@ -173,12 +228,49 @@ export function usePushToTalk({
     };
   }, [enabled, stableBinding, set]);
 
-  // The desktop half. Keyed on the same values as the window listeners, so a
-  // rebind reaches the shell the moment the setting changes.
+  // The desktop half. Keyed on the same values as the window listeners (plus
+  // the release delay for the native path), so a rebind reaches the shell
+  // the moment the setting changes.
   useEffect(() => {
     const desktop = getDesktop();
-    // Bound out of the object so the narrowing survives into the callbacks,
-    // and so a shell that predates either half takes the web path.
+    const bindNative = desktop?.bindPushToTalkNative?.bind(desktop);
+    const subscribeNative = desktop?.onPushToTalkNative?.bind(desktop);
+    if (bindNative && subscribeNative) {
+      if (!enabled) {
+        void bindNative(null, releaseDelayMs);
+        setGlobalHotkey(false);
+        return;
+      }
+      const descriptor: DesktopPttBinding = {
+        device: stableBinding.device,
+        code: stableBinding.code,
+        ctrl: stableBinding.ctrl,
+        alt: stableBinding.alt,
+        shift: stableBinding.shift,
+        meta: stableBinding.meta,
+        accelerator: bindingToAccelerator(stableBinding),
+      };
+      let cancelled = false;
+      const off = subscribeNative((down) => set(down));
+      void bindNative(descriptor, releaseDelayMs).then((result) => {
+        if (!cancelled) {
+          setGlobalHotkey(result.registered === true);
+        }
+      });
+      return () => {
+        cancelled = true;
+        off();
+        void bindNative(null, releaseDelayMs);
+        setGlobalHotkey(false);
+        set(false);
+      };
+    }
+
+    // Older shell: no `bindPushToTalkNative`. Same behaviour this hook has
+    // always had: `globalShortcut`, keyboard bindings only, release
+    // inferred from auto-repeat. A mouse binding has nothing to reach for
+    // here (`bindingToAccelerator` already answers `null` for one), so it
+    // silently stays in-window only, exactly like a modifier-only key does.
     const bind = desktop?.bindPushToTalk?.bind(desktop);
     const subscribe = desktop?.onPushToTalk?.bind(desktop);
     if (!bind || !subscribe) {
@@ -186,8 +278,6 @@ export function usePushToTalk({
     }
     const accelerator = enabled ? bindingToAccelerator(stableBinding) : null;
     if (!accelerator) {
-      // Modifier-only binding, or nothing to bind: make sure the shell holds
-      // no stale registration from a previous binding.
       void bind(null);
       setGlobalHotkey(false);
       return;
@@ -206,7 +296,7 @@ export function usePushToTalk({
       setGlobalHotkey(false);
       set(false);
     };
-  }, [enabled, stableBinding, set]);
+  }, [enabled, stableBinding, releaseDelayMs, set]);
 
   return { held, windowFocused: windowFocused || globalHotkey };
 }

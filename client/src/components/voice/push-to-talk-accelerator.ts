@@ -1,4 +1,4 @@
-import type { KeyBinding } from "@/components/voice/push-to-talk";
+import type { KeyBinding, PttBinding } from "@/components/voice/push-to-talk";
 
 /**
  * Turn a push-to-talk binding into an Electron accelerator, or refuse.
@@ -76,8 +76,22 @@ function keyNameForCode(code: string): string | null {
 /**
  * `null` means "no global hotkey for this binding"; the renderer keeps the
  * in-window behaviour it already has and the desktop shell is not asked.
+ *
+ * A mouse binding is always one of these `null`s. `globalShortcut` has no
+ * concept of a mouse button at all: accelerators are a keyboard-only
+ * grammar, so a mouse `PttBinding` can only ever work through the native
+ * hook (`electron/lib/native-ptt-hook.js`), never through the
+ * `globalShortcut` fallback this function feeds. The guard is explicit
+ * rather than left to `keyNameForCode` failing to recognize a code like
+ * `"MouseButton4"`, so a future mouse code that happened to collide with the
+ * keyboard table's shape could never slip through by accident.
  */
-export function bindingToAccelerator(binding: KeyBinding): string | null {
+export function bindingToAccelerator(
+  binding: KeyBinding | PttBinding,
+): string | null {
+  if ("device" in binding && binding.device === "mouse") {
+    return null;
+  }
   const key = keyNameForCode(binding.code);
   if (!key) {
     return null;
