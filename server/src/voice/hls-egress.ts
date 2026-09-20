@@ -434,6 +434,24 @@ interface RoomHls {
    */
   videoTrackId: string;
   /**
+   * The screen's OWN audio sid the ladder was started on ("música" in the
+   * product's language: the tab or system audio the presenter is sharing,
+   * not their microphone), or null when the share had none at that moment.
+   *
+   * A Track Composite egress is bound to this sid exactly the way it is
+   * bound to `videoTrackId`, and until 2026-09-20 only the video half was
+   * ever compared on a same-presenter reconcile: ticking "share audio" on
+   * after the ladder was already running, losing it, or the browser handing
+   * out a new audio sid while the video sid stayed put all went unnoticed
+   * forever, because nothing recorded what the running egress actually had.
+   * The seated room kept hearing the presenter's live track regardless (a
+   * direct LiveKit subscription, untouched by any of this); only the
+   * seatless HLS audience was stuck on whatever audio the egress happened to
+   * start with — silence if it started muted, or a dead sid if the original
+   * track was later replaced. Compared here exactly like `videoTrackId` is.
+   */
+  audioTrackId: string | null;
+  /**
    * The presenter's camera and/or voice rung, transcoded beside the ladder,
    * or null. One slot for both, because they are the same egress: a Track
    * Composite with a video sid, an audio sid, or one of each.
@@ -3382,8 +3400,15 @@ export function adoptLiveHlsSession(input: {
   presenterPeerId: string;
   videoTrackId: string;
   /**
-   * `hls_sessions.audio_track_id`. Only meaningful for the camera/voice slot
-   * (`rung === CAMERA_RUNG_NAME`) — every ladder rung ignores it.
+   * `hls_sessions.audio_track_id`. For the camera/voice slot
+   * (`rung === CAMERA_RUNG_NAME`) this is the separated mic sid. For a
+   * ladder rung it is the screen's own audio sid the egress was started
+   * with ("música"), recorded there since 2026-09-20 for exactly this
+   * adoption: without it, every ladder row read back null regardless of
+   * whether the presenter's tab audio was live, and the next reconcile
+   * after an API restart would see the SFU's real audio sid disagree with
+   * that remembered null and restart a session that had not actually
+   * changed. See `RoomHls.audioTrackId`.
    */
   audioTrackId?: string | null;
   /** Which rendition this egress is. Null is a pre-ladder single-rung row. */
@@ -3444,10 +3469,20 @@ export function adoptLiveHlsSession(input: {
     existing && existing.stream.startedAt === input.startedAt
       ? existing.camera
       : null;
+  // Same idea as `carriedCamera`: whichever rung arrives first sets the
+  // ladder's audio sid, and a later rung of the same session (all started
+  // together, so all recorded with the same `audio_track_id`) must not
+  // clobber it back to null just because its own row carries none of the
+  // rung-specific fields being read here.
+  const carriedAudioTrackId =
+    existing && existing.stream.startedAt === input.startedAt
+      ? existing.audioTrackId
+      : null;
   rooms.set(input.channelId, {
     rungs,
     stream: carriedCamera ? withCameraUrl(stream, input.channelId) : stream,
     videoTrackId: input.videoTrackId,
+    audioTrackId: input.audioTrackId ?? carriedAudioTrackId,
     camera: carriedCamera,
     startedAtMs: Date.now(),
     // Carried over from the entry this adoption is rebuilding, so a ladder
@@ -3946,6 +3981,7 @@ export async function adoptRunningLiveHlsSession(
       startedAt,
       presenterPeerId,
       videoTrackId: entry.row.video_track_id ?? "",
+      audioTrackId: entry.row.audio_track_id,
       rung: entry.rung,
     });
   }
@@ -5422,6 +5458,7 @@ async function startRoom(
     rungs: running,
     stream,
     videoTrackId: tracks.videoTrackId,
+    audioTrackId: tracks.audioTrackId ?? null,
     // Started below, after the readiness probe: a camera must never be the
     // reason the film is late, and a session that fails its probe is torn down
     // anyway.
@@ -5453,6 +5490,13 @@ async function startRoom(
         entry.rung.name,
         presenterPeerId,
         tracks.videoTrackId,
+        false,
+        // The ladder's own audio sid now, same column the camera/voice slot
+        // already used: `adoptLiveHlsSession` reads it back for the ladder
+        // rows too, so an API restart mid-party does not forget whether the
+        // running egress had the presenter's tab audio and cause a spurious
+        // restart the moment the next reconcile notices.
+        tracks.audioTrackId ?? null,
       ),
     ),
   );
@@ -5708,20 +5752,34 @@ async function reconcileLiveHlsNow(
       return { stream: announcedStreamOf(current) };
     }
     clearCameraProbeRetry(channelId);
-    if (tracks.videoTrackId === current.videoTrackId) {
-      // The film has not moved; the camera may have. This is the ordinary
-      // path: it runs on every roster event and on the `set-camera` frame,
-      // and it is where a webcam being switched on actually starts its
-      // transcode. It reuses the `listParticipants` call above, so it costs
-      // no extra RPC. The camera itself is reconciled by the caller, as the
-      // next link of the queue — never here.
+    const nextAudioTrackId = tracks.audioTrackId ?? null;
+    if (
+      tracks.videoTrackId === current.videoTrackId &&
+      nextAudioTrackId === current.audioTrackId
+    ) {
+      // The film has not moved and its own audio sid has not either; the
+      // camera may have. This is the ordinary path: it runs on every roster
+      // event and on the `set-camera` frame, and it is where a webcam being
+      // switched on actually starts its transcode. It reuses the
+      // `listParticipants` call above, so it costs no extra RPC. The camera
+      // itself is reconciled by the caller, as the next link of the queue —
+      // never here.
       return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
+    // A NEW AUDIO SID WITH THE SAME VIDEO SID IS STILL A REPLACEMENT. Ticking
+    // "share audio" on after the ladder was already running, losing the
+    // share's audio, or the browser handing the presenter a new audio track
+    // while the video track stays put all change `nextAudioTrackId` alone —
+    // see `RoomHls.audioTrackId`. The running egress is bound to whichever
+    // sid it started with either way, so this restarts on that too, not only
+    // on the video sid the comment above used to name alone.
     logEvent("voice.hlsTrackReplaced", {
       channelId,
       egressIds: current.rungs.map((entry) => entry.egressId),
       from: current.videoTrackId,
       to: tracks.videoTrackId,
+      audioFrom: current.audioTrackId,
+      audioTo: nextAudioTrackId,
     });
     await stopRoom(channelId, "screen-track-replaced");
     return startRoom(channelId, presenterPeerId, tracks, sourceHeight);
