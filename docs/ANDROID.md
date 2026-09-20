@@ -2141,42 +2141,41 @@ MinIO. So local attachment testing needs a second tunnel,
 `adb reverse tcp:9000 tcp:9000`. Hosted builds do not, because R2 is a public
 host.
 
-## Push notifications: the client is built, the server leg is not
+## Push notifications: the message leg is wired end to end; the ringing-call leg is the one thing left
 
-The client half is here and works. The server half does not exist, cannot be
-faked from the client, and is **not** in this PR. Read the boundary before
-quoting either half.
+The client half was already here and works. **The server FCM leg now exists**
+(`server/src/services/fcm.ts`, wired into `push.ts`, PR
+`fix/android-call-notifications`, 2026-09-20), inert until a Firebase service
+account is configured, exactly as the APNs leg is inert without its key. The
+one piece still unbuilt is the *ringing-call* path: a backgrounded phone that
+gets an ordinary message/mention/DM push will draw a tray notification the
+moment Firebase is provisioned, but making it *ring* full-screen from a push
+still needs a client change (below). Read the boundary before quoting any half.
 
-### What the server does today, and why Android cannot register
+### What used to stop an Android device registering (all three now fixed)
 
-`server/src/services/push.ts` already decides *who* gets told: no live socket
-anywhere in the cluster, not on do-not-disturb, and a per-channel notification
-level that allows it. That decision is made once and handed to two transports,
-Web Push (VAPID) and APNs. FCM would be the third leg of the same feature, and
-the client re-decides none of it.
+`server/src/services/push.ts` decides *who* gets told: no live socket anywhere
+in the cluster, not on do-not-disturb, and a per-channel notification level that
+allows it. That decision is made once and handed to the transports; FCM is the
+third leg of the same feature, and the client re-decides none of it.
 
-Three things stop an Android device registering against the server as it stands,
-and all three are server-side:
+Three things used to stop an Android device registering, all server-side, all
+now fixed by the FCM leg:
 
-1. **`PushPlatform` is `"web" | "apns"`.** There is no third value.
-2. **`pushRegistrationSchema` is a two-member zod union**: an APNs body
-   (`platform: "apns"` plus a lowercase-hex token) or a Web Push body (an https
-   endpoint plus ECDH keys). An FCM registration token is neither. It is a long
-   mixed-case opaque string containing a `:`, so `POST /api/push/subscriptions`
-   answers 400.
-3. **The database would refuse it anyway.** `push_subscriptions_platform_shape`
-   in `server/src/schema.sql` is a CHECK constraint that enumerates the two
-   shapes, so an `fcm` row is rejected at the storage layer even if the types
-   allowed it.
+1. **`PushPlatform` was `"web" | "apns"`.** It is now `"web" | "apns" | "fcm"`.
+2. **`pushRegistrationSchema` was a two-member zod union.** It now has a third
+   member, `fcmSubscriptionSchema` (`platform: "fcm"` plus an opaque token),
+   tried before the Web Push member so every existing request still parses.
+3. **The database would have refused it.** `push_subscriptions_platform_shape`
+   in `server/src/schema.sql` now admits `platform IN ('apns', 'fcm')` for the
+   token shape, with a separate `idx_push_subscriptions_fcm_token` partial
+   unique index so the FCM upsert has an index to infer.
 
-There is no client-side way around this, and squeezing an FCM token into the
-`web` shape would be a lie that looks like it works. So the client is built up
-to that boundary and stops there.
+### The server leg, as built (was: "what the server needs, precisely")
 
-### What the server needs, precisely
-
-Seven edits, in the shape the existing APNs leg already established. `apns.ts`
-is the template throughout: FCM is the same job with a different envelope.
+Seven edits, in the shape the existing APNs leg established — `apns.ts` was the
+template throughout, and every one of these is now in the tree. Kept as the
+design record; the code is the authority.
 
 The blast radius is `server/src/` plus `server/src/schema.sql`, and **nothing
 else**. In particular `packages/shared/` is not involved: `PushPlatform` and
@@ -2395,11 +2394,12 @@ compiles and links with no config, and every call into it is behind the flag.
 With no config Firebase logs `FirebaseApp initialization unsuccessful` once at
 launch and nothing else happens.
 
-The second gate is the server's. `GET /api/push/config` has no `fcm` member
-today, so `PushServerConfig.fcm` defaults to false, the switch is disabled and
-says "This server cannot send notifications to Android yet." The day the server
-answers `fcm: true`, already-installed builds start offering it with no client
-change.
+The second gate is the server's. `GET /api/push/config` **now carries an `fcm`
+member** (`isFcmEnabled()`), which answers false until the three `FCM_*` secrets
+are set, so `PushServerConfig.fcm` stays false and the switch stays disabled
+until then. The day those secrets exist the config answers `fcm: true`, and
+already-installed builds start offering it with no client change — which is the
+whole reason that gate was a config read rather than a build flag.
 
 ### What the client does
 
@@ -2452,15 +2452,30 @@ frame into `PushController.onMessageReceived`, the exact method
 - 21 unit tests over the route parser and the presentation rule. Neutering the
   foreground guard fails exactly the test that names it.
 
-**Not verified, and not verifiable here: FCM itself.** No Firebase project
-exists, so there is no registration token, no delivery, and no round trip. Every
-line above the transport is exercised; the transport is not. Do not write
-"Android push works" until a real device has received a real message from a real
-server.
+**Not verified, and not verifiable here: FCM itself, on either side.** No
+Firebase project exists, so there is no registration token, no delivery, and no
+round trip. On the server, `fcm.ts` is unit-tested at every seam that fails
+silently (the RS256 assertion is *verified* against its public key, the
+data-only body is asserted field by field, the token-gone rule is pinned so a
+payload bug cannot prune the table) and `push.test.ts` drives a message and a
+call push through the fake FCM transport against a real Postgres — but the real
+`oauth2.googleapis.com` token exchange and `fcm.googleapis.com` send are faked,
+because what they would test is Google's server. Do not write "Android push
+works" until a real device has received a real message from a real server.
 
 Also unbuilt: no toggle for `dmDetails` (the server owns it and the client only
-reads it), no ringing-call notification, and no notification actions such as
-reply or mark-as-read.
+reads it), no notification actions such as reply or mark-as-read, and — the one
+that matters for calls — **the ringing-call path from a push**. The server leg
+delivers a call push to a backgrounded phone as an ordinary high-priority data
+message, which today's `PqpMessagingService.onMessageReceived` draws as a tray
+notification rather than raising the full-screen Telecom incoming-call UI. The
+precise, small client change that closes that gap (a fifth `data` key
+`kind: "call"` on the call payload, and a `TelecomController.ringFromPush`
+branch off it) is specified in **[`ANDROID_TELECOM.md`](./ANDROID_TELECOM.md)
+§"What is gated on the server: cold-start incoming calls"**. It is client-only
+now that the server leg exists, and it needs a real device plus a Firebase
+project to verify, which is why it is a separate follow-up rather than folded in
+here.
 
 ## The connection check
 

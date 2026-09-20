@@ -51,6 +51,7 @@ const {
   pushRegistrationSchema,
   resolvePushLevel,
   saveApnsSubscription,
+  saveFcmSubscription,
   savePushRegistration,
   savePushSettings,
   savePushSubscription,
@@ -66,6 +67,11 @@ const {
   resetApnsJwtCacheForTests,
   setApnsTransportForTests,
 } = await import("./apns.js");
+const {
+  resetFcmTokenCacheForTests,
+  setFcmTokenFetcherForTests,
+  setFcmTransportForTests,
+} = await import("./fcm.js");
 // Erased at compile time, so this static import cannot run module side effects
 // before the DATABASE_URL patching above.
 type ChannelAudienceView = import("./push.js").ChannelAudienceView;
@@ -112,6 +118,30 @@ function clearApnsEnv(): void {
     delete process.env[key];
   }
   delete process.env.APNS_ENVIRONMENT;
+}
+
+// A real RSA key: `buildFcmJwt` verifies the key type before signing, so a
+// placeholder string would make every FCM case throw for the wrong reason.
+const { privateKey: fcmPrivateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
+
+const FCM_ENV = {
+  FCM_PROJECT_ID: "pqp-app",
+  FCM_CLIENT_EMAIL: "fcm@pqp-app.iam.gserviceaccount.com",
+  FCM_PRIVATE_KEY: fcmPrivateKey,
+};
+
+function setFcmEnv(): void {
+  Object.assign(process.env, FCM_ENV);
+}
+
+function clearFcmEnv(): void {
+  for (const key of Object.keys(FCM_ENV)) {
+    delete process.env[key];
+  }
 }
 
 // --------------------------------------------------------- pure decisions
@@ -529,6 +559,8 @@ describeDb("web push fan-out", () => {
   let apnsSent: ApnsRequest[];
   /** Per-device-token answers; anything unlisted is a 200. */
   let apnsAnswers: Map<string, { status: number; reason: string | null }>;
+  /** Every FCM request the fake transport was handed. */
+  let fcmSent: { url: string; body: Record<string, unknown> }[];
 
   beforeAll(async () => {
     await initDb();
@@ -567,6 +599,21 @@ describeDb("web push fan-out", () => {
       );
     });
 
+    // FCM (native Android) is configured for every case too, the same posture
+    // as APNs above: both legs on by default so an ordinary assertion proves
+    // the fan-out reaches all three, and cleared explicitly where a case cares.
+    fcmSent = [];
+    setFcmEnv();
+    resetFcmTokenCacheForTests();
+    setFcmTokenFetcherForTests(async () => "fcm-access-token");
+    setFcmTransportForTests(async (request) => {
+      fcmSent.push({
+        url: request.url,
+        body: JSON.parse(request.body) as Record<string, unknown>,
+      });
+      return { status: 200, errorCode: null };
+    });
+
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     const makeUser = (name: string) =>
       upsertUser({ clerkId: `clerk_${name}`, displayName: name, avatarUrl: null });
@@ -593,10 +640,14 @@ describeDb("web push fan-out", () => {
   afterEach(() => {
     clearVapidEnv();
     clearApnsEnv();
+    clearFcmEnv();
     setPushSenderForTests(null);
     setLiveSocketProbeForTests(null);
     setApnsTransportForTests(null);
     resetApnsJwtCacheForTests();
+    setFcmTransportForTests(null);
+    setFcmTokenFetcherForTests(null);
+    resetFcmTokenCacheForTests();
   });
 
   function audienceOf(
@@ -634,6 +685,13 @@ describeDb("web push fan-out", () => {
     return token;
   }
 
+  /** An FCM token: opaque, mixed-case, with the `:` a real one always has. */
+  async function registerAndroidPhone(userId: string, seed = userId) {
+    const token = `${seed}Inst:APA91b${seed}XyZ_-token`;
+    await saveFcmSubscription(userId, token);
+    return token;
+  }
+
   function serverEvent(overrides: Partial<Parameters<typeof sendChannelPush>[0]> = {}) {
     return {
       channelId,
@@ -658,6 +716,54 @@ describeDb("web push fan-out", () => {
     expect(sent[0]!.payload.title).toBe("#general — Friends");
     expect(sent[0]!.payload.body).toBe("ana mentioned you");
     expect(sent[0]!.payload.path).toBe(`/app/server/${serverId}/channel/${channelId}`);
+  });
+
+  it("reaches a mentioned member's Android phone as a data-only FCM message", async () => {
+    const token = await registerAndroidPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(fcmSent).toHaveLength(1);
+    expect(fcmSent[0]!.url).toContain("/projects/pqp-app/messages:send");
+    const message = fcmSent[0]!.body.message as Record<string, unknown>;
+    expect(message.token).toBe(token);
+    // Data-only: the client draws it, the Firebase SDK never does (see fcm.ts).
+    expect(message).not.toHaveProperty("notification");
+    expect(message.data).toEqual({
+      title: "#general — Friends",
+      body: "ana mentioned you",
+      path: `/app/server/${serverId}/channel/${channelId}`,
+      tag: channelId,
+    });
+    // A message is normal urgency, mapped to FCM's NORMAL android priority.
+    expect((message.android as Record<string, unknown>).priority).toBe("NORMAL");
+  });
+
+  it("does not touch the FCM leg when it is unconfigured, even with a token stored", async () => {
+    await registerAndroidPhone(bea.id);
+    clearFcmEnv();
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(fcmSent).toHaveLength(0);
+  });
+
+  it("sends an incoming-call push to an Android phone at HIGH priority", async () => {
+    const token = await registerAndroidPhone(bea.id);
+
+    await sendCallPush({
+      conversationId: channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "Ana",
+    });
+
+    expect(fcmSent).toHaveLength(1);
+    const message = fcmSent[0]!.body.message as Record<string, unknown>;
+    expect(message.token).toBe(token);
+    expect((message.data as Record<string, string>).body).toBe("Incoming call");
+    // A call must wake a dozing device; a late ring is a wrong ring.
+    expect((message.android as Record<string, unknown>).priority).toBe("HIGH");
   });
 
   it("pushes a reply to its target", async () => {
@@ -1336,17 +1442,20 @@ describeDb("web push fan-out", () => {
     expect(apnsSent).toHaveLength(1);
   });
 
-  it("is inert when neither leg is configured", async () => {
+  it("is inert when no leg is configured", async () => {
     clearVapidEnv();
     clearApnsEnv();
+    clearFcmEnv();
     expect(isAnyPushEnabled()).toBe(false);
     await subscribe(bea.id);
     await registerPhone(bea.id);
+    await registerAndroidPhone(bea.id);
 
     await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
 
     expect(sent).toEqual([]);
     expect(apnsSent).toEqual([]);
+    expect(fcmSent).toEqual([]);
   });
 
   it("builds an aps envelope that carries an alert, a thread and the route", () => {

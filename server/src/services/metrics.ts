@@ -707,7 +707,7 @@ export interface AdminMetrics {
     pendingFriendRequests: number;
     attachments: { total: number; last24h: number };
     invites: { created24h: number; uses: number };
-    push: { web: number; apns: number };
+    push: { web: number; apns: number; fcm: number };
   };
 
   /** Backs the "moderação" tab. */
@@ -1142,6 +1142,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       invite_uses: string;
       push_web: string;
       push_apns: string;
+      push_fcm: string;
     }>(
       `SELECT
          (SELECT COUNT(*) FROM friendships WHERE status = 'accepted')::text AS friendships,
@@ -1153,7 +1154,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
            WHERE created_at >= now() - interval '24 hours')::text AS invites_24h,
          (SELECT COALESCE(SUM(uses), 0) FROM server_invites)::text AS invite_uses,
          (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'web')::text AS push_web,
-         (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'apns')::text AS push_apns`,
+         (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'apns')::text AS push_apns,
+         (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'fcm')::text AS push_fcm`,
     ),
     // A history that failed to read must not cost the dashboard its counts:
     // the sparklines vanish, every number stays.
@@ -1342,6 +1344,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       push: {
         web: Number(productCounts.rows[0]?.push_web ?? 0),
         apns: Number(productCounts.rows[0]?.push_apns ?? 0),
+        fcm: Number(productCounts.rows[0]?.push_fcm ?? 0),
       },
     },
 

@@ -157,7 +157,7 @@ interface MetricsBody {
     pendingFriendRequests: number;
     attachments: { total: number; last24h: number };
     invites: { created24h: number; uses: number };
-    push: { web: number; apns: number };
+    push: { web: number; apns: number; fcm: number };
   };
 }
 
@@ -380,7 +380,7 @@ describeDb("GET /api/admin/metrics", () => {
       pendingFriendRequests: 0,
       attachments: { total: 0, last24h: 0 },
       invites: { created24h: 0, uses: 0 },
-      push: { web: 0, apns: 0 },
+      push: { web: 0, apns: 0, fcm: 0 },
     });
 
     // Counts, never people.
