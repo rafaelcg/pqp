@@ -132,12 +132,12 @@ struct RootView: View {
         // The ring floats above whatever is on screen. Only ever while signed
         // in — a call cannot reach an account that is not authenticated.
         .overlay(alignment: .top) {
-            if session.phase == .ready, let incoming = call.incoming.first {
+            if session.phase == .ready, let incoming = call.bannerRing {
                 IncomingCallBanner(incoming: incoming)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(Motion.standard, value: call.incoming)
+        .animation(Motion.standard, value: call.bannerRing)
         // "How was that call?", from the root for the same reason the stage is:
         // the call may have ended by walking out of a voice channel, which pops
         // the screen that hosted it. Bottom-aligned so it does not collide with

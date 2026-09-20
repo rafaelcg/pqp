@@ -283,8 +283,26 @@ final class CallKitCoordinator: NSObject {
 
     /// A `call-incoming` ring arrived over the socket. Puts pqp's own ring on
     /// the lock screen, CarPlay and the Watch, not only the in-app banner.
-    func reportIncomingCall(room: CallKitRoom, callerName: String) {
-        guard uuidsByRoom[room] == nil else { return }
+    ///
+    /// `onPresented` fires exactly once and says whether CallKit is now
+    /// presenting this ring as a system call: `true` when the report was
+    /// accepted (or the room was already reported), `false` when CallKit
+    /// refused it (Screen Time, every call slot in use, the simulator). The
+    /// room owner uses that to decide whether to also draw its own in-app
+    /// banner — it must not, while CallKit has the ring, or the call shows up
+    /// as two competing incoming-call surfaces at once. See
+    /// `incomingCallBannerRing` and `docs/IOS_CALLKIT.md`.
+    func reportIncomingCall(
+        room: CallKitRoom,
+        callerName: String,
+        onPresented: @escaping (_ presented: Bool) -> Void = { _ in }
+    ) {
+        guard uuidsByRoom[room] == nil else {
+            // Already reported — CallKit is presenting it, so the caller
+            // should keep suppressing its own banner.
+            onPresented(true)
+            return
+        }
         let uuid = UUID()
         uuidsByRoom[room] = uuid
         roomsByUUID[uuid] = room
@@ -301,12 +319,15 @@ final class CallKitCoordinator: NSObject {
         provider.reportNewIncomingCall(uuid: uuid, update: update) { [weak self] error in
             guard let self else { return }
             guard error == nil else {
-                // The in-app banner (`IncomingCallBanner`) still rings; this
-                // only means the lock screen/CarPlay never learn about it,
-                // the same degrade as a refused outgoing report.
+                // CallKit refused. The in-app banner (`IncomingCallBanner`)
+                // takes over as the fallback ring surface; this only means
+                // the lock screen/CarPlay never learn about it, the same
+                // degrade as a refused outgoing report.
                 self.forgetRoom(room)
+                onPresented(false)
                 return
             }
+            onPresented(true)
         }
     }
 
