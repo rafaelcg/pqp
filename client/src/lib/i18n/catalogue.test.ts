@@ -135,3 +135,72 @@ describe("translateMessage", () => {
     void suffix;
   });
 });
+
+/**
+ * The desktop shell can only share a screen or a window, never a browser
+ * tab (`electron/lib/display-sources.js` asks `desktopCapturer` for
+ * `["screen", "window"]`), and on macOS/Linux it cannot carry the shared
+ * audio at all (Chromium's loopback capture is Windows-only). These context
+ * variants keep the watch-party setup copy from telling a desktop presenter
+ * to do something their app cannot do ("share a tab"), and steer them at
+ * the one that actually works on each platform.
+ */
+describe("watch-party desktop copy (electron cannot share a tab)", () => {
+  it("tells a desktop presenter to pick the window, not a tab, in both languages", () => {
+    const en_ = translateMessage("watchParty.setup.pickBody", {
+      context: "desktop",
+    });
+    expect(en_).toContain("window");
+    expect(en_).not.toContain("tab");
+  });
+
+  it("keeps the ordinary browser copy when there is no desktop context", () => {
+    expect(translateMessage("watchParty.setup.pickBody")).toContain("tab");
+  });
+
+  it("steers a Windows desktop presenter to tick the computer-sound option", () => {
+    expect(translateMessage("watchParty.setup.noAudio", { context: "desktop" })).toContain(
+      "computer's sound",
+    );
+  });
+
+  it("steers a macOS/Linux desktop presenter to present from Chrome instead", () => {
+    const hint = translateMessage("watchParty.setup.noAudio", {
+      context: "desktopSilent",
+    });
+    expect(hint).toContain("Chrome");
+    expect(hint).toContain("pqp.gg");
+  });
+
+  it("never tells a desktop presenter their silent capture needs 'a tab'", () => {
+    expect(
+      translateMessage("watchParty.checklist.tabAudioTitle", { context: "desktop" }),
+    ).not.toContain("tab");
+    expect(
+      translateMessage("watchParty.checklist.tabAudioBody", { context: "desktop" }),
+    ).not.toContain("tab");
+  });
+
+  it("labels a source with audio as a window on desktop, a tab everywhere else", () => {
+    expect(translateMessage("watchParty.setup.sourceOk", { context: "desktop" })).toBe(
+      "Window with audio, ready",
+    );
+    expect(translateMessage("watchParty.setup.sourceOk")).toBe("Tab with audio, ready");
+  });
+
+  it("has every new desktop variant in pt-BR too", async () => {
+    await loadLocale("pt-BR");
+    for (const [key, context] of [
+      ["watchParty.setup.pickBody", "desktop"],
+      ["watchParty.setup.noAudio", "desktop"],
+      ["watchParty.setup.noAudio", "desktopSilent"],
+      ["watchParty.setup.sourceOk", "desktop"],
+      ["watchParty.checklist.tabAudioTitle", "desktop"],
+      ["watchParty.checklist.tabAudioBody", "desktop"],
+    ] as const) {
+      const pt = translateMessage(key, { context });
+      expect(pt.length, `${key}_${context} in pt-BR`).toBeGreaterThan(0);
+      expect(pt).not.toBe(translateMessage(key));
+    }
+  });
+});

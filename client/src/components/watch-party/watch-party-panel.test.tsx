@@ -508,6 +508,50 @@ describe("the go-live checklist (postmortem B3)", () => {
 });
 
 /**
+ * The desktop shell's picker only ever lists screens and windows
+ * (`desktopCapturer.getSources` in `electron/main.js` asks for
+ * `["screen", "window"]`), so it can never satisfy `displaySurface: "browser"`
+ * and never hands back a tab. Copy that tells an Electron presenter to
+ * "share a tab" describes a control their app does not have.
+ */
+describe("desktop presenter guidance (electron cannot share a tab)", () => {
+  const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
+    party: { ...PARTY, state: "draft", viewerRole: "host" },
+  };
+  const realWindow = globalThis.window;
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+    (globalThis as { window?: unknown }).window = {
+      ...realWindow,
+      pqpDesktop: { isElectron: true },
+    };
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+    (globalThis as { window?: unknown }).window = realWindow;
+  });
+
+  it("tells a desktop presenter to pick the window playing the film, not a tab", () => {
+    const html = render(draft);
+    expect(html).toContain("browser window playing the film");
+    expect(html).not.toContain("browser tab with the film");
+  });
+
+  it("still tells an ordinary browser host to pick a tab", () => {
+    (globalThis as { window?: unknown }).window = realWindow;
+    const html = render(draft);
+    expect(html).toContain("browser tab with the film");
+  });
+});
+
+/**
  * "Seu mic está mudo: ninguém te ouve, nem na transmissão" — the addition
  * this postmortem asked for after a recording lost the host's voice for an
  * hour with only the small bar pill to notice by. `LiveSurface` renders both

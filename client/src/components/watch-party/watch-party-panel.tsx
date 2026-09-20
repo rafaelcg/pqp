@@ -874,19 +874,30 @@ function GoLiveChecklist({
             </span>
           </div>
         ))}
-        {hints.map((item) => (
-          <div
-            key={item.id}
-            className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning"
-            data-watch-party-checklist-item={item.id}
-          >
-            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span className="min-w-0">
-              <span className="block font-semibold">{t(CHECKLIST_TITLE[item.id])}</span>
-              <span className="block text-paper-muted">{t(CHECKLIST_BODY[item.id])}</span>
-            </span>
-          </div>
-        ))}
+        {hints.map((item) => {
+          // TABAUDIO'S HINT SAYS "SHARE A TAB". The desktop shell has no tab
+          // surfaces at all (`steersAtBrowserTab` in `screen-capture-audio.ts`),
+          // so that instruction is not merely unhelpful there, it names a
+          // control that does not exist. Only this row gets a desktop variant:
+          // it is the one whose text names a browser-only control.
+          const ctx =
+            item.id === "tabAudio" && isDesktopApp()
+              ? { context: "desktop" as const }
+              : undefined;
+          return (
+            <div
+              key={item.id}
+              className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning"
+              data-watch-party-checklist-item={item.id}
+            >
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0">
+                <span className="block font-semibold">{t(CHECKLIST_TITLE[item.id], ctx)}</span>
+                <span className="block text-paper-muted">{t(CHECKLIST_BODY[item.id], ctx)}</span>
+              </span>
+            </div>
+          );
+        })}
         {oks.length > 0 && (
           <p
             className={cn(
@@ -1300,7 +1311,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                     {t("watchParty.setup.pickTitle")}
                   </p>
                   <p className="max-w-sm text-sm text-paper-muted">
-                    {t("watchParty.setup.pickBody")}
+                    {t(
+                      "watchParty.setup.pickBody",
+                      isDesktopApp() ? { context: "desktop" } : undefined,
+                    )}
                   </p>
                   <Button
                     type="button"
@@ -1470,7 +1484,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   )}
                 >
                   {sourceState === "ok"
-                    ? t("watchParty.setup.sourceOk")
+                    ? t(
+                        "watchParty.setup.sourceOk",
+                        isDesktopApp() ? { context: "desktop" } : undefined,
+                      )
                     : sourceState === "silent"
                       ? t("watchParty.setup.sourceSilent")
                       : t("watchParty.setup.noSource")}
