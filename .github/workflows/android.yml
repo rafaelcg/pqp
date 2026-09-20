@@ -81,6 +81,25 @@ jobs:
         # The whole repo, not a sparse android/ checkout: the protocol tests
         # read packages/shared, server/src/ws and client/src/lib off disk.
 
+      - name: Write google-services.json (enables FCM push when the secret is set)
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -uo pipefail
+          # google-services.json is gitignored (it names a live Firebase
+          # project). build.gradle.kts applies the google-services plugin and
+          # enables FCM ONLY when this file exists; without it the APK builds
+          # fine but push is off. Materialise it from the base64 secret so the
+          # published android-beta APK can register for push. Absent secret
+          # (a fork PR) leaves push disabled, which still builds.
+          if [ -n "${GOOGLE_SERVICES_JSON}" ]; then
+            echo "${GOOGLE_SERVICES_JSON}" | base64 --decode > android/app/google-services.json
+            echo "google-services.json written ($(wc -c < android/app/google-services.json) bytes) -- FCM enabled"
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is empty; building with push DISABLED."
+          fi
+
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
