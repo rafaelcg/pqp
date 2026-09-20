@@ -309,5 +309,304 @@ class RenderFailureTests(unittest.TestCase):
         self.assertNotIn("pqp_api_call_join_attempts_total", body)
 
 
+class ReplicasScrapedGaugeTests(unittest.TestCase):
+    def test_defaults_to_one(self):
+        body = exporter.render(_base_payload())
+        self.assertIn("pqp_api_metrics_replicas_scraped 1", body)
+
+    def test_reflects_the_count_passed_in(self):
+        body = exporter.render(_base_payload(), replicas_scraped=2)
+        self.assertIn("pqp_api_metrics_replicas_scraped 2", body)
+
+
+class AdminMetricsEndpointsTests(unittest.TestCase):
+    """`PQP_API_METRICS_ENDPOINTS` parsing -- the replica-split fix's config
+    seam. Unset must fall back to the single `{PQP_API_URL}/api/admin/metrics`
+    scrape this script always did, so a self-host / single-replica box needs
+    no config change (CLAUDE.md's own convention for every flag in this repo)."""
+
+    def setUp(self):
+        self._saved = os.environ.get("PQP_API_METRICS_ENDPOINTS")
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("PQP_API_METRICS_ENDPOINTS", None)
+        else:
+            os.environ["PQP_API_METRICS_ENDPOINTS"] = self._saved
+
+    def test_unset_falls_back_to_single_endpoint(self):
+        os.environ.pop("PQP_API_METRICS_ENDPOINTS", None)
+        self.assertEqual(
+            exporter.admin_metrics_endpoints(),
+            [f"{exporter.API_URL}/api/admin/metrics"],
+        )
+
+    def test_comma_separated_list_is_split_and_trimmed(self):
+        os.environ["PQP_API_METRICS_ENDPOINTS"] = (
+            " https://api.pqp.gg/_replica/a , https://api.pqp.gg/_replica/b "
+        )
+        self.assertEqual(
+            exporter.admin_metrics_endpoints(),
+            ["https://api.pqp.gg/_replica/a", "https://api.pqp.gg/_replica/b"],
+        )
+
+    def test_blank_value_falls_back_like_unset(self):
+        os.environ["PQP_API_METRICS_ENDPOINTS"] = "   "
+        self.assertEqual(
+            exporter.admin_metrics_endpoints(),
+            [f"{exporter.API_URL}/api/admin/metrics"],
+        )
+
+
+class FetchAdminMetricsAllTests(unittest.TestCase):
+    """`fetch_admin_metrics_all()` against a stubbed `fetch_admin_metrics()` --
+    no network. Covers the partial-failure case the task asked for: one
+    replica down must not blank the whole textfile."""
+
+    def setUp(self):
+        self._orig = exporter.fetch_admin_metrics
+
+    def tearDown(self):
+        exporter.fetch_admin_metrics = self._orig
+
+    def test_both_endpoints_succeed(self):
+        exporter.fetch_admin_metrics = lambda url: {"url": url}
+        payloads, scraped = exporter.fetch_admin_metrics_all(["a", "b"])
+        self.assertEqual(scraped, 2)
+        self.assertEqual([p["url"] for p in payloads], ["a", "b"])
+
+    def test_one_endpoint_down_still_produces_output(self):
+        def flaky(url):
+            if url == "b":
+                raise RuntimeError("connection refused")
+            return {"url": url}
+
+        exporter.fetch_admin_metrics = flaky
+        payloads, scraped = exporter.fetch_admin_metrics_all(["a", "b"])
+        self.assertEqual(scraped, 1)
+        self.assertEqual([p["url"] for p in payloads], ["a"])
+
+    def test_all_endpoints_down_raises(self):
+        def always_fails(url):
+            raise RuntimeError("connection refused")
+
+        exporter.fetch_admin_metrics = always_fails
+        with self.assertRaises(RuntimeError):
+            exporter.fetch_admin_metrics_all(["a", "b"])
+
+
+class MergeAdminMetricsTests(unittest.TestCase):
+    """The classification this fix is actually about: `calls` and
+    `product.pushDelivery` (process-local, additive) must be SUMMED across
+    replicas, while `messages`/`activation`/`users`/`cluster` (DB-derived,
+    shared) must NOT be doubled -- summing them would be as wrong as the
+    non-monotonic bounce this exporter used to produce, just in the other
+    direction."""
+
+    def _payload(self, calls_join_attempts, messages_last24h, activation_signup):
+        return {
+            "cluster": {"sockets": 7},
+            "users": {"total": 500, "last24h": 20},
+            "messages": {
+                "last24h": messages_last24h,
+                "byScope24h": {"dm": 10, "group": 5, "server": 15},
+            },
+            "activation": {
+                "window7d": {"signup": activation_signup, "firstMessage": 3},
+            },
+            "calls": {
+                "joinAttempts": calls_join_attempts,
+                "joinConnected": calls_join_attempts - 1,
+                "joinConnectedByTransport": {"mesh": calls_join_attempts, "livekit": 0},
+                "joinRefusedByReason": {"room-full": 1},
+                "rings": 2,
+                "ringsAnswered": 1,
+                "ringsDeclined": 0,
+                "ringsEndedByReason": {"timeout": 1},
+            },
+            "product": {
+                "friendships": 42,
+                "pushDelivery": {
+                    "web": {"sent": 10, "failed": 1, "pruned": 0},
+                },
+            },
+        }
+
+    def test_calls_are_summed_across_replicas(self):
+        a = self._payload(calls_join_attempts=9, messages_last24h=100, activation_signup=12)
+        b = self._payload(calls_join_attempts=9, messages_last24h=100, activation_signup=12)
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["calls"]["joinAttempts"], 18)
+        self.assertEqual(merged["calls"]["joinConnected"], 16)
+        self.assertEqual(merged["calls"]["joinConnectedByTransport"]["mesh"], 18)
+        self.assertEqual(merged["calls"]["joinRefusedByReason"]["room-full"], 2)
+        self.assertEqual(merged["calls"]["rings"], 4)
+
+    def test_push_delivery_is_summed_across_replicas(self):
+        a = self._payload(calls_join_attempts=1, messages_last24h=1, activation_signup=1)
+        b = self._payload(calls_join_attempts=1, messages_last24h=1, activation_signup=1)
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["product"]["pushDelivery"]["web"]["sent"], 20)
+        self.assertEqual(merged["product"]["pushDelivery"]["web"]["failed"], 2)
+
+    def test_messages_and_activation_are_not_doubled(self):
+        # Different replicas, same DB -- identical DB-derived numbers, which
+        # is what production actually looks like.
+        a = self._payload(calls_join_attempts=5, messages_last24h=100, activation_signup=12)
+        b = self._payload(calls_join_attempts=3, messages_last24h=100, activation_signup=12)
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["messages"]["last24h"], 100)
+        self.assertEqual(merged["activation"]["window7d"]["signup"], 12)
+        self.assertEqual(merged["users"]["total"], 500)
+        self.assertEqual(merged["product"]["friendships"], 42)
+        # calls DID sum, for contrast -- proves the two blocks are genuinely
+        # on different policies, not that summing silently never happened.
+        self.assertEqual(merged["calls"]["joinAttempts"], 8)
+
+    def test_cluster_block_is_not_doubled(self):
+        a = self._payload(calls_join_attempts=1, messages_last24h=1, activation_signup=1)
+        b = self._payload(calls_join_attempts=1, messages_last24h=1, activation_signup=1)
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["cluster"]["sockets"], 7)
+
+    def test_single_payload_is_returned_unchanged(self):
+        payload = self._payload(calls_join_attempts=9, messages_last24h=100, activation_signup=12)
+        merged = exporter.merge_admin_metrics([payload])
+        self.assertIs(merged, payload)
+
+    def test_voice_rooms_are_shared_not_summed(self):
+        # VOICE_REGISTRY=postgres in production: both replicas already read
+        # the same cluster-wide voice_peers rows, so `rooms`/`participants`
+        # must be taken from one, never summed (that would double every
+        # seated participant).
+        a = {"voice": {"activeRooms": 2, "participants": 5, "largestRoomNow": 3, "rooms": [{"transport": "mesh", "participants": 3}], "peakRoomSizeToday": 6}}
+        b = {"voice": {"activeRooms": 2, "participants": 5, "largestRoomNow": 3, "rooms": [{"transport": "mesh", "participants": 3}], "peakRoomSizeToday": 4}}
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["voice"]["participants"], 5)
+        self.assertEqual(merged["voice"]["activeRooms"], 2)
+        self.assertEqual(len(merged["voice"]["rooms"]), 1)
+        # peakRoomSizeToday is the one voice.* field that is neither summed
+        # nor taken from one: it is a per-process high-water mark, so the
+        # cluster's peak is the larger of the two.
+        self.assertEqual(merged["voice"]["peakRoomSizeToday"], 6)
+
+    def test_voice_in_memory_counters_are_summed(self):
+        a = {
+            "voice": {
+                "cluster": {"framesRelayed": 10, "framesReceived": 3},
+                "roster": {"deltas": 5, "snapshots": 1, "sockets": 4},
+                "seats": {
+                    "idleOverAnHour": 1,
+                    "oldestIdleMinutes": 30,
+                    "staleRowWritesRefused": 2,
+                    "ghostsSwept": 1,
+                    "meshHoldsRefused": 0,
+                    "idleAloneWarned": 0,
+                    "idleAloneDisconnected": 0,
+                    "meshResumeSockets": 3,
+                    "sockets": 4,
+                },
+            }
+        }
+        b = {
+            "voice": {
+                "cluster": {"framesRelayed": 6, "framesReceived": 1},
+                "roster": {"deltas": 2, "snapshots": 0, "sockets": 2},
+                "seats": {
+                    "idleOverAnHour": 1,
+                    "oldestIdleMinutes": 45,
+                    "staleRowWritesRefused": 1,
+                    "ghostsSwept": 0,
+                    "meshHoldsRefused": 1,
+                    "idleAloneWarned": 0,
+                    "idleAloneDisconnected": 0,
+                    "meshResumeSockets": 1,
+                    "sockets": 2,
+                },
+            }
+        }
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["voice"]["cluster"]["framesRelayed"], 16)
+        self.assertEqual(merged["voice"]["roster"]["deltas"], 7)
+        self.assertEqual(merged["voice"]["roster"]["sockets"], 6)
+        self.assertEqual(merged["voice"]["seats"]["staleRowWritesRefused"], 3)
+        self.assertEqual(merged["voice"]["seats"]["meshResumeSockets"], 4)
+        self.assertEqual(merged["voice"]["seats"]["sockets"], 6)
+        # idleOverAnHour is DB-derived (countIdleVoiceSeats over the shared
+        # voice_peers table) -- take one, never sum.
+        self.assertEqual(merged["voice"]["seats"]["idleOverAnHour"], 1)
+
+    def test_live_hls_sessions_summed_uncleaned_shared(self):
+        a = {
+            "liveHls": {
+                "enabled": True,
+                "sessions": 1,
+                "rungs": 3,
+                "orphansStopped": 0,
+                "startsTotal": 5,
+                "stopsTotal": 4,
+                "restartsScheduled": 1,
+                "restartsExhausted": 0,
+                "uncleaned": 2,
+                "oldestSessionMinutes": 10,
+                "playlistRejectedByReason": {"expired": 3},
+            }
+        }
+        b = {
+            "liveHls": {
+                "enabled": True,
+                "sessions": 1,
+                "rungs": 2,
+                "orphansStopped": 1,
+                "startsTotal": 3,
+                "stopsTotal": 3,
+                "restartsScheduled": 0,
+                "restartsExhausted": 0,
+                "uncleaned": 2,
+                "oldestSessionMinutes": 25,
+                "playlistRejectedByReason": {"expired": 1, "missing": 2},
+            }
+        }
+        merged = exporter.merge_admin_metrics([a, b])
+        # A live session lives in exactly one process's memory -- additive.
+        self.assertEqual(merged["liveHls"]["sessions"], 2)
+        self.assertEqual(merged["liveHls"]["rungs"], 5)
+        self.assertEqual(merged["liveHls"]["startsTotal"], 8)
+        self.assertEqual(merged["liveHls"]["orphansStopped"], 1)
+        self.assertEqual(merged["liveHls"]["playlistRejectedByReason"]["expired"], 4)
+        self.assertEqual(merged["liveHls"]["playlistRejectedByReason"]["missing"], 2)
+        # The oldest session across the cluster is the older of the two.
+        self.assertEqual(merged["liveHls"]["oldestSessionMinutes"], 25)
+        # uncleaned is countDueSessions() over the shared hls_sessions table --
+        # summing would double the real count of leaked objects.
+        self.assertEqual(merged["liveHls"]["uncleaned"], 2)
+
+    def test_merged_payload_renders_correctly(self):
+        # End-to-end: merge two replica payloads, then render() them, and
+        # confirm the Prometheus series carries the true cluster total for an
+        # additive counter and the undoubled total for a shared one -- this
+        # is the actual bug (pitfall-9-shaped: a flag/config that changes the
+        # code path, exercised end to end rather than only at the unit level).
+        a = _base_payload(
+            calls={"joinAttempts": 9, "joinConnected": 8, "joinConnectedByTransport": {"mesh": 8, "livekit": 0},
+                   "joinConnectedByScope": {"dm": 8, "group": 0, "server": 0},
+                   "joinRefusedByReason": {"room-full": 1}, "rings": 0, "ringsAnswered": 0,
+                   "ringsDeclined": 0, "ringsEndedByReason": {}},
+            messages={"last24h": 100, "byScope24h": {"dm": 100, "group": 0, "server": 0}},
+        )
+        b = _base_payload(
+            calls={"joinAttempts": 9, "joinConnected": 8, "joinConnectedByTransport": {"mesh": 8, "livekit": 0},
+                   "joinConnectedByScope": {"dm": 8, "group": 0, "server": 0},
+                   "joinRefusedByReason": {"room-full": 0}, "rings": 0, "ringsAnswered": 0,
+                   "ringsDeclined": 0, "ringsEndedByReason": {}},
+            messages={"last24h": 100, "byScope24h": {"dm": 100, "group": 0, "server": 0}},
+        )
+        merged = exporter.merge_admin_metrics([a, b])
+        body = exporter.render(merged, replicas_scraped=2)
+        self.assertIn("pqp_api_call_join_attempts_total 18", body)
+        self.assertIn("pqp_api_messages_24h 100", body)
+        self.assertIn("pqp_api_metrics_replicas_scraped 2", body)
+
+
 if __name__ == "__main__":
     unittest.main()
