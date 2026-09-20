@@ -267,6 +267,19 @@ interface VoicePeer {
   /** `Permission.MANAGE_MUSIC` here; always true in a conversation call. */
   canManageMusic: boolean;
   /**
+   * `channel.kind === "server"`. Resolved once at join, alongside
+   * `watchParty`, because it never changes for the life of a channel.
+   *
+   * The only thing this gates is `promoteRoomPastMeshCap`: a DM or group call
+   * is pinned to mesh for good by `resolveVoiceTransport` (reason `"dm"`),
+   * and that pin is a policy, not a guess the room-size or camera/screen
+   * triggers are free to correct the way they correct a small server's guess.
+   * Without this a conversation could still be priced and pinned to the SFU
+   * the moment it crossed `MESH_ROOM_PROMOTION_SIZE` or a mesh video cap,
+   * which is exactly the split the one-transport rule exists to prevent.
+   */
+  canPromoteTransport: boolean;
+  /**
    * The seat is in a `watch_party` channel. Resolved from `channel.type` at
    * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
    * which will not start an HLS transcode from any other kind of room.
@@ -6005,6 +6018,10 @@ export async function handleVoiceMessage(
     // THE ROOM GATE for the egress, read off the same row as the stage gate
     // so the two cannot disagree. See `pickHlsSharer`.
     const watchParty = isWatchPartyChannelType(channel.type);
+    // Cached on the seat so `promoteRoomPastMeshCap` never has to re-fetch
+    // the channel for a trigger that only holds a peer, not a channel row
+    // (`set-sharing-screen`, `set-camera`). See the field's own comment.
+    const canPromoteTransport = channel.kind === "server";
 
     /**
      * THE SEAT GATE. A watch party has no voice by default, and this is the
@@ -6247,6 +6264,7 @@ export async function handleVoiceMessage(
           payload.voiceChannelId,
           "stale-pin",
           user.id,
+          channel.kind === "server",
           "mesh",
         ))
       ) {
@@ -6475,6 +6493,7 @@ export async function handleVoiceMessage(
           payload.voiceChannelId,
           "room-size",
           user.id,
+          channel.kind === "server",
           "mesh",
         )
       ) {
@@ -6529,6 +6548,7 @@ export async function handleVoiceMessage(
           payload.voiceChannelId,
           "room-full",
           user.id,
+          channel.kind === "server",
           "mesh",
         )
       ) {
@@ -6669,6 +6689,7 @@ export async function handleVoiceMessage(
       canStream,
       canManageMusic,
       watchParty,
+      canPromoteTransport,
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
       // A measurement is about a link at a moment; a client that reconnects
@@ -6840,7 +6861,12 @@ export async function handleVoiceMessage(
         // rather than refuse the share; `promoteRoomPastMeshCap` prices the
         // box first and answers false when it cannot, which is exactly the
         // old refusal.
-        await promoteRoomPastMeshCap(peer.voiceChannelId, "screens", user.id);
+        await promoteRoomPastMeshCap(
+          peer.voiceChannelId,
+          "screens",
+          user.id,
+          peer.canPromoteTransport,
+        );
         // The await above may have outlived the socket, and the promotion
         // itself releases seats: re-read everything before the write. This is
         // the "keep the check in the same tick as the write" rule restated:
@@ -7314,7 +7340,12 @@ export async function handleVoiceMessage(
         // to be seen. Move the room to the SFU and let the camera on. See the
         // promotion section for what makes that safe and what stops it (the
         // box's budget).
-        await promoteRoomPastMeshCap(peer.voiceChannelId, "cameras", user.id);
+        await promoteRoomPastMeshCap(
+          peer.voiceChannelId,
+          "cameras",
+          user.id,
+          peer.canPromoteTransport,
+        );
         if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
           return;
         }
@@ -8809,15 +8840,39 @@ function applyPromotionLocally(
  * mesh elsewhere and this would return `true` without moving anything. That is
  * the split-brain the whole one-transport rule exists to prevent, so the
  * caller that knows says so.
+ *
+ * `canPromoteTransport` is the one-transport rule's other half: a DM or group
+ * call is pinned to mesh for good (`resolveVoiceTransport`, reason `"dm"`),
+ * and every caller here already knows whether its room is one — the join
+ * path from `channel.kind`, `set-sharing-screen` and `set-camera` from the
+ * seat's own `canPromoteTransport` (resolved once at join, since a channel's
+ * kind never changes). Checked before the dedup map and before anything is
+ * priced, so a conversation never starts a probe of the SFU or the cluster's
+ * room list for a promotion that was always going to be refused.
  */
 async function promoteRoomPastMeshCap(
   voiceChannelId: string,
   reason: VoicePromotionReason,
   userId: string,
+  canPromoteTransport: boolean,
   currentTransport: VoiceRoomTransport = getRoomTransport(voiceChannelId),
 ): Promise<boolean> {
   if (currentTransport !== "mesh") {
     return true;
+  }
+  if (!canPromoteTransport) {
+    logEvent("voice.transportPromotionRefused", {
+      voiceChannelId,
+      userId,
+      reason,
+      refusal: "conversation",
+      loadMbps: 0,
+      addedMbps: 0,
+      budgetMbps: promotionBudgetMbps(),
+      roomSize: getRoomPeers(voiceChannelId).length,
+      sfuReachable: null,
+    });
+    return false;
   }
   const existing = pendingPromotions.get(voiceChannelId);
   if (existing) {
