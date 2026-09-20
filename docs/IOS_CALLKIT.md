@@ -38,16 +38,25 @@ while the app is hidden" row.
   switched on once, at launch (`CallKitCoordinator.init`), which stops
   WebRTC's mesh engine from calling `AVAudioSession.setActive` itself.
   `VoiceClient.startAudio()` now skips that call under manual audio; the
-  session only actually goes live in `provider(_:didActivate:)`, via
-  `RTCAudioSession.audioSessionDidActivate(_:)`, the hook WebRTC ships
-  specifically for a host that hands activation to something else. This is
-  the classic CallKit mistake the brief called out: activate the session
-  yourself ahead of CallKit, under manual audio, and you get two callers
-  fighting over one `AVAudioSession`, with the losing side silent. If CallKit
-  itself refuses the registration (a Screen Time restriction, every call slot
-  already in use), the coordinator activates the session directly as a
-  fallback, see `activateAudioWithoutCallKit`, so a refused report degrades to
-  "no lock-screen card" rather than "no audio at all".
+  session goes live in `provider(_:didActivate:)`, which does **two** things,
+  both required. First `RTCAudioSession.audioSessionDidActivate(_:)`, the hook
+  WebRTC ships for a host that hands activation to something else. Second,
+  and this is the step whose absence stranded every CallKit-carried call in
+  silence (2026-09-20), `RTCAudioSession.isAudioEnabled = true`: under
+  `useManualAudio` the VoIP audio unit stays uninitialised until this is set,
+  in both directions, no matter that the session activated. Video worked
+  throughout because video needs no audio unit, which is exactly why the bug
+  read as "connected, camera fine, nobody can be heard". `didDeactivate` is
+  the mirror: notify WebRTC and set `isAudioEnabled = false`. Both operations
+  go through `WebRTCAudioControlling` so a test can pin them
+  (`CallKitCoordinatorTests`) without touching the real singleton. Calling
+  `setActive` yourself ahead of CallKit, under manual audio, is the other
+  classic mistake: two callers fighting over one `AVAudioSession`, the losing
+  side silent. If CallKit itself refuses the registration (a Screen Time
+  restriction, every call slot already in use), the coordinator activates the
+  session directly AND enables the unit as a fallback, see
+  `activateAudioWithoutCallKit`, so a refused report degrades to "no
+  lock-screen card" rather than "no audio at all".
 - **Configuration.** `supportsVideo = false` (CallKit's own chrome does not
   offer a video surface; the in-app camera button is untouched by this),
   `maximumCallGroups = 1`, `maximumCallsPerCallGroup = 1`,
@@ -211,11 +220,13 @@ never told about is a safe no-op everywhere (`reportConnected`,
 owner, so the owner's own follow-up report is a no-op rather than a double
 report; and a system mute action reaches the correct room's owner
 (`CallModel` for a `.conversation`, `VoiceModel` for a `.channel`) with the
-correct value. What it does not cover: `provider(_:didActivate:)` /
-`didDeactivate`, which are a two-line pass-through into the real
-`RTCAudioSession` singleton with no branching of this file's own to pin.
-Asserting WebRTC's internal audio-session state would make the suite depend
-on the simulator's actual audio hardware for no benefit.
+correct value. It also covers the audio handshake, once that turned out to
+carry logic rather than being a pass-through: `provider(_:didActivate:)` must
+both notify WebRTC and enable the audio unit, `didDeactivate` must disable it,
+and the CallKit-refused fallback must enable it too. A fake
+`WebRTCAudioControlling` records those calls, so the suite pins them without
+depending on the simulator's actual audio hardware or touching the real
+`RTCAudioSession` singleton.
 
 ## Why in-app buttons do not round-trip through CallKit
 
