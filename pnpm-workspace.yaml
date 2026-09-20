@@ -10,3 +10,7 @@ allowBuilds:
   esbuild: true
   electron: true
   electron-winstaller: true
+  # `uiohook-napi` ships prebuilt N-API binaries for every target platform
+  # (win/mac/linux). Its "install" script only verifies the right one is
+  # present, never compiles. See electron/README.md "Global push-to-talk".
+  uiohook-napi: true

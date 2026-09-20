@@ -75,12 +75,20 @@ import {
   type ScreenFrameRate,
 } from "@/lib/hls-capture-rate";
 import {
-  defaultPushToTalkBinding,
+  defaultPttBinding,
   formatBinding,
-  parseBinding,
+  parsePttBinding,
   supportsKeyBinding,
   type KeyBinding,
+  type PttBinding,
 } from "@/components/voice/push-to-talk";
+import {
+  clampReleaseDelayMs,
+  DEFAULT_RELEASE_DELAY_MS,
+  MAX_RELEASE_DELAY_MS,
+} from "@/lib/ptt-release-delay";
+import { PttBindingField } from "@/components/voice/key-binding-field";
+import { pttHintMessageKey, usePttNativeSupport } from "@/lib/ptt-native-support";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import {
   parseVadThreshold,
@@ -100,7 +108,7 @@ import {
   parseNoiseSuppressionMode,
   type NoiseSuppressionMode,
 } from "../../lib/noise-suppression";
-import { desktopContext, getDesktop } from "@/lib/desktop";
+import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicAutoJoin, useMusicAutoJoin } from "@/lib/music-prefs";
 import {
@@ -132,6 +140,7 @@ import {
   subscribeSounds,
   type IncomingRingId,
   type SoundCue,
+  type SoundState,
 } from "@/lib/sounds";
 import {
   disablePush,
@@ -196,7 +205,24 @@ export interface LocalSettings {
    * room, and `@pqp/shared` has no preference key for it yet.
    */
   vadThreshold: number;
-  pushToTalkKey: KeyBinding;
+  /**
+   * `PttBinding` rather than plain `KeyBinding`: push-to-talk can be bound to
+   * a mouse button (middle click, or one of the two "extra" side buttons) as
+   * well as a key, on the desktop shell's native hook (Tier 2, see
+   * `electron/lib/native-ptt-hook.js`). See `push-to-talk.ts` for why that
+   * type stays separate from the `KeyBinding` every app shortcut still uses.
+   */
+  pushToTalkKey: PttBinding;
+  /**
+   * How long the mic stays open after the PHYSICAL release before actually
+   * closing, on the desktop shell's native hook: 0 to 2000 ms, default 20.
+   * Same idea as Discord's own release-delay slider: closing the instant the
+   * key comes up clips the end of a word. Device-local for the same reason
+   * `pushToTalkKey` is: this is a property of this machine's native hook, and
+   * has no meaning at all on the web (there is no native hook there, see
+   * `use-push-to-talk.ts`) or on a shell too old to carry the bridge.
+   */
+  pttReleaseDelayMs: number;
   /**
    * Short local tones when the PTT key opens and closes the mic. Device-local
    * with the binding: it is a cue for this machine, and it is not a synced
@@ -254,7 +280,8 @@ export const defaultLocalSettings: LocalSettings = {
   // has, and push-to-talk is a choice people make, not one made for them.
   inputMode: "voice-activity",
   vadThreshold: SPEAKING_THRESHOLD,
-  pushToTalkKey: defaultPushToTalkBinding,
+  pushToTalkKey: defaultPttBinding(),
+  pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
   pttBeep: true,
   shortcuts: {},
   micProcessing: defaultMicProcessing,
@@ -299,9 +326,12 @@ export function loadLocalSettings(): LocalSettings {
       vadThreshold: parseVadThreshold(parsed.vadThreshold),
       // A binding that no longer parses — hand-edited storage, or a key this
       // build has since started refusing — falls back rather than leaving
-      // push-to-talk bound to nothing and the user apparently mute.
+      // push-to-talk bound to nothing and the user apparently mute. Absent
+      // `device` (every blob stored before mouse buttons existed) reads as
+      // `"keyboard"`, which is exactly what it always meant.
       pushToTalkKey:
-        parseBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+        parsePttBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+      pttReleaseDelayMs: clampReleaseDelayMs(parsed.pttReleaseDelayMs),
       pttBeep:
         typeof parsed.pttBeep === "boolean"
           ? parsed.pttBeep
@@ -952,6 +982,128 @@ function PttBeepRow({
 }
 
 /**
+ * macOS-only: shown while `usePttNativeSupport().permission === "denied"`.
+ * macOS never re-prompts once Accessibility/Input Monitoring have been said
+ * no to (or simply never granted), so the only way back is Settings. This
+ * is the deep link, not a native system dialog we do not have a way to
+ * trigger reliably ourselves. See `MAC_ACCESSIBILITY_SETTINGS_URL` /
+ * `MAC_INPUT_MONITORING_SETTINGS_URL` in `electron/lib/native-ptt-hook.js`.
+ */
+function PttPermissionNudge({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5"
+    >
+      <p className="text-sm font-medium">{t("settings.voice.pttPermissionTitle")}</p>
+      <p className="text-xs text-paper-muted">{t("settings.voice.pttPermissionBody")}</p>
+      <Button type="button" size="sm" variant="secondary" onClick={onOpenSettings}>
+        {t("settings.voice.pttPermissionOpenSettings")}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * The push-to-talk binding, its release delay (desktop only) and the
+ * "works everywhere on this computer" hint, sized to whatever this shell
+ * can actually do. Split out of `VoiceSection` because the desktop-only
+ * pieces (release delay, the permission nudge, the native-vs-fallback hint)
+ * need `usePttNativeSupport`'s state and that state has nothing to say on
+ * the web build.
+ */
+function PttControls({
+  draftLocal,
+  patchLocal,
+  sounds,
+}: {
+  draftLocal: LocalSettings;
+  patchLocal: (partial: Partial<LocalSettings>) => void;
+  sounds: SoundState;
+}) {
+  const { t } = useTranslation();
+  const isDesktop = isDesktopApp();
+  const native = usePttNativeSupport();
+  const hintKey = pttHintMessageKey({
+    isDesktop,
+    platformSupported: native.platformSupported,
+    platformReason: native.platformReason,
+    permission: native.permission,
+  });
+
+  return (
+    <div className="space-y-3">
+      <PttBindingField
+        label={t(isDesktop ? "settings.voice.pttKeyOrMouse" : "settings.voice.pttKey")}
+        binding={draftLocal.pushToTalkKey}
+        allowMouse={isDesktop}
+        takenBy={(binding) => {
+          if (binding.device === "mouse") {
+            // A mouse button cannot collide with a keyboard-only app
+            // shortcut. See the note on `PttBinding` in push-to-talk.ts.
+            return null;
+          }
+          const conflict = findBindingConflict(
+            bindableMap(draftLocal),
+            "pushToTalk",
+            binding,
+          );
+          return conflict ? t(ACTION_LABEL[conflict]) : null;
+        }}
+        onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+      />
+
+      {isDesktop && native.available && (
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.pttReleaseDelay")}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={MAX_RELEASE_DELAY_MS}
+            step={10}
+            value={draftLocal.pttReleaseDelayMs}
+            onChange={(e) =>
+              patchLocal({
+                pttReleaseDelayMs: clampReleaseDelayMs(Number(e.target.value)),
+              })
+            }
+            className="w-full accent-[var(--color-signal)]"
+          />
+          <span className="mt-0.5 block text-xs text-paper-muted">
+            {t("settings.voice.pttReleaseDelayMs", { ms: draftLocal.pttReleaseDelayMs })}
+          </span>
+          <span className="mt-0.5 block text-xs text-paper-muted">
+            {t("settings.voice.pttReleaseDelayHint")}
+          </span>
+        </label>
+      )}
+
+      <PttBeepRow
+        enabled={draftLocal.pttBeep}
+        soundsOn={sounds.enabled}
+        onEnabledChange={(pttBeep) => {
+          setPttBeepEnabled(pttBeep);
+          patchLocal({ pttBeep });
+        }}
+      />
+
+      {isDesktop && native.permission === "denied" && (
+        <PttPermissionNudge onOpenSettings={native.openSettings} />
+      )}
+
+      {/* The honest limit, stated where the binding is set rather than
+          discovered later by talking to nobody. */}
+      <p className="text-xs text-paper-muted">
+        {t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Devices, levels, input mode and microphone processing.
  *
  * Everything here applies live rather than on Save — the same behaviour it had
@@ -1102,38 +1254,7 @@ function VoiceSection({
 
       {draftLocal.inputMode === "push-to-talk" &&
         (canBindKey ? (
-          <div className="space-y-1.5">
-            <KeyBindingField
-              label={t("settings.voice.pttKey")}
-              binding={draftLocal.pushToTalkKey}
-              takenBy={(binding) => {
-                const conflict = findBindingConflict(
-                  bindableMap(draftLocal),
-                  "pushToTalk",
-                  binding,
-                );
-                return conflict ? t(ACTION_LABEL[conflict]) : null;
-              }}
-              onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
-            />
-            <PttBeepRow
-              enabled={draftLocal.pttBeep}
-              soundsOn={sounds.enabled}
-              onEnabledChange={(pttBeep) => {
-                setPttBeepEnabled(pttBeep);
-                patchLocal({ pttBeep });
-              }}
-            />
-            {/* The honest limit, stated where the binding is set rather than
-                discovered later by talking to nobody. A web page cannot receive
-                a key pressed while another window has focus; there is no global
-                hotkey short of the desktop shell. */}
-            <p className="text-xs text-paper-muted">
-              {t("settings.voice.pttHint", {
-                key: formatBinding(draftLocal.pushToTalkKey),
-              })}
-            </p>
-          </div>
+          <PttControls draftLocal={draftLocal} patchLocal={patchLocal} sounds={sounds} />
         ) : (
           <div className="space-y-1.5">
             <p className="text-xs text-paper-muted">
@@ -1385,6 +1506,7 @@ function KeyboardSection({
   onShowOverlay: () => void;
 }) {
   const { t } = useTranslation();
+  const isDesktop = isDesktopApp();
   const canBindKey = useMemo(() => supportsKeyBinding(), []);
   const bindings = useMemo(
     () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
@@ -1408,6 +1530,14 @@ function KeyboardSection({
     };
   }
 
+  /** Same conflict rule as `takenBy`, widened for a `PttBinding` that might be a mouse button, which can never collide with a keyboard-only app shortcut. */
+  function pttTakenBy(binding: PttBinding) {
+    if (binding.device === "mouse") {
+      return null;
+    }
+    return takenBy("pushToTalk")(binding);
+  }
+
   return (
     <div className="space-y-5">
       <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
@@ -1427,7 +1557,8 @@ function KeyboardSection({
           onClick={() =>
             patchLocal({
               shortcuts: {},
-              pushToTalkKey: defaultPushToTalkBinding,
+              pushToTalkKey: defaultPttBinding(),
+              pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
             })
           }
         >
@@ -1454,10 +1585,15 @@ function KeyboardSection({
                 ))}
                 {group.id === "voice" && (
                   <li className="py-3">
-                    <KeyBindingField
-                      label={t(ACTION_LABEL.pushToTalk)}
+                    <PttBindingField
+                      label={t(
+                        isDesktop
+                          ? "settings.voice.pttKeyOrMouse"
+                          : ACTION_LABEL.pushToTalk,
+                      )}
                       binding={draftLocal.pushToTalkKey}
-                      takenBy={takenBy("pushToTalk")}
+                      allowMouse={isDesktop}
+                      takenBy={pttTakenBy}
                       onChange={(binding) =>
                         patchLocal({ pushToTalkKey: binding })
                       }

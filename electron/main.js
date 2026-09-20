@@ -46,6 +46,14 @@ const {
   isAcceptableAccelerator,
   createHoldTracker,
 } = require("./lib/global-ptt");
+const {
+  nativeHookPlatformSupport,
+  macAccessibilityPermission,
+  MAC_ACCESSIBILITY_SETTINGS_URL,
+  MAC_INPUT_MONITORING_SETTINGS_URL,
+  createNativeHookSession,
+} = require("./lib/native-ptt-hook");
+const { DEFAULT_RELEASE_DELAY_MS, clampReleaseDelayMs } = require("./lib/release-delay");
 const { trayIconKind, trayIconImage } = require("./lib/tray-icon");
 const {
   buildTrayTemplate,
@@ -147,6 +155,63 @@ let pttAccelerator = null;
 let pttRegistered = null;
 const pttHold = createHoldTracker((held) => {
   sendToRenderer("pqp:ptt-held", held);
+});
+
+/**
+ * Native global push-to-talk (Tier 2): a real keyboard/mouse hook via
+ * `uiohook-napi`, instead of inferring the release from `globalShortcut`
+ * auto-repeat. See `lib/native-ptt-hook.js` for the full design, especially
+ * the focus-swap note about uiohook-napi issue #54. This module is only
+ * ever asked to listen while the window is NOT focused, same rule as
+ * `pttAccelerator` above, and for the same reason.
+ *
+ * `pttNativeBinding` is what the renderer last asked for (a
+ * `DesktopPttBinding`, see `client/src/lib/desktop.ts`), independent of
+ * whether the hook is actually running right now. `uiohook` is the
+ * lazily-`require`d module, or `null` when it failed to load (missing on
+ * this platform's prebuild list, or genuinely not installed). Every use of
+ * it is guarded, so a build that ships without it degrades to the
+ * `globalShortcut` fallback rather than crashing the main process at import
+ * time.
+ */
+/**
+ * @type {{ device: "keyboard" | "mouse", code: string, ctrl: boolean, alt: boolean, shift: boolean, meta: boolean, accelerator: string | null } | null}
+ */
+let pttNativeBinding = null;
+let pttReleaseDelayMs = DEFAULT_RELEASE_DELAY_MS;
+let uiohookModule; // undefined = not attempted yet; null = load failed.
+
+function loadUiohook() {
+  if (uiohookModule !== undefined) {
+    return uiohookModule;
+  }
+  try {
+    // Lazy on purpose: a platform this prebuild does not cover (or a build
+    // that stripped node_modules) must not crash the whole app at import
+    // time, only degrade this one feature. See `asarUnpack` in package.json
+    // for why the binary can be required at all from inside the packaged
+    // asar.
+    uiohookModule = require("uiohook-napi").uIOhook;
+  } catch (err) {
+    console.warn("[pqp] uiohook-napi unavailable, push-to-talk falls back to globalShortcut:", err?.message ?? err);
+    uiohookModule = null;
+  }
+  return uiohookModule;
+}
+
+// Required once, here, rather than inside `syncPushToTalkRegistration`: a
+// native N-API module has nothing to attach until `.start()` is called, so
+// requiring it at module load costs nothing extra and `loadUiohook` is
+// memoized regardless, so there is no benefit to deferring the attempt further,
+// only a second code path to keep in sync.
+const pttNativeSession = createNativeHookSession({
+  uiohook: loadUiohook(),
+  getBinding: () => pttNativeBinding,
+  onHeldChange: (held) => sendToRenderer("pqp:ptt-held-native", held),
+  releaseDelayMs: pttReleaseDelayMs,
+  onError: (err) => {
+    console.warn("[pqp] native push-to-talk hook failed to start:", err?.message ?? err);
+  },
 });
 
 /**
@@ -1202,6 +1267,7 @@ function createWindow(appUrl, allowedOrigin) {
   // and syncGlobalVoiceHotkeys for why focus is the switch.
   mainWindow.on("focus", () => {
     syncPushToTalkRegistration();
+    syncNativePushToTalk();
     syncGlobalVoiceHotkeys();
     // Whatever asked for attention (a notification, the badge) is answered
     // now that the window is back in front.
@@ -1209,6 +1275,7 @@ function createWindow(appUrl, allowedOrigin) {
   });
   mainWindow.on("blur", () => {
     syncPushToTalkRegistration();
+    syncNativePushToTalk();
     syncGlobalVoiceHotkeys();
   });
 
@@ -1244,6 +1311,7 @@ function createWindow(appUrl, allowedOrigin) {
     mainWindow = null;
     // A window that is gone cannot be typing into, so the shell takes the key.
     syncPushToTalkRegistration();
+    syncNativePushToTalk();
     syncGlobalVoiceHotkeys();
   });
 
@@ -1424,6 +1492,149 @@ function setPushToTalkAccelerator(accelerator) {
     pttAccelerator = null;
   }
   return available;
+}
+
+/**
+ * `globalShortcut` fallback for the NATIVE-PATH binding specifically. Kept
+ * as its own registration slot (`pttNativeShortcutRegistered`,
+ * `pttNativeShortcutHold`) rather than reusing `pttRegistered` / `pttHold`
+ * above: those belong to the OLD bridge (`pqp:ptt-bind` /
+ * `bindPushToTalk`), which stays wired exactly as it always was for a
+ * client older than `bindPushToTalkNative`. See the comment on that method
+ * in `client/src/lib/desktop.ts`. A new client always uses one bridge or
+ * the other, never both, but keeping the state separate means that is true
+ * by construction rather than by every caller remembering it.
+ */
+/** @type {string | null} */
+let pttNativeShortcutRegistered = null;
+const pttNativeShortcutHold = createHoldTracker((held) =>
+  sendToRenderer("pqp:ptt-held-native", held),
+);
+
+function syncNativeShortcutFallback(wanted) {
+  if (wanted === pttNativeShortcutRegistered) {
+    return pttNativeShortcutRegistered !== null;
+  }
+  if (pttNativeShortcutRegistered) {
+    try {
+      globalShortcut.unregister(pttNativeShortcutRegistered);
+    } catch {
+      // Already gone.
+    }
+    pttNativeShortcutRegistered = null;
+    pttNativeShortcutHold.release();
+  }
+  if (!wanted) {
+    return false;
+  }
+  let ok = false;
+  try {
+    ok = globalShortcut.register(wanted, () => pttNativeShortcutHold.press());
+  } catch (err) {
+    console.warn(
+      "[pqp] push-to-talk shortcut fallback register failed:",
+      err?.message ?? err,
+    );
+    ok = false;
+  }
+  if (ok) {
+    pttNativeShortcutRegistered = wanted;
+  }
+  return ok;
+}
+
+/**
+ * Hold or release the native-path push-to-talk binding, choosing between
+ * the native hook and the `globalShortcut` fallback, same focus rule as
+ * `syncPushToTalkRegistration`: registered only while the window is NOT
+ * focused, for the identical reason (the renderer's own listeners are the
+ * precise ones while focused, and a registered global hook/shortcut would
+ * only compete with them).
+ *
+ * @returns {{ registered: boolean, via: "native" | "shortcut" | "none", reason?: "wayland" | "denied" | "unavailable" }}
+ */
+function syncNativePushToTalk() {
+  const focused = Boolean(
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+  );
+  if (focused || !pttNativeBinding) {
+    pttNativeSession.stop();
+    syncNativeShortcutFallback(null);
+    return { registered: false, via: "none" };
+  }
+
+  const support = nativeHookPlatformSupport(process.platform);
+  const macPermission = macAccessibilityPermission(process.platform, systemPreferences);
+  // Do not even attempt the hook when we already know Accessibility is
+  // denied: it would either throw or (worse, unobserved) silently receive
+  // nothing. See the permission-proxy caveat in `lib/native-ptt-hook.js`:
+  // this is a necessary condition, not a sufficient one, so a start()
+  // failure below can still happen even when this check passes (Input
+  // Monitoring has no query API at all).
+  const hookUsable = support.supported && Boolean(loadUiohook()) && macPermission !== "denied";
+
+  if (hookUsable) {
+    const result = pttNativeSession.start();
+    if (result.ok) {
+      syncNativeShortcutFallback(null);
+      return { registered: true, via: "native" };
+    }
+  } else {
+    pttNativeSession.stop();
+  }
+
+  // Fallback: globalShortcut. Keyboard only, there is no such thing as a
+  // mouse-button globalShortcut, so a mouse binding gets nothing here.
+  if (pttNativeBinding.device === "keyboard" && pttNativeBinding.accelerator) {
+    if (syncNativeShortcutFallback(pttNativeBinding.accelerator)) {
+      return { registered: true, via: "shortcut" };
+    }
+  } else {
+    syncNativeShortcutFallback(null);
+  }
+
+  const reason = !support.supported ? "wayland" : macPermission === "denied" ? "denied" : "unavailable";
+  return { registered: false, via: "none", reason };
+}
+
+/**
+ * Take (or drop) the native-path push-to-talk binding on the renderer's
+ * behalf. Mirrors `setPushToTalkAccelerator`'s shape but carries the whole
+ * `DesktopPttBinding` (device, code, chord, and the accelerator the
+ * renderer already computed for the fallback) rather than only an
+ * accelerator string, because this path also has to handle a mouse button,
+ * which has no accelerator at all.
+ */
+function setNativePushToTalkBinding(binding, releaseDelayMs) {
+  if (binding !== null) {
+    const looksValid =
+      binding &&
+      typeof binding === "object" &&
+      (binding.device === "keyboard" || binding.device === "mouse") &&
+      typeof binding.code === "string" &&
+      binding.code.length > 0;
+    if (!looksValid) {
+      return { registered: false, via: "none" };
+    }
+    // A client-computed accelerator we would refuse to register anyway.
+    // `globalShortcut.register` throws on garbage and would take the IPC
+    // handler down with it. Treat it as absent rather than trusting it.
+    if (
+      binding.device === "keyboard" &&
+      binding.accelerator !== null &&
+      !isAcceptableAccelerator(binding.accelerator)
+    ) {
+      binding = { ...binding, accelerator: null };
+    } else if (binding.device === "mouse") {
+      binding = { ...binding, accelerator: null };
+    }
+  }
+  pttNativeBinding = binding;
+  if (typeof releaseDelayMs === "number") {
+    pttReleaseDelayMs = clampReleaseDelayMs(releaseDelayMs);
+    pttNativeSession.setReleaseDelayMs(pttReleaseDelayMs);
+  }
+  return syncNativePushToTalk();
 }
 
 const GLOBAL_VOICE_ACTIONS = ["toggleMute", "toggleDeafen"];
@@ -1666,6 +1877,39 @@ if (!gotLock) {
     return setPushToTalkAccelerator(accelerator);
   });
 
+  ipcMain.handle("pqp:ptt-bind-native", (_event, binding, releaseDelayMs) => {
+    if (binding !== null && typeof binding !== "object") {
+      return { registered: false, via: "none" };
+    }
+    return setNativePushToTalkBinding(binding, releaseDelayMs);
+  });
+
+  ipcMain.handle("pqp:ptt-permission-status", () => {
+    return macAccessibilityPermission(process.platform, systemPreferences);
+  });
+
+  // Read-only, binds nothing: lets the settings UI explain the native hook
+  // (or say why it cannot run, Wayland chiefly) before anyone has joined a
+  // call to actually try it. `syncNativePushToTalk` re-derives the same
+  // thing every time it runs; this is the same probe, just callable without
+  // a binding already in place.
+  ipcMain.handle("pqp:ptt-native-capability", () => {
+    return nativeHookPlatformSupport(process.platform);
+  });
+
+  ipcMain.on("pqp:ptt-open-permission-settings", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    // Both panes: Accessibility is the half we can even ask about, Input
+    // Monitoring is the other half of what a global key/mouse hook needs and
+    // Electron exposes no query for it at all. Opening both a second time
+    // just re-navigates an already-open System Settings window, it does not
+    // spawn a second one.
+    shell.openExternal(MAC_ACCESSIBILITY_SETTINGS_URL).catch(() => {});
+    shell.openExternal(MAC_INPUT_MONITORING_SETTINGS_URL).catch(() => {});
+  });
+
   ipcMain.handle("pqp:global-voice-bind", (_event, accelerators) => {
     const toggleMute =
       accelerators && typeof accelerators === "object"
@@ -1772,6 +2016,10 @@ if (!gotLock) {
     pttAccelerator = null;
     pttRegistered = null;
     pttHold.dispose();
+    pttNativeBinding = null;
+    pttNativeSession.dispose();
+    pttNativeShortcutRegistered = null;
+    pttNativeShortcutHold.dispose();
     globalVoiceHotkeys = { toggleMute: null, toggleDeafen: null };
     globalVoiceRegistered = { toggleMute: null, toggleDeafen: null };
     globalShortcut.unregisterAll();

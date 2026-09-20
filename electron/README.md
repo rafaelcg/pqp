@@ -65,8 +65,87 @@ On Windows / Linux, the native title bar is kept (minimal).
 ## Global push-to-talk
 
 The web client can only hear a key while its window is focused, so browser
-push-to-talk stops the moment you alt-tab into a game. The shell registers the
-same binding with `globalShortcut` and reports it over IPC:
+push-to-talk stops the moment you alt-tab into a game. The shell offers two
+mechanisms, both feature-detected and layered so nothing regresses:
+
+### Tier 2: the native hook (`bindPushToTalkNative`)
+
+`lib/native-ptt-hook.js` wraps `uiohook-napi`, a real global keyboard/mouse
+hook (an N-API binding over libuiohook, ships prebuilt binaries for every
+target platform, no compiler needed at install or package time). Real
+key-down / key-up and mouse-button-down/up, not an inference:
+
+- The renderer sends the full binding (device, code, chord, plus the
+  Electron-accelerator spelling for the fallback below) and a release-delay
+  in milliseconds to `pqpDesktop.bindPushToTalkNative(binding, releaseDelayMs)`.
+  Main tries the native hook first and falls back to `globalShortcut` itself
+  when the hook is unavailable, denied, or the binding is a mouse button (see
+  below); the promise resolves `{ registered, via: "native" | "shortcut" | "none", reason? }`.
+- `lib/release-delay.js` is the whole point of the upgrade: after the
+  PHYSICAL release, the mic stays open for a configurable delay (default
+  20 ms, 0-2000 ms, `settings.voice.pttReleaseDelay` in Voice & Video) before
+  actually closing, so word endings do not get clipped. A press inside that
+  window cancels the pending release: a quick up-then-down never closes the
+  mic in between. This is Discord's own model.
+- **Mouse buttons.** `uiohook-napi` reports mouse buttons too, so PTT can be
+  bound to middle click or either of the two "extra" side buttons a mouse
+  ships (`electron/lib/uiohook-key-map.js`, `BINDABLE_MOUSE_CODES` in
+  `client/src/components/voice/push-to-talk.ts`). Left and right click are
+  never offered, since binding either would make ordinary clicking a
+  transmission. A mouse binding has no `globalShortcut` equivalent at all
+  (there is no such thing as a "global mouse shortcut" API), so it only ever
+  works out-of-window through the native hook; in-window it works everywhere,
+  including the web, via plain `mousedown`/`mouseup`.
+- **The hook is held only while the app window is NOT focused**, the exact
+  same rule `globalShortcut` already followed, for the same reason: a
+  registered global hook swallows the key/button system-wide, our own
+  renderer included, and the renderer's own down/up pair is the precise one.
+  `main.js`'s `syncNativePushToTalk` runs on every focus/blur.
+- **uiohook-napi issue #54.** On Windows there is a reported case where the
+  low-level keyboard hook stops delivering events once `getUserMedia()`
+  starts capturing the microphone *while the window that called it is
+  focused*. The focus rule above means this never has a window to occur in
+  for us: the hook only runs while unfocused, and a focused mic capture is
+  never racing it for the same keystroke. This is a structural argument, not
+  a verified fix; nobody on this change reproduced #54 on real Windows
+  hardware to confirm it.
+- **macOS permission.** Global key/mouse capture needs Input Monitoring (and
+  possibly Accessibility) under Privacy & Security. macOS never re-prompts
+  once denied, so the settings dialog checks silently
+  (`systemPreferences.isTrustedAccessibilityClient(false)`, the Accessibility
+  half only; Electron has **no** query API for Input Monitoring at all) and
+  shows an in-app nudge with a button that deep-links to both panes
+  (`pqpDesktop.openPttPermissionSettings()`,
+  `MAC_ACCESSIBILITY_SETTINGS_URL` / `MAC_INPUT_MONITORING_SETTINGS_URL`).
+  It never fails silently: a denied/unknown permission still tries the
+  `globalShortcut` fallback for a keyboard binding, and the UI says which
+  mechanism (if any) is actually holding the key
+  (`settings.voice.pttHintDesktop*` strings).
+- **Linux/Wayland.** libuiohook has no Wayland backend at all (its source
+  tree has only `x11`, `darwin` and `windows` implementations), and the
+  compositors that matter (GNOME, KDE) deliberately restrict the legacy X11
+  global-input extensions XWayland would otherwise relay, for the reason
+  Wayland exists in the first place. `nativeHookPlatformSupport` detects a
+  Wayland session (`XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`) and refuses
+  outright rather than trying and silently receiving nothing; the settings
+  UI says so and suggests Voice Activity mode instead. Same ceiling Discord
+  hits. Linux/X11 has no such gate.
+- **Packaging.** `uiohook-napi` is a native addon; `asarUnpack` in
+  `package.json` keeps its whole directory out of the asar archive (a native
+  `.node` binary cannot `dlopen` from inside one), and `npmRebuild: false`
+  stops electron-builder from trying to recompile it from source, since it ships
+  N-API prebuilds for every target platform already, which is the entire
+  point of choosing it, and compiling for another OS from this host would
+  not work anyway.
+
+### Tier 1 fallback: `globalShortcut` (`bindPushToTalk`)
+
+Kept exactly as it was, verbatim, for two reasons: it is what runs when the
+native hook is unavailable/denied/unsupported on a keyboard binding, and it
+is the whole bridge a shell built before `bindPushToTalkNative` existed still
+offers. The packaged shell loads the *hosted* client, so a client deployed
+today can be running inside a shell built weeks ago, and that shell must keep
+working exactly as it always did.
 
 - The renderer converts its binding (a `KeyboardEvent.code` plus a chord) into
   an Electron accelerator (`client/src/components/voice/push-to-talk-accelerator.ts`)
@@ -74,29 +153,32 @@ same binding with `globalShortcut` and reports it over IPC:
   the OS refuses the key, and the client silently stays in-window only.
 - Rebinding calls it again; `null` gives the key back. `will-quit` unregisters
   everything.
-- **The accelerator is held only while the app window is NOT focused.** A
-  registered global shortcut is swallowed system-wide, our own renderer
-  included, and the renderer's keydown / keyup pair is the precise one. So
-  in-window PTT is unchanged and out-of-window PTT is the shell's job.
+- **The accelerator is held only while the app window is NOT focused**, same
+  rule as above.
 - **`globalShortcut` reports key-down and nothing else.** There is no key-up
   and no way to poll. `lib/global-ptt.js` infers the release from auto-repeat:
   the first press engages, repeats extend the deadline, and a gap ends the
   transmission. A tap therefore holds the mic for up to ~1.1 s (the initial
   repeat delay every OS applies), and a held key lets go ~250 ms after the
   finger. On a desktop that does not repeat global hotkeys at all, a hold is a
-  single ~1.1 s pulse. Going tighter needs a native keyboard hook, which is a
-  native module and a macOS accessibility grant this shell deliberately does
-  not ask for.
+  single ~1.1 s pulse. This is exactly the crudeness Tier 2 exists to fix.
 
 **macOS.** `globalShortcut` does **not** need the Accessibility permission (it
 uses Carbon hotkeys, not an event tap), so there is no TCC prompt and nothing
-to grant. What it *is* subject to is conflicts: a key the system or another app
-already owns cannot be registered, `register` returns false, and pqp falls back
-to in-window PTT rather than pretending. Cmd chords collide with system
-shortcuts most often; the default `` ` `` binding does not.
+to grant on this tier specifically. What it *is* subject to is conflicts: a
+key the system or another app already owns cannot be registered, `register`
+returns false, and pqp falls back to in-window PTT rather than pretending.
+Cmd chords collide with system shortcuts most often; the default `` ` ``
+binding does not.
 
-**Modifier-only bindings** (Left Ctrl on its own) cannot be global: an
-accelerator needs a non-modifier key. Those keep working in-window.
+**Modifier-only bindings** (Left Ctrl on its own) are the one case where the
+two tiers genuinely differ in reach. `globalShortcut` requires a
+non-modifier key, so on the Tier 1 fallback a modifier held alone only ever
+works in-window. The native hook has no such limit: `uiohook-napi` reports
+a bare modifier's own down/up like any other key, and `matchesEngage` /
+`matchesRelease` in `lib/native-ptt-hook.js` special-case a modifier code the
+same way the renderer's `isModifierCode` does, so on Tier 2 a modifier held
+alone works globally too, wherever the hook itself is available.
 
 ## Global mute/deafen hotkeys
 
@@ -261,13 +343,15 @@ Artifacts land in `electron/release/`.
 
 Packaged apps load the hosted app (see **Environment** above). `resources/client` is still shipped and used when `PQP_LOAD_STATIC=1`.
 
+**The one native dependency, `uiohook-napi`** (global push-to-talk hook, see above): ships prebuilt N-API binaries for win/mac/linux, so nothing here needs a C++ toolchain. `pnpm install` on any host is enough: `node-gyp-build`, its install script, only verifies the right prebuild is present, and pnpm's workspace `allowBuilds` list has to say so explicitly (pnpm 10 blocks unlisted install scripts by default; see `pnpm-workspace.yaml`). `build.asarUnpack` keeps the whole module out of the asar archive (a native `.node` file cannot `dlopen` from inside one) and `build.npmRebuild: false` stops electron-builder from trying to recompile it for the Electron ABI, unnecessary for an N-API module, and it would not cross-compile for another OS from this host regardless. Building `dist:win` / `dist:linux` from a macOS host still works because every platform's prebuild already ships inside the one npm package; nothing is fetched per-target.
+
 ## Electron-ready client conventions
 
 - `VITE_API_URL` / `VITE_WS_URL` — absolute backend URLs when not same-origin
 - No `window`-only assumptions in core hooks (`lib/api.ts`, `lib/realtime.ts`)
 - Clerk: add the desktop origin (and `http://127.0.0.1:*` for static mode if used) to allowed origins
 - Detect `window.pqpDesktop?.isElectron` for desktop-only UX (title bar, mute IPC, deep links)
-- Feature-detect each bridge method, never the shell version: `bindPushToTalk`, `onPushToTalk`, `bindGlobalVoiceHotkeys`, `setVoiceState` and `onVoiceCommand` are absent in a browser **and** in shells built before they landed, and the packaged shell loads the hosted client, so a client deployed today runs inside a shell built weeks ago
+- Feature-detect each bridge method, never the shell version: `bindPushToTalk`, `onPushToTalk`, `bindPushToTalkNative`, `onPushToTalkNative`, `getPttPermissionStatus`, `openPttPermissionSettings`, `getPttNativeCapability`, `bindGlobalVoiceHotkeys`, `setVoiceState` and `onVoiceCommand` are absent in a browser **and** in shells built before they landed, and the packaged shell loads the hosted client, so a client deployed today runs inside a shell built weeks ago
 
 ## Remaining gaps
 
@@ -280,7 +364,7 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 | App icons | `build/icon.{icns,ico,png}`, generated from `build/*.svg` |
 | Bundled client origin | Loopback static mode cannot satisfy a production CORS allowlist; the fix is a stable `app://` protocol |
 | Tray, minimize to tray during a call | Implemented (`lib/tray-icon.js`, `lib/tray-menu.js`, `lib/tray-state.js`) |
-| Global push-to-talk | Implemented (`lib/global-ptt.js`); release is inferred from auto-repeat, see above |
+| Global push-to-talk | Tier 2 implemented (`lib/native-ptt-hook.js`, `uiohook-napi`): real key/mouse down-up, configurable release delay, mouse-button binding, macOS permission nudge; Wayland has no native-capture backend at all (documented, falls back). Tier 1 fallback kept verbatim (`lib/global-ptt.js`, release inferred from auto-repeat) for an unavailable/denied hook and for a shell built before Tier 2 landed |
 | Global mute/deafen hotkeys | Implemented; plain toggles, no release to infer, gated to calls, see above |
 | Start at login | Implemented (`lib/login-item.js`, Settings → Appearance). macOS and Windows only, Electron has no Linux login-item API |
 | Native notifications, click-through, taskbar/dock flash | Implemented (`showNotification` in `main.js`, IPC via `pqpDesktop.notify` / `onNotificationClick`). Message and mention banners were already wired end to end (`client/src/lib/notifications.ts`); an incoming DM/group call rang the in-app card and the ringtone only, with nothing for a backgrounded window — `notifyIncomingCall` closes that gap. `flashFrame` bounces the dock / flashes the taskbar on any native banner shown while unfocused, cleared on refocus |
