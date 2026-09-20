@@ -64,6 +64,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "call-avisa-som-iphone",
+    date: "2026-09-20",
+    title: {
+      "pt-BR": "A call te avisa, e o som volta no iPhone",
+      en: "The call rings you, and iPhone gets its sound back",
+    },
+    summary: {
+      "pt-BR":
+        "A call te avisa mesmo com o app no fundo. No iPhone o som da DM voltou. E watch party e call mais firmes: música igual pra todos, sem gente dobrada na sala, sem cair com duas telas.",
+      en: "A call reaches you even with the app backgrounded. On iPhone the DM sound is back. Steadier watch party and calls: same music for all, no doubled people, no drop with two screens.",
+    },
+  },
+  {
     slug: "mixer-e-o-bau-com-embeds",
     date: "2026-09-13",
     title: {

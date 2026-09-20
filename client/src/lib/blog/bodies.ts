@@ -19,6 +19,16 @@ import type { BlogLocale } from "./posts";
  * to transform at build time and nothing new in the dependency tree.
  */
 const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
+  "call-avisa-som-iphone": {
+    "pt-BR": () =>
+      import("@/content/blog/call-avisa-som-iphone.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/call-avisa-som-iphone.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "mixer-e-o-bau-com-embeds": {
     "pt-BR": () =>
       import("@/content/blog/mixer-e-o-bau-com-embeds.pt-BR.md?raw").then(
