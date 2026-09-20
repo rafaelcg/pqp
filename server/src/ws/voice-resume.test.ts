@@ -424,6 +424,38 @@ describe("voice session resume", () => {
     expect(frame(resumed, "welcome")?.resumed).toBe(true);
   });
 
+  it("does not show a person's seat twice after a cold rejoin races their own orphan", async () => {
+    // The previous test proves the server keeps both seats — that is
+    // deliberate, so a legitimate resume racing this cold join still has
+    // something to reattach to. What must not happen is either of them
+    // being handed to a viewer as two people in the call. A one-star review
+    // reported exactly this: "ta duplicando, ta parecendo 2 pessoas na
+    // mesma call" (2026-09-20).
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const holding = await join(recorder(), userId, channel);
+    const oldPeerId = frame(holding, "welcome")?.peerId as string;
+
+    removeVoicePeerBySocket(holding.socket);
+
+    // Cold rejoin: no resume pair, so this lands a brand new peer id while
+    // the old one is still orphaned and holding its seat for the resume
+    // window.
+    const phone = await join(recorder(), userId, channel);
+    const newPeerId = welcomeOf(phone).peerId as string;
+    expect(newPeerId).not.toBe(oldPeerId);
+
+    // Anyone reading the room fresh from here — a new joiner's first roster
+    // snapshot is the plainest example — must see this person once.
+    const joiner = await join(recorder(), randomUUID(), channel);
+    const roster = joiner.frames.filter((f) => f.type === "voice-roster").at(-1);
+    const participants =
+      (roster?.participants as { peerId: string; userId: string }[]) ?? [];
+    const seatsForUser = participants.filter((p) => p.userId === userId);
+    expect(seatsForUser).toHaveLength(1);
+    expect(seatsForUser[0]?.peerId).toBe(newPeerId);
+  });
+
   it("removes an orphan when the tab-close beacon presents the resume pair", async () => {
     const channel = randomUUID();
     const userId = randomUUID();
