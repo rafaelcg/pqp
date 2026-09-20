@@ -621,6 +621,45 @@ function writePeerRow(peer: VoicePeer): void {
   );
 }
 
+/**
+ * Multiple seats for one person is by design for up to `VOICE_RESUME_TTL_MS`:
+ * a cold rejoin (resume token missing, expired, or refused) can land a fresh
+ * peer id while the old one is still held open, orphaned, waiting out its
+ * resume window — see the "two seats for 90s is cosmetic" note beside the
+ * cold-join mesh-ceiling check in the join handler. That was meant to be
+ * invisible plumbing (occupancy counts, the mesh ceiling), not a roster
+ * entry: left in the outgoing roster, both seats carry the same display name
+ * and avatar, and everyone else in the room sees that person rendered twice
+ * for up to ninety seconds. That is the duplicate-participant bug reported
+ * 2026-09-20 ("ta duplicando, ta parecendo 2 pessoas na mesma call").
+ *
+ * Drops an orphaned seat once a live seat exists for the same person. A lone
+ * orphan is left alone — nothing to prefer over it, and this is what keeps a
+ * reconnecting person's own tile up while their client is mid-resume — and a
+ * person genuinely holding more than one LIVE seat (two tabs, two devices)
+ * is untouched: this only ever removes a seat nothing but a TTL is still
+ * holding open. Order-preserving, because some receivers key their own
+ * comparisons off roster position.
+ */
+function collapseOrphanedDuplicates<T>(
+  entries: T[],
+  userIdOf: (entry: T) => string,
+  isOrphaned: (entry: T) => boolean,
+): T[] {
+  const hasLiveSeat = new Map<string, boolean>();
+  for (const entry of entries) {
+    const userId = userIdOf(entry);
+    if (!isOrphaned(entry)) {
+      hasLiveSeat.set(userId, true);
+    } else if (!hasLiveSeat.has(userId)) {
+      hasLiveSeat.set(userId, false);
+    }
+  }
+  return entries.filter(
+    (entry) => !isOrphaned(entry) || !hasLiveSeat.get(userIdOf(entry)),
+  );
+}
+
 /** A registry row as the wire shape: what a roster carries for a peer held elsewhere. */
 function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
   return {
@@ -692,18 +731,25 @@ async function readClusterRoom(
 ): Promise<{ participants: VoiceParticipant[]; transport: VoiceRoomTransport } | null> {
   const room = await listVoiceRoster(voiceChannelId);
   const byId = new Map<string, VoiceParticipant>();
+  const orphanedById = new Map<string, boolean>();
   for (const row of room?.peers ?? []) {
     byId.set(row.peerId, rowToParticipant(row));
+    orphanedById.set(row.peerId, row.orphanedAt !== null);
   }
   for (const peer of getRoomPeers(voiceChannelId)) {
     byId.set(peer.id, toParticipant(peer));
+    orphanedById.set(peer.id, peer.orphanedAt !== undefined);
   }
   noteRemoteTransport(voiceChannelId, room?.transport ?? null);
   if (!room && byId.size === 0) {
     return null;
   }
   return {
-    participants: [...byId.values()],
+    participants: collapseOrphanedDuplicates(
+      [...byId.values()],
+      (participant) => participant.userId,
+      (participant) => orphanedById.get(participant.peerId) ?? false,
+    ),
     transport:
       roomTransports.get(voiceChannelId) ??
       room?.transport ??
@@ -3871,7 +3917,12 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
 
     // --- one synchronous stretch: snapshot, queue, sequence ---------------
     const participants =
-      room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant);
+      room?.participants ??
+      collapseOrphanedDuplicates(
+        getRoomPeers(voiceChannelId),
+        (peer) => peer.userId,
+        (peer) => peer.orphanedAt !== undefined,
+      ).map(toParticipant);
     noteMusicListenerCount(voiceChannelId, participants);
     events = pendingRoomEvents.get(voiceChannelId) ?? [];
     pendingRoomEvents.delete(voiceChannelId);
@@ -5337,12 +5388,16 @@ export function voiceChannelAccessCacheStats(): {
 export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   const rooms = new Map<
     string,
-    { participants: Map<string, VoiceParticipant>; transport?: VoiceRoomTransport }
+    {
+      participants: Map<string, VoiceParticipant>;
+      orphaned: Map<string, boolean>;
+      transport?: VoiceRoomTransport;
+    }
   >();
   const roomOf = (voiceChannelId: string) => {
     let room = rooms.get(voiceChannelId);
     if (!room) {
-      room = { participants: new Map() };
+      room = { participants: new Map(), orphaned: new Map() };
       rooms.set(voiceChannelId, room);
     }
     return room;
@@ -5360,6 +5415,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         noteRemoteTransport(row.channelId, row.transport);
         for (const peer of row.peers) {
           room.participants.set(peer.peerId, rowToParticipant(peer));
+          room.orphaned.set(peer.peerId, peer.orphanedAt !== null);
         }
       }
     } catch (error) {
@@ -5370,7 +5426,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
     }
   }
   for (const peer of peers.values()) {
-    roomOf(peer.voiceChannelId).participants.set(peer.id, toParticipant(peer));
+    const room = roomOf(peer.voiceChannelId);
+    room.participants.set(peer.id, toParticipant(peer));
+    room.orphaned.set(peer.id, peer.orphanedAt !== undefined);
   }
 
   await Promise.all(
@@ -5395,7 +5453,11 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       send(socket, {
         type: "voice-roster",
         voiceChannelId,
-        participants: [...room.participants.values()],
+        participants: collapseOrphanedDuplicates(
+          [...room.participants.values()],
+          (participant) => participant.userId,
+          (participant) => room.orphaned.get(participant.peerId) ?? false,
+        ),
         transport:
           roomTransports.get(voiceChannelId) ??
           room.transport ??

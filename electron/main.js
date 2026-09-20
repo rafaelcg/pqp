@@ -215,6 +215,32 @@ const pttNativeSession = createNativeHookSession({
 });
 
 /**
+ * Global mute / deafen hotkeys.
+ *
+ * Same focus-swap idea as push-to-talk above, minus the hold-tracking: these
+ * two are plain toggles, so each one is a single `globalShortcut.register`
+ * that fires `sendVoiceCommand` once per press, no press/release inference
+ * needed.
+ *
+ * `globalVoiceHotkeys` is what the renderer asked for; `globalVoiceRegistered`
+ * is what `globalShortcut` actually holds right now. They differ while the
+ * window is focused, on purpose: the in-window path (the app menu's fixed
+ * Cmd/Ctrl+Shift+M/D, or the renderer's own key listener for a remapped
+ * chord) owns the key while it can see it directly, and letting go of the
+ * global registration is what stops a focused press from firing twice, see
+ * `syncGlobalVoiceHotkeys`.
+ *
+ * Gated by the renderer to calls only: `pqp:global-voice-bind` is sent with
+ * both accelerators while connected and with both `null` on leave, so a
+ * Cmd/Ctrl+Shift+M chord is never swallowed system-wide for someone who is
+ * not even in a voice channel.
+ */
+/** @type {{ toggleMute: string | null, toggleDeafen: string | null }} */
+let globalVoiceHotkeys = { toggleMute: null, toggleDeafen: null };
+/** @type {{ toggleMute: string | null, toggleDeafen: string | null }} */
+let globalVoiceRegistered = { toggleMute: null, toggleDeafen: null };
+
+/**
  * How long the picker window gets to load before the share is abandoned.
  *
  * Only the load is timed, never the decision: a timer running while somebody
@@ -1236,11 +1262,13 @@ function createWindow(appUrl, allowedOrigin) {
     }
   });
 
-  // The global push-to-talk key is held only while this window is elsewhere.
-  // See syncPushToTalkRegistration for why focus is the switch.
+  // The global push-to-talk key, and the global mute/deafen toggles, are
+  // held only while this window is elsewhere. See syncPushToTalkRegistration
+  // and syncGlobalVoiceHotkeys for why focus is the switch.
   mainWindow.on("focus", () => {
     syncPushToTalkRegistration();
     syncNativePushToTalk();
+    syncGlobalVoiceHotkeys();
     // Whatever asked for attention (a notification, the badge) is answered
     // now that the window is back in front.
     mainWindow?.flashFrame(false);
@@ -1248,6 +1276,7 @@ function createWindow(appUrl, allowedOrigin) {
   mainWindow.on("blur", () => {
     syncPushToTalkRegistration();
     syncNativePushToTalk();
+    syncGlobalVoiceHotkeys();
   });
 
   /**
@@ -1283,6 +1312,7 @@ function createWindow(appUrl, allowedOrigin) {
     // A window that is gone cannot be typing into, so the shell takes the key.
     syncPushToTalkRegistration();
     syncNativePushToTalk();
+    syncGlobalVoiceHotkeys();
   });
 
   mainWindow.loadURL(appUrl);
@@ -1607,6 +1637,102 @@ function setNativePushToTalkBinding(binding, releaseDelayMs) {
   return syncNativePushToTalk();
 }
 
+const GLOBAL_VOICE_ACTIONS = ["toggleMute", "toggleDeafen"];
+
+/**
+ * Hold or release the global mute/deafen toggles.
+ *
+ * Registered only while the app window is NOT focused, for the same reason
+ * as push-to-talk: a registered `globalShortcut` is swallowed system-wide, so
+ * keeping it while focused would steal the chord from the app menu (default
+ * chord) or the renderer's own key listener (a remap) and fire the toggle
+ * twice for one press. Unlike push-to-talk there is no hold to infer: each
+ * one is `globalShortcut.register(accel, () => sendVoiceCommand(action))`,
+ * a single fire per press, same as any other toggle.
+ */
+function syncGlobalVoiceHotkeys() {
+  const focused = Boolean(
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+  );
+  for (const action of GLOBAL_VOICE_ACTIONS) {
+    const wanted = focused ? null : globalVoiceHotkeys[action];
+    const current = globalVoiceRegistered[action];
+    if (wanted === current) {
+      continue;
+    }
+    if (current) {
+      try {
+        globalShortcut.unregister(current);
+      } catch {
+        // Already gone (another app took it, the OS dropped it): nothing to do.
+      }
+      globalVoiceRegistered[action] = null;
+    }
+    if (!wanted) {
+      continue;
+    }
+    let ok = false;
+    try {
+      ok = globalShortcut.register(wanted, () => sendVoiceCommand(action));
+    } catch (err) {
+      console.warn(`[pqp] global ${action} register failed:`, err?.message ?? err);
+      ok = false;
+    }
+    if (ok) {
+      globalVoiceRegistered[action] = wanted;
+    }
+  }
+}
+
+/**
+ * Take (or drop) the global mute/deafen accelerators on the renderer's
+ * behalf. Mirrors `setPushToTalkAccelerator`: probes each requested
+ * accelerator so the answer is accurate even while the window is focused and
+ * `syncGlobalVoiceHotkeys` is deliberately holding neither of them.
+ *
+ * @param {{ toggleMute: string | null, toggleDeafen: string | null }} accelerators
+ * @returns {{ toggleMute: boolean, toggleDeafen: boolean }}
+ */
+function setGlobalVoiceHotkeys(accelerators) {
+  for (const action of GLOBAL_VOICE_ACTIONS) {
+    const accelerator = accelerators?.[action] ?? null;
+    globalVoiceHotkeys[action] =
+      accelerator !== null && isAcceptableAccelerator(accelerator)
+        ? accelerator
+        : null;
+  }
+  syncGlobalVoiceHotkeys();
+
+  const result = { toggleMute: false, toggleDeafen: false };
+  for (const action of GLOBAL_VOICE_ACTIONS) {
+    const wanted = globalVoiceHotkeys[action];
+    if (!wanted) {
+      continue;
+    }
+    if (globalVoiceRegistered[action] === wanted) {
+      result[action] = true;
+      continue;
+    }
+    // The window is focused, so `syncGlobalVoiceHotkeys` just let this key
+    // go on purpose. Probe it: take it, see if the OS agrees, hand it right
+    // back, and let the focus rule register it for real on the next blur.
+    let available = false;
+    try {
+      available = globalShortcut.register(wanted, () => sendVoiceCommand(action));
+      if (available) {
+        globalShortcut.unregister(wanted);
+      }
+    } catch {
+      available = false;
+    }
+    if (!available) {
+      globalVoiceHotkeys[action] = null;
+    }
+    result[action] = available;
+  }
+  return result;
+}
+
 function collectDeepLinkFromArgv(argv) {
   const link = argv.find((arg) => arg.startsWith(`${PROTOCOL}://`));
   if (link) {
@@ -1784,6 +1910,24 @@ if (!gotLock) {
     shell.openExternal(MAC_INPUT_MONITORING_SETTINGS_URL).catch(() => {});
   });
 
+  ipcMain.handle("pqp:global-voice-bind", (_event, accelerators) => {
+    const toggleMute =
+      accelerators && typeof accelerators === "object"
+        ? (accelerators.toggleMute ?? null)
+        : null;
+    const toggleDeafen =
+      accelerators && typeof accelerators === "object"
+        ? (accelerators.toggleDeafen ?? null)
+        : null;
+    if (
+      (toggleMute !== null && typeof toggleMute !== "string") ||
+      (toggleDeafen !== null && typeof toggleDeafen !== "string")
+    ) {
+      return { toggleMute: false, toggleDeafen: false };
+    }
+    return setGlobalVoiceHotkeys({ toggleMute, toggleDeafen });
+  });
+
   ipcMain.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);
     if (
@@ -1876,6 +2020,8 @@ if (!gotLock) {
     pttNativeSession.dispose();
     pttNativeShortcutRegistered = null;
     pttNativeShortcutHold.dispose();
+    globalVoiceHotkeys = { toggleMute: null, toggleDeafen: null };
+    globalVoiceRegistered = { toggleMute: null, toggleDeafen: null };
     globalShortcut.unregisterAll();
     if (tray && !tray.isDestroyed()) {
       tray.destroy();

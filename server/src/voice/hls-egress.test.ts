@@ -362,6 +362,69 @@ describe("live HLS egress", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * THE BUG REPORT THIS PINS: "música tocando pra uma pessoa e não pra
+   * outra, musica encerrando pra uma e tocando pra outra" — a 2-star review,
+   * 2026-09-18. The seated room hears the presenter's live screen audio
+   * regardless of any of this (a direct LiveKit subscription), so only the
+   * seatless HLS audience was ever affected, which is exactly "some people
+   * hear it and some don't": before this fix, a same-presenter reconcile
+   * looked at `videoTrackId` alone, so gaining, losing or replacing the
+   * screen's own audio sid while the video sid stayed put left the running
+   * Track Composite egress bound to whatever audio it started with, forever.
+   */
+  it("restarts when the screen's own audio sid changes but the video sid does not", async () => {
+    enableHls();
+    let egressN = 0;
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: `EG_${(egressN += 1)}` }),
+    );
+    const stop = vi.fn();
+    let audioTrackId: string | undefined = undefined;
+    setLiveHlsTestHooks({
+      egress: { startTrackCompositeEgress: start, stopEgress: stop },
+      findTracks: async () => ({ videoTrackId: "TR_V1", audioTrackId }),
+    });
+
+    // The share starts with no audio: the presenter has not ticked "share
+    // audio" yet, or the tab has not started playing anything.
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(first).not.toBeNull();
+    expect(start.mock.calls[0]![2]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: undefined }),
+    );
+
+    // The music starts: a new audio sid appears, same video sid throughout.
+    audioTrackId = "TR_A1";
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const second = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith("EG_1");
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1]![2]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A1" }),
+    );
+    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+
+    // Same audio sid again: nothing moves, same as the video-sid case.
+    const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(third).toEqual(second);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    // The browser hands the presenter a new audio track (the shared tab
+    // reloaded, or the source changed) without the video sid moving at all.
+    audioTrackId = "TR_A2";
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const fourth = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(start.mock.calls[2]![2]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A2" }),
+    );
+    expect(fourth?.hlsUrl).not.toBe(second?.hlsUrl);
+  });
+
   it("keeps the egress when the SFU cannot be asked which sid is live", async () => {
     enableHls();
     const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(

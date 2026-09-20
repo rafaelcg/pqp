@@ -374,6 +374,30 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return ipcRenderer.invoke("pqp:ptt-native-capability");
   },
 
+  /**
+   * Global mute/deafen toggle hotkeys. Same idea as `bindPushToTalk`, two
+   * accelerators at once: the renderer hands over the current toggle-mute
+   * and toggle-deafen accelerators (or `null` to let one go) and the main
+   * process registers each with `globalShortcut` while the window is not
+   * focused. Resolves with which of the two the OS actually took. On fire,
+   * the main process sends the same `pqp:voice-command` the tray menu uses,
+   * so there is one handler for "mute got toggled from outside the window".
+   */
+  bindGlobalVoiceHotkeys(accelerators) {
+    const toggleMute =
+      accelerators && typeof accelerators.toggleMute === "string"
+        ? accelerators.toggleMute
+        : null;
+    const toggleDeafen =
+      accelerators && typeof accelerators.toggleDeafen === "string"
+        ? accelerators.toggleDeafen
+        : null;
+    return ipcRenderer.invoke("pqp:global-voice-bind", {
+      toggleMute,
+      toggleDeafen,
+    });
+  },
+
   /** Call state for the tray icon and menu. */
   setVoiceState(state) {
     if (!state || typeof state !== "object") {
