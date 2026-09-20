@@ -51,24 +51,40 @@ answered ~18 calls. DB-derived blocks (`users`, `messages`, `activation`,
 `servers`, `cluster`) were never affected: every replica queries the same
 Postgres and reports the same numbers regardless of which one answers.
 
-The fix is `PQP_API_METRICS_ENDPOINTS`: a comma-separated list of admin
-metrics URLs, one per replica, scraped every run and combined with
-`merge_admin_metrics()` below into a single, correct payload before
-`render()` ever sees it -- process-local counters summed across replicas,
-DB-derived blocks taken from one (never summed, or they would double-count).
-Caddy exposes `/_replica/a` and `/_replica/b` on `api.pqp.gg` specifically
-for this (see the Caddyfile comment there): each bypasses the round-robin
-`(upstreams)` snippet and pins straight to one container, so this script can
-address a replica directly instead of hoping the load balancer picks the
-right one. Both routes stay token-protected -- the API itself still checks
-`Authorization: Bearer $ADMIN_METRICS_TOKEN` on `/api/admin/metrics` after
-Caddy forwards the request, so pinning a route exposes no new surface.
+THE FIX IS NOT A DEDICATED ROUTE PER REPLICA. An earlier version of this
+fix added `/_replica/a` / `/_replica/b` routes to `tools/api-host/Caddyfile`
+that were meant to bypass the round robin and pin straight to one
+container, but they did not work in production -- every request to them
+returned the SPA's catch-all instead of the metrics JSON, and there was no
+way to debug the live Caddy config from outside the box. Those routes are
+gone; do not re-add them.
 
-With `PQP_API_METRICS_ENDPOINTS` unset, this falls back to the single
-`{PQP_API_URL}/api/admin/metrics` scrape exactly as before -- a self-host or
-any single-replica deployment keeps working with no config change. See
-tools/monitoring/README.md and docs/MONITORING.md for the endpoint list and
-the merge rules.
+THE ACTUAL FIX: `collect_admin_metrics_snapshots()` scrapes the ordinary,
+load-balanced `{PQP_API_URL}/api/admin/metrics` REPEATEDLY -- a fresh
+request each time, exactly as unpredictably routed as before -- and keys
+each response by its own top-level `instanceId`, a per-process UUID
+regenerated every boot (`server/src/lib/bus.ts`'s `INSTANCE_ID`, carried on
+the payload by `server/src/services/metrics.ts`'s `AdminMetrics.instanceId`).
+Keeping only the latest snapshot per distinct `instanceId` and stopping once
+as many distinct ids have been seen as the payload's own `instanceCount`
+claims turns a sequence of scrapes against ONE unpredictable endpoint into
+the same thing a per-replica route would have provided: one snapshot per
+live replica, no Caddy change required at all. Bounded by
+`PQP_API_METRICS_MAX_SCRAPES` (default 8) so a stuck load balancer or a
+topology that never converges cannot spin this forever. A payload with no
+`instanceId` at all (an older API) is returned as the single snapshot with
+no repeated scrapes -- there is nothing to dedup on, so a self-host or a
+deployment that has not yet picked up the `instanceId` field keeps working
+exactly as before, at the old single-scrape cost.
+
+The collected snapshots are combined with `merge_admin_metrics()` below into
+a single, correct payload before `render()` ever sees it -- process-local
+counters summed across replicas, DB-derived blocks taken from one (never
+summed, or they would double-count). `PQP_API_METRICS_ENDPOINTS` still
+exists as an OPTIONAL override, comma-separated, for the rare deployment
+shape where each replica genuinely has its own directly reachable URL; it is
+no longer the primary mechanism and most deployments should leave it unset.
+See tools/monitoring/README.md and docs/MONITORING.md for the merge rules.
 
 Writes are atomic (write to .tmp, rename), same as pqp-box-metrics.py,
 because the textfile collector will happily read a half-written file
@@ -100,21 +116,21 @@ TEXTFILE_DIR = os.environ.get(
 FILENAME = "pqp_api.prom"
 
 
-def admin_metrics_endpoints() -> list[str]:
-    """The admin-metrics URL(s) to scrape, one GET each, merged into one payload.
+def admin_metrics_endpoints_override() -> list[str] | None:
+    """`PQP_API_METRICS_ENDPOINTS`, parsed, or `None` when unset/blank.
 
-    `PQP_API_METRICS_ENDPOINTS` is a comma-separated list, meant to be one
-    entry per API replica (e.g. `https://api.pqp.gg/_replica/a,https://
-    api.pqp.gg/_replica/b`, the two Caddy routes that pin straight to
-    `api-a`/`api-b` -- see tools/api-host/Caddyfile and the module docstring
-    above). Unset falls back to the single `{PQP_API_URL}/api/admin/metrics`
-    scrape this script always did, so a self-host or single-replica box needs
-    no config change.
+    This is an OPTIONAL override, not the primary mechanism -- see the
+    module docstring's "REPLICA-SPLIT METRICS" section. Most deployments
+    should leave it unset and let `collect_admin_metrics_snapshots()` dedup
+    the ordinary load-balanced endpoint by `instanceId` instead. Set it only
+    for a deployment shape where each replica genuinely has its own
+    directly reachable URL (comma-separated, one per replica).
     """
     raw = os.environ.get("PQP_API_METRICS_ENDPOINTS", "").strip()
     if not raw:
-        return [f"{API_URL}/api/admin/metrics"]
-    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+        return None
+    endpoints = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    return endpoints or None
 
 
 def write_atomic(name: str, body: str) -> None:
@@ -222,6 +238,71 @@ def fetch_admin_metrics_all(urls: list[str]) -> tuple[list[dict], int]:
     if not payloads:
         raise RuntimeError(f"all {len(urls)} admin-metrics endpoint(s) failed")
     return payloads, len(payloads)
+
+
+def collect_admin_metrics_snapshots() -> tuple[list[dict], int]:
+    """THE REPLICA-SPLIT FIX. Scrapes the single, load-balanced
+    `{PQP_API_URL}/api/admin/metrics` repeatedly -- a fresh request each
+    time, exactly as unpredictably routed across `api-a`/`api-b` as any other
+    request to that host -- and dedups the responses by their own top-level
+    `instanceId` (server/src/services/metrics.ts's `AdminMetrics.instanceId`,
+    a per-process UUID regenerated every boot: `server/src/lib/bus.ts`'s
+    `INSTANCE_ID`). Keeping only the LATEST snapshot per distinct
+    `instanceId` and stopping once as many distinct ids have been seen as
+    the payload's own `instanceCount` claims turns that unpredictable
+    sequence into one snapshot per live replica, with no Caddy route and no
+    per-replica URL required at all -- see the module docstring for why an
+    earlier version of this fix tried a dedicated route per replica and why
+    that did not work in production.
+
+    Returns the distinct per-instance payloads (ready for
+    `merge_admin_metrics()`) and the `instanceCount` the last payload with
+    one reported, so the caller can publish both how many were actually
+    collected and how many were expected -- a gap between the two is a real
+    thing to notice (a replica not answering, or stuck sticky routing that
+    never surfaces a second instance within the scrape budget), not
+    something to paper over.
+
+    BOUNDED by `PQP_API_METRICS_MAX_SCRAPES` (default 8, read fresh on every
+    call so a test or an operator can override it without reloading the
+    module): a stuck load balancer that always routes to the same replica,
+    or a topology that genuinely never converges, must not spin this
+    forever. Falling one instance short of `instanceCount` after the cap is
+    visible as `pqp_api_metrics_replicas_scraped` <
+    `pqp_api_metrics_instances_expected`, not a hang.
+
+    NO `instanceId` AT ALL (an older API, predating this field) returns that
+    single payload immediately with no repeated scrapes -- there is nothing
+    to dedup on, so repeating the request would only add load for no
+    benefit. This is also exactly what a self-host or single-replica
+    deployment on an older build already did, so nothing regresses for it.
+    """
+    url = f"{API_URL}/api/admin/metrics"
+    max_scrapes = max(1, int(os.environ.get("PQP_API_METRICS_MAX_SCRAPES", "8")))
+    seen: dict[str, dict] = {}
+    expected = 1
+    last_error: BaseException | None = None
+    for attempt in range(max_scrapes):
+        try:
+            payload = fetch_admin_metrics(url)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            print(
+                f"pqp-api-metrics-exporter: scrape {attempt + 1}/{max_scrapes} failed: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        instance_id = payload.get("instanceId")
+        if instance_id is None:
+            return [payload], 1
+        expected = payload.get("instanceCount") or expected
+        seen[instance_id] = payload
+        if len(seen) >= expected:
+            break
+    if not seen:
+        assert last_error is not None
+        raise last_error
+    return list(seen.values()), expected
 
 
 def fetch_ready() -> dict:
@@ -586,7 +667,12 @@ def merge_admin_metrics(payloads: list[dict]) -> dict:
     return merged
 
 
-def render(payload: dict, ready_payload: dict | None = None, replicas_scraped: int = 1) -> str:
+def render(
+    payload: dict,
+    ready_payload: dict | None = None,
+    replicas_scraped: int = 1,
+    instances_expected: int = 1,
+) -> str:
     ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
     postgres = checks.get("postgres", {})
@@ -983,10 +1069,19 @@ def render(payload: dict, ready_payload: dict | None = None, replicas_scraped: i
     gauge(
         lines,
         "pqp_api_metrics_replicas_scraped",
-        "How many admin-metrics endpoints answered this run, out of PQP_API_METRICS_ENDPOINTS "
-        "(or 1 for the single-endpoint fallback). Less than the configured count means a partial "
-        "scrape -- the numbers below are still real, just not the whole cluster's.",
+        "How many DISTINCT api-a/api-b instances (by instanceId) this run collected a snapshot "
+        "for, via collect_admin_metrics_snapshots(). 1 for a single-replica deployment or an "
+        "older API with no instanceId. Less than pqp_api_metrics_instances_expected means a "
+        "partial collection -- the numbers below are still real, just not the whole cluster's.",
         replicas_scraped,
+    )
+    gauge(
+        lines,
+        "pqp_api_metrics_instances_expected",
+        "instanceCount as reported by the admin-metrics payload: how many live instances this "
+        "run should have collected a snapshot from. Compare against "
+        "pqp_api_metrics_replicas_scraped to see a partial collection.",
+        instances_expected,
     )
     gauge(
         lines,
@@ -1025,15 +1120,20 @@ def main() -> int:
     # previous (possibly stale) success metrics in place would let Grafana
     # keep reading a confident, wrong, green number through an outage.
     try:
-        endpoints = admin_metrics_endpoints()
-        payloads, scraped = fetch_admin_metrics_all(endpoints)
+        override = admin_metrics_endpoints_override()
+        if override:
+            payloads, _ = fetch_admin_metrics_all(override)
+            expected = len(override)
+        else:
+            payloads, expected = collect_admin_metrics_snapshots()
         payload = merge_admin_metrics(payloads)
+        scraped = len(payloads)
         try:
             ready_payload = fetch_ready()
         except Exception as exc:  # noqa: BLE001
             print(f"pqp-api-metrics-exporter: /ready fetch failed, using admin block: {exc}", file=sys.stderr)
             ready_payload = None
-        body = render(payload, ready_payload, replicas_scraped=scraped)
+        body = render(payload, ready_payload, replicas_scraped=scraped, instances_expected=expected)
     except (
         urllib.error.URLError,
         RuntimeError,

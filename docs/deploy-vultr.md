@@ -627,22 +627,25 @@ this section's health checks do, so consecutive scrapes landed on a random
 replica and the series bounced between each one's own count instead of
 climbing monotonically. Prometheus read every drop as a counter reset and
 `increase()`/`rate()` inflated wildly, which produced a false "call failure
-rate 20%" alert. `tools/api-host/Caddyfile` carries two routes for this,
-`/_replica/a` and `/_replica/b`, that bypass the `(upstreams)` round robin
-above and pin straight to `api-a:3001` / `api-b:3001` (the loopback ports
-`127.0.0.1:3011`/`:3012` used for the health checks above are not an option
-here, since the exporter runs on the separate SFU box, off this machine's
-loopback). Point `PQP_API_METRICS_ENDPOINTS` at both:
+rate 20%" alert.
 
-```
-PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
-```
+A first fix added two Caddy routes, `/_replica/a` and `/_replica/b`, meant
+to bypass the `(upstreams)` round robin above and pin straight to
+`api-a:3001` / `api-b:3001` directly (the loopback ports
+`127.0.0.1:3011`/`:3012` used for the health checks above were never an
+option for this, since the exporter runs on the separate SFU box, off this
+machine's loopback). Those routes did not work in production -- every
+request to them returned the SPA's catch-all instead of the metrics JSON --
+and are no longer in the Caddyfile.
 
-in `/etc/pqp-api-metrics.env` on the SFU box, and the exporter scrapes both
-directly and merges them into the true cluster total instead of guessing
-from one. See `tools/monitoring/README.md` "Replica-split metrics" and
-`docs/MONITORING.md` for the full classification of which counters sum and
-which stay shared. Applying the Caddyfile change is a normal deploy through
-`pqp-deploy.sh`, which reloads Caddy and drains open WebSockets over 30s
-(pitfall #11 in `CLAUDE.md`) rather than dropping them, but is still worth
-timing outside a live event.
+The fix that actually works needs no Caddy change at all: the exporter
+scrapes the SAME round-robined `GET /api/admin/metrics` repeatedly and
+dedups the responses by the payload's own top-level `instanceId` (a
+per-process UUID regenerated every boot, `server/src/lib/bus.ts`'s
+`INSTANCE_ID`), stopping once it has seen as many distinct ids as the
+payload's `instanceCount` claims, or after `PQP_API_METRICS_MAX_SCRAPES`
+scrapes (default 8). See `tools/monitoring/README.md` "Replica-split
+metrics" and `docs/MONITORING.md` for the full mechanism and the
+classification of which counters sum and which stay shared. Nothing on this
+box needs to change for it -- the fix lives entirely in the exporter running
+on the SFU box.

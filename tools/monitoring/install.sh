@@ -31,12 +31,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector
 PQP_API_URL="${PQP_API_URL:-https://api.pqp.gg}"
 # Replica-split metrics (see tools/monitoring/README.md "Replica-split
-# metrics"): comma-separated admin-metrics URLs, one per API replica, e.g.
-#   PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
-# Left unset here, the exporter falls back to the single PQP_API_URL scrape
-# it always did -- set it in the environment before running this script (or
-# hand-edit /etc/pqp-api-metrics.env after) once tools/api-host/Caddyfile's
-# /_replica/a and /_replica/b routes are deployed on this box.
+# metrics") need NO extra config here: the exporter scrapes PQP_API_URL
+# repeatedly and dedups by the payload's own instanceId on its own, whether
+# this box is behind one API replica or several. PQP_API_METRICS_ENDPOINTS
+# below is an OPTIONAL override for the rare case of genuinely distinct,
+# directly reachable per-replica URLs -- leave it unset unless you actually
+# have that.
 PQP_API_METRICS_ENDPOINTS="${PQP_API_METRICS_ENDPOINTS:-}"
 
 echo "== textfile collector"
@@ -62,10 +62,10 @@ if [[ -n "${ADMIN_METRICS_TOKEN:-}" ]]; then
 PQP_API_URL=${PQP_API_URL}
 ADMIN_METRICS_TOKEN=${ADMIN_METRICS_TOKEN}
 ENV
-  # Only written when set -- an empty PQP_API_METRICS_ENDPOINTS in the env
-  # file would still be "unset" to the exporter's own fallback, but leaving
-  # the line out entirely keeps the file matching what a plain single-scrape
-  # install has always looked like.
+  # Only written when set -- this is the rare per-replica-URL override (see
+  # the comment above), not something a normal install needs. Leaving the
+  # line out entirely keeps the file matching what a plain install has
+  # always looked like, so the instanceId-dedup path is what runs.
   if [[ -n "$PQP_API_METRICS_ENDPOINTS" ]]; then
     echo "PQP_API_METRICS_ENDPOINTS=${PQP_API_METRICS_ENDPOINTS}" >>/etc/pqp-api-metrics.env
   fi

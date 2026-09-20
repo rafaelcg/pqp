@@ -313,17 +313,20 @@ class ReplicasScrapedGaugeTests(unittest.TestCase):
     def test_defaults_to_one(self):
         body = exporter.render(_base_payload())
         self.assertIn("pqp_api_metrics_replicas_scraped 1", body)
+        self.assertIn("pqp_api_metrics_instances_expected 1", body)
 
-    def test_reflects_the_count_passed_in(self):
-        body = exporter.render(_base_payload(), replicas_scraped=2)
-        self.assertIn("pqp_api_metrics_replicas_scraped 2", body)
+    def test_reflects_the_counts_passed_in(self):
+        body = exporter.render(_base_payload(), replicas_scraped=1, instances_expected=2)
+        self.assertIn("pqp_api_metrics_replicas_scraped 1", body)
+        self.assertIn("pqp_api_metrics_instances_expected 2", body)
 
 
-class AdminMetricsEndpointsTests(unittest.TestCase):
-    """`PQP_API_METRICS_ENDPOINTS` parsing -- the replica-split fix's config
-    seam. Unset must fall back to the single `{PQP_API_URL}/api/admin/metrics`
-    scrape this script always did, so a self-host / single-replica box needs
-    no config change (CLAUDE.md's own convention for every flag in this repo)."""
+class AdminMetricsEndpointsOverrideTests(unittest.TestCase):
+    """`PQP_API_METRICS_ENDPOINTS` parsing -- an OPTIONAL override, not the
+    primary mechanism (that is `collect_admin_metrics_snapshots()`'s
+    instanceId dedup, tested below). Unset/blank must return `None` so
+    `main()` falls through to the dedup path -- a self-host / single-replica
+    box needs no config change either way."""
 
     def setUp(self):
         self._saved = os.environ.get("PQP_API_METRICS_ENDPOINTS")
@@ -334,28 +337,22 @@ class AdminMetricsEndpointsTests(unittest.TestCase):
         else:
             os.environ["PQP_API_METRICS_ENDPOINTS"] = self._saved
 
-    def test_unset_falls_back_to_single_endpoint(self):
+    def test_unset_returns_none(self):
         os.environ.pop("PQP_API_METRICS_ENDPOINTS", None)
-        self.assertEqual(
-            exporter.admin_metrics_endpoints(),
-            [f"{exporter.API_URL}/api/admin/metrics"],
-        )
+        self.assertIsNone(exporter.admin_metrics_endpoints_override())
 
     def test_comma_separated_list_is_split_and_trimmed(self):
         os.environ["PQP_API_METRICS_ENDPOINTS"] = (
-            " https://api.pqp.gg/_replica/a , https://api.pqp.gg/_replica/b "
+            " https://api-a.internal/api/admin/metrics , https://api-b.internal/api/admin/metrics "
         )
         self.assertEqual(
-            exporter.admin_metrics_endpoints(),
-            ["https://api.pqp.gg/_replica/a", "https://api.pqp.gg/_replica/b"],
+            exporter.admin_metrics_endpoints_override(),
+            ["https://api-a.internal/api/admin/metrics", "https://api-b.internal/api/admin/metrics"],
         )
 
-    def test_blank_value_falls_back_like_unset(self):
+    def test_blank_value_returns_none(self):
         os.environ["PQP_API_METRICS_ENDPOINTS"] = "   "
-        self.assertEqual(
-            exporter.admin_metrics_endpoints(),
-            [f"{exporter.API_URL}/api/admin/metrics"],
-        )
+        self.assertIsNone(exporter.admin_metrics_endpoints_override())
 
 
 class FetchAdminMetricsAllTests(unittest.TestCase):
@@ -393,6 +390,179 @@ class FetchAdminMetricsAllTests(unittest.TestCase):
         exporter.fetch_admin_metrics = always_fails
         with self.assertRaises(RuntimeError):
             exporter.fetch_admin_metrics_all(["a", "b"])
+
+
+class CollectAdminMetricsSnapshotsTests(unittest.TestCase):
+    """`collect_admin_metrics_snapshots()` -- the ACTUAL replica-split fix.
+    No Caddy route, no per-replica URL: scrape the ordinary load-balanced
+    endpoint repeatedly and dedup by the payload's own `instanceId`, stopping
+    once `instanceCount` distinct ids have been seen or the scrape budget
+    (`PQP_API_METRICS_MAX_SCRAPES`) runs out. Mocks `fetch_admin_metrics`, no
+    network."""
+
+    def setUp(self):
+        self._orig_fetch = exporter.fetch_admin_metrics
+        self._saved_max_scrapes = os.environ.get("PQP_API_METRICS_MAX_SCRAPES")
+
+    def tearDown(self):
+        exporter.fetch_admin_metrics = self._orig_fetch
+        if self._saved_max_scrapes is None:
+            os.environ.pop("PQP_API_METRICS_MAX_SCRAPES", None)
+        else:
+            os.environ["PQP_API_METRICS_MAX_SCRAPES"] = self._saved_max_scrapes
+
+    def test_alternating_instance_ids_collect_both_snapshots(self):
+        # Simulates a round-robin load balancer: consecutive scrapes of the
+        # SAME url land on alternating replicas, each with its own
+        # instanceId, different calls counts, identical messages/activation.
+        payload_a = {
+            "instanceId": "instance-a",
+            "instanceCount": 2,
+            "calls": {"joinAttempts": 5},
+            "messages": {"last24h": 100},
+        }
+        payload_b = {
+            "instanceId": "instance-b",
+            "instanceCount": 2,
+            "calls": {"joinAttempts": 3},
+            "messages": {"last24h": 100},
+        }
+        cycle = [payload_a, payload_b]
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            payload = cycle[calls["n"] % len(cycle)]
+            calls["n"] += 1
+            return payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        self.assertEqual(expected, 2)
+        self.assertEqual(len(snapshots), 2)
+        ids = {snap["instanceId"] for snap in snapshots}
+        self.assertEqual(ids, {"instance-a", "instance-b"})
+        # Stopped as soon as both distinct ids were seen -- exactly 2 scrapes,
+        # not the full PQP_API_METRICS_MAX_SCRAPES budget.
+        self.assertEqual(calls["n"], 2)
+
+    def test_merged_result_sums_calls_and_does_not_double_messages(self):
+        payload_a = {
+            "instanceId": "instance-a",
+            "instanceCount": 2,
+            "calls": {"joinAttempts": 5, "joinConnected": 4},
+            "messages": {"last24h": 100},
+            "activation": {"window7d": {"signup": 12}},
+        }
+        payload_b = {
+            "instanceId": "instance-b",
+            "instanceCount": 2,
+            "calls": {"joinAttempts": 3, "joinConnected": 2},
+            "messages": {"last24h": 100},
+            "activation": {"window7d": {"signup": 12}},
+        }
+        cycle = [payload_a, payload_b]
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            payload = cycle[calls["n"] % len(cycle)]
+            calls["n"] += 1
+            return payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        merged = exporter.merge_admin_metrics(snapshots)
+        self.assertEqual(merged["calls"]["joinAttempts"], 8)
+        self.assertEqual(merged["calls"]["joinConnected"], 6)
+        self.assertEqual(merged["messages"]["last24h"], 100)
+        self.assertEqual(merged["activation"]["window7d"]["signup"], 12)
+
+    def test_never_exceeds_max_scrapes(self):
+        # A sticky load balancer that always answers with the SAME instance,
+        # while claiming a second one exists -- the collector must give up
+        # after the configured budget rather than looping forever.
+        os.environ["PQP_API_METRICS_MAX_SCRAPES"] = "5"
+        sticky_payload = {
+            "instanceId": "instance-a",
+            "instanceCount": 2,
+            "calls": {"joinAttempts": 1},
+        }
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            calls["n"] += 1
+            return sticky_payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        self.assertEqual(calls["n"], 5)
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(expected, 2)
+
+    def test_single_instance_deployment(self):
+        # API_REPLICAS=1: instanceCount is 1, so the very first scrape
+        # already satisfies it -- one snapshot, one fetch.
+        payload = {
+            "instanceId": "only-instance",
+            "instanceCount": 1,
+            "calls": {"joinAttempts": 9},
+        }
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            calls["n"] += 1
+            return payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(expected, 1)
+        merged = exporter.merge_admin_metrics(snapshots)
+        # A single-element merge must equal that payload unchanged.
+        self.assertIs(merged, payload)
+
+    def test_missing_instance_id_falls_back_to_single_scrape(self):
+        # An older API predating the instanceId field: nothing to dedup on,
+        # so this must behave exactly like the original single-scrape
+        # exporter -- one fetch, no repeats.
+        payload = {"calls": {"joinAttempts": 4}}
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            calls["n"] += 1
+            return payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(snapshots, [payload])
+        self.assertEqual(expected, 1)
+
+    def test_partial_failures_still_collect_the_others(self):
+        payload_a = {"instanceId": "instance-a", "instanceCount": 2, "calls": {"joinAttempts": 1}}
+        payload_b = {"instanceId": "instance-b", "instanceCount": 2, "calls": {"joinAttempts": 2}}
+        cycle = [RuntimeError("timeout"), payload_a, RuntimeError("timeout"), payload_b]
+        calls = {"n": 0}
+
+        def flaky(url):
+            item = cycle[calls["n"] % len(cycle)]
+            calls["n"] += 1
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        exporter.fetch_admin_metrics = flaky
+        snapshots, expected = exporter.collect_admin_metrics_snapshots()
+        ids = {snap["instanceId"] for snap in snapshots}
+        self.assertEqual(ids, {"instance-a", "instance-b"})
+        self.assertEqual(expected, 2)
+
+    def test_all_scrapes_failing_raises(self):
+        def always_fails(url):
+            raise RuntimeError("connection refused")
+
+        exporter.fetch_admin_metrics = always_fails
+        with self.assertRaises(RuntimeError):
+            exporter.collect_admin_metrics_snapshots()
 
 
 class MergeAdminMetricsTests(unittest.TestCase):

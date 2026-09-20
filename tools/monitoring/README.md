@@ -25,7 +25,7 @@ actually running on a box with a Prometheus textfile collector -- see
 
 | File | Role |
 |---|---|
-| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion) **and the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. With `PQP_API_METRICS_ENDPOINTS` set, scrapes every listed replica and merges them (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
+| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion) **and the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Scrapes the endpoint repeatedly and dedups by the payload's own `instanceId` (`collect_admin_metrics_snapshots()`), merging the distinct per-replica snapshots (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- no Caddy route or per-replica URL required; see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
 | `grafana-dashboard-growth.json` | Standing "pqp Growth" dashboard: signups, messages by scope, call attempts/connect/failure-rate/refusals, ring outcomes, watch-party reliability, playlist rejections, push delivery. Import and leave up. |
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
@@ -35,7 +35,7 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 5 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
 | `grafana-dashboard-event.json` | Event-scoped "pqp Event" dashboard: sockets, seated, watching (see below), pool in-use/queued, DB latency, egress box CPU, HLS rungs/sessions, restarts, rung deaths. |
 | `grafana-dashboard-live.json` | Standing "pqp Live" dashboard: online users, voice calls (mesh vs livekit), voice rooms by backend, largest/peak room size, watch party sessions/rungs (+ the same "no viewer count" note as the event dashboard), SFU box CPU, egress box CPU, DB pool + breaker, and the exporter's own scrape health. See "Live dashboard" below. |
-| `test_exporter.py` | `unittest` coverage for the exporter's `render()` (payload dict in, Prometheus text out) -- the by-backend zero-default behaviour, the breaker gauge, that no viewer gauge is invented, and the activation funnel series (both cohort windows, the conversion gauges, and the zero-default when a step has no data) -- plus `PQP_API_METRICS_ENDPOINTS` parsing, partial-failure scraping, and `merge_admin_metrics()`'s additive-vs-shared classification (`calls`/`pushDelivery` sum, `messages`/`activation`/`cluster` never double, `voice`/`liveHls`'s mixed fields land on the right side). Run with `python3 -m unittest tools/monitoring/test_exporter.py`. |
+| `test_exporter.py` | `unittest` coverage for the exporter's `render()` (payload dict in, Prometheus text out) -- the by-backend zero-default behaviour, the breaker gauge, that no viewer gauge is invented, and the activation funnel series (both cohort windows, the conversion gauges, and the zero-default when a step has no data) -- plus `collect_admin_metrics_snapshots()`'s `instanceId` dedup (alternating replicas, the `PQP_API_METRICS_MAX_SCRAPES` cap, a single-instance deployment, an older payload with no `instanceId`, partial scrape failures), the `PQP_API_METRICS_ENDPOINTS` override, and `merge_admin_metrics()`'s additive-vs-shared classification (`calls`/`pushDelivery` sum, `messages`/`activation`/`cluster` never double, `voice`/`liveHls`'s mixed fields land on the right side). Run with `python3 -m unittest tools/monitoring/test_exporter.py`. |
 
 ## Install
 
@@ -107,28 +107,38 @@ actually answered about 18 calls. DB-derived blocks (`users`, `messages`,
 queries the same Postgres and reports the same numbers regardless of which
 one answers.
 
-**The fix.** `PQP_API_METRICS_ENDPOINTS` (comma-separated) tells the exporter
-to scrape every replica directly and merge them into one correct payload
-before `render()` sees it, instead of the single, randomly-routed scrape:
+**The fix has no Caddy route in it.** A first attempt added `/_replica/a` /
+`/_replica/b` routes to `tools/api-host/Caddyfile` meant to bypass the round
+robin and pin straight to one container. It did not work in production --
+every request to those routes returned the SPA's catch-all instead of the
+metrics JSON, and there was no way to debug the live Caddy config from
+outside the box. Those routes are gone.
 
-```
-PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
-```
+**The actual fix: dedup by `instanceId`, no routing change required.**
+`collect_admin_metrics_snapshots()` scrapes the ordinary, round-robined
+`{PQP_API_URL}/api/admin/metrics` REPEATEDLY -- a fresh request each time,
+exactly as unpredictably routed as before -- and keys each response by its
+own top-level `instanceId`, a per-process UUID regenerated every boot
+(`server/src/lib/bus.ts`'s `INSTANCE_ID`, carried on the payload as
+`AdminMetrics.instanceId`). Keeping only the latest snapshot per distinct
+`instanceId` and stopping once as many distinct ids have been seen as the
+payload's own `instanceCount` claims turns a sequence of scrapes against ONE
+unpredictable endpoint into one snapshot per live replica -- the same result
+a per-replica route would have given, with no Caddy change at all. Bounded
+by `PQP_API_METRICS_MAX_SCRAPES` (default 8) so a stuck load balancer or a
+topology that never converges cannot spin this forever.
 
-`/_replica/a` and `/_replica/b` are two routes on `api.pqp.gg` in
-`tools/api-host/Caddyfile` that bypass the `(upstreams)` round robin and pin
-straight to `api-a:3001` / `api-b:3001`, rewriting to the real
-`/api/admin/metrics` path. Both stay token-protected: the API itself still
-requires `Authorization: Bearer $ADMIN_METRICS_TOKEN` on
-`/api/admin/metrics` after Caddy forwards the request, so pinning a route
-here exposes nothing new. Applying the Caddyfile change reloads Caddy
-(`pqp-deploy.sh`), which drains open WebSockets over 30s (CLAUDE.md pitfall
-#11) -- a reload, not a restart, but still worth doing outside a live event.
+The collected snapshots are merged into one correct payload before
+`render()` sees it, exactly as before. A payload with no `instanceId` at all
+(an older API) is returned as the single snapshot with no repeated scrapes,
+so a self-host or a deployment on an older build needs no config change and
+gets byte-for-byte the same output as before.
 
-Unset (the default until this is installed), the exporter falls back to the
-single `{PQP_API_URL}/api/admin/metrics` scrape it always did -- a self-host
-or single-replica deployment needs no config change and gets byte-for-byte
-the same output as before.
+`PQP_API_METRICS_ENDPOINTS` still exists as an OPTIONAL override
+(comma-separated), for the rare deployment shape where each replica
+genuinely has its own directly reachable URL. It is no longer the primary
+mechanism -- most deployments should leave it unset and let the `instanceId`
+dedup do the work.
 
 **The merge itself is the part that has to be correct, not just present.**
 `merge_admin_metrics()` in `pqp-api-metrics-exporter.py` classifies every
@@ -163,10 +173,14 @@ distinction directly: two payloads with different `calls` counts and
 identical `messages`/`activation` must sum the first and never double the
 second.
 
-`pqp_api_metrics_replicas_scraped` reports how many endpoints answered this
-run (1 for the single-endpoint fallback); less than the configured count
-means a partial scrape -- one replica down does not blank the textfile, it
-just means the numbers are one replica short until the other recovers.
+`pqp_api_metrics_replicas_scraped` reports how many distinct instances (by
+`instanceId`) this run actually collected a snapshot for (1 for a
+single-replica deployment or an older API with no `instanceId`).
+`pqp_api_metrics_instances_expected` is the `instanceCount` the payload
+itself reported. Scraped less than expected means a partial collection --
+one replica not answering, or a scrape budget that ran out before a second
+instance ever showed up -- and does not blank the textfile, it just means
+the numbers are one replica short until the other recovers.
 
 ## Alert rules
 
