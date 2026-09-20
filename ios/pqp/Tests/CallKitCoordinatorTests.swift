@@ -1,5 +1,6 @@
 import XCTest
 import CallKit
+import AVFoundation
 @testable import pqp
 
 /// `CallKitCoordinator`'s bookkeeping, pinned with the real `CXProvider` and
@@ -8,11 +9,13 @@ import CallKit
 /// to register a call with the system for real, so this is the only way to
 /// exercise the state machine at all.
 ///
-/// What is NOT covered here, and why: `provider(_:didActivate:)` /
-/// `didDeactivate` are a two-line pass-through into `RTCAudioSession`, a real
-/// WebRTC singleton, and asserting its internal state would make this suite
-/// depend on the simulator's actual audio session rather than on this file's
-/// own logic, for no branching this file controls.
+/// The CallKit audio handshake (`provider(_:didActivate:)` / `didDeactivate`
+/// and the CallKit-refused fallback) is covered too, since it turned out to
+/// carry real logic and not just a pass-through: with `useManualAudio` on, the
+/// coordinator must ALSO enable WebRTC's audio unit, and omitting that left
+/// every CallKit-carried call silent in both directions while video worked.
+/// A fake `WebRTCAudioControlling` records the handshake so the assertion runs
+/// without touching the real `RTCAudioSession` singleton.
 final class CallKitCoordinatorTests: XCTestCase {
     @MainActor
     private func makeCoordinator() -> (
@@ -22,6 +25,22 @@ final class CallKitCoordinatorTests: XCTestCase {
         let controller = FakeCXCallController()
         let coordinator = CallKitCoordinator(provider: provider, callController: controller)
         return (coordinator, provider, controller)
+    }
+
+    /// As `makeCoordinator`, plus a fake audio control so the CallKit audio
+    /// handshake can be observed.
+    @MainActor
+    private func makeAudioCoordinator() -> (
+        coordinator: CallKitCoordinator, provider: FakeCXProvider,
+        controller: FakeCXCallController, audio: FakeWebRTCAudioControl
+    ) {
+        let provider = FakeCXProvider()
+        let controller = FakeCXCallController()
+        let audio = FakeWebRTCAudioControl()
+        let coordinator = CallKitCoordinator(
+            provider: provider, callController: controller, audio: audio
+        )
+        return (coordinator, provider, controller, audio)
     }
 
     // MARK: - Outgoing
@@ -220,6 +239,69 @@ final class CallKitCoordinatorTests: XCTestCase {
         coordinator.reportConnected(room: .conversation("c1"))
         XCTAssertTrue(provider.connectedAt.isEmpty)
     }
+
+    // MARK: - CallKit audio handshake (the DM-call silence bug)
+
+    /// The regression this seam exists for. A DM call is mesh WebRTC wrapped
+    /// in CallKit; with `useManualAudio` armed at init, the call becomes
+    /// audible only when the coordinator, on CallKit activating the session,
+    /// both notifies WebRTC (`notifyDidActivate`) AND enables the audio unit
+    /// (`setAudioEnabled(true)`). The bug did only the first, so the VoIP unit
+    /// never started and the call was silent in both directions while video
+    /// (which needs no audio unit) worked. This asserts the second step.
+    ///
+    /// It fails against the bug: drop `setAudioEnabled(true)` from
+    /// `provider(_:didActivate:)` and `audio.audioEnabled` stays false here.
+    @MainActor
+    func testCallKitActivationEnablesWebRTCAudio() {
+        let (coordinator, _, _, audio) = makeAudioCoordinator()
+        // Manual audio is armed at init; nothing has enabled the unit yet.
+        XCTAssertTrue(audio.manualAudioEnabled)
+        XCTAssertFalse(audio.audioEnabled)
+
+        // The outgoing DM ring, then CallKit activating the audio session.
+        coordinator.reportOutgoingCall(room: .conversation("c1"), displayName: "Bob")
+        coordinator.provider(
+            CXProvider(configuration: .pqp), didActivate: AVAudioSession.sharedInstance()
+        )
+
+        XCTAssertEqual(audio.didActivateCount, 1)
+        XCTAssertTrue(
+            audio.audioEnabled,
+            "WebRTC audio must be enabled after CallKit activates the session, or the call is silent"
+        )
+    }
+
+    /// The mirror: CallKit deactivating the session stops the audio unit, so
+    /// it is not left running against a session CallKit has torn down.
+    @MainActor
+    func testCallKitDeactivationDisablesWebRTCAudio() {
+        let (coordinator, _, _, audio) = makeAudioCoordinator()
+        coordinator.provider(
+            CXProvider(configuration: .pqp), didActivate: AVAudioSession.sharedInstance()
+        )
+        XCTAssertTrue(audio.audioEnabled)
+
+        coordinator.provider(
+            CXProvider(configuration: .pqp), didDeactivate: AVAudioSession.sharedInstance()
+        )
+        XCTAssertEqual(audio.didDeactivateCount, 1)
+        XCTAssertFalse(audio.audioEnabled)
+    }
+
+    /// CallKit refusing the registration falls back to activating the session
+    /// directly, and that path must enable the audio unit too, the same second
+    /// step as the CallKit path, or a refused report is silent rather than
+    /// merely missing its lock-screen card.
+    @MainActor
+    func testCallKitRefusalFallbackEnablesWebRTCAudio() {
+        let (coordinator, _, controller, audio) = makeAudioCoordinator()
+        controller.nextError = NSError(domain: "test", code: 1)
+        coordinator.reportOutgoingCall(room: .conversation("c1"), displayName: "Bob")
+
+        XCTAssertEqual(audio.directActivations, 1)
+        XCTAssertTrue(audio.audioEnabled)
+    }
 }
 
 // MARK: - Fakes
@@ -274,6 +356,24 @@ private final class FakeCXCallController: CXCallControllerProviding {
         nextError = nil
         completion(error)
     }
+}
+
+/// Records the CallKit audio handshake in place of the real, process-wide
+/// `RTCAudioSession`. `audioEnabled` is the property the DM-call silence bug
+/// turned on: it must end true after CallKit activates the session.
+@MainActor
+private final class FakeWebRTCAudioControl: WebRTCAudioControlling {
+    private(set) var manualAudioEnabled = false
+    private(set) var audioEnabled = false
+    private(set) var didActivateCount = 0
+    private(set) var didDeactivateCount = 0
+    private(set) var directActivations = 0
+
+    func enableManualAudio() { manualAudioEnabled = true }
+    func notifyDidActivate(_ session: AVAudioSession) { didActivateCount += 1 }
+    func notifyDidDeactivate(_ session: AVAudioSession) { didDeactivateCount += 1 }
+    func setAudioEnabled(_ enabled: Bool) { audioEnabled = enabled }
+    func activateSessionDirectly() { directActivations += 1 }
 }
 
 @MainActor

@@ -117,6 +117,91 @@ final class SystemCXCallController: CXCallControllerProviding {
     }
 }
 
+// MARK: - WebRTC's audio session behind a protocol
+
+/// The slice of WebRTC's process-wide `RTCAudioSession` this coordinator
+/// drives, behind a protocol for two reasons.
+///
+/// One, so the CallKit audio handshake can be pinned by a test at all:
+/// `RTCAudioSession.sharedInstance()` is a real WebRTC singleton, so a test
+/// that let the coordinator touch it directly would both depend on the
+/// simulator's audio hardware and leak state into every other test in the
+/// same process (see `CallKitCoordinator.init`). A fake standing in here
+/// records the handshake instead.
+///
+/// Two, and this is the bug this seam exists to make impossible to reintroduce
+/// silently: with `useManualAudio` on, notifying WebRTC that the session
+/// activated (`audioSessionDidActivate`) is **not** enough to make the call
+/// audible. WebRTC's VoIP audio unit stays uninitialised, in both directions,
+/// until `isAudioEnabled` is set true, and it must be set false again when the
+/// session deactivates. Those are two separate operations, and the coordinator
+/// has to sequence both; keeping `setAudioEnabled` a first-class method here
+/// (rather than folding it inside a single `didActivate`) is what lets a test
+/// assert the coordinator actually performs it.
+@MainActor
+protocol WebRTCAudioControlling: AnyObject {
+    /// Hand the VoIP audio unit's lifetime to the coordinator: from here on
+    /// WebRTC does not start it on its own, only when `setAudioEnabled(true)`.
+    func enableManualAudio()
+    /// Tell WebRTC that CallKit activated the shared `AVAudioSession`.
+    func notifyDidActivate(_ session: AVAudioSession)
+    /// Tell WebRTC that CallKit deactivated the shared `AVAudioSession`.
+    func notifyDidDeactivate(_ session: AVAudioSession)
+    /// Permit (true) or stop and uninitialise (false) WebRTC's VoIP audio
+    /// unit. Under `useManualAudio`, THE line whose absence left every
+    /// CallKit-carried call silent: `audioSessionDidActivate` alone never
+    /// starts the unit.
+    func setAudioEnabled(_ enabled: Bool)
+    /// The CallKit-refused fallback: activate the audio session directly, the
+    /// pre-CallKit way, so a refused report degrades to "no lock-screen card"
+    /// rather than "no audio at all".
+    func activateSessionDirectly()
+}
+
+/// Real implementation, driving the WebRTC `RTCAudioSession` singleton. A thin
+/// wrapper for the same reason `SystemCXProvider` is: it isolates every place
+/// this file depends on WebRTC's exact audio-session API to one spot.
+@MainActor
+final class SystemWebRTCAudioControl: WebRTCAudioControlling {
+    private var session: RTCAudioSession { RTCAudioSession.sharedInstance() }
+
+    func enableManualAudio() {
+        session.useManualAudio = true
+    }
+
+    func notifyDidActivate(_ audioSession: AVAudioSession) {
+        session.audioSessionDidActivate(audioSession)
+    }
+
+    func notifyDidDeactivate(_ audioSession: AVAudioSession) {
+        session.audioSessionDidDeactivate(audioSession)
+    }
+
+    func setAudioEnabled(_ enabled: Bool) {
+        session.isAudioEnabled = enabled
+    }
+
+    func activateSessionDirectly() {
+        let session = self.session
+        session.lockForConfiguration()
+        try? session.setActive(true)
+        session.unlockForConfiguration()
+    }
+}
+
+/// A do-nothing stand-in used by a coordinator built on a fake `CXProvider`
+/// (i.e. a test) that did not inject its own audio control. It exists so such
+/// a coordinator can never touch the real `RTCAudioSession` singleton even on
+/// the fallback path, which would leak into the rest of the test process.
+@MainActor
+final class NoopWebRTCAudioControl: WebRTCAudioControlling {
+    func enableManualAudio() {}
+    func notifyDidActivate(_ session: AVAudioSession) {}
+    func notifyDidDeactivate(_ session: AVAudioSession) {}
+    func setAudioEnabled(_ enabled: Bool) {}
+    func activateSessionDirectly() {}
+}
+
 // MARK: - Configuration
 
 extension CXProviderConfiguration {
@@ -190,39 +275,40 @@ final class CallKitCoordinator: NSObject {
     /// resumed `welcome` does not call `reportOutgoingCall(connectedAt:)`
     /// twice for the same call.
     private var connectedRooms: Set<CallKitRoom> = []
-    /// Whether this is the app's one real coordinator rather than a test's
-    /// instance built on fakes. Read by `activateAudioWithoutCallKit` too:
-    /// a fake coordinator's "CallKit refused" fallback must not touch the
-    /// real, process-wide `RTCAudioSession` either, for the same reason
-    /// `init` below only flips `useManualAudio` for the real one.
-    private let isReal: Bool
+    /// WebRTC's audio session, behind a protocol. The one real coordinator
+    /// the app wires up gets `SystemWebRTCAudioControl`, which drives the
+    /// process-wide `RTCAudioSession` singleton; a test built on a fake
+    /// `CXProvider` that injects nothing gets `NoopWebRTCAudioControl`, so it
+    /// can never touch that singleton and leak into another test.
+    private let audio: WebRTCAudioControlling
 
     init(
         provider: CXProviding? = nil,
-        callController: CXCallControllerProviding = SystemCXCallController()
+        callController: CXCallControllerProviding = SystemCXCallController(),
+        audio: WebRTCAudioControlling? = nil
     ) {
-        // Whether this is the one real coordinator the app wires up, versus
-        // a test's instance built on fakes. `RTCAudioSession` is a process
-        // singleton, and `pqpTests` runs every test in one process: a fake
-        // coordinator flipping `useManualAudio` on would leak into every
-        // OTHER test that exercises `VoiceClient.startAudio()` afterward,
-        // with nothing left in the process to ever call
-        // `audioSessionDidActivate` and turn the audio engine back on. This
-        // is not hypothetical, it crashed `VoiceRosterDeltaTests` the first
-        // time this file's own tests ran in the same process.
-        isReal = provider == nil
+        // A coordinator built with a real (nil) provider is the app's one, and
+        // drives the real audio session; one built on a fake provider is a
+        // test's, and must not. `RTCAudioSession` is a process singleton and
+        // `pqpTests` runs every test in one process, so a test coordinator
+        // touching it would leak `useManualAudio` into every OTHER test that
+        // exercises `VoiceClient.startAudio()` afterward, with nothing left in
+        // the process to call `audioSessionDidActivate` and turn the engine
+        // back on. This is not hypothetical, it crashed `VoiceRosterDeltaTests`
+        // the first time this file's own tests ran in the same process.
         self.provider = provider ?? SystemCXProvider(configuration: .pqp)
         self.callController = callController
+        self.audio = audio ?? (provider == nil ? SystemWebRTCAudioControl() : NoopWebRTCAudioControl())
         super.init()
         self.provider.setDelegate(self)
-        guard isReal else { return }
         // From here on WebRTC's own audio unit only starts when THIS
-        // coordinator says so (`provider(_:didActivate:)`), never on its own:
-        // that is the mistake this file exists to avoid. `startAudio` in
-        // `VoiceClient` reads this same flag and skips its old direct
-        // `setActive(true)` once it is set, which is what makes this line
-        // the single switch between the two behaviours.
-        RTCAudioSession.sharedInstance().useManualAudio = true
+        // coordinator says so (`provider(_:didActivate:)` sets it enabled),
+        // never on its own: that is the mistake this file exists to avoid.
+        // `startAudio` in `VoiceClient` reads `useManualAudio` and skips its
+        // old direct `setActive(true)` once it is set, which is what makes
+        // this the single switch between the two behaviours. (A no-op on the
+        // Noop control, so a test coordinator leaves the singleton alone.)
+        self.audio.enableManualAudio()
     }
 
     /// Which owner a room belongs to.
@@ -330,19 +416,14 @@ final class CallKitCoordinator: NSObject {
     }
 
     /// The pre-CallKit path, used only when CallKit itself refused to take
-    /// the call: activates the session directly rather than leaving the room
-    /// mute under `useManualAudio` with nothing left to turn it on. A no-op
-    /// for a fake coordinator: `init` never put the real singleton into
-    /// manual mode for one, so there is nothing here to fall back from, and
-    /// touching the process's real `RTCAudioSession` from a test would be
-    /// its own bug.
+    /// the call: activates the session directly AND enables the audio unit,
+    /// rather than leaving the room mute under `useManualAudio` with nothing
+    /// left to turn it on. Enabling audio is the same second step
+    /// `provider(_:didActivate:)` performs on the CallKit path, and just as
+    /// load-bearing here. A no-op on a test coordinator's Noop control.
     private func activateAudioWithoutCallKit() {
-        guard isReal else { return }
-        let session = RTCAudioSession.sharedInstance()
-        session.lockForConfiguration()
-        try? session.setActive(true)
-        session.unlockForConfiguration()
-        session.isAudioEnabled = true
+        audio.activateSessionDirectly()
+        audio.setAudioEnabled(true)
     }
 }
 
@@ -417,17 +498,35 @@ extension CallKitCoordinator: CXProviderDelegate {
     }
 
     /// THIS is where WebRTC's audio engine is allowed to start, never before.
-    /// `RTCAudioSession.audioSessionDidActivate` is the hook WebRTC ships
-    /// specifically for a host that hands audio-session activation to
-    /// something else (here, CallKit). Calling `setActive` ourselves ahead of
-    /// this, under `useManualAudio`, is the mistake this file exists to
-    /// avoid: two callers fighting over one audio session, one of them
-    /// silent.
+    /// Two operations, both required, and the bug that stranded every
+    /// CallKit-carried call in silence (video working throughout, since video
+    /// needs no audio unit) was performing only the first:
+    ///
+    /// 1. `notifyDidActivate` -> `RTCAudioSession.audioSessionDidActivate`, the
+    ///    hook WebRTC ships for a host that hands session activation to
+    ///    something else (here, CallKit). This tells WebRTC the session is now
+    ///    active; on its own it does NOT start the VoIP audio unit.
+    /// 2. `setAudioEnabled(true)`. Under `useManualAudio` the unit stays
+    ///    uninitialised until this is set, in both directions. Without it the
+    ///    call is mute no matter that the session activated.
+    ///
+    /// Calling `setActive` ourselves ahead of this, under `useManualAudio`, is
+    /// the other mistake this file avoids: two callers fighting over one audio
+    /// session, one of them silent.
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
+        MainActor.assumeIsolated {
+            self.audio.notifyDidActivate(audioSession)
+            self.audio.setAudioEnabled(true)
+        }
     }
 
+    /// The mirror of `didActivate`: hand the deactivation notice to WebRTC and
+    /// stop the audio unit, so it is not left running against a session
+    /// CallKit has torn down (an interruption, the call ending).
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
-        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
+        MainActor.assumeIsolated {
+            self.audio.notifyDidDeactivate(audioSession)
+            self.audio.setAudioEnabled(false)
+        }
     }
 }
