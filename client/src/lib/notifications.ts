@@ -710,6 +710,56 @@ async function deliverViaServiceWorker(
   }
 }
 
+/**
+ * A DM or group call ringing this device while the window is not in front.
+ *
+ * `IncomingCallOverlay` and the ringtone (`startSoundLoop("incomingCall")`)
+ * already cover a focused window — this exists for the same reason `deliver`
+ * does for messages: a backgrounded or minimized desktop app has nothing on
+ * screen to see, and only the shell's own IPC can raise it from behind
+ * another application when the notification is clicked. That is the desktop
+ * equivalent of a phone never ringing for an incoming call.
+ *
+ * Deliberately not gated by a channel/server level or `arrivalToast`: the
+ * overlay and the ringtone already ignore both — a call is not a message,
+ * and a muted conversation should not stop it from ringing here too.
+ */
+export function notifyIncomingCall(
+  call: { conversationId: string; kind: "dm" | "group"; callerName: string },
+  context: { windowFocused: boolean },
+): void {
+  if (context.windowFocused || doNotDisturb) {
+    return;
+  }
+  if (!state.desktop || notificationPermission() !== "granted") {
+    return;
+  }
+  const title = call.callerName;
+  const body = translateMessage(
+    call.kind === "group" ? "call.incoming.groupTitle" : "call.incoming.title",
+  );
+  const tag = `call:${call.conversationId}`;
+  const path = conversationRoutePath(call.conversationId);
+
+  const desktop = getDesktop();
+  if (desktop?.notify) {
+    desktop.notify({ title, body, tag, path });
+    return;
+  }
+
+  try {
+    const notification = new Notification(title, { body, tag, silent: true });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+      openNotificationTarget(path);
+    };
+  } catch {
+    // Android Chrome — see the identical fallback in `deliver`.
+    void deliverViaServiceWorker(title, body, tag, path);
+  }
+}
+
 function flush(channelId: string): void {
   const burst = bursts.get(channelId);
   if (!burst) {

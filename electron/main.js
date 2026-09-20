@@ -409,6 +409,15 @@ function showNotification({ title, body, tag, path: appPath }) {
   });
   liveNotifications.set(key, notification);
   notification.show();
+
+  // The OS banner alone can go unseen — Do Not Disturb, a "silent" banner
+  // style, or the window simply buried under others. flashFrame bounces the
+  // dock icon (macOS) or flashes the taskbar (Windows/most Linux WMs) until
+  // the window is focused again, which is the same nudge a ringing call or a
+  // waiting mention gets on every other platform.
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
+    mainWindow.flashFrame(true);
+  }
 }
 
 function applyBadgeCount(count) {
@@ -1164,7 +1173,12 @@ function createWindow(appUrl, allowedOrigin) {
 
   // The global push-to-talk key is held only while this window is elsewhere.
   // See syncPushToTalkRegistration for why focus is the switch.
-  mainWindow.on("focus", () => syncPushToTalkRegistration());
+  mainWindow.on("focus", () => {
+    syncPushToTalkRegistration();
+    // Whatever asked for attention (a notification, the badge) is answered
+    // now that the window is back in front.
+    mainWindow?.flashFrame(false);
+  });
   mainWindow.on("blur", () => syncPushToTalkRegistration());
 
   /**

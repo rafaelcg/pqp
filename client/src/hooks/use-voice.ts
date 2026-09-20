@@ -14,6 +14,7 @@ import {
   type WatchPartyGuestsMode,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
+import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
   audibleScreenPeerIds,
@@ -4693,6 +4694,23 @@ export function createVoiceController(transport: RealtimeTransport) {
           },
         ];
         emit();
+        // The ringing card and ringtone cover a focused window; a backgrounded
+        // or minimized one gets nothing on screen without this. See
+        // `notifyIncomingCall`.
+        notifyIncomingCall(
+          {
+            conversationId: message.conversationId,
+            kind: message.kind,
+            callerName: message.caller.displayName,
+          },
+          // No DOM in some test/SSR-ish contexts — default to "focused" so
+          // this silently no-ops there rather than throwing, matching how
+          // `ActivityContext.windowFocused` defaults elsewhere in this file.
+          {
+            windowFocused:
+              typeof document === "undefined" ? true : document.hasFocus(),
+          },
+        );
         break;
       case "call-ring-cancelled":
         if (removeIncomingCall(message.conversationId)) {
