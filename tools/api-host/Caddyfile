@@ -131,6 +131,30 @@ api.pqp.gg {
 		import upstreams
 	}
 
+	# REPLICA-SPLIT METRICS. api-a/api-b each hold their own in-memory
+	# counters (calls.*, product.pushDelivery.*, the in-memory fields of
+	# voice.*/liveHls.*), so scraping GET /api/admin/metrics through the
+	# round-robin (upstreams) snippet above lands on a random replica every
+	# time: the Prometheus series it fed bounced between each replica's own
+	# count and every dip read as a counter reset, inflating increase()/
+	# rate() wildly (see tools/monitoring/pqp-api-metrics-exporter.py's
+	# module docstring). These two routes bypass the load balancer entirely
+	# and pin straight to one container, so the exporter can scrape both and
+	# merge them into one correct, monotonic total instead of hoping the
+	# round robin picks the right one. Still token-protected: the API itself
+	# still requires Authorization: Bearer $ADMIN_METRICS_TOKEN on
+	# /api/admin/metrics after Caddy forwards the request, so pinning a
+	# route here exposes nothing new. See docs/MONITORING.md and
+	# tools/monitoring/README.md.
+	handle_path /_replica/a* {
+		rewrite * /api/admin/metrics
+		reverse_proxy api-a:3001
+	}
+	handle_path /_replica/b* {
+		rewrite * /api/admin/metrics
+		reverse_proxy api-b:3001
+	}
+
 	handle {
 		import upstreams
 	}
@@ -145,6 +169,20 @@ api.pqp.gg {
 # api.pqp.gg {
 # 	handle /health {
 # 		import upstreams
+# 	}
+#
+# 	# REPLICA-SPLIT METRICS. Mirrors MODE A above: pins straight to one
+# 	# container so the exporter can scrape both replicas and merge them
+# 	# instead of the round robin picking a random one. Still
+# 	# token-protected by the API's own Authorization check. See
+# 	# docs/MONITORING.md and tools/monitoring/README.md.
+# 	handle_path /_replica/a* {
+# 		rewrite * /api/admin/metrics
+# 		reverse_proxy api-a:3001
+# 	}
+# 	handle_path /_replica/b* {
+# 		rewrite * /api/admin/metrics
+# 		reverse_proxy api-b:3001
 # 	}
 #
 # 	handle {

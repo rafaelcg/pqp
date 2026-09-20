@@ -36,6 +36,40 @@ so every run of this script costs the API one live `SELECT 1` through the
 pool -- the same cost `GET /ready` itself has, and why this polls on a timer
 rather than continuously.
 
+REPLICA-SPLIT METRICS. Production runs two API replicas (`api-a`, `api-b`)
+behind Caddy's round robin (`tools/api-host/Caddyfile`), and each replica
+holds its own in-memory counters -- `calls.*`, `product.pushDelivery.*`, and
+the in-memory counter fields under `voice.*` / `liveHls.*` all live in one
+process's memory and reset to zero on that process's own boot. Scraping the
+load-balanced `https://api.pqp.gg/api/admin/metrics` on a timer means
+consecutive scrapes land on a random replica, so the single series this
+script used to write bounced non-monotonically between each replica's own
+count (e.g. 26, 13, 26, 14, 27...). Prometheus reads every drop as a counter
+reset and `increase()`/`rate()` inflate wildly across the reset -- this
+produced a false "call failure rate 20%" alert from a cluster that actually
+answered ~18 calls. DB-derived blocks (`users`, `messages`, `activation`,
+`servers`, `cluster`) were never affected: every replica queries the same
+Postgres and reports the same numbers regardless of which one answers.
+
+The fix is `PQP_API_METRICS_ENDPOINTS`: a comma-separated list of admin
+metrics URLs, one per replica, scraped every run and combined with
+`merge_admin_metrics()` below into a single, correct payload before
+`render()` ever sees it -- process-local counters summed across replicas,
+DB-derived blocks taken from one (never summed, or they would double-count).
+Caddy exposes `/_replica/a` and `/_replica/b` on `api.pqp.gg` specifically
+for this (see the Caddyfile comment there): each bypasses the round-robin
+`(upstreams)` snippet and pins straight to one container, so this script can
+address a replica directly instead of hoping the load balancer picks the
+right one. Both routes stay token-protected -- the API itself still checks
+`Authorization: Bearer $ADMIN_METRICS_TOKEN` on `/api/admin/metrics` after
+Caddy forwards the request, so pinning a route exposes no new surface.
+
+With `PQP_API_METRICS_ENDPOINTS` unset, this falls back to the single
+`{PQP_API_URL}/api/admin/metrics` scrape exactly as before -- a self-host or
+any single-replica deployment keeps working with no config change. See
+tools/monitoring/README.md and docs/MONITORING.md for the endpoint list and
+the merge rules.
+
 Writes are atomic (write to .tmp, rename), same as pqp-box-metrics.py,
 because the textfile collector will happily read a half-written file
 otherwise. On a failed fetch (network, expired token, API down) the ready/
@@ -64,6 +98,23 @@ TEXTFILE_DIR = os.environ.get(
     "PQP_TEXTFILE_DIR", "/var/lib/node_exporter/textfile_collector"
 )
 FILENAME = "pqp_api.prom"
+
+
+def admin_metrics_endpoints() -> list[str]:
+    """The admin-metrics URL(s) to scrape, one GET each, merged into one payload.
+
+    `PQP_API_METRICS_ENDPOINTS` is a comma-separated list, meant to be one
+    entry per API replica (e.g. `https://api.pqp.gg/_replica/a,https://
+    api.pqp.gg/_replica/b`, the two Caddy routes that pin straight to
+    `api-a`/`api-b` -- see tools/api-host/Caddyfile and the module docstring
+    above). Unset falls back to the single `{PQP_API_URL}/api/admin/metrics`
+    scrape this script always did, so a self-host or single-replica box needs
+    no config change.
+    """
+    raw = os.environ.get("PQP_API_METRICS_ENDPOINTS", "").strip()
+    if not raw:
+        return [f"{API_URL}/api/admin/metrics"]
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
 
 
 def write_atomic(name: str, body: str) -> None:
@@ -137,17 +188,40 @@ def voice_room_backend_totals(rooms) -> dict[str, dict[str, int]]:
     return totals
 
 
-def fetch_admin_metrics() -> dict:
+def fetch_admin_metrics(url: str) -> dict:
     if not TOKEN:
         raise RuntimeError("ADMIN_METRICS_TOKEN is not set")
     request = urllib.request.Request(
-        f"{API_URL}/api/admin/metrics",
+        url,
         headers={"User-Agent": "pqp-api-metrics-exporter/1 (+https://pqp.gg)", "Authorization": f"Bearer {TOKEN}"},
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         if response.status != 200:
             raise RuntimeError(f"unexpected status {response.status}")
         return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_admin_metrics_all(urls: list[str]) -> tuple[list[dict], int]:
+    """Scrape every endpoint in `urls`, tolerating partial failure.
+
+    Returns the payloads that succeeded (in the same order as `urls`) and how
+    many of `urls` that was. A single unreachable replica must not blank the
+    whole textfile -- the surviving replica's numbers are still real numbers,
+    just not the whole cluster's, so this proceeds with whatever it got and
+    lets the caller record `pqp_api_metrics_replicas_scraped` so a partial
+    scrape is visible rather than silently passed off as a full one. All
+    failing is the caller's problem (same as today's single-endpoint case):
+    an empty list here means "raise", not "render zeroes".
+    """
+    payloads: list[dict] = []
+    for url in urls:
+        try:
+            payloads.append(fetch_admin_metrics(url))
+        except Exception as exc:  # noqa: BLE001
+            print(f"pqp-api-metrics-exporter: scrape of {url} failed: {exc}", file=sys.stderr)
+    if not payloads:
+        raise RuntimeError(f"all {len(urls)} admin-metrics endpoint(s) failed")
+    return payloads, len(payloads)
 
 
 def fetch_ready() -> dict:
@@ -169,7 +243,350 @@ def fetch_ready() -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def render(payload: dict, ready_payload: dict | None = None) -> str:
+# ------------------------------------------------------------- merge (M1/M2)
+#
+# THE CRITICAL PART. One `GET /api/admin/metrics` payload is one process's
+# view. Some of what it carries is process-local, in-memory state that must
+# be SUMMED across replicas to get the cluster total (a call counted on
+# `api-a` never shows up on `api-b`'s side of the same counter). Some of it
+# is already a DB-derived, cluster-wide number that is IDENTICAL on every
+# replica (same query, same Postgres) and must be taken from exactly one --
+# summing it would silently double-count. Getting this backwards in either
+# direction produces a wrong number that looks plausible, which is worse
+# than the non-monotonic bounce this whole module exists to fix. Every rule
+# below cites the source file that justifies it; see this PR's description
+# for the full classification with line numbers.
+#
+# The policy is per TOP-LEVEL BLOCK (`calls`, `voice`, `users`, ...), because
+# that is what `AdminMetrics` (server/src/services/metrics.ts) is organised
+# around and what a new counter gets added to. A few blocks mix process-local
+# and DB-derived fields internally (`voice`, `liveHls`, `watchParty`,
+# `product`) and get a hand-written merge function instead of a blanket rule.
+
+
+def _is_number(value: object) -> bool:
+    # bool is a subclass of int in Python -- True + True must never become 2.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def take_first(a: object, b: object) -> object:
+    """SHARED / PER-INSTANCE-HEALTH policy: the first replica's value, never
+    summed. Correct for anything DB-derived (every replica queries the same
+    Postgres and gets the same answer) and for anything that only describes
+    'whichever process answered' (runtime, ready, config flags, ladders)."""
+    return a if a is not None else b
+
+
+def max_nullable(a: object, b: object) -> object:
+    """For a per-process HIGH-WATER MARK or peak (not cumulative, not shared):
+    neither summing nor picking one replica is right -- the true cluster peak
+    is the larger of what each process independently saw. `None` means 'that
+    replica has nothing to report' (e.g. no live session), not zero."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if a >= b else b
+
+
+def deep_sum(a: object, b: object) -> object:
+    """ADDITIVE policy: recursively sum numeric leaves across two payloads,
+    unioning dict keys so a reason/label seen by only one replica still
+    carries its count (e.g. `joinRefusedByReason`, `playlistRejectedByReason`).
+    A leaf that is not a number on at least one side (a string, a bool, a
+    list) is not summable and falls back to the first replica's value --
+    this is what keeps `deep_sum` safe to use even on a block that is mostly
+    but not entirely numeric."""
+    if isinstance(a, dict) or isinstance(b, dict):
+        a_dict = a if isinstance(a, dict) else {}
+        b_dict = b if isinstance(b, dict) else {}
+        keys = dict.fromkeys(list(a_dict.keys()) + list(b_dict.keys()))
+        return {k: deep_sum(a_dict.get(k), b_dict.get(k)) for k in keys}
+    if _is_number(a) and _is_number(b):
+        return a + b
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a  # two non-numeric values (e.g. two strings): not summable.
+
+
+# ----- blocks that mix process-local and DB-derived fields: hand-written ---
+
+
+def _merge_voice(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.voice`, built by `getVoiceActivitySnapshot()`
+    (server/src/ws/voice.ts).
+
+    `activeRooms`/`participants`/`largestRoomNow`/`rooms`/`backend`: when
+    `VOICE_REGISTRY=postgres` (production's own posture -- see
+    docs/deploy-vultr.md "Two replicas on one box"), `rooms` already comes
+    from `listVoiceRoomOccupancy()`, a query over the shared `voice_peers`
+    table, so every replica reports the SAME cluster-wide rooms -- take one,
+    never sum (voice.ts:1891-1906). Without the registry this is only that
+    process's own peer map, but that is exactly today's (buggy) single-scrape
+    behaviour for a self-host running one replica, not a regression.
+
+    `peakRoomSizeToday`: a per-process high-water mark (`noteRoomSizeForPeak`,
+    voice.ts:1567-1581) reset at boot / Sao Paulo midnight -- not shared, not
+    cumulative, so the true cluster peak is the max of what each process saw.
+
+    `cluster`/`roster`/`liveHls`: in-memory, since-boot, per-instance counters
+    (`clusterFrames`, `musicCluster`, `hlsReconcileRelay`, `rosterFramesSent`,
+    `hlsAudienceFramesSent`, `hlsTokenRemint` -- voice.ts:1600-1621,
+    1701-1734, 1922-1957) -- additive.
+
+    `registry`/`seats`: see the dedicated helpers below -- each mixes a
+    DB-derived field with in-memory counters.
+    """
+    a = a or {}
+    b = b or {}
+    if not a and not b:
+        return None
+    out: dict = {}
+    for key in ("activeRooms", "participants", "largestRoomNow", "rooms", "backend", "peakTrackedSince"):
+        out[key] = take_first(a.get(key), b.get(key))
+    out["peakRoomSizeToday"] = max_nullable(a.get("peakRoomSizeToday"), b.get("peakRoomSizeToday"))
+    out["cluster"] = deep_sum(a.get("cluster"), b.get("cluster"))
+    out["roster"] = deep_sum(a.get("roster"), b.get("roster"))
+    out["liveHls"] = deep_sum(a.get("liveHls"), b.get("liveHls"))
+    out["registry"] = _merge_voice_registry(a.get("registry"), b.get("registry"))
+    out["seats"] = _merge_voice_seats(a.get("seats"), b.get("seats"))
+    return out
+
+
+def _merge_voice_registry(a: dict | None, b: dict | None) -> dict | None:
+    """`voice.registry` (voice.ts:1631-1651). `writesPerMinute` is registry
+    writes issued BY THIS PROCESS in the trailing 60s -- each process writes
+    its own rows, so the cluster rate is the sum. `batch.*` (registry-batch.ts:
+    206-226) is mostly the same (cumulative since-boot counters, additive),
+    except `maxBatch`/`flushMsP95`/`maxPending`, which are a high-water mark
+    and a latency percentile -- not cumulative totals, so the larger of the
+    two is the closer answer (a true merged p95 would need the underlying
+    samples, which this payload does not carry)."""
+    a = a or {}
+    b = b or {}
+    if not a and not b:
+        return None
+    out = {"writesPerMinute": deep_sum(a.get("writesPerMinute"), b.get("writesPerMinute"))}
+    batch_a, batch_b = a.get("batch"), b.get("batch")
+    if batch_a is None and batch_b is None:
+        out["batch"] = None
+    else:
+        batch_a = batch_a or {}
+        batch_b = batch_b or {}
+        out["batch"] = {
+            "batchFlushes": deep_sum(batch_a.get("batchFlushes"), batch_b.get("batchFlushes")),
+            "rowsCoalesced": deep_sum(batch_a.get("rowsCoalesced"), batch_b.get("rowsCoalesced")),
+            "flushFailures": deep_sum(batch_a.get("flushFailures"), batch_b.get("flushFailures")),
+            "staleDropped": deep_sum(batch_a.get("staleDropped"), batch_b.get("staleDropped")),
+            "pending": deep_sum(batch_a.get("pending"), batch_b.get("pending")),
+            "maxBatch": max_nullable(batch_a.get("maxBatch"), batch_b.get("maxBatch")),
+            "flushMsP95": max_nullable(batch_a.get("flushMsP95"), batch_b.get("flushMsP95")),
+            "maxPending": max_nullable(batch_a.get("maxPending"), batch_b.get("maxPending")),
+        }
+    return out
+
+
+def _merge_voice_seats(a: dict | None, b: dict | None) -> dict | None:
+    """`voice.seats` (voice.ts:1812-1842). `idleOverAnHour`/`oldestIdleMinutes`
+    come from `countIdleVoiceSeats()`, a query over the shared `voice_peers`
+    table -- explicitly "SHARED ON PURPOSE" in that function's own comment, so
+    take one, never sum. Everything else is either an in-memory since-boot
+    counter (`staleRowWritesRefused`, `ghostsSwept`, `meshHoldsRefused`,
+    `idleAloneWarned`, `idleAloneDisconnected`) or a count of sockets held BY
+    THIS PROCESS (`meshResumeSockets`, `sockets`) -- a socket lives on exactly
+    one replica, so the cluster total is the sum. `None` on either side means
+    the registry was off on that replica (should not happen in practice --
+    both replicas share one `.env` -- but handled rather than assumed)."""
+    if a is None and b is None:
+        return None
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return {
+        "idleOverAnHour": take_first(a.get("idleOverAnHour"), b.get("idleOverAnHour")),
+        "oldestIdleMinutes": take_first(a.get("oldestIdleMinutes"), b.get("oldestIdleMinutes")),
+        "staleRowWritesRefused": deep_sum(a.get("staleRowWritesRefused"), b.get("staleRowWritesRefused")),
+        "ghostsSwept": deep_sum(a.get("ghostsSwept"), b.get("ghostsSwept")),
+        "meshHoldsRefused": deep_sum(a.get("meshHoldsRefused"), b.get("meshHoldsRefused")),
+        "idleAloneWarned": deep_sum(a.get("idleAloneWarned"), b.get("idleAloneWarned")),
+        "idleAloneDisconnected": deep_sum(a.get("idleAloneDisconnected"), b.get("idleAloneDisconnected")),
+        "meshResumeSockets": deep_sum(a.get("meshResumeSockets"), b.get("meshResumeSockets")),
+        "sockets": deep_sum(a.get("sockets"), b.get("sockets")),
+    }
+
+
+def _merge_live_hls(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.liveHls` (server/src/services/metrics.ts:512-655, built from
+    `liveHlsActivity()`/`llHlsActivity()` in hls-egress.ts / hls-remux.ts).
+
+    `enabled`/`configured`/`allowlisted`/`ladder`/`maxSessions`/`sweepsHere`/
+    `latency`: config flags or a percentile histogram -- take one, never sum.
+    `sweepsHere` in particular is `WORKER_MODE`-derived and identical on
+    `api-a`/`api-b` (both run `WORKER_MODE=api`) so which one is taken does
+    not matter in practice.
+
+    `sessions`/`rungs`/`silentSessions`/`micArchive`/`cameraSessions`/
+    `deferredStops`: CURRENT counts on this process (hls-egress.ts:2435-2465,
+    `rooms.values()` / `deferredStops.size`) -- an egress lives in exactly one
+    process's memory, so the cluster total is the sum, same reasoning as
+    `voice.seats.sockets` above.
+
+    `startsTotal`/`stopsTotal`/`restartsScheduled`/`restartsExhausted`/
+    `orphansStopped`/`skippedOwnedElsewhere`/`llStartFailures`/
+    `llStopFailures`/`llDemoted`/`keepWarmLoops`/`keepWarmRenders`: cumulative
+    since-boot counters, additive by the same reasoning as `calls.*`.
+
+    `oldestSessionMinutes`: the longest-running LOCAL session's age -- not
+    cumulative, not shared, so the cluster's oldest session is the max of
+    what each process reports (mirrors `voice.peakRoomSizeToday`).
+
+    `uncleaned`: `countDueSessions()`, a query over `hls_sessions` -- shared
+    across the cluster (metrics.ts:1011, "only `uncleaned` costs a query...").
+    Summing this would double the real count of leaked objects.
+
+    `stateFrames`/`playlistRejectedByReason`: in-memory since-boot counters
+    (watch-party-events.ts, hls-playlist-proxy.ts) -- additive.
+    """
+    a = a or {}
+    b = b or {}
+    if not a and not b:
+        return None
+    out: dict = {}
+    for key in ("enabled", "configured", "allowlisted", "ladder", "maxSessions", "sweepsHere", "latency"):
+        out[key] = take_first(a.get(key), b.get(key))
+    out["stateFrames"] = deep_sum(a.get("stateFrames"), b.get("stateFrames"))
+    out["playlistRejectedByReason"] = deep_sum(a.get("playlistRejectedByReason"), b.get("playlistRejectedByReason"))
+    for key in (
+        "sessions", "rungs", "silentSessions", "micArchive", "cameraSessions", "deferredStops",
+        "skippedOwnedElsewhere", "orphansStopped", "startsTotal", "stopsTotal",
+        "restartsScheduled", "restartsExhausted", "keepWarmLoops", "keepWarmRenders",
+        "llSessions", "llStartFailures", "llStopFailures", "llDemoted",
+    ):
+        out[key] = deep_sum(a.get(key), b.get(key))
+    out["oldestSessionMinutes"] = max_nullable(a.get("oldestSessionMinutes"), b.get("oldestSessionMinutes"))
+    out["uncleaned"] = take_first(a.get("uncleaned"), b.get("uncleaned"))
+    return out
+
+
+def _merge_watch_party(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.watchParty` (services/watch-parties.ts:1385-1394,
+    `sweepCounters`): in-memory since-boot counters -- additive.
+    `draftTtlMinutes`/`hostGoneMinutes` are the two sweep knobs' live values
+    (config, identical on both replicas) -- take one."""
+    a = a or {}
+    b = b or {}
+    if not a and not b:
+        return None
+    out: dict = {}
+    for key in ("sweptDrafts", "supersededDrafts", "sweptHostGone", "sweptNoShare", "heldByLiveStream", "streamCheckFailures"):
+        out[key] = deep_sum(a.get(key), b.get(key))
+    for key in ("draftTtlMinutes", "hostGoneMinutes"):
+        out[key] = take_first(a.get(key), b.get(key))
+    return out
+
+
+def _merge_product(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.product` (services/metrics.ts). `friendships`/
+    `pendingFriendRequests`/`attachments`/`invites`/`push` come from one SQL
+    query (`productCounts` in `computeAdminMetrics`) -- DB-derived, shared,
+    take one. `pushDelivery` is `product/push-metrics.ts`'s in-process,
+    since-boot send-outcome counters -- additive, and the example the task
+    that produced this file was built around."""
+    a = a or {}
+    b = b or {}
+    if not a and not b:
+        return None
+    out: dict = {}
+    for key in ("friendships", "pendingFriendRequests", "attachments", "invites", "push"):
+        out[key] = take_first(a.get(key), b.get(key))
+    out["pushDelivery"] = deep_sum(a.get("pushDelivery"), b.get("pushDelivery"))
+    return out
+
+
+# ----- top-level policy table ----------------------------------------------
+
+# SHARED / PER-INSTANCE-HEALTH: DB-derived (every replica queries the same
+# Postgres) or describes "whichever process answered" (runtime, ready, sfu,
+# config). Never summed -- see services/metrics.ts's own field comments,
+# which name each of these as either a SQL-backed block or explicitly
+# per-instance ("Which machine answered this request", "cluster" itself is
+# already the cross-instance sum via the `voice_instances` heartbeat table --
+# metrics.ts:163-177 -- so summing it AGAIN here would double it).
+_SHARED_TAKE_FIRST_KEYS = (
+    "generatedAt", "cacheTtlSeconds", "version", "excludedAccounts",
+    "runtime", "instanceId", "instanceCount", "cluster", "ready", "sfu",
+    "statusHistory", "users", "servers", "messages", "distinctSenders24h",
+    "activeTextChannels24h", "channels", "topServers24h", "acquisition",
+    "activation", "retention", "callRatings", "connections",
+    "channelDetail", "userDetail", "communities", "moderation",
+)
+
+# ADDITIVE: process-local in-memory counters, confirmed cumulative-since-boot
+# in their own source file (db-tx-metrics.ts, read-cache.ts, chat.ts's
+# `getPresenceFanoutStats`, call-metrics.ts). Recursively summed, including
+# their nested label maps (`byPath`, `byRoute`, `joinRefusedByReason`, ...).
+_ADDITIVE_SUM_KEYS = ("dbTx", "dbQueries", "readCache", "presence", "calls")
+
+# Blocks that mix process-local and DB-derived fields: hand-written mergers.
+_CUSTOM_MERGERS = {
+    "voice": _merge_voice,
+    "liveHls": _merge_live_hls,
+    "watchParty": _merge_watch_party,
+    "product": _merge_product,
+}
+
+_warned_unclassified_keys: set[str] = set()
+
+
+def _merge_pair(a: dict, b: dict) -> dict:
+    keys = dict.fromkeys(list(a.keys()) + list(b.keys()))
+    out: dict = {}
+    for key in keys:
+        if key in _CUSTOM_MERGERS:
+            out[key] = _CUSTOM_MERGERS[key](a.get(key), b.get(key))
+        elif key in _ADDITIVE_SUM_KEYS:
+            out[key] = deep_sum(a.get(key), b.get(key))
+        elif key in _SHARED_TAKE_FIRST_KEYS:
+            out[key] = take_first(a.get(key), b.get(key))
+        else:
+            # Not explicitly classified. Default to take-from-first, which is
+            # safe against double-counting: the wrong call on an additive
+            # counter merely undercounts it (same failure mode as scraping
+            # one replica today), while the wrong call on a shared/DB-derived
+            # number would silently double it. Logged once per process so a
+            # new top-level block on the payload does not ride along
+            # unclassified forever -- see this file's module docstring and
+            # tools/monitoring/README.md.
+            if key not in _warned_unclassified_keys:
+                _warned_unclassified_keys.add(key)
+                print(
+                    f"pqp-api-metrics-exporter: unclassified admin-metrics block '{key}' -- "
+                    "defaulting to take-from-first-replica; classify it in "
+                    "_merge_pair()'s policy tables (pqp-api-metrics-exporter.py)",
+                    file=sys.stderr,
+                )
+            out[key] = take_first(a.get(key), b.get(key))
+    return out
+
+
+def merge_admin_metrics(payloads: list[dict]) -> dict:
+    """Combine 1+ admin-metrics payloads (one per scraped replica) into the
+    single, correct payload `render()` expects. A single payload is returned
+    unchanged -- the single-endpoint fallback path never touches any of the
+    merge logic above, so a self-host / single-replica deployment's output is
+    byte-for-byte what it always was."""
+    if not payloads:
+        raise ValueError("merge_admin_metrics requires at least one payload")
+    merged = payloads[0]
+    for extra in payloads[1:]:
+        merged = _merge_pair(merged, extra)
+    return merged
+
+
+def render(payload: dict, ready_payload: dict | None = None, replicas_scraped: int = 1) -> str:
     ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
     postgres = checks.get("postgres", {})
@@ -565,6 +982,14 @@ def render(payload: dict, ready_payload: dict | None = None) -> str:
     )
     gauge(
         lines,
+        "pqp_api_metrics_replicas_scraped",
+        "How many admin-metrics endpoints answered this run, out of PQP_API_METRICS_ENDPOINTS "
+        "(or 1 for the single-endpoint fallback). Less than the configured count means a partial "
+        "scrape -- the numbers below are still real, just not the whole cluster's.",
+        replicas_scraped,
+    )
+    gauge(
+        lines,
         "pqp_api_metrics_collected_seconds",
         "Unix time this textfile was last written.",
         int(time.time()),
@@ -600,13 +1025,15 @@ def main() -> int:
     # previous (possibly stale) success metrics in place would let Grafana
     # keep reading a confident, wrong, green number through an outage.
     try:
-        payload = fetch_admin_metrics()
+        endpoints = admin_metrics_endpoints()
+        payloads, scraped = fetch_admin_metrics_all(endpoints)
+        payload = merge_admin_metrics(payloads)
         try:
             ready_payload = fetch_ready()
         except Exception as exc:  # noqa: BLE001
             print(f"pqp-api-metrics-exporter: /ready fetch failed, using admin block: {exc}", file=sys.stderr)
             ready_payload = None
-        body = render(payload, ready_payload)
+        body = render(payload, ready_payload, replicas_scraped=scraped)
     except (
         urllib.error.URLError,
         RuntimeError,

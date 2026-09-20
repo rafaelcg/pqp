@@ -616,3 +616,33 @@ network, so Caddy's active health checker logs a dial failure for it every
 `health_interval`. That is this mechanism working as designed — Caddy
 routes everything to `api-a`, the only thing actually running — not a
 misconfiguration to chase.
+
+**Two replicas broke the Prometheus metrics exporter, silently.**
+`tools/monitoring/pqp-api-metrics-exporter.py` scrapes `GET
+/api/admin/metrics` on a timer and writes a Prometheus series, but `api-a`
+and `api-b` each hold their own in-memory counters (`calls.*`,
+`product.pushDelivery.*`, the in-memory fields of `voice.*`/`liveHls.*`),
+and the exporter used to hit the same round-robined `https://api.pqp.gg`
+this section's health checks do, so consecutive scrapes landed on a random
+replica and the series bounced between each one's own count instead of
+climbing monotonically. Prometheus read every drop as a counter reset and
+`increase()`/`rate()` inflated wildly, which produced a false "call failure
+rate 20%" alert. `tools/api-host/Caddyfile` carries two routes for this,
+`/_replica/a` and `/_replica/b`, that bypass the `(upstreams)` round robin
+above and pin straight to `api-a:3001` / `api-b:3001` (the loopback ports
+`127.0.0.1:3011`/`:3012` used for the health checks above are not an option
+here, since the exporter runs on the separate SFU box, off this machine's
+loopback). Point `PQP_API_METRICS_ENDPOINTS` at both:
+
+```
+PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
+```
+
+in `/etc/pqp-api-metrics.env` on the SFU box, and the exporter scrapes both
+directly and merges them into the true cluster total instead of guessing
+from one. See `tools/monitoring/README.md` "Replica-split metrics" and
+`docs/MONITORING.md` for the full classification of which counters sum and
+which stay shared. Applying the Caddyfile change is a normal deploy through
+`pqp-deploy.sh`, which reloads Caddy and drains open WebSockets over 30s
+(pitfall #11 in `CLAUDE.md`) rather than dropping them, but is still worth
+timing outside a live event.

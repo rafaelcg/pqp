@@ -30,6 +30,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector
 PQP_API_URL="${PQP_API_URL:-https://api.pqp.gg}"
+# Replica-split metrics (see tools/monitoring/README.md "Replica-split
+# metrics"): comma-separated admin-metrics URLs, one per API replica, e.g.
+#   PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
+# Left unset here, the exporter falls back to the single PQP_API_URL scrape
+# it always did -- set it in the environment before running this script (or
+# hand-edit /etc/pqp-api-metrics.env after) once tools/api-host/Caddyfile's
+# /_replica/a and /_replica/b routes are deployed on this box.
+PQP_API_METRICS_ENDPOINTS="${PQP_API_METRICS_ENDPOINTS:-}"
 
 echo "== textfile collector"
 mkdir -p "$TEXTFILE_DIR"
@@ -54,6 +62,13 @@ if [[ -n "${ADMIN_METRICS_TOKEN:-}" ]]; then
 PQP_API_URL=${PQP_API_URL}
 ADMIN_METRICS_TOKEN=${ADMIN_METRICS_TOKEN}
 ENV
+  # Only written when set -- an empty PQP_API_METRICS_ENDPOINTS in the env
+  # file would still be "unset" to the exporter's own fallback, but leaving
+  # the line out entirely keeps the file matching what a plain single-scrape
+  # install has always looked like.
+  if [[ -n "$PQP_API_METRICS_ENDPOINTS" ]]; then
+    echo "PQP_API_METRICS_ENDPOINTS=${PQP_API_METRICS_ENDPOINTS}" >>/etc/pqp-api-metrics.env
+  fi
   chmod 0600 /etc/pqp-api-metrics.env
 fi
 test -s /etc/pqp-api-metrics.env || { echo "missing /etc/pqp-api-metrics.env; re-run with ADMIN_METRICS_TOKEN=..." >&2; exit 1; }

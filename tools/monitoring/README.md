@@ -25,7 +25,7 @@ actually running on a box with a Prometheus textfile collector -- see
 
 | File | Role |
 |---|---|
-| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion) **and the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too. |
+| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion) **and the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. With `PQP_API_METRICS_ENDPOINTS` set, scrapes every listed replica and merges them (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
 | `grafana-dashboard-growth.json` | Standing "pqp Growth" dashboard: signups, messages by scope, call attempts/connect/failure-rate/refusals, ring outcomes, watch-party reliability, playlist rejections, push delivery. Import and leave up. |
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
@@ -35,7 +35,7 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 5 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
 | `grafana-dashboard-event.json` | Event-scoped "pqp Event" dashboard: sockets, seated, watching (see below), pool in-use/queued, DB latency, egress box CPU, HLS rungs/sessions, restarts, rung deaths. |
 | `grafana-dashboard-live.json` | Standing "pqp Live" dashboard: online users, voice calls (mesh vs livekit), voice rooms by backend, largest/peak room size, watch party sessions/rungs (+ the same "no viewer count" note as the event dashboard), SFU box CPU, egress box CPU, DB pool + breaker, and the exporter's own scrape health. See "Live dashboard" below. |
-| `test_exporter.py` | `unittest` coverage for the exporter's `render()` (payload dict in, Prometheus text out) -- the by-backend zero-default behaviour, the breaker gauge, that no viewer gauge is invented, and the activation funnel series (both cohort windows, the conversion gauges, and the zero-default when a step has no data). Run with `python3 -m unittest tools/monitoring/test_exporter.py`. |
+| `test_exporter.py` | `unittest` coverage for the exporter's `render()` (payload dict in, Prometheus text out) -- the by-backend zero-default behaviour, the breaker gauge, that no viewer gauge is invented, and the activation funnel series (both cohort windows, the conversion gauges, and the zero-default when a step has no data) -- plus `PQP_API_METRICS_ENDPOINTS` parsing, partial-failure scraping, and `merge_admin_metrics()`'s additive-vs-shared classification (`calls`/`pushDelivery` sum, `messages`/`activation`/`cluster` never double, `voice`/`liveHls`'s mixed fields land on the right side). Run with `python3 -m unittest tools/monitoring/test_exporter.py`. |
 
 ## Install
 
@@ -88,6 +88,85 @@ ssh root@216.238.114.79 'cat /var/lib/node_exporter/textfile_collector/pqp_api.p
 failure (bad token, API unreachable); when it fails, every other gauge in the
 file is dropped rather than left stale, so a broken exporter reads as "no
 data" in Grafana rather than a confident wrong number.
+
+## Replica-split metrics
+
+The Vultr box runs `api-a` and `api-b` behind Caddy's round-robin load
+balancer (`tools/api-host/Caddyfile`'s `(upstreams)` snippet), and each
+replica holds its own in-memory counters -- `calls.*`,
+`product.pushDelivery.*`, and the in-memory fields of `voice.*`/`liveHls.*`
+all live in one process's memory and start at zero on that process's own
+boot. Scraping the load-balanced `https://api.pqp.gg/api/admin/metrics` on a
+timer means consecutive runs land on a random replica, so the single series
+this exporter used to write bounced non-monotonically between each replica's
+own count (observed: 26, 13, 26, 14, 27...). Prometheus reads every drop as a
+counter reset, so `increase()`/`rate()` inflate wildly across it -- this
+produced a false "call failure rate 20%" alert from a cluster that had
+actually answered about 18 calls. DB-derived blocks (`users`, `messages`,
+`activation`, `servers`, `cluster`) were never affected: every replica
+queries the same Postgres and reports the same numbers regardless of which
+one answers.
+
+**The fix.** `PQP_API_METRICS_ENDPOINTS` (comma-separated) tells the exporter
+to scrape every replica directly and merge them into one correct payload
+before `render()` sees it, instead of the single, randomly-routed scrape:
+
+```
+PQP_API_METRICS_ENDPOINTS=https://api.pqp.gg/_replica/a,https://api.pqp.gg/_replica/b
+```
+
+`/_replica/a` and `/_replica/b` are two routes on `api.pqp.gg` in
+`tools/api-host/Caddyfile` that bypass the `(upstreams)` round robin and pin
+straight to `api-a:3001` / `api-b:3001`, rewriting to the real
+`/api/admin/metrics` path. Both stay token-protected: the API itself still
+requires `Authorization: Bearer $ADMIN_METRICS_TOKEN` on
+`/api/admin/metrics` after Caddy forwards the request, so pinning a route
+here exposes nothing new. Applying the Caddyfile change reloads Caddy
+(`pqp-deploy.sh`), which drains open WebSockets over 30s (CLAUDE.md pitfall
+#11) -- a reload, not a restart, but still worth doing outside a live event.
+
+Unset (the default until this is installed), the exporter falls back to the
+single `{PQP_API_URL}/api/admin/metrics` scrape it always did -- a self-host
+or single-replica deployment needs no config change and gets byte-for-byte
+the same output as before.
+
+**The merge itself is the part that has to be correct, not just present.**
+`merge_admin_metrics()` in `pqp-api-metrics-exporter.py` classifies every
+top-level block on the payload as one of:
+
+- **ADDITIVE** -- process-local in-memory counters, summed across replicas:
+  `calls`, `product.pushDelivery`, `dbTx`, `dbQueries`, `readCache`,
+  `presence`, and the in-memory counter fields of `voice.*` / `liveHls.*`
+  (join/ring outcomes, push send outcomes, registry writes, roster frames,
+  running egress/session counts, lifecycle totals).
+- **SHARED** -- DB-derived blocks, taken from one replica, never summed:
+  `users`, `servers`, `messages`, `activation`, `acquisition`, `retention`,
+  `cluster` (already a cross-instance sum via the `voice_instances`
+  heartbeat table -- summing it again here would double it), `voice.rooms`/
+  `.participants`/`.activeRooms` (already cluster-wide via the shared
+  `voice_peers` registry when `VOICE_REGISTRY=postgres`, production's own
+  posture), and `liveHls.uncleaned` (a `hls_sessions` table scan).
+- **PER-INSTANCE health** -- `runtime`, `ready`, `sfu`: represent whichever
+  replica answered first, not summed and not averaged.
+- A per-process **high-water mark** (`voice.peakRoomSizeToday`,
+  `liveHls.oldestSessionMinutes`, the batch coalescer's `maxBatch`/
+  `flushMsP95`/`maxPending`) is neither summed nor taken from one -- the
+  cluster's true peak is the larger of what each replica saw.
+
+Anything on the payload not explicitly classified defaults to take-from-first
+(safe against double-counting) and logs a one-line warning to stderr, so a
+new counter added to `GET /api/admin/metrics` does not silently ride along
+unclassified -- see the module docstring above `merge_admin_metrics()` for
+the full policy tables and the source-file line citing each rule.
+`test_exporter.py`'s `MergeAdminMetricsTests` pins the additive-vs-shared
+distinction directly: two payloads with different `calls` counts and
+identical `messages`/`activation` must sum the first and never double the
+second.
+
+`pqp_api_metrics_replicas_scraped` reports how many endpoints answered this
+run (1 for the single-endpoint fallback); less than the configured count
+means a partial scrape -- one replica down does not blank the textfile, it
+just means the numbers are one replica short until the other recovers.
 
 ## Alert rules
 
