@@ -161,6 +161,84 @@ class RenderNewGaugesTests(unittest.TestCase):
             self.assertIn(name, body, msg=f"missing existing gauge {name}")
 
 
+class RenderGrowthMetricsTests(unittest.TestCase):
+    def _payload(self):
+        return _base_payload(
+            users={"total": 400, "last24h": 12},
+            servers={"total": 30, "last24h": 2},
+            messages={
+                "last24h": 100,
+                "byScope24h": {"dm": 40, "group": 10, "server": 50},
+            },
+            calls={
+                "joinAttempts": 20,
+                "joinConnected": 17,
+                "joinConnectedByTransport": {"mesh": 12, "livekit": 5},
+                "joinConnectedByScope": {"dm": 8, "group": 2, "server": 7},
+                "joinRefusedByReason": {"room-full": 3},
+                "rings": 6,
+                "ringsAnswered": 4,
+                "ringsDeclined": 1,
+                "ringsEndedByReason": {"timeout": 1, "cancelled": 0},
+            },
+            liveHls={
+                "sessions": 1,
+                "rungs": 3,
+                "orphansStopped": 0,
+                "startsTotal": 2,
+                "stopsTotal": 1,
+                "restartsScheduled": 4,
+                "restartsExhausted": 1,
+                "playlistRejectedByReason": {"expired": 9, "missing": 2},
+            },
+            product={
+                "pushDelivery": {
+                    "web": {"sent": 30, "failed": 2, "pruned": 1},
+                    "apns": {"sent": 5, "failed": 0, "pruned": 0},
+                    "fcm": {"sent": 7, "failed": 1, "pruned": 0},
+                }
+            },
+        )
+
+    def test_signups_and_messages(self):
+        body = exporter.render(self._payload())
+        self.assertIn("pqp_api_signups_24h 12", body)
+        self.assertIn("pqp_api_messages_24h 100", body)
+        self.assertIn('pqp_api_messages_24h_by_scope{scope="dm"} 40', body)
+        self.assertIn('pqp_api_messages_24h_by_scope{scope="server"} 50', body)
+
+    def test_call_outcomes(self):
+        body = exporter.render(self._payload())
+        self.assertIn("pqp_api_call_join_attempts_total 20", body)
+        self.assertIn("pqp_api_call_join_connected_total 17", body)
+        self.assertIn('pqp_api_call_join_connected_by_transport_total{transport="mesh"} 12', body)
+        self.assertIn('pqp_api_call_join_connected_by_scope_total{scope="dm"} 8', body)
+        self.assertIn('pqp_api_call_join_refused_total{reason="room-full"} 3', body)
+        # A refusal reason never seen still gets a zero series.
+        self.assertIn('pqp_api_call_join_refused_total{reason="no-access"} 0', body)
+        self.assertIn("pqp_api_call_rings_total 6", body)
+        self.assertIn('pqp_api_call_rings_ended_total{reason="timeout"} 1', body)
+
+    def test_watch_party_lifecycle_and_rejections(self):
+        body = exporter.render(self._payload())
+        self.assertIn("pqp_api_hls_starts_total 2", body)
+        self.assertIn("pqp_api_hls_restarts_scheduled_total 4", body)
+        self.assertIn("pqp_api_hls_restarts_exhausted_total 1", body)
+        self.assertIn('pqp_api_hls_playlist_rejected_total{reason="expired"} 9', body)
+
+    def test_push_delivery(self):
+        body = exporter.render(self._payload())
+        self.assertIn('pqp_api_push_delivery_total{platform="web",outcome="sent"} 30', body)
+        self.assertIn('pqp_api_push_delivery_total{platform="fcm",outcome="failed"} 1', body)
+
+    def test_absent_blocks_do_not_crash_render(self):
+        # An older payload with none of the growth blocks still renders (the
+        # optional blocks are skipped, the always-present ones default).
+        body = exporter.render(_base_payload())
+        self.assertIn("pqp_api_metrics_scrape_ok 1", body)
+        self.assertIn("pqp_api_hls_starts_total 0", body)
+
+
 class RenderFailureTests(unittest.TestCase):
     def test_render_failure_marks_scrape_not_ok(self):
         body = exporter.render_failure()
@@ -169,6 +247,7 @@ class RenderFailureTests(unittest.TestCase):
         self.assertNotIn("pqp_api_users_online", body)
         self.assertNotIn("pqp_api_voice_participants_by_backend", body)
         self.assertNotIn("pqp_api_db_breaker_open", body)
+        self.assertNotIn("pqp_api_call_join_attempts_total", body)
 
 
 if __name__ == "__main__":

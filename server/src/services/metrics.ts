@@ -29,7 +29,13 @@ import { llHlsActivity } from "../voice/hls-remux.js";
 import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
+  hlsPlaylistRejectionsByReason,
 } from "../voice/hls-playlist-proxy.js";
+import { callMetricsSnapshot, type CallMetrics } from "../voice/call-metrics.js";
+import {
+  pushDeliverySnapshot,
+  type PushDelivery,
+} from "./push-metrics.js";
 import {
   hlsTelemetryActivity,
   type HlsTelemetryActivity,
@@ -207,6 +213,15 @@ export interface AdminMetrics {
     /** Webhook and character messages in the last 24h, reported, not counted. */
     automated24h: number;
     byHour: number[];
+    /**
+     * The `last24h` total split by where it was sent: a server channel, a
+     * DM (1:1 conversation) or a group conversation. `dm + group + server`
+     * equals `last24h`. This is the only place "DMs sent" is broken out — the
+     * growth signal for private messaging as against server activity — and it
+     * is DB-derived from the same query as `last24h`, so it costs no extra
+     * round trip.
+     */
+    byScope24h: { dm: number; group: number; server: number };
   };
   distinctSenders24h: number;
   activeTextChannels24h: number;
@@ -292,6 +307,25 @@ export interface AdminMetrics {
     sockets: number;
     socketsOnDeltas: number;
   };
+  /**
+   * WHAT HAPPENS WHEN SOMEBODY TRIES TO BE IN A CALL. Server-truth outcome
+   * counts, cumulative since this process booted (a rate is Prometheus's to
+   * derive), on the instance that answered — the same convention as
+   * `voice.roster` and `dbTx`. The server routes every call, so the outcome is
+   * known for certain here and nowhere else. See `voice/call-metrics.ts`.
+   *
+   *  - `joinAttempts` / `joinConnected`: `join-voice-room` frames tried and
+   *    seated. `joinAttempts - joinConnected` is the refusal total, of which
+   *    `joinRefusedByReason` is the explained part (mesh cap, no access, a
+   *    client that cannot run the room's transport, ...). This is the number
+   *    the MoonKase spike (2026-09-05) had no way to show: 212 signups whose
+   *    calls the mesh cap refused, invisible until after the fact.
+   *  - `joinConnectedByTransport` / `...ByScope`: mesh vs livekit, and dm vs
+   *    group vs server — "how many mesh DM calls connected".
+   *  - the ring block: DM/group ring outcomes — started, answered, declined,
+   *    and unanswered ends (`timeout` rang out, `cancelled` room emptied).
+   */
+  calls: CallMetrics;
   voice: {
     activeRooms: number;
     participants: number;
@@ -594,6 +628,29 @@ export interface AdminMetrics {
      * increments it exists.
      */
     llDemoted: number;
+    /**
+     * WATCH-PARTY TRANSCODE LIFECYCLE since this process booted (cumulative,
+     * per instance — a rate is Prometheus's to derive). `startsTotal` /
+     * `stopsTotal` are sessions that began (`voice.hlsStarted`) and were torn
+     * down (`voice.hlsStopped`). `restartsScheduled` is a rung that died and
+     * is being brought back; `restartsExhausted` is `scheduleRestart` giving
+     * up (`voice.hlsFailed`) — an audience left on a blank pane. A rising
+     * `restartsScheduled` during one party is a stream that will not stay up,
+     * which pitfall 15 was and which no gauge here could show before.
+     */
+    startsTotal: number;
+    stopsTotal: number;
+    restartsScheduled: number;
+    restartsExhausted: number;
+    /**
+     * Playlist requests refused by the viewer capability, by reason
+     * (`missing` / `expired` / `bad-signature` / ...), cumulative. Counts EVERY
+     * rejection, ahead of the per-channel log suppression, so a rolling
+     * `expired` wave (pitfall 16, which stalled every web viewer) is a true
+     * level an alert can read rather than a rate-limited log line. Only reasons
+     * actually seen appear.
+     */
+    playlistRejectedByReason: Record<string, number>;
   };
   topServers24h: {
     name: string;
@@ -708,6 +765,15 @@ export interface AdminMetrics {
     attachments: { total: number; last24h: number };
     invites: { created24h: number; uses: number };
     push: { web: number; apns: number; fcm: number };
+    /**
+     * PUSH SEND OUTCOMES per platform since boot (cumulative, per instance),
+     * NOT subscription counts — `push` above is how many devices could be
+     * reached, this is what happened when the server actually sent. `sent` is
+     * accepted by the vendor, `pruned` is a dead token garbage-collected
+     * (normal, not a failure), `failed` is everything else (auth/config/outage
+     * — the one an alert watches). See `services/push-metrics.ts`.
+     */
+    pushDelivery: PushDelivery;
   };
 
   /** Backs the "moderação" tab. */
@@ -844,6 +910,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       previous24h: string;
       last_hour: string;
       automated24h: string;
+      dm_24h: string;
+      group_24h: string;
+      server_24h: string;
       senders: string;
       active_text_channels: string;
     }>(
@@ -851,6 +920,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
               COUNT(*) FILTER (WHERE f.human AND NOT f.recent)::text AS previous24h,
               COUNT(*) FILTER (WHERE f.human AND m.created_at >= now() - interval '1 hour')::text AS last_hour,
               COUNT(*) FILTER (WHERE NOT f.human AND f.recent)::text AS automated24h,
+              COUNT(*) FILTER (WHERE f.human AND f.recent AND c.kind = 'dm')::text AS dm_24h,
+              COUNT(*) FILTER (WHERE f.human AND f.recent AND c.kind = 'group')::text AS group_24h,
+              COUNT(*) FILTER (WHERE f.human AND f.recent AND c.kind = 'server')::text AS server_24h,
               COUNT(DISTINCT m.author_id) FILTER (WHERE f.human AND f.recent)::text AS senders,
               COUNT(DISTINCT m.channel_id) FILTER (
                 WHERE f.human AND f.recent AND c.kind = 'server' AND c.type = 'text'
@@ -1195,10 +1267,16 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       lastHour: Number(m?.last_hour ?? 0),
       automated24h: Number(m?.automated24h ?? 0),
       byHour: toHourly(messagesByHour.rows),
+      byScope24h: {
+        dm: Number(m?.dm_24h ?? 0),
+        group: Number(m?.group_24h ?? 0),
+        server: Number(m?.server_24h ?? 0),
+      },
     },
     distinctSenders24h: Number(m?.senders ?? 0),
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
+    calls: callMetricsSnapshot(),
     dbTx: { byPath: dbTxByPath() },
     dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),
@@ -1263,6 +1341,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       llStartFailures: llActivity.startFailures,
       llStopFailures: llActivity.stopFailures,
       llDemoted: llActivity.demoted,
+      startsTotal: hlsActivity.startsTotal,
+      stopsTotal: hlsActivity.stopsTotal,
+      restartsScheduled: hlsActivity.restartsScheduledTotal,
+      restartsExhausted: hlsActivity.restartsExhaustedTotal,
+      playlistRejectedByReason: hlsPlaylistRejectionsByReason(),
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,
@@ -1346,6 +1429,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         apns: Number(productCounts.rows[0]?.push_apns ?? 0),
         fcm: Number(productCounts.rows[0]?.push_fcm ?? 0),
       },
+      pushDelivery: pushDeliverySnapshot(),
     },
 
     moderation: {

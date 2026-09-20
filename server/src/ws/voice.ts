@@ -45,6 +45,16 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
+import {
+  noteJoinAttempt,
+  noteJoinConnected,
+  noteJoinRefused,
+  noteRingAnswered,
+  noteRingDeclined,
+  noteRingEnded,
+  noteRingStarted,
+  type CallScope,
+} from "../voice/call-metrics.js";
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { listBlockersOf } from "../services/blocks.js";
@@ -5794,6 +5804,11 @@ export async function handleVoiceMessage(
     if (!roomLimiter.take(user.id)) {
       return;
     }
+    // Every join past the per-user room rate limiter is one attempt. The
+    // outcome — connected, or one of the named refusal doors below — is what
+    // `calls.*` on GET /api/admin/metrics is built from; `joinAttempts` is
+    // its denominator, and `joinAttempts - joinConnected` the refusals.
+    noteJoinAttempt();
     const refuseResume = () => {
       if (payload.resumePeerId) {
         send(socket, {
@@ -5814,10 +5829,12 @@ export async function handleVoiceMessage(
     // peer that this refusal prevents from ever existing — including the one
     // that mints an SFU token.
     if (user.is_character) {
+      noteJoinRefused("character");
       refuseResume();
       return;
     }
     if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
+      noteJoinRefused("no-access");
       refuseResume();
       return;
     }
@@ -5841,10 +5858,12 @@ export async function handleVoiceMessage(
     // fires first is not observable by any client.
     const channel = await getChannel(payload.voiceChannelId);
     if (!channel) {
+      noteJoinRefused("invalid-channel");
       refuseResume();
       return;
     }
     if (channel.kind === "server" && !isVoiceRoomChannelType(channel.type)) {
+      noteJoinRefused("invalid-channel");
       refuseResume();
       return;
     }
@@ -5857,6 +5876,7 @@ export async function handleVoiceMessage(
       channel.kind !== "server" &&
       (await isDmSendBlocked(payload.voiceChannelId, user.id))
     ) {
+      noteJoinRefused("blocked");
       refuseResume();
       return;
     }
@@ -5877,6 +5897,7 @@ export async function handleVoiceMessage(
       channel.kind === "server" &&
       (await findTimeoutForChannel(user.id, payload.voiceChannelId))
     ) {
+      noteJoinRefused("timeout");
       refuseResume();
       return;
     }
@@ -5902,6 +5923,7 @@ export async function handleVoiceMessage(
         channel,
       );
       if (!hasPermission(resolved.permissions, Permission.CONNECT)) {
+        noteJoinRefused("no-access");
         refuseResume();
         return;
       }
@@ -5967,6 +5989,7 @@ export async function handleVoiceMessage(
         console.error("[voice] failed to read the watch party seat:", error);
       }
       if (!allowed) {
+        noteJoinRefused("watch-party-full");
         logEvent("voice.watchPartySeatRefused", {
           channelId: payload.voiceChannelId,
         });
@@ -6250,6 +6273,7 @@ export async function handleVoiceMessage(
       if (pinnedHere) {
         void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
       }
+      noteJoinRefused("transport-unsupported");
       logEvent("voice.transportUnsupported", {
         userId: user.id,
         voiceChannelId: payload.voiceChannelId,
@@ -6463,6 +6487,7 @@ export async function handleVoiceMessage(
     // ceiling is a property of the mesh, so it does not apply once media is
     // routed through an SFU.
     if (meshIsFull()) {
+      noteJoinRefused("room-full");
       logEvent("voice.roomFull", {
         userId: user.id,
         voiceChannelId: payload.voiceChannelId,
@@ -6647,6 +6672,17 @@ export async function handleVoiceMessage(
             : opening?.reason,
       });
     }
+    // Connected: a peer is seated (a fresh join or a resume reattaching a
+    // seat; both passed noteJoinAttempt above, so counting resumes here keeps
+    // `joinAttempts - joinConnected` equal to the refusals). `transport` is
+    // mesh|livekit; scope is the room kind (a conversation is dm or group).
+    const joinScope: CallScope =
+      channel.kind === "server"
+        ? "server"
+        : channel.kind === "group"
+          ? "group"
+          : "dm";
+    noteJoinConnected(transport, joinScope);
     logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
       peerId,
       userId: user.id,
@@ -7674,6 +7710,7 @@ async function handleCallRing(
     emptyRoomTimer: null,
   };
   conversationRings.set(conversationId, ring);
+  noteRingStarted(ring.kind);
 
   logEvent("voice.callRing", {
     conversationId,
@@ -7745,6 +7782,11 @@ function answerRing(conversationId: string, userId: string): boolean {
     return true;
   }
   ring.rung.delete(userId);
+  // Count the ring as answered on the FIRST answer only, so a group call where
+  // three people pick up is one answered ring, not three.
+  if (!ring.anyoneAnswered) {
+    noteRingAnswered(ring.kind);
+  }
   ring.anyoneAnswered = true;
   // Their other devices stop ringing; everyone still pending keeps ringing.
   fanToUserSockets(new Set([userId]), {
@@ -7804,6 +7846,7 @@ function declineRing(conversationId: string, userId: string): boolean {
       frame: declined,
     } satisfies VoiceCallFrame);
   }
+  noteRingDeclined();
   logEvent("voice.callDeclined", { conversationId, userId });
   if (ring.pending.size === 0) {
     if (ring.anyoneAnswered) {
@@ -7880,6 +7923,7 @@ async function endConversationRing(
     answered: ring.anyoneAnswered,
   });
   if (!ring.anyoneAnswered) {
+    noteRingEnded(reason);
     await postMissedCallMessage(ring);
   }
 }

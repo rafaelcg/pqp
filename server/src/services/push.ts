@@ -10,6 +10,7 @@ import {
 } from "./push-copy.js";
 import { isInvisible, resolveStatus } from "../ws/status.js";
 import { logEvent } from "../lib/log.js";
+import { notePush } from "./push-metrics.js";
 import {
   type ApnsConfig,
   isApnsEnabled,
@@ -999,17 +1000,20 @@ async function deliverWebPush(
     // consistent with both "working perfectly" and "never attempted" — see
     // CLAUDE.md pitfall 16 for the last time that ambiguity cost an afternoon.
     logEvent("push.webSent", { userId: subscription.user_id, tag: payload.tag });
+    notePush("web", "sent");
   } catch (error) {
     const statusCode = (error as { statusCode?: number }).statusCode;
     // 404/410 is the vendor saying this subscription no longer exists —
     // the user cleared site data, or the browser rotated it. Pruning on
     // this signal is the only garbage collection these rows get.
     if (statusCode === 404 || statusCode === 410) {
+      notePush("web", "pruned");
       await pruneSubscription(subscription.id).catch(() => {
         // Best-effort: the next 410 will try again.
       });
       return;
     }
+    notePush("web", "failed");
     console.error(
       `[push] send failed (${statusCode ?? "network"}) for user ${subscription.user_id}`,
     );
@@ -1054,10 +1058,12 @@ async function deliverApns(
       console.warn(
         `[apns] pruning device token for user ${subscription.user_id}: ${result.status} ${result.reason ?? ""}`.trim(),
       );
+      notePush("apns", "pruned");
       await pruneSubscription(subscription.id).catch(() => {});
       return;
     }
     if (result.status >= 400) {
+      notePush("apns", "failed");
       console.error(
         `[apns] send failed (${result.status} ${result.reason ?? "no reason"}) for user ${subscription.user_id}`,
       );
@@ -1066,9 +1072,11 @@ async function deliverApns(
     // Same reasoning as the web leg's success line above: a run of "no apns
     // in the logs" must mean nothing was sent, not merely nothing failed.
     logEvent("push.apnsSent", { userId: subscription.user_id, tag: payload.tag });
+    notePush("apns", "sent");
   } catch (error) {
     // A transport failure — dead session, timeout, TLS. Never fatal: this whole
     // module is fire-and-forget from the message fan-out's point of view.
+    notePush("apns", "failed");
     console.error(
       `[apns] send failed (network) for user ${subscription.user_id}:`,
       (error as Error).message,
@@ -1121,6 +1129,7 @@ async function deliverFcm(
       console.warn(
         `[fcm] pruning device token for user ${subscription.user_id}: ${result.status} ${result.errorCode ?? ""}`.trim(),
       );
+      notePush("fcm", "pruned");
       await pruneSubscription(subscription.id).catch(() => {});
       return;
     }
@@ -1128,15 +1137,18 @@ async function deliverFcm(
       // 401/403 is an auth/project problem (a bad or unshared service account),
       // 400 INVALID_ARGUMENT is usually a payload bug — both are ours to fix,
       // neither is a dead token, so the row stays and the reason is logged.
+      notePush("fcm", "failed");
       console.error(
         `[fcm] send failed (${result.status} ${result.errorCode ?? "no code"}) for user ${subscription.user_id}`,
       );
       return;
     }
     logEvent("push.fcmSent", { userId: subscription.user_id, tag: payload.tag });
+    notePush("fcm", "sent");
   } catch (error) {
     // A transport or token-exchange failure. Never fatal: fire-and-forget from
     // the fan-out's point of view, like the other two legs.
+    notePush("fcm", "failed");
     console.error(
       `[fcm] send failed (network) for user ${subscription.user_id}:`,
       (error as Error).message,

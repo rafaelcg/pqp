@@ -129,6 +129,25 @@ jobs:
           VITE_WATCH_PARTY_CHANNELS: ${{ vars.VITE_WATCH_PARTY_CHANNELS }}
           VITE_WATCH_PARTY_SCHEDULE: ${{ vars.VITE_WATCH_PARTY_SCHEDULE }}
           VITE_LIVE_REACTIONS: ${{ vars.VITE_LIVE_REACTIONS }}
+          # Grafana Faro (frontend errors + RUM). Hosted-only, same posture as
+          # Umami and Google Ads above: unset on a fork or self-host means the
+          # SDK never initialises (see client/src/lib/faro.ts — no URL, no
+          # init, no network). The collector URL carries a write-only ingest
+          # key that ships in any client bundle regardless, so it travels as a
+          # repository VARIABLE, not a secret. App version is the deployed
+          # commit, so a source-mapped stack trace names the release it is from.
+          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
+          VITE_FARO_APP_NAME: ${{ vars.VITE_FARO_APP_NAME }}
+          VITE_FARO_APP_VERSION: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Source-map upload to Faro, for de-obfuscated stack traces. All four
+          # are required and the upload is OFF until they are set; the build
+          # skips it (never fails) when the API key is absent. FARO_SOURCEMAP_API_KEY
+          # is a SECRET; the other three are non-secret ids from the Faro app's
+          # "Source maps" settings page. See client/vite.config.ts.
+          FARO_SOURCEMAP_API_KEY: ${{ secrets.FARO_SOURCEMAP_API_KEY }}
+          FARO_SOURCEMAP_ENDPOINT: ${{ vars.FARO_SOURCEMAP_ENDPOINT }}
+          FARO_SOURCEMAP_APP_ID: ${{ vars.FARO_SOURCEMAP_APP_ID }}
+          FARO_SOURCEMAP_STACK_ID: ${{ vars.FARO_SOURCEMAP_STACK_ID }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)

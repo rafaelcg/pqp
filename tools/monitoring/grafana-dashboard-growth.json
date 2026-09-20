@@ -1,0 +1,273 @@
+{
+  "_comment": [
+    "The 'Growth' dashboard: signups, messages, call outcomes, watch-party",
+    "reliability and push delivery, from GET /api/admin/metrics via the textfile",
+    "exporter in this directory (pqp-api-metrics-exporter.py). Standard Grafana",
+    "dashboard JSON model: Dashboards > New > Import, paste this file.",
+    "",
+    "Replace <PROMETHEUS_DATASOURCE_UID> with the real UID from Administration >",
+    "Data sources (the Grafana Cloud Prometheus stack the pqp-sfu-box dashboard",
+    "already uses); the import dialog also offers to remap it.",
+    "",
+    "EVERY panel needs pqp-api-metrics-exporter.py installed and running (see this",
+    "directory's README) -- without it they read 'No data', which is the honest",
+    "state, not a broken panel. All counters reset on an API deploy, which is a",
+    "real counter reset, so rate()/increase() handle it correctly.",
+    "",
+    "There is deliberately NO 'watch-party viewers' panel: pqp has no server-side",
+    "count of concurrent HLS viewers (the playlist proxy is a stateless",
+    "unauthenticated-per-request pull) -- read audience size from the stream's own",
+    "source, the same note the Event dashboard's 'Watching' panel carries.",
+    "Not provisioned from the repo: the UI is the source of truth once imported."
+  ],
+  "title": "pqp Growth",
+  "uid": "pqp-growth",
+  "tags": ["pqp", "growth"],
+  "timezone": "utc",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Signups (last 24h, rolling)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_signups_24h",
+          "legendFormat": "signups (24h)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_servers_24h",
+          "legendFormat": "servers created (24h)"
+        }
+      ],
+      "description": "New human accounts in the trailing 24h (users.last24h), and servers created. A rolling window, so it is a level, not a per-day bar; read the trend."
+    },
+    {
+      "id": 2,
+      "title": "Total accounts",
+      "type": "stat",
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_users_total",
+          "legendFormat": "accounts"
+        }
+      ],
+      "description": "All human accounts that exist (users.total)."
+    },
+    {
+      "id": 3,
+      "title": "Messages / day, by scope",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_messages_24h_by_scope",
+          "legendFormat": "{{scope}}"
+        }
+      ],
+      "description": "Human messages sent in the trailing 24h, split dm / group / server (messages.byScope24h). The only place DM volume is broken out from server activity."
+    },
+    {
+      "id": 4,
+      "title": "Call joins: attempts vs connected (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_join_attempts_total[1h]))",
+          "legendFormat": "attempts"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_join_connected_total[1h]))",
+          "legendFormat": "connected"
+        }
+      ],
+      "description": "join-voice-room attempts and the ones that seated a peer, per hour. The gap between them is the refusals broken down in the next panel."
+    },
+    {
+      "id": 5,
+      "title": "Call failure rate",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "1 - (sum(increase(pqp_api_call_join_connected_total[1h])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[1h])), 1))",
+          "legendFormat": "refused fraction"
+        }
+      ],
+      "description": "(attempts - connected) / attempts over the last hour. clamp_min avoids a divide-by-zero when nobody called. Spikes are the shape the MoonKase mesh-cap night had and no metric could show."
+    },
+    {
+      "id": 6,
+      "title": "Call refusals by reason (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (reason) (increase(pqp_api_call_join_refused_total[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "description": "Named refusal reasons per hour (room-full is the mesh cap, transport-unsupported a client that cannot run the room's media path, no-access/blocked/timeout the moderation gates)."
+    },
+    {
+      "id": 7,
+      "title": "Ring outcomes (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_rings_total[1h]))",
+          "legendFormat": "rings"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_rings_answered_total[1h]))",
+          "legendFormat": "answered"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_rings_declined_total[1h]))",
+          "legendFormat": "declined"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_call_rings_ended_total{reason=\"timeout\"}[1h]))",
+          "legendFormat": "rang out (timeout)"
+        }
+      ],
+      "description": "DM/group rings, and how they ended: answered, declined, or rang out. Answered / rings is the pickup rate."
+    },
+    {
+      "id": 8,
+      "title": "Watch-party reliability (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_hls_starts_total[1h]))",
+          "legendFormat": "sessions started"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_hls_restarts_scheduled_total[1h]))",
+          "legendFormat": "rung restarts scheduled"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_hls_restarts_exhausted_total[1h]))",
+          "legendFormat": "restarts exhausted (blank pane)"
+        }
+      ],
+      "description": "Transcode sessions started, plus the reliability signal: restarts scheduled (a rung that died) and restarts exhausted (gave up -> the audience saw a blank pane). No viewer count exists server-side; read turnout from the stream's own source."
+    },
+    {
+      "id": 9,
+      "title": "Playlist rejections by reason (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (reason) (increase(pqp_api_hls_playlist_rejected_total[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "description": "Watch-party playlist requests refused by the viewer capability. A rolling `expired` wave is CLAUDE.md pitfall 16, which stalled every web viewer of every party."
+    },
+    {
+      "id": 10,
+      "title": "Push sends by platform and outcome (per hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (platform, outcome) (increase(pqp_api_push_delivery_total[1h]))",
+          "legendFormat": "{{platform}} {{outcome}}"
+        }
+      ],
+      "description": "Push sends per platform (web/apns/fcm) and outcome. `pruned` is a dead token garbage-collected (normal, not a failure); `failed` is auth/config/outage."
+    },
+    {
+      "id": 11,
+      "title": "Push failure rate",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum(increase(pqp_api_push_delivery_total{outcome=\"failed\"}[1h])) / clamp_min(sum(increase(pqp_api_push_delivery_total{outcome=~\"sent|failed\"}[1h])), 1)",
+          "legendFormat": "failed / (sent + failed)"
+        }
+      ],
+      "description": "Failed sends over attempted sends (pruned excluded -- a dead token is not a failure). A sustained spike is a bad APNs/FCM key or an outage, per services/push.ts."
+    }
+  ]
+}

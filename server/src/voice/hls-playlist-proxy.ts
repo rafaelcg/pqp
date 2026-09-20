@@ -1,6 +1,10 @@
 import { getPool, DatabaseUnavailableError } from "../db.js";
 import { signRequest } from "../lib/s3.js";
-import { mintHlsPartyPass, verifyHlsViewerToken } from "./hls-viewer-token.js";
+import {
+  mintHlsPartyPass,
+  verifyHlsViewerToken,
+  type HlsViewerTokenFailure,
+} from "./hls-viewer-token.js";
 import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
@@ -250,6 +254,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   keepWarmRenders = 0;
   keepWarmDeclined = 0;
   keepWarmAdopted = 0;
+  playlistRejections.clear();
 }
 
 /**
@@ -631,6 +636,31 @@ export function hlsKeepWarmLoopsActive(): number {
 /** How many warm (non-viewer) renders the keep-warm loop(s) have performed. For metrics. */
 export function hlsKeepWarmRenders(): number {
   return keepWarmRenders;
+}
+
+/**
+ * Playlist requests refused by the viewer capability, by reason, cumulative
+ * since boot, for `liveHls.playlistRejectedByReason` on
+ * `GET /api/admin/metrics`.
+ *
+ * WHY THIS IS A COUNTER AND NOT JUST THE LOG. `voice.hlsPlaylistRejected` is
+ * rate-limited per channel per reason (30s) so it does not drown the log
+ * during a rolling `expired` wave — which is exactly the wave that stalled
+ * every web viewer in pitfall 16, and exactly the shape a "many rejections"
+ * alert needs a true count of. This counts EVERY rejection, before that
+ * suppression, so the level is real. Bounded by `HlsViewerTokenFailure`'s
+ * seven values; never a user id, token or channel.
+ */
+const playlistRejections = new Map<HlsViewerTokenFailure, number>();
+
+/** Record one playlist rejection. Called from the proxy route in api/index.ts. */
+export function noteHlsPlaylistRejected(reason: HlsViewerTokenFailure): void {
+  playlistRejections.set(reason, (playlistRejections.get(reason) ?? 0) + 1);
+}
+
+/** Snapshot for metrics: only reasons actually seen appear (bounded set). */
+export function hlsPlaylistRejectionsByReason(): Record<string, number> {
+  return Object.fromEntries(playlistRejections);
 }
 
 function touchKeepWarmSession(channelId: string, startedAt: number, now: number): void {

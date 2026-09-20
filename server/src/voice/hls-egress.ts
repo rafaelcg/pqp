@@ -524,6 +524,21 @@ const orphanStopBackoff = new Map<
  */
 let orphansStopped = 0;
 /**
+ * Watch-party transcode lifecycle counts, cumulative since this process
+ * started (reset only by `resetLiveHlsForTests`), for `liveHls.*` on
+ * `GET /api/admin/metrics`. Per instance, like `orphansStopped`: they belong
+ * to whichever machine answered. `starts`/`stops` are the `voice.hlsStarted` /
+ * `voice.hlsStopped` log lines as a level a "flapping" alert can evaluate;
+ * `restartsScheduled` is a rung that died and is being brought back, and
+ * `restartsExhausted` is `scheduleRestart` giving up (`voice.hlsFailed`) —
+ * the pair is the shape of a stream that will not stay up, which pitfall 15
+ * was, and which no gauge on this endpoint could show before.
+ */
+let hlsStartsTotal = 0;
+let hlsStopsTotal = 0;
+let restartsScheduledTotal = 0;
+let restartsExhaustedTotal = 0;
+/**
  * Egress ids the box-budget count has already logged as a ghost, so a
  * record that lives on for hours (exactly what makes it a ghost) does not
  * re-log every monitor tick. Cleared only by `resetLiveHlsForTests`; nothing
@@ -1843,6 +1858,10 @@ export function resetLiveHlsForTests(): void {
   reconcileQueue.clear();
   orphanStopBackoff.clear();
   orphansStopped = 0;
+  hlsStartsTotal = 0;
+  hlsStopsTotal = 0;
+  restartsScheduledTotal = 0;
+  restartsExhaustedTotal = 0;
   deferredStops.clear();
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
@@ -2383,6 +2402,24 @@ export interface LiveHlsActivity {
    * at zero; a number that stays up is a database that is not answering.
    */
   deferredStops: number;
+  /**
+   * Watch-party transcode lifecycle since this process started (NOT a live
+   * count — these only grow):
+   *  - `startsTotal` / `stopsTotal`: sessions started (`voice.hlsStarted`) and
+   *    torn down (`voice.hlsStopped` via `stopRoom`). Started well above
+   *    stopped over a party's life is normal; a `stopsTotal` climbing without
+   *    `startsTotal` is churn.
+   *  - `restartsScheduledTotal`: a rung died and is being brought back
+   *    (`voice.hlsRestartScheduled`). A stream that will not stay up shows up
+   *    here as a rising slope during a single party.
+   *  - `restartsExhaustedTotal`: `scheduleRestart` gave up after
+   *    `HLS_MAX_RESTARTS` in the window (`voice.hlsFailed`). Nonzero means an
+   *    audience got a blank pane, not a recovered stream.
+   */
+  startsTotal: number;
+  stopsTotal: number;
+  restartsScheduledTotal: number;
+  restartsExhaustedTotal: number;
 }
 
 /**
@@ -2421,6 +2458,10 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     cameraSessions: runningCameraCount(),
     skippedOwnedElsewhere: hlsSkippedOwnedElsewhereCount(),
     deferredStops: deferredStops.size,
+    startsTotal: hlsStartsTotal,
+    stopsTotal: hlsStopsTotal,
+    restartsScheduledTotal,
+    restartsExhaustedTotal,
   };
 }
 
@@ -2522,6 +2563,7 @@ function scheduleRestart(
   if (history.length >= HLS_MAX_RESTARTS) {
     failedUntil.set(channelId, now + FAILED_COOLDOWN_MS);
     restartHistory.delete(channelId);
+    restartsExhaustedTotal += 1;
     logEvent("voice.hlsFailed", {
       channelId,
       reason,
@@ -2538,6 +2580,7 @@ function scheduleRestart(
     RESTART_BACKOFF_BASE_MS * 2 ** (attempt - 1),
     RESTART_BACKOFF_MAX_MS,
   );
+  restartsScheduledTotal += 1;
   logEvent("voice.hlsRestartScheduled", {
     channelId,
     reason,
@@ -4796,6 +4839,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   cameraCooldownUntil.delete(channelId);
   voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
+  hlsStopsTotal += 1;
   logEvent("voice.hlsStopped", {
     channelId,
     reason,
@@ -5442,6 +5486,7 @@ async function startRoom(
   const ready = await waitForLivePlaylist(
     internalPlaylistUrl(channelId, startedAt, primary.rung.name),
   );
+  hlsStartsTotal += 1;
   logEvent("voice.hlsStarted", {
     channelId,
     presenterPeerId,

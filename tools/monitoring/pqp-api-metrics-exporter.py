@@ -80,6 +80,27 @@ def gauge(lines: list[str], name: str, help_text: str, value) -> None:
     lines.append(f"{name} {value}")
 
 
+def counter(lines: list[str], name: str, help_text: str, value) -> None:
+    """A cumulative-since-boot total. Emitted as a Prometheus `counter` so
+    rate()/increase() handle the reset-to-zero on an API restart correctly.
+    The API's own counters reset on deploy, which is a real reset, not a
+    rollover -- exactly what the counter type is for."""
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} counter")
+    lines.append(f"{name} {value}")
+
+
+def labeled_counter(
+    lines: list[str], name: str, help_text: str, samples: list[tuple[dict[str, str], object]]
+) -> None:
+    """labeled_gauge()'s counter sibling; one cumulative series per label set."""
+    lines.append(f"# HELP {name} {help_text}")
+    lines.append(f"# TYPE {name} counter")
+    for labels, value in samples:
+        label_str = ",".join(f'{key}="{val}"' for key, val in labels.items())
+        lines.append(f"{name}{{{label_str}}} {value}")
+
+
 def labeled_gauge(
     lines: list[str], name: str, help_text: str, samples: list[tuple[dict[str, str], object]]
 ) -> None:
@@ -157,6 +178,11 @@ def render(payload: dict, ready_payload: dict | None = None) -> str:
     voice = payload.get("voice", {})
     live_hls = payload.get("liveHls", {})
     cluster = payload.get("cluster", {})
+    users = payload.get("users", {})
+    servers = payload.get("servers", {})
+    messages = payload.get("messages", {})
+    calls = payload.get("calls", {})
+    product = payload.get("product", {})
     breaker = runtime.get("db", {}).get("breaker", {})
 
     lines: list[str] = []
@@ -292,6 +318,182 @@ def render(payload: dict, ready_payload: dict | None = None) -> str:
         "Leftover transcodes reapForeignEgresses has stopped since this process started. Belongs at zero.",
         live_hls.get("orphansStopped", -1),
     )
+
+    # ---------------------------------------------------------------- growth
+    # Product and ops counters for the growth dashboard (grafana-dashboard-growth.json).
+    # Everything below is either a 24h rolling window (a gauge) or a cumulative
+    # since-boot total (a counter, so rate()/increase() survive a deploy reset).
+
+    # Signups and message volume (24h rolling windows -> gauges).
+    gauge(
+        lines,
+        "pqp_api_users_total",
+        "All human accounts that exist (users.total).",
+        users.get("total", -1),
+    )
+    gauge(
+        lines,
+        "pqp_api_signups_24h",
+        "Human accounts created in the last 24 hours (users.last24h).",
+        users.get("last24h", -1),
+    )
+    gauge(
+        lines,
+        "pqp_api_servers_24h",
+        "Servers created in the last 24 hours (servers.last24h).",
+        servers.get("last24h", -1),
+    )
+    gauge(
+        lines,
+        "pqp_api_messages_24h",
+        "Human messages sent in the last 24 hours (messages.last24h).",
+        messages.get("last24h", -1),
+    )
+    by_scope = messages.get("byScope24h") or {}
+    if isinstance(by_scope, dict):
+        labeled_gauge(
+            lines,
+            "pqp_api_messages_24h_by_scope",
+            "Human messages in the last 24h split by where they were sent "
+            "(messages.byScope24h): dm, group, server. Sums to pqp_api_messages_24h.",
+            [({"scope": scope}, by_scope.get(scope, 0)) for scope in ("dm", "group", "server")],
+        )
+
+    # Calls: attempts, connected (by transport and scope), refusals by reason,
+    # and the DM/group ring outcomes. Server-truth, cumulative -> counters.
+    if isinstance(calls, dict) and calls:
+        counter(
+            lines,
+            "pqp_api_call_join_attempts_total",
+            "join-voice-room frames tried, past the per-user room limiter (calls.joinAttempts). "
+            "Denominator for the connect/refuse rates.",
+            calls.get("joinAttempts", 0),
+        )
+        counter(
+            lines,
+            "pqp_api_call_join_connected_total",
+            "Joins that seated a peer (calls.joinConnected). attempts - connected is the refusal total.",
+            calls.get("joinConnected", 0),
+        )
+        connected_transport = calls.get("joinConnectedByTransport") or {}
+        labeled_counter(
+            lines,
+            "pqp_api_call_join_connected_by_transport_total",
+            "Connected joins by media path (calls.joinConnectedByTransport). mesh and livekit both emitted.",
+            [
+                ({"transport": t}, connected_transport.get(t, 0))
+                for t in ("mesh", "livekit")
+            ],
+        )
+        connected_scope = calls.get("joinConnectedByScope") or {}
+        labeled_counter(
+            lines,
+            "pqp_api_call_join_connected_by_scope_total",
+            "Connected joins by room kind (calls.joinConnectedByScope): dm, group, server.",
+            [({"scope": s}, connected_scope.get(s, 0)) for s in ("dm", "group", "server")],
+        )
+        refused = calls.get("joinRefusedByReason") or {}
+        # Fixed reason set: emit all so a series exists before its first refusal.
+        refused_reasons = (
+            "no-access",
+            "blocked",
+            "timeout",
+            "character",
+            "invalid-channel",
+            "transport-unsupported",
+            "room-full",
+            "watch-party-full",
+        )
+        labeled_counter(
+            lines,
+            "pqp_api_call_join_refused_total",
+            "join-voice-room refusals by reason (calls.joinRefusedByReason). "
+            "room-full is the mesh cap that refused the MoonKase spike.",
+            [({"reason": r}, refused.get(r, 0)) for r in refused_reasons],
+        )
+        counter(
+            lines,
+            "pqp_api_call_rings_total",
+            "DM/group rings committed (calls.rings).",
+            calls.get("rings", 0),
+        )
+        counter(
+            lines,
+            "pqp_api_call_rings_answered_total",
+            "Rings where at least one person answered (calls.ringsAnswered).",
+            calls.get("ringsAnswered", 0),
+        )
+        counter(
+            lines,
+            "pqp_api_call_rings_declined_total",
+            "Rings someone actively declined (calls.ringsDeclined).",
+            calls.get("ringsDeclined", 0),
+        )
+        rings_ended = calls.get("ringsEndedByReason") or {}
+        labeled_counter(
+            lines,
+            "pqp_api_call_rings_ended_total",
+            "Unanswered rings that ended (calls.ringsEndedByReason): timeout rang out, cancelled emptied.",
+            [({"reason": r}, rings_ended.get(r, 0)) for r in ("timeout", "cancelled")],
+        )
+
+    # Watch-party transcode lifecycle (cumulative -> counters) and playlist
+    # rejections by reason.
+    counter(
+        lines,
+        "pqp_api_hls_starts_total",
+        "Watch-party transcode sessions started since boot (liveHls.startsTotal).",
+        live_hls.get("startsTotal", 0),
+    )
+    counter(
+        lines,
+        "pqp_api_hls_stops_total",
+        "Watch-party transcode sessions torn down since boot (liveHls.stopsTotal).",
+        live_hls.get("stopsTotal", 0),
+    )
+    counter(
+        lines,
+        "pqp_api_hls_restarts_scheduled_total",
+        "Rung deaths that scheduled a restart (liveHls.restartsScheduled). A rising slope during "
+        "one party is a stream that will not stay up.",
+        live_hls.get("restartsScheduled", 0),
+    )
+    counter(
+        lines,
+        "pqp_api_hls_restarts_exhausted_total",
+        "scheduleRestart giving up after the window's budget (liveHls.restartsExhausted). "
+        "Nonzero means an audience got a blank pane.",
+        live_hls.get("restartsExhausted", 0),
+    )
+    rejected = live_hls.get("playlistRejectedByReason") or {}
+    if isinstance(rejected, dict) and rejected:
+        labeled_counter(
+            lines,
+            "pqp_api_hls_playlist_rejected_total",
+            "Playlist requests refused by the viewer capability, by reason "
+            "(liveHls.playlistRejectedByReason). A rolling `expired` wave is pitfall 16.",
+            [({"reason": reason}, count) for reason, count in rejected.items()],
+        )
+
+    # Push delivery outcomes per platform (cumulative -> counters). NOT
+    # subscription counts (product.push): this is what happened when the server
+    # sent. `failed` is the one an alert watches; `pruned` is normal GC.
+    push_delivery = product.get("pushDelivery") or {}
+    if isinstance(push_delivery, dict) and push_delivery:
+        samples: list[tuple[dict[str, str], object]] = []
+        for platform in ("web", "apns", "fcm"):
+            outcomes = push_delivery.get(platform) or {}
+            for outcome in ("sent", "failed", "pruned"):
+                samples.append(
+                    ({"platform": platform, "outcome": outcome}, outcomes.get(outcome, 0))
+                )
+        labeled_counter(
+            lines,
+            "pqp_api_push_delivery_total",
+            "Push sends by platform and outcome (product.pushDelivery): sent, failed, pruned.",
+            samples,
+        )
+
     gauge(
         lines,
         "pqp_api_metrics_scrape_ok",
