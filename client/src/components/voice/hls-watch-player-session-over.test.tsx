@@ -244,12 +244,52 @@ describe("a watch player whose session is over", () => {
     await mount({ src: SRC, mode: "live" });
     emitPlaylist404();
     await settleReconnect();
+    const askedWhenOver = fetchChannelLive.mock.calls.length;
+
+    // The player runs two independent timers once `sessionOver` is set: the
+    // 1s stall watchdog (stood down, see the guard on `sessionOverRef` right
+    // above `watch.tick()` in the component -- this is the thing under
+    // test) and the SEPARATE `SESSION_OVER_POLL_MS` (20s) poll, which is
+    // *supposed* to keep calling `fetchChannelLive` on its own cadence --
+    // that is how a party coming back is noticed with nothing pressed (see
+    // the comment on that effect). Its 20s clock starts the moment
+    // `settleReconnect()` above observes the session-over call land, at
+    // whatever fake-clock offset that happened to be: `settleReconnect`'s
+    // own tick loop resolves after the watchdog's jittered delay
+    // (`drainJitterMs`, an unseeded `Math.random()` in [500ms, 4000ms]),
+    // plus whatever real wall-clock drift `vi.useFakeTimers({
+    // shouldAdvanceTime: true })` folds into the fake clock while that loop
+    // and `mount()`'s own polling run. That offset is not reproducible
+    // between runs, so measuring a fixed window from THIS point races the
+    // poll's own boundary: on a slow enough CI runner the drift is large
+    // enough that the boundary lands inside the window, firing one
+    // legitimate poll call that then reads as a watchdog budget leak that
+    // never happened. That produced the "expected 2 to be 1" flake on PRs
+    // #741 and #742.
+    //
+    // Rebase instead of guessing: let the poll's own next call land (it is
+    // allowed to -- that is not the guarantee under test), observe it
+    // directly, and only then start the 10s measurement. That start point
+    // is confirmed poll-aligned, so the window below cannot straddle the
+    // *next* boundary by construction, independent of how long everything
+    // before it took. (Bounded to 25 ticks, the same order of magnitude the
+    // "recovers ... through its own slow poll" test below already uses to
+    // wait out one full `SESSION_OVER_POLL_MS` cycle.)
+    for (
+      let i = 0;
+      i < 25 && fetchChannelLive.mock.calls.length === askedWhenOver;
+      i += 1
+    ) {
+      await tick();
+    }
+    expect(fetchChannelLive.mock.calls.length).toBe(askedWhenOver + 1);
     const asked = fetchChannelLive.mock.calls.length;
 
-    // Ten more seconds of stall ticks. The watchdog is stood down: it must
-    // not spend its reconnect budget (and reach "A transmissão caiu") on a
-    // party that simply finished. Ten seconds is half the session-over
-    // poll's own interval, so nothing else should ask either.
+    // Ten more seconds of stall ticks, now measured from a known
+    // poll-aligned point. The watchdog is stood down: it must not spend its
+    // reconnect budget (and reach "A transmissão caiu") on a party that
+    // simply finished, and ten seconds is safely inside the poll's own 20s
+    // period measured from here.
     await tick(10);
     expect(fetchChannelLive.mock.calls.length).toBe(asked);
     expect(container.querySelector('[data-testid="hls-dead"]')).toBeNull();
