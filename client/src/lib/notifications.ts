@@ -731,7 +731,12 @@ export function notifyIncomingCall(
   if (context.windowFocused || doNotDisturb) {
     return;
   }
-  if (!state.desktop || notificationPermission() !== "granted") {
+  // An incoming call bypasses the desktop-notifications opt-in that ordinary
+  // message banners honour: a call is high-signal and time-critical, you always
+  // want to know the phone or desktop is ringing even if you never turned
+  // message banners on. The real OS permission below cannot be bypassed; if the
+  // browser or OS has not granted notifications, there is nothing we can show.
+  if (notificationPermission() !== "granted") {
     return;
   }
   const title = call.callerName;
