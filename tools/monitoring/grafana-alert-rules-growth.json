@@ -1,0 +1,114 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning format (apiVersion 1): two always-on",
+    "growth/health rules -- call failure rate high, push failure rate high --",
+    "reading the textfile exporter in this directory (pqp-api-metrics-exporter.py).",
+    "Unlike grafana-alert-rules-event.json (which is imported before an event and",
+    "deleted after), these are meant to run continuously alongside pqp-api-logs",
+    "and pqp-sfu-box. Everything in this repo's Grafana stack is managed by hand",
+    "in the UI (docs/MONITORING.md: 'the UI is the source of truth'), so treat",
+    "this file the same way -- paste it into Alerting > Alert rules > 'Import from",
+    "file' (or POST to /api/v1/provisioning/alert-rules), not as something CI",
+    "applies.",
+    "",
+    "Replace <PROMETHEUS_DATASOURCE_UID> before import (Administration > Data",
+    "sources, the Grafana Cloud Prometheus stack the pqp-sfu-box dashboard uses).",
+    "",
+    "BOTH rules carry a volume floor inside the query: `expr and (volume > 20)`",
+    "returns nothing when traffic is below the floor, so a single failure at 3am",
+    "against near-zero volume never pages. noDataState is OK for the same reason:",
+    "no calls / no push in the window is not an incident. Install the exporter",
+    "first, or they sit on 'no data' (which, being OK here, is silent)."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-growth",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-growth-call-failure-rate",
+          "title": "Call failure rate high",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 900, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "(1 - sum(increase(pqp_api_call_join_connected_total[15m])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[15m])), 1)) and (sum(increase(pqp_api_call_join_attempts_total[15m])) > 20)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [0.5] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "10m",
+          "labels": { "severity": "warning", "area": "growth" },
+          "annotations": {
+            "summary": "More than half of voice-join attempts are being refused.",
+            "description": "(attempts - connected) / attempts > 0.5 for 10m, with more than 20 attempts in the window. Break it down by pqp_api_call_join_refused_total{reason}: room-full is the mesh cap (the MoonKase shape), transport-unsupported a client that cannot run the room's media path, no-access/blocked/timeout the moderation gates. See the pqp Growth dashboard.",
+            "runbook": "docs/MONITORING.md#growth-and-product-counters"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-growth-push-failure-rate",
+          "title": "Push failure rate high",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 900, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "(sum(increase(pqp_api_push_delivery_total{outcome=\"failed\"}[15m])) / clamp_min(sum(increase(pqp_api_push_delivery_total{outcome=~\"sent|failed\"}[15m])), 1)) and (sum(increase(pqp_api_push_delivery_total{outcome=~\"sent|failed\"}[15m])) > 20)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [0.25] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "15m",
+          "labels": { "severity": "warning", "area": "growth" },
+          "annotations": {
+            "summary": "More than a quarter of push sends are failing.",
+            "description": "failed / (sent + failed) > 0.25 for 15m, with more than 20 send outcomes in the window (pruned excluded -- a dead token is normal GC, not a failure). A sustained spike is a bad APNs/FCM key, an unshared service account, or a vendor outage, per services/push.ts. Break it down by pqp_api_push_delivery_total{platform,outcome}.",
+            "runbook": "docs/MONITORING.md#growth-and-product-counters"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        }
+      ]
+    }
+  ]
+}

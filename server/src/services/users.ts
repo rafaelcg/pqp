@@ -535,6 +535,12 @@ async function insertNewUser(auth: AuthUser): Promise<DbUser> {
       );
       const inserted = result.rows[0];
       if (inserted) {
+        // The one place a genuinely new account is created (the winner branch
+        // below is somebody else's insert we lost the race to, not ours). This
+        // is the signup event docs/MONITORING.md asked for: it lets Loki graph
+        // signups per hour and outlives `turma1000.stamped`, which stops after
+        // the 1000th account. No email, tag or clerk id — just the row id.
+        logEvent("user.created", { userId: inserted.id });
         tryStampTurma1000();
         return inserted;
       }

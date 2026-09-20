@@ -89,6 +89,27 @@ interface MetricsBody {
     lastHour: number;
     automated24h: number;
     byHour: number[];
+    byScope24h: { dm: number; group: number; server: number };
+  };
+  calls: {
+    joinAttempts: number;
+    joinConnected: number;
+    joinConnectedByTransport: { mesh: number; livekit: number };
+    joinConnectedByScope: { dm: number; group: number; server: number };
+    joinRefusedByReason: Record<string, number>;
+    rings: number;
+    ringsByKind: { dm: number; group: number };
+    ringsAnswered: number;
+    ringsAnsweredByKind: { dm: number; group: number };
+    ringsDeclined: number;
+    ringsEndedByReason: { timeout: number; cancelled: number };
+  };
+  liveHls: {
+    startsTotal: number;
+    stopsTotal: number;
+    restartsScheduled: number;
+    restartsExhausted: number;
+    playlistRejectedByReason: Record<string, number>;
   };
   runtime: {
     sampledAt: string;
@@ -158,6 +179,10 @@ interface MetricsBody {
     attachments: { total: number; last24h: number };
     invites: { created24h: number; uses: number };
     push: { web: number; apns: number; fcm: number };
+    pushDelivery: Record<
+      "web" | "apns" | "fcm",
+      { sent: number; failed: number; pruned: number }
+    >;
   };
 }
 
@@ -381,7 +406,38 @@ describeDb("GET /api/admin/metrics", () => {
       attachments: { total: 0, last24h: 0 },
       invites: { created24h: 0, uses: 0 },
       push: { web: 0, apns: 0, fcm: 0 },
+      pushDelivery: {
+        web: { sent: 0, failed: 0, pruned: 0 },
+        apns: { sent: 0, failed: 0, pruned: 0 },
+        fcm: { sent: 0, failed: 0, pruned: 0 },
+      },
     });
+
+    // The two human messages are both in a server channel, so the DM/group
+    // split is zero and the total matches `last24h`.
+    expect(body.messages.byScope24h).toEqual({ dm: 0, group: 0, server: 2 });
+
+    // The call-outcome block: no calls in this fixture, so every count is zero,
+    // but the fixed-label shape is present so a Prometheus series exists before
+    // the first event.
+    expect(body.calls.joinConnectedByTransport).toEqual({ mesh: 0, livekit: 0 });
+    expect(body.calls.joinConnectedByScope).toEqual({ dm: 0, group: 0, server: 0 });
+    expect(body.calls.ringsByKind).toEqual({ dm: 0, group: 0 });
+    expect(body.calls.joinRefusedByReason).toMatchObject({
+      "no-access": 0,
+      "room-full": 0,
+      "transport-unsupported": 0,
+    });
+
+    // Watch-party transcode lifecycle counters and the playlist-rejection
+    // breakdown are present (all zero here — no party ran).
+    expect(body.liveHls).toMatchObject({
+      startsTotal: 0,
+      stopsTotal: 0,
+      restartsScheduled: 0,
+      restartsExhausted: 0,
+    });
+    expect(body.liveHls.playlistRejectedByReason).toEqual({});
 
     // Counts, never people.
     const text = JSON.stringify(body);

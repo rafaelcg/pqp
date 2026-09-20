@@ -654,11 +654,13 @@ all routed to the contact point `rafael-email`):
 The synthetic checks on `/health` and `sfu.pqp.gg` (ids 6260, 6261) and the
 contact point predate this and live in the same stack.
 
-Gap worth closing: **there is no signup event.** `insertNewUser` in
-`server/src/services/users.ts` creates the row silently; the only line it
-emits is `turma1000.stamped`, which stops after the 1000th account. Add
-`logEvent("user.created", { userId })` there when a server change is going out
-anyway (`restarts-api`), then point the "Account created" panel at it.
+Closed: **the signup event exists now.** `insertNewUser` in
+`server/src/services/users.ts` emits `logEvent("user.created", { userId })` on
+each genuinely new account (not the concurrent-insert loser branch), so the
+"Account created" panel can point at `user.created` rather than
+`turma1000.stamped`, which stopped after the 1000th account. The count also
+rides `GET /api/admin/metrics` as `users.last24h` / `.byHour` — see "Growth and
+product counters" above.
 
 ### Voice seat health, and the one switch that is waiting to be flipped
 
@@ -900,6 +902,68 @@ it to `logs.>` only with that arithmetic in mind.
 
 ---
 
+## Growth and product counters
+
+The Loki dashboard graphs *events*; `GET /api/admin/metrics` carries the
+*levels and totals* the growth story needs. The textfile exporter
+(`tools/monitoring/pqp-api-metrics-exporter.py`, installed on the SFU box, see
+below) scrapes that endpoint and writes Prometheus series, so a dashboard and
+"rate is high for N minutes" alerts can be built the same way the SFU box ones
+are.
+
+**Adding a counter to the endpoint does NOT make it appear in Grafana on its
+own.** The exporter hand-picks the fields it emits (it does not walk the whole
+payload), so a new metric on `/api/admin/metrics` needs a matching series added
+to `render()` in the exporter. The ones below are already wired; a further one
+means editing both places and re-running `tools/monitoring/test_exporter.py`.
+
+### What is counted, and where it increments
+
+All of these are per instance (whichever machine answered the scrape) and, where
+noted as a total, cumulative since the last API deploy — a real counter reset,
+which is why they are exported as Prometheus `counter` type.
+
+| Area | Series | Source field / increment site |
+|---|---|---|
+| **Signups** | `pqp_api_signups_24h`, `pqp_api_users_total`, `pqp_api_servers_24h` | `users.last24h` / `.total`, `servers.last24h` (DB-derived). A `user.created` log line is also emitted on each new account (`insertNewUser`, `server/src/services/users.ts`), closing the "no signup event" gap noted below. |
+| **Messages / DMs** | `pqp_api_messages_24h`, `pqp_api_messages_24h_by_scope{scope=dm\|group\|server}` | `messages.last24h` and `messages.byScope24h` — DB-derived, so DM volume is finally split from server activity. |
+| **Calls** | `pqp_api_call_join_attempts_total`, `..._connected_total` (+`_by_transport`, `_by_scope`), `..._refused_total{reason}`, `..._rings_total`, `..._rings_answered_total`, `..._rings_declined_total`, `..._rings_ended_total{reason}` | `calls.*` on the payload, from `server/src/voice/call-metrics.ts`, incremented on the real signalling path in `server/src/ws/voice.ts`: `noteJoinAttempt`/`noteJoinConnected`/`noteJoinRefused` in the `join-voice-room` branch, and `noteRingStarted`/`noteRingAnswered`/`noteRingDeclined`/`noteRingEnded` in `handleCallRing` / `answerRing` / `declineRing` / `endConversationRing`. This is the number the MoonKase mesh-cap night (2026-09-05) had no way to show. |
+| **Watch party** | `pqp_api_hls_starts_total`, `..._stops_total`, `..._restarts_scheduled_total`, `..._restarts_exhausted_total`, `..._playlist_rejected_total{reason}` | `liveHls.*` from `server/src/voice/hls-egress.ts` (`voice.hlsStarted` / `voice.hlsStopped` / `scheduleRestart`) and `server/src/voice/hls-playlist-proxy.ts` (`noteHlsPlaylistRejected`, called from the proxy route ahead of the log's own rate limit — pitfall 16). There is **no server-side viewer count** anywhere in pqp; read turnout from the stream's own source. |
+| **Push delivery** | `pqp_api_push_delivery_total{platform=web\|apns\|fcm,outcome=sent\|failed\|pruned}` | `product.pushDelivery` from `server/src/services/push-metrics.ts`, incremented at each leg of `server/src/services/push.ts`. NOT the same as `product.push`, which is subscription counts. `pruned` is a dead token garbage-collected (normal); `failed` is the one to watch. |
+
+DAU is not a separate counter: `distinctSenders24h` (24h) and
+`userDetail.active7d` (7d) on the same payload are the cheapest honest proxies
+this schema can answer, and messages are the only per-user activity it records.
+
+### Dashboard and alerts
+
+- **pqp Growth** dashboard: `tools/monitoring/grafana-dashboard-growth.json`
+  (import, replace `<PROMETHEUS_DATASOURCE_UID>`). Signups, messages by scope,
+  call attempts/connect/failure-rate/refusals, ring outcomes, watch-party
+  reliability, playlist rejections, and push delivery.
+- **pqp-growth** alert group: `tools/monitoring/grafana-alert-rules-growth.json`
+  — two always-on rules, **call failure rate high** and **push failure rate
+  high**, each with a volume floor built into the query so low-traffic noise
+  never pages, routed to `rafael-email`. Import the same way as the event
+  rules; unlike those, these are meant to stay on.
+
+### Frontend errors and RUM (Grafana Faro)
+
+Everything above is server-side. Browser errors are invisible to it — the error
+heartbeat reads the server's stdout, and "anything that fails in the browser is
+invisible to it" is a stated gap. **Grafana Faro** closes it: the web client
+initialises the Faro Web SDK (`client/src/lib/faro.ts`) and reports uncaught
+errors, unhandled rejections, console errors and Web Vitals to a Frontend
+Observability app, tagged with the release commit. It is **hosted-only and
+gated exactly like the analytics tags**: with `VITE_FARO_URL` unset the SDK
+never initialises, so a self-host makes no request and defines no global (AGPL
+— nobody inherits our collector). No user identity is attached (no PII).
+Build-time source-map upload (`@grafana/faro-rollup-plugin` in
+`client/vite.config.ts`) de-obfuscates the minified stack traces, gated on
+`FARO_SOURCEMAP_API_KEY` plus the app's endpoint/appId/stackId; absent means no
+upload and the build still succeeds. Faro is a separate Grafana product from the
+Prometheus/Loki stack here and has its own UI; there is nothing to import.
+
 ## The SFU box (Vultr, São Paulo)
 
 Production voice runs on a self-hosted LiveKit at `wss://sfu.pqp.gg`, with TURN
@@ -1095,6 +1159,10 @@ restart and would churn the series set for nothing.
 |---|---|
 | `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
 | `tools/sfu-monitoring/` | Grafana Alloy config, the vnstat/docker textfile exporter and the installer for the SFU box |
+| `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
+| `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
+| `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `client/src/lib/faro.ts` | Grafana Faro init (frontend errors + RUM), gated on `VITE_FARO_URL`; inert on a self-host |
 | `.github/workflows/monitor-uptime.yml` | Every 10 min; availability |
 | `.github/workflows/monitor-errors.yml` | Every 15 min; production log error rate and support-bot liveness |
 | `.github/workflows/monitor-limits.yml` | Daily; certificates, domain, quotas |

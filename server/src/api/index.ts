@@ -162,6 +162,7 @@ import {
   hlsPlaylistAgeMs,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
+  noteHlsPlaylistRejected,
   resolveHlsPlaylistViewer,
   resolveHlsSessionId,
 } from "../voice/hls-playlist-proxy.js";
@@ -2408,6 +2409,10 @@ function logHlsPlaylistRejection(
     // took the door. Nothing to say.
     return;
   }
+  // Counted BEFORE the per-channel/per-reason log suppression below, so the
+  // metric is a true count of every rejection even during a rolling `expired`
+  // wave (pitfall 16), which is the shape the log is rate-limited against.
+  noteHlsPlaylistRejected(reason);
   const key = `${channelId}:${reason}`;
   const now = Date.now();
   const seen = hlsRejectionLog.get(key);

@@ -3,7 +3,52 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
+import faroUploader from "@grafana/faro-rollup-plugin";
 import { googleAds } from "./src/lib/google-ads-tag";
+
+/**
+ * Build-time source-map upload to Grafana Faro, so a production stack trace is
+ * de-obfuscated (`App-Db_vfGSK.js:852` becomes a real file and line) instead of
+ * pointing at a minified chunk.
+ *
+ * OFF UNLESS FULLY CONFIGURED, and it never fails the build when it is not. The
+ * upload needs four values from the Faro app's "Source maps" settings page:
+ * `FARO_SOURCEMAP_API_KEY` (a CI secret — see `docs/MONITORING.md` and
+ * `.github/workflows/deploy-web.yml`), plus `FARO_SOURCEMAP_ENDPOINT`,
+ * `FARO_SOURCEMAP_APP_ID` and `FARO_SOURCEMAP_STACK_ID`. With the API key unset
+ * this returns null and nothing is generated or uploaded; with the key set but
+ * a companion missing it prints one line and still skips, rather than throwing
+ * during a deploy. `appName` follows `VITE_FARO_APP_NAME` so the maps land under
+ * the same app the runtime SDK reports to (`src/lib/faro.ts`).
+ */
+function faroSourceMaps(): Plugin | null {
+  const apiKey = process.env.FARO_SOURCEMAP_API_KEY?.trim();
+  if (!apiKey) {
+    return null;
+  }
+  const endpoint = process.env.FARO_SOURCEMAP_ENDPOINT?.trim();
+  const appId = process.env.FARO_SOURCEMAP_APP_ID?.trim();
+  const stackId = process.env.FARO_SOURCEMAP_STACK_ID?.trim();
+  if (!endpoint || !appId || !stackId) {
+    console.warn(
+      "[faro] FARO_SOURCEMAP_API_KEY is set but FARO_SOURCEMAP_ENDPOINT / _APP_ID / _STACK_ID are not — skipping source-map upload.",
+    );
+    return null;
+  }
+  return faroUploader({
+    appName: process.env.VITE_FARO_APP_NAME?.trim() || "pqp-web",
+    endpoint,
+    appId,
+    stackId,
+    apiKey,
+    gzipContents: true,
+  }) as unknown as Plugin;
+}
+
+// Computed once: it also decides whether Vite emits source maps at all. `hidden`
+// generates them for the uploader to read and send, then does NOT reference them
+// from the shipped bundles, so the `.map` files are not served to the public.
+const faroSourcemapPlugin = faroSourceMaps();
 
 /**
  * `/edge-config.json` — the only thing the Cloudflare Pages middleware needs to
@@ -82,6 +127,9 @@ export default defineConfig({
     // Same gate as Umami above, same reason. See `src/lib/google-ads-tag.ts`;
     // it lives under `src/` so `vitest` can prove the gate holds.
     googleAds(process.env),
+    // Uploads source maps to Faro when fully configured; null (skipped) here
+    // otherwise, so a self-host or an unconfigured CI build carries no upload.
+    ...(faroSourcemapPlugin ? [faroSourcemapPlugin] : []),
     tailwindcss(),
     VitePWA({
       // `prompt`, never `autoUpdate`. This client holds live WebSocket state and
@@ -178,6 +226,11 @@ export default defineConfig({
       },
     }),
   ],
+  // Source maps are emitted only when the Faro uploader is active, and `hidden`
+  // so the `.map` files are generated for upload without being served publicly.
+  build: {
+    sourcemap: faroSourcemapPlugin ? "hidden" : false,
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

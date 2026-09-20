@@ -177,6 +177,10 @@ const {
   resetVoiceRoomTransports,
 } = await import("./voice.js");
 
+const { callMetricsSnapshot, resetCallMetrics } = await import(
+  "../voice/call-metrics.js"
+);
+
 const { setCoalesceImmediate } = await import("./fanout.js");
 // Fake timers below would freeze the roster's coalescing window.
 setCoalesceImmediate(true);
@@ -278,6 +282,7 @@ beforeEach(() => {
   resetVoiceRoomTransports();
   resetVoicePeers();
   resetConversationCalls();
+  resetCallMetrics();
 });
 
 afterEach(() => {
@@ -287,6 +292,58 @@ afterEach(() => {
   }
   resetConversationCalls();
   vi.useRealTimers();
+});
+
+describe("call metrics", () => {
+  it("counts a DM ring started and the caller's connected mesh join", async () => {
+    const caller = authedRecorder(CALLER);
+    await startCall(caller);
+
+    const m = callMetricsSnapshot();
+    // The ring: one DM ring committed.
+    expect(m.rings).toBe(1);
+    expect(m.ringsByKind.dm).toBe(1);
+    expect(m.ringsByKind.group).toBe(0);
+    // The join underneath it: the caller connected to a mesh DM room.
+    expect(m.joinAttempts).toBeGreaterThanOrEqual(1);
+    expect(m.joinConnected).toBeGreaterThanOrEqual(1);
+    expect(m.joinConnectedByTransport.mesh).toBeGreaterThanOrEqual(1);
+    expect(m.joinConnectedByScope.dm).toBeGreaterThanOrEqual(1);
+  });
+
+  it("counts a ring as answered when a callee joins the room", async () => {
+    const caller = authedRecorder(CALLER);
+    const callee = authedRecorder(CALLEE);
+    await startCall(caller);
+    await join(callee, CALLEE, CONVERSATION);
+
+    const m = callMetricsSnapshot();
+    expect(m.ringsAnswered).toBe(1);
+    expect(m.ringsAnsweredByKind.dm).toBe(1);
+    // Answered, so it is not counted as an unanswered end.
+    expect(m.ringsEndedByReason.timeout).toBe(0);
+    expect(m.ringsEndedByReason.cancelled).toBe(0);
+  });
+
+  it("counts an unanswered ring that rings out as a timeout end", async () => {
+    const caller = authedRecorder(CALLER);
+    authedRecorder(CALLEE);
+    await startCall(caller);
+    await vi.advanceTimersByTimeAsync(CALL_RING_TIMEOUT_MS + 1);
+
+    const m = callMetricsSnapshot();
+    expect(m.ringsAnswered).toBe(0);
+    expect(m.ringsEndedByReason.timeout).toBe(1);
+  });
+
+  it("counts a decline", async () => {
+    const caller = authedRecorder(CALLER);
+    const callee = authedRecorder(CALLEE);
+    await startCall(caller);
+    await decline(callee, CALLEE, CONVERSATION);
+
+    expect(callMetricsSnapshot().ringsDeclined).toBe(1);
+  });
 });
 
 describe("ringing", () => {

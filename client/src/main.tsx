@@ -30,6 +30,7 @@ import { browserStorage } from "./lib/arrival";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
+import { initFaro } from "./lib/faro";
 import { I18nProvider, useTranslation } from "./lib/i18n";
 import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
@@ -372,6 +373,10 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // the URL this page loaded with are remembered now, and sent once after the
 // account exists (see `lib/acquisition.ts` and the arrival effect in App.tsx).
 // Nothing is stripped from the address bar here; the URL is the page's to own.
+// Faro (frontend errors + RUM) as early as possible, so an error thrown during
+// the first render is captured. Inert unless VITE_FARO_URL is set, which is
+// only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
+initFaro();
 rememberAcquisitionFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
