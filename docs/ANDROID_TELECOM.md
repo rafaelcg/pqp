@@ -174,13 +174,15 @@ VoiceController (room)  ─┘         │                        │
 
 **Everything above needs the app process alive.** A DM call ringing a phone
 whose pqp process has been killed needs something to wake it, and the only
-thing that can is a high-priority push. `ANDROID.md`'s own **Push
-notifications** section already states the general gap in full — `PushPlatform`
-has no `"fcm"` member, there is no `server/src/services/fcm.ts`, no Firebase
-project exists — and none of that is re-litigated here. **Do not implement
-it as part of this feature**; the seven-edit plan in that section is still
-the plan. This section is the one slice of it a ringing call needs, written
-down so the eventual FCM work does not have to rediscover it.
+thing that can is a high-priority push. **The server FCM leg now exists**
+(`server/src/services/fcm.ts`, wired into `push.ts` on 2026-09-20 — the
+seven-edit plan in `ANDROID.md`'s Push section is done, `PushPlatform` has
+its `"fcm"` member, and a call push is already fanned out to the FCM
+transport at `android.priority: HIGH`). What is **still** missing is the two
+things below: the `kind` discriminator on the wire, and the client branch that
+turns a call push into a full-screen ring instead of a tray notification. A
+Firebase project still has to be provisioned (see `ANDROID.md` §"What Rafael
+has to create") before any of it delivers. This section is the client slice.
 
 ### The good news: the server-side call push already exists
 

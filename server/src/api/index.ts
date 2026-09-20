@@ -9869,8 +9869,8 @@ export async function handleApi(
 // ===========================================================================
 
 import {
-  deleteApnsSubscription,
   deletePushSubscription,
+  deleteTokenSubscription,
   getPushSettings,
   getVapidPublicKey,
   isPushEnabled,
@@ -9880,6 +9880,7 @@ import {
   savePushSettings,
 } from "../services/push.js";
 import { isApnsEnabled } from "../services/apns.js";
+import { isFcmEnabled } from "../services/fcm.js";
 
 /**
  * What a client needs before it can offer the toggle: whether this server can
@@ -9897,6 +9898,11 @@ router.get("/api/push/config", async ({ user }) => {
     enabled,
     publicKey: enabled ? getVapidPublicKey() : null,
     apns: isApnsEnabled(),
+    // The Android app's gate. Absent until now, it defaulted false on the
+    // client (see `gg.pqp.app.push.PushApi`), so an already-installed build
+    // starts offering notifications the moment this answers true, no update
+    // required.
+    fcm: isFcmEnabled(),
     ...(await getPushSettings(user.id)),
   };
 });
@@ -9908,13 +9914,22 @@ router.get("/api/push/config", async ({ user }) => {
  * app a device token on *every* launch, so the upsert keeps exactly one row per
  * endpoint or token, owned by the caller.
  *
- * The refusal is per leg. A server with VAPID keys and no APNs key must not
- * accept device tokens it can never send to, and vice versa.
+ * The refusal is per leg. A server with VAPID keys and no APNs/FCM key must not
+ * accept device tokens it can never send to, and vice versa — which is exactly
+ * what makes an Android build's registration return 409 until the FCM leg is
+ * configured (the client reads that as "no FCM leg", not an error).
  */
 router.post("/api/push/subscriptions", async ({ req, user }) => {
   const body = pushRegistrationSchema.parse(await readJsonBody(req));
-  const isApns = "platform" in body && body.platform === "apns";
-  if (isApns ? !isApnsEnabled() : !isPushEnabled()) {
+  const platform =
+    "platform" in body ? (body.platform as "apns" | "fcm") : "web";
+  const legEnabled =
+    platform === "apns"
+      ? isApnsEnabled()
+      : platform === "fcm"
+        ? isFcmEnabled()
+        : isPushEnabled();
+  if (!legEnabled) {
     throw new HttpError(409, "Push notifications are not configured on this server");
   }
   await savePushRegistration(user.id, body);
@@ -9935,7 +9950,10 @@ router.delete("/api/push/subscriptions", async ({ url, user }) => {
     return { ok: true };
   }
   if (token) {
-    await deleteApnsSubscription(user.id, token);
+    // Covers both token platforms (APNs and FCM); the query carries only the
+    // string, and scoping to the caller's own token rows deletes the right one
+    // whichever it is.
+    await deleteTokenSubscription(user.id, token);
     return { ok: true };
   }
   throw new HttpError(400, "endpoint or token query parameter required");

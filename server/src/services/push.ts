@@ -17,6 +17,14 @@ import {
   readApnsConfig,
   sendApnsPush,
 } from "./apns.js";
+import {
+  type FcmConfig,
+  type FcmDelivery,
+  isFcmEnabled,
+  isFcmTokenGone,
+  readFcmConfig,
+  sendFcmPush,
+} from "./fcm.js";
 
 /**
  * Push — how a mention, reply or DM reaches a phone that is closed.
@@ -95,7 +103,7 @@ export function isPushEnabled(): boolean {
  * web one.
  */
 export function isAnyPushEnabled(): boolean {
-  return isPushEnabled() || isApnsEnabled();
+  return isPushEnabled() || isApnsEnabled() || isFcmEnabled();
 }
 
 /** What the client needs to call `pushManager.subscribe`. Never the private key. */
@@ -147,15 +155,42 @@ export const apnsSubscriptionSchema = z.object({
 export type ApnsSubscriptionBody = z.infer<typeof apnsSubscriptionSchema>;
 
 /**
- * What `POST /api/push/subscriptions` accepts. A union rather than a second
- * route, so "register this device for notifications" stays one endpoint.
+ * An FCM registration token, as `FirebaseMessaging.getToken()` hands it to the
+ * Android app. Unlike an APNs token it is not hex: it is a long, opaque,
+ * mixed-case string that always contains a `:` (an `<app-instance>:<APA91b…>`
+ * shape), so it is matched only loosely and bounded generously rather than
+ * pinned to a charset that FCM does not promise. The `platform` literal is what
+ * discriminates it from the two older shapes; see `pushRegistrationSchema`.
+ */
+export const fcmSubscriptionSchema = z.object({
+  platform: z.literal("fcm"),
+  // Registration tokens are ~150-200 chars today, of the form
+  // "<instance-id>:APA91b<...>", but Google documents the length as not fixed.
+  // Bounded generously and checked for shape, not pinned to a charset FCM does
+  // not promise.
+  token: z
+    .string()
+    .min(64)
+    .max(4096)
+    .regex(/^[A-Za-z0-9_:.-]+$/, "FCM registration tokens are URL-safe base64-ish"),
+});
+
+export type FcmSubscriptionBody = z.infer<typeof fcmSubscriptionSchema>;
+
+/**
+ * What `POST /api/push/subscriptions` accepts. A union rather than a route per
+ * platform, so "register this device for notifications" stays one endpoint.
  *
- * ORDER MATTERS AND IS THE COMPATIBILITY GUARANTEE: the APNs member is tried
- * first and requires `platform: "apns"`, which a Web Push body does not carry,
- * so every request the web client has ever sent still parses as it did before.
+ * ORDER MATTERS AND IS THE COMPATIBILITY GUARANTEE: the two token members are
+ * tried first and each requires its own `platform` literal (`apns` / `fcm`),
+ * which a Web Push body does not carry, so every request the web client has
+ * ever sent still falls through to `pushSubscriptionSchema` and parses as it
+ * did before. The two token shapes are mutually exclusive on that literal, so
+ * their order relative to each other does not matter.
  */
 export const pushRegistrationSchema = z.union([
   apnsSubscriptionSchema,
+  fcmSubscriptionSchema,
   pushSubscriptionSchema,
 ]);
 
@@ -221,14 +256,16 @@ export async function savePushSettings(
  */
 export const MAX_PUSH_SUBSCRIPTIONS_PER_USER = 8;
 
-export type PushPlatform = "web" | "apns";
+export type PushPlatform = "web" | "apns" | "fcm";
 
 /**
- * One row shape for both legs. The nullability is not sloppiness — it is the
+ * One row shape for every leg. The nullability is not sloppiness — it is the
  * `platform` discriminant, and the CHECK constraint in schema.sql is what makes
  * it a real one: a `web` row has an endpoint and keys and no token, an `apns`
- * row has a token and neither. Reading a row means switching on `platform`
- * first, exactly as the delivery code below does.
+ * or `fcm` row has a token and neither. `apns` and `fcm` share the row shape
+ * (both are opaque device tokens) and differ only in the discriminant and the
+ * transport the delivery code below routes them to. Reading a row means
+ * switching on `platform` first, exactly as that code does.
  */
 export interface StoredPushSubscription {
   id: string;
@@ -238,7 +275,7 @@ export interface StoredPushSubscription {
   endpoint: string | null;
   p256dh: string | null;
   auth: string | null;
-  /** APNs only. */
+  /** APNs and FCM (the token's meaning is the `platform`'s to say). */
   token: string | null;
 }
 
@@ -324,13 +361,41 @@ export async function saveApnsSubscription(
   await trimSubscriptions(userId);
 }
 
-/** Dispatches on the discriminant so the route stays four lines. */
+/**
+ * The FCM equivalent of `saveApnsSubscription`, upserting on the token for the
+ * same reason and against its own partial unique index (see schema.sql: the
+ * `fcm` partial index, distinct from the `apns` one, so an FCM token and an
+ * APNs token can never be mistaken for the same device even in the vanishingly
+ * unlikely event their opaque strings collide). The Android app re-posts on
+ * every launch and after every rotation, so this is a hot write with no read
+ * first, exactly as APNs is.
+ */
+export async function saveFcmSubscription(
+  userId: string,
+  token: string,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO push_subscriptions (user_id, platform, token)
+     VALUES ($1, 'fcm', $2)
+     ON CONFLICT (token) WHERE platform = 'fcm' DO UPDATE
+       SET user_id = EXCLUDED.user_id,
+           created_at = NOW()`,
+    [userId, token],
+  );
+  await trimSubscriptions(userId);
+}
+
+/** Dispatches on the discriminant so the route stays a few lines. */
 export async function savePushRegistration(
   userId: string,
   body: PushRegistrationBody,
 ): Promise<void> {
   if ("platform" in body && body.platform === "apns") {
     await saveApnsSubscription(userId, body.token);
+    return;
+  }
+  if ("platform" in body && body.platform === "fcm") {
+    await saveFcmSubscription(userId, body.token);
     return;
   }
   await savePushSubscription(userId, body as PushSubscriptionBody);
@@ -355,6 +420,24 @@ export async function deleteApnsSubscription(
   await getPool().query(
     `DELETE FROM push_subscriptions
      WHERE user_id = $1 AND platform = 'apns' AND token = $2`,
+    [userId, token],
+  );
+}
+
+/**
+ * Unregister a device token without the caller having to know which token
+ * platform it is. The `DELETE /api/push/subscriptions?token=` route sees only a
+ * string, and an Android build and an iOS build both send one; scoping to the
+ * caller's own rows and to the two token platforms deletes exactly the right
+ * row whichever it is, and can never touch a `web` row (whose token is null).
+ */
+export async function deleteTokenSubscription(
+  userId: string,
+  token: string,
+): Promise<void> {
+  await getPool().query(
+    `DELETE FROM push_subscriptions
+     WHERE user_id = $1 AND platform IN ('apns', 'fcm') AND token = $2`,
     [userId, token],
   );
 }
@@ -833,15 +916,17 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
 interface PushTransports {
   vapid: VapidConfig | null;
   apns: ApnsConfig | null;
+  fcm: FcmConfig | null;
 }
 
 function readTransports(): PushTransports | null {
   const vapid = readVapidConfig();
   const apns = readApnsConfig();
-  if (!vapid && !apns) {
+  const fcm = readFcmConfig();
+  if (!vapid && !apns && !fcm) {
     return null;
   }
-  return { vapid, apns };
+  return { vapid, apns, fcm };
 }
 
 /**
@@ -850,9 +935,9 @@ function readTransports(): PushTransports | null {
  * Both the message path and the call path end here — they differ in who and
  * what, never in how.
  *
- * ONE QUERY FOR BOTH PLATFORMS. The alternative — a query per leg — would ask
- * the same index the same question twice for the common case of a person with a
- * laptop and a phone.
+ * ONE QUERY FOR EVERY PLATFORM. The alternative — a query per leg — would ask
+ * the same index the same question three times for the common case of a person
+ * with a laptop and a phone.
  */
 async function deliverToUsers(
   userIds: readonly string[],
@@ -875,6 +960,10 @@ async function deliverToUsers(
       }
       if (subscription.platform === "apns") {
         await deliverApns(subscription, payload, transports.apns, delivery);
+        return;
+      }
+      if (subscription.platform === "fcm") {
+        await deliverFcm(subscription, payload, transports.fcm, delivery);
         return;
       }
       await deliverWebPush(subscription, payload, transports.vapid, delivery);
@@ -989,6 +1078,71 @@ async function deliverApns(
 
 /** See the note on `ApnsDelivery.priority` for why a message is not a 5. */
 const APNS_ALERT_PRIORITY = 10 as const;
+
+/**
+ * The FCM last mile, the exact sibling of `deliverApns`: no decision about who,
+ * no reading of preferences, no second opinion on the payload. The same
+ * `PushPayload` the other two legs send, carried in an FCM data message so the
+ * Android app draws it itself rather than the Firebase SDK doing it blind (see
+ * `fcm.ts` and the client's `PqpMessagingService`).
+ *
+ * The urgency the caller decided in push.ts maps straight to FCM's android
+ * priority — a message is `normal`, a call is `high` — matching the web leg's
+ * per-event distinction rather than APNs's flat 10.
+ */
+async function deliverFcm(
+  subscription: StoredPushSubscription,
+  payload: PushPayload,
+  config: FcmConfig | null,
+  delivery: PushDeliveryOptions,
+): Promise<void> {
+  if (!config || !subscription.token) {
+    return;
+  }
+  const fcmDelivery: FcmDelivery = {
+    priority: delivery.urgency === "high" ? "high" : "normal",
+    ttlSeconds: delivery.ttlSeconds,
+  };
+  try {
+    const result = await sendFcmPush({
+      config,
+      deviceToken: subscription.token,
+      title: payload.title,
+      body: payload.body,
+      path: payload.path,
+      tag: payload.tag,
+      delivery: fcmDelivery,
+    });
+    if (isFcmTokenGone(result)) {
+      // Said out loud rather than pruned silently, the same reasoning as the
+      // APNs leg: a run of prunes with no sends is a sign of a project
+      // misconfiguration, not a fleet of uninstalls, and the log line is what
+      // tells the two apart.
+      console.warn(
+        `[fcm] pruning device token for user ${subscription.user_id}: ${result.status} ${result.errorCode ?? ""}`.trim(),
+      );
+      await pruneSubscription(subscription.id).catch(() => {});
+      return;
+    }
+    if (result.status >= 400) {
+      // 401/403 is an auth/project problem (a bad or unshared service account),
+      // 400 INVALID_ARGUMENT is usually a payload bug — both are ours to fix,
+      // neither is a dead token, so the row stays and the reason is logged.
+      console.error(
+        `[fcm] send failed (${result.status} ${result.errorCode ?? "no code"}) for user ${subscription.user_id}`,
+      );
+      return;
+    }
+    logEvent("push.fcmSent", { userId: subscription.user_id, tag: payload.tag });
+  } catch (error) {
+    // A transport or token-exchange failure. Never fatal: fire-and-forget from
+    // the fan-out's point of view, like the other two legs.
+    console.error(
+      `[fcm] send failed (network) for user ${subscription.user_id}:`,
+      (error as Error).message,
+    );
+  }
+}
 
 /**
  * The `aps` envelope, built from the payload both legs share.

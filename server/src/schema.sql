@@ -1740,6 +1740,12 @@ ALTER TABLE push_subscriptions ALTER COLUMN auth DROP NOT NULL;
 -- DROP-then-ADD, the same shape every other constraint in this file uses: the
 -- rule is stated once, here, and editing it re-applies it on the next boot
 -- instead of leaving an old version in place.
+-- FCM (native Android) is a THIRD shape in the same table, and it is the same
+-- shape as APNs: an opaque device token and nothing else. It is a separate
+-- `platform` value rather than a shared "token" one because the delivery code
+-- routes on it (an APNs token goes to Apple, an FCM token to Google) and
+-- because the two live in separate partial unique indexes below, so a token
+-- string that happened to be valid on both providers is still two rows.
 ALTER TABLE push_subscriptions
   DROP CONSTRAINT IF EXISTS push_subscriptions_platform_shape;
 ALTER TABLE push_subscriptions
@@ -1748,7 +1754,7 @@ ALTER TABLE push_subscriptions
       AND endpoint IS NOT NULL AND p256dh IS NOT NULL AND auth IS NOT NULL
       AND token IS NULL)
     OR
-    (platform = 'apns'
+    (platform IN ('apns', 'fcm')
       AND token IS NOT NULL
       AND endpoint IS NULL AND p256dh IS NULL AND auth IS NULL)
   );
@@ -1758,6 +1764,12 @@ ALTER TABLE push_subscriptions
 -- NULLs and this must do the same for the many `web` rows whose token is null.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_token
   ON push_subscriptions (token) WHERE platform = 'apns';
+
+-- The FCM half, its own partial index for the same reason — and separate from
+-- the APNs one so `ON CONFLICT (token) WHERE platform = 'fcm'` has an index to
+-- infer, and so an FCM token and an APNs token are never the same row.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_fcm_token
+  ON push_subscriptions (token) WHERE platform = 'fcm';
 
 -- The send-time lookup ("every subscription these offline users hold") and the
 -- account-deletion cascade both start from user_id.
