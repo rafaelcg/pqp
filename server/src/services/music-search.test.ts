@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const innertube = vi.hoisted(() => ({
   innertubeSearch: vi.fn(),
@@ -10,11 +10,16 @@ vi.mock("./innertube.js", () => ({
   setInnerTubeGate: vi.fn(),
 }));
 
-const { MusicResolveError, searchMusicCandidates } = await import("./music.js");
+const { MusicResolveError, resetMusicCachesForTests, searchMusicCandidates, searchYouTube } =
+  await import("./music.js");
 
 describe("searchMusicCandidates", () => {
   afterEach(() => {
     innertube.innertubeSearch.mockReset();
+  });
+
+  beforeEach(() => {
+    resetMusicCachesForTests();
   });
 
   it("maps InnerTube hits to MusicResolved, capped at five", async () => {
@@ -95,5 +100,87 @@ describe("searchMusicCandidates", () => {
     ]);
 
     vi.unstubAllGlobals();
+  });
+});
+
+/*
+ * The typed-search path had no cache at all, which mattered more once the
+ * field started searching as you type: every pause was an upstream call,
+ * and an empty answer cost up to four tokens of the shared budget plus a
+ * scrape. One cache serves both paths.
+ */
+describe("the search cache", () => {
+  beforeEach(() => {
+    resetMusicCachesForTests();
+    innertube.innertubeSearch.mockReset();
+  });
+
+  const hit = (videoId: string) => ({
+    videoId,
+    title: `Track ${videoId}`,
+    durationMs: 180_000,
+    thumbnailUrl: null,
+  });
+
+  it("asks upstream once for the same typed query", async () => {
+    innertube.innertubeSearch.mockResolvedValue([hit("aaaaaaaaaaa")]);
+    await searchMusicCandidates("legiao urbana");
+    await searchMusicCandidates("legiao urbana");
+    expect(innertube.innertubeSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores case and surrounding whitespace in the key", async () => {
+    innertube.innertubeSearch.mockResolvedValue([hit("aaaaaaaaaaa")]);
+    await searchMusicCandidates("Legiao  Urbana");
+    await searchMusicCandidates("  legiao urbana  ");
+    expect(innertube.innertubeSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves the resolve path from the same entry", async () => {
+    innertube.innertubeSearch.mockResolvedValue([hit("aaaaaaaaaaa")]);
+    await searchMusicCandidates("caetano veloso");
+    const resolved = await searchYouTube("caetano veloso");
+    expect(innertube.innertubeSearch).toHaveBeenCalledTimes(1);
+    expect(resolved.videoId).toBe("aaaaaaaaaaa");
+  });
+
+  it("does not remember an empty answer, which is usually a flake", async () => {
+    innertube.innertubeSearch.mockResolvedValue([]);
+    await searchMusicCandidates("nothing at all").catch(() => undefined);
+    innertube.innertubeSearch.mockResolvedValue([hit("bbbbbbbbbbb")]);
+    const second = await searchMusicCandidates("nothing at all");
+    expect(second[0]?.videoId).toBe("bbbbbbbbbbb");
+  });
+
+  it("shares one upstream call between callers asking at the same time", async () => {
+    let release: (value: unknown) => void = () => {};
+    innertube.innertubeSearch.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const both = Promise.all([
+      searchMusicCandidates("daft punk"),
+      searchMusicCandidates("daft punk"),
+    ]);
+    release([hit("ccccccccccc")]);
+    const [first, second] = await both;
+    expect(innertube.innertubeSearch).toHaveBeenCalledTimes(1);
+    expect(first[0]?.videoId).toBe("ccccccccccc");
+    expect(second[0]?.videoId).toBe("ccccccccccc");
+  });
+});
+
+describe("a typed link that does not parse", () => {
+  beforeEach(() => {
+    resetMusicCachesForTests();
+    innertube.innertubeSearch.mockReset();
+  });
+
+  it("is refused rather than searched upstream", async () => {
+    await expect(searchMusicCandidates("https://")).rejects.toMatchObject({
+      code: "unsupported",
+    });
+    expect(innertube.innertubeSearch).not.toHaveBeenCalled();
   });
 });

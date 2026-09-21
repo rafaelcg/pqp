@@ -48,6 +48,52 @@ const state = (overrides: Partial<MusicState> = {}): MusicState => ({
 });
 
 describe("parseMusicInput", () => {
+  it("reads a watch URL with a trailing slash, which YouTube serves", () => {
+    expect(parseMusicInput("https://www.youtube.com/watch/?v=dQw4w9WgXcQ")).toEqual({
+      kind: "youtube",
+      videoId: "dQw4w9WgXcQ",
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+  });
+
+  it("keeps reading the other shapes with a trailing slash", () => {
+    for (const url of [
+      "https://www.youtube.com/shorts/dQw4w9WgXcQ/",
+      "https://www.youtube.com/embed/dQw4w9WgXcQ/",
+    ]) {
+      expect(parseMusicInput(url)).toEqual({
+        kind: "youtube",
+        videoId: "dQw4w9WgXcQ",
+        url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      });
+    }
+  });
+
+  /*
+   * A paste that did not survive the clipboard is not a search. It used to
+   * fall through to one and come back with an unrelated song.
+   */
+  it("refuses text that starts with a scheme and does not parse", () => {
+    expect(parseMusicInput("https://")).toBeNull();
+    expect(parseMusicInput("https://%%%")).toBeNull();
+  });
+
+  it("still searches for text that merely contains a colon or a scheme", () => {
+    expect(parseMusicInput("Rush 2112: Overture")).toEqual({
+      kind: "search",
+      query: "Rush 2112: Overture",
+    });
+    expect(parseMusicInput("bohemian rhapsody http://")).toEqual({
+      kind: "search",
+      query: "bohemian rhapsody http://",
+    });
+    // "ht!tp" is not a scheme, so this is ordinary text with a colon in it.
+    expect(parseMusicInput("ht!tp://not a url###")).toEqual({
+      kind: "search",
+      query: "ht!tp://not a url###",
+    });
+  });
+
   it("reads every YouTube link shape", () => {
     for (const url of [
       "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10",

@@ -119,12 +119,13 @@ listName }` (and `track`, the first, for the first client build):
 
 | Pasted | What happens |
 |---|---|
-| YouTube video (`watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music) | id off the URL; title and thumbnail off YouTube's oEmbed, no key |
+| YouTube video (`watch?v=`, `watch/?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music, any of them with a trailing slash) | id off the URL; title and thumbnail off YouTube's oEmbed, no key; the duration from one InnerTube search, because oEmbed has none and the end-of-track gate needs one |
 | YouTube playlist (`playlist?list=`, `watch?v=X&list=Y`, YouTube Music) | up to 50 items off InnerTube `browse` (or `playlistItems` with a key). A `watch?v=X&list=Y` starts at X, and a video past the first page is resolved on its own and placed first. A mix (`list=RD...`) is generated per viewer and has no list, so it is treated as its single video |
 | Spotify track (`open.spotify.com/track/`, `intl-xx/track/`, `embed/track/`, `spotify:track:`) | title off Spotify's oEmbed, artist off the server-rendered embed page, then one search; keeps the Spotify URL for "abrir no Spotify" |
 | Spotify album or playlist (same shapes, `album/`, `playlist/`) | the track list off the embed page, then one search per track, three at a time with one retry, capped at `SPOTIFY_LIST_MAX` (25) |
 | `spotify.link/...` | followed, then parsed again |
 | Spotify artist, other sites | refused with a message |
+| Text that STARTS with a scheme and does not parse (`https://`) | refused the same way, rather than searched. Text that merely contains a colon or a scheme later on ("Rush 2112: Overture") is an ordinary search |
 | Anything else | a search |
 
 ### Search: InnerTube, the way every music bot does it
@@ -170,8 +171,13 @@ Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
 charged per call to YouTube or Spotify rather than per request, so a cache
 hit costs nothing, a pasted link costs one and a 25-track Spotify list costs
-twenty-six; a six-hour search cache; eight-second upstream timeouts; and no
-query string in an error message (the Data API key travels in one).
+twenty-six; ONE six-hour search cache shared by `/api/music/resolve` and
+`/api/music/search`, holding the list of hits so the first serves the
+single-track path and all five serve the add box, with one upstream call
+per key while it is in flight rather than one per caller; eight-second
+upstream timeouts; and no URL query string in an error message (the Data
+API key travels in one, which is why `fetchText` cuts the URL at the `?`;
+the text somebody searched for is their own and does appear).
 
 ## Measured
 

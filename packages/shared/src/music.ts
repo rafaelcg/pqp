@@ -649,11 +649,23 @@ export function parseMusicInput(raw: string): MusicLink | null {
   } catch {
     url = null;
   }
+  /*
+   * A paste that did not survive the clipboard is not a search. Without
+   * this it fell past the "some other site" refusal below, which needs a
+   * parsed URL, and came back as a search for the broken text with an
+   * unrelated song attached. It has to START with a scheme: "bohemian
+   * rhapsody http://" is a search today and stays one, and so does any
+   * query with a colon in it.
+   */
+  if (url === null && /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    return null;
+  }
   if (url && YOUTUBE_HOSTS.has(url.hostname)) {
     let id: string | null = null;
     if (url.hostname.endsWith("youtu.be")) {
       id = url.pathname.slice(1).split("/")[0] ?? null;
-    } else if (url.pathname === "/watch") {
+      // `youtube.com/watch/?v=` is served by YouTube and was refused here.
+    } else if (url.pathname.replace(/\/+$/, "") === "/watch") {
       id = url.searchParams.get("v");
     } else {
       const match = url.pathname.match(/^\/(?:shorts|embed|live|v)\/([^/?]+)/);

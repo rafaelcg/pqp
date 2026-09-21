@@ -56,7 +56,23 @@ export function resetUpstreamBudget(): void {
   upstreamBudget.reset();
 }
 
-async function fetchText(url: string, headers: Record<string, string> = {}): Promise<string> {
+/**
+ * `missingIsEmpty` is for a page whose absence is an answer rather than a
+ * failure: a deleted or private playlist 404s, and calling that "the music
+ * provider is unavailable" sends a 502 for something the person can read
+ * and fix. Every other status stays an upstream error.
+ */
+function fetchText(url: string, headers?: Record<string, string>): Promise<string>;
+function fetchText(
+  url: string,
+  headers: Record<string, string>,
+  options: { missingIsEmpty: true },
+): Promise<string | null>;
+async function fetchText(
+  url: string,
+  headers: Record<string, string> = {},
+  options: { missingIsEmpty?: boolean } = {},
+): Promise<string | null> {
   takeUpstreamBudget();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -70,6 +86,9 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
         ...headers,
       },
     });
+    if (res.status === 404 && options.missingIsEmpty) {
+      return null;
+    }
     if (!res.ok) {
       // Never the query string: the Data API key travels in it.
       throw new MusicResolveError("upstream", `${url.split("?")[0]} answered ${res.status}`);
@@ -254,37 +273,100 @@ async function searchByScraping(query: string): Promise<SearchHit | null> {
 }
 
 /**
- * Search results, remembered for a while. A Spotify playlist is twenty-five
- * searches, and the same playlist gets pasted into the same room more than
- * once; the answer for "artist title" does not change between the two.
+ * ONE CACHE FOR BOTH SEARCH PATHS.
+ *
+ * A Spotify playlist is twenty-five searches, the same playlist gets pasted
+ * into the same room more than once, and the answer for "artist title" does
+ * not change between the two. It holds the LIST of hits rather than the
+ * first, so `searchYouTube` (which wants one) and `searchMusicCandidates`
+ * (which wants five) share entries: a typed query and the same text
+ * arriving later through a Spotify resolve cost one upstream call between
+ * them. That matters more since the field searches as you type.
+ *
+ * Empty answers are not remembered: an empty InnerTube reply is usually a
+ * flake, and six hours is a long time to repeat one.
  */
 const SEARCH_CACHE_MAX = 500;
 const SEARCH_CACHE_TTL_MS = 6 * 60 * 60_000;
-const searchCache = new Map<string, { at: number; hit: SearchHit }>();
+const SEARCH_HITS_MAX = 5;
+const searchCache = new Map<string, { at: number; hits: SearchHit[] }>();
+/** One upstream call per key while it is in flight, not one per caller. */
+const searchInFlight = new Map<string, Promise<SearchHit[]>>();
 
-function rememberSearch(query: string, hit: SearchHit) {
+/** Case and runs of whitespace do not make a different search. */
+function searchCacheKey(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function rememberSearch(key: string, hits: SearchHit[]) {
+  if (hits.length === 0) {
+    return;
+  }
   if (searchCache.size >= SEARCH_CACHE_MAX) {
     const oldest = searchCache.keys().next().value;
     if (oldest !== undefined) {
       searchCache.delete(oldest);
     }
   }
-  searchCache.set(query, { at: Date.now(), hit });
+  searchCache.set(key, { at: Date.now(), hits: hits.slice(0, SEARCH_HITS_MAX) });
+}
+
+function cachedSearch(key: string): SearchHit[] | null {
+  const entry = searchCache.get(key);
+  if (!entry || Date.now() - entry.at >= SEARCH_CACHE_TTL_MS) {
+    return null;
+  }
+  return entry.hits;
+}
+
+/**
+ * The hits for one query: cache, then whoever is already asking, then
+ * upstream. `fetchHits` is the path the caller wants when nothing is
+ * remembered.
+ */
+async function searchHits(
+  query: string,
+  fetchHits: () => Promise<SearchHit[]>,
+): Promise<SearchHit[]> {
+  const key = searchCacheKey(query);
+  const cached = cachedSearch(key);
+  if (cached) {
+    return cached;
+  }
+  const running = searchInFlight.get(key);
+  if (running) {
+    return running;
+  }
+  const attempt = (async () => {
+    try {
+      const hits = await fetchHits();
+      rememberSearch(key, hits);
+      return hits;
+    } finally {
+      searchInFlight.delete(key);
+    }
+  })();
+  searchInFlight.set(key, attempt);
+  return attempt;
+}
+
+/** Test seam: the caches are module state and outlive a test otherwise. */
+export function resetMusicCachesForTests(): void {
+  searchCache.clear();
+  searchInFlight.clear();
 }
 
 export async function searchYouTube(query: string): Promise<MusicResolved> {
-  const key = process.env.YOUTUBE_API_KEY?.trim();
-  const cacheKey = query.toLowerCase();
-  const cached = searchCache.get(cacheKey);
-  let hit: SearchHit | null;
-  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
-    hit = cached.hit;
-  } else {
-    hit = key ? await searchWithDataApi(query, key) : await searchUnofficial(query);
-    if (hit) {
-      rememberSearch(cacheKey, hit);
-    }
-  }
+  const apiKey = process.env.YOUTUBE_API_KEY?.trim();
+  const hits = await searchHits(query, async () => {
+    // One hit is all this path needs, and one hit is a list of one: the
+    // candidates path reads the same entry and is right to.
+    const one = apiKey
+      ? await searchWithDataApi(query, apiKey)
+      : await searchUnofficial(query);
+    return one ? [one] : [];
+  });
+  const hit = hits[0] ?? null;
   if (!hit) {
     throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
   }
@@ -442,14 +524,18 @@ export async function resolveYouTubePlaylist(
       );
     }
     if (items.length === 0) {
-      const html = await fetchText(`https://www.youtube.com/playlist?list=${listId}`, {
-        cookie: "CONSENT=YES+1; SOCS=CAI",
-      });
-      items = playlistFromHtml(html).map((item) => ({
-        ...item,
-        thumbnailUrl: `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
-      }));
-      name = playlistNameFromHtml(html);
+      const html = await fetchText(
+        `https://www.youtube.com/playlist?list=${listId}`,
+        { cookie: "CONSENT=YES+1; SOCS=CAI" },
+        { missingIsEmpty: true },
+      );
+      if (html !== null) {
+        items = playlistFromHtml(html).map((item) => ({
+          ...item,
+          thumbnailUrl: `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+        }));
+        name = playlistNameFromHtml(html);
+      }
     }
   }
   if (items.length === 0) {
@@ -651,34 +737,75 @@ export async function resolveMusic(raw: string): Promise<MusicResolution> {
 }
 
 /**
- * Top search hits for the add box. InnerTube first (title, duration,
- * thumbnail). When it answers nothing, fall through to `resolveMusic` so a
- * pasted query still yields the same single track resolve already knew.
+ * Top search hits for the add box, from the same cache the resolve path
+ * uses. A typed link that does not parse is refused here rather than
+ * searched: only the PASTE goes to `/api/music/resolve`, so the same text
+ * typed character by character used to reach InnerTube as a search and
+ * come back with an unrelated song.
  */
 export async function searchMusicCandidates(query: string): Promise<MusicResolved[]> {
+  const parsed = parseMusicInput(query);
+  if (parsed === null) {
+    throw new MusicResolveError(
+      "unsupported",
+      "Only YouTube and Spotify links, or a search, are supported",
+    );
+  }
+  if (parsed.kind !== "search") {
+    // A real link. `resolveMusic` knows what each shape means.
+    const { tracks } = await resolveMusic(query);
+    return tracks;
+  }
+  let hits: SearchHit[] = [];
   try {
-    const videos = await innertubeSearch(query, 5);
-    if (videos && videos.length > 0) {
-      return videos.slice(0, 5).map((video) => ({
-        provider: "youtube" as const,
+    hits = await searchHits(query, async () => {
+      const videos = await innertubeSearch(query, SEARCH_HITS_MAX);
+      return (videos ?? []).slice(0, SEARCH_HITS_MAX).map((video) => ({
         videoId: video.videoId,
-        title: cleanTitle(video.title) || video.videoId,
-        sourceUrl: null,
+        title: video.title,
         thumbnailUrl: video.thumbnailUrl,
         durationMs: video.durationMs,
       }));
-    }
+    });
   } catch (error) {
     if (error instanceof MusicResolveError) {
       throw error;
     }
     console.warn(
-      "[music] innertube search failed, falling back to resolve:",
+      "[music] innertube search failed, falling back to the results page:",
       error instanceof Error ? error.message : String(error),
     );
   }
-  const { tracks } = await resolveMusic(query);
-  return tracks;
+  if (hits.length > 0) {
+    return hits.map((hit) => ({
+      provider: "youtube" as const,
+      videoId: hit.videoId,
+      title: cleanTitle(hit.title) || hit.videoId,
+      sourceUrl: null,
+      thumbnailUrl: hit.thumbnailUrl,
+      durationMs: hit.durationMs ?? null,
+    }));
+  }
+  /*
+   * Nothing from InnerTube. This used to call `resolveMusic`, which ran the
+   * SAME InnerTube search again before scraping, so an empty answer cost up
+   * to four tokens of the shared budget and a scrape. Go straight to the
+   * page, which is the one door InnerTube's silence leaves.
+   */
+  const scraped = await searchByScraping(query);
+  if (!scraped) {
+    throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
+  }
+  return [
+    {
+      provider: "youtube",
+      videoId: scraped.videoId,
+      title: cleanTitle(scraped.title) || scraped.videoId,
+      sourceUrl: null,
+      thumbnailUrl: scraped.thumbnailUrl,
+      durationMs: scraped.durationMs ?? null,
+    },
+  ];
 }
 
 /** Related videos for autoplay, mapped to the room's resolve shape. */
