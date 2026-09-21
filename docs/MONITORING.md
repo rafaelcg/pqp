@@ -803,6 +803,43 @@ each is high enough (more than a handful) to trust the percentile rather than
 a couple of noisy readings. `voice.hlsTelemetryBatch`'s log trend should track
 the same shape, if noisier, in real time on the dashboard above.
 
+### Screen-share / watch-party video quality
+
+Where the number lives: `GET /api/admin/metrics`'s `streamQuality` block
+(`server/src/voice/stream-quality-metrics.ts`), fed by sampled client
+`getStats()` readings (`POST /api/stream-quality/telemetry`,
+`packages/shared/src/stream-quality-telemetry.ts`). fps, bitrate and
+resolution are bounded histograms split by role (`presenter`/`viewer`) and
+transport (`mesh`/`livekit`); `limitationReasons` is WebRTC's own
+`qualityLimitationReason` (`none`/`cpu`/`bandwidth`/`other`), presenter-only
+— the field that tells a starved uplink apart from an overloaded encoder,
+which a raw fps number cannot. In-process and resets on a restart, the same
+as every other counter on this endpoint.
+
+Unlike the B0.6 latency panel above, **this has a direct Prometheus line**:
+`pqp-api-metrics-exporter.py` renders `pqp_api_stream_quality_fps_total`,
+`pqp_api_stream_quality_bitrate_kbps_total`,
+`pqp_api_stream_quality_resolution_total` (each labeled `role`, `transport`,
+`bucket`) and `pqp_api_stream_quality_limitation_reason_total` (labeled
+`transport`, `reason`) straight from the histogram — no log-line
+approximation is needed because there is no per-batch log line at all: a
+batch is folded straight into the bucket counts with nothing logged (the
+same reasoning `hls-latency-metrics.ts`'s per-rung histogram already uses;
+logging every accepted batch would be the flood pitfall 16 warns against, at
+a cadence with no viewer-sampling floor keeping it rare). "pqp Live"
+(`tools/monitoring/grafana-dashboard-live.json`) carries three panels built
+on these series: "Screen share fps (presenter, by bucket)", "Screen share
+limitation reason (presenter)" and "Screen share bitrate (presenter, by
+bucket)" — read the first two side by side: a rising `5-9` fps line against
+a rising `reason=bandwidth` line is a starved uplink; the same fps drop
+against `reason=cpu` is the presenter's own machine.
+
+**Scope.** WebRTC `getStats()` only — a watch party's HLS audience holds no
+`RTCPeerConnection` at all (`docs/WATCH_PARTY.md`: "an audience watches
+without a seat"), so this says nothing about them; their playback quality is
+the B0.6 latency panel above. This is the presenter's encode, and the
+decode of anyone actually seated in the room.
+
 ### DB call budget (2026-09-13 Vultr cutover)
 
 The cutover's first 16.5h of Postgres query stats found four repeat

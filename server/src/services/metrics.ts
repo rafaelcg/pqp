@@ -33,6 +33,10 @@ import {
 } from "../voice/hls-playlist-proxy.js";
 import { callMetricsSnapshot, type CallMetrics } from "../voice/call-metrics.js";
 import {
+  streamQualityMetricsSnapshot,
+  type StreamQualityMetrics,
+} from "../voice/stream-quality-metrics.js";
+import {
   pushDeliverySnapshot,
   type PushDelivery,
 } from "./push-metrics.js";
@@ -327,6 +331,17 @@ export interface AdminMetrics {
    *    and unanswered ends (`timeout` rang out, `cancelled` room emptied).
    */
   calls: CallMetrics;
+  /**
+   * SCREEN-SHARE / WATCH-PARTY VIDEO QUALITY, folded from client-reported
+   * `getStats()` samples (`POST /api/stream-quality/telemetry`) into bounded
+   * histograms since this process booted. fps, bitrate and resolution are
+   * each split by role (presenter/viewer) and transport (mesh/livekit);
+   * `limitationReasons` is WebRTC's own `qualityLimitationReason`
+   * (`none`/`cpu`/`bandwidth`/`other`), presenter-only -- the field that
+   * tells a starved uplink apart from an overloaded encoder, which a raw fps
+   * number cannot. See `voice/stream-quality-metrics.ts`.
+   */
+  streamQuality: StreamQualityMetrics;
   voice: {
     activeRooms: number;
     participants: number;
@@ -1290,6 +1305,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
     calls: callMetricsSnapshot(),
+    streamQuality: streamQualityMetricsSnapshot(),
     dbTx: { byPath: dbTxByPath() },
     dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),

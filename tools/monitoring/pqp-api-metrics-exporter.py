@@ -609,7 +609,7 @@ _SHARED_TAKE_FIRST_KEYS = (
 # in their own source file (db-tx-metrics.ts, read-cache.ts, chat.ts's
 # `getPresenceFanoutStats`, call-metrics.ts). Recursively summed, including
 # their nested label maps (`byPath`, `byRoute`, `joinRefusedByReason`, ...).
-_ADDITIVE_SUM_KEYS = ("dbTx", "dbQueries", "readCache", "presence", "calls")
+_ADDITIVE_SUM_KEYS = ("dbTx", "dbQueries", "readCache", "presence", "calls", "streamQuality")
 
 # Blocks that mix process-local and DB-derived fields: hand-written mergers.
 _CUSTOM_MERGERS = {
@@ -687,6 +687,7 @@ def render(
     messages = payload.get("messages", {})
     calls = payload.get("calls", {})
     product = payload.get("product", {})
+    stream_quality = payload.get("streamQuality", {})
     breaker = runtime.get("db", {}).get("breaker", {})
 
     lines: list[str] = []
@@ -1001,6 +1002,83 @@ def render(
             "pqp_api_call_rings_ended_total",
             "Unanswered rings that ended (calls.ringsEndedByReason): timeout rang out, cancelled emptied.",
             [({"reason": r}, rings_ended.get(r, 0)) for r in ("timeout", "cancelled")],
+        )
+
+    # Screen-share / watch-party video quality: fps, bitrate and resolution
+    # buckets split by role (presenter/viewer) and transport (mesh/livekit),
+    # plus WebRTC's own qualityLimitationReason (presenter-only -- the field
+    # that tells a starved uplink apart from an overloaded encoder). Folded
+    # from client getStats() samples (streamQuality.*, in-process, additive).
+    if isinstance(stream_quality, dict) and stream_quality:
+        roles = ("presenter", "viewer")
+        transports = ("mesh", "livekit")
+        fps_buckets = ("0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-plus")
+        bitrate_buckets = ("0-199", "200-499", "500-999", "1000-1999", "2000-3999", "4000-plus")
+        resolution_buckets = ("240p-minus", "360p", "480p", "720p", "1080p", "1440p-plus")
+        reasons = ("none", "cpu", "bandwidth", "other")
+
+        fps = stream_quality.get("fpsBuckets") or {}
+        samples: list[tuple[dict[str, str], object]] = []
+        for role in roles:
+            for transport in transports:
+                buckets = ((fps.get(role) or {}).get(transport)) or {}
+                for bucket in fps_buckets:
+                    samples.append(
+                        ({"role": role, "transport": transport, "bucket": bucket}, buckets.get(bucket, 0))
+                    )
+        labeled_counter(
+            lines,
+            "pqp_api_stream_quality_fps_total",
+            "Screen-share/watch-party frames-per-second readings, bucketed (streamQuality.fpsBuckets). "
+            "bucket=5-9 is the '5-6 fps' complaint made countable.",
+            samples,
+        )
+
+        bitrate = stream_quality.get("bitrateBuckets") or {}
+        samples = []
+        for role in roles:
+            for transport in transports:
+                buckets = ((bitrate.get(role) or {}).get(transport)) or {}
+                for bucket in bitrate_buckets:
+                    samples.append(
+                        ({"role": role, "transport": transport, "bucket": bucket}, buckets.get(bucket, 0))
+                    )
+        labeled_counter(
+            lines,
+            "pqp_api_stream_quality_bitrate_kbps_total",
+            "Screen-share/watch-party bitrate readings, bucketed kbps (streamQuality.bitrateBuckets).",
+            samples,
+        )
+
+        resolution = stream_quality.get("resolutionBuckets") or {}
+        samples = []
+        for role in roles:
+            for transport in transports:
+                buckets = ((resolution.get(role) or {}).get(transport)) or {}
+                for bucket in resolution_buckets:
+                    samples.append(
+                        ({"role": role, "transport": transport, "bucket": bucket}, buckets.get(bucket, 0))
+                    )
+        labeled_counter(
+            lines,
+            "pqp_api_stream_quality_resolution_total",
+            "Screen-share/watch-party resolution readings, bucketed by height (streamQuality.resolutionBuckets).",
+            samples,
+        )
+
+        limitation = stream_quality.get("limitationReasons") or {}
+        samples = []
+        for transport in transports:
+            by_reason = limitation.get(transport) or {}
+            for reason in reasons:
+                samples.append(({"transport": transport, "reason": reason}, by_reason.get(reason, 0)))
+        labeled_counter(
+            lines,
+            "pqp_api_stream_quality_limitation_reason_total",
+            "Presenter-only: WebRTC's own qualityLimitationReason (streamQuality.limitationReasons). "
+            "reason=bandwidth is the uplink talking, reason=cpu is the encoder/machine talking -- "
+            "the split this feature exists to make.",
+            samples,
         )
 
     # Watch-party transcode lifecycle (cumulative -> counters) and playlist
