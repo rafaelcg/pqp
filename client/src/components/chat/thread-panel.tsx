@@ -51,8 +51,6 @@ interface ThreadPanelProps {
   parentChannelName: string | null;
   /** Swap the right column to the roster, keeping this thread one tap away. */
   onShowMembers?: (() => void) | null;
-  /** Roster size for the switch label. */
-  memberCount?: number;
   canModerate: boolean;
   blockedAuthorIds: ReadonlySet<string>;
   mentionCandidates: MentionCandidate[];
@@ -82,7 +80,6 @@ export function ThreadPanel({
   serverId,
   parentChannelName,
   onShowMembers = null,
-  memberCount = 0,
   canModerate,
   blockedAuthorIds,
   mentionCandidates,
@@ -174,10 +171,11 @@ export function ThreadPanel({
           <div className="px-3 pt-2 max-md:hidden">
             <RightColumnTabs
               active="thread"
-              membersLabel={t("memberList.sectionHeading", {
-                label: t("memberList.title"),
-                count: memberCount,
-              })}
+              // No count on this half. The roster's own switch has one,
+              // because MemberSidebar counts the rows it is about to draw —
+              // members, or a group conversation's participants plus you.
+              // Recomputing that from outside got the group case wrong.
+              membersLabel={t("memberList.title")}
               threadLabel={t("thread.title")}
               onSelectMembers={onShowMembers}
               onSelectThread={() => {}}
