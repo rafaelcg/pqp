@@ -133,6 +133,7 @@ import {
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
   liveHlsTelemetryBatchSchema,
+  streamQualityTelemetryBatchSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -175,6 +176,12 @@ import {
   recordHlsTelemetryBatchRejectedSession,
   recordHlsTelemetryBatchRejectedSessionLookupTimeout,
 } from "../voice/hls-latency-metrics.js";
+import {
+  recordStreamQualityBatchAccepted,
+  recordStreamQualityBatchRejectedRateLimit,
+  recordStreamQualityBatchRejectedSchema,
+  recordStreamQualitySample,
+} from "../voice/stream-quality-metrics.js";
 import { isKnownHlsRung } from "../voice/hls-ladder.js";
 import { createHlsSessionLookupGuard } from "../voice/hls-telemetry-session-guard.js";
 import {
@@ -854,6 +861,19 @@ const liveHlsTelemetrySessionLimiter = createRateLimiter({
   refillPerSecond: 10,
 });
 /**
+ * Screen-share / watch-party video quality telemetry
+ * (`stream-quality-telemetry.ts` in `@pqp/shared`). The client sampler ticks
+ * once per `STREAM_QUALITY_TELEMETRY_SAMPLE_INTERVAL_MS` (20s) and only
+ * while a screen-share row actually exists, so one caller sending a batch
+ * every few seconds is already a script, not a browser doing what this
+ * feature asks of it. Capacity gives room for a reconnect to catch up a
+ * couple of missed ticks without tripping the limiter on the very next one.
+ */
+const streamQualityTelemetryLimiter = createRateLimiter({
+  capacity: 6,
+  refillPerSecond: 0.1,
+});
+/**
  * How long a signed telemetry batch's `resolveHlsSessionId` lookup may run
  * before the route gives up on it, and how long that session's key is then
  * assumed still struggling before the next batch tries again -- see
@@ -977,6 +997,7 @@ export function resetApiRateLimits(): void {
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
   hlsSessionLookupGuard.reset();
+  streamQualityTelemetryLimiter.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -8879,6 +8900,50 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     avgBufferSeconds:
       avgBufferSeconds !== undefined ? Math.round(avgBufferSeconds * 10) / 10 : undefined,
   });
+  return { ok: true };
+});
+
+/**
+ * Screen-share / watch-party video quality telemetry: fps, bitrate,
+ * resolution and (presenter side only) WebRTC's own
+ * `qualityLimitationReason`, folded straight into the bounded histograms
+ * `GET /api/admin/metrics`'s `streamQuality` block reads
+ * (`voice/stream-quality-metrics.ts`). See that module's own doc comment for
+ * why this schema carries no free-text field and therefore has only one
+ * rejection shape (schema), unlike the HLS latency route above it.
+ *
+ * NO PII, NO SESSION IDENTITY. Every field is a closed enum or a bounded
+ * number; nothing here names a channel, a room or a session. The Bearer
+ * token this route requires (like every other `/api/*` route, see
+ * `handleApi`) exists only to key the per-caller rate limit below — the
+ * sample itself is written into an aggregate bucket the server could not
+ * trace back to who sent it even if it wanted to.
+ *
+ * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES, the same convention
+ * `POST /api/live-hls/telemetry` documents above: this is a measurement, not
+ * an event anything downstream is waiting on.
+ */
+router.post("/api/stream-quality/telemetry", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!streamQualityTelemetryLimiter.take(key)) {
+    recordStreamQualityBatchRejectedRateLimit();
+    res.setHeader(
+      "Retry-After",
+      String(streamQualityTelemetryLimiter.retryAfter(key)),
+    );
+    throw new HttpError(429, "Slow down");
+  }
+  let batch: ReturnType<typeof streamQualityTelemetryBatchSchema.parse>;
+  try {
+    batch = streamQualityTelemetryBatchSchema.parse(await readJsonBody(req));
+  } catch (error) {
+    recordStreamQualityBatchRejectedSchema();
+    throw error;
+  }
+  for (const sample of batch.samples) {
+    recordStreamQualitySample(sample);
+  }
+  recordStreamQualityBatchAccepted();
   return { ok: true };
 });
 

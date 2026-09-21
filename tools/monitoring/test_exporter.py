@@ -227,6 +227,31 @@ class RenderGrowthMetricsTests(unittest.TestCase):
                     "fcm": {"sent": 7, "failed": 1, "pruned": 0},
                 }
             },
+            streamQuality={
+                "samplesAccepted": 12,
+                "batchesAccepted": 4,
+                "batchesRejectedSchema": 1,
+                "batchesRejectedRateLimit": 0,
+                "fpsBuckets": {
+                    "presenter": {
+                        "mesh": {"5-9": 3, "30-plus": 1},
+                        "livekit": {},
+                    },
+                    "viewer": {"mesh": {}, "livekit": {"30-plus": 2}},
+                },
+                "bitrateBuckets": {
+                    "presenter": {"mesh": {"200-499": 3}, "livekit": {}},
+                    "viewer": {"mesh": {}, "livekit": {}},
+                },
+                "resolutionBuckets": {
+                    "presenter": {"mesh": {"360p": 3}, "livekit": {}},
+                    "viewer": {"mesh": {}, "livekit": {}},
+                },
+                "limitationReasons": {
+                    "mesh": {"none": 0, "cpu": 0, "bandwidth": 3, "other": 0},
+                    "livekit": {"none": 1, "cpu": 0, "bandwidth": 0, "other": 0},
+                },
+            },
         )
 
     def test_signups_and_messages(self):
@@ -259,6 +284,44 @@ class RenderGrowthMetricsTests(unittest.TestCase):
         body = exporter.render(self._payload())
         self.assertIn('pqp_api_push_delivery_total{platform="web",outcome="sent"} 30', body)
         self.assertIn('pqp_api_push_delivery_total{platform="fcm",outcome="failed"} 1', body)
+
+    def test_stream_quality_fps_bitrate_resolution_and_limitation_reason(self):
+        body = exporter.render(self._payload())
+        self.assertIn(
+            'pqp_api_stream_quality_fps_total{role="presenter",transport="mesh",bucket="5-9"} 3',
+            body,
+        )
+        # A bucket never hit still gets a zero series.
+        self.assertIn(
+            'pqp_api_stream_quality_fps_total{role="presenter",transport="mesh",bucket="0-4"} 0',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_stream_quality_fps_total{role="viewer",transport="livekit",bucket="30-plus"} 2',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_stream_quality_bitrate_kbps_total{role="presenter",transport="mesh",bucket="200-499"} 3',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_stream_quality_resolution_total{role="presenter",transport="mesh",bucket="360p"} 3',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_stream_quality_limitation_reason_total{transport="mesh",reason="bandwidth"} 3',
+            body,
+        )
+        self.assertIn(
+            'pqp_api_stream_quality_limitation_reason_total{transport="livekit",reason="none"} 1',
+            body,
+        )
+
+    def test_stream_quality_absent_emits_nothing_but_does_not_crash(self):
+        payload = self._payload()
+        del payload["streamQuality"]
+        body = exporter.render(payload)
+        self.assertNotIn("pqp_api_stream_quality_fps_total", body)
 
     def test_activation_funnel_cohort_and_conversion(self):
         body = exporter.render(self._payload())
@@ -475,6 +538,47 @@ class CollectAdminMetricsSnapshotsTests(unittest.TestCase):
         self.assertEqual(merged["calls"]["joinConnected"], 6)
         self.assertEqual(merged["messages"]["last24h"], 100)
         self.assertEqual(merged["activation"]["window7d"]["signup"], 12)
+
+    def test_merged_result_sums_stream_quality_nested_buckets(self):
+        # Three levels deep (role -> transport -> bucket): confirms deep_sum
+        # recurses past the two-level shape calls/pushDelivery already cover.
+        payload_a = {
+            "instanceId": "instance-a",
+            "instanceCount": 2,
+            "streamQuality": {
+                "samplesAccepted": 5,
+                "fpsBuckets": {"presenter": {"mesh": {"5-9": 2}}},
+                "limitationReasons": {"mesh": {"bandwidth": 2}},
+            },
+        }
+        payload_b = {
+            "instanceId": "instance-b",
+            "instanceCount": 2,
+            "streamQuality": {
+                "samplesAccepted": 3,
+                "fpsBuckets": {"presenter": {"mesh": {"5-9": 1}, "livekit": {"30-plus": 4}}},
+                "limitationReasons": {"mesh": {"bandwidth": 1}, "livekit": {"none": 6}},
+            },
+        }
+        cycle = [payload_a, payload_b]
+        calls = {"n": 0}
+
+        def fake_fetch(url):
+            payload = cycle[calls["n"] % len(cycle)]
+            calls["n"] += 1
+            return payload
+
+        exporter.fetch_admin_metrics = fake_fetch
+        snapshots, _ = exporter.collect_admin_metrics_snapshots()
+        merged = exporter.merge_admin_metrics(snapshots)
+        self.assertEqual(merged["streamQuality"]["samplesAccepted"], 8)
+        self.assertEqual(merged["streamQuality"]["fpsBuckets"]["presenter"]["mesh"]["5-9"], 3)
+        # A key seen by only one replica (livekit here) still carries its count.
+        self.assertEqual(
+            merged["streamQuality"]["fpsBuckets"]["presenter"]["livekit"]["30-plus"], 4
+        )
+        self.assertEqual(merged["streamQuality"]["limitationReasons"]["mesh"]["bandwidth"], 3)
+        self.assertEqual(merged["streamQuality"]["limitationReasons"]["livekit"]["none"], 6)
 
     def test_never_exceeds_max_scrapes(self):
         # A sticky load balancer that always answers with the SAME instance,

@@ -25,7 +25,7 @@ actually running on a box with a Prometheus textfile collector -- see
 
 | File | Role |
 |---|---|
-| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion) **and the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Scrapes the endpoint repeatedly and dedups by the payload's own `instanceId` (`collect_admin_metrics_snapshots()`), merging the distinct per-replica snapshots (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- no Caddy route or per-replica URL required; see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
+| `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls`, `streamQuality` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion), **the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) **and screen-share/watch-party video quality** (fps/bitrate/resolution buckets by role and transport, and WebRTC's own `qualityLimitationReason` for the presenter) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Scrapes the endpoint repeatedly and dedups by the payload's own `instanceId` (`collect_admin_metrics_snapshots()`), merging the distinct per-replica snapshots (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- no Caddy route or per-replica URL required; see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
 | `grafana-dashboard-growth.json` | Standing "pqp Growth" dashboard: signups, messages by scope, call attempts/connect/failure-rate/refusals, ring outcomes, watch-party reliability, playlist rejections, push delivery. Import and leave up. |
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
@@ -145,10 +145,13 @@ dedup do the work.
 top-level block on the payload as one of:
 
 - **ADDITIVE** -- process-local in-memory counters, summed across replicas:
-  `calls`, `product.pushDelivery`, `dbTx`, `dbQueries`, `readCache`,
-  `presence`, and the in-memory counter fields of `voice.*` / `liveHls.*`
-  (join/ring outcomes, push send outcomes, registry writes, roster frames,
-  running egress/session counts, lifecycle totals).
+  `calls`, `streamQuality`, `product.pushDelivery`, `dbTx`, `dbQueries`,
+  `readCache`, `presence`, and the in-memory counter fields of `voice.*` /
+  `liveHls.*` (join/ring outcomes, push send outcomes, registry writes,
+  roster frames, running egress/session counts, lifecycle totals).
+  `streamQuality`'s bucket maps are three levels deep (role -> transport ->
+  bucket); `deep_sum` recurses on nested dicts regardless of depth, so this
+  needed no special case beyond adding the key to the policy table.
 - **SHARED** -- DB-derived blocks, taken from one replica, never summed:
   `users`, `servers`, `messages`, `activation`, `acquisition`, `retention`,
   `cluster` (already a cross-instance sum via the `voice_instances`

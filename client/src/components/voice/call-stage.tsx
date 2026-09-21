@@ -189,6 +189,7 @@ import {
 import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
 import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
 import { useShareUplinkStrain } from "@/hooks/use-share-uplink-strain";
+import { useStreamQualityTelemetry } from "@/hooks/use-stream-quality-telemetry";
 import { cameraBitrateFor } from "@/lib/video-quality";
 import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
@@ -930,6 +931,15 @@ function ActiveCall({
     // the rule has to expect a smaller screen ceiling rather than read it as
     // a weak link.
     voiceState.isCameraOn ? cameraBitrateFor(videoQuality) : 0,
+  );
+  // Operator-facing telemetry only: fps/bitrate/resolution/limitation-reason
+  // for whoever is presenting or watching a screen share, beaconed to
+  // GET /api/admin/metrics's streamQuality block. See the hook's own doc
+  // comment for the cost bound and the sampling rule.
+  useStreamQualityTelemetry(
+    voiceState.status !== "idle",
+    voiceState.roomTransport,
+    currentUser?.id ?? null,
   );
 
   const speaking = new Set(voiceState.speakingPeerIds);

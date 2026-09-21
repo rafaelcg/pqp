@@ -277,6 +277,57 @@
         }
       ],
       "description": "Every other panel on this dashboard depends on the exporter itself being alive. scrape_ok at 0, or seconds-since-last-scrape climbing past ~120 (the timer runs every 20s), means every pqp_api_* panel here is showing stale or absent data, not a quiet product."
+    },
+    {
+      "id": 11,
+      "title": "Screen share fps (presenter, by bucket)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (bucket) (rate(pqp_api_stream_quality_fps_total{role=\"presenter\"}[5m]))",
+          "legendFormat": "{{bucket}} fps"
+        }
+      ],
+      "description": "streamQuality.fpsBuckets.presenter, both transports summed: the PRESENTER's own encode rate, bucketed. A rising 5-9 line against a falling 30-plus line is the '5-6 fps' user report made visible on a graph instead of a ticket. See voice/stream-quality-metrics.ts."
+    },
+    {
+      "id": 12,
+      "title": "Screen share limitation reason (presenter)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (reason) (rate(pqp_api_stream_quality_limitation_reason_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "description": "streamQuality.limitationReasons, both transports summed: WebRTC's own qualityLimitationReason on the presenter's encoder. reason=bandwidth climbing is the uplink talking (a starved upload); reason=cpu climbing is the machine/encoder talking -- the split this feature exists to make, so a choppy share gets the right fix instead of a guess."
+    },
+    {
+      "id": 13,
+      "title": "Screen share bitrate (presenter, by bucket)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "sum by (bucket) (rate(pqp_api_stream_quality_bitrate_kbps_total{role=\"presenter\"}[5m]))",
+          "legendFormat": "{{bucket}} kbps"
+        }
+      ],
+      "description": "streamQuality.bitrateBuckets.presenter, both transports summed: read next to the fps panel -- low fps with a healthy bitrate bucket points at CPU/encoder (reason=cpu), low fps with a low bitrate bucket points at the uplink (reason=bandwidth)."
     }
   ]
 }
