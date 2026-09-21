@@ -33,6 +33,14 @@ rolls the update across `api-a` then `api-b` (or just `api-a` under
 merging this directory or the workflow changes nothing on its own — see
 `docs/deploy-vultr.md` for the cutover sequence.
 
+## Manual ops on the box
+
+Never run `docker compose up` on this box without `APP_IMAGE_TAG=<sha>` set
+(`compose.yaml` refuses to parse without it now, see its header comment for
+the 2026-09-21 incident that made this the rule). If you need to recreate a
+container by hand, do it one replica at a time (`api-a`, confirm healthy,
+then `api-b`) and never while a watch party is live.
+
 ## Apply a Caddyfile-only change by hand
 
 For a change that is only this `Caddyfile` (no new image to roll), on the

@@ -394,6 +394,14 @@ Decide the cutover window with that in mind, same as the Fly migration was.
 **Deploy.** Merge to `main`; `deploy-api-vultr.yml` does the rest once
 `DEPLOY_TARGET=vultr`. Manual: `gh workflow run "Deploy API (Vultr)"`.
 
+**Manual ops on the box.** Never run a bare `docker compose up` on the API
+box without `APP_IMAGE_TAG=<sha>` in scope (compose.yaml now refuses to
+parse without it, so this is enforced, not just a rule to remember). If you
+must recreate a container by hand, do one replica at a time (`up -d
+api-a`, confirm healthy, then `api-b`), and never during a live watch
+party. See the 2026-09-21 incident in `tools/api-host/compose.yaml`'s
+header comment.
+
 **Check what is running.**
 ```bash
 ssh pqp@<ip> 'cd /opt/pqp && COMPOSE_PROFILES=replicas docker compose ps && docker compose logs --tail=100 api-a'
