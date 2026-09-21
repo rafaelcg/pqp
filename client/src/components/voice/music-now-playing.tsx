@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  MoreHorizontal,
   Music,
   Pause,
   Play,
@@ -359,7 +360,14 @@ export function MusicNowPlaying({
   ) : null;
 
   const modeHide = "hidden @min-[28rem]:inline-flex";
-  const overflow = composer && canManage ? (
+  const overflowTrigger =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text";
+  /*
+   * Every row in this menu is a manager's, so a member's trigger opens
+   * nothing. It still draws, disabled, with the reason: a control that
+   * appears and disappears with rights moves everything beside it.
+   */
+  const overflow = !composer ? null : canManage ? (
     <MusicOverflowMenu
       canManage
       openControls={music.state?.openControls === true}
@@ -367,9 +375,23 @@ export function MusicNowPlaying({
       repeat={music.state?.repeat ?? "off"}
       modes="menu"
       side="top"
-      triggerClassName="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text"
+      triggerClassName={overflowTrigger}
     />
-  ) : null;
+  ) : (
+    <Tooltip label={t("music.overflow")} detail={t("music.noManage")}>
+      <span className="inline-flex">
+        <button
+          type="button"
+          data-music-overflow=""
+          className={cn(overflowTrigger, "opacity-40")}
+          aria-label={t("music.overflow")}
+          disabled
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </span>
+    </Tooltip>
+  );
 
   /*
    * THE ROOM'S QUEUE, ON THE BAR.
@@ -435,16 +457,15 @@ export function MusicNowPlaying({
           </div>
           <div className="flex items-center justify-end gap-1 @min-[28rem]:contents">
             <div className="flex items-center justify-center gap-1">
-              {canManage ? <MusicShuffleButton className={modeHide} /> : null}
+              <MusicShuffleButton className={modeHide} disabled={!canManage} />
               {previousControl}
               {playControl}
               {skipControl}
-              {canManage ? (
-                <MusicRepeatButton
-                  repeat={music.state?.repeat ?? "off"}
-                  className={modeHide}
-                />
-              ) : null}
+              <MusicRepeatButton
+                repeat={music.state?.repeat ?? "off"}
+                className={modeHide}
+                disabled={!canManage}
+              />
             </div>
             <div className="flex items-center justify-end gap-1">
               {overflow}

@@ -1060,6 +1060,7 @@
   "music.shuffle": "Shuffle",
   "music.voteSkip": "Vote to skip",
   "music.voteSkip.count": "{count} of {needed} votes",
+  "music.voteSkip.badge": "{count}/{needed}",
   "music.voteSkip.hint": "Needs {needed} votes to skip",
   "music.history": "Played",
   "music.options": "Queue options",

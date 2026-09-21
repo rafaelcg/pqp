@@ -1060,6 +1060,7 @@
   "music.shuffle": "Embaralhar",
   "music.voteSkip": "Votar pra pular",
   "music.voteSkip.count": "{count} de {needed} votos",
+  "music.voteSkip.badge": "{count}/{needed}",
   "music.voteSkip.hint": "Precisa de {needed} votos pra pular",
   "music.history": "Tocadas",
   "music.options": "Opções da fila",

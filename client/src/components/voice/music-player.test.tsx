@@ -653,9 +653,10 @@ describe("MusicNowPlaying", () => {
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
     expect(html).toContain("lucide-skip-back");
     expect(html).toContain("disabled=\"\"");
-    expect(html).not.toContain("data-music-shuffle");
-    expect(html).not.toContain("data-music-repeat");
-    expect(html).not.toContain("data-music-overflow");
+    /* Dimmed in place, not removed: see "the composer bar a member sees". */
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
   });
 
   it("cycles the repeat icon to Repeat1 when the mode is one", () => {
@@ -796,6 +797,75 @@ describe("the composer bar's up-next line", () => {
     );
     expect(html).toContain("data-music-listeners");
     expect(html).toContain(translateMessage("music.listening", { count: 2 }));
+  });
+});
+
+/**
+ * A member gets the same bar, not a different one: the controls they may not
+ * use are dimmed in place, so nothing under the pointer moves with rights.
+ */
+describe("the composer bar a member sees", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    listening: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+    onToggleDucking: () => {},
+  };
+  const bar = (canManage: boolean, music: Partial<MusicState> = {}) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(music),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState({ canManageMusic: canManage })}
+          canManage={canManage}
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  it("keeps shuffle and repeat in place, disabled", () => {
+    const html = bar(false);
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html.match(/disabled=""/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  /* The tooltip's reason is not in the markup: Radix renders it on open. */
+  it("keeps the overflow in place, disabled, instead of removing it", () => {
+    const html = bar(false);
+    expect(html).toMatch(/data-music-overflow=""[^>]*disabled=""/);
+    expect(bar(true)).not.toMatch(/data-music-overflow=""[^>]*disabled=""/);
+  });
+
+  it("puts vote-skip in the skip slot, with the count on the button", () => {
+    const html = bar(false, { skipVotes: ["22222222-2222-4222-8222-222222222222"] });
+    expect(html).toContain("data-music-vote-skip");
+    expect(html).toContain(translateMessage("music.voteSkip.badge", { count: 1, needed: 2 }));
+  });
+
+  it("leaves a manager's bar working", () => {
+    const html = bar(true);
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toContain("data-music-vote-skip");
   });
 });
 

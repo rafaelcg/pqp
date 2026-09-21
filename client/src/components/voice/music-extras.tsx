@@ -67,16 +67,19 @@ const ghostIcon =
 export function MusicRepeatButton({
   repeat,
   className,
+  disabled = false,
 }: {
   repeat: MusicRepeat;
   className?: string;
+  /** A member sees the control dimmed in place, never missing. */
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const label = repeatLabel(t, repeat);
   const on = repeat !== "off";
 
   return (
-    <Tooltip label={label}>
+    <Tooltip label={label} detail={disabled ? t("music.noManage") : undefined}>
       <Button
         type="button"
         variant="ghost"
@@ -85,6 +88,7 @@ export function MusicRepeatButton({
         className={cn(ghostIcon, className)}
         aria-label={label}
         aria-pressed={on}
+        disabled={disabled}
         onClick={() => setRepeat(nextMusicRepeat(repeat))}
       >
         {repeat === "one" ? (
@@ -97,10 +101,19 @@ export function MusicRepeatButton({
   );
 }
 
-export function MusicShuffleButton({ className }: { className?: string }) {
+export function MusicShuffleButton({
+  className,
+  disabled = false,
+}: {
+  className?: string;
+  disabled?: boolean;
+}) {
   const { t } = useTranslation();
   return (
-    <Tooltip label={t("music.shuffle")}>
+    <Tooltip
+      label={t("music.shuffle")}
+      detail={disabled ? t("music.noManage") : undefined}
+    >
       <Button
         type="button"
         variant="ghost"
@@ -108,6 +121,7 @@ export function MusicShuffleButton({ className }: { className?: string }) {
         data-music-shuffle=""
         className={cn(ghostIcon, className)}
         aria-label={t("music.shuffle")}
+        disabled={disabled}
         onClick={() => shuffle()}
       >
         <Shuffle className="h-4 w-4" aria-hidden="true" />
@@ -443,7 +457,7 @@ export function MusicVoteSkipButton({
 
   return (
     <Tooltip label={t("music.voteSkip")} detail={t("music.voteSkip.hint", { needed })}>
-      <span className="inline-flex">
+      <span className="relative inline-flex">
         <Button
           type="button"
           variant="ghost"
@@ -457,6 +471,14 @@ export function MusicVoteSkipButton({
         >
           <SkipForward className="h-4 w-4" aria-hidden="true" />
         </Button>
+        {/* The count belongs on the button. In a tooltip it is a fact nobody
+            reads until they have already pressed the thing. */}
+        <span
+          data-music-vote-count=""
+          className="pointer-events-none absolute -right-1 -top-0.5 rounded-full bg-accent-soft px-1 text-[9px] font-semibold tabular-nums text-on-accent-soft"
+        >
+          {t("music.voteSkip.badge", { count, needed })}
+        </span>
       </span>
     </Tooltip>
   );
