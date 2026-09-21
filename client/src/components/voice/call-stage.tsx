@@ -2555,8 +2555,14 @@ export function CallControls({
       >
         {collapsed && leading && (
           <div
+            data-call-dock-people=""
             className={cn(
               "flex h-9 min-w-0 items-center",
+              // Under 35rem the bar is a COLUMN, and a column centres what it
+              // holds: the name drifted to the middle of its own line while
+              // the tiles under it stayed right. Full width here puts it back
+              // against the same left edge as the message below it.
+              "w-full @min-[35rem]:w-auto",
               // Sized to its content: what the row has spare goes to the
               // pill, and past the pill's cap to the gap before the tiles.
               pushToTalk
