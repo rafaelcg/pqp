@@ -4,7 +4,9 @@ import {
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
 import { Button } from "@/components/ui/button";
@@ -22,6 +24,17 @@ import {
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import { formatMusicClock } from "@/components/voice/music-now-playing";
+
+/**
+ * LIVE SEARCH, WITHIN THE LIMITER.
+ *
+ * `GET /api/music/search` is rate limited per user at 20 burst and then one
+ * every two seconds, so the field asks only once the typing stops, never for
+ * the same text twice, and never below the floor. Two characters is the floor
+ * rather than three because bands are called U2 and MC.
+ */
+export const LIVE_SEARCH_DEBOUNCE_MS = 350;
+export const LIVE_SEARCH_MIN_CHARS = 2;
 
 export function shouldResolveQuery(text: string): boolean {
   const trimmed = text.trim();
@@ -72,8 +85,12 @@ export function MusicSearchPicker({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [results, setResults] = useState<MusicResolved[] | null>(null);
+  /** The text these results answer, so a stale list cannot be added by Enter. */
+  const [resultsFor, setResultsFor] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rail = chrome === "rail";
+  const lastQueried = useRef("");
+  const runId = useRef(0);
 
   useEffect(() => {
     onQueryActive?.(Boolean(query.trim()) || results !== null);
@@ -93,6 +110,8 @@ export function MusicSearchPicker({
         setNotice(t("music.queued"));
         setQuery("");
         setResults(null);
+        setResultsFor("");
+        lastQueried.current = "";
       } else if (outcome === "full") {
         setNotice(t("music.full"));
       }
@@ -128,6 +147,8 @@ export function MusicSearchPicker({
             );
             setQuery("");
             setResults(null);
+            setResultsFor("");
+            lastQueried.current = "";
           }
         } else {
           tellOutcome(addTrack(track));
@@ -152,19 +173,29 @@ export function MusicSearchPicker({
   const runSearch = useCallback(
     async (text: string) => {
       const room = musicSessionChannelId();
+      /* A slower answer to an older query must not land on a newer one. */
+      runId.current += 1;
+      const mine = runId.current;
+      const stale = () =>
+        runId.current !== mine || room === null || musicSessionChannelId() !== room;
       try {
         const { tracks } = await searchMusic(text);
-        if (room === null || musicSessionChannelId() !== room) {
+        if (stale()) {
           return;
         }
         setResults(tracks.slice(0, 5));
+        setResultsFor(text);
         setHighlight(0);
         if (tracks.length === 0) {
           setNotice(t("music.error.notFound"));
         }
       } catch (error) {
+        if (stale()) {
+          return;
+        }
         if (error instanceof ApiError && error.status === 404) {
           setResults([]);
+          setResultsFor(text);
           setNotice(t("music.error.notFound"));
         } else if (error instanceof ApiError && error.status === 400) {
           setNotice(t("music.error.unsupported"));
@@ -176,12 +207,34 @@ export function MusicSearchPicker({
     [t],
   );
 
+  /*
+   * Typing searches on its own. It deliberately does not raise `busy`: that
+   * disables the field, and a field that goes dead under the caret is worse
+   * than a slow list. A link is never live-searched, because resolving one
+   * ADDS it, and half a pasted URL is not a song.
+   */
+  useEffect(() => {
+    const text = query.trim();
+    if (
+      text.length < LIVE_SEARCH_MIN_CHARS ||
+      shouldResolveQuery(text) ||
+      text === lastQueried.current
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      lastQueried.current = text;
+      void runSearch(text);
+    }, LIVE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query, runSearch]);
+
   const submit = useCallback(async () => {
     const text = query.trim();
     if (!text || busy) {
       return;
     }
-    if (results && results.length > 0) {
+    if (results && results.length > 0 && resultsFor === text) {
       const pick = results[highlight] ?? results[0];
       if (pick) {
         addResolved(pick);
@@ -194,12 +247,42 @@ export function MusicSearchPicker({
       if (shouldResolveQuery(text)) {
         await runResolve(text);
       } else {
+        lastQueried.current = text;
         await runSearch(text);
       }
     } finally {
       setBusy(false);
     }
-  }, [addResolved, busy, highlight, query, results, runResolve, runSearch]);
+  }, [addResolved, busy, highlight, query, results, resultsFor, runResolve, runSearch]);
+
+  /*
+   * A pasted link resolves at once. Only a paste, never a keystroke: somebody
+   * typing a URL by hand would otherwise fire a resolve at every character
+   * that happens to parse, and each one costs the upstream budget.
+   */
+  const onFieldPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const field = event.currentTarget;
+    const pasted = event.clipboardData?.getData("text") ?? "";
+    const next = (
+      field.value.slice(0, field.selectionStart ?? field.value.length) +
+      pasted +
+      field.value.slice(field.selectionEnd ?? field.value.length)
+    ).trim();
+    if (!next || !shouldResolveQuery(next) || busy) {
+      return;
+    }
+    event.preventDefault();
+    setQuery(next);
+    setBusy(true);
+    setNotice(null);
+    void (async () => {
+      try {
+        await runResolve(next);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
 
   const onFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" && results && results.length > 0) {
@@ -217,6 +300,7 @@ export function MusicSearchPicker({
       event.stopPropagation();
       if (results) {
         setResults(null);
+        setResultsFor("");
         return;
       }
       if (!query.trim()) {
@@ -230,10 +314,16 @@ export function MusicSearchPicker({
     }
   };
 
+  /*
+   * The old list stays under the caret while the next one is on its way, so
+   * the panel does not blink on every keystroke. `resultsFor` is what keeps
+   * Enter honest about which text those rows answer.
+   */
   const onQueryChange = (value: string) => {
     setQuery(value);
-    if (results) {
+    if (results && !value.trim()) {
       setResults(null);
+      setResultsFor("");
     }
   };
 
@@ -257,6 +347,7 @@ export function MusicSearchPicker({
     "aria-activedescendant":
       results && results[highlight] ? `${listId}-${highlight}` : undefined,
     onKeyDown: onFieldKeyDown,
+    onPaste: onFieldPaste,
     onFocus: (event: { currentTarget: HTMLInputElement }) => {
       event.currentTarget.scrollIntoView({ block: "nearest" as const });
     },
