@@ -1001,6 +1001,49 @@ function history(count: number, from = 0): Message[] {
   });
 }
 
+describe("reconnect resync", () => {
+  // App.tsx's transport.onReady(reconnected) handler re-subscribes and then
+  // refetches only the tail page (`fetchMessages(channelId)`, no cursor),
+  // handing it to `chat.setMessages` with the window otherwise untouched.
+  it("keeps a scrolled-up older page below a fresh tail, not after it", () => {
+    const { chat } = setup();
+    // The user had scrolled up (loadOlder) before the disconnect, so the
+    // window holds an older page in front of the messages near the tail.
+    chat.setMessages(history(6, 0), true);
+
+    // Reconnect resync: only the newest page is refetched and merged in.
+    chat.setMessages(history(2, 10));
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+      "m5",
+      "m10",
+      "m11",
+    ]);
+  });
+
+  it("still carries a message sent during the gap, in order", () => {
+    const { chat } = setup();
+    chat.setMessages(history(2, 0), true);
+    // A message sent while offline, broadcast back before the resync lands.
+    chat.setMessages([...history(2, 0), ...history(1, 20)]);
+
+    chat.setMessages(history(2, 10));
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "m10",
+      "m11",
+      "m20",
+    ]);
+  });
+});
+
 describe("jumping into history", () => {
   it("fetches a page around a message that is not loaded", async () => {
     const { chat } = setup();
