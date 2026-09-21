@@ -125,7 +125,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
-          "expr": "1 - (sum(increase(pqp_api_call_join_connected_total[1h])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[1h])), 1))",
+          "expr": "sum(increase(pqp_api_call_join_refused_total[1h])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[1h])), 1)",
           "legendFormat": "refused fraction"
         }
       ],
