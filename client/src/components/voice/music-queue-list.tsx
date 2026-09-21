@@ -1,13 +1,15 @@
-import { ChevronDown, ChevronUp, ExternalLink, GripVertical, ListStart, X } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { GripVertical, MoreHorizontal } from "lucide-react";
+import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { MusicTrack } from "@pqp/shared";
-import { Button } from "@/components/ui/button";
+import { ContextMenu } from "@/components/ui/context-menu";
+import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import { moveInQueue, moveTrackTo, removeFromQueue } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
+import { queueRowMenuItems } from "@/components/voice/music-extras";
 import { formatMusicClock, lookupAddedBy } from "@/components/voice/music-now-playing";
 
 export function trackSourceHref(track: Pick<MusicTrack, "sourceUrl" | "videoId">): string {
@@ -19,23 +21,19 @@ export function trackSourceIsSpotify(track: Pick<MusicTrack, "sourceUrl">): bool
 }
 
 /**
- * The queue: scrolls past six rows, and reorders by drag.
- *
- * Native HTML5 drag, like the sidebar's voice occupants
- * (`lib/voice-occupant-dnd.ts`). While a row is dragged, the pointer's
- * position over each row decides whether it would land before or after it,
- * and a line is drawn there: the "drop preview". The write is one
- * `moveTrackTo` on drop, so the room sees one reorder and not a scrub.
- * The up/down buttons stay for the keyboard.
+ * The queue: scrolls, and reorders by drag. Keyboard is Alt+arrow on a
+ * focused row. Hover and right-click share play-next, remove, and the source.
  */
 export function MusicQueueList({
   queue,
   voiceState,
   canManage,
+  tone = "rail",
 }: {
   queue: MusicTrack[];
   voiceState: VoiceState;
   canManage: boolean;
+  tone?: "rail" | "composer";
 }) {
   const selfUserId = voiceState.self?.userId ?? null;
   const [dragId, setDragId] = useState<string | null>(null);
@@ -49,7 +47,7 @@ export function MusicQueueList({
   return (
     <ol
       data-music-queue=""
-      className="space-y-0.5 pr-0.5"
+      className="space-y-0.5"
       onDragOver={(event) => {
         if (dragId) {
           event.preventDefault();
@@ -80,6 +78,7 @@ export function MusicQueueList({
           dragging={dragId === track.id}
           dropBefore={dropIndex === index}
           dropAfter={dropIndex === index + 1 && index === queue.length - 1}
+          tone={tone}
           onDragStart={(event) => {
             if (!canManage) {
               event.preventDefault();
@@ -116,6 +115,7 @@ function QueueRow({
   dragging,
   dropBefore,
   dropAfter,
+  tone,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -129,6 +129,7 @@ function QueueRow({
   dragging: boolean;
   dropBefore: boolean;
   dropAfter: boolean;
+  tone: "rail" | "composer";
   onDragStart: (event: DragEvent<HTMLLIElement>) => void;
   onDragEnd: () => void;
   onDragOver: (event: DragEvent<HTMLLIElement>) => void;
@@ -138,111 +139,130 @@ function QueueRow({
   const href = trackSourceHref(track);
   const openLabel = trackSourceIsSpotify(track) ? t("music.openSource") : t("music.openYoutube");
   const canRemove = canManage || mine;
+  const composer = tone === "composer";
+  const menuItems = useMemo(
+    () =>
+      queueRowMenuItems({
+        t,
+        canManage,
+        canRemove,
+        href,
+        openLabel,
+        onPlayNext: () => moveTrackTo(track.id, 0),
+        onRemove: () => removeFromQueue(track.id),
+      }),
+    [t, canManage, canRemove, href, openLabel, track.id],
+  );
+
+  const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
+    if (!canManage || !event.altKey) {
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (index > 0) {
+        moveInQueue(track.id, -1);
+      }
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!last) {
+        moveInQueue(track.id, 1);
+      }
+    }
+  };
 
   return (
-    <li
-      draggable={canManage}
-      data-queue-row={track.id}
-      data-drop={dropBefore ? "before" : dropAfter ? "after" : undefined}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onDragOver={onDragOver}
-      className={cn(
-        "group/row relative flex items-center gap-1 rounded-[var(--radius-control)] px-1 py-1 hover:bg-surface-2",
-        canManage && "cursor-grab active:cursor-grabbing",
-        mine && "bg-surface-2/60",
-        dragging && "opacity-40",
-        dropBefore &&
-          "before:absolute before:inset-x-1 before:-top-[2px] before:h-[2px] before:rounded-full before:bg-accent",
-        dropAfter &&
-          "after:absolute after:inset-x-1 after:-bottom-[2px] after:h-[2px] after:rounded-full after:bg-accent",
-      )}
-    >
-      {canManage && (
-        <GripVertical
-          className="h-3 w-3 shrink-0 text-text-tertiary/60 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
-          aria-hidden="true"
-        />
-      )}
-      <span className="w-4 shrink-0 text-right tabular-nums text-text-tertiary">{index + 1}</span>
-      <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-3">
-        {track.thumbnailUrl ? (
-          <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-        ) : null}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12px] text-text" title={track.title}>
-          {track.title}
-        </span>
-        <span className="flex items-center gap-1 text-[10px] text-text-tertiary">
-          <UserAvatar
-            name={addedBy.name}
-            avatarUrl={addedBy.avatarUrl}
-            className="h-3.5 w-3.5"
-            fallbackClassName="bg-accent-soft text-[8px] text-on-accent-soft"
-            rounded="full"
-          />
-          <span className="truncate">{addedBy.name}</span>
-          {track.durationMs ? (
-            <span className="tabular-nums">· {formatMusicClock(track.durationMs)}</span>
+    <ContextMenu items={menuItems}>
+      <li
+        draggable={canManage}
+        tabIndex={canManage ? 0 : undefined}
+        data-queue-row={track.id}
+        data-drop={dropBefore ? "before" : dropAfter ? "after" : undefined}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onKeyDown={onKeyDown}
+        className={cn(
+          "group/row relative flex items-center gap-2 rounded-md px-1 py-1",
+          composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
+          dragging && "opacity-40",
+          dropBefore &&
+            "before:absolute before:inset-x-1 before:-top-[2px] before:h-[2px] before:rounded-full before:bg-accent",
+          dropAfter &&
+            "after:absolute after:inset-x-1 after:-bottom-[2px] after:h-[2px] after:rounded-full after:bg-accent",
+        )}
+      >
+        <span
+          className={cn(
+            "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
+            composer ? "bg-surface-3" : "bg-ink-3",
+          )}
+        >
+          {track.thumbnailUrl ? (
+            <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+          ) : null}
+          {canManage ? (
+            <span
+              className={cn(
+                "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing",
+                composer ? "bg-surface/70 text-text" : "bg-ink/70 text-paper",
+              )}
+              aria-hidden="true"
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </span>
           ) : null}
         </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
-        {canManage && (
-          <Tooltip label={t("music.playNext")}>
-            <button
-              type="button"
-              onClick={() => moveTrackTo(track.id, 0)}
-              className="rounded-[var(--radius-control)] p-0.5 text-text-tertiary hover:bg-surface-3 hover:text-text"
-            >
-              <ListStart className="h-3 w-3" aria-hidden="true" />
-            </button>
-          </Tooltip>
-        )}
-        {canManage && (
-          <>
-            <Tooltip label={t("music.moveUp")}>
-              <button
-                type="button"
-                disabled={index === 0}
-                onClick={() => moveInQueue(track.id, -1)}
-                className="rounded-[var(--radius-control)] p-0.5 text-text-tertiary hover:bg-surface-3 hover:text-text focus-visible:opacity-100 disabled:opacity-30"
-              >
-                <ChevronUp className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </Tooltip>
-            <Tooltip label={t("music.moveDown")}>
-              <button
-                type="button"
-                disabled={last}
-                onClick={() => moveInQueue(track.id, 1)}
-                className="rounded-[var(--radius-control)] p-0.5 text-text-tertiary hover:bg-surface-3 hover:text-text focus-visible:opacity-100 disabled:opacity-30"
-              >
-                <ChevronDown className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </Tooltip>
-          </>
-        )}
-        {canRemove && (
-          <Tooltip label={t("music.remove")}>
-            <button
-              type="button"
-              onClick={() => removeFromQueue(track.id)}
-              className="rounded-[var(--radius-control)] p-0.5 text-text-tertiary hover:bg-surface-3 hover:text-text"
-            >
-              <X className="h-3 w-3" aria-hidden="true" />
-            </button>
-          </Tooltip>
-        )}
-        <Tooltip label={openLabel}>
-          <Button asChild variant="ghost" size="icon" className="h-6 w-6 text-text-tertiary">
-            <a href={href} target="_blank" rel="noreferrer">
-              <ExternalLink className="h-3 w-3" aria-hidden="true" />
-            </a>
-          </Button>
+        <span
+          className={cn("min-w-0 flex-1 truncate text-sm", composer ? "text-text" : "text-paper")}
+          title={track.title}
+        >
+          {track.title}
+        </span>
+        <Tooltip label={t("music.addedBy", { name: addedBy.name })}>
+          <span className="shrink-0">
+            <UserAvatar
+              name={addedBy.name}
+              avatarUrl={addedBy.avatarUrl}
+              className="h-4 w-4"
+              fallbackClassName={
+                composer
+                  ? "bg-surface-3 text-[8px] text-text"
+                  : "bg-ink-3 text-[8px] text-paper"
+              }
+              rounded="full"
+            />
+          </span>
         </Tooltip>
-      </span>
-    </li>
+        {track.durationMs ? (
+          <span
+            className={cn(
+              "shrink-0 text-[11px] tabular-nums",
+              composer ? "text-text-secondary" : "text-paper-muted",
+            )}
+          >
+            {formatMusicClock(track.durationMs)}
+          </span>
+        ) : null}
+        <span className="flex w-8 shrink-0 items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+          <Menu items={menuItems} align="end" side="bottom">
+            <button
+              type="button"
+              data-queue-row-menu=""
+              className={cn(
+                "flex h-8 w-8 items-center justify-center rounded-md",
+                composer
+                  ? "text-text-tertiary hover:bg-surface-2 hover:text-text"
+                  : "text-paper-muted hover:bg-ink-2 hover:text-paper",
+              )}
+              aria-label={t("music.overflow")}
+            >
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </Menu>
+        </span>
+      </li>
+    </ContextMenu>
   );
 }

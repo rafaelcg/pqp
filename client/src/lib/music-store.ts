@@ -15,6 +15,9 @@ import {
 
 export { musicSkipVotesNeeded };
 
+/** Past this, skip-back restarts the current track instead of Tocadas. */
+export const MUSIC_RESTART_THRESHOLD_MS = 3000;
+
 /**
  * THE ROOM'S MUSIC QUEUE, ON THIS MACHINE.
  *
@@ -45,7 +48,7 @@ export interface MusicSnapshot {
   state: MusicState | null;
   /** This machine's clock when `state` arrived. Drift is measured from here. */
   receivedAt: number;
-  /** Whether the sidebar player is expanded. Shared so the call-bar button and the player agree. */
+  /** Whether the composer Fila sheet is open. Click-only; adds never set this. */
   open: boolean;
   /**
    * Whether THIS machine plays the room's music. False is "parar de ouvir":
@@ -167,6 +170,32 @@ export function useMusic(): MusicSnapshot {
   return useSyncExternalStore(subscribeMusic, getMusicSnapshot, getMusicSnapshot);
 }
 
+export interface MusicDockSnapshot {
+  /** Fila sheet open. The dock tile's pressed state. */
+  open: boolean;
+  /** A track is on. The composer bar is visible. */
+  on: boolean;
+}
+
+let dockSnap: MusicDockSnapshot = { open: false, on: false };
+
+function getMusicDockSnapshot(): MusicDockSnapshot {
+  const on = snapshot.state?.current != null;
+  if (dockSnap.open === snapshot.open && dockSnap.on === on) {
+    return dockSnap;
+  }
+  dockSnap = { open: snapshot.open, on };
+  return dockSnap;
+}
+
+/**
+ * Open + whether a track is on. Position samples do not change this
+ * snapshot, so CallControls can subscribe without following the playhead.
+ */
+export function useMusicDock(): MusicDockSnapshot {
+  return useSyncExternalStore(subscribeMusic, getMusicDockSnapshot, getMusicDockSnapshot);
+}
+
 export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
@@ -174,6 +203,7 @@ export function resetMusicStoreForTests(): void {
   localEndedTrackId = null;
   fillGeneration += 1;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+  dockSnap = { open: false, on: false };
   listeners.clear();
 }
 
@@ -331,7 +361,6 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   if (currentTrackHasEnded() && held.current) {
     const extra = minted.slice(1);
     startNow(minted[0] as MusicTrack, extra);
-    setMusicOpen(true);
     const extraFits = Math.min(extra.length, MUSIC_QUEUE_LIMIT);
     return {
       added: 1 + extraFits,
@@ -358,9 +387,6 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
     status: startedPlaying ? "playing" : held.status,
     positionMs: startedPlaying ? 0 : held.positionMs,
   });
-  if (added > 0) {
-    setMusicOpen(true);
-  }
   return { added, dropped, startedPlaying };
 }
 
@@ -373,19 +399,16 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   const held = base();
   if (held.current === null) {
     write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
-    setMusicOpen(true);
     return "playing";
   }
   if (currentTrackHasEnded()) {
     startNow(track);
-    setMusicOpen(true);
     return "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
     return "full";
   }
   write({ ...held, queue: [...held.queue, track] });
-  setMusicOpen(true);
   return "queued";
 }
 
@@ -414,6 +437,47 @@ export function seekTo(positionMs: number): void {
     // the write still has to land so the room can catch up
   }
   write({ ...held, positionMs: at });
+}
+
+function restamp(track: MusicTrack): MusicTrack {
+  trackSeq += 1;
+  const peer = session?.peerId ?? "local";
+  return {
+    ...track,
+    id: `${peer.slice(0, 8)}-${Date.now().toString(36)}-${trackSeq}`,
+  };
+}
+
+/**
+ * Spotify skip-back. Past three seconds, or with nothing in Tocadas, or
+ * on repeat-one, restarts the current track. Otherwise the first history
+ * row becomes current and the displaced track goes to the front of the
+ * queue (the tail is dropped if the queue is already at MUSIC_QUEUE_LIMIT).
+ */
+export function musicPrevious(): void {
+  const held = base();
+  if (!held.current) {
+    return;
+  }
+  const previous = held.history[0];
+  const restart =
+    held.positionMs > MUSIC_RESTART_THRESHOLD_MS ||
+    !previous ||
+    held.repeat === "one" ||
+    previous.videoId === held.current.videoId;
+  if (restart) {
+    seekTo(0);
+    return;
+  }
+  write({
+    ...held,
+    current: restamp(previous),
+    queue: [held.current, ...held.queue].slice(0, MUSIC_QUEUE_LIMIT),
+    history: held.history.slice(1),
+    status: "playing",
+    positionMs: 0,
+    skipVotes: [],
+  });
 }
 
 /** Position-only sample while playing, so a late joiner lands close. */

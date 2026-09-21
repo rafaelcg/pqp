@@ -15,7 +15,6 @@ import {
   setMusicAutoJoin,
   setMusicDucking,
   setMusicPlacement,
-  setMusicShowVideo,
   shouldAutoDeclineListen,
 } from "./music-prefs";
 
@@ -91,12 +90,11 @@ describe("music prefs store", () => {
     resetMusicPrefsForTests();
   });
 
-  it("defaults on and remembers each switch", () => {
+  it("defaults hidden and remembers each switch", () => {
     expect(getMusicPrefs()).toEqual({
-      placement: "panel",
+      placement: "hidden",
       ducking: true,
       autoJoin: true,
-      showVideo: false,
     });
     setMusicPlacement("stage");
     setMusicDucking(false);
@@ -105,34 +103,30 @@ describe("music prefs store", () => {
       placement: "stage",
       ducking: false,
       autoJoin: false,
-      showVideo: true,
     });
     expect(localStorage.getItem("pqp:music-placement")).toBe("stage");
     expect(localStorage.getItem("pqp:music-duck")).toBe("0");
     expect(localStorage.getItem("pqp:music-auto-join")).toBe("0");
-    expect(localStorage.getItem("pqp:music-video")).toBe("1");
-    setMusicShowVideo(false);
-    expect(getMusicPrefs().showVideo).toBe(false);
-    expect(localStorage.getItem("pqp:music-video")).toBe("0");
+    setMusicPlacement("hidden");
+    expect(getMusicPrefs().placement).toBe("hidden");
+    expect(localStorage.getItem("pqp:music-placement")).toBe("hidden");
   });
 
-  it("treats hide-video and stage as one picture", () => {
-    expect(musicPictureMode({ placement: "panel", showVideo: false })).toBe("hidden");
-    expect(musicPictureMode({ placement: "stage", showVideo: false })).toBe("hidden");
-    expect(musicPictureMode({ placement: "panel", showVideo: true })).toBe("panel");
-    expect(musicPictureMode({ placement: "stage", showVideo: true })).toBe("stage");
+  it("treats the stage as the only picture", () => {
+    expect(musicPictureMode({ placement: "hidden" })).toBe("hidden");
+    expect(musicPictureMode({ placement: "stage" })).toBe("stage");
     expect(
       musicStagePictureActive({
         hasCurrent: true,
         listening: true,
-        showVideo: false,
+        onStage: false,
       }),
     ).toBe(false);
     expect(
       musicStagePictureActive({
         hasCurrent: true,
         listening: true,
-        showVideo: true,
+        onStage: true,
       }),
     ).toBe(true);
   });

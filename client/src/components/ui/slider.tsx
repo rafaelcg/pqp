@@ -10,8 +10,8 @@ const root = cva(
       variant: {
         scrub: "h-4",
         volume: "h-4",
-        /** Compact player: the fill sits on the panel's top border. */
-        edge: "h-3 items-start",
+        /** Compact player: the fill sits on the panel's bottom border. */
+        edge: "h-3 items-end",
       },
     },
     defaultVariants: {
@@ -72,7 +72,7 @@ export interface SliderProps
 /**
  * One-dimensional value. `scrub` is a thin track whose thumb appears on
  * hover or focus. `volume` keeps the thumb visible. `edge` is the same
- * fill sitting on a panel's top border. `readOnly` draws the fill without
+ * fill sitting on a panel's bottom border. `readOnly` draws the fill without
  * a thumb and does not seek.
  */
 export function Slider({

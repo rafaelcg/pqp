@@ -1,6 +1,12 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
-import { ListStart, Plus } from "lucide-react";
-import { useCallback, useEffect, useId, useState } from "react";
+import { ListStart, Plus, Search } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -44,14 +50,21 @@ export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
 
 export function MusicSearchPicker({
   compact = false,
+  chrome = "default",
   variant = "queue",
   canManage = false,
   autoFocus = false,
+  onQueryActive,
+  onEmptyEscape,
 }: {
   compact?: boolean;
+  /** Member-list field: icon in the box, paper tokens, square result thumbs. */
+  chrome?: "default" | "rail";
   variant?: "start" | "queue";
   canManage?: boolean;
   autoFocus?: boolean;
+  onQueryActive?: (active: boolean) => void;
+  onEmptyEscape?: () => void;
 }) {
   const { t } = useTranslation();
   const listId = useId();
@@ -60,6 +73,11 @@ export function MusicSearchPicker({
   const [notice, setNotice] = useState<string | null>(null);
   const [results, setResults] = useState<MusicResolved[] | null>(null);
   const [highlight, setHighlight] = useState(0);
+  const rail = chrome === "rail";
+
+  useEffect(() => {
+    onQueryActive?.(Boolean(query.trim()) || results !== null);
+  }, [onQueryActive, query, results]);
 
   useEffect(() => {
     if (!notice) {
@@ -183,12 +201,66 @@ export function MusicSearchPicker({
     }
   }, [addResolved, busy, highlight, query, results, runResolve, runSearch]);
 
+  const onFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown" && results && results.length > 0) {
+      event.preventDefault();
+      setHighlight((index) => Math.min(results.length - 1, index + 1));
+      return;
+    }
+    if (event.key === "ArrowUp" && results && results.length > 0) {
+      event.preventDefault();
+      setHighlight((index) => Math.max(0, index - 1));
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (results) {
+        setResults(null);
+        return;
+      }
+      if (!query.trim()) {
+        onEmptyEscape?.();
+      }
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submit();
+    }
+  };
+
+  const onQueryChange = (value: string) => {
+    setQuery(value);
+    if (results) {
+      setResults(null);
+    }
+  };
+
   const placeholder =
     variant === "start"
       ? t("music.placeholder.start")
       : compact
         ? t("music.placeholder.short")
         : t("music.placeholder");
+
+  const fieldProps = {
+    value: query,
+    autoFocus,
+    disabled: busy,
+    placeholder,
+    "aria-label": t("music.placeholder"),
+    role: "combobox" as const,
+    "aria-expanded": results !== null,
+    "aria-controls": listId,
+    "aria-autocomplete": "list" as const,
+    "aria-activedescendant":
+      results && results[highlight] ? `${listId}-${highlight}` : undefined,
+    onKeyDown: onFieldKeyDown,
+    onFocus: (event: { currentTarget: HTMLInputElement }) => {
+      event.currentTarget.scrollIntoView({ block: "nearest" as const });
+    },
+  };
 
   return (
     <form
@@ -199,63 +271,47 @@ export function MusicSearchPicker({
         void submit();
       }}
     >
-      <div className="flex items-center gap-1.5">
-        <Input
-          value={query}
-          autoFocus={autoFocus}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            if (results) {
-              setResults(null);
-            }
-          }}
-          placeholder={placeholder}
-          aria-label={t("music.placeholder")}
-          role="combobox"
-          aria-expanded={results !== null}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={
-            results && results[highlight] ? `${listId}-${highlight}` : undefined
-          }
-          className="h-8 text-xs"
-          disabled={busy}
-          onFocus={(event) => {
-            event.currentTarget.scrollIntoView({ block: "nearest" });
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" && results && results.length > 0) {
-              event.preventDefault();
-              setHighlight((index) => Math.min(results.length - 1, index + 1));
-              return;
-            }
-            if (event.key === "ArrowUp" && results && results.length > 0) {
-              event.preventDefault();
-              setHighlight((index) => Math.max(0, index - 1));
-              return;
-            }
-            if (event.key === "Escape" && results) {
-              event.preventDefault();
-              setResults(null);
-              return;
-            }
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <Tooltip label={t("music.add")}>
-          <Button
-            type="submit"
-            size="icon"
-            variant="secondary"
-            className="h-8 w-8 shrink-0"
-            disabled={busy || !query.trim()}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </Button>
-        </Tooltip>
+      <div className={cn("flex items-center gap-1.5", rail && "relative")}>
+        {rail ? (
+          <>
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+            />
+            <input
+              {...fieldProps}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              className={cn(
+                "h-8 w-full appearance-none rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted",
+                "focus:outline-none focus:ring-2 focus:ring-signal/60",
+                "[&::-webkit-search-cancel-button]:hidden",
+              )}
+              onChange={(event) => onQueryChange(event.target.value)}
+            />
+          </>
+        ) : (
+          <>
+            <Input
+              {...fieldProps}
+              className="h-8 text-xs"
+              onChange={(event) => onQueryChange(event.target.value)}
+            />
+            <Tooltip label={t("music.add")}>
+              <Button
+                type="submit"
+                size="icon"
+                variant="secondary"
+                className="h-8 w-8 shrink-0"
+                disabled={busy || !query.trim()}
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </Tooltip>
+          </>
+        )}
       </div>
       {results && results.length > 0 && (
         <ul
@@ -271,8 +327,14 @@ export function MusicSearchPicker({
               role="option"
               aria-selected={index === highlight}
               className={cn(
-                "flex items-center gap-1 rounded-[var(--radius-control)] px-1 py-1",
-                index === highlight ? "bg-accent/12" : "hover:bg-surface-2",
+                "group/hit flex items-center gap-2 rounded-md px-1 py-1",
+                index === highlight
+                  ? rail
+                    ? "bg-ink-3"
+                    : "bg-accent/12"
+                  : rail
+                    ? "hover:bg-ink-3"
+                    : "hover:bg-surface-2",
               )}
             >
               <button
@@ -281,30 +343,48 @@ export function MusicSearchPicker({
                 onClick={() => addResolved(track)}
                 onMouseEnter={() => setHighlight(index)}
               >
-                <span className="relative h-9 w-16 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2">
+                <span
+                  className={cn(
+                    "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
+                    rail ? "bg-ink-3" : "bg-surface-2",
+                  )}
+                >
                   {track.thumbnailUrl ? (
                     <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
                   ) : null}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 text-[12px] leading-tight text-text">
-                    {track.title}
-                  </span>
-                  {track.durationMs ? (
-                    <span className="tabular-nums text-[11px] text-text-tertiary">
-                      {formatMusicClock(track.durationMs)}
-                    </span>
-                  ) : null}
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm",
+                    rail ? "text-paper" : "text-text",
+                  )}
+                >
+                  {track.title}
                 </span>
+                {track.durationMs ? (
+                  <span
+                    className={cn(
+                      "shrink-0 tabular-nums text-[11px]",
+                      rail ? "text-paper-muted" : "text-text-tertiary",
+                    )}
+                  >
+                    {formatMusicClock(track.durationMs)}
+                  </span>
+                ) : null}
               </button>
               {canManage && (
                 <Tooltip label={t("music.playNext")}>
                   <button
                     type="button"
-                    className="rounded-[var(--radius-control)] p-1 text-text-tertiary hover:bg-surface-3 hover:text-text"
+                    className={cn(
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-md opacity-0 group-hover/hit:opacity-100 group-focus-within/hit:opacity-100",
+                      rail
+                        ? "text-paper-muted hover:bg-ink-2 hover:text-paper"
+                        : "text-text-tertiary hover:bg-surface-3 hover:text-text",
+                    )}
                     onClick={() => addResolved(track, true)}
                   >
-                    <ListStart className="h-3.5 w-3.5" aria-hidden="true" />
+                    <ListStart className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </Tooltip>
               )}
@@ -313,7 +393,10 @@ export function MusicSearchPicker({
         </ul>
       )}
       {notice && (
-        <p role="status" className="text-[11px] text-text-secondary">
+        <p
+          role="status"
+          className={cn("text-[11px]", rail ? "text-paper-muted" : "text-text-secondary")}
+        >
           {notice}
         </p>
       )}

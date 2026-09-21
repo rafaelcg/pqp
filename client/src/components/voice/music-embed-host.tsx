@@ -4,10 +4,10 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
  * ONE EMBED, NEVER REPARENTED.
  *
  * The YouTube iframe lives on a #root-level paint dock for the whole listen
- * session. The sidebar `data-music-embed-dock` node is only a sizer. Show/hide
- * video and "Assistir na tela" overlay that paint dock over a slot: no
- * `appendChild` into the call grid, and no `overflow: hidden` sidebar clip.
- * Mounting on `#root` (not `body`) keeps tile labels above the picture.
+ * session. The sidebar `data-music-embed-dock` node is only a sizer. "Ver no
+ * palco" overlays that paint dock over the stage slot: no `appendChild` into
+ * the call grid, and no `overflow: hidden` sidebar clip. Mounting on `#root`
+ * (not `body`) keeps tile labels above the picture.
  */
 
 let embedHost: HTMLDivElement | null = null;

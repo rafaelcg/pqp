@@ -102,7 +102,7 @@ import {
 } from "../../lib/noise-suppression";
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { setMusicAutoJoin, useMusicAutoJoin } from "@/lib/music-prefs";
+import { setMusicAutoJoin, setMusicDucking, useMusicAutoJoin, useMusicDucking } from "@/lib/music-prefs";
 import {
   isVoiceCleanSettingsSeen,
   markVoiceCleanSettingsSeen,
@@ -984,6 +984,7 @@ function VoiceSection({
 }) {
   const { t } = useTranslation();
   const musicAutoJoin = useMusicAutoJoin();
+  const musicDucking = useMusicDucking();
   const canSelectOutput = supportsAudioOutputSelection();
   const checkConnection = () => requestConnectionCheck();
   const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
@@ -1360,6 +1361,13 @@ function VoiceSection({
         onCheckedChange={setMusicAutoJoin}
         label={t("settings.voice.musicAutoJoin")}
         description={t("settings.voice.musicAutoJoinHint")}
+        className="px-0"
+      />
+      <Switch
+        checked={musicDucking}
+        onCheckedChange={setMusicDucking}
+        label={t("settings.voice.musicDuck")}
+        description={t("settings.voice.musicDuckHint")}
         className="px-0"
       />
     </div>

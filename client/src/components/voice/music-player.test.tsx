@@ -17,15 +17,16 @@ import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-music-card-rights";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
-import { effectiveCanManageMusic, musicOverflowItems } from "@/components/voice/music-extras";
+import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
-import { MusicPanel, musicActivityForViewer, musicActivityFromDiff } from "@/components/voice/music-panel";
+import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
 } from "@/components/voice/music-stage-tile";
-import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
-import { MusicDock } from "@/components/voice/music-dock";
+import { MusicComposer } from "@/components/voice/music-composer";
+import { MusicFila } from "@/components/voice/music-fila";
+import { resetMusicLocalPlaybackForTests } from "@/components/voice/music-local-playback";
 import {
   applyYouTubeVolume,
   musicEmbedCommand,
@@ -143,38 +144,6 @@ const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
     channelMusic: {},
     ...overrides,
   }) as VoiceState;
-
-describe("musicActivityFromDiff", () => {
-  it("stays quiet on the first snapshot", () => {
-    expect(musicActivityFromDiff(null, state())).toBeNull();
-  });
-
-  it("names a skip, a pause and a multi-add", () => {
-    const playing = state();
-    expect(musicActivityFromDiff(playing, state({ current: track("next"), actorId: "peer-rafa" }))).toEqual({
-      kind: "skipped",
-    });
-    expect(musicActivityFromDiff(playing, state({ status: "paused" }))).toEqual({ kind: "paused" });
-    expect(
-      musicActivityFromDiff(
-        playing,
-        state({ queue: [track("a"), track("b"), track("c")] }),
-      ),
-    ).toEqual({ kind: "added", count: 3 });
-  });
-
-  it("treats a torn-down room as stopped", () => {
-    expect(musicActivityFromDiff(state(), null)).toEqual({ kind: "stopped" });
-  });
-
-  it("does not announce the local peer's own actions", () => {
-    const playing = state({ actorId: "peer-me" });
-    expect(musicActivityForViewer(playing, state({ actorId: "peer-me", status: "paused" }), "peer-me")).toBeNull();
-    expect(musicActivityForViewer(playing, state({ actorId: "peer-rafa", status: "paused" }), "peer-me")).toEqual({
-      kind: "paused",
-    });
-  });
-});
 
 describe("shouldResolveQuery", () => {
   it("resolves links and searches everything else", () => {
@@ -393,27 +362,20 @@ describe("shouldReportUnknownDuration", () => {
 describe("musicOverflowItems", () => {
   const t = (key: Parameters<typeof translateMessage>[0]) => translateMessage(key);
 
-  it("puts duck, video, stage, room options and stop for everyone on a manager menu", () => {
+  it("puts room options, repeat, shuffle and stop on a drawer menu", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
-      ducking: true,
-      showVideo: false,
-      onStage: false,
       openControls: false,
       autoplay: true,
-      onToggleDucking: () => {},
-      onToggleVideo: () => {},
-      onWatchOnStage: () => {},
+      repeat: "off",
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
-      "duck",
-      "video",
-      "stage",
-      "sep-room",
       "open-controls",
       "autoplay",
+      "repeat",
+      "shuffle",
       "sep-stop",
       "stop-all",
     ]);
@@ -422,20 +384,60 @@ describe("musicOverflowItems", () => {
     expect(items.filter((item) => !item.separator).every((item) => item.icon)).toBe(true);
   });
 
-  it("drops manage-only rows when the viewer cannot manage", () => {
+  it("puts shuffle and repeat first on the bar menu", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      openControls: true,
+      autoplay: false,
+      repeat: "one",
+      modes: "menu",
+      onStopAll: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual([
+      "shuffle",
+      "repeat",
+      "open-controls",
+      "autoplay",
+      "sep-stop",
+      "stop-all",
+    ]);
+    expect(items.find((item) => item.id === "repeat")?.checked).toBe(true);
+  });
+
+  it("drops shuffle and repeat when the bar already shows them", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+      modes: "none",
+      onStopAll: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual([
+      "open-controls",
+      "autoplay",
+      "sep-stop",
+      "stop-all",
+    ]);
+  });
+
+  it("is empty when the viewer cannot manage", () => {
     const items = musicOverflowItems({
       t,
       canManage: false,
-      ducking: false,
-      showVideo: true,
-      onStage: false,
       openControls: false,
       autoplay: false,
-      onToggleDucking: () => {},
-      onToggleVideo: () => {},
+      repeat: "off",
     });
-    expect(items.map((item) => item.id)).toEqual(["duck", "video"]);
-    expect(items.find((item) => item.id === "video")?.checked).toBe(true);
+    expect(items).toEqual([]);
+  });
+
+  it("cycles repeat off, one, all", () => {
+    expect(nextMusicRepeat("off")).toBe("one");
+    expect(nextMusicRepeat("one")).toBe("all");
+    expect(nextMusicRepeat("all")).toBe("off");
   });
 });
 
@@ -455,6 +457,17 @@ describe("effectiveCanManageMusic", () => {
 });
 
 describe("MusicNowPlaying", () => {
+  const extras = {
+    listening: true as const,
+    volume: 40,
+    muted: false,
+    ducking: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+    onToggleDucking: () => {},
+  };
+
   it("shows the adder and a vote skip when the viewer cannot manage", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
@@ -471,22 +484,22 @@ describe("MusicNowPlaying", () => {
           canManage={false}
           playing
           needsTap={false}
-          onExpand={() => {}}
           onPlayPause={() => {}}
           onSkip={() => {}}
           onTapToPlay={() => {}}
+          {...extras}
         />
       </TooltipProvider>,
     );
     expect(html).toContain("Ana");
     expect(html).toContain("data-music-now-playing");
-    expect(html).toContain("data-music-expand");
-    expect(html).not.toContain("data-music-expand-label");
+    expect(html).toContain("data-music-speaker");
     expect(html).toContain("data-music-vote-skip");
-    expect(html).toContain("data-music-stop-listening");
+    expect(html).not.toContain("data-music-stop-listening");
+    expect(html).not.toContain("data-music-fila=\"\"");
     expect(html).toContain("opacity-40");
     expect(html).toContain("role=\"progressbar\"");
-    expect(html).toContain("h-10 w-10");
+    expect(html).toContain("h-8 w-8");
     expect(html.match(/aria-expanded/g)?.length).toBe(3);
   });
 
@@ -506,22 +519,158 @@ describe("MusicNowPlaying", () => {
           canManage
           playing
           needsTap={false}
-          onExpand={() => {}}
           onPlayPause={() => {}}
           onSkip={() => {}}
           onTapToPlay={() => {}}
+          {...extras}
         />
       </TooltipProvider>,
     );
     expect(html).toContain("data-music-autoplayed");
     expect(html).not.toContain("Ana");
     expect(html).toContain("data-slider=\"edge\"");
+    expect(html).toContain("h-8 w-8");
+    expect(html).not.toContain("h-14 w-14");
+    expect(html).not.toContain("data-slider=\"scrub\"");
+  });
+
+  it("is the player on the composer bar: 56px art, round play, seek and clocks", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...extras}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain('data-music-now-playing="composer"');
+    expect(html).toContain("h-14 w-14");
+    expect(html).toContain("rounded-full");
+    expect(html).toContain("data-slider=\"scrub\"");
+    expect(html).toContain("col-span-full");
+    expect(html).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(html).toMatch(/Previous|Voltar|music\.previous/);
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
+    expect(html).toContain("hidden @min-[28rem]:inline-flex");
+    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
+    expect(html).not.toContain("data-slider=\"edge\"");
+    expect(html.match(/aria-expanded/g)?.length).toBe(4);
+  });
+
+  it("keeps the composer seek indeterminate when duration is unknown", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now", { durationMs: null })}
+          music={{
+            channelId: CHANNEL,
+            state: state({ current: track("now", { durationMs: null }) }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...extras}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-slider=\"scrub\"");
+    expect(html).toContain("data-indeterminate");
+    expect(html).toContain("–:––");
+    expect(html).not.toContain("data-slider=\"edge\"");
+  });
+
+  it("disables skip-back when the viewer cannot manage", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState({ canManageMusic: false })}
+          canManage={false}
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...extras}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toMatch(/Previous|Voltar|music\.previous/);
+    expect(html).toContain("lucide-skip-back");
+    expect(html).toContain("disabled=\"\"");
+    expect(html).not.toContain("data-music-shuffle");
+    expect(html).not.toContain("data-music-repeat");
+    expect(html).not.toContain("data-music-overflow");
+  });
+
+  it("cycles the repeat icon to Repeat1 when the mode is one", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ repeat: "one" }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...extras}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain('data-music-repeat="one"');
+    expect(html).toContain("lucide-repeat1");
+    expect(html).toContain('aria-pressed="true"');
   });
 });
 
-describe("MusicDock", () => {
+describe("MusicComposer", () => {
   beforeEach(() => {
     resetMusicStoreForTests();
+    resetMusicLocalPlaybackForTests();
     setMusicSession({
       channelId: CHANNEL,
       peerId: "peer-me",
@@ -531,145 +680,180 @@ describe("MusicDock", () => {
     });
   });
 
-  it("lets the compact title use leftover width instead of a 12rem cap", () => {
+  it("renders no music chrome when idle and the Fila is closed", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicComposer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toBe("");
+  });
+
+  it("lets the sheet replace Tocar música while the queue is empty", () => {
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicComposer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-fila=\"sheet\"");
+    expect(html).toContain("data-music-search");
+    expect(html).not.toContain("data-music-composer-start");
+  });
+
+  it("puts the transport in the composer", () => {
     receiveMusic(
       CHANNEL,
       state({ current: track("now", { title: "Arctic Monkeys - Cornerstone" }) }),
     );
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicDock compact voiceState={voiceState()} />
+        <MusicComposer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-dock=\"compact\"");
+    expect(html).toContain("data-music-composer");
+    expect(html).toContain('data-music-now-playing="composer"');
     expect(html).toContain("Arctic Monkeys - Cornerstone");
-    expect(html).not.toContain("max-w-[12rem]");
-    expect(html).toContain("flex-1");
+    expect(html).toContain("h-14 w-14");
+    expect(html).toContain("rounded-full");
+    expect(html).toContain("data-slider=\"scrub\"");
+    expect(html).toContain("col-span-full");
+    expect(html).toMatch(/Previous|Voltar|music\.previous/);
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).not.toContain("data-music-composer-start");
+    expect(html).not.toContain("data-slider=\"edge\"");
+    expect(html).not.toContain("data-music-fila");
+    expect(html).not.toContain("w-60");
+  });
+
+  it("expands Fila as a sheet, not a members rail", () => {
+    receiveMusic(CHANNEL, state({ current: track("now") }));
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicComposer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-fila=\"sheet\"");
+    expect(html).not.toContain("data-music-fila=\"drawer\"");
+    expect(html).not.toContain("w-60");
+    expect(html).toContain("max-h-[min(28rem,50dvh)]");
+    expect(html).not.toContain("data-music-composer-start");
+    expect(html).not.toContain("data-music-fila-play");
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
   });
 });
 
-describe("MusicPanel", () => {
-  const snapshot = (durationMs: number | null) => ({
-    channelId: CHANNEL,
-    state: state({ current: track("now", { durationMs }) }),
-    receivedAt: Date.now(),
-    open: true,
-    listening: true,
+describe("MusicFila", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    resetMusicPrefsForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
   });
 
-  const renderPanel = (durationMs: number | null) =>
-    renderToStaticMarkup(
+  it("is the queue only: no now-playing card or seek on the sheet", () => {
+    receiveMusic(CHANNEL, state({ current: track("now", { durationMs: null }) }));
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicPanel
-          current={track("now", { durationMs })}
-          music={snapshot(durationMs)}
-          voiceState={voiceState()}
-          canManage
-          playing
-          needsTap={false}
-          showVideo={false}
-          volume={40}
-          muted={false}
-          onPlayPause={() => {}}
-          onSkip={() => {}}
-          onTapToPlay={() => {}}
-          onMute={() => {}}
-          onVolume={() => {}}
-          onToggleVideo={() => {}}
-        />
+        <MusicFila voiceState={voiceState()} />
       </TooltipProvider>,
     );
-
-  it("keeps a compact artwork row and a scrubber while duration is unknown", () => {
-    const html = renderPanel(null);
-    expect(html).toContain("data-music-panel");
-    expect(html).toContain("data-music-collapse");
-    expect(html).toContain("data-music-overflow");
-    expect(html).toContain("data-music-stop-listening");
-    expect(html).not.toContain("data-music-collapse-label");
-    expect(html).not.toContain("grid-cols-2");
-    expect(html).toContain("h-14 w-14");
-    expect(html).not.toContain("aspect-square");
-    expect(html).toContain("data-slider=\"scrub\"");
-    expect(html).toContain("data-indeterminate");
-    expect(html).toContain("–:––");
-    expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*–:––/);
+    expect(html).toContain("data-music-fila");
+    expect(html).toContain("data-music-fila=\"sheet\"");
+    expect(html).not.toContain("w-60");
+    expect(html).toContain("data-music-fila-close");
+    expect(html).not.toContain("data-music-overflow");
+    expect(html).toContain("data-music-stage-watch");
+    expect(html).not.toContain("data-music-fila-play");
+    expect(html).not.toContain("h-12 w-12");
+    expect(html).not.toContain("data-music-vote-skip");
+    expect(html).not.toContain("data-slider=\"scrub\"");
+    expect(html).not.toContain("data-slider=\"volume\"");
+    expect(html).not.toContain("data-music-stop-listening");
   });
 
-  it("lets a manager seek once duration is known", () => {
-    const html = renderPanel(180_000);
+  it("keeps play-on-art and seek on the drawer radio", () => {
+    receiveMusic(CHANNEL, state({ current: track("now", { durationMs: 180_000 }) }));
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicFila variant="drawer" voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-fila=\"drawer\"");
+    expect(html).toContain("data-music-overflow");
+    expect(html).toContain("data-music-fila-play");
+    expect(html).toContain("h-12 w-12");
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).not.toContain("data-indeterminate");
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 
-  it("puts repeat, shuffle and an overflow trigger on a manager panel", () => {
-    const html = renderPanel(180_000);
-    expect(html).toContain("data-music-repeat");
-    expect(html).toContain("data-music-shuffle");
-    expect(html).toContain("data-music-overflow");
-    expect(html).not.toContain("data-music-options");
-    expect(html).not.toContain("data-music-listeners");
-    expect(html).toContain("data-music-added-by");
-    expect(html).toContain("added by Ana");
-    expect(html).toContain("data-slider=\"volume\"");
-  });
-
-  it("replaces skip with vote skip when the viewer cannot manage", () => {
+  it("hides search until Adicionar when a track is on", () => {
+    receiveMusic(CHANNEL, state());
+    setMusicOpen(true);
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicPanel
-          current={track("now")}
-          music={snapshot(180_000)}
-          voiceState={voiceState({ canManageMusic: false })}
-          canManage={false}
-          playing
-          needsTap={false}
-          showVideo={false}
-          volume={40}
-          muted={false}
-          onPlayPause={() => {}}
-          onSkip={() => {}}
-          onTapToPlay={() => {}}
-          onMute={() => {}}
-          onVolume={() => {}}
-          onToggleVideo={() => {}}
-        />
+        <MusicFila voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-vote-skip");
-    expect(html).toContain("data-music-overflow");
-    expect(html).not.toContain("data-music-options");
+    expect(html).toContain("data-music-add");
+    expect(html).not.toContain("data-music-search");
     expect(html).not.toContain("data-music-repeat");
-    expect(html).not.toContain("grid-cols-1");
   });
 
-  it("keeps stage and ducking off the sheet body", () => {
+  it("opens search when nothing is playing", () => {
+    setMusicOpen(true);
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicPanel
-          current={track("now")}
-          music={snapshot(180_000)}
-          voiceState={voiceState()}
-          canManage
-          playing
-          needsTap={false}
-          showVideo={false}
-          volume={40}
-          muted={false}
-          onPlayPause={() => {}}
-          onSkip={() => {}}
-          onTapToPlay={() => {}}
-          onMute={() => {}}
-          onVolume={() => {}}
-          onToggleVideo={() => {}}
-          onWatchOnStage={() => {}}
-          onToggleDucking={() => {}}
-        />
+        <MusicFila voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-overflow");
-    expect(html).not.toContain("role=\"switch\"");
+    expect(html).toContain("data-music-search");
+    expect(html).toContain("data-music-fila-close");
+  });
+
+  it("keeps skip off Fila when the viewer cannot manage", () => {
+    receiveMusic(CHANNEL, state());
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicFila voiceState={voiceState({ canManageMusic: false })} />
+      </TooltipProvider>,
+    );
+    expect(html).not.toContain("data-music-vote-skip");
+    expect(html).not.toContain("data-music-overflow");
+    expect(html).toContain("data-music-stage-watch");
+    expect(html).not.toContain("data-music-fila-play");
+  });
+
+  it("re-adds from Tocadas with an icon, not a labeled button", () => {
+    receiveMusic(
+      CHANNEL,
+      state({ history: [track("old", { title: "Tempo perdido" })] }),
+    );
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicFila voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-history");
+    expect(html).toContain("data-music-play-again");
+    expect(html).not.toMatch(/>Play again</);
+    expect(html).not.toMatch(/>Tocar de novo</);
   });
 });
 
@@ -697,7 +881,7 @@ describe("ChannelMusicCard", () => {
     expect(html).not.toContain("data-music-vote-skip");
   });
 
-  it("hides play and skip unless the viewer can manage music", () => {
+  it("hides play and skip in the call", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <ChannelMusicCard
@@ -710,12 +894,12 @@ describe("ChannelMusicCard", () => {
         />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-vote-skip");
+    expect(html).not.toContain("data-music-vote-skip");
     expect(html).not.toContain("data-music-card-play");
     expect(html).not.toContain("data-music-card-skip");
   });
 
-  it("keeps play and skip for a manager already in the call", () => {
+  it("stays listen-only for a manager already in the call", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <ChannelMusicCard
@@ -728,8 +912,8 @@ describe("ChannelMusicCard", () => {
         />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-card-play");
-    expect(html).toContain("data-music-card-skip");
+    expect(html).not.toContain("data-music-card-play");
+    expect(html).not.toContain("data-music-card-skip");
     expect(html).not.toContain("data-music-vote-skip");
   });
 });
@@ -761,6 +945,7 @@ describe("MusicMiniPlayer", () => {
     resetMusicPrefsForTests();
     resetMusicEmbedHostForTests();
     resetChannelMusicCardRightsForTests();
+    resetMusicLocalPlaybackForTests();
     setMusicSession({
       channelId: CHANNEL,
       peerId: "peer-me",
@@ -781,32 +966,33 @@ describe("MusicMiniPlayer", () => {
     expect(html).toMatch(/Play music|Tocar música|music\.bar\.start/);
   });
 
-  it("opens the add box when the panel is open and nothing is on", () => {
+  it("stays the idle row when Fila is open and nothing is on", () => {
     setMusicOpen(true);
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicMiniPlayer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain('data-music-mini-player="start"');
+    expect(html).toContain('data-music-mini-player="idle"');
+    expect(html).toContain("data-music-fila=\"drawer\"");
     expect(html).toContain("data-music-search");
     expect(html).toContain("data-music-embed-dock");
-    expect(html).not.toContain('data-music-mini-player="empty"');
   });
 
-  it("still opens the add box in the icons-only sidebar", () => {
+  it("keeps the icons-only sidebar as a start button, not a search box", () => {
     setMusicOpen(true);
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicMiniPlayer voiceState={voiceState()} compact />
       </TooltipProvider>,
     );
-    expect(html).toContain('data-music-mini-player="start"');
-    expect(html).toContain("data-music-search");
+    expect(html).toContain('data-music-mini-player="idle"');
+    expect(html).toContain("h-8 w-8");
+    expect(html).toContain("data-music-fila=\"drawer\"");
     expect(html).toContain("data-music-embed-dock");
   });
 
-  it("tidies the pill when the viewer is not listening", () => {
+  it("keeps Ouvir on the compact bar when the viewer is not listening", () => {
     addTrack({
       provider: "youtube",
       videoId: "aaaaaaaaaaa",
@@ -822,8 +1008,9 @@ describe("MusicMiniPlayer", () => {
       </TooltipProvider>,
     );
     expect(html).toContain('data-music-mini-player="dismissed"');
-    expect(html).toContain("h-5 w-5");
+    expect(html).toContain("data-music-now-playing");
     expect(html).toContain("Legião Urbana");
+    expect(html).not.toContain("data-music-speaker");
   });
 
   it("shows the compact bar when a room is already playing", () => {
@@ -834,13 +1021,14 @@ describe("MusicMiniPlayer", () => {
       </TooltipProvider>,
     );
     expect(html).toContain("data-music-now-playing");
-    expect(html).toContain("data-music-expand");
-    expect(html).toContain("data-music-stop-listening");
-    expect(html).not.toContain("data-music-panel");
-    expect(html).not.toContain("data-music-expand-label");
+    expect(html).toContain("data-music-speaker");
+    expect(html).not.toContain("data-music-fila=\"\"");
+    expect(html).not.toContain("data-music-fila-close");
+    expect(html).not.toContain("data-music-search");
+    expect(html).not.toContain("aspect-video");
   });
 
-  it("opens the sheet when this machine adds a song", () => {
+  it("does not open Fila when this machine adds a song", () => {
     addTrack({
       provider: "youtube",
       videoId: "aaaaaaaaaaa",
@@ -849,15 +1037,14 @@ describe("MusicMiniPlayer", () => {
       thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
       durationMs: 1,
     });
+    expect(getMusicSnapshot().open).toBe(false);
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicMiniPlayer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-panel");
-    expect(html).toContain("data-music-overflow");
-    expect(html).toContain("data-music-stop-listening");
-    expect(html).not.toContain("data-music-now-playing");
+    expect(html).toContain("data-music-now-playing");
+    expect(html).not.toContain("data-music-fila-close");
   });
 
   it("keeps the embed dock after the room stop so a second queue can play", () => {
@@ -878,5 +1065,19 @@ describe("MusicMiniPlayer", () => {
     expect(html).toMatch(/data-music-mini-player="(idle|start)"/);
     expect(html).toContain("data-music-embed-dock");
     expect(html).not.toContain("data-music-now-playing");
+  });
+
+  it("hides sidebar chrome when the composer owns the bar", () => {
+    receiveMusic(CHANNEL, state({ current: track("now", { title: "Legião Urbana" }) }));
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} chrome={false} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-embed-dock");
+    expect(html).toContain('data-music-mini-player="dock"');
+    expect(html).not.toContain("data-music-now-playing");
+    expect(html).not.toContain("data-music-composer-start");
+    expect(html).not.toContain("Tocar música");
   });
 });

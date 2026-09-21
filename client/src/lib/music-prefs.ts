@@ -6,34 +6,30 @@ import {
 } from "@/lib/music-store";
 
 /**
- * Personal music choices for this browser: where the video lives, whether
- * speech ducks the track, and whether a room starting music puts the player
- * on automatically. Kept out of `music-store.ts` so the room's queue and a
- * later controls PR can merge without touching this file.
+ * Personal music choices for this browser: whether the clip is on the
+ * stage, whether speech ducks the track, and whether a room starting
+ * music puts the player on automatically. Video never lives in the
+ * sidebar; stage is the only picture.
  */
 
-export type MusicPlacement = "panel" | "stage";
+export type MusicPlacement = "hidden" | "stage";
 
 export interface MusicPrefs {
   placement: MusicPlacement;
   ducking: boolean;
   autoJoin: boolean;
-  /** Local picture. Stage and the sheet share this so hide-video hides both. */
-  showVideo: boolean;
 }
 
-export type MusicPictureMode = "hidden" | "panel" | "stage";
+export type MusicPictureMode = "hidden" | "stage";
 
 const PLACEMENT_KEY = "pqp:music-placement";
 const DUCKING_KEY = "pqp:music-duck";
 const AUTO_JOIN_KEY = "pqp:music-auto-join";
-const VIDEO_KEY = "pqp:music-video";
 
 const DEFAULTS: MusicPrefs = {
-  placement: "panel",
+  placement: "hidden",
   ducking: true,
   autoJoin: true,
-  showVideo: false,
 };
 
 const listeners = new Set<() => void>();
@@ -58,7 +54,7 @@ function writeStored(key: string, value: string) {
 }
 
 function parsePlacement(raw: string | null): MusicPlacement {
-  return raw === "stage" ? "stage" : "panel";
+  return raw === "stage" ? "stage" : "hidden";
 }
 
 function parseFlag(raw: string | null, fallback: boolean): boolean {
@@ -80,7 +76,6 @@ function load(): MusicPrefs {
     placement: parsePlacement(readStored(PLACEMENT_KEY)),
     ducking: parseFlag(readStored(DUCKING_KEY), DEFAULTS.ducking),
     autoJoin: parseFlag(readStored(AUTO_JOIN_KEY), DEFAULTS.autoJoin),
-    showVideo: parseFlag(readStored(VIDEO_KEY), DEFAULTS.showVideo),
   };
   return snapshot;
 }
@@ -97,8 +92,7 @@ function setPrefs(partial: Partial<MusicPrefs>): void {
   if (
     next.placement === current.placement &&
     next.ducking === current.ducking &&
-    next.autoJoin === current.autoJoin &&
-    next.showVideo === current.showVideo
+    next.autoJoin === current.autoJoin
   ) {
     return;
   }
@@ -106,7 +100,6 @@ function setPrefs(partial: Partial<MusicPrefs>): void {
   writeStored(PLACEMENT_KEY, next.placement);
   writeStored(DUCKING_KEY, next.ducking ? "1" : "0");
   writeStored(AUTO_JOIN_KEY, next.autoJoin ? "1" : "0");
-  writeStored(VIDEO_KEY, next.showVideo ? "1" : "0");
   emit();
 }
 
@@ -127,25 +120,14 @@ export function useMusicPrefs(): MusicPrefs {
 }
 
 export function setMusicPlacement(placement: MusicPlacement): void {
-  if (placement === "stage") {
-    setPrefs({ placement, showVideo: true });
-    return;
-  }
   setPrefs({ placement });
 }
 
-export function setMusicShowVideo(showVideo: boolean): void {
-  setPrefs({ showVideo });
-}
-
-/** Hide, sheet, or stage: never two pictures. */
+/** Hide or stage: never two pictures, never a sidebar 16:9. */
 export function musicPictureMode(
-  prefs: Pick<MusicPrefs, "placement" | "showVideo">,
+  prefs: Pick<MusicPrefs, "placement">,
 ): MusicPictureMode {
-  if (!prefs.showVideo) {
-    return "hidden";
-  }
-  return prefs.placement === "stage" ? "stage" : "panel";
+  return prefs.placement === "stage" ? "stage" : "hidden";
 }
 
 export function setMusicDucking(ducking: boolean): void {
@@ -169,8 +151,9 @@ export function useMusicAutoJoin(): boolean {
 }
 
 /**
- * Off + a track appearing (or already on when you sit down) means the pill,
- * not the player. A skip from one track to another is not that transition.
+ * Off + a track appearing (or already on when you sit down) means Ouvir
+ * on the compact bar, not the player. A skip from one track to another is
+ * not that transition.
  */
 export function shouldAutoDeclineListen(input: {
   autoJoin: boolean;
@@ -248,9 +231,9 @@ export interface MusicStagePresence {
 export function musicStagePictureActive(input: {
   hasCurrent: boolean;
   listening: boolean;
-  showVideo: boolean;
+  onStage: boolean;
 }): boolean {
-  return input.hasCurrent && input.listening && input.showVideo;
+  return input.hasCurrent && input.listening && input.onStage;
 }
 
 let presenceCache: MusicStagePresence = {
@@ -267,7 +250,7 @@ function getMusicStagePresence(): MusicStagePresence {
     active: musicStagePictureActive({
       hasCurrent: Boolean(current),
       listening: snap.listening,
-      showVideo: load().showVideo,
+      onStage: load().placement === "stage",
     }),
     title: current?.title ?? "",
     addedByName: current?.addedByName ?? "",
@@ -296,7 +279,7 @@ function subscribeMusicStagePresence(listener: () => void): () => void {
 
 /**
  * Track / listening / local picture. A position sample must not re-render
- * the stage. Hiding video turns this off so the stage tile leaves with it.
+ * the stage. Leaving the stage is the only way this turns off.
  */
 export function useMusicStagePresence(): MusicStagePresence {
   return useSyncExternalStore(

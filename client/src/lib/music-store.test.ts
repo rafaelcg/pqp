@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MusicResolved, MusicState } from "@pqp/shared";
+import { MUSIC_QUEUE_LIMIT } from "@pqp/shared";
 import {
   addTrack,
   addTracks,
@@ -8,12 +9,14 @@ import {
   getMusicSnapshot,
   markCurrentEnded,
   moveTrackTo,
+  musicPrevious,
   onTrackEnded,
   receiveMusic,
   readdFromHistory,
   resetMusicStoreForTests,
   seekTo,
   setAutoplay,
+  setPositionProbe,
   setSeekApply,
   setListening,
   setMusicSession,
@@ -66,9 +69,112 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.positionMs).toBe(45_000);
   });
 
+  it("restarts skip-back when past three seconds", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      history: [{ ...now, id: "old", videoId: "hhhhhhhhhhh", title: "Old" }],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    setPositionProbe(() => 5000);
+    musicPrevious();
+    expect(getMusicSnapshot().state?.current?.id).toBe(now.id);
+    expect(getMusicSnapshot().state?.positionMs).toBe(0);
+    expect(getMusicSnapshot().state?.history[0]?.videoId).toBe("hhhhhhhhhhh");
+  });
+
+  it("plays the last Tocadas row and requeues the current", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    addTrack(resolved("queuedddddd"));
+    const now = getMusicSnapshot().state!.current!;
+    const queued = getMusicSnapshot().state!.queue[0]!;
+    const older = {
+      ...now,
+      id: "h1",
+      videoId: "hhhhhhhhhhh",
+      title: "Old",
+    };
+    const olderStill = {
+      ...now,
+      id: "h2",
+      videoId: "ggggggggggg",
+      title: "Older",
+    };
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      skipVotes: ["u2"],
+      history: [older, olderStill],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    setPositionProbe(() => 1000);
+    musicPrevious();
+    const state = getMusicSnapshot().state!;
+    expect(state.current?.videoId).toBe("hhhhhhhhhhh");
+    expect(state.current?.id).not.toBe("h1");
+    expect(state.queue.map((track) => track.id)).toEqual([now.id, queued.id]);
+    expect(state.history.map((track) => track.id)).toEqual(["h2"]);
+    expect(state.skipVotes).toEqual([]);
+    expect(state.status).toBe("playing");
+    expect(state.positionMs).toBe(0);
+  });
+
+  it("restarts under repeat one, and when history is empty", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    setRepeat("one");
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      history: [{ ...now, id: "old", videoId: "hhhhhhhhhhh", title: "Old" }],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    setPositionProbe(() => 1000);
+    musicPrevious();
+    expect(getMusicSnapshot().state?.current?.id).toBe(now.id);
+    expect(getMusicSnapshot().state?.positionMs).toBe(0);
+
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      repeat: "off",
+      history: [],
+      positionMs: 1000,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    setPositionProbe(() => 1000);
+    musicPrevious();
+    expect(getMusicSnapshot().state?.current?.id).toBe(now.id);
+    expect(getMusicSnapshot().state?.positionMs).toBe(0);
+  });
+
+  it("trims the requeued current to the queue cap", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const extras = Array.from({ length: MUSIC_QUEUE_LIMIT }, (_, index) =>
+      resolved(`q${index.toString().padStart(10, "0")}`),
+    );
+    addTracks(extras);
+    const now = getMusicSnapshot().state!.current!;
+    const tail = getMusicSnapshot().state!.queue.at(-1)!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      history: [{ ...now, id: "old", videoId: "hhhhhhhhhhh", title: "Old" }],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    setPositionProbe(() => 500);
+    musicPrevious();
+    const state = getMusicSnapshot().state!;
+    expect(state.queue).toHaveLength(MUSIC_QUEUE_LIMIT);
+    expect(state.queue[0]?.id).toBe(now.id);
+    expect(state.queue.some((track) => track.id === tail.id)).toBe(false);
+  });
+
   it("starts the first track and queues the rest, in one write for a list", () => {
     expect(addTrack(resolved("a"))).toBe("playing");
-    expect(getMusicSnapshot().open).toBe(true);
+    expect(getMusicSnapshot().open).toBe(false);
     const outcome = addTracks([resolved("b"), resolved("c"), resolved("d")]);
     expect(outcome).toEqual({ added: 3, dropped: 0, startedPlaying: false });
     const state = getMusicSnapshot().state!;

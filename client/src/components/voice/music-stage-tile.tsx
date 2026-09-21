@@ -1,7 +1,6 @@
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useLayoutEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { setMusicPlacement } from "@/lib/music-prefs";
@@ -102,13 +101,17 @@ export function MusicStageTile({
           </p>
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setMusicPlacement("panel")}
-          >
-            {t("music.stage.dock")}
-          </Button>
+          <Tooltip label={t("music.stage.hide")} side="top">
+            <button
+              type="button"
+              data-music-stage-hide=""
+              aria-label={t("music.stage.hide")}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-0/80 text-text hover:bg-surface-2"
+              onClick={() => setMusicPlacement("hidden")}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </Tooltip>
           {onToggleFullscreen ? (
             <Tooltip label={fullscreenLabel} side="top">
               <button
