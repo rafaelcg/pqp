@@ -11,6 +11,7 @@ import { relatedMusic } from "@/lib/api";
 import {
   expectedPositionMs,
   fillAutoplayBuffer,
+  clearCurrentEnded,
   markCurrentEnded,
   onTrackEnded,
   reportPosition,
@@ -279,6 +280,12 @@ export function MusicPlayer({
             },
             onStateChange: (event) => {
               const snap = musicRef.current;
+              if (
+                event.data === YT_STATE.BUFFERING ||
+                event.data === YT_STATE.CUED
+              ) {
+                clearCurrentEnded(snap.state?.current?.id);
+              }
               if (event.data === YT_STATE.ENDED) {
                 // Only the video the room is on. A late "ended" from the
                 // video this player just left, or a transition with no id
@@ -299,6 +306,13 @@ export function MusicPlayer({
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
+                /*
+                 * Out of ENDED, so this machine's player is not at the end
+                 * any more and the mark is stale. The store clears it when
+                 * the ROOM restarts a track; this clears it when only the
+                 * player did, which the room never announces.
+                 */
+                clearCurrentEnded(snap.state?.current?.id);
                 const current = snap.state?.current;
                 if (
                   shouldReportUnknownDuration({

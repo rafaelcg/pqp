@@ -45,15 +45,25 @@ export function MusicMiniPlayer({
   voiceState,
   compact = false,
   chrome = true,
+  embed = true,
 }: {
   voiceState: VoiceState;
-  /** The icons-only sidebar: nothing drawn, but the embed stays mounted so the sound does not stop. */
+  /** The icons-only sidebar: nothing drawn, but the chrome still decides. */
   compact?: boolean;
   /**
-   * False while the call's composer is drawing the bar. The dock still
-   * mounts so the paint host has a sizer.
+   * False while the call's composer is drawing the bar.
    */
   chrome?: boolean;
+  /**
+   * Whether THIS instance carries the YouTube iframe. Exactly one mount may,
+   * and it is the one in `App` that never unmounts. The footer renders this
+   * component up to twice at once, because the sidebar stays mounted but
+   * hidden under Novidades while Novidades renders a footer of its own; two
+   * carriers would portal two iframes into the one singleton host, play the
+   * track twice, and leave the survivor's position probe pointing at the
+   * player that unmounted first.
+   */
+  embed?: boolean;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
@@ -121,8 +131,8 @@ export function MusicMiniPlayer({
     return null;
   }
 
-  const keepEmbed = embedHeldRef.current;
-  const embed = keepEmbed ? (
+  const keepEmbed = embed && embedHeldRef.current;
+  const player = keepEmbed ? (
     <MusicPlayer
       music={music}
       isActor={isActor}
@@ -136,17 +146,20 @@ export function MusicMiniPlayer({
       deafened={voiceState.isDeafened}
     />
   ) : null;
-  const dock = (
+  const dock = embed ? (
     <div
       ref={dockRef}
       data-music-embed-dock=""
       className="h-0 overflow-hidden"
     >
-      {embed}
+      {player}
     </div>
-  );
+  ) : null;
 
   if (!chrome) {
+    if (!embed) {
+      return null;
+    }
     return (
       <div
         data-music-mini-player={current ? (music.listening ? "dock" : "dismissed") : "idle"}

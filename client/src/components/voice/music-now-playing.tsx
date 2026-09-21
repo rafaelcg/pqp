@@ -24,6 +24,7 @@ import {
   type MusicSnapshot,
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
+import { useScrub, type Scrub } from "@/components/voice/use-scrub";
 import {
   MusicOverflowMenu,
   MusicRepeatButton,
@@ -169,7 +170,7 @@ export function MusicNowPlaying({
   const { t } = useTranslation();
   const addedBy = lookupAddedBy(voiceState, current.addedByUserId, current.addedByName);
   const progress = usePlaybackProgress(music, current.durationMs);
-  const [scrub, setScrub] = useState<number | null>(null);
+  const scrub = useScrub((value) => seekTo(value));
   const expandLabel = t("music.open");
   const secondary = current.autoplayed ? t("music.autoplayed") : addedBy.name;
   const composer = tone === "composer";
@@ -183,7 +184,7 @@ export function MusicNowPlaying({
       : "text-paper";
   const duration = progress.durationMs ?? 0;
   const durationKnown = progress.known;
-  const position = scrub ?? progress.position;
+  const position = scrub.preview ?? progress.position;
   const queue = music.state?.queue ?? [];
   /* Alone with your own music is not a fact worth a line. */
   const listenerCount = musicListenerCount(voiceState, listening);
@@ -312,6 +313,10 @@ export function MusicNowPlaying({
               : "h-8 w-8 shrink-0"
           }
           aria-pressed={playing}
+          // Its own name, not the tooltip's: `Tooltip` merges `aria-label`
+          // onto its immediate child, and that is the span this button
+          // needs so the bubble still opens while it is disabled.
+          aria-label={playing ? t("music.pause") : t("music.play")}
           disabled={!canManage}
           onClick={onPlayPause}
         >
@@ -437,7 +442,7 @@ export function MusicNowPlaying({
       durationKnown={durationKnown}
       duration={duration}
       position={position}
-      onScrub={setScrub}
+      scrub={scrub}
     />
   );
 
@@ -542,13 +547,13 @@ function MusicSeekBar({
   durationKnown,
   duration,
   position,
-  onScrub,
+  scrub,
 }: {
   canManage: boolean;
   durationKnown: boolean;
   duration: number;
   position: number;
-  onScrub: (value: number | null) => void;
+  scrub: Scrub;
 }): ReactNode {
   const { t } = useTranslation();
   return (
@@ -566,15 +571,15 @@ function MusicSeekBar({
         step={250}
         className="min-w-0 flex-1 px-1"
         aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
+        {...scrub.rootProps}
         onValueChange={(value) => {
           if (canManage && durationKnown) {
-            onScrub(value);
+            scrub.onValueChange(value);
           }
         }}
         onValueCommit={(value) => {
           if (canManage && durationKnown) {
-            seekTo(value);
-            onScrub(null);
+            scrub.onValueCommit(value);
           }
         }}
       />

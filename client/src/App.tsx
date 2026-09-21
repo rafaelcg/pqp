@@ -6982,6 +6982,9 @@ function MainAppContent({
   // only one that can ever pass `compact={true}` — the other two
   // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
   // their `compact` is always `false` regardless of `sidebarIconsOnly`.
+  // Those three call sites are also why the footer carries no music embed:
+  // two of them can be mounted at once (the sidebar stays mounted under
+  // Novidades), and two embeds is two iframes playing the same track.
   // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
   // looser than the render guard for any of the three: it can only be
   // *stricter* than necessary on the two branches where compact never
@@ -7120,10 +7123,15 @@ function MainAppContent({
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
+      {/* Chrome only. The embed is mounted once, below, because this
+          function has three call sites and two of them can be on screen at
+          the same time: the sidebar stays mounted under Novidades while
+          Novidades renders its own footer. */}
       <MusicMiniPlayer
         voiceState={voiceState}
         compact={compact}
         chrome={!musicInComposer}
+        embed={false}
       />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
@@ -8636,6 +8644,12 @@ function MainAppContent({
           void handleToggleProfileVisibility(id, showOnProfile)
         }
       />
+
+      {/* THE ONE EMBED. Mounted here, outside every branch, because it must
+          never unmount while somebody is listening: unmounting the iframe is
+          what stops the sound. The footers below draw the radio and the
+          queue, and carry no player of their own. */}
+      <MusicMiniPlayer voiceState={voiceState} chrome={false} />
 
       {/* Stay mounted under Novidades so a half-typed message is still there
           when Escape puts the app back. `hidden` takes it out of layout. */}

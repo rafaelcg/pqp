@@ -121,6 +121,67 @@ describe("music store writes", () => {
     expect(state.positionMs).toBe(0);
   });
 
+  /*
+   * `startNow` gives the incoming tracks the cap first and the displaced
+   * ones what is left, so a big add at the end of a track can evict most
+   * of the queue. It used to report none of that.
+   */
+  it("counts the queued tracks a big add pushed off the end", () => {
+    addTrack({ ...resolved("currenttttt"), durationMs: 180_000 });
+    const filling = Array.from({ length: MUSIC_QUEUE_LIMIT }, (_, index) =>
+      resolved(`old${String(index).padStart(8, "0")}`),
+    );
+    for (const track of filling) {
+      addTrack(track);
+    }
+    expect(getMusicSnapshot().state?.queue.length).toBe(MUSIC_QUEUE_LIMIT);
+
+    // The current track ends, which is what sends the next add through
+    // `startNow` rather than the ordinary append.
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    const outcome = addTracks(
+      Array.from({ length: 30 }, (_, index) =>
+        resolved(`new${String(index).padStart(8, "0")}`),
+      ),
+    );
+    expect(outcome.added).toBe(30);
+    // The first new track plays, 29 queue behind it, and the finished
+    // track goes to history rather than the queue. So the 50 tracks that
+    // were queued compete for the 21 remaining slots and 29 fall off.
+    expect(outcome.dropped).toBe(29);
+    expect(getMusicSnapshot().state?.queue.length).toBe(MUSIC_QUEUE_LIMIT);
+  });
+
+  /*
+   * The local "this track ended" mark is cleared when the room moves to a
+   * different track. Under repeat-one the room moves to the SAME track, so
+   * the mark used to stay set for the rest of that track's life, and the
+   * next add took the end-of-track path: it pulled the looping track out
+   * mid-song and pushed it into history and the front of the queue.
+   */
+  it("clears the ended mark when repeat-one restarts the same track", () => {
+    addTrack({ ...resolved("loopinggggg"), durationMs: 180_000 });
+    setRepeat("one");
+    const playing = getMusicSnapshot().state!;
+    const looping = playing.current!;
+    markCurrentEnded(looping.id);
+    // The room's echo of the repeat-one advance: same track, from the top.
+    receiveMusic(CHANNEL, {
+      ...playing,
+      current: looping,
+      positionMs: 0,
+      status: "playing",
+      rev: playing.rev + 1,
+      actorId: "peer-b",
+    });
+
+    expect(addTrack(resolved("nexttttttttt"))).toBe("queued");
+    const after = getMusicSnapshot().state!;
+    expect(after.current?.id).toBe(looping.id);
+    expect(after.history).toEqual([]);
+    expect(after.queue.map((track) => track.videoId)).toEqual(["nexttttttttt"]);
+  });
+
   it("restarts under repeat one, and when history is empty", () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     const now = getMusicSnapshot().state!.current!;

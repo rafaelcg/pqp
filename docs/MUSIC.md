@@ -222,7 +222,12 @@ composer until that tile is pressed or a track is on. A track on is a
 shuffle, skip-back, a filled round play, skip or vote-skip, and repeat
 (managers; shuffle and repeat hide under 28rem and move into `…`).
 A seek with clocks sits across the full bar (managers seek; everyone
-else read-only). The right cluster is `…` then a speaker popover
+else read-only). The bar holds a preview of the thumb's position only
+while a pointer drag is in progress (`use-scrub.ts`): the slider is
+controlled, so a key press arrives as commit-then-change, and a preview
+cleared on commit alone was set again by the change that followed and
+never cleared after that, freezing the clock for the rest of the track. A
+change with no drag in progress seeks straight through. The right cluster is `…` then a speaker popover
 (mute, volume, ducking, Parar de ouvir). `…` opens upward: Todo mundo
 controla, Continuar com parecidas, and Parar pra todos behind a
 confirm. Members see none of shuffle, repeat, or `…`. Art and title
@@ -247,7 +252,13 @@ keeps the 48px card, seek, and the five-item `…`, because that radio
 has no bar), without unmounting them.
 
 The YouTube iframe stays in a hidden dock in `music-mini-player.tsx` for
-the whole listen, including after the queue is cleared: ending the room
+the whole listen. Exactly one `MusicMiniPlayer` carries it, mounted in
+`App` outside every branch, because the sidebar footer has three call
+sites and two of them can be on screen at once (the sidebar stays mounted
+under Novidades while Novidades renders a footer of its own); two
+carriers portal two iframes into the one host and play the track twice.
+The footers render the radio and the queue with `embed={false}`. It stays
+mounted including after the queue is cleared: ending the room
 stops the iframe (`stopVideo`) and does not destroy it. Unmounting is what
 stops the sound, so that only happens on Parar de ouvir or leaving the
 call.

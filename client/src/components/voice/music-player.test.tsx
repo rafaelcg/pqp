@@ -854,6 +854,18 @@ describe("the composer bar's up-next line", () => {
       </TooltipProvider>,
     );
 
+  /*
+   * `Tooltip` forwards `aria-label` through Radix `asChild`, which merges
+   * onto its immediate child. Here that is the span the disabled-button
+   * tooltip needs, not the button, so the name was dropped.
+   */
+  it("gives the play button a name of its own", () => {
+    const html = bar({ queue: [] });
+    expect(html).toMatch(
+      new RegExp(`aria-pressed="true"[^>]*aria-label="${translateMessage("music.pause")}"`),
+    );
+  });
+
   it("puts the queue behind an icon with its count, where Spotify keeps it", () => {
     const html = bar({
       queue: [track("q1", { title: "Daft Punk - One More Time" }), track("q2"), track("q3")],
@@ -1136,6 +1148,57 @@ describe("musicListenerCount", () => {
   it("drops the seats that stopped, and this machine when it stopped", () => {
     expect(musicListenerCount(room(false, true), true)).toBe(2);
     expect(musicListenerCount(room(true, true), false)).toBe(2);
+  });
+});
+
+/*
+ * Two `MusicMiniPlayer`s can be on screen at once: App keeps the sidebar
+ * mounted but hidden under Novidades and gives Novidades its own footer.
+ * Both would portal a YouTube iframe into the one singleton host, so two
+ * players, two audio streams, and whichever unmounts first nulls the
+ * position probe the survivor needs. Only the one mount that never
+ * unmounts carries the embed.
+ */
+describe("who carries the YouTube embed", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    resetMusicLocalPlaybackForTests();
+    resetMusicEmbedHostForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
+    receiveMusic(CHANNEL, state({ current: track("now") }));
+  });
+
+  it("is not the footer's copy", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} embed={false} />
+      </TooltipProvider>,
+    );
+    expect(html).not.toContain("data-music-embed-dock");
+  });
+
+  it("is the single mount that owns it", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} chrome={false} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-embed-dock");
+  });
+
+  it("renders nothing at all when it carries neither", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} chrome={false} embed={false} />
+      </TooltipProvider>,
+    );
+    expect(html).toBe("");
   });
 });
 

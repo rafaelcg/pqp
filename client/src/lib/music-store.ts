@@ -84,7 +84,20 @@ function abandonAutoplayFill(): void {
 }
 
 function set(state: MusicState | null, channelId: string | null) {
-  if (localEndedTrackId && state?.current?.id !== localEndedTrackId) {
+  /*
+   * The mark says "this machine's player reported the end of the track the
+   * room is on". A different track clears it. So does the SAME track from
+   * the top, which is what repeat-one and an empty-queue repeat-all wrap
+   * both produce: without that case the mark outlived the track and the
+   * next add took the end-of-track path, pulling a looping song out
+   * mid-play. A manager seeking to zero clears it too, and correctly:
+   * `seekTo(0)` on an ended player restarts it.
+   */
+  const restartedFromTheTop =
+    state?.current?.id === localEndedTrackId &&
+    state?.positionMs === 0 &&
+    state?.status === "playing";
+  if (localEndedTrackId && (state?.current?.id !== localEndedTrackId || restartedFromTheTop)) {
     localEndedTrackId = null;
   }
   // A fill started for another room or another current track must not
@@ -322,15 +335,27 @@ export function markCurrentEnded(trackId: string): void {
   }
 }
 
+/**
+ * This machine's player left ENDED for the track it is on. The store's own
+ * rule in `set()` covers a restart the ROOM announced; this covers one only
+ * the player knows about, and the player is the authority on that.
+ */
+export function clearCurrentEnded(trackId: string | undefined): void {
+  if (trackId && localEndedTrackId === trackId) {
+    localEndedTrackId = null;
+  }
+}
+
 export function currentTrackHasEnded(): boolean {
   const currentId = snapshot.state?.current?.id;
   return Boolean(currentId && localEndedTrackId === currentId);
 }
 
-function startNow(track: MusicTrack, extra: MusicTrack[] = []): void {
+/** Returns how many tracks the room already had and lost to the cap. */
+function startNow(track: MusicTrack, extra: MusicTrack[] = []): number {
   const held = snapshot.state;
   if (!held?.current) {
-    return;
+    return 0;
   }
   const advanced = musicAdvance({
     ...held,
@@ -347,6 +372,12 @@ function startNow(track: MusicTrack, extra: MusicTrack[] = []): void {
     status: "playing",
     positionMs: 0,
   });
+  // What the room already had and no longer has. The incoming tracks take
+  // the cap first, so a big add at the end of a track can push most of the
+  // queue off, and saying "30 added" without saying that is a lie. The
+  // autoplayed rows dropped above are not counted: that drop is on purpose,
+  // so the new pick becomes the radio's seed.
+  return displaced.length - displacedFits.length;
 }
 
 export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
@@ -373,11 +404,11 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   }
   if (currentTrackHasEnded() && held.current) {
     const extra = minted.slice(1);
-    startNow(minted[0] as MusicTrack, extra);
+    const evicted = startNow(minted[0] as MusicTrack, extra);
     const extraFits = Math.min(extra.length, MUSIC_QUEUE_LIMIT);
     return {
       added: 1 + extraFits,
-      dropped: extra.length - extraFits,
+      dropped: extra.length - extraFits + evicted,
       startedPlaying: true,
     };
   }

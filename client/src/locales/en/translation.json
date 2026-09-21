@@ -1023,7 +1023,7 @@
   "music.queuedMany": "{count} songs added",
   "music.queuedManyDropped": "{count} songs added, {dropped} did not fit",
   "music.full": "The queue is full",
-  "music.error.unsupported": "Only YouTube links, Spotify track links, or a search",
+  "music.error.unsupported": "Only YouTube or Spotify links (song, album or playlist), or a search",
   "music.error.notFound": "Nothing found for that",
   "music.error.upstream": "Music search is unavailable right now",
   "music.error.playback": "This video cannot be played here",

@@ -1,5 +1,5 @@
 import { MonitorPlay, Pause, Play, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -27,6 +27,7 @@ import {
 } from "@/components/voice/music-now-playing";
 import { MusicQueueList } from "@/components/voice/music-queue-list";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
+import { useScrub } from "@/components/voice/use-scrub";
 
 const RAIL_ICON =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
@@ -62,12 +63,12 @@ export function MusicFila({
   const canSetSwitches = canSetMusicSwitches(voiceState);
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
-  const [scrub, setScrub] = useState<number | null>(null);
+  const scrub = useScrub((value) => seekTo(value));
   const onStage = prefs.placement === "stage";
   const queue = music.state?.queue ?? [];
   const history = music.state?.history ?? [];
   const duration = progress.durationMs ?? 0;
-  const position = scrub ?? progress.position;
+  const position = scrub.preview ?? progress.position;
   const durationKnown = progress.known;
   const addedBy = current
     ? lookupAddedBy(voiceState, current.addedByUserId, current.addedByName)
@@ -267,15 +268,15 @@ export function MusicFila({
                 step={250}
                 className="min-w-0 flex-1 px-1.5"
                 aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
+                {...scrub.rootProps}
                 onValueChange={(value) => {
                   if (canManage && durationKnown) {
-                    setScrub(value);
+                    scrub.onValueChange(value);
                   }
                 }}
                 onValueCommit={(value) => {
                   if (canManage && durationKnown) {
-                    seekTo(value);
-                    setScrub(null);
+                    scrub.onValueCommit(value);
                   }
                 }}
               />
