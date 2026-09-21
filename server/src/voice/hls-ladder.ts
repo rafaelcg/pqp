@@ -255,18 +255,41 @@ const ALL_KNOWN_RUNGS: Readonly<Record<string, LadderRung>> = Object.assign(
   { [CAMERA_RUNG_NAME]: CAMERA_RUNG },
 );
 
+/**
+ * The two rung names the low-latency path reports, straight from
+ * `LL_VIDEO_RUNG` / `LL_AUDIO_RUNG` in `tools/hls-edge/src/ll-state.js`
+ * ("ll" / "ll-audio"). Kept as a local literal rather than an import --
+ * `tools/hls-edge` is a standalone Worker package with no `@pqp/shared`
+ * dependency, the same reason `llObjectPrefix` in `hls-remux.ts` duplicates
+ * its own small literal from that file instead of importing it. These two
+ * names never appear in `LADDER_RUNGS` (that ladder is the conventional
+ * egress only) and have no real `LadderRung` entry -- no width, height, or
+ * bitrate to invent -- so they are checked here rather than folded into
+ * `ALL_KNOWN_RUNGS`. `hlsRungVideoKbps` already returns null for a name with
+ * no `LadderRung`, which is what a name with no real bitrate should do: it
+ * sorts last in `byRung` instead of claiming a made-up number.
+ */
+const LL_RUNGS = new Set(["ll", "ll-audio"]);
+
 export function isKnownHlsRung(rung: string): boolean {
-  return Object.hasOwn(ALL_KNOWN_RUNGS, rung);
+  return Object.hasOwn(ALL_KNOWN_RUNGS, rung) || LL_RUNGS.has(rung);
 }
 
 /**
  * The bitrate a rung name sorts by, lowest first -- what "lowest bitrate
  * first" actually means, rather than `localeCompare` on the name (which puts
- * `1080p30` before `720p30`). Null for a name this build does not know at
- * all, so a caller can put those last rather than guessing where they sort.
+ * `1080p30` before `720p30`). Null for a name with no real `LadderRung` --
+ * a name this build does not know at all, or one of the LL rungs above,
+ * which have no bitrate to report -- so a caller can put those last rather
+ * than guessing where they sort. Checked against `ALL_KNOWN_RUNGS` directly
+ * rather than `isKnownHlsRung`: that also accepts the LL names, which is
+ * right for "should this sample be recorded at all" but wrong here, where
+ * there is no entry to look up.
  */
 export function hlsRungVideoKbps(rung: string): number | null {
-  return isKnownHlsRung(rung) ? ALL_KNOWN_RUNGS[rung]!.videoKbps : null;
+  return Object.hasOwn(ALL_KNOWN_RUNGS, rung)
+    ? ALL_KNOWN_RUNGS[rung]!.videoKbps
+    : null;
 }
 
 /**

@@ -75,6 +75,21 @@ describe("hlsLatencySnapshot", () => {
     ]);
   });
 
+  it("accepts the low-latency path's rung names (ll, ll-audio), same as any conventional-ladder rung", () => {
+    // `LL_VIDEO_RUNG` / `LL_AUDIO_RUNG` in tools/hls-edge/src/ll-state.js --
+    // the edge Worker's multivariant playlist names its renditions "ll" and
+    // "ll-audio", and the client reports exactly those names.
+    recordHlsLatencySample("ll", 4_000);
+    recordHlsLatencySample("ll-audio", 4_500);
+    const activity = hlsTelemetryActivity();
+    expect(activity.samplesRecorded).toBe(2);
+    expect(activity.samplesRejectedUnknownRung).toBe(0);
+    expect(hlsLatencySnapshot().map((r) => r.rung).sort()).toEqual([
+      "ll",
+      "ll-audio",
+    ]);
+  });
+
   it("refuses a rung this build does not recognise, counted separately, never added to the histogram", () => {
     // Farol finding, 2026-09-13: `rung` on the wire is a free-form 1-16
     // character string an authenticated caller controls. Without this guard
