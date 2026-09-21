@@ -1,7 +1,6 @@
 import {
-  ChevronDown,
-  ChevronUp,
   HeadphoneOff,
+  ListMusic,
   Music,
   Pause,
   Play,
@@ -143,7 +142,6 @@ export function MusicNowPlaying({
   onTapToPlay,
   onMute,
   onVolume,
-  onToggleDucking,
   tone = "rail",
 }: {
   current: MusicTrack;
@@ -163,7 +161,6 @@ export function MusicNowPlaying({
   onTapToPlay: () => void;
   onMute: () => void;
   onVolume: (value: number) => void;
-  onToggleDucking: (value: boolean) => void;
   tone?: "rail" | "composer";
 }) {
   const { t } = useTranslation();
@@ -185,8 +182,6 @@ export function MusicNowPlaying({
   const durationKnown = progress.known;
   const position = scrub ?? progress.position;
   const queue = music.state?.queue ?? [];
-  const nextTrack = queue[0] ?? null;
-  const autoplayOn = music.state?.autoplay === true;
   /* Alone with your own music is not a fact worth a line. */
   const listenerCount = musicListenerCount(voiceState, listening);
   /** A track is on and this machine is not hearing it. */
@@ -373,10 +368,9 @@ export function MusicNowPlaying({
     <MusicSpeakerControl
       volume={volume}
       muted={muted}
-      ducking={ducking}
+      slider={composer}
       onMute={onMute}
       onVolume={onVolume}
-      onToggleDucking={onToggleDucking}
     />
   ) : null;
 
@@ -391,6 +385,7 @@ export function MusicNowPlaying({
     <MusicOverflowMenu
       canManage={canManage}
       listening={listening}
+      ducking={ducking}
       openControls={music.state?.openControls === true}
       autoplay={music.state?.autoplay === true}
       repeat={music.state?.repeat ?? "off"}
@@ -401,51 +396,35 @@ export function MusicNowPlaying({
   ) : null;
 
   /*
-   * THE ROOM'S QUEUE, ON THE BAR.
-   *
-   * The bar is the one music surface that is always on screen during a call,
-   * so it has to answer "what is next" without the panel being open. The row
-   * never disappears: an empty queue says so, which keeps the bar one height.
+   * THE QUEUE, WHERE SPOTIFY KEEPS IT: an icon in the right cluster that
+   * opens the panel, carrying the count so the room is legible without it.
+   * It replaced a full-width "A seguir <track>" line, which said more but
+   * cost the bar a third row and has no equivalent in the layout this bar
+   * is copying.
    */
-  const nextRow = composer ? (
-    <button
-      type="button"
-      data-music-next={nextTrack ? "track" : autoplayOn ? "autoplay" : "empty"}
-      className="flex w-full min-w-0 items-center gap-2 border-t border-border/60 pt-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:text-text @min-[48rem]:border-t-0 @min-[48rem]:pt-0"
-      aria-expanded={music.open}
-      aria-label={music.open ? t("music.close") : t("music.open")}
-      onClick={toggleMusicOpen}
-    >
-      {nextTrack ? (
-        <>
-          <span className="shrink-0">{t("music.queue")}</span>
-          <span className="min-w-0 flex-1 truncate text-text-secondary">
-            {nextTrack.title}
+  const queueButton = composer ? (
+    <Tooltip label={music.open ? t("music.close") : t("music.open")}>
+      <button
+        type="button"
+        data-music-queue-toggle=""
+        aria-expanded={music.open}
+        aria-label={music.open ? t("music.close") : t("music.open")}
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-1 rounded-full px-2 transition-colors",
+          music.open
+            ? "bg-accent-soft text-on-accent-soft"
+            : "text-text-tertiary hover:bg-surface-2 hover:text-text",
+        )}
+        onClick={toggleMusicOpen}
+      >
+        <ListMusic className="h-4 w-4" aria-hidden="true" />
+        {queue.length > 0 ? (
+          <span data-music-queue-count="" className="text-[11px] font-medium tabular-nums">
+            {queue.length}
           </span>
-          {/* Text, not a badge. Spotify's bar has no coloured pill in it,
-              and a filled one here was the loudest thing in a row whose
-              subject is the track, not the count. */}
-          <span
-            data-music-next-count=""
-            className="shrink-0 tabular-nums text-text-secondary"
-          >
-            {t("music.next.count", { count: queue.length })}
-          </span>
-        </>
-      ) : autoplayOn ? (
-        <span className="min-w-0 flex-1 truncate">{t("music.autoplay.next")}</span>
-      ) : (
-        <>
-          <span className="min-w-0 flex-1 truncate">{t("music.next.empty")}</span>
-          <span className="shrink-0 font-semibold text-accent">{t("music.add")}</span>
-        </>
-      )}
-      {music.open ? (
-        <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      ) : (
-        <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      )}
-    </button>
+        ) : null}
+      </button>
+    </Tooltip>
   ) : null;
 
   const seekBar = (
@@ -477,9 +456,9 @@ export function MusicNowPlaying({
           >
             {t("music.listen")}
           </button>
+          {queueButton}
           {overflow}
         </div>
-        <div className="mt-1.5 min-w-0">{nextRow}</div>
       </div>
     );
   }
@@ -488,26 +467,16 @@ export function MusicNowPlaying({
     return (
       <div data-music-now-playing="composer" className="px-3 py-2">
         {/*
-          STACKED, THEN THIRDS. One breakpoint, 48rem, and one rule on each
-          side of it.
+          SPOTIFY'S BAR. Three columns: the track on the left, the transport
+          with the seek under it in the middle, the icons on the right. One
+          row of chrome, two lines tall, everything vertically centred.
 
-          Past 48rem the bar is Spotify's shape, taken from their bar rather
-          than guessed at: three EQUAL columns, the track on the left, the
-          transport over the seek in the middle, the right column carrying
-          its own two lines. Measured off a 2000px Spotify window their seek
-          is about a third of the bar and their side columns match each
-          other. Thirds scale with the bar; a fixed rem cap does not, and a
-          cap wide enough to look right at 1920 ate half of a 1050px bar.
+          It is copied rather than derived because it is the player every
+          person in these rooms already uses, and because every layout this
+          bar tried on the way here was a number tuned by eye.
 
-          Equal columns only work while all three carry something, which is
-          why the queue line lives on the right: it is what stops that column
-          reserving the title's width for two icons.
-
-          Below 48rem everything stacks in one column. The earlier
-          three-column narrow layout mirrored an almost empty right column
-          onto the title's and starved it — 47px at a 462px bar, which is
-          about three characters. A stacked bar is one row taller and says
-          what is playing.
+          Below 48rem the three parts stack in one column: the transport
+          alone is wider than a narrow bar, so nothing shares a line with it.
         */}
         <div className="grid grid-cols-1 items-center gap-x-3 gap-y-1.5 @min-[48rem]:grid-cols-3">
           <div className="flex min-w-0 items-center gap-3">
@@ -525,16 +494,16 @@ export function MusicNowPlaying({
                 disabled={!canManage}
               />
             </div>
-            <div className="flex items-center justify-end gap-1">
+            {/* Spans both lines, so it centres against the pair rather than
+                sitting on the transport's line. */}
+            <div className="flex items-center justify-end gap-1 @min-[48rem]:row-span-2">
+              {queueButton}
               {overflow}
               {extras}
             </div>
           </div>
           <div className="min-w-0 @min-[48rem]:col-start-2 @min-[48rem]:row-start-2">
             {seekBar}
-          </div>
-          <div className="min-w-0 @min-[48rem]:col-start-3 @min-[48rem]:row-start-2">
-            {nextRow}
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ExternalLink,
   HeadphoneOff,
@@ -24,9 +24,9 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { setMusicDucking } from "@/lib/music-prefs";
 import {
   readdFromHistory,
   setAutoplay,
@@ -132,63 +132,43 @@ export function MusicShuffleButton({
 }
 
 /**
- * Local volume, mute and ducking. Click opens the popover; scroll on the
- * icon changes volume.
+ * Local volume: the icon mutes, the slider sets the level.
+ *
+ * It was a popover holding a slider, a ducking switch and Parar de ouvir,
+ * which made the level a two-click job and hid two personal settings behind
+ * a speaker. The level is inline now, the way every player draws it, and
+ * the two settings live in the one overflow under "Só pra você". The
+ * slider hides on a narrow bar, where its width belongs to the title.
  */
 export function MusicSpeakerControl({
   volume,
   muted,
-  ducking,
+  slider = false,
   onMute,
   onVolume,
-  onToggleDucking,
 }: {
   volume: number;
   muted: boolean;
-  ducking: boolean;
+  /** The composer bar has the width for it; the sidebar radio does not. */
+  slider?: boolean;
   onMute: () => void;
   onVolume: (value: number) => void;
-  onToggleDucking: (value: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const shown = muted || volume === 0 ? 0 : volume;
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node | null)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   return (
-    <div ref={rootRef} className="relative shrink-0">
-      <Tooltip label={muted ? t("music.unmute") : t("music.volume")}>
+    <div className="flex shrink-0 items-center gap-1">
+      <Tooltip label={muted ? t("music.unmute") : t("music.mute")}>
         <Button
           type="button"
           variant="ghost"
           size="icon"
           data-music-speaker=""
           className="h-8 w-8 shrink-0"
-          aria-expanded={open}
-          aria-label={t("music.volume")}
-          onClick={() => setOpen((value) => !value)}
+          aria-pressed={shown === 0}
+          aria-label={muted ? t("music.unmute") : t("music.mute")}
+          onClick={onMute}
           onWheel={(event) => {
             event.preventDefault();
             const delta = event.deltaY > 0 ? -5 : 5;
@@ -202,48 +182,17 @@ export function MusicSpeakerControl({
           )}
         </Button>
       </Tooltip>
-      {open ? (
-        <div
-          data-music-speaker-popover=""
-          className="absolute bottom-full right-0 z-[100] mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
-        >
-          <div className="flex items-center gap-2 px-2 py-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0"
-              aria-pressed={muted}
-              aria-label={muted ? t("music.unmute") : t("music.mute")}
-              onClick={onMute}
-            >
-              {shown === 0 ? (
-                <VolumeX className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <Volume2 className="h-4 w-4" aria-hidden="true" />
-              )}
-            </Button>
-            <Slider
-              variant="volume"
-              value={shown}
-              min={0}
-              max={100}
-              aria-label={t("music.volume")}
-              className="min-w-0 flex-1 px-1.5"
-              onValueChange={onVolume}
-            />
-          </div>
-          {/* Volume, mute and ducking: what a speaker icon promises, and
-              nothing else. Parar de ouvir moved to the one overflow, beside
-              Parar pra todos, because the two stops differ in WHO they stop
-              and that is not something two popovers can say. */}
-          <Switch
-            checked={ducking}
-            onCheckedChange={onToggleDucking}
-            label={t("music.duck")}
-            className="hover:bg-ink-3"
-          />
-        </div>
+      {slider ? (
+        <Slider
+          variant="volume"
+          data-music-volume=""
+          value={shown}
+          min={0}
+          max={100}
+          aria-label={t("music.volume")}
+          className="hidden w-20 shrink-0 @min-[40rem]:flex"
+          onValueChange={onVolume}
+        />
       ) : null}
     </div>
   );
@@ -278,12 +227,20 @@ function musicModeOverflowItems(input: {
 function musicPersonalItems(input: {
   t: (key: MessageKey) => string;
   listening: boolean;
+  ducking: boolean;
 }): ContextMenuItemDef[] {
   return [
     {
       id: "scope-you",
       label: input.t("music.scope.you"),
       heading: true,
+    },
+    {
+      id: "duck",
+      label: input.t("music.duck"),
+      icon: Volume2,
+      checked: input.ducking,
+      onSelect: () => setMusicDucking(!input.ducking),
     },
     input.listening
       ? {
@@ -349,17 +306,21 @@ export function musicOverflowItems(input: {
   t: (key: MessageKey) => string;
   canManage: boolean;
   listening: boolean;
+  ducking: boolean;
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
   onStopAll?: () => void;
   modes?: "all" | "menu" | "none";
 }): ContextMenuItemDef[] {
-  const personal = musicPersonalItems({ t: input.t, listening: input.listening });
+  const personal = musicPersonalItems({
+    t: input.t,
+    listening: input.listening,
+    ducking: input.ducking,
+  });
   if (!input.canManage) {
-    /* A member's menu is the personal row alone, and a heading over one row
-       is noise, so the scope label only appears once there is a second
-       group to tell it apart from. */
+    /* A member's menu is the personal rows alone, and a heading over the
+       only group there is is noise. */
     return personal.filter((item) => !item.heading);
   }
   const modes = input.modes ?? "all";
@@ -396,6 +357,7 @@ export function musicOverflowItems(input: {
 export function MusicOverflowMenu({
   canManage,
   listening,
+  ducking,
   openControls,
   autoplay,
   repeat,
@@ -404,8 +366,9 @@ export function MusicOverflowMenu({
   triggerClassName,
 }: {
   canManage: boolean;
-  /** This machine's own state, which is the menu's first row either way. */
+  /** This machine's own state, which is the menu's first group either way. */
   listening: boolean;
+  ducking: boolean;
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
@@ -421,13 +384,14 @@ export function MusicOverflowMenu({
         t,
         canManage,
         listening,
+        ducking,
         openControls,
         autoplay,
         repeat,
         modes,
         onStopAll: canManage ? () => setConfirmStop(true) : undefined,
       }),
-    [t, canManage, listening, openControls, autoplay, repeat, modes],
+    [t, canManage, listening, ducking, openControls, autoplay, repeat, modes],
   );
 
   if (items.length === 0) {

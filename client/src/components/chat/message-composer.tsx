@@ -1508,6 +1508,14 @@ export function MessageComposer({
           "rounded-[var(--radius-card)] border border-border bg-surface-2 transition-colors focus-within:border-border-strong",
         )}
       >
+        {/*
+          THREE SURFACES IN ONE WELL, bottom to top: the field itself, the
+          call dock above it, and the music bar above that. The order is the
+          rule, not an accident — each layer is further from what you are
+          typing and closer to what the room is doing, so a music bar that
+          appears or goes does not push the dock's controls under the
+          pointer that was aiming at them.
+        */}
         {music}
         {dock}
         {(replyTarget ||

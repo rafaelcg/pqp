@@ -3,11 +3,7 @@ import { useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
-import {
-  setMusicDucking,
-  useMusicJoinGate,
-  useMusicPrefs,
-} from "@/lib/music-prefs";
+import { useMusicJoinGate, useMusicPrefs } from "@/lib/music-prefs";
 import {
   advance,
   setMusicOpen,
@@ -176,7 +172,6 @@ export function MusicMiniPlayer({
       onTapToPlay={tapMusicLocalToPlay}
       onMute={toggleMusicLocalMuted}
       onVolume={setMusicLocalVolume}
-      onToggleDucking={setMusicDucking}
     />
   ) : null;
 

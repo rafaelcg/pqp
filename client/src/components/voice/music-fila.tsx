@@ -132,6 +132,7 @@ export function MusicFila({
             <MusicOverflowMenu
               canManage={canManage}
               listening={music.listening}
+              ducking={prefs.ducking}
               openControls={music.state?.openControls === true}
               autoplay={music.state?.autoplay === true}
               repeat={music.state?.repeat ?? "off"}

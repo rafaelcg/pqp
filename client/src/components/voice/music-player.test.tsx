@@ -387,6 +387,7 @@ describe("musicOverflowItems", () => {
       t,
       canManage: true,
       listening: true,
+      ducking: true,
       openControls: false,
       autoplay: true,
       repeat: "off",
@@ -394,6 +395,7 @@ describe("musicOverflowItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual([
       "scope-you",
+      "duck",
       "stop-listening",
       "sep-scope",
       "scope-room",
@@ -419,6 +421,7 @@ describe("musicOverflowItems", () => {
       t,
       canManage: true,
       listening: true,
+      ducking: true,
       openControls: true,
       autoplay: false,
       repeat: "one",
@@ -427,6 +430,7 @@ describe("musicOverflowItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual([
       "scope-you",
+      "duck",
       "stop-listening",
       "sep-scope",
       "scope-room",
@@ -445,6 +449,7 @@ describe("musicOverflowItems", () => {
       t,
       canManage: true,
       listening: true,
+      ducking: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
@@ -453,6 +458,7 @@ describe("musicOverflowItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual([
       "scope-you",
+      "duck",
       "stop-listening",
       "sep-scope",
       "scope-room",
@@ -470,12 +476,13 @@ describe("musicOverflowItems", () => {
       t,
       canManage: false,
       listening: true,
+      ducking: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
     });
-    expect(items.map((item) => item.id)).toEqual(["stop-listening"]);
-    expect(items[0]?.label).toBe(translateMessage("music.dismiss"));
+    expect(items.map((item) => item.id)).toEqual(["duck", "stop-listening"]);
+    expect(items[1]?.label).toBe(translateMessage("music.dismiss"));
   });
 
   it("offers the way back in once this machine has stopped", () => {
@@ -483,12 +490,13 @@ describe("musicOverflowItems", () => {
       t,
       canManage: false,
       listening: false,
+      ducking: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
     });
-    expect(items.map((item) => item.id)).toEqual(["listen"]);
-    expect(items[0]?.label).toBe(translateMessage("music.listen"));
+    expect(items.map((item) => item.id)).toEqual(["duck", "listen"]);
+    expect(items[1]?.label).toBe(translateMessage("music.listen"));
   });
 
   it("leads a manager's menu with the same personal row", () => {
@@ -496,6 +504,7 @@ describe("musicOverflowItems", () => {
       t,
       canManage: true,
       listening: true,
+      ducking: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
@@ -541,7 +550,6 @@ describe("MusicNowPlaying", () => {
     onOpenFila: () => {},
     onMute: () => {},
     onVolume: () => {},
-    onToggleDucking: () => {},
   };
 
   it("shows the adder and a vote skip when the viewer cannot manage", () => {
@@ -576,7 +584,8 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("opacity-40");
     expect(html).toContain("role=\"progressbar\"");
     expect(html).toContain("h-8 w-8");
-    expect(html.match(/aria-expanded/g)?.length).toBe(3);
+    /* Art and title open Fila; the speaker is a mute toggle now. */
+    expect(html.match(/aria-expanded/g)?.length).toBe(2);
   });
 
   it("says the room picked a similar track", () => {
@@ -638,7 +647,7 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("h-14 w-14");
     expect(html).toContain("rounded-full");
     expect(html).toContain("data-slider=\"scrub\"");
-    /* One column stacked, thirds past 48rem. */
+    /* One column stacked, three columns past 48rem. */
     expect(html).toContain("grid-cols-1");
     expect(html).toContain("@min-[48rem]:grid-cols-3");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
@@ -646,11 +655,12 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("hidden @min-[28rem]:inline-flex");
-    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).toContain("data-music-queue-toggle");
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
     expect(html).not.toContain("data-slider=\"edge\"");
-    /* Art, title, the overflow, the speaker, and now the up-next row. */
-    expect(html.match(/aria-expanded/g)?.length).toBe(5);
+    /* Art, title, the overflow and the up-next row. The speaker stopped
+       being a popover trigger when the volume went inline. */
+    expect(html.match(/aria-expanded/g)?.length).toBe(4);
   });
 
   it("keeps the composer seek indeterminate when duration is unknown", () => {
@@ -755,7 +765,6 @@ describe("the composer bar's up-next line", () => {
     onOpenFila: () => {},
     onMute: () => {},
     onVolume: () => {},
-    onToggleDucking: () => {},
   };
   const bar = (
     music: Partial<MusicState>,
@@ -787,27 +796,20 @@ describe("the composer bar's up-next line", () => {
       </TooltipProvider>,
     );
 
-  it("names the next track and counts the whole queue", () => {
+  it("puts the queue behind an icon with its count, where Spotify keeps it", () => {
     const html = bar({
       queue: [track("q1", { title: "Daft Punk - One More Time" }), track("q2"), track("q3")],
     });
-    expect(html).toContain('data-music-next="track"');
-    expect(html).toContain("Daft Punk - One More Time");
-    expect(html).toContain("data-music-next-count");
-    expect(html).toContain(translateMessage("music.next.count", { count: 3 }));
+    expect(html).toContain("data-music-queue-toggle");
+    expect(html).toMatch(/data-music-queue-count=""[^>]*>3</);
+    /* The full-width "A seguir <track>" line is gone with it. */
+    expect(html).not.toContain("data-music-next");
   });
 
-  it("says the room will keep going when the queue is empty and autoplay is on", () => {
-    const html = bar({ queue: [], autoplay: true });
-    expect(html).toContain('data-music-next="autoplay"');
-    expect(html).toContain(translateMessage("music.autoplay.next"));
-    expect(html).not.toContain("data-music-next-count");
-  });
-
-  it("offers to add when the queue ran out and autoplay is off", () => {
-    const html = bar({ queue: [], autoplay: false });
-    expect(html).toContain('data-music-next="empty"');
-    expect(html).toContain(translateMessage("music.next.empty"));
+  it("drops the count when there is nothing queued", () => {
+    const html = bar({ queue: [] });
+    expect(html).toContain("data-music-queue-toggle");
+    expect(html).not.toContain("data-music-queue-count");
   });
 
   it("stays out of the sidebar radio, which has no room for it", () => {
@@ -834,7 +836,7 @@ describe("the composer bar's up-next line", () => {
         />
       </TooltipProvider>,
     );
-    expect(html).not.toContain("data-music-next");
+    expect(html).not.toContain("data-music-queue-toggle");
   });
 
   it("counts the listeners once there is more than one", () => {
@@ -857,10 +859,6 @@ describe("the composer bar's up-next line", () => {
   });
 });
 
-/**
- * A member gets the same bar, not a different one: the controls they may not
- * use are dimmed in place, so nothing under the pointer moves with rights.
- */
 describe("the composer bar a member sees", () => {
   const knobs = {
     volume: 40,
@@ -870,7 +868,6 @@ describe("the composer bar a member sees", () => {
     onOpenFila: () => {},
     onMute: () => {},
     onVolume: () => {},
-    onToggleDucking: () => {},
   };
   const bar = (canManage: boolean, music: Partial<MusicState> = {}) =>
     renderToStaticMarkup(
@@ -963,56 +960,38 @@ describe("the composer bar folds to one row when it has the width", () => {
           onTapToPlay={() => {}}
           onMute={() => {}}
           onVolume={() => {}}
-          onToggleDucking={() => {}}
         />
       </TooltipProvider>,
     );
 
   /* Thirds scale with the bar; a fixed cap does not. A cap wide enough at
      1920 took half of a 1050px bar and left the title 163px. */
-  it("splits into three equal columns, the way Spotify's bar does", () => {
-    const markup = html();
-    expect(markup).toContain("@min-[48rem]:grid-cols-3");
-    expect(markup).not.toMatch(/grid-cols-\[minmax\(0,1(\.\d+)?fr\)_minmax/);
+  it("is three columns: track, transport over seek, icons", () => {
+    expect(html()).toContain("@min-[48rem]:grid-cols-3");
   });
 
-  it("moves the seek under the transport instead of across everything", () => {
+  it("keeps the seek in the middle column, under the transport", () => {
     expect(html()).toMatch(
       /@min-\[48rem\]:col-start-2[^"]*@min-\[48rem\]:row-start-2/,
     );
   });
 
-  /* Equal columns only work while all three carry something: on the right
-     the queue line is what stops it reserving the title's width for two
-     icons. */
-  it("gives the right column the queue line rather than empty space", () => {
-    expect(html()).toMatch(
-      /@min-\[48rem\]:col-start-3[^"]*@min-\[48rem\]:row-start-2/,
-    );
+  it("centres the right cluster against both lines", () => {
+    expect(html()).toContain("@min-[48rem]:row-span-2");
   });
 
-  it("keeps the queue count as text, not as a badge", () => {
+  it("puts the volume beside the speaker instead of behind it", () => {
     const markup = html();
-    expect(markup).toContain("data-music-next-count");
-    expect(markup).not.toMatch(/data-music-next-count=""[^>]*bg-accent-soft/);
+    expect(markup).toContain("data-music-volume");
+    expect(markup).not.toContain("data-music-speaker-popover");
   });
 
-  /* One column below the breakpoint. Sharing the first line with the
-     transport left the title 47px on a 462px bar. */
-  it("stacks in one column below the breakpoint, so the title has the width", () => {
+  /* One column below the breakpoint: the transport alone is wider than a
+     narrow bar, so nothing shares a line with it. */
+  it("stacks in one column below the breakpoint", () => {
     const markup = html();
     expect(markup).toContain("grid-cols-1");
     expect(markup).not.toContain("@min-[28rem]:grid-cols-");
-  });
-
-  it("drops the queue line's rule, which only divided stacked rows", () => {
-    expect(html()).toContain("@min-[48rem]:border-t-0");
-  });
-
-  it("keeps the rows stacked below the breakpoint", () => {
-    const markup = html();
-    expect(markup).toContain("grid-cols-1");
-    expect(markup).toContain("@min-[48rem]:grid-cols-3");
   });
 });
 
@@ -1024,7 +1003,6 @@ describe("the composer bar after Parar de ouvir", () => {
     onOpenFila: () => {},
     onMute: () => {},
     onVolume: () => {},
-    onToggleDucking: () => {},
   };
   const bar = (listening: boolean) =>
     renderToStaticMarkup(
@@ -1068,9 +1046,8 @@ describe("the composer bar after Parar de ouvir", () => {
     expect(bar(true)).toContain('data-slider="scrub"');
   });
 
-  it("keeps the queue line, so the room stays legible", () => {
-    expect(bar(false)).toContain("data-music-next");
-    expect(bar(false)).toContain("Daft Punk");
+  it("keeps the way back to the queue, so the room stays legible", () => {
+    expect(bar(false)).toContain("data-music-queue-toggle");
   });
 
   it("is the ordinary bar again while listening", () => {
@@ -1155,7 +1132,7 @@ describe("MusicComposer", () => {
     expect(html).toContain("data-music-shuffle");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
-    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).toContain("data-music-queue-toggle");
     expect(html).not.toContain("data-music-composer-start");
     expect(html).not.toContain("data-slider=\"edge\"");
     expect(html).not.toContain("data-music-fila");

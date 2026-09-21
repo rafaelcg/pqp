@@ -1,5 +1,5 @@
 import type { VoiceState } from "@/hooks/use-voice";
-import { setMusicDucking, useMusicPrefs } from "@/lib/music-prefs";
+import { useMusicPrefs } from "@/lib/music-prefs";
 import {
   advance,
   musicPrevious,
@@ -58,7 +58,6 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
           onTapToPlay={tapMusicLocalToPlay}
           onMute={toggleMusicLocalMuted}
           onVolume={setMusicLocalVolume}
-          onToggleDucking={setMusicDucking}
         />
       ) : null}
     </div>
