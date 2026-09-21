@@ -168,6 +168,56 @@ describe("the Fila panel is one column", () => {
     ).toBeTruthy();
   });
 
+  it("closes when something elsewhere is pressed", () => {
+    mount();
+    const away = document.createElement("button");
+    document.body.appendChild(away);
+    act(() => {
+      away.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(false);
+    away.remove();
+  });
+
+  /* Both of these toggle the panel. Closing before their click lands would
+     leave the tile reopening what it had just shut. */
+  it("stays open for a press on the player or on the dock tile", () => {
+    mount();
+    const composer = document.createElement("div");
+    composer.setAttribute("data-music-composer", "");
+    const inner = document.createElement("button");
+    composer.appendChild(inner);
+    document.body.appendChild(composer);
+    act(() => {
+      inner.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(true);
+
+    const tile = document.createElement("button");
+    tile.setAttribute("data-music-dock", "playing");
+    document.body.appendChild(tile);
+    act(() => {
+      tile.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(true);
+    composer.remove();
+    tile.remove();
+  });
+
+  it("stays open for a press inside a menu it opened", () => {
+    mount();
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    const row = document.createElement("button");
+    menu.appendChild(row);
+    document.body.appendChild(menu);
+    act(() => {
+      row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(true);
+    menu.remove();
+  });
+
   it("puts the field above the queue in the drawer too", () => {
     mount("drawer");
     const search = host.querySelector("[data-music-search]");

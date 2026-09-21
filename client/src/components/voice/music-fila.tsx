@@ -89,6 +89,35 @@ export function MusicFila({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /*
+   * A press anywhere else closes the sheet, the way every popover does. The
+   * drawer has its own backdrop for this; the sheet sits in the composer
+   * with nothing over the page, so it listens instead.
+   *
+   * The player and the dock tile are not "elsewhere": both of them toggle
+   * this panel, and closing here before their click lands would leave the
+   * tile reopening what it had just shut. A menu or a dialog the panel
+   * itself opened is portalled out of the composer, so it is excluded too.
+   */
+  useEffect(() => {
+    if (!sheet || !music.open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (
+        target?.closest(
+          "[data-music-composer], [data-music-dock], [role='menu'], [role='dialog']",
+        )
+      ) {
+        return;
+      }
+      setMusicOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [sheet, music.open]);
+
   if (!music.open) {
     return null;
   }
