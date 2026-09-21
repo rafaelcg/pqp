@@ -953,7 +953,7 @@ describe("MusicFila", () => {
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 
-  it("hides search until Adicionar when a track is on", () => {
+  it("keeps the field mounted with a track on, and drops the header's plus", () => {
     receiveMusic(CHANNEL, state());
     setMusicOpen(true);
     const html = renderToStaticMarkup(
@@ -961,8 +961,8 @@ describe("MusicFila", () => {
         <MusicFila voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-add");
-    expect(html).not.toContain("data-music-search");
+    expect(html).toContain("data-music-search");
+    expect(html).not.toContain("data-music-add");
     expect(html).not.toContain("data-music-repeat");
   });
 

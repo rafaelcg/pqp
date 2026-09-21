@@ -1,4 +1,4 @@
-import { MonitorPlay, Pause, Play, Plus, X } from "lucide-react";
+import { MonitorPlay, Pause, Play, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -40,6 +40,11 @@ const SHEET_ICON =
  * without unmounting them. The drawer keeps a now-playing card because
  * that radio has no seek and keeps the five-item `…`; the sheet does
  * not, because the bar under it is the player.
+ *
+ * ONE COLUMN, ALWAYS THE SAME ONE. The field is mounted for the whole life
+ * of the panel and search results land above the queue rather than in its
+ * place: adding to a queue you can no longer see is how you add the same
+ * song twice. Escape from an empty field closes the panel.
  */
 export function MusicFila({
   variant = "sheet",
@@ -56,8 +61,6 @@ export function MusicFila({
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
   const [scrub, setScrub] = useState<number | null>(null);
-  const [adding, setAdding] = useState(current === null);
-  const [searchActive, setSearchActive] = useState(false);
   const onStage = prefs.placement === "stage";
   const queue = music.state?.queue ?? [];
   const history = music.state?.history ?? [];
@@ -77,12 +80,6 @@ export function MusicFila({
   const tone = sheet ? "composer" : "rail";
 
   useEffect(() => {
-    if (current === null) {
-      setAdding(true);
-    }
-  }, [current]);
-
-  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setMusicOpen(false);
@@ -91,9 +88,6 @@ export function MusicFila({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  const showSearch = adding || current === null;
-  const showQueue = !searchActive;
 
   if (!music.open) {
     return null;
@@ -121,17 +115,6 @@ export function MusicFila({
           })}
         </p>
         <div className="flex shrink-0 items-center">
-          <Tooltip label={t("music.add")} side="left">
-            <button
-              type="button"
-              data-music-add=""
-              className={iconClass}
-              aria-label={t("music.add")}
-              onClick={() => setAdding(true)}
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </Tooltip>
           {current && !onStage ? (
             <Tooltip label={t("music.stage.watch")} side="left">
               <button
@@ -267,59 +250,59 @@ export function MusicFila({
               </span>
             </div>
           </div>
-        ) : current ? null : (
-          <div className="shrink-0 space-y-1 px-3 pt-3">
+        ) : null}
+
+        <div className="shrink-0 px-2 pt-2">
+          <MusicSearchPicker
+            compact
+            chrome={sheet ? "default" : "rail"}
+            variant={current ? "queue" : "start"}
+            canManage={canManage}
+            autoFocus
+            onEmptyEscape={() => setMusicOpen(false)}
+          />
+        </div>
+
+        {current ? null : (
+          <div className="shrink-0 space-y-1 px-3 pt-2">
             <p className={cn("text-sm font-medium", title)}>{t("music.empty.title")}</p>
             <p className={cn("text-[11px]", muted)}>{t("music.empty.hint")}</p>
           </div>
         )}
 
-        {showSearch ? (
-          <div className="shrink-0 px-2 pt-2">
-            <MusicSearchPicker
-              compact
-              chrome={sheet ? "default" : "rail"}
-              variant={current ? "queue" : "start"}
-              canManage={canManage}
-              autoFocus
-              onQueryActive={setSearchActive}
-              onEmptyEscape={current ? () => setAdding(false) : undefined}
-            />
-          </div>
-        ) : null}
-
-        {showQueue ? (
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-            {queue.length > 0 && (
-              <div>
-                <p
-                  className={cn(
-                    "mb-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider",
-                    muted,
-                  )}
-                >
-                  {t("music.queue")}
-                </p>
-                <MusicQueueList
-                  queue={queue}
-                  voiceState={voiceState}
-                  canManage={canManage}
-                  tone={tone}
-                />
-              </div>
-            )}
-            {music.state?.autoplay && queue.length === 0 && current ? (
-              <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
-                {t("music.autoplay.next")}
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {queue.length > 0 && (
+            <div>
+              <p
+                className={cn(
+                  "mb-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider",
+                  muted,
+                )}
+              >
+                {t("memberList.sectionHeading", {
+                  label: t("music.queue"),
+                  count: queue.length,
+                })}
               </p>
-            ) : null}
-            <MusicHistoryList
-              history={history}
-              defaultOpen={queue.length === 0}
-              tone={tone}
-            />
-          </div>
-        ) : null}
+              <MusicQueueList
+                queue={queue}
+                voiceState={voiceState}
+                canManage={canManage}
+                tone={tone}
+              />
+            </div>
+          )}
+          {music.state?.autoplay && queue.length === 0 && current ? (
+            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
+              {t("music.autoplay.next")}
+            </p>
+          ) : null}
+          <MusicHistoryList
+            history={history}
+            defaultOpen={queue.length === 0}
+            tone={tone}
+          />
+        </div>
       </div>
     </>
   );
