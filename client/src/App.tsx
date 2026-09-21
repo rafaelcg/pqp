@@ -123,6 +123,7 @@ import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
   shouldOfferBringFriendsHint,
+  shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
@@ -264,6 +265,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicComposer } from "@/components/voice/music-composer";
+import { useMusicDock } from "@/lib/music-store";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -1201,6 +1203,10 @@ function MainAppContent({
     featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  // Open + whether a track is on, which is what the music hint's live half
+  // reads. The snapshot deliberately ignores position samples, so this does
+  // not put the playhead on App's render path.
+  const musicDock = useMusicDock();
   const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
   // The cargos card decides for itself whether it was seen; the corner queue
   // has to know too, or the corner stays "taken" by a card that never draws
@@ -6956,7 +6962,14 @@ function MainAppContent({
       canInvite: canCreateInviteForVoice,
       roomSize: voiceRoomSize,
     }),
-    music: wantsMusicHint && voiceState.status === "connected",
+    music: shouldOfferMusicHint({
+      seen: !wantsMusicHint,
+      automated: false,
+      connected: voiceState.status === "connected",
+      canSpeak: voiceState.canSpeak,
+      playing: musicDock.on,
+      filaOpen: musicDock.open,
+    }),
     composerFormat:
       wantsComposerFormatHint &&
       selectedChannel?.type === "text" &&

@@ -7,8 +7,8 @@ import {
 
 /**
  * One-shot coachmarks for controls people miss: the composer format bar,
- * Watch party / share on the call strip, Fixar on the channel list, and
- * Cmd+/ for the shortcut map.
+ * Watch party / share and Música on the call dock, Fixar on the channel
+ * list, and Cmd+/ for the shortcut map.
  *
  * Persistence is `lib/hints.ts` (one store). Attached hints share a queue so
  * they cannot stack; shortcuts is a CornerCard in `CORNER_HINT_ORDER` and
@@ -35,7 +35,10 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
   watchParty: "pqp:feature-hint-watch-party-2026-09",
   bringFriends: "pqp:feature-hint-bring-friends-2026-09",
-  music: "pqp:feature-hint-music-2026-09",
+  // Bumped: the card was re-aimed twice under the first key (the player
+  // left the sidebar for the call dock), so everybody who saw the old
+  // copy had it stamped and would never be shown the one that is true.
+  music: "pqp:feature-hint-music-2026-09-2",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
@@ -59,10 +62,10 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // After the watch-party tips so those still win if both want the slot,
   // before the standing share/music tips.
   "bringFriends",
-  // The music queue, on the player at the bottom of the sidebar, the first
-  // time a person is in a call with nothing on. After the share tip: both
-  // fire for anyone in any call, and share is the older, less discoverable
-  // control.
+  // The music queue, on the Música tile in the call dock, the first time a
+  // person who may speak is in a call with nothing on. After the share tip:
+  // both fire for anyone in any call, and share is the older, less
+  // discoverable control.
   "music",
   "composerFormat",
   "channelPin",
@@ -203,6 +206,33 @@ export function shouldOfferBringFriendsHint(input: {
     input.canInvite &&
     input.roomSize > 0 &&
     input.roomSize < 3
+  );
+}
+
+/**
+ * A person who could put something on, in a call where nobody has.
+ *
+ * SPEAK is the difference between a tip and a lie: without it there is
+ * nothing this person may add. A track already playing draws the bar above
+ * the dock, so the card would be pointing at what they are reading; an open
+ * Fila is the same argument one step further on.
+ */
+export function shouldOfferMusicHint(input: {
+  seen: boolean;
+  automated: boolean;
+  connected: boolean;
+  canSpeak: boolean;
+  /** A track is on, so the composer bar is on screen. */
+  playing: boolean;
+  filaOpen: boolean;
+}): boolean {
+  return (
+    !input.seen &&
+    !input.automated &&
+    input.connected &&
+    input.canSpeak &&
+    !input.playing &&
+    !input.filaOpen
   );
 }
 

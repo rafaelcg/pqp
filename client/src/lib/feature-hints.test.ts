@@ -8,6 +8,7 @@ import {
   shouldOfferCallDockHint,
   shouldOfferChannelPinHint,
   shouldOfferComposerFormatHint,
+  shouldOfferMusicHint,
   shouldOfferShortcutsHint,
   shouldOfferWatchPartyHint,
   winningFeatureHint,
@@ -181,6 +182,45 @@ describe("shouldOfferBringFriendsHint", () => {
     expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.bringFriends)).toBe("1");
     expect(isFeatureHintSeen("bringFriends", storage, true)).toBe(true);
     expect(isFeatureHintSeen("bringFriends", storage, false)).toBe(false);
+  });
+});
+
+describe("shouldOfferMusicHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    connected: true,
+    canSpeak: true,
+    playing: false,
+    filaOpen: false,
+  };
+
+  it("shows once in a call where nobody has put anything on", () => {
+    expect(shouldOfferMusicHint(ready)).toBe(true);
+  });
+
+  it("stays quiet for a listener, a room with music on, and an open panel", () => {
+    expect(shouldOfferMusicHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferMusicHint({ ...ready, automated: true })).toBe(false);
+    expect(shouldOfferMusicHint({ ...ready, connected: false })).toBe(false);
+    // Without SPEAK there is nothing this person could add, so the card
+    // would be describing a control they cannot use.
+    expect(shouldOfferMusicHint({ ...ready, canSpeak: false })).toBe(false);
+    // The bar is on screen: the card would point at what they are reading.
+    expect(shouldOfferMusicHint({ ...ready, playing: true })).toBe(false);
+    // They already opened the panel the card exists to send them to.
+    expect(shouldOfferMusicHint({ ...ready, filaOpen: true })).toBe(false);
+  });
+
+  it("records under the second September 2026 key", () => {
+    const storage = memory();
+    // The card was re-aimed twice under the first key, so everybody who saw
+    // the sidebar-era copy has it stamped and would never see this one.
+    expect(FEATURE_HINT_STORAGE_KEYS.music).toBe(
+      "pqp:feature-hint-music-2026-09-2",
+    );
+    rememberFeatureHint("music", storage, true);
+    expect(isFeatureHintSeen("music", storage, true)).toBe(true);
   });
 });
 

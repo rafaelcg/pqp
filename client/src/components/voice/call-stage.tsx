@@ -199,6 +199,12 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { isAutomatedBrowser } from "@/lib/hints";
+import {
+  isMusicPipSeen,
+  rememberMusicPip,
+  shouldShowMusicPip,
+} from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
@@ -2407,6 +2413,18 @@ export function CallControls({
   const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
   const musicHintEnabled = useFeatureHintEnabled("music");
   const musicDock = useMusicDock();
+  // The pip outlives the card: it is spent by opening the panel, which the
+  // card's own impression never waits for. `lib/music-pip.ts` says why the
+  // two do not share a key.
+  const [musicPipUnseen, setMusicPipUnseen] = useState(
+    () => !isAutomatedBrowser() && !isMusicPipSeen(),
+  );
+  const musicPip = shouldShowMusicPip({
+    seen: !musicPipUnseen,
+    automated: false,
+    canSpeak: voiceState.canSpeak,
+    playing: musicDock.on,
+  });
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -2993,9 +3011,24 @@ export function CallControls({
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
           )}
-          onClick={toggleMusicOpen}
+          onClick={() => {
+            if (musicPipUnseen) {
+              rememberMusicPip();
+              setMusicPipUnseen(false);
+            }
+            toggleMusicOpen();
+          }}
         >
           <Music className={iconSize} />
+          {/* NOVO, until the panel has been opened once. Never beside the
+              dot below: that one needs a track on and this one needs none. */}
+          {musicPip ? (
+            <span
+              data-music-pip=""
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          ) : null}
           {/* The room has music and this machine is not hearing it. Nothing
               else on this tile can say that with the panel shut. */}
           {musicDock.on && !musicDock.listening ? (
