@@ -411,7 +411,7 @@ export function MusicNowPlaying({
     <button
       type="button"
       data-music-next={nextTrack ? "track" : autoplayOn ? "autoplay" : "empty"}
-      className="flex w-full min-w-0 items-center gap-2 border-t border-border/60 pt-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:text-text"
+      className="flex w-full min-w-0 items-center gap-2 border-t border-border/60 pt-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:text-text @min-[48rem]:border-t-0 @min-[48rem]:pt-0"
       aria-expanded={music.open}
       aria-label={music.open ? t("music.close") : t("music.open")}
       onClick={toggleMusicOpen}
@@ -484,7 +484,15 @@ export function MusicNowPlaying({
   if (composer) {
     return (
       <div data-music-now-playing="composer" className="px-3 py-2">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        {/*
+          THREE ROWS WHEN IT MUST, ONE WHEN IT CAN.
+          Nothing is added or removed across the breakpoint: past 48rem the
+          seek stops spanning the whole bar and sits under the transport in a
+          column of its own, and the queue line moves under the title, into
+          the space that was empty. What was three full-width rows above the
+          composer becomes one row about half as tall.
+        */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)_minmax(0,1fr)]">
           <div className="flex min-w-0 items-center gap-3">
             {identity}
           </div>
@@ -500,15 +508,17 @@ export function MusicNowPlaying({
                 disabled={!canManage}
               />
             </div>
-            <div className="flex items-center justify-end gap-1">
+            {/* Spans both rows at width, so it stays centred against a bar
+                that is two lines tall rather than sitting on the first. */}
+            <div className="flex items-center justify-end gap-1 @min-[48rem]:row-span-2">
               {overflow}
               {extras}
             </div>
           </div>
-          <div className="col-span-full min-w-0">
+          <div className="col-span-full min-w-0 @min-[48rem]:col-span-1 @min-[48rem]:col-start-2 @min-[48rem]:row-start-2">
             {seekBar}
           </div>
-          <div className="col-span-full min-w-0">
+          <div className="col-span-full min-w-0 @min-[48rem]:col-span-1 @min-[48rem]:col-start-1 @min-[48rem]:row-start-2">
             {nextRow}
           </div>
         </div>

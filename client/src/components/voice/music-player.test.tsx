@@ -930,6 +930,70 @@ describe("the composer bar a member sees", () => {
  * Stopping is personal: the room plays on without you. The bar has to say
  * that, because a player that just goes quiet reads as broken.
  */
+/**
+ * Three full-width rows above a composer is most of the bottom of a wide
+ * window. The elements do not change; where they sit does.
+ */
+describe("the composer bar folds to one row when it has the width", () => {
+  const html = () =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1", { title: "Daft Punk" })] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          listening
+          volume={40}
+          muted={false}
+          ducking
+          onOpenFila={() => {}}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          onMute={() => {}}
+          onVolume={() => {}}
+          onToggleDucking={() => {}}
+        />
+      </TooltipProvider>,
+    );
+
+  it("gives the middle column a bounded width, not the whole bar", () => {
+    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)_minmax(0,1fr)]");
+  });
+
+  it("moves the seek under the transport instead of across everything", () => {
+    expect(html()).toMatch(
+      /col-span-full[^"]*@min-\[48rem\]:col-start-2[^"]*@min-\[48rem\]:row-start-2/,
+    );
+  });
+
+  it("moves the queue line under the title, into the space that was empty", () => {
+    expect(html()).toMatch(
+      /col-span-full[^"]*@min-\[48rem\]:col-start-1[^"]*@min-\[48rem\]:row-start-2/,
+    );
+  });
+
+  it("drops the queue line's rule, which only divided stacked rows", () => {
+    expect(html()).toContain("@min-[48rem]:border-t-0");
+  });
+
+  it("keeps the stacked rows below the breakpoint", () => {
+    const markup = html();
+    expect(markup).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(markup).toContain("@min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
+  });
+});
+
 describe("the composer bar after Parar de ouvir", () => {
   const knobs = {
     volume: 40,
