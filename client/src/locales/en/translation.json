@@ -1483,6 +1483,8 @@
   "thread.noReplies": "No replies yet",
   "thread.chip.aria": "Open thread {name}, {replies}",
   "thread.originDeleted": "The original message was deleted",
+  "thread.originAttachment_one": "{count} file",
+  "thread.originAttachment_other": "{count} files",
   "thread.placeholder": "Reply in thread",
   "thread.loading": "Loading thread…",
   "thread.error.start": "Couldn't start the thread. Try again.",

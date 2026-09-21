@@ -250,8 +250,9 @@ export async function listThreadsForMessages(
 }
 
 /**
- * The active threads under a set of parent channels, newest activity first,
- * capped per parent — what the channel list nests under a channel row.
+ * The active threads under a set of parent channels that THIS READER is in,
+ * newest activity first, capped per parent — what the channel list nests
+ * under a channel row.
  *
  * Archived threads are left out on purpose: the sidebar is for what is going
  * on now, and a thread quiet for THREAD_AUTO_ARCHIVE_DAYS is reachable the
@@ -261,6 +262,7 @@ export async function listThreadsForMessages(
 export async function listActiveThreadsByParent(
   parentChannelIds: string[],
   perParent: number,
+  viewerId: string,
 ): Promise<Map<string, ThreadSummary[]>> {
   const byParent = new Map<string, ThreadSummary[]>();
   if (parentChannelIds.length === 0) {
@@ -270,10 +272,29 @@ export async function listActiveThreadsByParent(
     `SELECT ${THREAD_COLUMNS}
      FROM channels c
      WHERE c.parent_id = ANY($1::uuid[]) AND c.type = 'thread'
+       -- ONLY THREADS THIS READER IS IN. A thread has no members of its own
+       -- (its audience is its parent's), so membership is derived from having
+       -- taken part: started it, said something in it, or opened it — which
+       -- is the same "created, replied, or joined" Discord gates its own
+       -- sidebar on. Listing every active thread to everybody turns a busy
+       -- channel's rail into a feed of other people's conversations, which is
+       -- the thing all three of Discord, Slack and Teams decline to do.
+       AND (
+         EXISTS (SELECT 1 FROM messages mine
+                  WHERE mine.channel_id = c.id AND mine.author_id = $2)
+         OR EXISTS (SELECT 1 FROM messages root
+                     WHERE root.id = c.thread_root_message_id
+                       AND root.author_id = $2)
+         -- Opening the panel writes a read cursor, so this is "joined". A
+         -- thread never opened has no row here, which is also why unread
+         -- cannot be the test: with no cursor everything reads unread.
+         OR EXISTS (SELECT 1 FROM channel_reads cr
+                     WHERE cr.channel_id = c.id AND cr.user_id = $2)
+       )
      ORDER BY c.parent_id,
               coalesce((SELECT max(m.created_at) FROM messages m
                          WHERE m.channel_id = c.id), c.created_at) DESC`,
-    [parentChannelIds],
+    [parentChannelIds, viewerId],
   );
   for (const row of result.rows) {
     const summary = toSummary(row);

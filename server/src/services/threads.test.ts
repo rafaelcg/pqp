@@ -19,7 +19,9 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { canAccessChannel, upsertUser } = await import("./users.js");
+const { canAccessChannel, markChannelRead, upsertUser } = await import(
+  "./users.js"
+);
 const {
   addChannelMember,
   createChannel,
@@ -182,17 +184,72 @@ describeDb("threads", () => {
     const newer = (await createThreadForMessage(second.id, null))!.thread;
     await postMessage(newer.channelId, owner, "keeps it on top");
 
-    const byParent = await listActiveThreadsByParent([publicChannelId], 3);
+    const byParent = await listActiveThreadsByParent([publicChannelId], 3, owner.id);
     const ids = byParent.get(publicChannelId)?.map((one) => one.channelId);
     expect(ids?.[0]).toBe(newer.channelId);
     expect(ids).toContain(older.channelId);
 
     // The cap is per parent, so one busy channel cannot crowd out the rest.
     expect(
-      (await listActiveThreadsByParent([publicChannelId], 1)).get(
+      (await listActiveThreadsByParent([publicChannelId], 1, owner.id)).get(
         publicChannelId,
       ),
     ).toHaveLength(1);
+  });
+
+  it("lists only the threads the reader is in", async () => {
+    // Somebody else's conversation, which this reader has never touched.
+    const theirs = await postMessage(publicChannelId, member, "their topic");
+    const theirThread = (await createThreadForMessage(theirs.id, null))!.thread;
+    await postMessage(theirThread.channelId, member, "their reply");
+
+    const forOwner = await listActiveThreadsByParent(
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(theirThread.channelId);
+
+    // Its own author is in it, by having started it and spoken in it.
+    const forMember = await listActiveThreadsByParent(
+      [publicChannelId],
+      10,
+      member.id,
+    );
+    expect(
+      (forMember.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(theirThread.channelId);
+
+    // Replying is joining.
+    await postMessage(theirThread.channelId, owner, "now I am in it");
+    const afterReply = await listActiveThreadsByParent(
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (afterReply.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(theirThread.channelId);
+  });
+
+  it("counts opening a thread as joining it", async () => {
+    const theirs = await postMessage(publicChannelId, member, "opened topic");
+    const thread = (await createThreadForMessage(theirs.id, null))!.thread;
+    await postMessage(thread.channelId, member, "their reply");
+
+    // What the panel does on open: a read cursor, and nothing else.
+    await markChannelRead(thread.channelId, owner.id);
+
+    const forOwner = await listActiveThreadsByParent(
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(thread.channelId);
   });
 
   it("leaves archived threads out of the sidebar list", async () => {
@@ -206,7 +263,7 @@ describeDb("threads", () => {
       [thread.channelId, longAgo],
     );
 
-    const byParent = await listActiveThreadsByParent([publicChannelId], 3);
+    const byParent = await listActiveThreadsByParent([publicChannelId], 3, owner.id);
     expect(
       (byParent.get(publicChannelId) ?? []).map((one) => one.channelId),
     ).not.toContain(thread.channelId);

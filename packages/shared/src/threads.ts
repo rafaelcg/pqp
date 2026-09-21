@@ -29,8 +29,12 @@ import { z } from "zod";
  * read-time computation over the thread's last activity — there is no sweeper,
  * no stored flag, and nothing to un-archive: saying something in an archived
  * thread makes it active again by making the condition false.
+ *
+ * Three days, which is Discord's default for the same setting. It was seven,
+ * chosen before threads had a sidebar; a week is a long time for somebody
+ * else's finished conversation to keep a row in a busy channel.
  */
-export const THREAD_AUTO_ARCHIVE_DAYS = 7;
+export const THREAD_AUTO_ARCHIVE_DAYS = 3;
 
 /** Thread names are titles, not slugs — spaces and punctuation are fine. */
 export const THREAD_NAME_MAX_LENGTH = 80;

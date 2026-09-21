@@ -7021,6 +7021,7 @@ router.get("/api/servers/:serverId/threads", async ({ user }, { serverId }) => {
   const byParent = await listActiveThreadsByParent(
     parents,
     SIDEBAR_THREADS_PER_CHANNEL,
+    user.id,
   );
   return {
     threads: Object.fromEntries(byParent),

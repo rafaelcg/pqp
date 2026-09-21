@@ -19,7 +19,7 @@ import type { ChatController, ChatMessage } from "@/hooks/use-chat";
 import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
-import { formatDayLabel } from "@/lib/utils";
+import { cn, formatDayLabel } from "@/lib/utils";
 
 /**
  * The thread's own conversation: a side panel on desktop, the whole viewport
@@ -108,6 +108,27 @@ export function ThreadPanel({
      Deliberately crude: one touch, mostly horizontal, far enough to be meant.
      There is no shared gesture helper in the app to reach for. */
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * What the quote above the thread says. A message with no text is not a
+   * blank quote: a poll is its question, an upload is its file. The thread's
+   * own name is never used here — it is already the header's title.
+   */
+  const originText = origin
+    ? origin.body.trim().length > 0
+      ? origin.body
+      : origin.poll
+        ? origin.poll.question
+        : origin.attachments.length > 0
+          ? t("thread.originAttachment", { count: origin.attachments.length })
+          : null
+    : thread.rootMessageId === null
+      ? t("thread.originDeleted")
+      : null;
+  // A thread born from a message is NAMED after that message, so a quote
+  // saying the same words as the title one row above it is the repetition
+  // this panel exists to stop having.
+  const originLine = originText === thread.name ? null : originText;
 
   return (
     <aside
@@ -212,22 +233,28 @@ export function ThreadPanel({
 
       {/* The message the thread grew out of — context, not part of the
           thread's own history, so it is a quote and not a second message.
-          Deleted origins say so instead of vanishing. */}
-      <div className="shrink-0 border-b border-border/60 px-3 py-2">
-        {origin ? (
-          <p className="border-l-2 border-border-strong pl-2 text-xs text-text-tertiary">
+          Deleted origins say so instead of vanishing.
+
+          Nothing at all when the origin is simply not on hand: the panel can
+          be opened from the sidebar without the parent channel's page having
+          been read, and the old fallback printed the thread's NAME here,
+          which is the header's line repeated one row below it. */}
+      {originLine !== null && (
+        <div className="shrink-0 border-b border-border/60 px-3 py-2">
+          <p
+            className={cn(
+              "text-xs text-text-tertiary",
+              origin
+                ? "border-l-2 border-border-strong pl-2"
+                : "italic",
+            )}
+          >
             <span className="line-clamp-3 whitespace-pre-wrap break-words">
-              {origin.body}
+              {originLine}
             </span>
           </p>
-        ) : (
-          <p className="text-xs italic text-text-tertiary">
-            {thread.rootMessageId === null
-              ? t("thread.originDeleted")
-              : thread.name}
-          </p>
-        )}
-      </div>
+        </div>
+      )}
 
       <MessageList
         messages={controller.getMessages()}

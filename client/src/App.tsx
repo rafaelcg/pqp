@@ -3566,9 +3566,24 @@ function MainAppContent({
             chat.applyThreadUpdate(message.messageId, message.thread);
             // The sidebar row moves to the top of its channel on every reply,
             // which is the whole point of listing the active ones.
+            //
+            // A thread NOT already listed is somebody else's: the list is
+            // only the threads this reader is in, and the server decided that.
+            // The one exception is the thread open right now, which this
+            // reader has just joined by opening it. Adding every thread that
+            // gets a reply would undo the filter one frame at a time.
             setThreadsByChannel((prev) => {
               const parent = message.thread.parentChannelId;
-              const rest = (prev[parent] ?? []).filter(
+              const current = prev[parent] ?? [];
+              const listed = current.some(
+                (one) => one.channelId === message.thread.channelId,
+              );
+              const mine =
+                openThreadChannelIdRef.current === message.thread.channelId;
+              if (!listed && !mine) {
+                return prev;
+              }
+              const rest = current.filter(
                 (one) => one.channelId !== message.thread.channelId,
               );
               return {
@@ -8520,10 +8535,16 @@ function MainAppContent({
                   selectedServerId ?? undefined,
                 );
               }
-              // The origin message may not be in the page we have; the panel
-              // renders the thread name in its place, the same as it does for
-              // a thread whose origin was deleted.
-              await openThreadPanel(thread, null);
+              // Hand the panel the real origin message when the parent
+              // channel's page has it, so its quote is that message —
+              // including a poll's question or an upload — rather than
+              // nothing. A page that does not reach back that far leaves the
+              // quote out, which the panel is written for.
+              const origin =
+                chat
+                  .getMessages()
+                  .find((one) => one.id === thread.rootMessageId) ?? null;
+              await openThreadPanel(thread, origin);
             })();
           }}
           channels={channels}
