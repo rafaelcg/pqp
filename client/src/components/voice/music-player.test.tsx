@@ -638,8 +638,9 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("h-14 w-14");
     expect(html).toContain("rounded-full");
     expect(html).toContain("data-slider=\"scrub\"");
-    expect(html).toContain("col-span-full");
-    expect(html).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    /* One column stacked, thirds past 48rem. */
+    expect(html).toContain("grid-cols-1");
+    expect(html).toContain("@min-[48rem]:grid-cols-3");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
     expect(html).toContain("data-music-shuffle");
     expect(html).toContain("data-music-repeat");
@@ -967,18 +968,27 @@ describe("the composer bar folds to one row when it has the width", () => {
       </TooltipProvider>,
     );
 
-  it("gives the middle column a bounded width, not the whole bar", () => {
-    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1.7fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
+  /* Thirds scale with the bar; a fixed cap does not. A cap wide enough at
+     1920 took half of a 1050px bar and left the title 163px. */
+  it("splits into three equal columns, the way Spotify's bar does", () => {
+    const markup = html();
+    expect(markup).toContain("@min-[48rem]:grid-cols-3");
+    expect(markup).not.toMatch(/grid-cols-\[minmax\(0,1(\.\d+)?fr\)_minmax/);
   });
 
-  /* At 1920 a 26rem cap left a 359px seek against Spotify's ~640. */
-  it("lets the seek breathe on a wide window", () => {
-    expect(html()).not.toContain("minmax(18rem,26rem)");
+  it("moves the seek under the transport instead of across everything", () => {
+    expect(html()).toMatch(
+      /@min-\[48rem\]:col-start-2[^"]*@min-\[48rem\]:row-start-2/,
+    );
   });
 
-  /* Equal sides reserve as much for two icons as they give the title. */
-  it("does not mirror the right column onto the title's", () => {
-    expect(html()).not.toContain("grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
+  /* Equal columns only work while all three carry something: on the right
+     the queue line is what stops it reserving the title's width for two
+     icons. */
+  it("gives the right column the queue line rather than empty space", () => {
+    expect(html()).toMatch(
+      /@min-\[48rem\]:col-start-3[^"]*@min-\[48rem\]:row-start-2/,
+    );
   });
 
   it("keeps the queue count as text, not as a badge", () => {
@@ -987,32 +997,22 @@ describe("the composer bar folds to one row when it has the width", () => {
     expect(markup).not.toMatch(/data-music-next-count=""[^>]*bg-accent-soft/);
   });
 
-  /* Under 28rem the transport alone is wider than the bar, so a shared row
-     starved the title to nothing: art, controls, and no idea what is on. */
-  it("gives the title the whole first line when the bar is narrowest", () => {
-    expect(html()).toMatch(/col-span-full[^"]*@min-\[28rem\]:col-auto/);
-  });
-
-  it("moves the seek under the transport instead of across everything", () => {
-    expect(html()).toMatch(
-      /col-span-full[^"]*@min-\[48rem\]:col-start-2[^"]*@min-\[48rem\]:row-start-2/,
-    );
-  });
-
-  it("moves the queue line under the title, into the space that was empty", () => {
-    expect(html()).toMatch(
-      /col-span-full[^"]*@min-\[48rem\]:col-start-1[^"]*@min-\[48rem\]:row-start-2/,
-    );
+  /* One column below the breakpoint. Sharing the first line with the
+     transport left the title 47px on a 462px bar. */
+  it("stacks in one column below the breakpoint, so the title has the width", () => {
+    const markup = html();
+    expect(markup).toContain("grid-cols-1");
+    expect(markup).not.toContain("@min-[28rem]:grid-cols-");
   });
 
   it("drops the queue line's rule, which only divided stacked rows", () => {
     expect(html()).toContain("@min-[48rem]:border-t-0");
   });
 
-  it("keeps the stacked rows below the breakpoint", () => {
+  it("keeps the rows stacked below the breakpoint", () => {
     const markup = html();
-    expect(markup).toContain("grid-cols-[minmax(0,1fr)_auto]");
-    expect(markup).toContain("@min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
+    expect(markup).toContain("grid-cols-1");
+    expect(markup).toContain("@min-[48rem]:grid-cols-3");
   });
 });
 
@@ -1150,7 +1150,7 @@ describe("MusicComposer", () => {
     expect(html).toContain("h-14 w-14");
     expect(html).toContain("rounded-full");
     expect(html).toContain("data-slider=\"scrub\"");
-    expect(html).toContain("col-span-full");
+    expect(html).toContain("grid-cols-1");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
     expect(html).toContain("data-music-shuffle");
     expect(html).toContain("data-music-repeat");

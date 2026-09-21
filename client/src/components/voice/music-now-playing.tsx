@@ -422,8 +422,9 @@ export function MusicNowPlaying({
           <span className="min-w-0 flex-1 truncate text-text-secondary">
             {nextTrack.title}
           </span>
-          {/* Text, not a badge. A pill here was the loudest thing in a bar
-              whose subject is the track, which is not what it is counting. */}
+          {/* Text, not a badge. Spotify's bar has no coloured pill in it,
+              and a filled one here was the loudest thing in a row whose
+              subject is the track, not the count. */}
           <span
             data-music-next-count=""
             className="shrink-0 tabular-nums text-text-secondary"
@@ -487,31 +488,32 @@ export function MusicNowPlaying({
     return (
       <div data-music-now-playing="composer" className="px-3 py-2">
         {/*
-          THREE ROWS WHEN IT MUST, ONE WHEN IT CAN.
-          Nothing is added or removed across the breakpoint: past 48rem the
-          seek stops spanning the whole bar and sits under the transport in a
-          column of its own, and the queue line moves under the title, into
-          the space that was empty. What was three full-width rows above the
-          composer becomes one row about half as tall.
+          STACKED, THEN THIRDS. One breakpoint, 48rem, and one rule on each
+          side of it.
 
-          THE SIDES ARE NOT EQUAL, on purpose. Equal side columns are what
-          centres the transport exactly, and they cost the title every pixel
-          they reserve for two icons: measured on a 1054px bar, the right
-          column was 231px holding about 64px of content while the title had
-          163px. The left column takes 1.7 of the slack to the right's 1,
-          which moves the transport about 60px off the bar's midpoint and is
-          not something anybody reads as off-centre. Spotify centres its own
-          exactly because both of its side columns are full.
+          Past 48rem the bar is Spotify's shape, taken from their bar rather
+          than guessed at: three EQUAL columns, the track on the left, the
+          transport over the seek in the middle, the right column carrying
+          its own two lines. Measured off a 2000px Spotify window their seek
+          is about a third of the bar and their side columns match each
+          other. Thirds scale with the bar; a fixed rem cap does not, and a
+          cap wide enough to look right at 1920 ate half of a 1050px bar.
+
+          Equal columns only work while all three carry something, which is
+          why the queue line lives on the right: it is what stops that column
+          reserving the title's width for two icons.
+
+          Below 48rem everything stacks in one column. The earlier
+          three-column narrow layout mirrored an almost empty right column
+          onto the title's and starved it — 47px at a 462px bar, which is
+          about three characters. A stacked bar is one row taller and says
+          what is playing.
         */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1.7fr)_minmax(18rem,34rem)_minmax(0,1fr)]">
-          {/* Under 28rem the transport is wider than the whole bar, so
-              sharing a line left the title with no width at all: art,
-              controls, and nothing saying what is on. It takes the first
-              line to itself there and goes back to sharing at 28rem. */}
-          <div className="col-span-full flex min-w-0 items-center gap-3 @min-[28rem]:col-auto">
+        <div className="grid grid-cols-1 items-center gap-x-3 gap-y-1.5 @min-[48rem]:grid-cols-3">
+          <div className="flex min-w-0 items-center gap-3">
             {identity}
           </div>
-          <div className="flex items-center justify-end gap-1 @min-[28rem]:contents">
+          <div className="flex items-center justify-end gap-1 @min-[48rem]:contents">
             <div className="flex items-center justify-center gap-1">
               <MusicShuffleButton className={modeHide} disabled={!canManage} />
               {previousControl}
@@ -523,17 +525,15 @@ export function MusicNowPlaying({
                 disabled={!canManage}
               />
             </div>
-            {/* Spans both rows at width, so it stays centred against a bar
-                that is two lines tall rather than sitting on the first. */}
-            <div className="flex items-center justify-end gap-1 @min-[48rem]:row-span-2">
+            <div className="flex items-center justify-end gap-1">
               {overflow}
               {extras}
             </div>
           </div>
-          <div className="col-span-full min-w-0 @min-[48rem]:col-span-1 @min-[48rem]:col-start-2 @min-[48rem]:row-start-2">
+          <div className="min-w-0 @min-[48rem]:col-start-2 @min-[48rem]:row-start-2">
             {seekBar}
           </div>
-          <div className="col-span-full min-w-0 @min-[48rem]:col-span-1 @min-[48rem]:col-start-1 @min-[48rem]:row-start-2">
+          <div className="min-w-0 @min-[48rem]:col-start-3 @min-[48rem]:row-start-2">
             {nextRow}
           </div>
         </div>
