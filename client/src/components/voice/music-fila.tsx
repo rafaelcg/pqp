@@ -265,9 +265,13 @@ export function MusicFila({
         </div>
 
         {current ? null : (
-          <div className="shrink-0 space-y-1 px-3 pt-2">
-            <p className={cn("text-sm font-medium", title)}>{t("music.empty.title")}</p>
-            <p className={cn("text-[11px]", muted)}>{t("music.empty.hint")}</p>
+          /* Under the field, not over it: the first thing a new person needs
+             is somewhere to paste, and the second is what may be pasted. */
+          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2">
+            <p className={cn("text-[12px] leading-snug", muted)}>
+              {t("music.empty.what")}
+            </p>
+            <p className={cn("text-[11px]", muted)}>{t("music.empty.sources")}</p>
           </div>
         )}
 

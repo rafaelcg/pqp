@@ -13,6 +13,7 @@ import {
   setMusicSession,
 } from "@/lib/music-store";
 import { resetMusicPrefsForTests } from "@/lib/music-prefs";
+import { translateMessage } from "@/lib/i18n";
 import { MusicFila } from "@/components/voice/music-fila";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -142,6 +143,29 @@ describe("the Fila panel is one column", () => {
       );
     });
     expect(getMusicSnapshot().open).toBe(false);
+  });
+
+  it("says what may be pasted when the room has nothing on", () => {
+    resetMusicStoreForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
+    setMusicOpen(true);
+    mount();
+    const text = host.textContent ?? "";
+    expect(text).toContain(translateMessage("music.empty.what"));
+    expect(text).toContain(translateMessage("music.empty.sources"));
+    /* The field leads; the explanation is under it, not over it. */
+    const search = host.querySelector("[data-music-search]");
+    const blurb = host.querySelector("[data-music-empty]");
+    expect(blurb).not.toBeNull();
+    expect(
+      search!.compareDocumentPosition(blurb!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("puts the field above the queue in the drawer too", () => {

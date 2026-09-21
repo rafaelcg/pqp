@@ -175,16 +175,22 @@ export interface MusicDockSnapshot {
   open: boolean;
   /** A track is on. The composer bar is visible. */
   on: boolean;
+  /** This machine is hearing it. False after Parar de ouvir. */
+  listening: boolean;
 }
 
-let dockSnap: MusicDockSnapshot = { open: false, on: false };
+let dockSnap: MusicDockSnapshot = { open: false, on: false, listening: true };
 
 function getMusicDockSnapshot(): MusicDockSnapshot {
   const on = snapshot.state?.current != null;
-  if (dockSnap.open === snapshot.open && dockSnap.on === on) {
+  if (
+    dockSnap.open === snapshot.open &&
+    dockSnap.on === on &&
+    dockSnap.listening === snapshot.listening
+  ) {
     return dockSnap;
   }
-  dockSnap = { open: snapshot.open, on };
+  dockSnap = { open: snapshot.open, on, listening: snapshot.listening };
   return dockSnap;
 }
 
@@ -203,7 +209,7 @@ export function resetMusicStoreForTests(): void {
   localEndedTrackId = null;
   fillGeneration += 1;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
-  dockSnap = { open: false, on: false };
+  dockSnap = { open: false, on: false, listening: true };
   listeners.clear();
 }
 

@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  HeadphoneOff,
   Music,
   Pause,
   Play,
@@ -188,6 +189,8 @@ export function MusicNowPlaying({
   const autoplayOn = music.state?.autoplay === true;
   /* Alone with your own music is not a fact worth a line. */
   const listenerCount = musicListenerCount(voiceState, listening);
+  /** A track is on and this machine is not hearing it. */
+  const stopped = !listening;
   const listenersLabel =
     listenerCount > 1 ? t("music.listening", { count: listenerCount }) : null;
 
@@ -210,7 +213,12 @@ export function MusicNowPlaying({
         aria-label={expandLabel}
         onClick={onOpenFila}
       >
-        {current.thumbnailUrl ? (
+        {stopped ? (
+          <HeadphoneOff
+            className={cn("m-auto", composer ? "h-5 w-5" : "h-4 w-4", mutedText)}
+            aria-hidden="true"
+          />
+        ) : current.thumbnailUrl ? (
           <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
         ) : (
           <Music
@@ -228,9 +236,23 @@ export function MusicNowPlaying({
       >
         <MarqueeText
           text={current.title}
-          className={cn("text-[13px] font-medium leading-tight", titleText)}
+          className={cn(
+            "text-[13px] font-medium leading-tight",
+            stopped ? mutedText : titleText,
+          )}
         />
-        {current.autoplayed ? (
+        {stopped ? (
+          /* The room did not stop, this machine did. Saying so is the whole
+             job of this line: a player that only goes quiet reads as broken. */
+          <span
+            data-music-stopped=""
+            className={cn("mt-0.5 block truncate text-[11px] leading-tight", mutedText)}
+          >
+            {listenerCount > 0
+              ? t("music.stopped.playing", { count: listenerCount })
+              : t("music.stopped.alone")}
+          </span>
+        ) : current.autoplayed ? (
           <span
             data-music-autoplayed=""
             className={cn("mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight", mutedText)}
@@ -432,6 +454,32 @@ export function MusicNowPlaying({
       onScrub={setScrub}
     />
   );
+
+  if (composer && stopped) {
+    /* One decision, one button. The transport and the seek belong to sound
+       that is playing here, and neither is true right now. */
+    return (
+      <div
+        data-music-now-playing="composer"
+        data-music-listening="off"
+        className="px-3 py-2"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          {identity}
+          <button
+            type="button"
+            data-music-listen=""
+            className="flex h-8 shrink-0 items-center rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
+            onClick={() => setListening(true)}
+          >
+            {t("music.listen")}
+          </button>
+          {overflow}
+        </div>
+        <div className="mt-1.5 min-w-0">{nextRow}</div>
+      </div>
+    );
+  }
 
   if (composer) {
     return (

@@ -2981,7 +2981,7 @@ export function CallControls({
           aria-label={musicDock.open ? t("music.close") : t("music.open")}
           data-music-dock={musicDock.on ? "playing" : "idle"}
           className={cn(
-            "flex items-center justify-center rounded-full",
+            "relative flex items-center justify-center rounded-full",
             size,
             musicDock.open
               ? "bg-signal/20 text-signal"
@@ -2990,6 +2990,15 @@ export function CallControls({
           onClick={toggleMusicOpen}
         >
           <Music className={iconSize} />
+          {/* The room has music and this machine is not hearing it. Nothing
+              else on this tile can say that with the panel shut. */}
+          {musicDock.on && !musicDock.listening ? (
+            <span
+              data-music-dock-dot=""
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          ) : null}
         </button>
       </Tooltip>
       {/* The grid / focus toggle used to sit here. It has no question left to

@@ -926,6 +926,74 @@ describe("the composer bar a member sees", () => {
   });
 });
 
+/**
+ * Stopping is personal: the room plays on without you. The bar has to say
+ * that, because a player that just goes quiet reads as broken.
+ */
+describe("the composer bar after Parar de ouvir", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+    onToggleDucking: () => {},
+  };
+  const bar = (listening: boolean) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1", { title: "Daft Punk" })] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening,
+          }}
+          voiceState={voiceState({
+            occupancy: {
+              [CHANNEL]: [seat("peer-ana"), seat("peer-bia")],
+            },
+          })}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening={listening}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  it("says the room is still playing, and who for", () => {
+    const html = bar(false);
+    expect(html).toContain('data-music-listening="off"');
+    expect(html).toContain(translateMessage("music.stopped.playing", { count: 2 }));
+    expect(html).toContain(translateMessage("music.listen"));
+  });
+
+  it("drops the seek, because a position you cannot hear is noise", () => {
+    expect(bar(false)).not.toContain('data-slider="scrub"');
+    expect(bar(true)).toContain('data-slider="scrub"');
+  });
+
+  it("keeps the queue line, so the room stays legible", () => {
+    expect(bar(false)).toContain("data-music-next");
+    expect(bar(false)).toContain("Daft Punk");
+  });
+
+  it("is the ordinary bar again while listening", () => {
+    const html = bar(true);
+    expect(html).not.toContain('data-music-listening="off"');
+    expect(html).not.toContain(translateMessage("music.stopped.playing", { count: 2 }));
+  });
+});
+
 describe("musicListenerCount", () => {
   const room = (...flags: Array<boolean | undefined>): VoiceState =>
     voiceState({
