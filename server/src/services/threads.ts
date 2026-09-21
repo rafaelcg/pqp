@@ -47,6 +47,16 @@ const THREAD_COLUMNS = `c.id, c.parent_id, c.thread_root_message_id, c.name, c.c
        -- The faces on the chip: the last few distinct people to say something,
        -- most recent first. Capped here rather than in the client because this
        -- rides on every history page and every thread-update frame.
+       --
+       -- ON THE COST, because this IS the hot read path. It walks exactly the
+       -- rows reply_count above already walks — one thread's messages, small
+       -- by nature and covered by idx_messages_channel_created — plus a
+       -- primary-key join per distinct author. So a history page pays about
+       -- twice one of the two subselects it already paid, not a new class of
+       -- read. If that ever stops being true, the honest fix is to drop
+       -- participants from listThreadsForMessages alone and let the chip fill
+       -- its faces from the first thread-update, NOT to denormalise: see the
+       -- note at the top of this file on why nothing here is stored.
        (SELECT coalesce(json_agg(json_build_object(
                  'id', p.id,
                  'display_name', p.display_name,

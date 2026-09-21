@@ -593,6 +593,7 @@ import {
 } from "../services/profiles.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
 // --- threads ---
+import { SIDEBAR_THREADS_PER_CHANNEL } from "@pqp/shared";
 import {
   createThreadForMessage,
   listActiveThreadsByParent,
@@ -6999,9 +7000,6 @@ router.get(
  * `/api/messages/...` shape, so a timed-out member cannot use "start thread"
  * as a way to keep speaking.
  */
-/** How many threads the channel list nests under one channel row. */
-const SIDEBAR_THREADS_PER_CHANNEL = 3;
-
 /**
  * The active threads of a server, grouped by the channel they hang off — what
  * the channel list nests under each channel row.

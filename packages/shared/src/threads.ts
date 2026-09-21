@@ -38,6 +38,14 @@ export const THREAD_NAME_MAX_LENGTH = 80;
 /** Faces on the chip. Three is what fits beside a count without wrapping. */
 export const THREAD_PARTICIPANT_FACES = 3;
 
+/**
+ * How many threads the channel list nests under one channel row. Shared
+ * because the server caps the read and the client caps again when a
+ * `thread-update` puts a thread back on top; two copies of this number is two
+ * places to change it and one place to forget.
+ */
+export const SIDEBAR_THREADS_PER_CHANNEL = 3;
+
 // Same rule as `safeTextSchema` in api.ts, restated because this module must
 // not import api.ts (api.ts imports this one for the message shape).
 // eslint-disable-next-line no-control-regex

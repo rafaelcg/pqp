@@ -33,6 +33,7 @@ import {
   validateHandle,
   buildReplyExcerpt,
   isVoiceRoomChannelType,
+  SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
@@ -3574,7 +3575,10 @@ function MainAppContent({
                 ...prev,
                 [parent]: message.thread.archived
                   ? rest
-                  : [message.thread, ...rest].slice(0, 3),
+                  : [message.thread, ...rest].slice(
+                      0,
+                      SIDEBAR_THREADS_PER_CHANNEL,
+                    ),
               };
             });
             // The open panel's header shows the same numbers.
