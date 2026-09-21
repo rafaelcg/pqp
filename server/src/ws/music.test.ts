@@ -160,3 +160,71 @@ describe("applyMusicWrite", () => {
     expect(allowed.kind).toBe("accepted");
   });
 });
+
+/*
+ * The scenario the protocol agent reproduced over real sockets: six seats,
+ * threshold three. One person votes and leaves, a second votes, a third
+ * sends the advance. Two live voters must not clear a threshold sized for
+ * the room they are in.
+ */
+describe("a skip vote from somebody who left", () => {
+  beforeEach(() => resetMusicForTests());
+
+  const playing = state({
+    current: {
+      id: "t1",
+      provider: "youtube",
+      videoId: "dQw4w9WgXcQ",
+      title: "Track",
+      sourceUrl: null,
+      thumbnailUrl: null,
+      durationMs: 200_000,
+      addedByUserId: "u1",
+      addedByName: "Ana",
+    },
+    queue: [
+      {
+        id: "t2",
+        provider: "youtube",
+        videoId: "aaaaaaaaaaa",
+        title: "Next",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 200_000,
+        addedByUserId: "u1",
+        addedByName: "Ana",
+      },
+    ],
+    positionMs: 1_000,
+  });
+
+  it("does not count towards the threshold", () => {
+    applyMusicWrite(ROOM, { ...playing, skipVotes: ["gone", "u3"] }, MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    const advance = { ...musicAdvance(held), rev: held.rev + 1, actorId: "p4", atMs: 0 };
+    const refused = applyMusicWrite(ROOM, advance, {
+      userId: "u4",
+      canManage: false,
+      canAdd: true,
+      roomSize: 5,
+      seatedUserIds: ["u1", "u2", "u3", "u4", "u5"],
+    });
+    expect(refused.kind).toBe("refused");
+    expect(getMusicState(ROOM)?.current?.id).toBe("t1");
+  });
+
+  it("still advances once enough seated people have voted", () => {
+    applyMusicWrite(ROOM, { ...playing, skipVotes: ["u2", "u3"] }, MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    const advance = { ...musicAdvance(held), rev: held.rev + 1, actorId: "p4", atMs: 0 };
+    const accepted = applyMusicWrite(ROOM, advance, {
+      userId: "u4",
+      canManage: false,
+      canAdd: true,
+      roomSize: 5,
+      seatedUserIds: ["u1", "u2", "u3", "u4", "u5"],
+    });
+    expect(accepted.kind).toBe("accepted");
+    expect(getMusicState(ROOM)?.current?.id).toBe("t2");
+  });
+});

@@ -48,6 +48,16 @@ export function effectiveCanManageMusic(
   return voiceState.canManageMusic || (state?.openControls === true && voiceState.canSpeak);
 }
 
+/**
+ * The three room switches are NOT part of what "Todo mundo controla" hands
+ * over: a promoted speaker runs the music, they do not decide who else may.
+ * The server refuses those writes, so drawing them would only earn a
+ * `forced` correction. Everything else keeps the effective flag.
+ */
+export function canSetMusicSwitches(voiceState: { canManageMusic: boolean }): boolean {
+  return voiceState.canManageMusic;
+}
+
 export function nextMusicRepeat(repeat: MusicRepeat): MusicRepeat {
   return REPEAT_ORDER[(REPEAT_ORDER.indexOf(repeat) + 1) % REPEAT_ORDER.length] ?? "off";
 }
@@ -202,6 +212,7 @@ function musicModeOverflowItems(input: {
   t: (key: MessageKey) => string;
   repeat: MusicRepeat;
   order: "menu" | "all";
+  canSetSwitches: boolean;
 }): ContextMenuItemDef[] {
   const shuffleItem: ContextMenuItemDef = {
     id: "shuffle",
@@ -209,6 +220,10 @@ function musicModeOverflowItems(input: {
     icon: Shuffle,
     onSelect: () => shuffle(),
   };
+  if (!input.canSetSwitches) {
+    // Shuffle is a queue reorder and stays; repeat is a room switch.
+    return [shuffleItem];
+  }
   const repeatItem: ContextMenuItemDef = {
     id: "repeat",
     label: repeatLabel(input.t, input.repeat),
@@ -263,9 +278,10 @@ export function musicRoomOverflowItems(input: {
   t: (key: MessageKey) => string;
   openControls: boolean;
   autoplay: boolean;
+  canSetSwitches: boolean;
   onStopAll?: () => void;
 }): ContextMenuItemDef[] {
-  const items: ContextMenuItemDef[] = [
+  const items: ContextMenuItemDef[] = !input.canSetSwitches ? [] : [
     {
       id: "open-controls",
       label: input.t("music.openControls"),
@@ -305,6 +321,8 @@ export function musicRoomOverflowItems(input: {
 export function musicOverflowItems(input: {
   t: (key: MessageKey) => string;
   canManage: boolean;
+  /** A real `MANAGE_MUSIC`, not a promotion. Draws the three switches. */
+  canSetSwitches: boolean;
   listening: boolean;
   ducking: boolean;
   openControls: boolean;
@@ -328,6 +346,7 @@ export function musicOverflowItems(input: {
     t: input.t,
     openControls: input.openControls,
     autoplay: input.autoplay,
+    canSetSwitches: input.canSetSwitches,
     onStopAll: input.onStopAll,
   });
   const scopedRoom: ContextMenuItemDef[] = [
@@ -341,6 +360,7 @@ export function musicOverflowItems(input: {
     t: input.t,
     repeat: input.repeat,
     order: modes,
+    canSetSwitches: input.canSetSwitches,
   });
   if (modes === "menu") {
     return [...personal, ...scopedRoom, ...modeItems, ...room];
@@ -356,6 +376,7 @@ export function musicOverflowItems(input: {
 /** Confirm-stop lives with the menu that still offers Parar pra todos. */
 export function MusicOverflowMenu({
   canManage,
+  canSetSwitches,
   listening,
   ducking,
   openControls,
@@ -366,6 +387,7 @@ export function MusicOverflowMenu({
   triggerClassName,
 }: {
   canManage: boolean;
+  canSetSwitches: boolean;
   /** This machine's own state, which is the menu's first group either way. */
   listening: boolean;
   ducking: boolean;
@@ -383,6 +405,7 @@ export function MusicOverflowMenu({
       musicOverflowItems({
         t,
         canManage,
+        canSetSwitches,
         listening,
         ducking,
         openControls,
@@ -391,7 +414,7 @@ export function MusicOverflowMenu({
         modes,
         onStopAll: canManage ? () => setConfirmStop(true) : undefined,
       }),
-    [t, canManage, listening, ducking, openControls, autoplay, repeat, modes],
+    [t, canManage, canSetSwitches, listening, ducking, openControls, autoplay, repeat, modes],
   );
 
   if (items.length === 0) {

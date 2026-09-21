@@ -2912,22 +2912,38 @@ async function countMusicListeners(channelId: string): Promise<number> {
   return countMusicListenersFromPeers(channelId);
 }
 
-async function musicRoomSize(channelId: string): Promise<number> {
+/**
+ * Who is seated, for the music rights check. The count is the skip
+ * threshold's denominator and the ids are its numerator, so both come from
+ * one read: taking the size here and the ids somewhere else is how they
+ * drift apart. With the registry on this is the cluster room, so a voter on
+ * the other instance still counts.
+ */
+async function musicRoomSeats(
+  channelId: string,
+): Promise<{ roomSize: number; seatedUserIds: string[] }> {
   if (registryOn()) {
     await settledRowWrites(channelId);
     try {
       const room = await readClusterRoom(channelId);
       if (room) {
-        return room.participants.length;
+        return {
+          roomSize: room.participants.length,
+          seatedUserIds: room.participants.map((person) => person.userId),
+        };
       }
     } catch (error) {
       logEvent("voice.registryReadFailed", {
-        op: "musicRoomSize",
+        op: "musicRoomSeats",
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
-  return getRoomPeers(channelId).length;
+  const local = getRoomPeers(channelId);
+  return {
+    roomSize: local.length,
+    seatedUserIds: local.map((peer) => peer.userId),
+  };
 }
 
 async function channelMusicFrame(
@@ -7123,7 +7139,7 @@ export async function handleVoiceMessage(
       return;
     }
     const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
-    const roomSize = await musicRoomSize(peer.voiceChannelId);
+    const { roomSize, seatedUserIds } = await musicRoomSeats(peer.voiceChannelId);
     const held = getMusicState(peer.voiceChannelId);
     const incoming =
       payload.state === null ? null : completeMusicState(held, payload.state);
@@ -7140,6 +7156,7 @@ export async function handleVoiceMessage(
         canManage: false,
         canAdd: peer.canSpeak,
         roomSize,
+        seatedUserIds,
       })
     ) {
       try {
@@ -7155,6 +7172,7 @@ export async function handleVoiceMessage(
       canManage: peer.canManageMusic,
       canAdd: peer.canSpeak,
       roomSize,
+      seatedUserIds,
     });
     if (write.kind === "coalesced") {
       return;

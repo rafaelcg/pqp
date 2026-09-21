@@ -7,7 +7,10 @@ import {
   setPlaying,
   useMusic,
 } from "@/lib/music-store";
-import { effectiveCanManageMusic } from "@/components/voice/music-extras";
+import {
+  canSetMusicSwitches,
+  effectiveCanManageMusic,
+} from "@/components/voice/music-extras";
 import { MusicFila } from "@/components/voice/music-fila";
 import {
   setMusicLocalVolume,
@@ -30,6 +33,7 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
   const current = music.state?.current ?? null;
   const playing = music.state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, music.state);
+  const canSetSwitches = canSetMusicSwitches(voiceState);
 
   if (!current && !music.open) {
     return null;
@@ -45,6 +49,7 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
           music={music}
           voiceState={voiceState}
           canManage={canManage}
+          canSetSwitches={canSetSwitches}
           playing={playing}
           needsTap={local.needsTap}
           listening={music.listening}

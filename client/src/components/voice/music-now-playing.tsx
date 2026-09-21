@@ -129,6 +129,7 @@ export function MusicNowPlaying({
   music,
   voiceState,
   canManage,
+  canSetSwitches,
   playing,
   needsTap,
   listening,
@@ -148,6 +149,8 @@ export function MusicNowPlaying({
   music: MusicSnapshot;
   voiceState: VoiceState;
   canManage: boolean;
+  /** A real MANAGE_MUSIC. The three room switches are not promoted. */
+  canSetSwitches: boolean;
   playing: boolean;
   needsTap: boolean;
   listening: boolean;
@@ -384,6 +387,7 @@ export function MusicNowPlaying({
   const overflow = composer ? (
     <MusicOverflowMenu
       canManage={canManage}
+      canSetSwitches={canSetSwitches}
       listening={listening}
       ducking={ducking}
       openControls={music.state?.openControls === true}
@@ -491,7 +495,7 @@ export function MusicNowPlaying({
               <MusicRepeatButton
                 repeat={music.state?.repeat ?? "off"}
                 className={modeHide}
-                disabled={!canManage}
+                disabled={!canSetSwitches}
               />
             </div>
             {/* Spans both lines, so it centres against the pair rather than

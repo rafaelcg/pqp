@@ -386,6 +386,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
       listening: true,
       ducking: true,
       openControls: false,
@@ -420,6 +421,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
       listening: true,
       ducking: true,
       openControls: true,
@@ -448,6 +450,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
       listening: true,
       ducking: true,
       openControls: false,
@@ -475,6 +478,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: false,
+      canSetSwitches: false,
       listening: true,
       ducking: true,
       openControls: false,
@@ -489,6 +493,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: false,
+      canSetSwitches: false,
       listening: false,
       ducking: true,
       openControls: false,
@@ -503,6 +508,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
       listening: true,
       ducking: true,
       openControls: false,
@@ -517,6 +523,51 @@ describe("musicOverflowItems", () => {
     expect(stopAll).toBeGreaterThan(stopYou);
     expect(items.find((item) => item.id === "scope-you")?.heading).toBe(true);
     expect(items.find((item) => item.id === "scope-room")?.heading).toBe(true);
+  });
+
+  /*
+   * The server stopped letting a promoted speaker touch the three room
+   * switches, so the client must stop drawing them. Everything else the
+   * switch hands over stays: shuffle reorders the queue, and Parar pra
+   * todos is the null write, which a promoted speaker may still send.
+   */
+  it("hides the switches from a promoted speaker, and keeps the rest", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      canSetSwitches: false,
+      listening: true,
+      ducking: true,
+      openControls: true,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    });
+    const ids = items.map((item) => item.id);
+    expect(ids).toContain("shuffle");
+    expect(ids).toContain("stop-all");
+    expect(ids).not.toContain("repeat");
+    expect(ids).not.toContain("open-controls");
+    expect(ids).not.toContain("autoplay");
+  });
+
+  it("keeps all of it for a real manager", () => {
+    const ids = musicOverflowItems({
+      t,
+      canManage: true,
+      canSetSwitches: true,
+      listening: true,
+      ducking: true,
+      openControls: true,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    }).map((item) => item.id);
+    for (const id of ["shuffle", "repeat", "open-controls", "autoplay", "stop-all"]) {
+      expect(ids).toContain(id);
+    }
   });
 
   it("cycles repeat off, one, all", () => {
@@ -566,6 +617,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
+          canSetSwitches={false}
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -602,6 +654,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -634,6 +687,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -678,6 +732,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -708,6 +763,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
+          canSetSwitches={false}
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -741,6 +797,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -785,6 +842,7 @@ describe("the composer bar's up-next line", () => {
           }}
           voiceState={voiceState(voice)}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -826,6 +884,7 @@ describe("the composer bar's up-next line", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -884,6 +943,7 @@ describe("the composer bar a member sees", () => {
           }}
           voiceState={voiceState({ canManageMusic: canManage })}
           canManage={canManage}
+          canSetSwitches={canManage}
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -948,6 +1008,7 @@ describe("the composer bar folds to one row when it has the width", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           listening
@@ -1023,6 +1084,7 @@ describe("the composer bar after Parar de ouvir", () => {
             },
           })}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}

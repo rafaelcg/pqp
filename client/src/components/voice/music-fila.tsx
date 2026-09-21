@@ -14,6 +14,7 @@ import {
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import {
+  canSetMusicSwitches,
   effectiveCanManageMusic,
   MusicHistoryList,
   MusicOverflowMenu,
@@ -58,6 +59,7 @@ export function MusicFila({
   const prefs = useMusicPrefs();
   const current = music.state?.current ?? null;
   const canManage = effectiveCanManageMusic(voiceState, music.state);
+  const canSetSwitches = canSetMusicSwitches(voiceState);
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
   const [scrub, setScrub] = useState<number | null>(null);
@@ -160,6 +162,7 @@ export function MusicFila({
           {!sheet ? (
             <MusicOverflowMenu
               canManage={canManage}
+              canSetSwitches={canSetSwitches}
               listening={music.listening}
               ducking={prefs.ducking}
               openControls={music.state?.openControls === true}

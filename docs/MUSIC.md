@@ -31,7 +31,7 @@ costs nothing per listener.
 | `status` | `playing` or `paused` |
 | `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why) |
 | `rev`, `actorId` | the logical clock and its tie-break |
-| `openControls` | when true, anyone with SPEAK is treated as a manager. Only a manager writes it. A write that omits it keeps what the room already holds |
+| `openControls` | when true, anyone with SPEAK may write anything a manager may write EXCEPT the three room switches (`openControls`, `repeat`, `autoplay`), which stay with `MANAGE_MUSIC`: a promoted speaker runs the music, they do not decide who else may. Only a manager writes it. A write that omits it keeps what the room already holds |
 | `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
 | `skipVotes` | user ids that have voted to skip the current track. Any change of `current` clears it |
 | `history` | the last ten finished tracks, most recent first. A repeat of the same `videoId` moves that row to the front |
@@ -84,10 +84,10 @@ already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
 | add a song, or a list, to the end | `SPEAK` |
 | remove a song you added | being in the call |
 | start music when nothing is on | `SPEAK` (your own song) |
-| skip, pause, resume, reorder, shuffle, remove others' songs, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on |
-| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` |
+| skip, pause, resume, seek, skip-back, reorder, shuffle, remove others' songs, put a song on once the current one has ended, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on. Seek and skip-back are on this row because both are ordinary writes for whoever is running the music, and skip-back and the end-of-track add both rewrite `history` |
+| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` only, never a promoted speaker |
 | autoplay the next related track when the queue ran out | being in the call, while `autoplay` is on, the queue is empty, and the current track has run out. The write must put on your own track with `autoplayed: true`, playing at 0, history as `musicAdvance` would, votes cleared |
-| vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once `held.skipVotes` plus that vote reaches `max(2, ceil(roomSize / 2))` |
+| vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once the held votes FROM PEOPLE STILL SEATED, plus that vote, reach `max(2, ceil(roomSize / 2))`. The threshold's denominator shrinks when somebody leaves, so its numerator does too: a vote is counted only while its owner holds a seat, and the votes themselves are left alone until the track changes |
 | play a history row again | `SPEAK` (it is an ordinary own-append under your name) |
 
 `channel-music` also carries `listeners`: how many seated peers have `listeningMusic` true. That flag lives on `voice_peers.listening_music` (default true) and on the roster as `listeningMusic`, the same way `sharingScreen` does. A client that predates `set-music-listening` never turns it off, so they still count. The count is sent again when it changes.

@@ -355,6 +355,90 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(held, state({ status: "paused", openControls: true }), silent)).toBe(false);
   });
 
+  /*
+   * What "Todo mundo controla" hands over, and what it does not. The rule
+   * is one line: everything a manager may write except the three room
+   * switches. A verb list instead of that rule refuses skip-back and the
+   * end-of-track add, which both rewrite history.
+   */
+  describe("a speaker promoted by openControls", () => {
+    const held = state({
+      current: { ...track("a"), durationMs: 200_000 },
+      queue: [track("b"), track("c")],
+      history: [track("old")],
+      openControls: true,
+    });
+    const promoted = (incoming: MusicState) =>
+      musicWriteAllowed(held, incoming, member);
+
+    it("may do what the room switch promises", () => {
+      expect(promoted({ ...held, status: "paused" })).toBe(true);
+      expect(promoted(musicAdvance(held))).toBe(true);
+      expect(promoted({ ...held, queue: [track("c"), track("b")] })).toBe(true);
+      expect(promoted({ ...held, queue: [track("c")] })).toBe(true);
+      expect(promoted({ ...held, positionMs: 120_000 })).toBe(true);
+      expect(musicWriteAllowed(held, null, member)).toBe(true);
+    });
+
+    it("may take the two paths that rewrite history", () => {
+      // Skip-back: the first Tocadas row becomes current, the displaced
+      // track goes to the front of the queue, history loses its head.
+      expect(
+        promoted({
+          ...held,
+          current: track("old"),
+          queue: [held.current as MusicTrack, ...held.queue],
+          history: [],
+          positionMs: 0,
+        }),
+      ).toBe(true);
+      // The end-of-track add: current into history and the queue's front.
+      expect(
+        promoted({
+          ...held,
+          current: track("new"),
+          queue: [held.current as MusicTrack, ...held.queue],
+          history: [held.current as MusicTrack, ...held.history],
+          positionMs: 0,
+        }),
+      ).toBe(true);
+    });
+
+    it("may not touch the three room switches", () => {
+      expect(promoted({ ...held, openControls: false })).toBe(false);
+      expect(promoted({ ...held, repeat: "one" })).toBe(false);
+      expect(promoted({ ...held, autoplay: true })).toBe(false);
+    });
+
+    it("still refuses somebody who cannot speak", () => {
+      expect(musicWriteAllowed(held, { ...held, status: "paused" }, silent)).toBe(false);
+    });
+  });
+
+  /*
+   * The vote threshold's denominator is the live room, so its numerator has
+   * to be live too. A vote from somebody who left is not counted.
+   */
+  describe("skip votes from people who have left", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const held = state({ current, queue: [track("b")], skipVotes: ["gone1", "gone2"] });
+    const seated = { userId: "u2", canManage: false, canAdd: true, roomSize: 6, seatedUserIds: ["u1", "u2", "u3", "u4", "u5", "u6"] };
+
+    it("does not let two departed votes plus the sender clear a room of six", () => {
+      expect(musicWriteAllowed(held, musicAdvance(held), seated)).toBe(false);
+    });
+
+    it("counts the votes of people still seated", () => {
+      const live = state({ current, queue: [track("b")], skipVotes: ["u3", "u4"] });
+      expect(musicWriteAllowed(live, musicAdvance(live), seated)).toBe(true);
+    });
+
+    it("falls back to counting every held vote when the seats are not known", () => {
+      const { seatedUserIds: _omitted, ...withoutSeats } = seated;
+      expect(musicWriteAllowed(held, musicAdvance(held), withoutSeats)).toBe(true);
+    });
+  });
+
   it("does not let a member flip openControls, repeat, autoplay or history", () => {
     const held = state();
     expect(musicWriteAllowed(held, state({ openControls: true }), member)).toBe(false);

@@ -249,6 +249,14 @@ export interface MusicRights {
   canAdd: boolean;
   /** People seated in the call, the same count the roster uses. */
   roomSize: number;
+  /**
+   * The user ids behind that count, when the caller knows them. The skip
+   * threshold is half the LIVE room, so its numerator has to be live too:
+   * a vote is only counted while its owner is still seated. Omitted means
+   * "not known here", and every held vote counts, which is what the client
+   * does when it draws the button.
+   */
+  seatedUserIds?: string[];
 }
 
 /** Votes needed to skip: half the room, at least two. */
@@ -444,7 +452,9 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * decides on this; the client uses it to draw only what will be allowed.
  *
  * A manager may do anything. `openControls` on the held state promotes
- * anyone with SPEAK to that same bar. Anybody else may: put on the first
+ * anyone with SPEAK to the same bar EXCEPT the three room switches, which
+ * stay with `MANAGE_MUSIC`: a promoted speaker runs the music, they do not
+ * decide who else may. Anybody else may: put on the first
  * song when nothing is on (and only their own); append their own songs to
  * the end; remove their own; add their own skip vote; move the queue along
  * once the current track has run out or enough skip votes are in; and, as
@@ -460,10 +470,21 @@ export function musicWriteAllowed(
   incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): boolean {
-  const canManage =
-    rights.canManage || (held?.openControls === true && rights.canAdd);
-  if (canManage) {
+  if (rights.canManage) {
     return true;
+  }
+  /*
+   * "Todo mundo controla" is one rule, not a verb table: everything a
+   * manager may write except `openControls`, `repeat` and `autoplay`.
+   * A list of allowed verbs was tried and refuses two things the switch is
+   * meant to hand over, because both rewrite `history`: the skip-back, and
+   * an add while the current track has already ended.
+   */
+  if (held !== null && held.openControls === true && rights.canAdd) {
+    if (incoming === null) {
+      return true;
+    }
+    return controlsUnchanged(held, completeMusicState(held, incoming));
   }
   if (incoming === null) {
     return false;
@@ -521,7 +542,13 @@ export function musicWriteAllowed(
     held.current !== null &&
     held.current.durationMs !== null &&
     held.positionMs >= held.current.durationMs - MUSIC_END_GRACE_MS;
-  const votes = new Set([...votesHeld, rights.userId]);
+  // Only the votes of people still seated. `roomSize` shrinks when somebody
+  // leaves and their vote does not, so the two moved out of step and a
+  // ghost could carry the threshold.
+  const liveVotes = rights.seatedUserIds
+    ? votesHeld.filter((id) => rights.seatedUserIds?.includes(id))
+    : votesHeld;
+  const votes = new Set([...liveVotes, rights.userId]);
   const votedOut = votes.size >= musicSkipVotesNeeded(rights.roomSize);
   if (matchesAdvance(held, incoming)) {
     return ranOut || votedOut;

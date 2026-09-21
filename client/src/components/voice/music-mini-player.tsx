@@ -11,7 +11,10 @@ import {
   useMusic,
 } from "@/lib/music-store";
 import { setChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
-import { effectiveCanManageMusic } from "@/components/voice/music-extras";
+import {
+  canSetMusicSwitches,
+  effectiveCanManageMusic,
+} from "@/components/voice/music-extras";
 import { MusicFila } from "@/components/voice/music-fila";
 import {
   setMusicLocalNeedsTap,
@@ -77,6 +80,7 @@ export function MusicMiniPlayer({
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, state);
+  const canSetSwitches = canSetMusicSwitches(voiceState);
   const embedHeldRef = useRef(false);
   embedHeldRef.current = shouldKeepMusicEmbed({
     inCall,
@@ -160,6 +164,7 @@ export function MusicMiniPlayer({
       music={music}
       voiceState={voiceState}
       canManage={canManage}
+      canSetSwitches={canSetSwitches}
       playing={playing}
       needsTap={local.needsTap}
       listening={music.listening}
