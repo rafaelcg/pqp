@@ -1,4 +1,12 @@
-import { Music, Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Music,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { MusicTrack, VoiceParticipant } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -12,6 +20,7 @@ import {
   expectedPositionMs,
   seekTo,
   setListening,
+  toggleMusicOpen,
   type MusicSnapshot,
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
@@ -55,6 +64,21 @@ export function lookupAddedBy(
     name: person?.displayName ?? fallbackName,
     avatarUrl: person?.avatarUrl ?? null,
   };
+}
+
+/**
+ * How many seats in this room have the music on, this machine included.
+ *
+ * `listeningMusic` is absent on a client that predates `set-music-listening`,
+ * and absent reads as on, the same way the roster schema says. The local
+ * machine is not on its own roster row for this, so the caller's own state
+ * decides it.
+ */
+export function musicListenerCount(voiceState: VoiceState, listening: boolean): number {
+  const selfPeerId = voiceState.self?.peerId ?? null;
+  return musicRoomPeople(voiceState).filter((person) =>
+    person.peerId === selfPeerId ? listening : person.listeningMusic !== false,
+  ).length;
 }
 
 export function lookupActorName(voiceState: VoiceState, peerId: string | null): string | null {
@@ -159,6 +183,19 @@ export function MusicNowPlaying({
   const duration = progress.durationMs ?? 0;
   const durationKnown = progress.known;
   const position = scrub ?? progress.position;
+  const queue = music.state?.queue ?? [];
+  const nextTrack = queue[0] ?? null;
+  const autoplayOn = music.state?.autoplay === true;
+  /* Alone with your own music is not a fact worth a line. */
+  const listenerCount = musicListenerCount(voiceState, listening);
+  const listenersLabel =
+    listenerCount > 1 ? t("music.listening", { count: listenerCount }) : null;
+
+  const listeners = listenersLabel ? (
+    <span data-music-listeners="" className="shrink-0">
+      {`· ${listenersLabel}`}
+    </span>
+  ) : null;
 
   const identity = (
     <>
@@ -196,9 +233,10 @@ export function MusicNowPlaying({
         {current.autoplayed ? (
           <span
             data-music-autoplayed=""
-            className={cn("mt-0.5 block truncate text-[11px] leading-tight", mutedText)}
+            className={cn("mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight", mutedText)}
           >
-            {secondary}
+            <span className="truncate">{secondary}</span>
+            {listeners}
           </span>
         ) : (
           <span className={cn("mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight", mutedText)}>
@@ -214,6 +252,7 @@ export function MusicNowPlaying({
               rounded="full"
             />
             <span className="truncate">{secondary}</span>
+            {listeners}
           </span>
         )}
       </button>
@@ -332,6 +371,51 @@ export function MusicNowPlaying({
     />
   ) : null;
 
+  /*
+   * THE ROOM'S QUEUE, ON THE BAR.
+   *
+   * The bar is the one music surface that is always on screen during a call,
+   * so it has to answer "what is next" without the panel being open. The row
+   * never disappears: an empty queue says so, which keeps the bar one height.
+   */
+  const nextRow = composer ? (
+    <button
+      type="button"
+      data-music-next={nextTrack ? "track" : autoplayOn ? "autoplay" : "empty"}
+      className="flex w-full min-w-0 items-center gap-2 border-t border-border/60 pt-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:text-text"
+      aria-expanded={music.open}
+      aria-label={music.open ? t("music.close") : t("music.open")}
+      onClick={toggleMusicOpen}
+    >
+      {nextTrack ? (
+        <>
+          <span className="shrink-0">{t("music.queue")}</span>
+          <span className="min-w-0 flex-1 truncate text-text-secondary">
+            {nextTrack.title}
+          </span>
+          <span
+            data-music-next-count=""
+            className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold tabular-nums text-on-accent-soft"
+          >
+            {t("music.next.count", { count: queue.length })}
+          </span>
+        </>
+      ) : autoplayOn ? (
+        <span className="min-w-0 flex-1 truncate">{t("music.autoplay.next")}</span>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1 truncate">{t("music.next.empty")}</span>
+          <span className="shrink-0 font-semibold text-accent">{t("music.add")}</span>
+        </>
+      )}
+      {music.open ? (
+        <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      ) : (
+        <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      )}
+    </button>
+  ) : null;
+
   const seekBar = (
     <MusicSeekBar
       canManage={canManage}
@@ -369,6 +453,9 @@ export function MusicNowPlaying({
           </div>
           <div className="col-span-full min-w-0">
             {seekBar}
+          </div>
+          <div className="col-span-full min-w-0">
+            {nextRow}
           </div>
         </div>
       </div>

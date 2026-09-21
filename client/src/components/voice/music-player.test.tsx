@@ -19,7 +19,11 @@ import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
-import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
+import {
+  formatMusicClockOrUnknown,
+  musicListenerCount,
+  MusicNowPlaying,
+} from "@/components/voice/music-now-playing";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
@@ -74,6 +78,22 @@ const state = (partial: Partial<MusicState> = {}): MusicState => ({
   history: [],
   ...partial,
 });
+
+const seat = (
+  peerId: string,
+  extra: Record<string, unknown> = {},
+): VoiceState["occupancy"][string][number] =>
+  ({
+    peerId,
+    userId: `user-${peerId}`,
+    displayName: peerId,
+    avatarUrl: null,
+    sharingScreen: false,
+    muted: false,
+    deafened: false,
+    serverMuted: false,
+    ...extra,
+  }) as VoiceState["occupancy"][string][number];
 
 const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
   ({
@@ -572,7 +592,8 @@ describe("MusicNowPlaying", () => {
     expect(html).not.toContain("data-music-queue-toggle");
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
     expect(html).not.toContain("data-slider=\"edge\"");
-    expect(html.match(/aria-expanded/g)?.length).toBe(4);
+    /* Art, title, the overflow, the speaker, and now the up-next row. */
+    expect(html.match(/aria-expanded/g)?.length).toBe(5);
   });
 
   it("keeps the composer seek indeterminate when duration is unknown", () => {
@@ -664,6 +685,137 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain('data-music-repeat="one"');
     expect(html).toContain("lucide-repeat1");
     expect(html).toContain('aria-pressed="true"');
+  });
+});
+
+/** The bar states the room: what is next, and how many people are hearing it. */
+describe("the composer bar's up-next line", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+    onToggleDucking: () => {},
+  };
+  const bar = (
+    music: Partial<MusicState>,
+    voice: Partial<VoiceState> = {},
+    listening = true,
+  ) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(music),
+            receivedAt: Date.now(),
+            open: false,
+            listening,
+          }}
+          voiceState={voiceState(voice)}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening={listening}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  it("names the next track and counts the whole queue", () => {
+    const html = bar({
+      queue: [track("q1", { title: "Daft Punk - One More Time" }), track("q2"), track("q3")],
+    });
+    expect(html).toContain('data-music-next="track"');
+    expect(html).toContain("Daft Punk - One More Time");
+    expect(html).toContain("data-music-next-count");
+    expect(html).toContain(translateMessage("music.next.count", { count: 3 }));
+  });
+
+  it("says the room will keep going when the queue is empty and autoplay is on", () => {
+    const html = bar({ queue: [], autoplay: true });
+    expect(html).toContain('data-music-next="autoplay"');
+    expect(html).toContain(translateMessage("music.autoplay.next"));
+    expect(html).not.toContain("data-music-next-count");
+  });
+
+  it("offers to add when the queue ran out and autoplay is off", () => {
+    const html = bar({ queue: [], autoplay: false });
+    expect(html).toContain('data-music-next="empty"');
+    expect(html).toContain(translateMessage("music.next.empty"));
+  });
+
+  it("stays out of the sidebar radio, which has no room for it", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1")] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).not.toContain("data-music-next");
+  });
+
+  it("counts the listeners once there is more than one", () => {
+    const alone = bar({ queue: [] }, { occupancy: { [CHANNEL]: [] } });
+    expect(alone).not.toContain("data-music-listeners");
+
+    const html = bar(
+      { queue: [] },
+      {
+        occupancy: {
+          [CHANNEL]: [
+            seat("peer-ana", { displayName: "Ana" }),
+            seat("peer-bia", { displayName: "Bia", listeningMusic: false }),
+          ],
+        },
+      },
+    );
+    expect(html).toContain("data-music-listeners");
+    expect(html).toContain(translateMessage("music.listening", { count: 2 }));
+  });
+});
+
+describe("musicListenerCount", () => {
+  const room = (...flags: Array<boolean | undefined>): VoiceState =>
+    voiceState({
+      occupancy: {
+        [CHANNEL]: flags.map((listeningMusic, index) =>
+          seat(`peer-${index}`, listeningMusic === undefined ? {} : { listeningMusic }),
+        ),
+      },
+    });
+
+  it("reads an absent flag as listening, because an older client never sends it", () => {
+    expect(musicListenerCount(room(undefined, undefined), true)).toBe(3);
+  });
+
+  it("drops the seats that stopped, and this machine when it stopped", () => {
+    expect(musicListenerCount(room(false, true), true)).toBe(2);
+    expect(musicListenerCount(room(true, true), false)).toBe(2);
   });
 });
 
