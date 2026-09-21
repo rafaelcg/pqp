@@ -99,15 +99,27 @@ async function participantsFor(
   return byThread;
 }
 
-/** Fold `participantsFor` into summaries that were built without faces. */
+/**
+ * Fold `participantsFor` into summaries that were built without faces.
+ *
+ * NEVER THROWS. Its callers include the path that runs after a message has
+ * already been written, where the work is done and only the chip's decoration
+ * is outstanding; letting a failed read there surface would report a
+ * successful send as an error. A summary that misses its faces draws the
+ * generic icon and is corrected by the next update.
+ */
 async function withParticipants(
   summaries: ThreadSummary[],
 ): Promise<ThreadSummary[]> {
-  const faces = await participantsFor(
-    summaries.filter((one) => one.replyCount > 0).map((one) => one.channelId),
-  );
-  for (const summary of summaries) {
-    summary.participants = faces.get(summary.channelId) ?? [];
+  try {
+    const faces = await participantsFor(
+      summaries.filter((one) => one.replyCount > 0).map((one) => one.channelId),
+    );
+    for (const summary of summaries) {
+      summary.participants = faces.get(summary.channelId) ?? [];
+    }
+  } catch {
+    // Left as [], which is what every summary already carries.
   }
   return summaries;
 }
@@ -237,7 +249,7 @@ export async function createThreadForMessage(
     return null;
   }
   return {
-    thread: toSummary(existingRow),
+    thread: (await withParticipants([toSummary(existingRow)]))[0]!,
     created: false,
     parentChannelId: row.channel_id,
   };
@@ -250,6 +262,7 @@ export async function createThreadForMessage(
  */
 export async function getThreadInfo(
   channelId: string,
+  { faces = true }: { faces?: boolean } = {},
 ): Promise<ThreadSummary | null> {
   const result = await getPool().query<ThreadRow>(
     `SELECT ${THREAD_COLUMNS}
@@ -261,8 +274,10 @@ export async function getThreadInfo(
   if (!row) {
     return null;
   }
-  const [summary] = await withParticipants([toSummary(row)]);
-  return summary ?? null;
+  const summary = toSummary(row);
+  // A caller that only asks "is this a thread" (thread-join) never draws the
+  // chip, so it does not pay for the faces on it.
+  return faces ? ((await withParticipants([summary]))[0] ?? null) : summary;
 }
 
 /**

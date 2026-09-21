@@ -197,6 +197,19 @@ describeDb("threads", () => {
     ).toHaveLength(1);
   });
 
+  it("carries faces on a thread handed back to a second creator", async () => {
+    const origin = await postMessage(publicChannelId, owner, "race the create");
+    const first = (await createThreadForMessage(origin.id, null))!;
+    await postMessage(first.thread.channelId, member, "said something");
+
+    // The idempotent branch: somebody else taps "start thread" on the same
+    // message and gets the existing one back. It is the same summary the chip
+    // draws, so it needs the same faces.
+    const second = (await createThreadForMessage(origin.id, null))!;
+    expect(second.created).toBe(false);
+    expect(second.thread.participants.map((p) => p.id)).toEqual([member.id]);
+  });
+
   it("lists only the threads the reader is in", async () => {
     // Somebody else's conversation, which this reader has never touched.
     const theirs = await postMessage(publicChannelId, member, "their topic");

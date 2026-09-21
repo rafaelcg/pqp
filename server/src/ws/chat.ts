@@ -1807,7 +1807,8 @@ export async function handleChatMessage(
   // hold live delivery for two arbitrary channels at once, which no UI asks
   // for and no rate limit prices.
   if (payload.type === "thread-join") {
-    if (!(await getThreadInfo(payload.channelId))) {
+    // No faces: this asks whether the id is a thread at all, and draws nothing.
+    if (!(await getThreadInfo(payload.channelId, { faces: false }))) {
       return;
     }
     if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
