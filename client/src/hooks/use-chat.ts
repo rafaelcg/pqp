@@ -918,7 +918,22 @@ export function createChatController(
       (message) => !stored.has(message.id) && (carryLive || isOptimistic(message)),
     );
 
-    messages = [...next.map(toStoredMessage), ...inFlight];
+    // A reconnect resync (`transport.onReady` in App.tsx) refetches only the
+    // tail and hands it to `setMessages` with the window otherwise untouched,
+    // so when that window also holds an older page the user scrolled up into
+    // (`loadOlder`), every row of it is "not in `stored`" too, and rode along
+    // in `inFlight` as if it were live traffic newer than the fetched page.
+    // Concatenating put it after the fresh tail instead of before it — an old
+    // message rendered below new ones. Carried-over rows still belong wherever
+    // their timestamp puts them, so — as `loadNewer` already does below —
+    // everything that is not still in flight gets one stable sort, and only
+    // the genuinely-pending rows (still sending, no server timestamp to sort
+    // by) stay pinned at the end.
+    const settled = [
+      ...next.map(toStoredMessage),
+      ...inFlight.filter((message) => !isOptimistic(message)),
+    ].sort(byPosition);
+    messages = [...settled, ...inFlight.filter(isOptimistic)];
     hasMore = moreAvailable;
     hasNewer = newerAvailable;
     newestLoadedId = next[next.length - 1]?.id ?? null;
