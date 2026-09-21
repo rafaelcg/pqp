@@ -46,13 +46,22 @@ export function MenuItemRows({
 }) {
   // Menus that put an icon on any row reserve the column for every row, so
   // the labels still line up when only some items carry one.
-  const reserveIcon = items.some((item) => !item.separator && item.icon);
+  const reserveIcon = items.some((item) => !item.separator && !item.heading && item.icon);
 
   return (
     <>
       {items.map((item) =>
         item.separator ? (
           <Separator key={item.id} className="my-1 h-px bg-border" />
+        ) : item.heading ? (
+          /* Not an `Item`: a row that cannot be focused or chosen. */
+          <div
+            key={item.id}
+            data-menu-heading={item.id}
+            className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
+          >
+            {item.label}
+          </div>
         ) : (
           <Item
             key={item.id}

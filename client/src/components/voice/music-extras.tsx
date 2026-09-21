@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ExternalLink,
   HeadphoneOff,
+  Headphones,
   ListStart,
   MoreHorizontal,
   Plus,
@@ -130,29 +131,9 @@ export function MusicShuffleButton({
   );
 }
 
-/** Personal off: this machine stops, the room's queue carries on. */
-export function MusicStopListeningButton({ className }: { className?: string }) {
-  const { t } = useTranslation();
-  return (
-    <Tooltip label={t("music.dismiss")}>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        data-music-stop-listening=""
-        className={cn("h-8 w-8 shrink-0", className)}
-        aria-label={t("music.dismiss")}
-        onClick={() => setListening(false)}
-      >
-        <HeadphoneOff className="h-4 w-4" aria-hidden="true" />
-      </Button>
-    </Tooltip>
-  );
-}
-
 /**
- * Local volume, mute, ducking, and stop listening. Click opens the
- * popover; scroll on the icon changes volume.
+ * Local volume, mute and ducking. Click opens the popover; scroll on the
+ * icon changes volume.
  */
 export function MusicSpeakerControl({
   volume,
@@ -252,24 +233,16 @@ export function MusicSpeakerControl({
               onValueChange={onVolume}
             />
           </div>
+          {/* Volume, mute and ducking: what a speaker icon promises, and
+              nothing else. Parar de ouvir moved to the one overflow, beside
+              Parar pra todos, because the two stops differ in WHO they stop
+              and that is not something two popovers can say. */}
           <Switch
             checked={ducking}
             onCheckedChange={onToggleDucking}
             label={t("music.duck")}
             className="hover:bg-ink-3"
           />
-          <button
-            type="button"
-            data-music-stop-listening=""
-            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3"
-            onClick={() => {
-              setListening(false);
-              setOpen(false);
-            }}
-          >
-            <HeadphoneOff className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {t("music.dismiss")}
-          </button>
         </div>
       ) : null}
     </div>
@@ -295,6 +268,37 @@ function musicModeOverflowItems(input: {
     onSelect: () => setRepeat(nextMusicRepeat(input.repeat)),
   };
   return input.order === "menu" ? [shuffleItem, repeatItem] : [repeatItem, shuffleItem];
+}
+
+/**
+ * The one row that belongs to the person rather than the room, which is why
+ * it leads the menu under its own heading: everything below it changes what
+ * the whole call hears.
+ */
+function musicPersonalItems(input: {
+  t: (key: MessageKey) => string;
+  listening: boolean;
+}): ContextMenuItemDef[] {
+  return [
+    {
+      id: "scope-you",
+      label: input.t("music.scope.you"),
+      heading: true,
+    },
+    input.listening
+      ? {
+          id: "stop-listening",
+          label: input.t("music.dismiss"),
+          icon: HeadphoneOff,
+          onSelect: () => setListening(false),
+        }
+      : {
+          id: "listen",
+          label: input.t("music.listen"),
+          icon: Headphones,
+          onSelect: () => setListening(true),
+        },
+  ];
 }
 
 /** Room policy: Todo mundo controla, Continuar com parecidas, Parar pra todos. */
@@ -344,14 +348,19 @@ export function musicRoomOverflowItems(input: {
 export function musicOverflowItems(input: {
   t: (key: MessageKey) => string;
   canManage: boolean;
+  listening: boolean;
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
   onStopAll?: () => void;
   modes?: "all" | "menu" | "none";
 }): ContextMenuItemDef[] {
+  const personal = musicPersonalItems({ t: input.t, listening: input.listening });
   if (!input.canManage) {
-    return [];
+    /* A member's menu is the personal row alone, and a heading over one row
+       is noise, so the scope label only appears once there is a second
+       group to tell it apart from. */
+    return personal.filter((item) => !item.heading);
   }
   const modes = input.modes ?? "all";
   const room = musicRoomOverflowItems({
@@ -360,8 +369,12 @@ export function musicOverflowItems(input: {
     autoplay: input.autoplay,
     onStopAll: input.onStopAll,
   });
+  const scopedRoom: ContextMenuItemDef[] = [
+    { id: "sep-scope", label: "", separator: true },
+    { id: "scope-room", label: input.t("music.scope.room"), heading: true },
+  ];
   if (modes === "none") {
-    return room;
+    return [...personal, ...scopedRoom, ...room];
   }
   const modeItems = musicModeOverflowItems({
     t: input.t,
@@ -369,18 +382,20 @@ export function musicOverflowItems(input: {
     order: modes,
   });
   if (modes === "menu") {
-    return [...modeItems, ...room];
+    return [...personal, ...scopedRoom, ...modeItems, ...room];
   }
   const stopAt = room.findIndex((item) => item.id === "sep-stop");
-  if (stopAt === -1) {
-    return [...room, ...modeItems];
-  }
-  return [...room.slice(0, stopAt), ...modeItems, ...room.slice(stopAt)];
+  const ordered =
+    stopAt === -1
+      ? [...room, ...modeItems]
+      : [...room.slice(0, stopAt), ...modeItems, ...room.slice(stopAt)];
+  return [...personal, ...scopedRoom, ...ordered];
 }
 
 /** Confirm-stop lives with the menu that still offers Parar pra todos. */
 export function MusicOverflowMenu({
   canManage,
+  listening,
   openControls,
   autoplay,
   repeat,
@@ -389,6 +404,8 @@ export function MusicOverflowMenu({
   triggerClassName,
 }: {
   canManage: boolean;
+  /** This machine's own state, which is the menu's first row either way. */
+  listening: boolean;
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
@@ -403,13 +420,14 @@ export function MusicOverflowMenu({
       musicOverflowItems({
         t,
         canManage,
+        listening,
         openControls,
         autoplay,
         repeat,
         modes,
         onStopAll: canManage ? () => setConfirmStop(true) : undefined,
       }),
-    [t, canManage, openControls, autoplay, repeat, modes],
+    [t, canManage, listening, openControls, autoplay, repeat, modes],
   );
 
   if (items.length === 0) {

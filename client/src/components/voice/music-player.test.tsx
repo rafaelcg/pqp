@@ -386,12 +386,17 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      listening: true,
       openControls: false,
       autoplay: true,
       repeat: "off",
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
+      "scope-you",
+      "stop-listening",
+      "sep-scope",
+      "scope-room",
       "open-controls",
       "autoplay",
       "repeat",
@@ -401,13 +406,19 @@ describe("musicOverflowItems", () => {
     ]);
     expect(items.find((item) => item.id === "autoplay")?.checked).toBe(true);
     expect(items.find((item) => item.id === "stop-all")?.danger).toBe(true);
-    expect(items.filter((item) => !item.separator).every((item) => item.icon)).toBe(true);
+    /* Headings and separators carry no icon; every real row does. */
+    expect(
+      items
+        .filter((item) => !item.separator && !item.heading)
+        .every((item) => item.icon),
+    ).toBe(true);
   });
 
   it("puts shuffle and repeat first on the bar menu", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      listening: true,
       openControls: true,
       autoplay: false,
       repeat: "one",
@@ -415,6 +426,10 @@ describe("musicOverflowItems", () => {
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
+      "scope-you",
+      "stop-listening",
+      "sep-scope",
+      "scope-room",
       "shuffle",
       "repeat",
       "open-controls",
@@ -429,6 +444,7 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      listening: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
@@ -436,6 +452,10 @@ describe("musicOverflowItems", () => {
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
+      "scope-you",
+      "stop-listening",
+      "sep-scope",
+      "scope-room",
       "open-controls",
       "autoplay",
       "sep-stop",
@@ -443,15 +463,51 @@ describe("musicOverflowItems", () => {
     ]);
   });
 
-  it("is empty when the viewer cannot manage", () => {
+  /* The one stop a member has. No heading: a label over a single row is
+     noise, and there is no second group to tell it apart from. */
+  it("is the personal row alone when the viewer cannot manage", () => {
     const items = musicOverflowItems({
       t,
       canManage: false,
+      listening: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
     });
-    expect(items).toEqual([]);
+    expect(items.map((item) => item.id)).toEqual(["stop-listening"]);
+    expect(items[0]?.label).toBe(translateMessage("music.dismiss"));
+  });
+
+  it("offers the way back in once this machine has stopped", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: false,
+      listening: false,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+    });
+    expect(items.map((item) => item.id)).toEqual(["listen"]);
+    expect(items[0]?.label).toBe(translateMessage("music.listen"));
+  });
+
+  it("leads a manager's menu with the same personal row", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      listening: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    });
+    const stopYou = items.findIndex((item) => item.id === "stop-listening");
+    const stopAll = items.findIndex((item) => item.id === "stop-all");
+    expect(stopYou).toBeGreaterThanOrEqual(0);
+    expect(stopAll).toBeGreaterThan(stopYou);
+    expect(items.find((item) => item.id === "scope-you")?.heading).toBe(true);
+    expect(items.find((item) => item.id === "scope-room")?.heading).toBe(true);
   });
 
   it("cycles repeat off, one, all", () => {
@@ -847,11 +903,12 @@ describe("the composer bar a member sees", () => {
     expect(html.match(/disabled=""/g)?.length).toBeGreaterThanOrEqual(4);
   });
 
-  /* The tooltip's reason is not in the markup: Radix renders it on open. */
-  it("keeps the overflow in place, disabled, instead of removing it", () => {
+  /* Live, not dimmed: since the stops were gathered into one menu it holds
+     Parar de ouvir, which is a member's to use. */
+  it("keeps the overflow in place and usable", () => {
     const html = bar(false);
-    expect(html).toMatch(/data-music-overflow=""[^>]*disabled=""/);
-    expect(bar(true)).not.toMatch(/data-music-overflow=""[^>]*disabled=""/);
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toMatch(/data-music-overflow=""[^>]*disabled=""/);
   });
 
   it("puts vote-skip in the skip slot, with the count on the button", () => {

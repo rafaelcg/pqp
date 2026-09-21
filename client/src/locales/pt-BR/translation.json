@@ -1038,6 +1038,8 @@
   "music.dismiss": "Parar de ouvir",
   "music.stopAll": "Parar pra todos",
   "music.overflow": "Mais",
+  "music.scope.you": "Só pra você",
+  "music.scope.room": "Pra call",
   "music.mute": "Silenciar a música",
   "music.unmute": "Ativar o som da música",
   "music.playNext": "Tocar a seguir",

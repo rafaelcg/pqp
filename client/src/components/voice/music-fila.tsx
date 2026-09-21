@@ -131,6 +131,7 @@ export function MusicFila({
           {!sheet ? (
             <MusicOverflowMenu
               canManage={canManage}
+              listening={music.listening}
               openControls={music.state?.openControls === true}
               autoplay={music.state?.autoplay === true}
               repeat={music.state?.repeat ?? "off"}

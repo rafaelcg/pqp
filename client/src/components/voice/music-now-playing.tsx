@@ -1,7 +1,6 @@
 import {
   ChevronDown,
   ChevronUp,
-  MoreHorizontal,
   Music,
   Pause,
   Play,
@@ -363,13 +362,13 @@ export function MusicNowPlaying({
   const overflowTrigger =
     "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text";
   /*
-   * Every row in this menu is a manager's, so a member's trigger opens
-   * nothing. It still draws, disabled, with the reason: a control that
-   * appears and disappears with rights moves everything beside it.
+   * One menu for both stops. A member's has a single row, Parar de ouvir,
+   * which is why the trigger is live for them rather than a dimmed shape.
    */
-  const overflow = !composer ? null : canManage ? (
+  const overflow = composer ? (
     <MusicOverflowMenu
-      canManage
+      canManage={canManage}
+      listening={listening}
       openControls={music.state?.openControls === true}
       autoplay={music.state?.autoplay === true}
       repeat={music.state?.repeat ?? "off"}
@@ -377,21 +376,7 @@ export function MusicNowPlaying({
       side="top"
       triggerClassName={overflowTrigger}
     />
-  ) : (
-    <Tooltip label={t("music.overflow")} detail={t("music.noManage")}>
-      <span className="inline-flex">
-        <button
-          type="button"
-          data-music-overflow=""
-          className={cn(overflowTrigger, "opacity-40")}
-          aria-label={t("music.overflow")}
-          disabled
-        >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </span>
-    </Tooltip>
-  );
+  ) : null;
 
   /*
    * THE ROOM'S QUEUE, ON THE BAR.
