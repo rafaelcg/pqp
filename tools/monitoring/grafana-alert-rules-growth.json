@@ -39,7 +39,7 @@
               "relativeTimeRange": { "from": 900, "to": 0 },
               "model": {
                 "refId": "A",
-                "expr": "(1 - sum(increase(pqp_api_call_join_connected_total[15m])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[15m])), 1)) and (sum(increase(pqp_api_call_join_attempts_total[15m])) > 20)",
+                "expr": "(sum(increase(pqp_api_call_join_refused_total[15m])) / clamp_min(sum(increase(pqp_api_call_join_attempts_total[15m])), 1)) and (sum(increase(pqp_api_call_join_attempts_total[15m])) > 20)",
                 "instant": true,
                 "range": false
               }
