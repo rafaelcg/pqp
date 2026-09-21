@@ -2495,6 +2495,7 @@ const MessageRow = memo(function MessageRow({
             {isReal && message.thread && onOpenThread && (
               <ThreadChip
                 thread={message.thread}
+                originBody={message.body}
                 unread={threadUnread}
                 isOpen={isThreadOpen}
                 onOpen={onOpenThread}
@@ -2581,6 +2582,37 @@ const MessageRow = memo(function MessageRow({
                     onClick={onReply}
                   >
                     <Reply className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
+              )}
+              {/* --- threads --- beside Reply, because that is the action it
+                  is a sibling of. An icon rather than an emoji: the three
+                  quick reactions to the left are content, a control is not. */}
+              {isReal && message.thread && onOpenThread && (
+                <Tooltip label={t("thread.open")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6 text-signal"
+                    onClick={onOpenThread}
+                  >
+                    <MessageSquareText className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
+              )}
+              {isReal && !message.thread && onStartThread && (
+                <Tooltip label={t("thread.start")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6"
+                    onClick={onStartThread}
+                  >
+                    <MessageSquarePlus className="h-3.5 w-3.5" />
                   </Button>
                 </Tooltip>
               )}
@@ -2678,17 +2710,11 @@ const MessageRow = memo(function MessageRow({
                         {t("chat.report")}
                       </MoreMenuItem>
                     )}
-                    {onStartThread && !message.thread && (
-                      <MoreMenuItem
-                        icon={MessageSquarePlus}
-                        onSelect={() => {
-                          onStartThread();
-                          setMoreOpen(false);
-                        }}
-                      >
-                        {t("thread.start")}
-                      </MoreMenuItem>
-                    )}
+                    {/* --- threads --- deliberately absent. Starting a thread
+                        is a constructive action and used to sit below the red
+                        Report and Delete items; it lives in the hover toolbar
+                        beside Reply now, and in the row's context menu for
+                        keyboard and touch. */}
                     {canDelete && (
                       <MoreMenuItem
                         icon={Trash2}

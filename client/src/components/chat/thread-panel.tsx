@@ -2,8 +2,8 @@ import {
   THREAD_AUTO_ARCHIVE_DAYS,
   type ThreadSummary,
 } from "@pqp/shared";
-import { Archive, MessageSquareText, X } from "lucide-react";
-import { useState } from "react";
+import { Archive, ChevronLeft, MessageSquareText, X } from "lucide-react";
+import { useRef, useState } from "react";
 import {
   MessageComposer,
   type ComposerSlashContext,
@@ -13,11 +13,13 @@ import {
   type MessageAuthorInfo,
   type MessageRoleColor,
 } from "@/components/chat/message-list";
+import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { threadChipLabel } from "@/components/chat/thread-chip";
 import type { ChatController, ChatMessage } from "@/hooks/use-chat";
 import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { formatDayLabel } from "@/lib/utils";
 
 /**
  * The thread's own conversation: a side panel on desktop, the whole viewport
@@ -45,6 +47,12 @@ interface ThreadPanelProps {
     avatarUrl: string | null;
   } | null;
   serverId: string | null;
+  /** The text channel this thread hangs off, for the breadcrumb and back bar. */
+  parentChannelName: string | null;
+  /** Swap the right column to the roster, keeping this thread one tap away. */
+  onShowMembers?: (() => void) | null;
+  /** Roster size for the switch label. */
+  memberCount?: number;
   canModerate: boolean;
   blockedAuthorIds: ReadonlySet<string>;
   mentionCandidates: MentionCandidate[];
@@ -72,6 +80,9 @@ export function ThreadPanel({
   controller,
   currentUser,
   serverId,
+  parentChannelName,
+  onShowMembers = null,
+  memberCount = 0,
   canModerate,
   blockedAuthorIds,
   mentionCandidates,
@@ -93,56 +104,124 @@ export function ThreadPanel({
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
 
+  /* Swipe right to close, the gesture the full-viewport mobile layout implies.
+     Deliberately crude: one touch, mostly horizontal, far enough to be meant.
+     There is no shared gesture helper in the app to reach for. */
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+
   return (
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
-      className="flex h-full min-h-0 w-full shrink-0 flex-col border-ink-4/60 bg-ink max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-xl md:w-[26rem] md:border-l"
+      onTouchStart={(event) => {
+        const touch = event.touches[0];
+        touchStart.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+      }}
+      onTouchEnd={(event) => {
+        const start = touchStart.current;
+        const touch = event.changedTouches[0];
+        touchStart.current = null;
+        if (!start || !touch) {
+          return;
+        }
+        const dx = touch.clientX - start.x;
+        const dy = touch.clientY - start.y;
+        if (dx > 80 && Math.abs(dy) < 60) {
+          onClose();
+        }
+      }}
+      className="flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)] md:w-[26rem] md:border-l"
     >
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-ink-4/60 px-3">
-        {thread.archived ? (
-          <Archive className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
-        ) : (
-          <MessageSquareText
-            className="h-4 w-4 shrink-0 text-signal"
-            aria-hidden
-          />
+      {/* The header's job is orientation: which channel this hangs off, and a
+          way back to it. The name is second, not first, because a thread born
+          from a message carries that message AS its name — printing it loudest
+          is what made one sentence appear four times on one screen. */}
+      <header className="shrink-0 border-b border-border/60">
+        {/* Mobile: the panel is the whole viewport, so the way out is a back
+            bar naming what you left, not a ✕ in a corner. */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex min-h-11 w-full items-center gap-1 px-2 text-sm font-semibold text-accent hover:bg-surface-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring md:hidden"
+        >
+          <ChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
+          <span className="truncate">
+            {parentChannelName ? `#${parentChannelName}` : t("thread.back")}
+          </span>
+        </button>
+
+        {onShowMembers && (
+          <div className="px-3 pt-2 max-md:hidden">
+            <RightColumnTabs
+              active="thread"
+              membersLabel={t("memberList.sectionHeading", {
+                label: t("memberList.title"),
+                count: memberCount,
+              })}
+              threadLabel={t("thread.title")}
+              onSelectMembers={onShowMembers}
+              onSelectThread={() => {}}
+            />
+          </div>
         )}
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-display text-sm font-bold text-paper">
+
+        <div className="px-3 pb-2 pt-2 max-md:pt-0">
+          <div className="flex items-center gap-1.5 max-md:hidden">
+            {thread.archived ? (
+              <Archive
+                className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
+                aria-hidden
+              />
+            ) : (
+              <MessageSquareText
+                className="h-3.5 w-3.5 shrink-0 text-accent"
+                aria-hidden
+              />
+            )}
+            <p className="min-w-0 truncate text-[11px] text-text-tertiary">
+              {parentChannelName
+                ? t("thread.inChannel", { channel: parentChannelName })
+                : t("thread.title")}
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t("thread.close")}
+              className="ml-auto shrink-0 rounded-[var(--radius-control)] p-1 text-text-tertiary hover:bg-surface-2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <p className="truncate font-display text-sm font-bold text-text">
             {thread.name}
           </p>
-          <p className="truncate text-[11px] text-paper-muted">
-            {threadChipLabel(t, thread.replyCount)}
+          <p className="truncate text-[11px] text-text-tertiary">
+            {[
+              threadChipLabel(t, thread.replyCount),
+              origin ? t("thread.startedBy", { name: origin.authorName }) : null,
+              origin ? formatDayLabel(origin.createdAt) : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             {thread.archived &&
               ` · ${t("thread.archived")} — ${t("thread.archivedHint", {
                 days: THREAD_AUTO_ARCHIVE_DAYS,
               })}`}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t("thread.close")}
-          className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-        >
-          <X className="h-4 w-4" />
-        </button>
       </header>
 
       {/* The message the thread grew out of — context, not part of the
-          thread's own history. Deleted origins say so instead of vanishing. */}
-      <div className="shrink-0 border-b border-ink-4/60 px-3 py-2">
+          thread's own history, so it is a quote and not a second message.
+          Deleted origins say so instead of vanishing. */}
+      <div className="shrink-0 border-b border-border/60 px-3 py-2">
         {origin ? (
-          <p className="text-xs text-paper-muted">
-            <span className="font-semibold text-paper">
-              {origin.authorName}
-            </span>{" "}
+          <p className="border-l-2 border-border-strong pl-2 text-xs text-text-tertiary">
             <span className="line-clamp-3 whitespace-pre-wrap break-words">
               {origin.body}
             </span>
           </p>
         ) : (
-          <p className="text-xs italic text-paper-muted">
+          <p className="text-xs italic text-text-tertiary">
             {thread.rootMessageId === null
               ? t("thread.originDeleted")
               : thread.name}

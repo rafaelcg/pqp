@@ -2772,8 +2772,23 @@ function MainAppContent({
     origin: ChatMessage | null;
   } | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
+  /**
+   * A thread swapped out for the member list. The two share one column and
+   * always have (the roster toggle below closes a thread to show the people),
+   * so "show me the roster" used to throw the thread away. It is stashed here
+   * instead and the right column's switch offers it back. Closing the panel
+   * outright — the ✕, the mobile back bar, a channel switch — clears it.
+   */
+  const [stashedThread, setStashedThread] = useState<{
+    thread: ThreadSummary;
+    origin: ChatMessage | null;
+  } | null>(null);
   const openThreadChannelIdRef = useRef<string | null>(null);
   openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
+  const openThreadRef = useRef<typeof openThread>(null);
+  openThreadRef.current = openThread;
+  const memberSidebarOpenRef = useRef(false);
+  memberSidebarOpenRef.current = memberSidebar.open;
 
   const closeThreadPanel = useCallback(() => {
     if (!openThreadChannelIdRef.current) {
@@ -2787,8 +2802,25 @@ function MainAppContent({
     }
     threadChat.leaveChannel();
     setOpenThread(null);
+    setStashedThread(null);
     setThreadUnreadSince(null);
   }, [clearUnread, threadChat]);
+
+  /**
+   * The switch's "Members" half: give the column to the roster but remember
+   * what was in it. Everything `closeThreadPanel` does about read cursors
+   * still applies, so this goes through it rather than around it.
+   */
+  const stashThreadForMembers = useCallback(() => {
+    const current = openThreadRef.current;
+    closeThreadPanel();
+    if (current) {
+      setStashedThread(current);
+    }
+    if (!memberSidebarOpenRef.current) {
+      memberSidebar.toggle();
+    }
+  }, [closeThreadPanel, memberSidebar]);
   // openChannel is declared above this callback and must close the panel on
   // every channel switch, so it reaches it through a ref.
   const closeThreadPanelRef = useRef<() => void>(() => {});
@@ -2797,6 +2829,7 @@ function MainAppContent({
   const openThreadPanel = useCallback(
     async (thread: ThreadSummary, origin: ChatMessage | null) => {
       setOpenThread({ thread, origin });
+      setStashedThread(null);
       setThreadLoading(true);
       setThreadUnreadSince(null);
       threadChat.joinChannel(thread.channelId);
@@ -6812,6 +6845,9 @@ function MainAppContent({
     (selection.kind === "server"
       ? selectedServerId !== null
       : memberSidebarParticipants !== null);
+  /** Roster size, for the right column's switch label. */
+  const memberSidebarTotal =
+    memberSidebarParticipants?.length ?? serverMembers.length;
 
   // SOMEBODY ELSE is presenting in the call we are in. The one moment the
   // 16rem of channel names is worth less than the pixels it costs.
@@ -8823,6 +8859,13 @@ function MainAppContent({
           controller={threadChat}
           currentUser={user}
           serverId={selectedServerId}
+          // The breadcrumb and the mobile back bar name where this hangs off.
+          parentChannelName={
+            channels.find((c) => c.id === openThread.thread.parentChannelId)
+              ?.name ?? null
+          }
+          onShowMembers={memberSidebarAvailable ? stashThreadForMembers : null}
+          memberCount={memberSidebarTotal}
           canModerate={canManageMessages}
           blockedAuthorIds={blockedUserIds}
           mentionCandidates={mentionCandidates}
@@ -8868,6 +8911,11 @@ function MainAppContent({
       )}
       {memberSidebarAvailable && !openThread && !whatsNewOpen && (
         <MemberSidebar
+          onSelectThread={
+            stashedThread
+              ? () => void openThreadPanel(stashedThread.thread, stashedThread.origin)
+              : null
+          }
           open={memberSidebar.open}
           wide={memberSidebar.wide}
           onClose={memberSidebar.close}

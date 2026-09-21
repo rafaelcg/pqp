@@ -84,6 +84,35 @@ export function formatRecency(iso: string, locale?: string): string {
   });
 }
 
+/**
+ * "2 min ago" / "há 2 min" — how long ago something happened, for a line that
+ * is about freshness rather than about when. `Intl.RelativeTimeFormat` does
+ * the wording and the plural in every locale, so this adds no copy keys.
+ */
+export function formatRelativeShort(iso: string, locale?: string): string {
+  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  const format = new Intl.RelativeTimeFormat(localeTag(locale), {
+    numeric: "auto",
+    style: "short",
+  });
+  const steps: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["second", 60],
+    ["minute", 60],
+    ["hour", 24],
+    ["day", 7],
+    ["week", 4.35],
+    ["month", 12],
+  ];
+  let value = seconds;
+  for (const [unit, size] of steps) {
+    if (Math.abs(value) < size) {
+      return format.format(-Math.round(value), unit);
+    }
+    value = value / size;
+  }
+  return format.format(-Math.round(value), "year");
+}
+
 export function isSameDay(a: string, b: string): boolean {
   const first = new Date(a);
   const second = new Date(b);

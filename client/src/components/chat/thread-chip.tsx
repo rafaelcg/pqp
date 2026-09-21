@@ -1,13 +1,22 @@
-import { THREAD_AUTO_ARCHIVE_DAYS, type ThreadSummary } from "@pqp/shared";
+import {
+  deriveThreadName,
+  THREAD_AUTO_ARCHIVE_DAYS,
+  type ThreadSummary,
+} from "@pqp/shared";
 import { Archive, MessageSquareText } from "lucide-react";
 import { useTranslation, type Translator } from "@/lib/i18n";
-import { cn, formatTime, isSameDay } from "@/lib/utils";
+import { cn, formatFullTimestamp, formatRelativeShort } from "@/lib/utils";
 
 /**
  * The affordance on an origin message: reply count, freshness, archived
  * state, and one click to open the panel. Content-free by design — the chip
  * is fed by `thread-update` frames and history hydration, neither of which
  * ever carries a thread message body into the parent channel.
+ *
+ * It draws the thread's NAME only when somebody chose that name. A thread
+ * born from a message takes its name from that message (`deriveThreadName`),
+ * so printing it here reprints the sentence sitting one line above, which is
+ * how the same words ended up on screen four times.
  */
 
 /** The chip's one-line label, exported for tests. */
@@ -18,8 +27,21 @@ export function threadChipLabel(t: Translator["t"], replyCount: number): string 
   return t("thread.replies", { count: replyCount });
 }
 
+/** True when the name is still the one derived from the origin message. */
+export function threadNameIsDerived(
+  thread: ThreadSummary,
+  originBody: string | null,
+): boolean {
+  if (originBody === null) {
+    return false;
+  }
+  return thread.name === deriveThreadName(originBody);
+}
+
 interface ThreadChipProps {
   thread: ThreadSummary;
+  /** The origin message's body, to tell a derived name from a chosen one. */
+  originBody: string | null;
   /** The thread has activity this reader has not opened yet. */
   unread: boolean;
   /** This thread is the one the panel is currently showing. */
@@ -31,6 +53,7 @@ interface ThreadChipProps {
 
 export function ThreadChip({
   thread,
+  originBody,
   unread,
   isOpen,
   onOpen,
@@ -38,7 +61,7 @@ export function ThreadChip({
 }: ThreadChipProps) {
   const { t } = useTranslation();
   const replies = threadChipLabel(t, thread.replyCount);
-  const lastActivity = new Date(thread.lastActivityAt);
+  const showName = !threadNameIsDerived(thread, originBody);
 
   return (
     <button
@@ -48,43 +71,51 @@ export function ThreadChip({
       aria-label={t("thread.chip.aria", { name: thread.name, replies })}
       aria-expanded={isOpen}
       className={cn(
-        "mt-1.5 flex w-fit max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+        // A left rule rather than a bordered pill: the thread hangs off the
+        // message above it and should not read as a second card.
+        "mt-1 flex w-fit max-w-full items-center gap-2 border-l-2 py-0.5 pl-2.5 pr-2 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         isOpen
-          ? "border-signal/50 bg-signal/10 text-signal"
-          : "border-ink-4 bg-ink-3/60 text-paper-muted hover:border-signal/40 hover:text-paper",
+          ? "border-accent bg-surface-2 text-text"
+          : "border-accent/60 text-text-tertiary hover:bg-surface-1 hover:text-text",
       )}
     >
       {thread.archived ? (
         <Archive className="h-3.5 w-3.5 shrink-0" aria-hidden />
       ) : (
-        <MessageSquareText className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <MessageSquareText
+          className="h-3.5 w-3.5 shrink-0 text-accent"
+          aria-hidden
+        />
       )}
-      <span className="min-w-0 truncate font-medium text-signal">
-        {thread.name}
+      {showName && (
+        <span className="min-w-0 truncate font-medium text-accent">
+          {thread.name}
+        </span>
+      )}
+      <span className="shrink-0 font-medium tabular-nums text-accent">
+        {replies}
       </span>
-      <span className="shrink-0 tabular-nums">{replies}</span>
       {thread.archived ? (
         <span
-          className="shrink-0 rounded bg-ink-4 px-1 py-px text-[10px] uppercase tracking-wide"
+          className="shrink-0 text-text-tertiary"
           title={t("thread.archivedHint", { days: THREAD_AUTO_ARCHIVE_DAYS })}
         >
-          {t("thread.archived")}
+          · {t("thread.archived")}
         </span>
       ) : (
         thread.replyCount > 0 && (
           <time
-            className="shrink-0 text-[10px] text-paper-muted"
+            className="shrink-0 text-text-tertiary"
             dateTime={thread.lastActivityAt}
+            title={formatFullTimestamp(thread.lastActivityAt)}
           >
-            {isSameDay(thread.lastActivityAt, new Date().toISOString())
-              ? formatTime(thread.lastActivityAt)
-              : lastActivity.toLocaleDateString()}
+            · {formatRelativeShort(thread.lastActivityAt)}
           </time>
         )
       )}
-      {unread && !isOpen && (
+      {unread && !isOpen && !thread.archived && (
         <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-signal"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
           aria-hidden
         />
       )}
