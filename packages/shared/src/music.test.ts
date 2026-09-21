@@ -300,12 +300,19 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(held, null, member)).toBe(false);
   });
 
-  it("lets a member sample position and fill the duration", () => {
+  /*
+   * Sampling stayed anybody's, because every write carries the writer's own
+   * player position and refusing the sample would refuse the append it
+   * rides on. The duration fill did not stay anybody's: it is the other
+   * operand of the end-of-track gate. See "filling in a track's missing
+   * duration" below.
+   */
+  it("lets a member sample position, but not fill somebody else's duration", () => {
     const held = state();
     expect(musicWriteAllowed(held, state({ positionMs: 9000 }), member)).toBe(true);
     expect(
       musicWriteAllowed(held, state({ current: { ...track("a"), durationMs: 200000 } }), member),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("lets a member advance only once the track has run out", () => {
@@ -412,6 +419,57 @@ describe("musicWriteAllowed", () => {
 
     it("still refuses somebody who cannot speak", () => {
       expect(musicWriteAllowed(held, { ...held, status: "paused" }, silent)).toBe(false);
+    });
+  });
+
+  /*
+   * The end-of-track gate used to read a sample that anybody seated could
+   * write, so a member could satisfy it at will. It reads the server's own
+   * clock now, and the duration is not theirs to invent.
+   */
+  describe("the end-of-track gate", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const held = state({ current, queue: [track("b")], positionMs: 190_000 });
+    const advance = () => musicAdvance(held);
+
+    it("ignores a held sample the server's clock does not agree with", () => {
+      expect(
+        musicWriteAllowed(held, advance(), { ...member, expectedPositionMs: 10_000 }),
+      ).toBe(false);
+    });
+
+    it("opens once the server's clock is inside the grace, stale sample or not", () => {
+      const stale = state({ current, queue: [track("b")], positionMs: 0 });
+      expect(
+        musicWriteAllowed(stale, musicAdvance(stale), {
+          ...member,
+          expectedPositionMs: 200_000 - MUSIC_END_GRACE_MS,
+        }),
+      ).toBe(true);
+    });
+
+    it("falls back to the held sample when no clock is given, which is the client drawing", () => {
+      expect(musicWriteAllowed(held, advance(), member)).toBe(true);
+    });
+  });
+
+  describe("filling in a track's missing duration", () => {
+    const nullDuration = track("a");
+    const held = state({ current: nullDuration, queue: [track("b")] });
+    const filled = (durationMs: number) =>
+      state({ current: { ...nullDuration, durationMs }, queue: [track("b")] });
+
+    it("is the manager's, or the adder's", () => {
+      expect(musicWriteAllowed(held, filled(200_000), manager)).toBe(true);
+      // `track()` is added by u1, and the manager fixture is u1.
+      expect(
+        musicWriteAllowed(held, filled(200_000), { ...member, userId: "u1" }),
+      ).toBe(true);
+    });
+
+    it("is refused from anybody else, so the gate cannot be invented", () => {
+      expect(musicWriteAllowed(held, filled(1), member)).toBe(false);
+      expect(musicWriteAllowed(held, filled(200_000), member)).toBe(false);
     });
   });
 

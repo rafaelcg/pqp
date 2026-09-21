@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { musicAdvance, type MusicState } from "@pqp/shared";
+import {
+  MUSIC_POSITION_TOLERANCE_MS,
+  musicAdvance,
+  type MusicState,
+} from "@pqp/shared";
 import {
   applyMusicWrite,
   endMusic,
   getMusicState,
+  musicExpectedPositionMs,
   resetMusicForTests,
 } from "./music.js";
 
@@ -226,5 +231,119 @@ describe("a skip vote from somebody who left", () => {
     });
     expect(accepted.kind).toBe("accepted");
     expect(getMusicState(ROOM)?.current?.id).toBe("t2");
+  });
+});
+
+/*
+ * The room's clock belongs to the server. A sample from somebody who is not
+ * running the music may not move it forward past the tolerance, because the
+ * end-of-track gate reads it and every client seeks to it.
+ */
+describe("the server's own clock for the room", () => {
+  beforeEach(() => resetMusicForTests());
+
+  const playing = (durationMs: number | null = 200_000) =>
+    state({
+      current: {
+        id: "t1",
+        provider: "youtube",
+        videoId: "dQw4w9WgXcQ",
+        title: "Track",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs,
+        addedByUserId: "u1",
+        addedByName: "Ana",
+      },
+      queue: [],
+      positionMs: 0,
+    });
+
+  const LISTENER = {
+    userId: "u9",
+    canManage: false,
+    canAdd: false,
+    roomSize: 3,
+  };
+
+  it("starts at zero when a track starts, and runs while it plays", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const now = Date.now();
+    expect(musicExpectedPositionMs(ROOM, now)).toBe(0);
+    expect(musicExpectedPositionMs(ROOM, now + 5_000)).toBe(5_000);
+  });
+
+  it("clamps a sample from somebody who is not running the music", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    const write = applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 3_000_000, rev: held.rev + 1, actorId: "p9" },
+      LISTENER,
+    );
+    expect(write.kind).toBe("accepted");
+    const after = getMusicState(ROOM) as MusicState;
+    expect(after.positionMs).toBeLessThanOrEqual(MUSIC_POSITION_TOLERANCE_MS);
+  });
+
+  it("keeps the append that rode on the clamped write", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    const mine = {
+      id: "t2",
+      provider: "youtube" as const,
+      videoId: "aaaaaaaaaaa",
+      title: "Mine",
+      sourceUrl: null,
+      thumbnailUrl: null,
+      durationMs: 120_000,
+      addedByUserId: "u2",
+      addedByName: "Bia",
+    };
+    const write = applyMusicWrite(
+      ROOM,
+      {
+        ...held,
+        queue: [mine],
+        positionMs: 3_000_000,
+        rev: held.rev + 1,
+        actorId: "p2",
+      },
+      { userId: "u2", canManage: false, canAdd: true, roomSize: 3 },
+    );
+    expect(write.kind).toBe("accepted");
+    const after = getMusicState(ROOM) as MusicState;
+    expect(after.queue.map((track) => track.id)).toEqual(["t2"]);
+    expect(after.positionMs).toBeLessThanOrEqual(MUSIC_POSITION_TOLERANCE_MS);
+  });
+
+  it("takes a manager's seek as the truth", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const now = Date.now();
+    expect(musicExpectedPositionMs(ROOM, now)).toBeGreaterThanOrEqual(150_000);
+    expect(musicExpectedPositionMs(ROOM, now)).toBeLessThan(151_000);
+  });
+
+  it("accepts a sample that is behind, because a slow player never runs ahead", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 100_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const seeked = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...seeked, positionMs: 90_000, rev: seeked.rev + 1, actorId: "p9" },
+      LISTENER,
+    );
+    expect((getMusicState(ROOM) as MusicState).positionMs).toBe(90_000);
   });
 });

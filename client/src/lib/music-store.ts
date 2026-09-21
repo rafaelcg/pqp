@@ -41,6 +41,13 @@ export interface MusicSession {
   displayName: string;
   send: (state: MusicState | null) => void;
   sendListening?: (listening: boolean) => void;
+  /**
+   * Whether this seat holds MANAGE_MUSIC, read when it is needed rather
+   * than captured: a cargo change re-resolves the bit without minting a new
+   * session. Only the duration fill asks, and only to avoid writing
+   * something the server will answer with a `forced` frame.
+   */
+  canManage?: () => boolean;
 }
 
 export interface MusicSnapshot {
@@ -493,9 +500,20 @@ export function reportPosition(positionMs: number, durationMs?: number): void {
     return;
   }
   const next = base();
-  // The duration is what lets the server tell "the track ran out" from a
-  // skip, for people without MANAGE_MUSIC. Filled in by whoever samples.
-  if (next.current && next.current.durationMs === null && durationMs && durationMs > 0) {
+  /*
+   * The duration is what lets the server tell "the track ran out" from a
+   * skip. It is the other operand of that gate, so the server takes it
+   * only from a manager or from whoever put the track on, and filling it
+   * from anybody else would earn a `forced` correction every ten seconds.
+   */
+  const mine = next.current?.addedByUserId === session.userId;
+  if (
+    next.current &&
+    next.current.durationMs === null &&
+    durationMs &&
+    durationMs > 0 &&
+    (mine || session.canManage?.() === true)
+  ) {
     next.current = { ...next.current, durationMs: Math.round(durationMs) };
   }
   write({ ...next, positionMs: Math.max(0, Math.round(positionMs)) });

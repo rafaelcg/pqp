@@ -29,7 +29,7 @@ costs nothing per listener.
 | `current` | the track playing, or null |
 | `queue` | what is up next, at most `MUSIC_QUEUE_LIMIT` (50) |
 | `status` | `playing` or `paused` |
-| `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why) |
+| `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why). This is the last sample ANYBODY seated sent, so the server does not take it for the room's clock: it keeps its own anchor (`voice_rooms.music_anchor_ms` / `music_anchor_at`, and `anchors` in `server/src/ws/music.ts`), moves it only for a write from whoever is running the music or for a structural change, and replaces a sample more than `MUSIC_POSITION_TOLERANCE_MS` ahead of that anchor with the anchor's own reading. Clamped, never refused, because the same write carries an ordinary queue append. A sample that is behind is kept as it is: a buffering player lags, it does not run ahead |
 | `rev`, `actorId` | the logical clock and its tie-break |
 | `openControls` | when true, anyone with SPEAK may write anything a manager may write EXCEPT the three room switches (`openControls`, `repeat`, `autoplay`), which stay with `MANAGE_MUSIC`: a promoted speaker runs the music, they do not decide who else may. Only a manager writes it. A write that omits it keeps what the room already holds |
 | `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
@@ -101,9 +101,16 @@ rights, handing the held state back on that socket with `forced: true`
 (the sender's optimistic copy is a `rev` ahead and would otherwise call the
 correction stale). The one subtlety is the end of a track: every player
 fires "ended" and tries to advance, and a member's advance looks exactly
-like a skip. The room's last writer samples the track's duration along
-with its position, and a member's advance is accepted only once the last
-sample is within `MUSIC_END_GRACE_MS` of that duration.
+like a skip. A member's advance is accepted only once the SERVER's own
+clock for the room is within `MUSIC_END_GRACE_MS` of the track's duration.
+Both halves of that used to be writable by anybody seated, which made the
+gate a formality: the position was the last sample, and the duration could
+go from null to any value. The position is the anchor above. The duration
+is filled at add time wherever possible (a pasted link has no duration from
+oEmbed, so `resolveYouTube` asks InnerTube for one), and where it is still
+null only a manager or the person who added the track may fill it in.
+No bound on the filled value would do instead: any floor still lets the
+filler end the track one grace later.
 
 ## Resolving a link
 

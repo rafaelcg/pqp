@@ -154,7 +154,7 @@ import {
   persistWatchParty,
   claimVoiceRoomTransport,
   promoteVoiceRoomTransport,
-  readMusic,
+  readMusicWithAnchor,
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
@@ -203,10 +203,12 @@ import {
 } from "./watch-party.js";
 import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
 import {
+  adoptMusicAnchor,
   adoptMusicState,
   applyMusicWrite,
   channelMusicTrack,
   endMusic,
+  getMusicAnchor,
   getMusicState,
   musicChannels,
   resetMusicForTests,
@@ -1670,6 +1672,8 @@ export interface VoiceActivitySnapshot {
      * on, each one is a row write the other machine can read (pitfall 12).
      */
     musicListeningWrites: number;
+    /** Rooms adopted from a row with a queue and no clock. See `musicCluster`. */
+    musicAnchorMissing: number;
     /**
      * `voice.hlsReconcile`: reconcile intents this instance published for a
      * channel whose transcode lives on the other machine, and intents it
@@ -1985,6 +1989,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       musicRelayed: musicCluster.relayed,
       musicAdopted: musicCluster.adopted,
       musicListeningWrites: musicCluster.listeningWrites,
+      musicAnchorMissing: musicCluster.anchorMissing,
       hlsReconcileRelayed: hlsReconcileRelay.published,
       hlsReconcileApplied: hlsReconcileRelay.applied,
     },
@@ -3673,7 +3678,18 @@ const clusterFrames = { relayed: 0, received: 0 };
  * while `adopted` stays at zero on every instance is the shape of pitfall 12
  * in CLAUDE.md: a path that ships, publishes, and is never once applied.
  */
-const musicCluster = { relayed: 0, adopted: 0, listeningWrites: 0 };
+const musicCluster = {
+  relayed: 0,
+  adopted: 0,
+  listeningWrites: 0,
+  /**
+   * Rooms adopted from a row that carried a queue and no clock. The clamp
+   * and the clock-based end-of-track gate stand down for those until a
+   * trusted write sets an anchor, so this is what says whether the rollout
+   * left anybody unprotected.
+   */
+  anchorMissing: 0,
+};
 
 function publishVoice(topic: string, frame: unknown): void {
   clusterFrames.relayed += 1;
@@ -3729,6 +3745,7 @@ export function resetRosterSequences(): void {
   clusterFrames.received = 0;
   musicCluster.relayed = 0;
   musicCluster.adopted = 0;
+  musicCluster.anchorMissing = 0;
   musicCluster.listeningWrites = 0;
 }
 
@@ -5715,7 +5732,7 @@ async function welcomeVoicePeer(
       const [room, held, heldMusic] = await Promise.all([
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
-        readMusic(peer.voiceChannelId).catch((error: unknown) => {
+        readMusicWithAnchor(peer.voiceChannelId).catch((error: unknown) => {
           logEvent("voice.registryReadFailed", {
             op: "welcomeMusic",
             error: error instanceof Error ? error.message : String(error),
@@ -5724,7 +5741,15 @@ async function welcomeVoicePeer(
         }),
       ]);
       if (heldMusic !== undefined) {
-        adoptMusicFromRow(peer.voiceChannelId, heldMusic, peer.id);
+        adoptMusicFromRow(peer.voiceChannelId, heldMusic.state, peer.id);
+        // The row's clock comes with the row's queue. Null is a room whose
+        // anchor predates this field or was never set: the clamp and the
+        // clock-based gate stand down until a trusted write sets one, which
+        // is the documented cold-cache behaviour.
+        adoptMusicAnchor(peer.voiceChannelId, heldMusic.anchor);
+        if (heldMusic.state !== null && heldMusic.anchor === null) {
+          musicCluster.anchorMissing += 1;
+        }
       }
       noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
@@ -7210,7 +7235,11 @@ export async function handleVoiceMessage(
     if (registryOn()) {
       let persisted: Awaited<ReturnType<typeof persistMusic>> | null = null;
       try {
-        persisted = await persistMusic(peer.voiceChannelId, write.state);
+        persisted = await persistMusic(
+          peer.voiceChannelId,
+          write.state,
+          getMusicAnchor(peer.voiceChannelId),
+        );
       } catch (error) {
         logEvent("voice.registryWriteFailed", {
           op: "music",
@@ -7243,9 +7272,13 @@ export async function handleVoiceMessage(
     });
     if (clusterOn()) {
       musicCluster.relayed += 1;
+      const anchor = getMusicAnchor(peer.voiceChannelId);
       publishVoice(VOICE_MUSIC_TOPIC, {
         channelId: peer.voiceChannelId,
         state: write.state,
+        ...(anchor
+          ? { anchorPositionMs: anchor.positionMs, anchorAt: anchor.at }
+          : {}),
       } satisfies VoiceMusicFrame);
     }
     return;
@@ -9164,6 +9197,15 @@ const relayedLiveAt = new Map<string, number>();
 const voiceMusicFrameSchema = z.object({
   channelId: z.string().uuid(),
   state: musicStateSchema.nullable(),
+  /**
+   * The room's clock as the accepting instance holds it. Without this the
+   * other instance keeps its own anchor through a manager's seek, does not
+   * know the frame was a manager's, and then clamps every honest sample on
+   * its half of the room back by the size of the seek. Optional so a frame
+   * from an instance that predates the field still applies.
+   */
+  anchorPositionMs: z.number().int().nonnegative().optional(),
+  anchorAt: z.number().int().nonnegative().optional(),
 });
 type VoiceMusicFrame = z.infer<typeof voiceMusicFrameSchema>;
 
@@ -9624,7 +9666,7 @@ subscribeToCluster(VOICE_MUSIC_TOPIC, (data) => {
   if (!parsed.success) {
     return;
   }
-  const { channelId, state } = parsed.data;
+  const { channelId, state, anchorPositionMs, anchorAt } = parsed.data;
   // Only rooms this instance has somebody in, for the same reason the watch
   // party's handler says so: the cache is per room and is torn down when the
   // local room empties, so adopting for a room nobody here is in would be an
@@ -9643,6 +9685,12 @@ subscribeToCluster(VOICE_MUSIC_TOPIC, (data) => {
     return;
   }
   musicCluster.adopted += 1;
+  // After the state, and only when the frame carried one: `adoptMusicState`
+  // sets its own anchor for a structural change, which is the right answer
+  // when the other instance is older than this field.
+  if (anchorPositionMs !== undefined && anchorAt !== undefined) {
+    adoptMusicAnchor(channelId, { positionMs: anchorPositionMs, at: anchorAt });
+  }
   broadcastToRoom(channelId, { type: "music", channelId, state });
   if ((state?.current?.videoId ?? null) !== before) {
     void broadcastChannelMusic(channelId);

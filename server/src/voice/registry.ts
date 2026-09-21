@@ -1230,6 +1230,12 @@ export type MusicPersist =
 export async function persistMusic(
   channelId: string,
   state: MusicState | null,
+  /**
+   * The room's own clock, when this write set it. Carried beside the state
+   * so the other instance clamps against the same anchor instead of
+   * inventing one from a sample it did not see accepted.
+   */
+  anchor?: { positionMs: number; at: number } | null,
 ): Promise<MusicPersist> {
   const pool = getPool();
   if (state === null) {
@@ -1237,7 +1243,9 @@ export async function persistMusic(
     // queue is forgotten and the clock restarts, so the next queue's first
     // write (rev 1 from a client that has heard nothing) is not refused.
     const result = await pool.query(
-      `UPDATE voice_rooms SET music = NULL, music_rev = 0
+      `UPDATE voice_rooms
+          SET music = NULL, music_rev = 0,
+              music_anchor_ms = NULL, music_anchor_at = NULL
         WHERE channel_id = $1`,
       [channelId],
     );
@@ -1247,11 +1255,23 @@ export async function persistMusic(
   }
   const result = await pool.query(
     `UPDATE voice_rooms
-        SET music = $2::jsonb, music_rev = $3
+        SET music = $2::jsonb, music_rev = $3,
+            music_anchor_ms = COALESCE($5::bigint, music_anchor_ms),
+            music_anchor_at = CASE
+              WHEN $5::bigint IS NULL THEN music_anchor_at
+              ELSE to_timestamp($6::double precision / 1000.0)
+            END
       WHERE channel_id = $1
         AND (music_rev < $3
              OR (music_rev = $3 AND (music->>'actorId') <= $4))`,
-    [channelId, JSON.stringify(state), state.rev, state.actorId],
+    [
+      channelId,
+      JSON.stringify(state),
+      state.rev,
+      state.actorId,
+      anchor ? anchor.positionMs : null,
+      anchor ? anchor.at : null,
+    ],
   );
   if ((result.rowCount ?? 0) > 0) {
     return { kind: "updated" };
@@ -1267,19 +1287,45 @@ export async function persistMusic(
 export async function readMusic(
   channelId: string,
 ): Promise<MusicState | null | undefined> {
-  const result = await getPool().query<{ music: unknown }>(
-    `SELECT music FROM voice_rooms WHERE channel_id = $1`,
+  return (await readMusicWithAnchor(channelId))?.state;
+}
+
+export interface MusicRow {
+  state: MusicState | null;
+  /** Null while no trusted write has set the room's clock yet. */
+  anchor: { positionMs: number; at: number } | null;
+}
+
+/** The queue and the room's clock in one read, or undefined with no room. */
+export async function readMusicWithAnchor(
+  channelId: string,
+): Promise<MusicRow | undefined> {
+  const result = await getPool().query<{
+    music: unknown;
+    music_anchor_ms: string | null;
+    music_anchor_at: Date | null;
+  }>(
+    `SELECT music, music_anchor_ms, music_anchor_at
+       FROM voice_rooms WHERE channel_id = $1`,
     [channelId],
   );
   if (result.rows.length === 0) {
     return undefined;
   }
-  const raw = result.rows[0]?.music ?? null;
-  if (raw === null) {
-    return null;
-  }
-  const parsed = musicStateSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  const row = result.rows[0];
+  const raw = row?.music ?? null;
+  const parsed = raw === null ? null : musicStateSchema.safeParse(raw);
+  const anchor =
+    row?.music_anchor_ms != null && row.music_anchor_at != null
+      ? {
+          positionMs: Number(row.music_anchor_ms),
+          at: row.music_anchor_at.getTime(),
+        }
+      : null;
+  return {
+    state: parsed === null ? null : parsed.success ? parsed.data : null,
+    anchor,
+  };
 }
 
 /**

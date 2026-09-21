@@ -241,6 +241,19 @@ function sameIdList(a: string[], b: string[]): boolean {
  */
 export const MUSIC_END_GRACE_MS = 20_000;
 
+/**
+ * How far ahead of the server's own clock a non-manager's position sample
+ * may be before the server replaces it with the clock.
+ *
+ * The largest honest forward divergence is the client's 2.5 s seek
+ * threshold plus its 2 s check interval plus the round trip, so under five
+ * seconds. This is twice that and half the grace. Tighter would pull an
+ * honest append back a few seconds, which the room sees as a backward
+ * seek; looser lets somebody creep the room forward by the tolerance on
+ * every write, and position-only writes are coalesced rather than refused.
+ */
+export const MUSIC_POSITION_TOLERANCE_MS = 10_000;
+
 export interface MusicRights {
   userId: string;
   /** `Permission.MANAGE_MUSIC` in this channel. */
@@ -249,6 +262,13 @@ export interface MusicRights {
   canAdd: boolean;
   /** People seated in the call, the same count the roster uses. */
   roomSize: number;
+  /**
+   * The room's position by the SERVER's clock, when the caller keeps one.
+   * The end-of-track gate reads this rather than `held.positionMs`, which
+   * is the last accepted sample and which anybody seated can write. The
+   * client omits it: it only uses this function to decide what to draw.
+   */
+  expectedPositionMs?: number;
   /**
    * The user ids behind that count, when the caller knows them. The skip
    * threshold is half the LIVE room, so its numerator has to be live too:
@@ -514,6 +534,25 @@ export function musicWriteAllowed(
     if (!controlsUnchanged(held, incoming) || !sameHistory(historyHeld, historyIncoming)) {
       return false;
     }
+    /*
+     * The duration is the other half of the end-of-track gate, and
+     * `sameTrack` lets it go from null to any value so the room's writer
+     * can fill it in after the fact. A member who fills 1 makes the gate
+     * true at position zero, and no bound on the value closes that: any
+     * floor still lets the filler cut the track a grace later. So the fill
+     * belongs to the manager, or to whoever put the track on.
+     */
+    const fillsDuration =
+      held.current !== null &&
+      incoming.current !== null &&
+      held.current.durationMs === null &&
+      incoming.current.durationMs !== null;
+    if (
+      fillsDuration &&
+      !(rights.canManage || held.current?.addedByUserId === rights.userId)
+    ) {
+      return false;
+    }
     // Position sample, duration fill, and/or this person's skip vote.
     if (sameTracks(held.queue, incoming.queue)) {
       if (sameSkipVotes(votesHeld, votesIncoming)) {
@@ -537,11 +576,15 @@ export function musicWriteAllowed(
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
     return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
+  // The server's clock when there is one, the last sample when there is
+  // not. The sample alone was the whole bypass: anybody seated could write
+  // it to one grace short of the duration and then advance.
+  const gatePosition = rights.expectedPositionMs ?? held.positionMs;
   const ranOut =
     held.status === "playing" &&
     held.current !== null &&
     held.current.durationMs !== null &&
-    held.positionMs >= held.current.durationMs - MUSIC_END_GRACE_MS;
+    gatePosition >= held.current.durationMs - MUSIC_END_GRACE_MS;
   // Only the votes of people still seated. `roomSize` shrinks when somebody
   // leaves and their vote does not, so the two moved out of step and a
   // ghost could carry the threshold.

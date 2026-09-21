@@ -1472,6 +1472,15 @@ CREATE TABLE IF NOT EXISTS voice_rooms (
 -- deployment picks them up here rather than in a migration.
 ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music JSONB;
 ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_rev BIGINT NOT NULL DEFAULT 0;
+-- The room's own clock, which is NOT `music->>'positionMs'`: that is the
+-- last sample anybody seated sent, and the server clamps a non-manager's
+-- sample against this rather than trusting it. Both instances are on one
+-- box and share a clock, so `music_anchor_at` is server time. NULL means
+-- no anchor yet (a fresh process that has only read the row), and the
+-- clamp and the clock-based end-of-track gate both stand down until a
+-- trusted write sets one.
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_anchor_ms BIGINT;
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_anchor_at TIMESTAMPTZ;
 
 -- One row per voice peer anywhere in the cluster. `instance_id` says which
 -- process holds the socket; `orphaned_at` is set when that socket closed and

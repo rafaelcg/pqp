@@ -1,4 +1,5 @@
 import {
+  MUSIC_POSITION_TOLERANCE_MS,
   completeMusicState,
   musicWriteAllowed,
   musicWriteIsStale,
@@ -31,6 +32,76 @@ import { createDividedRateLimiter } from "../lib/cluster-rate-limit.js";
  * Documented in `docs/MUSIC.md`.
  */
 const rooms = new Map<string, MusicState>();
+
+/**
+ * THE ROOM'S CLOCK, KEPT HERE RATHER THAN TAKEN FROM THE LAST WRITER.
+ *
+ * `positionMs` on the state is the last sample anybody sent, and anybody
+ * seated can send one: it is what every client seeks to, and it was one
+ * half of the end-of-track gate. So the server keeps its own anchor and
+ * moves it only for a write it trusts: a manager's (their seek IS the
+ * truth), or a structural change from anybody (a new track starts at zero,
+ * a pause freezes, a resume restarts). A sample from anybody else is
+ * compared against it and clamped, never refused, because every write
+ * carries the writer's own player position and a refusal would take the
+ * ordinary queue append with it.
+ *
+ * `at` is server time. The state's own `atMs` is the client's clock and is
+ * already documented as not to be trusted.
+ */
+interface MusicAnchor {
+  positionMs: number;
+  at: number;
+}
+
+const anchors = new Map<string, MusicAnchor>();
+
+/** Where the room is by this server's clock, or null with no anchor yet. */
+export function musicExpectedPositionMs(
+  voiceChannelId: string,
+  now: number = Date.now(),
+): number | null {
+  const anchor = anchors.get(voiceChannelId);
+  const held = rooms.get(voiceChannelId);
+  if (!anchor || !held) {
+    return null;
+  }
+  if (held.status !== "playing") {
+    return anchor.positionMs;
+  }
+  return anchor.positionMs + Math.max(0, now - anchor.at);
+}
+
+/** A write this server trusts to say where the room is. */
+function setMusicAnchor(voiceChannelId: string, positionMs: number, at: number): void {
+  anchors.set(voiceChannelId, { positionMs: Math.max(0, positionMs), at });
+}
+
+/** The anchor as it stands, for the row and the bus frame. */
+export function getMusicAnchor(voiceChannelId: string): MusicAnchor | null {
+  return anchors.get(voiceChannelId) ?? null;
+}
+
+/**
+ * The anchor another instance accepted, or the one the row carries. Applied
+ * with the state it came with, never on its own: an anchor without its
+ * queue is a clock for a track that may already be over.
+ */
+export function adoptMusicAnchor(
+  voiceChannelId: string,
+  anchor: { positionMs: number; at: number } | null,
+): void {
+  if (anchor) {
+    setMusicAnchor(voiceChannelId, anchor.positionMs, anchor.at);
+    return;
+  }
+  anchors.delete(voiceChannelId);
+}
+
+/** Whoever is running the music: a manager, or a speaker the room promoted. */
+function runsTheMusic(held: MusicState | null, rights: MusicRights): boolean {
+  return rights.canManage || (held?.openControls === true && rights.canAdd);
+}
 
 /**
  * Same limiter shape as the watch party's: spent by every write, refusing
@@ -80,11 +151,13 @@ export function channelMusicTrack(
 
 /** Returns whether there was a queue to end. */
 export function endMusic(voiceChannelId: string): boolean {
+  anchors.delete(voiceChannelId);
   return rooms.delete(voiceChannelId);
 }
 
 export function resetMusicForTests(): void {
   rooms.clear();
+  anchors.clear();
   writeLimiter.reset();
 }
 
@@ -107,12 +180,23 @@ export function adoptMusicState(
       return false;
     }
     rooms.delete(voiceChannelId);
+    anchors.delete(voiceChannelId);
     return true;
   }
   if (musicWriteIsStale(held, state)) {
     return false;
   }
   rooms.set(voiceChannelId, state);
+  /*
+   * A structural change from elsewhere moves this instance's clock even
+   * without an anchor in the frame: a new track starts at zero and a
+   * pause freezes, which is true on every machine. A position-only
+   * difference does not, because the frame's `positionMs` is a sample and
+   * the whole point of the anchor is not to trust one.
+   */
+  if (musicWriteIsStructural(held, state)) {
+    setMusicAnchor(voiceChannelId, state.positionMs, Date.now());
+  }
   return true;
 }
 
@@ -130,15 +214,40 @@ export function applyMusicWrite(
 ): MusicWrite {
   const actorUserId = rights.userId;
   const held = getMusicState(voiceChannelId);
-  const next = incoming === null ? null : completeMusicState(held, incoming);
+  const now = Date.now();
+  const expected = musicExpectedPositionMs(voiceChannelId, now);
+  let next = incoming === null ? null : completeMusicState(held, incoming);
   if (musicWriteIsStale(held, next)) {
     return { kind: "stale", held: held as MusicState };
   }
-  if (!musicWriteAllowed(held, next, rights)) {
-    logEvent("voice.musicRefused", { voiceChannelId, userId: actorUserId });
+  // Clamped, not refused: the append on the same write has to land. A
+  // sample that is BEHIND is left alone, because a buffering player lags
+  // and a backward sample cannot reach the end-of-track gate anyway.
+  if (
+    next !== null &&
+    expected !== null &&
+    !runsTheMusic(held, rights) &&
+    next.positionMs > expected + MUSIC_POSITION_TOLERANCE_MS
+  ) {
+    logEvent("voice.musicClamped", {
+      voiceChannelId,
+      userId: actorUserId,
+      aheadMs: next.positionMs - expected,
+    });
+    next = { ...next, positionMs: expected };
+  }
+  if (!musicWriteAllowed(held, next, { ...rights, expectedPositionMs: expected ?? undefined })) {
+    logEvent("voice.musicRefused", {
+      voiceChannelId,
+      userId: actorUserId,
+      reason: next === null ? "stop" : "write",
+    });
     return { kind: "refused", held };
   }
   const structural = musicWriteIsStructural(held, next);
+  if (next !== null && (structural || runsTheMusic(held, rights))) {
+    setMusicAnchor(voiceChannelId, next.positionMs, now);
+  }
   const withinBudget = writeLimiter.take(actorUserId);
   if (!structural && !withinBudget) {
     if (next) {

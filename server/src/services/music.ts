@@ -128,8 +128,28 @@ export async function resolveYouTube(
     sourceUrl,
     thumbnailUrl:
       parsed.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    durationMs: null,
+    /*
+     * oEmbed has no duration, and the duration is half of the end-of-track
+     * gate: without it the server cannot tell "the track ran out" from "a
+     * member skipped", and nobody but a manager or the person who added
+     * the track may fill it in afterwards. One InnerTube search closes that
+     * at add time, costs one budget token, and is cached for six hours like
+     * any other search. A failure here is not one: the track plays, and the
+     * room falls back to votes for an early skip.
+     */
+    durationMs: await youtubeDurationMs(videoId),
   };
+}
+
+/** The duration InnerTube knows for one video id, or null if it does not. */
+async function youtubeDurationMs(videoId: string): Promise<number | null> {
+  try {
+    const videos = await innertubeSearch(videoId, 5);
+    const match = videos?.find((video) => video.videoId === videoId);
+    return match?.durationMs ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
