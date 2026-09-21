@@ -968,7 +968,24 @@ describe("the composer bar folds to one row when it has the width", () => {
     );
 
   it("gives the middle column a bounded width, not the whole bar", () => {
-    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)_minmax(0,1fr)]");
+    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
+  });
+
+  /* At 1920 a 26rem cap left a 359px seek against Spotify's ~640. */
+  it("lets the seek breathe on a wide window", () => {
+    expect(html()).not.toContain("minmax(18rem,26rem)");
+  });
+
+  it("keeps the queue count as text, not as a badge", () => {
+    const markup = html();
+    expect(markup).toContain("data-music-next-count");
+    expect(markup).not.toMatch(/data-music-next-count=""[^>]*bg-accent-soft/);
+  });
+
+  /* Under 28rem the transport alone is wider than the bar, so a shared row
+     starved the title to nothing: art, controls, and no idea what is on. */
+  it("gives the title the whole first line when the bar is narrowest", () => {
+    expect(html()).toMatch(/col-span-full[^"]*@min-\[28rem\]:col-auto/);
   });
 
   it("moves the seek under the transport instead of across everything", () => {

@@ -422,9 +422,11 @@ export function MusicNowPlaying({
           <span className="min-w-0 flex-1 truncate text-text-secondary">
             {nextTrack.title}
           </span>
+          {/* Text, not a badge. A pill here was the loudest thing in a bar
+              whose subject is the track, which is not what it is counting. */}
           <span
             data-music-next-count=""
-            className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold tabular-nums text-on-accent-soft"
+            className="shrink-0 tabular-nums text-text-secondary"
           >
             {t("music.next.count", { count: queue.length })}
           </span>
@@ -492,8 +494,12 @@ export function MusicNowPlaying({
           the space that was empty. What was three full-width rows above the
           composer becomes one row about half as tall.
         */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)_minmax(0,1fr)]">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]">
+          {/* Under 28rem the transport is wider than the whole bar, so
+              sharing a line left the title with no width at all: art,
+              controls, and nothing saying what is on. It takes the first
+              line to itself there and goes back to sharing at 28rem. */}
+          <div className="col-span-full flex min-w-0 items-center gap-3 @min-[28rem]:col-auto">
             {identity}
           </div>
           <div className="flex items-center justify-end gap-1 @min-[28rem]:contents">
