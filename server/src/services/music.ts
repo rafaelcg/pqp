@@ -1,4 +1,5 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
+import { repairMojibake } from "../lib/mojibake.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
   innertubePlaylist,
@@ -87,6 +88,15 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
   }
 }
 
+/**
+ * The one shape a user-visible name leaves this module in: mojibake put
+ * back (see `lib/mojibake.ts`), trimmed, and capped at what the client and
+ * the room state are sized for.
+ */
+function cleanTitle(text: string): string {
+  return repairMojibake(text).trim().slice(0, 200);
+}
+
 function decodeHtml(text: string): string {
   return text
     .replace(/&quot;/g, '"')
@@ -114,7 +124,7 @@ export async function resolveYouTube(
   return {
     provider: "youtube",
     videoId,
-    title: (parsed.title ?? "").trim().slice(0, 200) || videoId,
+    title: cleanTitle(parsed.title ?? "") || videoId,
     sourceUrl,
     thumbnailUrl:
       parsed.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
@@ -154,7 +164,7 @@ export async function spotifyQuery(url: string): Promise<string> {
     // The title alone is still a usable search.
   }
   const query = artist && !title.includes(artist) ? `${artist} ${title}` : title;
-  return query.slice(0, 200);
+  return cleanTitle(query);
 }
 
 interface SearchHit {
@@ -261,7 +271,7 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
   return {
     provider: "youtube",
     videoId: hit.videoId,
-    title: hit.title.trim().slice(0, 200) || hit.videoId,
+    title: cleanTitle(hit.title) || hit.videoId,
     sourceUrl: null,
     thumbnailUrl: hit.thumbnailUrl,
     durationMs: hit.durationMs ?? null,
@@ -341,7 +351,7 @@ export function playlistFromHtml(html: string): Array<{ videoId: string; title: 
 }
 
 function playlistNameFromHtml(html: string): string | null {
-  const title = decodeHtml(html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "");
+  const title = repairMojibake(decodeHtml(html.match(/<title>([^<]*)<\/title>/)?.[1] ?? ""));
   const name = title.replace(/\s*-\s*YouTube\s*$/, "").trim();
   return name || null;
 }
@@ -446,7 +456,7 @@ export async function resolveYouTubePlaylist(
     tracks: ordered.slice(0, PLAYLIST_MAX).map((item) => ({
       provider: "youtube",
       videoId: item.videoId,
-      title: item.title.trim().slice(0, 200) || item.videoId,
+      title: cleanTitle(item.title) || item.videoId,
       sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}&list=${listId}`,
       thumbnailUrl: item.thumbnailUrl,
       durationMs: item.durationMs ?? null,
@@ -632,7 +642,7 @@ export async function searchMusicCandidates(query: string): Promise<MusicResolve
       return videos.slice(0, 5).map((video) => ({
         provider: "youtube" as const,
         videoId: video.videoId,
-        title: video.title.trim().slice(0, 200) || video.videoId,
+        title: cleanTitle(video.title) || video.videoId,
         sourceUrl: null,
         thumbnailUrl: video.thumbnailUrl,
         durationMs: video.durationMs,
@@ -674,7 +684,7 @@ export async function relatedMusicTracks(
   return videos.map((video) => ({
     provider: "youtube" as const,
     videoId: video.videoId,
-    title: video.title.trim().slice(0, 200) || video.videoId,
+    title: cleanTitle(video.title) || video.videoId,
     sourceUrl: null,
     thumbnailUrl: video.thumbnailUrl,
     durationMs: video.durationMs,
