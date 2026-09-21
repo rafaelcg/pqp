@@ -35,6 +35,9 @@ export const THREAD_AUTO_ARCHIVE_DAYS = 7;
 /** Thread names are titles, not slugs — spaces and punctuation are fine. */
 export const THREAD_NAME_MAX_LENGTH = 80;
 
+/** Faces on the chip. Three is what fits beside a count without wrapping. */
+export const THREAD_PARTICIPANT_FACES = 3;
+
 // Same rule as `safeTextSchema` in api.ts, restated because this module must
 // not import api.ts (api.ts imports this one for the message shape).
 // eslint-disable-next-line no-control-regex
@@ -60,6 +63,25 @@ export const threadSummarySchema = z.object({
   lastActivityAt: z.string(),
   /** Computed from `lastActivityAt` at read time — see THREAD_AUTO_ARCHIVE_DAYS. */
   archived: z.boolean(),
+  /**
+   * Up to three faces for the chip, most recent speaker first. The chip used
+   * to say nothing about who was in a thread, which is the thing that makes a
+   * side conversation worth opening. Empty for a thread with no replies yet.
+   *
+   * Deliberately capped in SQL rather than trimmed in the client: this rides
+   * on every history page and every `thread-update`, so the cap is what keeps
+   * it small on the wire.
+   */
+  participants: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        displayName: z.string(),
+        avatarUrl: z.string().nullable(),
+      }),
+    )
+    .max(THREAD_PARTICIPANT_FACES)
+    .default([]),
 });
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>;

@@ -16,6 +16,9 @@ const BASE: ThreadSummary = {
   replyCount: 3,
   lastActivityAt: new Date().toISOString(),
   archived: false,
+  participants: [
+    { id: "44444444-4444-4444-8444-444444444444", displayName: "Bia", avatarUrl: null },
+  ],
 };
 
 describe("threadChipLabel", () => {
@@ -85,11 +88,17 @@ describe("ThreadChip", () => {
     expect(html).toContain("2 min. ago");
   });
 
-  it("holds the unread dot until the thread is open", () => {
-    expect(render(BASE, { unread: true })).toContain("rounded-full");
-    expect(render(BASE, { unread: true, isOpen: true })).not.toContain(
-      "rounded-full",
+  it("shows who is in the thread instead of a generic icon", () => {
+    expect(render(BASE)).not.toContain("lucide-message-square-text");
+    expect(render({ ...BASE, participants: [] })).toContain(
+      "lucide-message-square-text",
     );
+  });
+
+  it("holds the unread dot until the thread is open", () => {
+    const dot = "h-1.5 w-1.5 shrink-0 rounded-full bg-accent";
+    expect(render(BASE, { unread: true })).toContain(dot);
+    expect(render(BASE, { unread: true, isOpen: true })).not.toContain(dot);
   });
 
   it("carries the open state for the panel it toggles", () => {

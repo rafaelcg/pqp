@@ -648,13 +648,21 @@ export function MemberSidebar({
             />
           </div>
         )}
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 px-3">
-          <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("memberList.sectionHeading", {
-              label: t("memberList.title"),
-              count: total,
-            })}
-          </p>
+        <div
+          className={cn(
+            "flex shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 px-3",
+            // The switch above already carries the heading and the count.
+            onSelectThread ? "h-10" : "h-14",
+          )}
+        >
+          {!onSelectThread && (
+            <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+              {t("memberList.sectionHeading", {
+                label: t("memberList.title"),
+                count: total,
+              })}
+            </p>
+          )}
           {/* `side="left"`: this sits in the top-right corner of the window,
               where a bubble above or beside it would run off the edge. */}
           <Tooltip label={t("memberList.close")} side="left">

@@ -595,6 +595,7 @@ import { decodeSearchCursor, searchMessages } from "../services/search.js";
 // --- threads ---
 import {
   createThreadForMessage,
+  listActiveThreadsByParent,
   listThreadChannelIds,
   ThreadTargetError,
 } from "../services/threads.js";
@@ -6998,6 +6999,36 @@ router.get(
  * `/api/messages/...` shape, so a timed-out member cannot use "start thread"
  * as a way to keep speaking.
  */
+/** How many threads the channel list nests under one channel row. */
+const SIDEBAR_THREADS_PER_CHANNEL = 3;
+
+/**
+ * The active threads of a server, grouped by the channel they hang off — what
+ * the channel list nests under each channel row.
+ *
+ * Its own route rather than a wider `GET .../channels`: that payload is
+ * `etagged` because a server's channels barely change, while threads move on
+ * every reply. Folding one into the other would either thrash that etag or
+ * serve a stale thread list behind a fresh one.
+ */
+router.get("/api/servers/:serverId/threads", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  // Visibility follows the parent, so asking only about channels this reader
+  // can already see is the whole access check — a thread under a private
+  // channel never appears in the list its parent is absent from.
+  const channels = await listChannels(serverId!, user.id);
+  const parents = channels
+    .filter((channel) => channel.type === "text")
+    .map((channel) => channel.id);
+  const byParent = await listActiveThreadsByParent(
+    parents,
+    SIDEBAR_THREADS_PER_CHANNEL,
+  );
+  return {
+    threads: Object.fromEntries(byParent),
+  };
+});
+
 router.post(
   "/api/messages/:messageId/threads",
   async ({ req, user }, { messageId }) => {

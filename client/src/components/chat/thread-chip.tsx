@@ -4,6 +4,7 @@ import {
   type ThreadSummary,
 } from "@pqp/shared";
 import { Archive, MessageSquareText } from "lucide-react";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn, formatFullTimestamp, formatRelativeShort } from "@/lib/utils";
 
@@ -81,6 +82,24 @@ export function ThreadChip({
     >
       {thread.archived ? (
         <Archive className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      ) : thread.participants.length > 0 ? (
+        // Who is in there is the thing that makes a side conversation worth
+        // opening, and the chip used to say nothing about it.
+        <span className="flex shrink-0" aria-hidden>
+          {thread.participants.map((person, index) => (
+            <UserAvatar
+              key={person.id}
+              name={person.displayName}
+              avatarUrl={person.avatarUrl}
+              rounded="full"
+              className={cn(
+                "h-4 w-4 ring-2 ring-surface-0",
+                index > 0 && "-ml-1.5",
+              )}
+              fallbackClassName="bg-surface-3 text-[8px] text-text-secondary"
+            />
+          ))}
+        </span>
       ) : (
         <MessageSquareText
           className="h-3.5 w-3.5 shrink-0 text-accent"

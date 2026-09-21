@@ -34,6 +34,7 @@ const { createMessage, listMessages } = await import("./messages.js");
 const {
   createThreadForMessage,
   getThreadInfo,
+  listActiveThreadsByParent,
   listThreadChannelIds,
   listThreadsForMessages,
   ThreadTargetError,
@@ -156,6 +157,59 @@ describeDb("threads", () => {
 
     const byMessage = await listThreadsForMessages([origin.id]);
     expect(byMessage.get(origin.id)?.replyCount).toBe(2);
+  });
+
+  it("names who is in a thread, newest speaker first and capped", async () => {
+    const origin = await postMessage(publicChannelId, owner, "who is here");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    expect(thread.participants).toEqual([]);
+
+    await postMessage(thread.channelId, owner, "first");
+    await postMessage(thread.channelId, member, "second");
+    const fresh = await getThreadInfo(thread.channelId);
+    expect(fresh?.participants.map((p) => p.id)).toEqual([member.id, owner.id]);
+
+    // Somebody who spoke twice appears once, at their most recent turn.
+    await postMessage(thread.channelId, owner, "third");
+    const again = await getThreadInfo(thread.channelId);
+    expect(again?.participants.map((p) => p.id)).toEqual([owner.id, member.id]);
+  });
+
+  it("lists a channel's active threads for the sidebar, newest first", async () => {
+    const first = await postMessage(publicChannelId, owner, "older topic");
+    const older = (await createThreadForMessage(first.id, null))!.thread;
+    const second = await postMessage(publicChannelId, owner, "newer topic");
+    const newer = (await createThreadForMessage(second.id, null))!.thread;
+    await postMessage(newer.channelId, owner, "keeps it on top");
+
+    const byParent = await listActiveThreadsByParent([publicChannelId], 3);
+    const ids = byParent.get(publicChannelId)?.map((one) => one.channelId);
+    expect(ids?.[0]).toBe(newer.channelId);
+    expect(ids).toContain(older.channelId);
+
+    // The cap is per parent, so one busy channel cannot crowd out the rest.
+    expect(
+      (await listActiveThreadsByParent([publicChannelId], 1)).get(
+        publicChannelId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("leaves archived threads out of the sidebar list", async () => {
+    const origin = await postMessage(publicChannelId, owner, "quiet topic");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    const longAgo = new Date(
+      Date.now() - (THREAD_AUTO_ARCHIVE_DAYS + 1) * 24 * 3600 * 1000,
+    );
+    await getPool().query(
+      `UPDATE channels SET created_at = $2 WHERE id = $1`,
+      [thread.channelId, longAgo],
+    );
+
+    const byParent = await listActiveThreadsByParent([publicChannelId], 3);
+    expect(
+      (byParent.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(thread.channelId);
   });
 
   it("FAILS CLOSED: a thread under a private channel is invisible to a plain member", async () => {

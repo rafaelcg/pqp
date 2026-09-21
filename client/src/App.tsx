@@ -293,6 +293,7 @@ import {
   deleteChannel,
   fetchBlocks,
   fetchChannels,
+  fetchServerThreads,
   fetchCommunityHomeUnread,
   fetchConversations,
   fetchIceServers,
@@ -2779,6 +2780,38 @@ function MainAppContent({
    * instead and the right column's switch offers it back. Closing the panel
    * outright — the ✕, the mobile back bar, a channel switch — clears it.
    */
+  /**
+   * --- threads --- channelId -> the active threads under it, for the rows
+   * the channel list nests under a channel. Its own read (see the route's
+   * note on why it is not folded into the etagged channel list), refreshed
+   * on server switch and kept live by `thread-update`.
+   */
+  const [threadsByChannel, setThreadsByChannel] = useState<
+    Record<string, ThreadSummary[]>
+  >({});
+  // One read per server, rather than one per path that loads channels: the
+  // channel list is reached from a boot, a switch, an invite and a route
+  // restore, and a thread list that only some of those filled would be the
+  // kind of gap nobody notices until a server looks threadless.
+  useEffect(() => {
+    if (!selectedServerId) {
+      setThreadsByChannel({});
+      return;
+    }
+    let cancelled = false;
+    setThreadsByChannel({});
+    // Best effort: a failed read just draws no rows. Nothing else depends on it.
+    void fetchServerThreads(selectedServerId)
+      .then(({ threads }) => {
+        if (!cancelled) {
+          setThreadsByChannel(threads);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedServerId]);
   const [stashedThread, setStashedThread] = useState<{
     thread: ThreadSummary;
     origin: ChatMessage | null;
@@ -3530,6 +3563,20 @@ function MainAppContent({
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {
             chat.applyThreadUpdate(message.messageId, message.thread);
+            // The sidebar row moves to the top of its channel on every reply,
+            // which is the whole point of listing the active ones.
+            setThreadsByChannel((prev) => {
+              const parent = message.thread.parentChannelId;
+              const rest = (prev[parent] ?? []).filter(
+                (one) => one.channelId !== message.thread.channelId,
+              );
+              return {
+                ...prev,
+                [parent]: message.thread.archived
+                  ? rest
+                  : [message.thread, ...rest].slice(0, 3),
+              };
+            });
             // The open panel's header shows the same numbers.
             setOpenThread((prev) =>
               prev && prev.thread.channelId === message.thread.channelId
@@ -8459,6 +8506,22 @@ function MainAppContent({
               : undefined
           }
           server={selectedServer ?? null}
+          threadsByChannel={threadsByChannel}
+          unreadThreadIds={unreadThreadIds}
+          onOpenThread={(thread) => {
+            void (async () => {
+              if (thread.parentChannelId !== selectedChannelIdRef.current) {
+                await selectChannel(
+                  thread.parentChannelId,
+                  selectedServerId ?? undefined,
+                );
+              }
+              // The origin message may not be in the page we have; the panel
+              // renders the thread name in its place, the same as it does for
+              // a thread whose origin was deleted.
+              await openThreadPanel(thread, null);
+            })();
+          }}
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}

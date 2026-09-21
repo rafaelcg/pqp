@@ -1,6 +1,7 @@
 import {
   deriveThreadName,
   isThreadArchived,
+  THREAD_PARTICIPANT_FACES,
   type ThreadSummary,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -32,12 +33,33 @@ interface ThreadRow {
   created_at: Date;
   reply_count: number;
   last_message_at: Date | null;
+  participants: {
+    id: string;
+    display_name: string;
+    avatar_url: string | null;
+  }[] | null;
 }
 
 /** The two subselects every thread read shares. `c` must be `channels`. */
 const THREAD_COLUMNS = `c.id, c.parent_id, c.thread_root_message_id, c.name, c.created_at,
        (SELECT count(*) FROM messages m WHERE m.channel_id = c.id)::int AS reply_count,
-       (SELECT max(m.created_at) FROM messages m WHERE m.channel_id = c.id) AS last_message_at`;
+       (SELECT max(m.created_at) FROM messages m WHERE m.channel_id = c.id) AS last_message_at,
+       -- The faces on the chip: the last few distinct people to say something,
+       -- most recent first. Capped here rather than in the client because this
+       -- rides on every history page and every thread-update frame.
+       (SELECT coalesce(json_agg(json_build_object(
+                 'id', p.id,
+                 'display_name', p.display_name,
+                 'avatar_url', p.avatar_url
+               ) ORDER BY p.said_at DESC), '[]'::json)
+          FROM (SELECT u.id, u.display_name, u.avatar_url,
+                       max(m.created_at) AS said_at
+                  FROM messages m
+                  JOIN users u ON u.id = m.author_id
+                 WHERE m.channel_id = c.id
+                 GROUP BY u.id, u.display_name, u.avatar_url
+                 ORDER BY said_at DESC
+                 LIMIT ${THREAD_PARTICIPANT_FACES}) p) AS participants`;
 
 function toSummary(row: ThreadRow): ThreadSummary {
   const lastActivity = row.last_message_at ?? row.created_at;
@@ -52,6 +74,11 @@ function toSummary(row: ThreadRow): ThreadSummary {
     replyCount: row.reply_count,
     lastActivityAt: lastActivity.toISOString(),
     archived: isThreadArchived(lastActivity),
+    participants: (row.participants ?? []).map((person) => ({
+      id: person.id,
+      displayName: person.display_name,
+      avatarUrl: person.avatar_url,
+    })),
   };
 }
 
@@ -210,6 +237,50 @@ export async function listThreadsForMessages(
     }
   }
   return byMessage;
+}
+
+/**
+ * The active threads under a set of parent channels, newest activity first,
+ * capped per parent — what the channel list nests under a channel row.
+ *
+ * Archived threads are left out on purpose: the sidebar is for what is going
+ * on now, and a thread quiet for THREAD_AUTO_ARCHIVE_DAYS is reachable the
+ * way it always was, from its origin message. The cap is per parent rather
+ * than overall so a busy channel cannot crowd out every other one.
+ */
+export async function listActiveThreadsByParent(
+  parentChannelIds: string[],
+  perParent: number,
+): Promise<Map<string, ThreadSummary[]>> {
+  const byParent = new Map<string, ThreadSummary[]>();
+  if (parentChannelIds.length === 0) {
+    return byParent;
+  }
+  const result = await getPool().query<ThreadRow>(
+    `SELECT ${THREAD_COLUMNS}
+     FROM channels c
+     WHERE c.parent_id = ANY($1::uuid[]) AND c.type = 'thread'
+     ORDER BY c.parent_id,
+              coalesce((SELECT max(m.created_at) FROM messages m
+                         WHERE m.channel_id = c.id), c.created_at) DESC`,
+    [parentChannelIds],
+  );
+  for (const row of result.rows) {
+    const summary = toSummary(row);
+    if (summary.archived) {
+      continue;
+    }
+    const parent = row.parent_id;
+    if (!parent) {
+      continue;
+    }
+    const list = byParent.get(parent) ?? [];
+    if (list.length < perParent) {
+      list.push(summary);
+      byParent.set(parent, list);
+    }
+  }
+  return byParent;
 }
 
 /**
