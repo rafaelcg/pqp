@@ -30,6 +30,7 @@ import {
 import {
   desktopContext,
   desktopPredatesScreenShare,
+  isDesktopApp,
 } from "@/lib/desktop";
 import {
   capturesSystemAudio,
@@ -5830,8 +5831,23 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Same moment, same rule, different consequence: the presenter asked for
       // their pointer to be left out and this surface carries it anyway. Said
       // now, while they can still pick a different surface.
+      //
+      // The desktop shell's own picker never offers a tab, only screens and
+      // windows (`electron/lib/display-sources.js`), so a share started
+      // there is always one of the two surfaces this warning is about,
+      // whether or not the engine's `getSettings()` says so. Reported
+      // Electron/Chromium versions have shipped this track without a usable
+      // `displaySurface` (electron/electron#39226), and `cursorRidesAlong`
+      // treats an absent one as "no problem" on purpose, for Safari and
+      // Firefox, engines that genuinely never carry it. That reading is not
+      // available on the shell, so it is not trusted there: an absent
+      // surface falls back to the one the picker structurally guarantees,
+      // instead of the warning silently never firing on the one platform
+      // this feature was reported from.
+      const cursorSurface =
+        displaySurface ?? (isDesktopApp() ? "window" : displaySurface);
       state.isShareCursorVisible = cursorRidesAlong({
-        displaySurface,
+        displaySurface: cursorSurface,
         hideCursor,
         canControl: canControlShareCursor(),
       });

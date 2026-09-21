@@ -1,5 +1,5 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
@@ -543,6 +543,66 @@ describe("screen share audio", () => {
     await voice.startScreenShare(true);
 
     expect(voice.getState().isSharingSystemAudio).toBe(true);
+  });
+
+  /**
+   * The QG report this fix is for: a window shared from the desktop app,
+   * "hide my cursor" ticked, the pointer showing anyway with nothing said
+   * about it. No engine can actually hide the pointer (see
+   * `lib/screen-capture-cursor.ts`), so the honest answer is the warning,
+   * and it has to fire on this platform, not just in a browser.
+   */
+  describe("the cursor-rides-along warning", () => {
+    afterEach(() => {
+      // Node, not jsdom, so `window` only exists here where a test put it.
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("fires for a browser window share, same as the audio flag beside it", async () => {
+      displayMedia = async () => fakeCapture("cap-win", false, "window");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { hideCursor: true });
+
+      expect(voice.getState().isShareCursorVisible).toBe(true);
+    });
+
+    it("stays quiet when nobody asked to hide the cursor", async () => {
+      displayMedia = async () => fakeCapture("cap-win", false, "window");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { hideCursor: false });
+
+      expect(voice.getState().isShareCursorVisible).toBe(false);
+    });
+
+    it("fires on the desktop shell even when the track reports no surface at all", async () => {
+      // What Electron's `setDisplayMediaRequestHandler` has shipped on some
+      // versions (electron/electron#39226): a capture track with no usable
+      // `displaySurface`. The shell's own picker only ever hands over a
+      // screen or a window, never a tab, so the warning must not depend on
+      // that reading to know it applies here.
+      (globalThis as { window?: unknown }).window = {
+        pqpDesktop: { isElectron: true },
+      };
+      displayMedia = async () => fakeCapture("cap-win", false);
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { hideCursor: true });
+
+      expect(voice.getState().isShareCursorVisible).toBe(true);
+    });
+
+    it("stays quiet on the desktop shell when the engine did report a tab", async () => {
+      // Defensive: the shell never actually offers a tab today, but if a
+      // future build's track ever does carry a real surface, that reading
+      // wins over the shell fallback rather than being overridden by it.
+      (globalThis as { window?: unknown }).window = {
+        pqpDesktop: { isElectron: true },
+      };
+      displayMedia = async () => fakeCapture("cap-tab", false, "browser");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { hideCursor: true });
+
+      expect(voice.getState().isShareCursorVisible).toBe(false);
+    });
   });
 
   it("strips mixer audio when restrictOwnAudio came back false", async () => {
