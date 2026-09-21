@@ -194,18 +194,52 @@ async function request(
   }
 }
 
+/**
+ * The token provider is Clerk's own `getToken`, and it makes its own network
+ * call to Clerk's Frontend API whenever the cached JWT needs refreshing
+ * (Clerk sessions last about a minute — see the note on `TokenProvider`
+ * above). A blip reaching Clerk throws a `TypeError` exactly like a blip
+ * reaching pqp's API does, and `apiFetch` used to catch both the same way,
+ * so a failed *token* refresh was reported to the person as "Network error
+ * reaching API" — which is what let a moderator mute someone and then find
+ * every unmute attempt refused with that message: the mute had gone out on
+ * a token Clerk had already cached, and by the time the unmute click landed
+ * a few seconds or minutes later the cache had aged out and needed a
+ * refresh that, once, did not come back. `connection-doctor.ts` already
+ * keeps this distinction for its own manual diagnostic (`token` is its own
+ * check, separate from `api`); this gives every real request the same one
+ * retry a transient Clerk hiccup deserves, and an honest message — naming
+ * the session, not the API — when it still fails after that.
+ */
+async function resolveAuthToken(
+  options?: Parameters<TokenProvider>[0],
+): Promise<string | null> {
+  try {
+    return await tokenProvider(options);
+  } catch {
+    try {
+      return await tokenProvider(options);
+    } catch {
+      throw new ApiError(
+        0,
+        "Could not verify your session. Check your connection and try again.",
+      );
+    }
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
   try {
-    let token = await tokenProvider();
+    let token = await resolveAuthToken();
     let response = await request(path, options, token);
 
     // A 401 after a successful start almost always means the token aged out
     // mid-session. Refresh once and retry before surfacing an error.
     if (response.status === 401) {
-      token = await tokenProvider({ forceRefresh: true });
+      token = await resolveAuthToken({ forceRefresh: true });
       if (token) {
         response = await request(path, options, token);
       }
