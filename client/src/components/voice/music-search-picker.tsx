@@ -353,15 +353,15 @@ export function MusicSearchPicker({
     },
   };
 
+  /*
+   * NOT A FORM. The in-call panel renders inside the composer's own form,
+   * and a form inside a form is invalid HTML: the browser ran a real
+   * navigation on submit, which reloaded the SPA and dropped the person
+   * out of the voice call. Enter is handled on the field, and the + is an
+   * ordinary button calling the same path.
+   */
   return (
-    <form
-      data-music-search=""
-      className="space-y-1"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submit();
-      }}
-    >
+    <div data-music-search="" role="search" className="space-y-1">
       <div className={cn("flex items-center gap-1.5", rail && "relative")}>
         {rail ? (
           <>
@@ -392,11 +392,12 @@ export function MusicSearchPicker({
             />
             <Tooltip label={t("music.add")}>
               <Button
-                type="submit"
+                type="button"
                 size="icon"
                 variant="secondary"
                 className="h-8 w-8 shrink-0"
                 disabled={busy || !query.trim()}
+                onClick={() => void submit()}
               >
                 <Plus className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -491,6 +492,6 @@ export function MusicSearchPicker({
           {notice}
         </p>
       )}
-    </form>
+    </div>
   );
 }
