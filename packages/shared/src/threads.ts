@@ -80,9 +80,12 @@ export const threadSummarySchema = z.object({
    * to say nothing about who was in a thread, which is the thing that makes a
    * side conversation worth opening. Empty for a thread with no replies yet.
    *
-   * Deliberately capped in SQL rather than trimmed in the client: this rides
-   * on every history page and every `thread-update`, so the cap is what keeps
-   * it small on the wire.
+   * Capped in SQL rather than trimmed in the client: this rides on every
+   * history page and every `thread-update`, so the cap is what keeps it small
+   * on the wire. The SCHEMA deliberately does not enforce that cap — a
+   * `.max()` here would make an older client reject a whole `thread-update`
+   * from a newer server that sends one face more, instead of drawing what it
+   * understands. The chip slices what it draws.
    */
   participants: z
     .array(
@@ -92,7 +95,6 @@ export const threadSummarySchema = z.object({
         avatarUrl: z.string().nullable(),
       }),
     )
-    .max(THREAD_PARTICIPANT_FACES)
     .default([]),
 });
 

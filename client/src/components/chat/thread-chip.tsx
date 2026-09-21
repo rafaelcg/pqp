@@ -1,6 +1,7 @@
 import {
   deriveThreadName,
   THREAD_AUTO_ARCHIVE_DAYS,
+  THREAD_PARTICIPANT_FACES,
   type ThreadSummary,
 } from "@pqp/shared";
 import { Archive, MessageSquareText } from "lucide-react";
@@ -86,7 +87,9 @@ export function ThreadChip({
         // Who is in there is the thing that makes a side conversation worth
         // opening, and the chip used to say nothing about it.
         <span className="flex shrink-0" aria-hidden>
-          {thread.participants.map((person, index) => (
+          {thread.participants
+            .slice(0, THREAD_PARTICIPANT_FACES)
+            .map((person, index) => (
             <UserAvatar
               key={person.id}
               name={person.displayName}

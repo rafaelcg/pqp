@@ -90,7 +90,13 @@ export function formatRecency(iso: string, locale?: string): string {
  * the wording and the plural in every locale, so this adds no copy keys.
  */
 export function formatRelativeShort(iso: string, locale?: string): string {
-  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  // Clamped at zero: these timestamps are the server's `now()`, and a client
+  // clock a few seconds behind it would otherwise print "in 3 sec." on a
+  // reply that has just landed.
+  const seconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(iso).getTime()) / 1000),
+  );
   const format = new Intl.RelativeTimeFormat(localeTag(locale), {
     numeric: "auto",
     style: "short",

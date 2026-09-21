@@ -322,6 +322,7 @@ export async function listThreadsForMessages(
  * than overall so a busy channel cannot crowd out every other one.
  */
 export async function listActiveThreadsByParent(
+  serverId: string,
   parentChannelIds: string[],
   perParent: number,
   viewerId: string,
@@ -338,15 +339,22 @@ export async function listActiveThreadsByParent(
     `WITH mine AS (
        SELECT c.id
          FROM channels c
-        WHERE c.parent_id = ANY($1::uuid[])
+        WHERE c.server_id = $4
+          -- server_id first so idx_channels_parent (server_id, parent_id,
+          -- position) is usable at all: without its leading column this was a
+          -- sequential scan of the channels table on every server switch.
+          AND c.parent_id = ANY($1::uuid[])
           AND c.type = 'thread'
           AND ${ACTIVE_THREAD_SQL}
           -- ONLY THREADS THIS READER IS IN. A thread has no members of its
-          -- own (its audience is its parent's), so membership is derived from
-          -- having taken part: started it, said something in it, or opened it
-          -- — the same "created, replied, or joined" Discord gates its own
-          -- sidebar on. Listing every active thread to everybody turns a busy
-          -- channel's rail into a feed of other people's conversations.
+          -- own (its audience is its parent's) and no creator column, so
+          -- membership is derived from three things this reader did leave a
+          -- trace of: said something in it, WROTE THE MESSAGE IT GREW OUT OF
+          -- (not the same as having started it — anyone may thread anyone's
+          -- message, and the author is the one with the stake in the answers),
+          -- or opened it. Whoever taps "start thread" is admitted by the third
+          -- clause, because starting one opens its panel, which marks it read.
+          -- Between them that is Discord's "created, replied, or joined".
           AND (
             EXISTS (SELECT 1 FROM messages said
                      WHERE said.channel_id = c.id AND said.author_id = $3)
@@ -375,7 +383,7 @@ export async function listActiveThreadsByParent(
        FROM channels c
        JOIN ranked ON ranked.id = c.id AND ranked.rank <= $2
       ORDER BY c.parent_id, ranked.rank`,
-    [parentChannelIds, perParent, viewerId],
+    [parentChannelIds, perParent, viewerId, serverId],
   );
   const summaries = result.rows.map(toSummary);
   await withParticipants(summaries);

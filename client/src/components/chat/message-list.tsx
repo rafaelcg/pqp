@@ -2595,7 +2595,7 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6 text-signal"
+                    className="h-6 w-6 text-accent"
                     onClick={onOpenThread}
                   >
                     <MessageSquareText className="h-3.5 w-3.5" />

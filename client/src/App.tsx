@@ -2775,17 +2775,17 @@ function MainAppContent({
   } | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   /**
-   * A thread swapped out for the member list. The two share one column and
-   * always have (the roster toggle below closes a thread to show the people),
-   * so "show me the roster" used to throw the thread away. It is stashed here
-   * instead and the right column's switch offers it back. Closing the panel
-   * outright — the ✕, the mobile back bar, a channel switch — clears it.
-   */
-  /**
    * --- threads --- channelId -> the active threads under it, for the rows
-   * the channel list nests under a channel. Its own read (see the route's
-   * note on why it is not folded into the etagged channel list), refreshed
-   * on server switch and kept live by `thread-update`.
+   * the channel list nests under a channel. Its own read: see the route's
+   * note on why it is not folded into the etagged channel list.
+   *
+   * IT IS A SNAPSHOT, NOT A SUBSCRIPTION, and the rows for channels other
+   * than the one on screen are the stale half. `thread-update` is broadcast
+   * to a channel's joined sockets and this client joins one channel at a
+   * time, so a reply in a thread under some other channel reaches nobody
+   * here. What refreshes the whole map is a server switch, a reconnect, and
+   * the coalesced reload below; what stays live frame by frame is the
+   * selected channel's rows, which is where a reader is looking.
    */
   const [threadsByChannel, setThreadsByChannel] = useState<
     Record<string, ThreadSummary[]>
@@ -2858,6 +2858,9 @@ function MainAppContent({
     [],
   );
 
+  const reloadServerThreadsRef = useRef(reloadServerThreads);
+  reloadServerThreadsRef.current = reloadServerThreads;
+
   useEffect(() => {
     if (!selectedServerId) {
       threadsRequestRef.current += 1;
@@ -2870,6 +2873,8 @@ function MainAppContent({
       threadsRequestRef.current += 1;
     };
   }, [selectedServerId, reloadServerThreads]);
+  const threadsByChannelRef = useRef<Record<string, ThreadSummary[]>>({});
+  threadsByChannelRef.current = threadsByChannel;
   const [stashedThread, setStashedThread] = useState<{
     thread: ThreadSummary;
     origin: ChatMessage | null;
@@ -2983,7 +2988,7 @@ function MainAppContent({
   const chatMessagesRef = useRef<() => ChatMessage[]>(() => []);
   chatMessagesRef.current = () => chat.getMessages();
   const openThreadFromSidebar = useCallback(
-    async (thread: ThreadSummary) => {
+    async (thread: ThreadSummary, knownOrigin: ChatMessage | null = null) => {
       const request = ++threadOpenRef.current;
       try {
         if (thread.parentChannelId !== selectedChannelIdRef.current) {
@@ -3002,9 +3007,11 @@ function MainAppContent({
         // page has it, so its quote is that message — including a poll's
         // question or an upload — rather than nothing.
         const origin =
+          knownOrigin ??
           chatMessagesRef
             .current()
-            .find((one) => one.id === thread.rootMessageId) ?? null;
+            .find((one) => one.id === thread.rootMessageId) ??
+          null;
         if (threadOpenRef.current !== request) {
           return;
         }
@@ -3020,7 +3027,6 @@ function MainAppContent({
     },
     [openThreadPanel],
   );
-
 
   const handleStartThread = useCallback(
     async (message: ChatMessage) => {
@@ -3686,6 +3692,20 @@ function MainAppContent({
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {
             chat.applyThreadUpdate(message.messageId, message.thread);
+            // A thread neither listed nor open could be a stranger's, or one
+            // of this reader's own that the per-channel cap had pushed out and
+            // this reply has just brought back. Only the server can tell the
+            // two apart, because only it knows who is in what, so ask it —
+            // coalesced, since a busy channel produces these constantly.
+            // Beside the state updater rather than inside it: an updater is
+            // not a place to start work.
+            if (
+              !(threadsByChannelRef.current[message.thread.parentChannelId] ?? [])
+                .some((one) => one.channelId === message.thread.channelId) &&
+              openThreadChannelIdRef.current !== message.thread.channelId
+            ) {
+              scheduleThreadsReload();
+            }
             // The sidebar row moves to the top of its channel on every reply,
             // which is the whole point of listing the active ones.
             //
@@ -3703,12 +3723,6 @@ function MainAppContent({
               const mine =
                 openThreadChannelIdRef.current === message.thread.channelId;
               if (!listed && !mine) {
-                // Could be a stranger's thread, or one of this reader's own
-                // that the per-channel cap had pushed out and this reply has
-                // just brought back. Only the server can tell the two apart,
-                // because only it knows who is in what, so ask it — coalesced,
-                // since a busy channel produces these constantly.
-                scheduleThreadsReload();
                 return prev;
               }
               const rest = current.filter(
@@ -3888,6 +3902,12 @@ function MainAppContent({
           // --- threads --- the secondary slot re-announces itself the same
           // way; the panel's window is refreshed by its next open.
           threadChat.resubscribe();
+          // --- threads --- the sidebar rows are a read, not a subscription
+          // (see the note on threadsByChannel), so frames missed while the
+          // socket was down are simply gone. Re-ask.
+          if (selectedServerIdRef.current) {
+            void reloadServerThreadsRef.current(selectedServerIdRef.current);
+          }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -8471,7 +8491,6 @@ function MainAppContent({
         />
       )}
 
-
       <ConnectionDoctorDialog
         open={doctorOpen}
         onClose={() => setDoctorOpen(false)}
@@ -9107,7 +9126,13 @@ function MainAppContent({
         <MemberSidebar
           onSelectThread={
             stashedThread
-              ? () => void openThreadFromSidebar(stashedThread.thread)
+              ? () =>
+                  void openThreadFromSidebar(
+                    stashedThread.thread,
+                    // The panel already had this; re-deriving it would lose
+                    // the quote for an origin that has scrolled off.
+                    stashedThread.origin,
+                  )
               : null
           }
           open={memberSidebar.open}

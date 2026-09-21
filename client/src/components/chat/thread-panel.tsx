@@ -103,8 +103,15 @@ export function ThreadPanel({
 
   /* Swipe right to close, the gesture the full-viewport mobile layout implies.
      Deliberately crude: one touch, mostly horizontal, far enough to be meant.
-     There is no shared gesture helper in the app to reach for. */
+     There is no shared gesture helper in the app to reach for.
+
+     Only below the md breakpoint, which is the layout the gesture belongs to:
+     on a desktop touchscreen the panel is a docked column beside the chat and
+     a rightward drag across it should not throw it away. */
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const isDockedPanel = () =>
+    typeof window !== "undefined" &&
+    window.matchMedia("(min-width: 768px)").matches;
 
   /**
    * What the quote above the thread says. A message with no text is not a
@@ -131,10 +138,16 @@ export function ThreadPanel({
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
       onTouchStart={(event) => {
+        if (isDockedPanel()) {
+          return;
+        }
         const touch = event.touches[0];
         touchStart.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
       }}
       onTouchEnd={(event) => {
+        if (isDockedPanel()) {
+          return;
+        }
         const start = touchStart.current;
         const touch = event.changedTouches[0];
         touchStart.current = null;

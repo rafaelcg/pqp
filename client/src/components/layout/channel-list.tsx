@@ -1143,7 +1143,7 @@ export function ChannelList({
         {/* --- threads --- nested under the channel they hang off, the same
             shape the voice occupants below use. */}
         {(threadsByChannel[channel.id]?.length ?? 0) > 0 && onOpenThread && (
-          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
+          <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2">
             {threadsByChannel[channel.id]!.map((thread) => {
               const threadUnread = unreadThreadIds.has(thread.channelId);
               return (
@@ -1155,20 +1155,20 @@ export function ChannelList({
                       onMobileClose?.();
                     }}
                     className={cn(
-                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-ink-3/60",
+                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-surface-2/60",
                       threadUnread
-                        ? "font-semibold text-paper"
-                        : "text-paper-muted hover:text-paper",
+                        ? "font-semibold text-text"
+                        : "text-text-tertiary hover:text-text",
                     )}
                   >
                     <MessageSquareText
-                      className="h-3 w-3 shrink-0 text-signal"
+                      className="h-3 w-3 shrink-0 text-accent"
                       aria-hidden
                     />
                     <span className="min-w-0 truncate">{thread.name}</span>
                     {threadUnread && (
                       <span
-                        className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-signal"
+                        className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
                         aria-hidden
                       />
                     )}

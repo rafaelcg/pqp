@@ -271,6 +271,28 @@ describeDb("threads over HTTP and WS", () => {
       [threadId],
     );
     expect(count.rows[0]!.count).toBe("0");
+
+    // And the sidebar list, whose only access check is that it asks about
+    // channels the reader can see. The owner is on the private channel and
+    // gets the row; the member is not and must not learn the thread exists.
+    const forOwner = await call<{
+      threads: Record<string, { channelId: string }[]>;
+    }>(owner, "GET", `/api/servers/${serverId}/threads`);
+    expect(forOwner.status).toBe(200);
+    expect(
+      (forOwner.body.threads[privateChannelId] ?? []).map((one) => one.channelId),
+    ).toContain(threadId);
+
+    const forMember = await call<{
+      threads: Record<string, { channelId: string }[]>;
+    }>(member, "GET", `/api/servers/${serverId}/threads`);
+    expect(forMember.status).toBe(200);
+    expect(forMember.body.threads[privateChannelId]).toBeUndefined();
+    expect(
+      Object.values(forMember.body.threads)
+        .flat()
+        .map((one) => one.channelId),
+    ).not.toContain(threadId);
   });
 
   it("refuses to start a thread anywhere but a server text channel message", async () => {

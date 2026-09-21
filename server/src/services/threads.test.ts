@@ -184,14 +184,18 @@ describeDb("threads", () => {
     const newer = (await createThreadForMessage(second.id, null))!.thread;
     await postMessage(newer.channelId, owner, "keeps it on top");
 
-    const byParent = await listActiveThreadsByParent([publicChannelId], 3, owner.id);
+    const byParent = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 3, owner.id);
     const ids = byParent.get(publicChannelId)?.map((one) => one.channelId);
     expect(ids?.[0]).toBe(newer.channelId);
     expect(ids).toContain(older.channelId);
 
     // The cap is per parent, so one busy channel cannot crowd out the rest.
     expect(
-      (await listActiveThreadsByParent([publicChannelId], 1, owner.id)).get(
+      (await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 1, owner.id)).get(
         publicChannelId,
       ),
     ).toHaveLength(1);
@@ -212,11 +216,14 @@ describeDb("threads", () => {
 
   it("lists only the threads the reader is in", async () => {
     // Somebody else's conversation, which this reader has never touched.
+    // outsider wrote it and member threaded it, so the two halves of "started
+    // it" are different people and the query cannot conflate them.
     const theirs = await postMessage(publicChannelId, member, "their topic");
     const theirThread = (await createThreadForMessage(theirs.id, null))!.thread;
     await postMessage(theirThread.channelId, member, "their reply");
 
     const forOwner = await listActiveThreadsByParent(
+      serverId,
       [publicChannelId],
       10,
       owner.id,
@@ -227,6 +234,7 @@ describeDb("threads", () => {
 
     // Its own author is in it, by having started it and spoken in it.
     const forMember = await listActiveThreadsByParent(
+      serverId,
       [publicChannelId],
       10,
       member.id,
@@ -238,6 +246,7 @@ describeDb("threads", () => {
     // Replying is joining.
     await postMessage(theirThread.channelId, owner, "now I am in it");
     const afterReply = await listActiveThreadsByParent(
+      serverId,
       [publicChannelId],
       10,
       owner.id,
@@ -245,6 +254,36 @@ describeDb("threads", () => {
     expect(
       (afterReply.get(publicChannelId) ?? []).map((one) => one.channelId),
     ).toContain(theirThread.channelId);
+  });
+
+  it("admits the origin's author, not whoever tapped start thread", async () => {
+    // owner wrote the message; member threads it and replies. The query has
+    // no creator column to read, so what it can honestly test is the author
+    // of the origin, and the creator is admitted by having opened the panel.
+    const origin = await postMessage(publicChannelId, owner, "my message");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    await postMessage(thread.channelId, member, "member replies");
+
+    const forOwner = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(thread.channelId);
+
+    // outsider neither wrote the origin nor took part.
+    const forOutsider = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      outsider.id,
+    );
+    expect(
+      (forOutsider.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(thread.channelId);
   });
 
   it("counts opening a thread as joining it", async () => {
@@ -256,6 +295,7 @@ describeDb("threads", () => {
     await markChannelRead(thread.channelId, owner.id);
 
     const forOwner = await listActiveThreadsByParent(
+      serverId,
       [publicChannelId],
       10,
       owner.id,
@@ -276,7 +316,9 @@ describeDb("threads", () => {
       [thread.channelId, longAgo],
     );
 
-    const byParent = await listActiveThreadsByParent([publicChannelId], 3, owner.id);
+    const byParent = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 3, owner.id);
     expect(
       (byParent.get(publicChannelId) ?? []).map((one) => one.channelId),
     ).not.toContain(thread.channelId);
