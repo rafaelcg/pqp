@@ -493,8 +493,17 @@ export function MusicNowPlaying({
           column of its own, and the queue line moves under the title, into
           the space that was empty. What was three full-width rows above the
           composer becomes one row about half as tall.
+
+          THE SIDES ARE NOT EQUAL, on purpose. Equal side columns are what
+          centres the transport exactly, and they cost the title every pixel
+          they reserve for two icons: measured on a 1054px bar, the right
+          column was 231px holding about 64px of content while the title had
+          163px. The left column takes 1.7 of the slack to the right's 1,
+          which moves the transport about 60px off the bar's midpoint and is
+          not something anybody reads as off-centre. Spotify centres its own
+          exactly because both of its side columns are full.
         */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 @min-[28rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[48rem]:grid-cols-[minmax(0,1.7fr)_minmax(18rem,34rem)_minmax(0,1fr)]">
           {/* Under 28rem the transport is wider than the whole bar, so
               sharing a line left the title with no width at all: art,
               controls, and nothing saying what is on. It takes the first

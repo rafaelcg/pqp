@@ -968,12 +968,17 @@ describe("the composer bar folds to one row when it has the width", () => {
     );
 
   it("gives the middle column a bounded width, not the whole bar", () => {
-    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
+    expect(html()).toContain("@min-[48rem]:grid-cols-[minmax(0,1.7fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
   });
 
   /* At 1920 a 26rem cap left a 359px seek against Spotify's ~640. */
   it("lets the seek breathe on a wide window", () => {
     expect(html()).not.toContain("minmax(18rem,26rem)");
+  });
+
+  /* Equal sides reserve as much for two icons as they give the title. */
+  it("does not mirror the right column onto the title's", () => {
+    expect(html()).not.toContain("grid-cols-[minmax(0,1fr)_minmax(18rem,34rem)_minmax(0,1fr)]");
   });
 
   it("keeps the queue count as text, not as a badge", () => {
