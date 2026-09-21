@@ -1034,7 +1034,7 @@
   "music.sidebar.label": "Tocando",
   "music.sidebar.join": "Entrar na call e ouvir: {title}",
   "music.placeholder.short": "Adicionar: link ou busca",
-  "music.placeholder.start": "Tocar música: link ou busca",
+  "music.placeholder.field": "Cole um link do YouTube ou busque pelo nome",
   "music.listen": "Ouvir",
   "music.noManage": "Precisa de Gerenciar música neste canal",
   "music.dismiss": "Parar de ouvir",

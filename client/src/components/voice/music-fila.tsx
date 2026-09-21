@@ -1,5 +1,5 @@
 import { MonitorPlay, Pause, Play, X } from "lucide-react";
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -64,6 +64,13 @@ export function MusicFila({
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
   const scrub = useScrub((value) => seekTo(value));
+  /** Empty field, so the line that says what it takes is still useful. */
+  const [fieldIdle, setFieldIdle] = useState(true);
+  // The picker reports this from an effect that lists the callback, so a
+  // stable identity keeps it from re-running on every render of this panel.
+  const onQueryActive = useCallback((active: boolean) => {
+    setFieldIdle(!active);
+  }, []);
   const onStage = prefs.placement === "stage";
   const queue = music.state?.queue ?? [];
   const history = music.state?.history ?? [];
@@ -291,23 +298,28 @@ export function MusicFila({
           <MusicSearchPicker
             compact
             chrome={sheet ? "default" : "rail"}
-            variant={current ? "queue" : "start"}
             canManage={canManage}
             autoFocus
+            onQueryActive={onQueryActive}
             onEmptyEscape={() => setMusicOpen(false)}
           />
         </div>
 
-        {current ? null : (
+        {fieldIdle ? (
           /* Under the field, not over it: the first thing a new person needs
-             is somewhere to paste, and the second is what may be pasted. */
+             is somewhere to paste, and the second is what may be pasted.
+             The sources line stays for as long as the field is empty, so
+             opening the queue mid-song answers the question too; the longer
+             explanation is for a room with nothing on. */
           <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2">
-            <p className={cn("text-[12px] leading-snug", muted)}>
-              {t("music.empty.what")}
-            </p>
+            {current ? null : (
+              <p className={cn("text-[12px] leading-snug", muted)}>
+                {t("music.empty.what")}
+              </p>
+            )}
             <p className={cn("text-[11px]", muted)}>{t("music.empty.sources")}</p>
           </div>
-        )}
+        ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {queue.length > 0 && (

@@ -64,7 +64,6 @@ export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
 export function MusicSearchPicker({
   compact = false,
   chrome = "default",
-  variant = "queue",
   canManage = false,
   autoFocus = false,
   onQueryActive,
@@ -73,7 +72,6 @@ export function MusicSearchPicker({
   compact?: boolean;
   /** Member-list field: icon in the box, paper tokens, square result thumbs. */
   chrome?: "default" | "rail";
-  variant?: "start" | "queue";
   canManage?: boolean;
   autoFocus?: boolean;
   onQueryActive?: (active: boolean) => void;
@@ -327,12 +325,16 @@ export function MusicSearchPicker({
     }
   };
 
-  const placeholder =
-    variant === "start"
-      ? t("music.placeholder.start")
-      : compact
-        ? t("music.placeholder.short")
-        : t("music.placeholder");
+  /*
+   * The visible placeholder is the one sentence that says the field takes
+   * both a link and a search, so it is only shortened where it genuinely
+   * does not fit: the drawer is 240px wide.
+   */
+  const placeholder = rail
+    ? t("music.placeholder.short")
+    : compact
+      ? t("music.placeholder.field")
+      : t("music.placeholder");
 
   const fieldProps = {
     value: query,

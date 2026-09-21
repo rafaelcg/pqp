@@ -145,6 +145,34 @@ describe("the Fila panel is one column", () => {
     expect(getMusicSnapshot().open).toBe(false);
   });
 
+  /*
+   * The sources line used to render only when nothing was playing, so
+   * opening the queue mid-song left the field standing alone with no
+   * answer to "what can I put in here".
+   */
+  it("says what the field takes while a track is playing", () => {
+    mount();
+    const blurb = host.querySelector("[data-music-empty]");
+    expect(blurb).not.toBeNull();
+    expect(blurb?.textContent).toContain(translateMessage("music.empty.sources"));
+    // The long explanation belongs to the empty room, not to every open.
+    expect(blurb?.textContent).not.toContain(translateMessage("music.empty.what"));
+  });
+
+  it("drops it again once there is something in the field", () => {
+    mount();
+    const field = host.querySelector("input") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(field, "daft punk");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(host.querySelector("[data-music-empty]")).toBeNull();
+  });
+
   it("says what may be pasted when the room has nothing on", () => {
     resetMusicStoreForTests();
     setMusicSession({
@@ -227,5 +255,29 @@ describe("the Fila panel is one column", () => {
     expect(
       search!.compareDocumentPosition(queue!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  /*
+   * The one sentence that says the field takes a search as well as a link
+   * is the placeholder, so it only gets shortened where it does not fit.
+   */
+  it("names YouTube and a search in the sheet's placeholder", () => {
+    mount();
+    const field = host.querySelector("input") as HTMLInputElement;
+    expect(field.placeholder).toBe(translateMessage("music.placeholder.field"));
+    expect(field.placeholder).toContain("YouTube");
+  });
+
+  it("keeps the short one in the 240px drawer", () => {
+    mount("drawer");
+    const field = host.querySelector("input") as HTMLInputElement;
+    expect(field.placeholder).toBe(translateMessage("music.placeholder.short"));
+  });
+
+  it("says it before anything is playing too", () => {
+    receiveMusic(CHANNEL, state({ current: null, queue: [], status: "paused" }));
+    mount();
+    const field = host.querySelector("input") as HTMLInputElement;
+    expect(field.placeholder).toBe(translateMessage("music.placeholder.field"));
   });
 });

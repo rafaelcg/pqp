@@ -1034,7 +1034,7 @@
   "music.sidebar.label": "Playing",
   "music.sidebar.join": "Join the call and listen: {title}",
   "music.placeholder.short": "Add: link or search",
-  "music.placeholder.start": "Play music: link or search",
+  "music.placeholder.field": "Paste a YouTube link or search by name",
   "music.listen": "Listen",
   "music.noManage": "Needs Manage music in this channel",
   "music.dismiss": "Stop listening",
