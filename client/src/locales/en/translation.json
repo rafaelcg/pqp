@@ -1477,7 +1477,6 @@
   "thread.close": "Close thread",
   "thread.back": "Back",
   "thread.inChannel": "Thread in #{channel}",
-  "thread.startedBy": "started by {name}",
   "thread.archived": "Archived",
   "thread.archivedHint": "Quiet for {days}+ days, replying wakes it back up.",
   "thread.noReplies": "No replies yet",

@@ -1477,7 +1477,6 @@
   "thread.close": "Fechar thread",
   "thread.back": "Voltar",
   "thread.inChannel": "Thread em #{channel}",
-  "thread.startedBy": "criada por {name}",
   "thread.archived": "Arquivada",
   "thread.archivedHint": "Parada há mais de {days} dias, responder acorda ela de novo.",
   "thread.noReplies": "Sem respostas ainda",

@@ -218,7 +218,11 @@ export function ThreadPanel({
           <p className="truncate text-[11px] text-text-tertiary">
             {[
               threadChipLabel(t, thread.replyCount),
-              origin ? t("thread.startedBy", { name: origin.authorName }) : null,
+              // Who started it rides the quote below, attached to the message
+              // it names — unless there is no quote, because the quote would
+              // have repeated this header's title. Then it belongs here, so
+              // the panel never fails to say whose message this grew out of.
+              origin && originLine === null ? origin.authorName : null,
               origin ? formatDayLabel(origin.createdAt) : null,
             ]
               .filter(Boolean)
@@ -244,11 +248,16 @@ export function ThreadPanel({
           <p
             className={cn(
               "text-xs text-text-tertiary",
-              origin
-                ? "border-l-2 border-border-strong pl-2"
-                : "italic",
+              origin ? "border-l-2 border-border-strong pl-2" : "italic",
             )}
           >
+            {/* Named, like every other quoted message in the app: a quote
+                with no author is the one thing a reply quote never is. */}
+            {origin && (
+              <span className="font-medium text-accent">
+                {origin.authorName}
+              </span>
+            )}{" "}
             <span className="line-clamp-3 whitespace-pre-wrap break-words">
               {originLine}
             </span>
