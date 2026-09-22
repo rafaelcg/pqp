@@ -866,3 +866,86 @@ describe("a duration the client made up", () => {
   });
 });
 
+describe("a room that already holds an impossible duration", () => {
+  /*
+   * THE BOUND IS ON WHAT A WRITE INTRODUCES, NOT ON WHAT IT CARRIES.
+   *
+   * Every write is an absolute state, so it repeats every track already in
+   * the room. Checking all of them meant a room that had been handed a
+   * bogus duration before this rule existed — a live stream's uptime, say —
+   * would have EVERY later write refused, including the skip that would
+   * have got rid of the track. The room would be stuck until it emptied.
+   *
+   * So a track keeps whatever length it already had, and only a new or
+   * changed one is bounded. The gate is safe either way: it needs a
+   * positive duration and caps the grace at half of it, so a legacy zero
+   * still ends nothing and a legacy fifty days still never comes due.
+   */
+  const legacy: MusicTrack = {
+    ...(state().current as MusicTrack),
+    id: "legacy",
+    durationMs: MUSIC_MAX_DURATION_MS * 100,
+  };
+  const rights = {
+    userId: "u1",
+    canManage: true,
+    canAdd: true,
+    roomSize: 3,
+  };
+
+  it("lets the room go on writing around it", () => {
+    const held = state({ queue: [legacy] });
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, positionMs: 5_000, rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+  });
+
+  it("lets somebody skip it away", () => {
+    const held = state({ queue: [legacy] });
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+  });
+
+  it("still refuses to CHANGE a duration to an impossible one", () => {
+    const held = state({ queue: [legacy] });
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...legacy, durationMs: MUSIC_MAX_DURATION_MS * 200 }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(false);
+  });
+
+  it("still refuses a new track with one", () => {
+    const held = state();
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...legacy, id: "fresh" }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(false);
+  });
+});
+

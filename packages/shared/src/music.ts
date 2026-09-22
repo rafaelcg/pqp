@@ -526,13 +526,48 @@ function plausibleDuration(durationMs: number | null | undefined): boolean {
   );
 }
 
-function durationsArePlausible(incoming: MusicStateWrite): boolean {
-  if (!plausibleDuration(incoming.current?.durationMs)) {
+/** What the room already believes this track is, if it holds it at all. */
+function heldDurationOf(
+  held: MusicState | null,
+  trackId: string,
+): number | null | undefined {
+  if (held === null) {
+    return undefined;
+  }
+  if (held.current?.id === trackId) {
+    return held.current.durationMs;
+  }
+  return held.queue.find((track) => track.id === trackId)?.durationMs;
+}
+
+/**
+ * Bounded on what a write INTRODUCES, not on what it carries.
+ *
+ * Every write is an absolute state, so it repeats every track already in
+ * the room. Checking all of them meant a room handed a bogus duration
+ * before this rule existed would have every later write refused, including
+ * the skip that would have got rid of the track: stuck until it emptied.
+ *
+ * A track therefore keeps whatever length it already had, and only a new
+ * or changed one has to be plausible. The gate is safe either way, because
+ * it needs a positive duration and caps the grace at half of it: a legacy
+ * zero ends nothing and a legacy fifty days never comes due.
+ */
+function durationsArePlausible(
+  held: MusicState | null,
+  incoming: MusicStateWrite,
+): boolean {
+  const introduced = (track: MusicTrack) => {
+    const before = heldDurationOf(held, track.id);
+    if (before !== undefined && before === track.durationMs) {
+      return true;
+    }
+    return plausibleDuration(track.durationMs);
+  };
+  if (incoming.current && !introduced(incoming.current)) {
     return false;
   }
-  return (incoming.queue ?? []).every((track) =>
-    plausibleDuration(track.durationMs),
-  );
+  return (incoming.queue ?? []).every(introduced);
 }
 
 export function musicWriteAllowed(
@@ -555,7 +590,7 @@ export function musicWriteAllowed(
    * Null stays legal: that is what an unknown duration IS, and the room
    * falls back to votes for an early skip.
    */
-  if (incoming !== null && !durationsArePlausible(incoming)) {
+  if (incoming !== null && !durationsArePlausible(held, incoming)) {
     return false;
   }
   if (rights.canManage) {
@@ -668,8 +703,11 @@ export function musicWriteAllowed(
   // Only the votes of people still seated. `roomSize` shrinks when somebody
   // leaves and their vote does not, so the two moved out of step and a
   // ghost could carry the threshold.
-  const liveVotes = rights.seatedUserIds
-    ? votesHeld.filter((id) => rights.seatedUserIds?.includes(id))
+  const seated = rights.seatedUserIds
+    ? new Set(rights.seatedUserIds)
+    : null;
+  const liveVotes = seated
+    ? votesHeld.filter((id) => seated.has(id))
     : votesHeld;
   const votes = new Set([...liveVotes, rights.userId]);
   const votedOut = votes.size >= musicSkipVotesNeeded(rights.roomSize);
