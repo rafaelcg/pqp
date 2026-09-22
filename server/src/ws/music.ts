@@ -170,6 +170,31 @@ export function resetMusicForTests(): void {
  * nothing here was written by a person on this instance, and whoever accepted
  * it already ran all three.
  */
+/**
+ * WHAT MOVES THE ROOM'S CLOCK, WHICH IS NARROWER THAN WHAT IS STRUCTURAL.
+ *
+ * A new track starts at zero, a pause freezes and a resume restarts: those
+ * are true on every machine and for whoever wrote them. Everything else a
+ * write may carry (an append, a removal, a vote, a switch) says nothing
+ * about where the room is, and moving the clock for one hands a member the
+ * creep the clamp exists to stop: the append lands a tolerance ahead, the
+ * anchor follows it there, and the next append starts from the new reading.
+ * Twenty of them walk a 200 s track to its end and open the end-of-track
+ * gate for somebody holding no votes.
+ *
+ * `musicWriteIsStructural` is the WRITE LIMITER'S question ("may this be
+ * coalesced?") and stays what it is. This is the clock's.
+ */
+function movesTheClock(held: MusicState | null, next: MusicState): boolean {
+  if (held === null) {
+    return true;
+  }
+  return (
+    held.status !== next.status ||
+    (held.current?.id ?? null) !== (next.current?.id ?? null)
+  );
+}
+
 export function adoptMusicState(
   voiceChannelId: string,
   state: MusicState | null,
@@ -188,13 +213,12 @@ export function adoptMusicState(
   }
   rooms.set(voiceChannelId, state);
   /*
-   * A structural change from elsewhere moves this instance's clock even
-   * without an anchor in the frame: a new track starts at zero and a
-   * pause freezes, which is true on every machine. A position-only
-   * difference does not, because the frame's `positionMs` is a sample and
+   * A new track or a pause from elsewhere moves this instance's clock even
+   * without an anchor in the frame, because both are true on every
+   * machine. Nothing else does: the frame's `positionMs` is a sample, and
    * the whole point of the anchor is not to trust one.
    */
-  if (musicWriteIsStructural(held, state)) {
+  if (movesTheClock(held, state)) {
     setMusicAnchor(voiceChannelId, state.positionMs, Date.now());
   }
   return true;
@@ -245,7 +269,7 @@ export function applyMusicWrite(
     return { kind: "refused", held };
   }
   const structural = musicWriteIsStructural(held, next);
-  if (next !== null && (structural || runsTheMusic(held, rights))) {
+  if (next !== null && (movesTheClock(held, next) || runsTheMusic(held, rights))) {
     setMusicAnchor(voiceChannelId, next.positionMs, now);
   }
   const withinBudget = writeLimiter.take(actorUserId);

@@ -5,6 +5,7 @@ import {
   type MusicState,
 } from "@pqp/shared";
 import {
+  adoptMusicState,
   applyMusicWrite,
   endMusic,
   getMusicState,
@@ -328,6 +329,164 @@ describe("the server's own clock for the room", () => {
     const now = Date.now();
     expect(musicExpectedPositionMs(ROOM, now)).toBeGreaterThanOrEqual(150_000);
     expect(musicExpectedPositionMs(ROOM, now)).toBeLessThan(151_000);
+  });
+
+  /*
+   * THE CLAMP BOUNDS ONE WRITE. THE ANCHOR IS WHAT IT IS BOUNDED AGAINST.
+   *
+   * 0.2(a) says the anchor moves for a manager's write and for a structural
+   * change of CURRENT or STATUS, and for nothing else. An append is
+   * structural in the sense the write limiter means (it must not be
+   * coalesced), and moving the clock for it hands a member the creep the
+   * clamp exists to stop: each append lands a tolerance ahead, the anchor
+   * follows it there, and the next one starts from the new reading. Twenty
+   * of them in a millisecond walk a 200 s track to its end, and the
+   * end-of-track gate then opens for somebody holding no votes.
+   */
+  it("does not let a member's own appends walk the room's clock", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const now = Date.now();
+    for (let i = 0; i < 20; i += 1) {
+      const held = getMusicState(ROOM) as MusicState;
+      const expected = musicExpectedPositionMs(ROOM, now) ?? 0;
+      const write = applyMusicWrite(
+        ROOM,
+        {
+          ...held,
+          // One track on, one off: structural every time, and always the
+          // member's own, so the rights check never refuses it.
+          queue: i % 2 === 0
+            ? [
+                {
+                  id: `q${i}`,
+                  provider: "youtube" as const,
+                  videoId: "aaaaaaaaaaa",
+                  title: "Mine",
+                  sourceUrl: null,
+                  thumbnailUrl: null,
+                  durationMs: 120_000,
+                  addedByUserId: "u2",
+                  addedByName: "Bia",
+                },
+              ]
+            : [],
+          positionMs: expected + MUSIC_POSITION_TOLERANCE_MS - 1,
+          rev: held.rev + 1,
+          actorId: "p2",
+        },
+        MEMBER,
+      );
+      expect(write.kind).toBe("accepted");
+    }
+    // The track has been on for a millisecond, whatever the samples said.
+    expect(musicExpectedPositionMs(ROOM, now)).toBeLessThan(
+      MUSIC_POSITION_TOLERANCE_MS,
+    );
+  });
+
+  it("keeps the end-of-track gate shut while the track is still playing", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const now = Date.now();
+    for (let i = 0; i < 40; i += 1) {
+      const held = getMusicState(ROOM) as MusicState;
+      const expected = musicExpectedPositionMs(ROOM, now) ?? 0;
+      applyMusicWrite(
+        ROOM,
+        {
+          ...held,
+          queue: i % 2 === 0
+            ? [
+                {
+                  id: `q${i}`,
+                  provider: "youtube" as const,
+                  videoId: "aaaaaaaaaaa",
+                  title: "Mine",
+                  sourceUrl: null,
+                  thumbnailUrl: null,
+                  durationMs: 120_000,
+                  addedByUserId: "u2",
+                  addedByName: "Bia",
+                },
+              ]
+            : [],
+          positionMs: expected + MUSIC_POSITION_TOLERANCE_MS - 1,
+          rev: held.rev + 1,
+          actorId: "p2",
+        },
+        MEMBER,
+      );
+    }
+    const held = getMusicState(ROOM) as MusicState;
+    const advanced = musicAdvance(held);
+    const write = applyMusicWrite(
+      ROOM,
+      { ...advanced, atMs: 0, rev: held.rev + 1, actorId: "p2" },
+      MEMBER,
+    );
+    expect(write.kind).toBe("refused");
+  });
+
+  /*
+   * The same rule on the receiving side. A member's append accepted on the
+   * other instance arrives here as an absolute state; if this machine
+   * moved its clock to the sample that rode on it, the creep would simply
+   * cross the bus.
+   */
+  it("does not move the clock for an append adopted from another instance", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const now = Date.now();
+    const held = getMusicState(ROOM) as MusicState;
+    adoptMusicState(ROOM, {
+      ...held,
+      queue: [
+        {
+          id: "t2",
+          provider: "youtube",
+          videoId: "aaaaaaaaaaa",
+          title: "Mine",
+          sourceUrl: null,
+          thumbnailUrl: null,
+          durationMs: 120_000,
+          addedByUserId: "u2",
+          addedByName: "Bia",
+        },
+      ],
+      positionMs: 190_000,
+      rev: held.rev + 1,
+      actorId: "p2",
+    });
+    expect(musicExpectedPositionMs(ROOM, now)).toBeLessThan(
+      MUSIC_POSITION_TOLERANCE_MS,
+    );
+  });
+
+  it("still starts the clock over for a new track from another instance", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const seeked = getMusicState(ROOM) as MusicState;
+    adoptMusicState(ROOM, {
+      ...seeked,
+      current: {
+        id: "t9",
+        provider: "youtube",
+        videoId: "bbbbbbbbbbb",
+        title: "Next",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 200_000,
+        addedByUserId: "u2",
+        addedByName: "Bia",
+      },
+      positionMs: 0,
+      rev: seeked.rev + 1,
+      actorId: "p2",
+    });
+    expect(musicExpectedPositionMs(ROOM, Date.now())).toBeLessThan(1_000);
   });
 
   it("accepts a sample that is behind, because a slow player never runs ahead", () => {
