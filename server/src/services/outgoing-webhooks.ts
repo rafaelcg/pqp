@@ -244,7 +244,16 @@ async function validateTextChannelIds(
   db: Sql = getPool(),
   share = false,
 ): Promise<string[]> {
-  const unique = [...new Set(channelIds)];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of channelIds) {
+    const key = id.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(id);
+  }
   if (unique.length === 0) {
     throw new HttpError(400, "Select at least one text channel");
   }
@@ -278,7 +287,7 @@ async function validateTextChannelIds(
       continue;
     }
     if (row.kind === "server" && row.type === "text") {
-      kept.push(id);
+      kept.push(row.id);
       continue;
     }
     problems.push({
@@ -524,8 +533,12 @@ export async function updateOutgoingWebhook(
     const name = body.name?.trim() ?? existing.name;
     const url = body.url?.trim() ?? existing.url;
     const channelIds =
-      body.channelIds !== undefined
-        ? await validateTextChannelIds(existing.server_id, body.channelIds, client)
+      body.channelIds !== undefined || body.status === "active"
+        ? await validateTextChannelIds(
+            existing.server_id,
+            body.channelIds ?? existing.channel_ids,
+            client,
+          )
         : existing.channel_ids;
     const skipUserIds =
       body.skipUserIds !== undefined

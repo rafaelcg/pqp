@@ -180,7 +180,7 @@ function ChannelChips({
             aria-pressed
             onClick={() => onToggle(id)}
             className={cn(
-              "inline-flex max-w-full items-center gap-1.5 rounded-full border border-danger/45 bg-danger/10 px-3 py-1.5 text-sm text-paper",
+              "inline-flex max-w-full items-center gap-1.5 rounded-full border border-ink-4 bg-ink px-3 py-1.5 text-sm text-paper-muted",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
               disabled && "opacity-50",
             )}
@@ -926,7 +926,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                       </span>
                     ))}
                     {unknownCount > 0 && (
-                      <span className="inline-flex items-center rounded-full bg-danger/10 px-2 py-0.5 text-xs text-danger">
+                      <span className="inline-flex items-center rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted">
                         {t("integrations.channelUnlisted", { count: unknownCount })}
                       </span>
                     )}

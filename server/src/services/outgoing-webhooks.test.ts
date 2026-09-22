@@ -571,6 +571,46 @@ describeDb("outgoing webhooks", () => {
     expect(JSON.stringify(saved.body)).not.toContain("secret-room");
   });
 
+  it("stores one id when the same channel is sent in two cases", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, channelId.toUpperCase()] }),
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.webhook.channelIds).toEqual([channelId]);
+  });
+
+  it("refuses to enable a hook whose channels are all gone", async () => {
+    const only = await createChannel(serverId, "solo-enable", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    expect(await deleteChannel(only.id)).toBe(true);
+
+    const enabled = await call<{ error: string }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { status: "active" },
+    );
+    expect(enabled.status).toBe(400);
+    expect(enabled.body.error).toContain("Select at least one text channel");
+
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+  });
+
   it("still broadcasts when the POST fails", async () => {
     vi.mocked(safePost).mockRejectedValue(new Error("endpoint down"));
     expect(
