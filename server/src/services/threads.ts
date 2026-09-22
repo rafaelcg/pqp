@@ -221,21 +221,26 @@ export async function createThreadForMessage(
        ON CONFLICT (thread_root_message_id) WHERE thread_root_message_id IS NOT NULL
        DO NOTHING
        RETURNING id, parent_id, thread_root_message_id, name, created_at
+     ),
+     -- Starting a thread is joining it, written in the SAME statement as the
+     -- thread so one cannot exist without the other: as a second query, a
+     -- failure between the two left a thread its starter was not in, and a
+     -- retry took the "already exists" path and never wrote it. Only the
+     -- winner of the race joins: whoever tapped "start thread" on a message
+     -- that already had one opened somebody else's, and opening is not
+     -- joining.
+     starter AS (
+       INSERT INTO thread_memberships (thread_id, user_id, joined, updated_at)
+       SELECT id, $5::uuid, TRUE, now() FROM created WHERE $5::uuid IS NOT NULL
      )
      SELECT c.id, c.parent_id, c.thread_root_message_id, c.name, c.created_at,
             0 AS reply_count, NULL::timestamptz AS last_message_at
      FROM created c`,
-    [row.server_id, name, row.channel_id, messageId],
+    [row.server_id, name, row.channel_id, messageId, starterId ?? null],
   );
 
   const createdRow = inserted.rows[0];
   if (createdRow) {
-    // Starting a thread is joining it. Only the winner of the race writes
-    // this: whoever tapped "start thread" on a message that already had one
-    // opened somebody else's thread, and opening is not joining.
-    if (starterId) {
-      await setThreadMembership(createdRow.id, starterId, true);
-    }
     return {
       thread: toSummary(createdRow),
       created: true,

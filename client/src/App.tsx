@@ -2903,6 +2903,7 @@ function MainAppContent({
   }, [selectedServerId, reloadServerThreads]);
   /** The thread this reader last replied in from the panel, until its frame. */
   const ownThreadReplyRef = useRef<string | null>(null);
+  const ownReplyReloadInFlightRef = useRef(false);
   const threadsByChannelRef = useRef<Record<string, ThreadSummary[]>>({});
   threadsByChannelRef.current = threadsByChannel;
   const [stashedThread, setStashedThread] = useState<{
@@ -3091,6 +3092,7 @@ function MainAppContent({
    * discards a reload that was already in flight with the old answer (it
    * bumps the request token) and backfills a slot the leave freed.
    */
+  const membershipQueueRef = useRef(new Map<string, Promise<void>>());
   const handleThreadMembership = useCallback(
     async (thread: ThreadSummary, joined: boolean) => {
       // A read already in flight carries the answer from before this change.
@@ -3109,8 +3111,26 @@ function MainAppContent({
           };
         });
       }
+      // One thread's changes go out one at a time, in the order they were
+      // asked for. Sent concurrently, a Leave then Join could reach the
+      // server as Join then Leave, and the last write wins there.
+      const previous =
+        membershipQueueRef.current.get(thread.channelId) ?? Promise.resolve();
+      const request = previous.then(() =>
+        setThreadMembership(thread.channelId, joined),
+      );
+      const settled = request.then(
+        () => undefined,
+        () => undefined,
+      );
+      membershipQueueRef.current.set(thread.channelId, settled);
+      void settled.then(() => {
+        if (membershipQueueRef.current.get(thread.channelId) === settled) {
+          membershipQueueRef.current.delete(thread.channelId);
+        }
+      });
       try {
-        await setThreadMembership(thread.channelId, joined);
+        await request;
       } catch (error) {
         setAppError(
           error instanceof Error
@@ -3793,13 +3813,22 @@ function MainAppContent({
               !(threadsByChannelRef.current[message.thread.parentChannelId] ?? [])
                 .some((one) => one.channelId === message.thread.channelId)
             ) {
+              // One immediate read at a time: several replies sent before
+              // the first read lands fall back to the coalesced reload
+              // instead of each starting a full read of their own.
               const serverId = selectedServerIdRef.current;
               if (
                 ownThreadReplyRef.current === message.thread.channelId &&
-                serverId
+                serverId &&
+                !ownReplyReloadInFlightRef.current
               ) {
                 ownThreadReplyRef.current = null;
-                void reloadServerThreadsRef.current(serverId);
+                ownReplyReloadInFlightRef.current = true;
+                void reloadServerThreadsRef
+                  .current(serverId)
+                  .finally(() => {
+                    ownReplyReloadInFlightRef.current = false;
+                  });
               } else {
                 scheduleThreadsReload();
               }
