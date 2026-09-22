@@ -89,7 +89,7 @@ already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
 |---|---|
 | add a song, or a list, to the end | `SPEAK` |
 | remove a song you added | being in the call |
-| start music when nothing is on | `SPEAK` (your own song). Nothing on is no state at all, or a state whose queue ran dry (`current: null` after the last advance); the room's switches, votes and Tocadas must come back exactly as they were |
+| start music when nothing is on | `SPEAK` (your own song, playing, from zero). Nothing on is no state at all, or a state whose queue ran dry (`current: null` after the last advance); the room's switches, votes and Tocadas must come back exactly as they were, and a queued track keeps its length unless a manager or its own adder fills it |
 | skip, pause, resume, seek, skip-back, reorder, shuffle, remove others' songs, put a song on once the current one has ended, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on. Seek and skip-back are on this row because both are ordinary writes for whoever is running the music, and skip-back and the end-of-track add both rewrite `history` |
 | flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` only, never a promoted speaker |
 | autoplay the next related track when the queue ran out | being in the call, while `autoplay` is on, the queue is empty, and the current track has run out. The write must put on your own track with `autoplayed: true`, playing at 0, history as `musicAdvance` would, votes cleared |
