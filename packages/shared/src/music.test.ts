@@ -349,6 +349,36 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(null, state({ current: mine("m") }), { ...member, canAdd: false })).toBe(false);
   });
 
+  it("lets a member start the next song once the queue ran dry, keeping the room as it was", () => {
+    // What `musicAdvance` leaves behind after the last track: current null,
+    // the switches and Tocadas intact. This fell through to the advance
+    // gate and was refused, so a room that ran dry was stuck for members.
+    const dry = state({
+      current: null,
+      queue: [],
+      status: "paused",
+      positionMs: 0,
+      repeat: "all",
+      autoplay: true,
+      history: [track("done")],
+    });
+    const start = state({
+      ...dry,
+      current: mine("m"),
+      status: "playing",
+      positionMs: 0,
+    });
+    expect(musicWriteAllowed(dry, start, member)).toBe(true);
+    expect(musicWriteAllowed(dry, start, silent)).toBe(false);
+    // Only their own song, and nothing about the room rewritten with it.
+    expect(musicWriteAllowed(dry, { ...start, current: track("theirs") }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, repeat: "off" }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, autoplay: false }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, history: [] }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, queue: [mine("q")] }, member)).toBe(true);
+    expect(musicWriteAllowed(dry, { ...start, queue: [track("theirs")] }, member)).toBe(false);
+  });
+
   it("lets a member append and remove their own, and nothing else", () => {
     const held = state({ queue: [track("b"), mine("m")] });
     expect(musicWriteAllowed(held, state({ queue: [track("b"), mine("m"), mine("n")] }), member)).toBe(true);

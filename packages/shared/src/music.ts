@@ -471,6 +471,19 @@ function ids(tracks: MusicTrack[]): string[] {
   return tracks.map((track) => track.id);
 }
 
+/** `incoming` is `held` in order, plus only this person's tracks at the end. */
+function appendsOwn(
+  held: MusicTrack[],
+  incoming: MusicTrack[],
+  own: (track: MusicTrack) => boolean,
+): boolean {
+  return (
+    incoming.length >= held.length &&
+    held.every((track, index) => sameTrack(track, incoming[index] as MusicTrack)) &&
+    incoming.slice(held.length).every(own)
+  );
+}
+
 /**
  * The same track, field for field. The id alone is not enough: a member
  * who kept every id and swapped the video ids would be playing whatever
@@ -705,17 +718,40 @@ export function musicWriteAllowed(
   }
   incoming = completeMusicState(held, incoming);
   const own = (track: MusicTrack) => track.addedByUserId === rights.userId;
-  if (held === null) {
+  /*
+   * NOTHING IS ON: no state at all, or a state whose queue ran dry.
+   *
+   * An advance past the last track leaves `current: null` behind rather
+   * than tearing the room down, so the switches and Tocadas survive the
+   * silence. This branch used to fire only for `held === null`, and the
+   * dry room fell through to the advance gate, which compares the new
+   * song against "the next track after nothing" and refuses it: once a
+   * member's queue ran out, nobody without MANAGE_MUSIC could put another
+   * song on. The rule is the same in both cases: their own song, their
+   * own appends, and the room's switches, votes and history exactly as
+   * they were (which for no state at all is off, off, off, none, none).
+   */
+  if (held === null || held.current === null) {
+    const base = withMusicDefaults(
+      held ?? {
+        ...incoming,
+        current: null,
+        queue: [],
+        openControls: false,
+        repeat: "off",
+        autoplay: false,
+        skipVotes: [],
+        history: [],
+      },
+    );
     return (
       rights.canAdd &&
       incoming.current !== null &&
       own(incoming.current) &&
-      incoming.queue.every(own) &&
-      (incoming.openControls ?? false) === false &&
-      (incoming.repeat ?? "off") === "off" &&
-      (incoming.autoplay ?? false) === false &&
-      (incoming.skipVotes ?? []).length === 0 &&
-      (incoming.history ?? []).length === 0
+      appendsOwn(base.queue, incoming.queue, own) &&
+      controlsUnchanged(base, incoming) &&
+      sameSkipVotes(base.skipVotes, incoming.skipVotes ?? []) &&
+      sameHistory(base.history, incoming.history ?? [])
     );
   }
   const sameCurrent = sameOrNull(held.current, incoming.current);
@@ -760,11 +796,8 @@ export function musicWriteAllowed(
       return false;
     }
     // Append own to the end, the front untouched.
-    const prefixSame =
-      incoming.queue.length >= held.queue.length &&
-      held.queue.every((track, index) => sameTrack(track, incoming.queue[index] as MusicTrack));
-    if (prefixSame) {
-      return rights.canAdd && incoming.queue.slice(held.queue.length).every(own);
+    if (appendsOwn(held.queue, incoming.queue, own)) {
+      return rights.canAdd;
     }
     // Remove own: the held list in order, minus some of mine, nothing else touched.
     const incomingIds = new Set(ids(incoming.queue));

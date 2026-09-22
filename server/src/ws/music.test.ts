@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MUSIC_POSITION_TOLERANCE_MS,
   musicAdvance,
@@ -701,5 +701,137 @@ describe("the server's own clock for the room", () => {
       LISTENER,
     );
     expect((getMusicState(ROOM) as MusicState).positionMs).toBe(94_000);
+  });
+
+  /*
+   * THE CLAMP IS FOR SAMPLES, AND AN ADVANCE IS NOT ONE.
+   *
+   * `musicAdvance` writes `positionMs: 0` because the next song starts at
+   * zero. The clamp used to rewrite that to the finished track's reading
+   * whenever the anchor was more than a tolerance in, and `matchesAdvance`
+   * requires the zero, so a member could never move a room past its first
+   * song: the end-of-track advance, the add that lands after ENDED and the
+   * skip vote that carried were all refused, silently, with a `forced`
+   * frame. Every test above wrote within milliseconds of setting the
+   * anchor, which is why none of them saw it. These run the clock forward
+   * first. The gate itself is unchanged: the first case still refuses.
+   */
+  describe("a member's advance once the room's own clock says the track is over", () => {
+    const MEMBER_ALONE = {
+      userId: "u2",
+      canManage: false,
+      canAdd: true,
+      roomSize: 1,
+      peerId: "p2",
+      seatedUserIds: ["u2"],
+    };
+    const own = (durationMs: number | null) =>
+      state({
+        current: {
+          id: "t1",
+          provider: "youtube",
+          videoId: "dQw4w9WgXcQ",
+          title: "Track",
+          sourceUrl: null,
+          thumbnailUrl: null,
+          durationMs,
+          addedByUserId: "u2",
+          addedByName: "Bia",
+        },
+        queue: [],
+        positionMs: 0,
+        actorId: "p2",
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("is still refused while the track is playing", () => {
+      applyMusicWrite(ROOM, own(200_000), MEMBER_ALONE);
+      vi.setSystemTime(1_000_000 + 60_000);
+      const held = getMusicState(ROOM) as MusicState;
+      const write = applyMusicWrite(
+        ROOM,
+        { ...musicAdvance(held), atMs: 0, rev: held.rev + 1, actorId: "p2" },
+        MEMBER_ALONE,
+      );
+      expect(write.kind).toBe("refused");
+    });
+
+    it("takes the end-of-track advance, positionMs zero and all", () => {
+      applyMusicWrite(ROOM, own(200_000), MEMBER_ALONE);
+      vi.setSystemTime(1_000_000 + 199_000);
+      const held = getMusicState(ROOM) as MusicState;
+      const write = applyMusicWrite(
+        ROOM,
+        { ...musicAdvance(held), atMs: 0, rev: held.rev + 1, actorId: "p2" },
+        MEMBER_ALONE,
+      );
+      expect(write.kind).toBe("accepted");
+      expect((getMusicState(ROOM) as MusicState).current).toBeNull();
+      // The clock started over with the new state, not at the old reading.
+      expect(musicExpectedPositionMs(ROOM)).toBe(0);
+    });
+
+    it("still refuses an add that replaces a track the room has not advanced past", () => {
+      applyMusicWrite(ROOM, own(200_000), MEMBER_ALONE);
+      vi.setSystemTime(1_000_000 + 199_000);
+      const held = getMusicState(ROOM) as MusicState;
+      const advanced = musicAdvance(held);
+      const write = applyMusicWrite(
+        ROOM,
+        {
+          ...advanced,
+          current: {
+            id: "t2",
+            provider: "youtube",
+            videoId: "aaaaaaaaaaa",
+            title: "Next",
+            sourceUrl: null,
+            thumbnailUrl: null,
+            durationMs: 180_000,
+            addedByUserId: "u2",
+            addedByName: "Bia",
+          },
+          queue: [],
+          status: "playing",
+          positionMs: 0,
+          atMs: 0,
+          rev: held.rev + 1,
+          actorId: "p2",
+        },
+        MEMBER_ALONE,
+      );
+      // Not an advance shape the gate knows: the new song is not what
+      // `musicAdvance` would put on. The client only writes this after a
+      // refused advance left the finished track in place, and the fix
+      // above is what stops that refusal for a track that ran out.
+      expect(write.kind).toBe("refused");
+    });
+
+    it("takes the skip vote that carried, a minute in", () => {
+      const M2 = { ...MEMBER_ALONE, roomSize: 2, seatedUserIds: ["u2", "u3"] };
+      const M3 = { ...M2, userId: "u3", peerId: "p3" };
+      applyMusicWrite(ROOM, own(200_000), M2);
+      vi.setSystemTime(1_000_000 + 60_000);
+      let held = getMusicState(ROOM) as MusicState;
+      expect(
+        applyMusicWrite(
+          ROOM,
+          { ...held, positionMs: 60_000, skipVotes: ["u2"], rev: held.rev + 1, actorId: "p2" },
+          M2,
+        ).kind,
+      ).toBe("accepted");
+      held = getMusicState(ROOM) as MusicState;
+      const write = applyMusicWrite(
+        ROOM,
+        { ...musicAdvance(held), atMs: 0, rev: held.rev + 1, actorId: "p3" },
+        M3,
+      );
+      expect(write.kind).toBe("accepted");
+    });
   });
 });
