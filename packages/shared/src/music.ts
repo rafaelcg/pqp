@@ -679,10 +679,22 @@ export function musicWriteAllowed(
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
     return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
-  // The server's clock when there is one, the last sample when there is
-  // not. The sample alone was the whole bypass: anybody seated could write
-  // it to one grace short of the duration and then advance.
-  const gatePosition = rights.expectedPositionMs ?? held.positionMs;
+  /*
+   * THE SERVER FAILS CLOSED HERE; THE CLIENT IS ONLY DRAWING.
+   *
+   * `peerId` is set by the server and by nothing else, so it is how the
+   * two callers are told apart. The server's clock is the anchor, and
+   * when a room has none — the cold-row case counted as
+   * `musicCluster.anchorMissing` — falling back to `held.positionMs`
+   * handed the decision straight back to the last sample anybody seated
+   * wrote, which is the bypass the anchor exists to close. Without a
+   * trusted clock the room falls back to votes, which is safe and still
+   * lets it move on. The client has no anchor and never will; it asks
+   * this only to decide what to show.
+   */
+  const serverSide = rights.peerId !== undefined;
+  const gatePosition =
+    rights.expectedPositionMs ?? (serverSide ? null : held.positionMs);
   /*
    * The grace never swallows the whole track. At a flat 20 s any track
    * declaring less than that was "over" at position zero, so a short
@@ -699,13 +711,25 @@ export function musicWriteAllowed(
     held.current !== null &&
     declared !== null &&
     declared > 0 &&
+    gatePosition !== null &&
     gatePosition >= declared - grace;
   // Only the votes of people still seated. `roomSize` shrinks when somebody
   // leaves and their vote does not, so the two moved out of step and a
   // ghost could carry the threshold.
-  const seated = rights.seatedUserIds
-    ? new Set(rights.seatedUserIds)
-    : null;
+  /*
+   * Same rule for the roster. The server always knows who is seated
+   * (`musicRoomSeats` falls back to this instance's own peers rather than
+   * answering nothing), so an absent list server-side is a bug, and
+   * counting every held vote in that case would let the votes of people
+   * who have left carry the threshold. An empty set is the safe reading;
+   * the sender's own vote is still added below.
+   */
+  const seated =
+    rights.seatedUserIds !== undefined
+      ? new Set(rights.seatedUserIds)
+      : serverSide
+        ? new Set<string>()
+        : null;
   const liveVotes = seated
     ? votesHeld.filter((id) => seated.has(id))
     : votesHeld;

@@ -949,3 +949,88 @@ describe("a room that already holds an impossible duration", () => {
   });
 });
 
+describe("the gate with no trusted clock", () => {
+  /*
+   * FAIL CLOSED ON THE SERVER, NOT OPEN.
+   *
+   * `gatePosition` fell back to `held.positionMs` whenever the server had
+   * no anchor for the room — the documented cold-row case, counted as
+   * `musicCluster.anchorMissing`. That sample is the last one ANYBODY
+   * seated wrote, which is the whole reason the anchor exists, so in that
+   * window a listen-only seat could write a position near the end and then
+   * advance with no votes: exactly the bypass the anchor closed, reopened
+   * by its own absence.
+   *
+   * The server always says who is writing (`peerId`), so it can be told
+   * apart from the client, which calls this only to decide what to draw
+   * and has no clock of its own. Without a trusted clock the room falls
+   * back to votes, which is safe and still lets it move on.
+   */
+  const held = state({
+    current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+    positionMs: 190_000,
+  });
+  const advanced = { ...musicAdvance(held), atMs: 0, rev: 2, actorId: "pz" };
+
+  it("refuses an advance a seat claimed its way to, with no anchor", () => {
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        seatedUserIds: [],
+        peerId: "pz",
+      }),
+    ).toBe(false);
+  });
+
+  it("takes it once the server's own clock says the track is over", () => {
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        seatedUserIds: [],
+        peerId: "pz",
+        expectedPositionMs: 190_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves the client's own drawing alone", () => {
+    // No `peerId`: this is the client asking what to show, and it has only
+    // the held sample to go on.
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+      }),
+    ).toBe(true);
+  });
+
+  it("counts no departed votes when the server names no seats", () => {
+    const voted = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      skipVotes: ["gone-1", "gone-2", "gone-3", "gone-4"],
+    });
+    expect(
+      musicWriteAllowed(
+        voted,
+        { ...musicAdvance(voted), atMs: 0, rev: 2, actorId: "pz" },
+        {
+          userId: "nobody",
+          canManage: false,
+          canAdd: false,
+          roomSize: 10,
+          peerId: "pz",
+          expectedPositionMs: 0,
+        },
+      ),
+    ).toBe(false);
+  });
+});
+
