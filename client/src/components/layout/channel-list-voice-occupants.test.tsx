@@ -221,6 +221,33 @@ describe("ChannelList voice occupants", () => {
     );
   });
 
+  it("ends every row with its mute badge, so ours lines up with everybody else's", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        voiceOccupancy={{
+          [lobby.id]: [
+            { ...andre, muted: true },
+            { ...rafa, muted: true },
+          ],
+        }}
+        currentUserId={andre.userId}
+        peerVolumes={{ [rafa.userId]: 1 }}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    // Rafa's row carries the hover-only speaker slot and ours does not. It
+    // takes space even while invisible, so it must come BEFORE the badge:
+    // after it, Rafa's mic icon sat 18px left of our own.
+    const rafaRow = html.slice(
+      html.indexOf(`data-voice-occupant="${rafa.userId}"`),
+    );
+    expect(rafaRow.indexOf("data-voice-occupant-audio")).toBeGreaterThan(-1);
+    expect(rafaRow.indexOf("data-voice-occupant-audio")).toBeLessThan(
+      rafaRow.indexOf('aria-label="Muted"'),
+    );
+  });
+
   it("offers no volume for a call we are not in, where no audio arrives", () => {
     const html = renderList(
       <ChannelList
