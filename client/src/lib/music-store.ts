@@ -130,10 +130,18 @@ function set(state: MusicState | null, channelId: string | null) {
   if (snapshot.channelId !== channelId || snapshot.state?.current?.id !== state?.current?.id) {
     abandonAutoplayFill();
   }
-  // Parked on the transition only: a track was on, and now nothing is.
-  const wasOn = snapshot.channelId === channelId ? snapshot.state?.current ?? null : null;
-  const isOn = state?.current ?? null;
-  const parked = isOn !== null ? null : (wasOn ?? (channelId === snapshot.channelId ? snapshot.parked : null));
+  /*
+   * Parked on one transition only: a track was on, and the room is still
+   * there with nothing on, which is the shape `musicAdvance` leaves when
+   * the queue runs dry. A `null` state is the room torn down ("Parar para
+   * todos", or a session being set up again) and is never an end: parking
+   * on it told the person who had just stopped the music that the queue
+   * ended, and flashed the same bar over a reconnect mid-song.
+   */
+  const sameRoom = snapshot.channelId === channelId;
+  const wasOn = sameRoom ? snapshot.state?.current ?? null : null;
+  const ranDry = state !== null && state.current === null;
+  const parked = !ranDry ? null : (wasOn ?? (sameRoom ? snapshot.parked : null));
   snapshot = { ...snapshot, channelId, state, receivedAt: Date.now(), parked };
   emit();
 }

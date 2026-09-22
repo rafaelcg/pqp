@@ -146,6 +146,33 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().parked).toBeNull();
   });
 
+  /**
+   * A STOP IS NOT AN END.
+   *
+   * The queue running dry leaves the room behind with `current: null`;
+   * "Parar para todos" and a session reset tear it down to `null`. Parking
+   * on both told the person who had just stopped the music that the queue
+   * ended and offered to play it again, and a reconnect in the same room
+   * flashed the same bar over a song that was still playing.
+   */
+  it("does not park when somebody stops the music for everyone", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, null);
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
+  it("does not park when the seat is set up again in the same room", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-a",
+      userId: "u1",
+      displayName: "Ana",
+      send: () => {},
+    });
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
   it("does not park a room that was already empty when we arrived", () => {
     receiveMusic(CHANNEL, null);
     expect(getMusicSnapshot().parked).toBeNull();

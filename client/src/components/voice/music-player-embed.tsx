@@ -201,6 +201,49 @@ export function playerIsOnWrongVideo(
 }
 
 /**
+ * HOW OFTEN THE REPAIR MAY TRY, AND WHEN IT GIVES UP.
+ *
+ * A video YouTube will not load (embedding off, region-blocked, removed)
+ * keeps reporting the old id, so an unbounded repair reloaded it every two
+ * seconds, for every viewer, for the rest of the call. Three tries per room
+ * track, backing off from two seconds, then nothing until the room moves
+ * to another track; the player's own error path is what speaks for a
+ * video that will not play.
+ */
+export const WRONG_VIDEO_REPAIR_LIMIT = 3;
+export const WRONG_VIDEO_REPAIR_BASE_MS = 2_000;
+
+export interface WrongVideoRepair {
+  /** The room track the attempts below were for. */
+  videoId: string | null;
+  attempts: number;
+  /** No attempt before this. */
+  nextAtMs: number;
+}
+
+export function nextWrongVideoRepair(
+  previous: WrongVideoRepair,
+  roomVideoId: string,
+  nowMs: number,
+): { allowed: boolean; next: WrongVideoRepair } {
+  const held =
+    previous.videoId === roomVideoId
+      ? previous
+      : { videoId: roomVideoId, attempts: 0, nextAtMs: 0 };
+  if (held.attempts >= WRONG_VIDEO_REPAIR_LIMIT || nowMs < held.nextAtMs) {
+    return { allowed: false, next: held };
+  }
+  return {
+    allowed: true,
+    next: {
+      videoId: roomVideoId,
+      attempts: held.attempts + 1,
+      nextAtMs: nowMs + WRONG_VIDEO_REPAIR_BASE_MS * 2 ** held.attempts,
+    },
+  };
+}
+
+/**
  * Whether the drift/play effect should call `playVideo()`. YouTube replays
  * from the start when the player is ENDED; that is only correct for
  * repeat-one. A loaded id that is not the room's is the load effect's job.
@@ -453,6 +496,22 @@ export function MusicPlayer({
     [],
   );
 
+  const repairRef = useRef<WrongVideoRepair>({ videoId: null, attempts: 0, nextAtMs: 0 });
+  /**
+   * The tick's repair: bounded by `nextWrongVideoRepair`, and reading the
+   * ROOM's status at the call, so a paused room is cued rather than started.
+   */
+  const repairWrongVideo = useCallback(
+    (player: YTPlayer, roomVideoId: string) => {
+      const step = nextWrongVideoRepair(repairRef.current, roomVideoId, Date.now());
+      repairRef.current = step.next;
+      if (step.allowed) {
+        loadRoomTrack(player, roomVideoId, musicRef.current.state?.status === "playing");
+      }
+    },
+    [loadRoomTrack],
+  );
+
   // A new track: load it where the room is. An empty queue stops this
   // iframe rather than unmounting it (`musicEmbedCommand`).
   useEffect(() => {
@@ -503,7 +562,7 @@ export function MusicPlayer({
     if (playerIsOnWrongVideo(loaded, videoId)) {
       // The room moved on and this iframe did not. Put it back before the
       // drift loop below starts seeking the wrong song to the room's clock.
-      loadRoomTrack(player, videoId!, status === "playing");
+      repairWrongVideo(player, videoId!);
       return;
     }
     const repeat = musicRef.current.state?.repeat ?? "off";
@@ -568,7 +627,7 @@ export function MusicPlayer({
       }
       const roomVideoId = snap.state?.current?.videoId ?? null;
       if (playerIsOnWrongVideo(playing, roomVideoId)) {
-        loadRoomTrack(player, roomVideoId!, true);
+        repairWrongVideo(player, roomVideoId!);
         return;
       }
       if (!shouldReportPositionSample(ytState)) {
