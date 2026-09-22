@@ -3,12 +3,14 @@ import {
   MUSIC_AUTOPLAY_MAX_MS,
   MUSIC_AUTOPLAY_MIN_MS,
   MUSIC_END_GRACE_MS,
+  MUSIC_MAX_DURATION_MS,
   completeMusicState,
   musicAdvance,
   musicAutoplayCandidate,
   musicAutoplayCandidates,
   musicSkipVotesNeeded,
   musicStateSchema,
+  musicServerWriteAllowed,
   musicWriteAllowed,
   musicWriteIsStale,
   musicWriteIsStructural,
@@ -16,6 +18,7 @@ import {
   setMusicMessageSchema,
   type MusicResolved,
   type MusicState,
+  type MusicStateWrite,
   type MusicTrack,
 } from "./music.js";
 
@@ -30,6 +33,17 @@ const track = (id: string): MusicTrack => ({
   addedByUserId: "u1",
   addedByName: "Ana",
 });
+
+/**
+ * `musicAdvance` answers without `rev` / `actorId` / `atMs`, because those
+ * belong to whoever writes it. A test that hands its answer straight to
+ * `musicWriteAllowed` is skipping the step a real client does, and the
+ * types say so even though `vitest` never asked.
+ */
+const written = (
+  next: Omit<MusicState, "rev" | "actorId" | "atMs">,
+  overrides: Partial<Pick<MusicState, "rev" | "actorId" | "atMs">> = {},
+): MusicState => ({ atMs: 0, rev: 2, actorId: "p2", ...next, ...overrides });
 
 const state = (overrides: Partial<MusicState> = {}): MusicState => ({
   current: track("a"),
@@ -48,6 +62,52 @@ const state = (overrides: Partial<MusicState> = {}): MusicState => ({
 });
 
 describe("parseMusicInput", () => {
+  it("reads a watch URL with a trailing slash, which YouTube serves", () => {
+    expect(parseMusicInput("https://www.youtube.com/watch/?v=dQw4w9WgXcQ")).toEqual({
+      kind: "youtube",
+      videoId: "dQw4w9WgXcQ",
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+  });
+
+  it("keeps reading the other shapes with a trailing slash", () => {
+    for (const url of [
+      "https://www.youtube.com/shorts/dQw4w9WgXcQ/",
+      "https://www.youtube.com/embed/dQw4w9WgXcQ/",
+    ]) {
+      expect(parseMusicInput(url)).toEqual({
+        kind: "youtube",
+        videoId: "dQw4w9WgXcQ",
+        url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      });
+    }
+  });
+
+  /*
+   * A paste that did not survive the clipboard is not a search. It used to
+   * fall through to one and come back with an unrelated song.
+   */
+  it("refuses text that starts with a scheme and does not parse", () => {
+    expect(parseMusicInput("https://")).toBeNull();
+    expect(parseMusicInput("https://%%%")).toBeNull();
+  });
+
+  it("still searches for text that merely contains a colon or a scheme", () => {
+    expect(parseMusicInput("Rush 2112: Overture")).toEqual({
+      kind: "search",
+      query: "Rush 2112: Overture",
+    });
+    expect(parseMusicInput("bohemian rhapsody http://")).toEqual({
+      kind: "search",
+      query: "bohemian rhapsody http://",
+    });
+    // "ht!tp" is not a scheme, so this is ordinary text with a colon in it.
+    expect(parseMusicInput("ht!tp://not a url###")).toEqual({
+      kind: "search",
+      query: "ht!tp://not a url###",
+    });
+  });
+
   it("reads every YouTube link shape", () => {
     for (const url of [
       "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10",
@@ -300,12 +360,19 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(held, null, member)).toBe(false);
   });
 
-  it("lets a member sample position and fill the duration", () => {
+  /*
+   * Sampling stayed anybody's, because every write carries the writer's own
+   * player position and refusing the sample would refuse the append it
+   * rides on. The duration fill did not stay anybody's: it is the other
+   * operand of the end-of-track gate. See "filling in a track's missing
+   * duration" below.
+   */
+  it("lets a member sample position, but not fill somebody else's duration", () => {
     const held = state();
     expect(musicWriteAllowed(held, state({ positionMs: 9000 }), member)).toBe(true);
     expect(
       musicWriteAllowed(held, state({ current: { ...track("a"), durationMs: 200000 } }), member),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("lets a member advance only once the track has run out", () => {
@@ -353,6 +420,141 @@ describe("musicWriteAllowed", () => {
     const held = state({ openControls: true });
     expect(musicWriteAllowed(held, state({ status: "paused", openControls: true }), member)).toBe(true);
     expect(musicWriteAllowed(held, state({ status: "paused", openControls: true }), silent)).toBe(false);
+  });
+
+  /*
+   * What "Todo mundo controla" hands over, and what it does not. The rule
+   * is one line: everything a manager may write except the three room
+   * switches. A verb list instead of that rule refuses skip-back and the
+   * end-of-track add, which both rewrite history.
+   */
+  describe("a speaker promoted by openControls", () => {
+    const held = state({
+      current: { ...track("a"), durationMs: 200_000 },
+      queue: [track("b"), track("c")],
+      history: [track("old")],
+      openControls: true,
+    });
+    const promoted = (incoming: MusicState) =>
+      musicWriteAllowed(held, incoming, member);
+
+    it("may do what the room switch promises", () => {
+      expect(promoted({ ...held, status: "paused" })).toBe(true);
+      expect(promoted(written(musicAdvance(held)))).toBe(true);
+      expect(promoted({ ...held, queue: [track("c"), track("b")] })).toBe(true);
+      expect(promoted({ ...held, queue: [track("c")] })).toBe(true);
+      expect(promoted({ ...held, positionMs: 120_000 })).toBe(true);
+      expect(musicWriteAllowed(held, null, member)).toBe(true);
+    });
+
+    it("may take the two paths that rewrite history", () => {
+      // Skip-back: the first Tocadas row becomes current, the displaced
+      // track goes to the front of the queue, history loses its head.
+      expect(
+        promoted({
+          ...held,
+          current: track("old"),
+          queue: [held.current as MusicTrack, ...held.queue],
+          history: [],
+          positionMs: 0,
+        }),
+      ).toBe(true);
+      // The end-of-track add: current into history and the queue's front.
+      expect(
+        promoted({
+          ...held,
+          current: track("new"),
+          queue: [held.current as MusicTrack, ...held.queue],
+          history: [held.current as MusicTrack, ...held.history],
+          positionMs: 0,
+        }),
+      ).toBe(true);
+    });
+
+    it("may not touch the three room switches", () => {
+      expect(promoted({ ...held, openControls: false })).toBe(false);
+      expect(promoted({ ...held, repeat: "one" })).toBe(false);
+      expect(promoted({ ...held, autoplay: true })).toBe(false);
+    });
+
+    it("still refuses somebody who cannot speak", () => {
+      expect(musicWriteAllowed(held, { ...held, status: "paused" }, silent)).toBe(false);
+    });
+  });
+
+  /*
+   * The end-of-track gate used to read a sample that anybody seated could
+   * write, so a member could satisfy it at will. It reads the server's own
+   * clock now, and the duration is not theirs to invent.
+   */
+  describe("the end-of-track gate", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const held = state({ current, queue: [track("b")], positionMs: 190_000 });
+    const advance = () => written(musicAdvance(held));
+
+    it("ignores a held sample the server's clock does not agree with", () => {
+      expect(
+        musicWriteAllowed(held, advance(), { ...member, expectedPositionMs: 10_000 }),
+      ).toBe(false);
+    });
+
+    it("opens once the server's clock is inside the grace, stale sample or not", () => {
+      const stale = state({ current, queue: [track("b")], positionMs: 0 });
+      expect(
+        musicWriteAllowed(stale, written(musicAdvance(stale)), {
+          ...member,
+          expectedPositionMs: 200_000 - MUSIC_END_GRACE_MS,
+        }),
+      ).toBe(true);
+    });
+
+    it("falls back to the held sample when no clock is given, which is the client drawing", () => {
+      expect(musicWriteAllowed(held, advance(), member)).toBe(true);
+    });
+  });
+
+  describe("filling in a track's missing duration", () => {
+    const nullDuration = track("a");
+    const held = state({ current: nullDuration, queue: [track("b")] });
+    const filled = (durationMs: number) =>
+      state({ current: { ...nullDuration, durationMs }, queue: [track("b")] });
+
+    it("is the manager's, or the adder's", () => {
+      expect(musicWriteAllowed(held, filled(200_000), manager)).toBe(true);
+      // `track()` is added by u1, and the manager fixture is u1.
+      expect(
+        musicWriteAllowed(held, filled(200_000), { ...member, userId: "u1" }),
+      ).toBe(true);
+    });
+
+    it("is refused from anybody else, so the gate cannot be invented", () => {
+      expect(musicWriteAllowed(held, filled(1), member)).toBe(false);
+      expect(musicWriteAllowed(held, filled(200_000), member)).toBe(false);
+    });
+  });
+
+  /*
+   * The vote threshold's denominator is the live room, so its numerator has
+   * to be live too. A vote from somebody who left is not counted.
+   */
+  describe("skip votes from people who have left", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const held = state({ current, queue: [track("b")], skipVotes: ["gone1", "gone2"] });
+    const seated = { userId: "u2", canManage: false, canAdd: true, roomSize: 6, seatedUserIds: ["u1", "u2", "u3", "u4", "u5", "u6"] };
+
+    it("does not let two departed votes plus the sender clear a room of six", () => {
+      expect(musicWriteAllowed(held, written(musicAdvance(held)), seated)).toBe(false);
+    });
+
+    it("counts the votes of people still seated", () => {
+      const live = state({ current, queue: [track("b")], skipVotes: ["u3", "u4"] });
+      expect(musicWriteAllowed(live, written(musicAdvance(live)), seated)).toBe(true);
+    });
+
+    it("falls back to counting every held vote when the seats are not known", () => {
+      const { seatedUserIds: _omitted, ...withoutSeats } = seated;
+      expect(musicWriteAllowed(held, written(musicAdvance(held)), withoutSeats)).toBe(true);
+    });
   });
 
   it("does not let a member flip openControls, repeat, autoplay or history", () => {
@@ -510,3 +712,509 @@ describe("musicAutoplayCandidate", () => {
     ]);
   });
 });
+
+describe("a duration no music track has", () => {
+  /*
+   * A 24/7 live mix answers `getDuration()` with how long the STREAM has
+   * been up, so the room was handed 1209:42:45 and a seek bar measured
+   * against fifty days. The duration is the other operand of the
+   * end-of-track gate, so a value like that also means the gate never
+   * opens and the room never advances on its own.
+   *
+   * The bound is deliberately far above any real mix (twelve hours) and
+   * far below a stream that has been live for days: it is there to catch
+   * a category error, not to judge long videos.
+   */
+  const live = MUSIC_MAX_DURATION_MS + 1;
+  const held = state();
+  const withDuration = (durationMs: number): MusicState => ({
+    ...held,
+    current: { ...(held.current as MusicTrack), durationMs },
+    rev: held.rev + 1,
+    actorId: "p2",
+  });
+
+  it("refuses a fill past the ceiling, from anybody", () => {
+    const incoming = withDuration(live);
+    expect(
+      musicWriteAllowed(held, incoming, {
+        userId: "u1",
+        canManage: true,
+        canAdd: true,
+        roomSize: 3,
+      }),
+    ).toBe(false);
+  });
+
+  it("still takes an honest long mix", () => {
+    const incoming = withDuration(MUSIC_MAX_DURATION_MS - 1);
+    expect(
+      musicWriteAllowed(held, incoming, {
+        userId: "u1",
+        canManage: true,
+        canAdd: true,
+        roomSize: 3,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("a duration the client made up", () => {
+  /*
+   * A TRACK'S DECLARED LENGTH IS THE OTHER OPERAND OF THE END-OF-TRACK
+   * GATE, AND IT ARRIVES FROM A CLIENT.
+   *
+   * The ceiling added for live streams looked only at `incoming.current`,
+   * and only while the held duration was still null, so a member could
+   * queue a track declaring any length at all and it sailed through the
+   * ordinary append path. The low end was never checked: a track declaring
+   * zero satisfies `gatePosition >= 0 - 20000` from the instant it starts,
+   * and `matchesAdvance` + `ranOut` never consult `canAdd`, so ANY seated
+   * person — a listen-only seat with no rights whatsoever — could then
+   * write the advance and take the room's track away with no votes, or
+   * end the room outright when the queue was empty.
+   */
+  const bogus = (durationMs: number | null): MusicState => ({
+    ...state(),
+    current: { ...(state().current as MusicTrack), durationMs },
+  });
+
+  const LISTENER = {
+    userId: "nobody",
+    canManage: false,
+    canAdd: false,
+    roomSize: 10,
+    expectedPositionMs: 0,
+  };
+
+  it("refuses a zero-length track, so nobody can skip on it with no votes", () => {
+    const held = bogus(0);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        LISTENER,
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses one shorter than the grace, for the same reason", () => {
+    const held = bogus(MUSIC_END_GRACE_MS - 1);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        LISTENER,
+      ),
+    ).toBe(false);
+  });
+
+  it("lets a short track end once its clock genuinely reaches the end", () => {
+    const held = bogus(10_000);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        { ...LISTENER, expectedPositionMs: 9_000 },
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a queued track that declares an impossible length", () => {
+    const held = state();
+    const queued: MusicTrack = {
+      ...(state().current as MusicTrack),
+      id: "q1",
+      durationMs: MUSIC_MAX_DURATION_MS + 1,
+    };
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, queue: [queued], rev: 2, actorId: "p2" },
+        {
+          userId: "u1",
+          canManage: true,
+          canAdd: true,
+          roomSize: 3,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves an ordinary track and an unknown duration alone", () => {
+    const held = state();
+    const queued: MusicTrack = {
+      ...(state().current as MusicTrack),
+      id: "q1",
+      durationMs: 210_000,
+    };
+    const rights = {
+      userId: "u1",
+      canManage: true,
+      canAdd: true,
+      roomSize: 3,
+    };
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, queue: [queued], rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...queued, durationMs: null }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("a room that already holds an impossible duration", () => {
+  /*
+   * THE BOUND IS ON WHAT A WRITE INTRODUCES, NOT ON WHAT IT CARRIES.
+   *
+   * Every write is an absolute state, so it repeats every track already in
+   * the room. Checking all of them meant a room that had been handed a
+   * bogus duration before this rule existed — a live stream's uptime, say —
+   * would have EVERY later write refused, including the skip that would
+   * have got rid of the track. The room would be stuck until it emptied.
+   *
+   * So a track keeps whatever length it already had, and only a new or
+   * changed one is bounded. The gate is safe either way: it needs a
+   * positive duration and caps the grace at half of it, so a legacy zero
+   * still ends nothing and a legacy fifty days still never comes due.
+   */
+  const legacy: MusicTrack = {
+    ...(state().current as MusicTrack),
+    id: "legacy",
+    durationMs: MUSIC_MAX_DURATION_MS * 100,
+  };
+  const rights = {
+    userId: "u1",
+    canManage: true,
+    canAdd: true,
+    roomSize: 3,
+  };
+
+  it("lets the room go on writing around it", () => {
+    const held = state({ queue: [legacy] });
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, positionMs: 5_000, rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+  });
+
+  it("lets somebody skip it away", () => {
+    const held = state({ queue: [legacy] });
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+  });
+
+  it("still refuses to CHANGE a duration to an impossible one", () => {
+    const held = state({ queue: [legacy] });
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...legacy, durationMs: MUSIC_MAX_DURATION_MS * 200 }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(false);
+  });
+
+  it("still refuses a new track with one", () => {
+    const held = state();
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...legacy, id: "fresh" }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("the gate with no trusted clock", () => {
+  /*
+   * FAIL CLOSED ON THE SERVER, NOT OPEN.
+   *
+   * `gatePosition` fell back to `held.positionMs` whenever the server had
+   * no anchor for the room — the documented cold-row case, counted as
+   * `musicCluster.anchorMissing`. That sample is the last one ANYBODY
+   * seated wrote, which is the whole reason the anchor exists, so in that
+   * window a listen-only seat could write a position near the end and then
+   * advance with no votes: exactly the bypass the anchor closed, reopened
+   * by its own absence.
+   *
+   * The server always says who is writing (`peerId`), so it can be told
+   * apart from the client, which calls this only to decide what to draw
+   * and has no clock of its own. Without a trusted clock the room falls
+   * back to votes, which is safe and still lets it move on.
+   */
+  const held = state({
+    current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+    positionMs: 190_000,
+  });
+  const advanced = { ...musicAdvance(held), atMs: 0, rev: 2, actorId: "pz" };
+
+  it("refuses an advance a seat claimed its way to, with no anchor", () => {
+    expect(
+      musicServerWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        seatedUserIds: [],
+        peerId: "pz",
+        expectedPositionMs: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("takes it once the server's own clock says the track is over", () => {
+    expect(
+      musicServerWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        seatedUserIds: [],
+        peerId: "pz",
+        expectedPositionMs: 190_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves the client's own drawing alone", () => {
+    // No `peerId`: this is the client asking what to show, and it has only
+    // the held sample to go on.
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+      }),
+    ).toBe(true);
+  });
+
+  it("counts no departed votes when the server names no seats", () => {
+    const voted = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      skipVotes: ["gone-1", "gone-2", "gone-3", "gone-4"],
+    });
+    expect(
+      musicServerWriteAllowed(
+        voted,
+        { ...musicAdvance(voted), atMs: 0, rev: 2, actorId: "pz" },
+        {
+          userId: "nobody",
+          canManage: false,
+          canAdd: false,
+          roomSize: 10,
+          peerId: "pz",
+          expectedPositionMs: 0,
+          // The server always knows who is seated; saying nothing here is
+          // a bug, and no held vote may carry the threshold on it.
+          seatedUserIds: [],
+        },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("the server's own door", () => {
+  /*
+   * The trusted context is not optional here, and that is the whole point.
+   * On `MusicRights` those three fields are optional so the client can ask
+   * the same question with none of them, which is right for drawing and
+   * wrong for deciding: a server caller that left one out still compiled
+   * and quietly got the lenient reading. One of them already had — the
+   * permission re-check in `voice.ts` passed neither a peer id nor a
+   * clock.
+   */
+  it("fails closed on a room with no clock, without being asked to", () => {
+    const held = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      positionMs: 190_000,
+      queue: [track("b")],
+    });
+    expect(
+      musicServerWriteAllowed(held, written(musicAdvance(held)), {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        peerId: "p2",
+        expectedPositionMs: null,
+        seatedUserIds: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("agrees with the rule it delegates to when the clock is there", () => {
+    const held = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      positionMs: 0,
+      queue: [track("b")],
+    });
+    const write = written(musicAdvance(held));
+    const server = musicServerWriteAllowed(held, write, {
+      userId: "nobody",
+      canManage: false,
+      canAdd: false,
+      roomSize: 10,
+      peerId: "p2",
+      expectedPositionMs: 190_000,
+      seatedUserIds: [],
+    });
+    expect(server).toBe(true);
+    expect(
+      musicWriteAllowed(held, write, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        peerId: "p2",
+        expectedPositionMs: 190_000,
+        seatedUserIds: [],
+      }),
+    ).toBe(server);
+  });
+});
+
+describe("filling in a duration nobody asked you to", () => {
+  /*
+   * THE FILL RULE GUARDED `current` AND LEFT THE QUEUE OPEN.
+   *
+   * A duration may go from null to a value so the room's own writer can
+   * fill in what oEmbed did not carry, and that is restricted to the
+   * manager or the person who added the track — for `current`. The
+   * queue went through `sameTracks`, which allows exactly that transition
+   * for anybody. So a listen-only seat could give a queued track a length
+   * of 1 ms, wait for it to become current, and a millisecond later the
+   * end-of-track gate is satisfied: the track is taken away from the room
+   * with no votes and no rights, by somebody who cannot even speak.
+   */
+  const mine = track("q1");
+  const theirs: MusicTrack = { ...track("q2"), addedByUserId: "u2" };
+  const held = state({ queue: [mine, theirs] });
+  const seat = {
+    userId: "nobody",
+    canManage: false,
+    canAdd: false,
+    roomSize: 4,
+  };
+
+  const fill = (index: number, durationMs: number): MusicStateWrite => {
+    const queue = [...held.queue];
+    queue[index] = { ...(queue[index] as MusicTrack), durationMs };
+    return { ...held, queue, rev: 2, actorId: "p9" };
+  };
+
+  it("refuses a queued fill from somebody with no claim on the track", () => {
+    expect(musicWriteAllowed(held, fill(0, 200_000), seat)).toBe(false);
+  });
+
+  it("lets the person who added it fill it", () => {
+    expect(
+      musicWriteAllowed(held, fill(1, 200_000), { ...seat, userId: "u2" }),
+    ).toBe(true);
+  });
+
+  it("lets a manager fill any of them", () => {
+    expect(
+      musicWriteAllowed(held, fill(0, 200_000), { ...seat, canManage: true }),
+    ).toBe(true);
+  });
+
+  it("still takes an ordinary sample that changes no duration", () => {
+    expect(
+      musicWriteAllowed(held, { ...held, positionMs: 9_000, rev: 2, actorId: "p9" }, seat),
+    ).toBe(true);
+  });
+});
+
+describe("a vote that carries, with the infinity on", () => {
+  /*
+   * The room voted the track out and the queue is empty. With "Continuar
+   * com parecidas" on, the answer is a related track, not the end of the
+   * music — but the server only accepted an autoplayed advance when the
+   * track had RUN OUT, so the one write that would have kept the room
+   * going was refused and the only thing a client could do was end it.
+   */
+  const current = { ...(state().current as MusicTrack), durationMs: 200_000 };
+  const held = state({ current, queue: [], autoplay: true, skipVotes: ["u2"] });
+  const pick: MusicTrack = {
+    ...track("related"),
+    addedByUserId: "u1",
+    autoplayed: true,
+  };
+  const advanced: MusicStateWrite = {
+    ...musicAdvance(held),
+    current: pick,
+    queue: [],
+    status: "playing",
+    positionMs: 0,
+    atMs: 0,
+    rev: 2,
+    actorId: "p1",
+  };
+
+  it("takes the related pick the votes asked for", () => {
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "u1",
+        canManage: false,
+        canAdd: true,
+        roomSize: 3,
+        peerId: "p1",
+        expectedPositionMs: 1_000,
+        seatedUserIds: ["u1", "u2", "u3"],
+      }),
+    ).toBe(true);
+  });
+
+  it("still refuses it when the votes are not there", () => {
+    expect(
+      musicWriteAllowed(state({ current, queue: [], autoplay: true }), advanced, {
+        userId: "u1",
+        canManage: false,
+        canAdd: true,
+        roomSize: 9,
+        peerId: "p1",
+        expectedPositionMs: 1_000,
+        seatedUserIds: ["u1"],
+      }),
+    ).toBe(false);
+  });
+});
+

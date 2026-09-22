@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   ATTACHED_FEATURE_HINT_ORDER,
   FEATURE_HINT_STORAGE_KEYS,
@@ -8,8 +8,12 @@ import {
   shouldOfferCallDockHint,
   shouldOfferChannelPinHint,
   shouldOfferComposerFormatHint,
+  shouldOfferMusicFieldHint,
+  shouldOfferMusicHint,
   shouldOfferShortcutsHint,
   shouldOfferWatchPartyHint,
+  resetFeatureHintsForTests,
+  spendFeatureHintForLoad,
   winningFeatureHint,
 } from "./feature-hints";
 
@@ -61,6 +65,41 @@ describe("winningFeatureHint", () => {
     expect(
       winningFeatureHint({ bringFriends: true, music: true }),
     ).toBe("bringFriends");
+  });
+});
+
+describe("a hint that has had its turn stops holding the slot", () => {
+  /*
+   * WHY THIS IS NOT ONLY A LOCALHOST PROBLEM.
+   *
+   * The queue hands the slot to the first id that wants it, and `wanting`
+   * is computed from standing conditions: connected, in a call, a dock on
+   * screen. None of them changes when somebody presses Entendi, so the
+   * card that has already been seen went on winning for the rest of the
+   * page load and every tip behind it waited for good. On a developer's
+   * machine, where `lib/hints.ts` deliberately remembers nothing so every
+   * card can be seen again, that is forever: `callDock` is first, so the
+   * music card could never once be drawn.
+   */
+  beforeEach(() => resetFeatureHintsForTests());
+
+  it("passes the slot on once the winner is spent", () => {
+    expect(winningFeatureHint({ callDock: true, music: true })).toBe("callDock");
+    spendFeatureHintForLoad("callDock");
+    expect(winningFeatureHint({ callDock: true, music: true })).toBe("music");
+  });
+
+  it("keeps passing it down the order", () => {
+    spendFeatureHintForLoad("callDock");
+    spendFeatureHintForLoad("music");
+    expect(
+      winningFeatureHint({ callDock: true, music: true, composerFormat: true }),
+    ).toBe("composerFormat");
+  });
+
+  it("says nothing is wanted once every wanter has had its turn", () => {
+    spendFeatureHintForLoad("music");
+    expect(winningFeatureHint({ music: true })).toBeNull();
   });
 });
 
@@ -181,6 +220,89 @@ describe("shouldOfferBringFriendsHint", () => {
     expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.bringFriends)).toBe("1");
     expect(isFeatureHintSeen("bringFriends", storage, true)).toBe(true);
     expect(isFeatureHintSeen("bringFriends", storage, false)).toBe(false);
+  });
+});
+
+describe("shouldOfferMusicHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    connected: true,
+    canSpeak: true,
+    playing: false,
+    filaOpen: false,
+  };
+
+  it("shows once in a call where nobody has put anything on", () => {
+    expect(shouldOfferMusicHint(ready)).toBe(true);
+  });
+
+  it("stays quiet for a listener, a room with music on, and an open panel", () => {
+    expect(shouldOfferMusicHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferMusicHint({ ...ready, automated: true })).toBe(false);
+    expect(shouldOfferMusicHint({ ...ready, connected: false })).toBe(false);
+    // Without SPEAK there is nothing this person could add, so the card
+    // would be describing a control they cannot use.
+    expect(shouldOfferMusicHint({ ...ready, canSpeak: false })).toBe(false);
+    // The bar is on screen: the card would point at what they are reading.
+    expect(shouldOfferMusicHint({ ...ready, playing: true })).toBe(false);
+    // They already opened the panel the card exists to send them to.
+    expect(shouldOfferMusicHint({ ...ready, filaOpen: true })).toBe(false);
+  });
+
+  it("records under the second September 2026 key", () => {
+    const storage = memory();
+    // The card was re-aimed twice under the first key, so everybody who saw
+    // the sidebar-era copy has it stamped and would never see this one.
+    expect(FEATURE_HINT_STORAGE_KEYS.music).toBe(
+      "pqp:feature-hint-music-2026-09-2",
+    );
+    rememberFeatureHint("music", storage, true);
+    expect(isFeatureHintSeen("music", storage, true)).toBe(true);
+  });
+});
+
+describe("shouldOfferMusicFieldHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    filaOpen: true,
+    canAdd: true,
+  };
+
+  /*
+   * A MOMENT, NOT A STANDING TIP. The music card points at the tile from
+   * across the call; this one fires when somebody has opened the panel and
+   * is looking straight at the field, which is why it goes BEFORE `music`
+   * in the order — the same reasoning the two watch party hints carry.
+   */
+  it("fires the first time the panel is opened", () => {
+    expect(shouldOfferMusicFieldHint(ready)).toBe(true);
+  });
+
+  it("says nothing with the panel shut, or to somebody who cannot add", () => {
+    expect(shouldOfferMusicFieldHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferMusicFieldHint({ ...ready, automated: true })).toBe(false);
+    expect(shouldOfferMusicFieldHint({ ...ready, filaOpen: false })).toBe(false);
+    expect(shouldOfferMusicFieldHint({ ...ready, canAdd: false })).toBe(false);
+  });
+
+  it("beats the tile's card, which points at what they already opened", () => {
+    expect(winningFeatureHint({ music: true, musicField: true })).toBe(
+      "musicField",
+    );
+    expect(ATTACHED_FEATURE_HINT_ORDER.indexOf("musicField")).toBeLessThan(
+      ATTACHED_FEATURE_HINT_ORDER.indexOf("music"),
+    );
+  });
+
+  it("has a key of its own", () => {
+    const storage = memory();
+    rememberFeatureHint("musicField", storage, true);
+    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.musicField)).toBe("1");
+    expect(FEATURE_HINT_STORAGE_KEYS.musicField).not.toBe(
+      FEATURE_HINT_STORAGE_KEYS.music,
+    );
   });
 });
 

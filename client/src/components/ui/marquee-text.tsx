@@ -9,6 +9,11 @@ import { cn } from "@/lib/utils";
  * measured after layout and re-measured on resize; under
  * `prefers-reduced-motion` the CSS turns the animation off and the text
  * simply clips.
+ *
+ * The measurement is of ONE copy, never of the pair. Measuring the pair
+ * latches: the moment it overflows there are two copies to measure, so the
+ * answer stays yes until the box is wide enough for BOTH, and a box that
+ * grows to fit one and a half shows the spare copy sitting in the open.
  */
 export function MarqueeText({
   text,
@@ -22,19 +27,21 @@ export function MarqueeText({
 }) {
   const clipRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);
+  const oneRef = useRef<HTMLSpanElement | null>(null);
   const [overflows, setOverflows] = useState(false);
 
   useLayoutEffect(() => {
     const clip = clipRef.current;
     const inner = textRef.current;
-    if (!clip || !inner) {
+    const one = oneRef.current;
+    if (!clip || !inner || !one) {
       return;
     }
-    const measure = () => setOverflows(inner.scrollWidth > clip.clientWidth + 1);
+    const measure = () => setOverflows(one.scrollWidth > clip.clientWidth + 1);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(clip);
-    observer.observe(inner);
+    observer.observe(one);
     return () => observer.disconnect();
   }, [text]);
 
@@ -53,7 +60,9 @@ export function MarqueeText({
             : undefined
         }
       >
-        {text}
+        <span ref={oneRef} data-marquee-copy="" className="inline-block">
+          {text}
+        </span>
         {overflows && (
           <span aria-hidden="true" className="pl-8">
             {text}

@@ -7,8 +7,8 @@ import {
 
 /**
  * One-shot coachmarks for controls people miss: the composer format bar,
- * Watch party / share on the call strip, Fixar on the channel list, and
- * Cmd+/ for the shortcut map.
+ * Watch party / share and Música on the call dock, Fixar on the channel
+ * list, and Cmd+/ for the shortcut map.
  *
  * Persistence is `lib/hints.ts` (one store). Attached hints share a queue so
  * they cannot stack; shortcuts is a CornerCard in `CORNER_HINT_ORDER` and
@@ -22,6 +22,7 @@ export const FEATURE_HINT_IDS = [
   "watchParty",
   "bringFriends",
   "music",
+  "musicField",
   "composerFormat",
   "channelPin",
   "shortcuts",
@@ -35,7 +36,11 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
   watchParty: "pqp:feature-hint-watch-party-2026-09",
   bringFriends: "pqp:feature-hint-bring-friends-2026-09",
-  music: "pqp:feature-hint-music-2026-09",
+  // Bumped: the card was re-aimed twice under the first key (the player
+  // left the sidebar for the call dock), so everybody who saw the old
+  // copy had it stamped and would never be shown the one that is true.
+  music: "pqp:feature-hint-music-2026-09-2",
+  musicField: "pqp:feature-hint-music-field-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
@@ -59,10 +64,14 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // After the watch-party tips so those still win if both want the slot,
   // before the standing share/music tips.
   "bringFriends",
-  // The music queue, on the player at the bottom of the sidebar, the first
-  // time a person is in a call with nothing on. After the share tip: both
-  // fire for anyone in any call, and share is the older, less discoverable
-  // control.
+  // The queue's field, the first time somebody opens the panel. A moment,
+  // like the two watch party hints above, so it comes BEFORE the standing
+  // tip that points at the tile they have just pressed.
+  "musicField",
+  // The music queue, on the Música tile in the call dock, the first time a
+  // person who may speak is in a call with nothing on. After the share tip:
+  // both fire for anyone in any call, and share is the older, less
+  // discoverable control.
   "music",
   "composerFormat",
   "channelPin",
@@ -86,11 +95,40 @@ export function rememberFeatureHint(
   rememberHint(FEATURE_HINT_STORAGE_KEYS[id], storage, persist);
 }
 
+/**
+ * SPENT FOR THIS PAGE LOAD, WHICH IS NOT THE SAME AS SEEN.
+ *
+ * `wanting` is built from standing conditions — connected, in a call, a
+ * dock on screen — and none of them changes when somebody presses Entendi.
+ * So the card that had already had its turn went on winning the slot and
+ * every tip behind it waited for good. On a developer's machine, where
+ * `lib/hints.ts` deliberately remembers nothing so every card can be seen
+ * again, "for good" is every session: `callDock` is first in the order, so
+ * the music card could never once be drawn.
+ *
+ * A hint is spent when it is dismissed, or when the gate that justified it
+ * turns off after it was shown. `components/layout/feature-hint.tsx` is
+ * what decides that; this is where the queue reads it.
+ */
+const spentThisLoad = new Set<FeatureHintId>();
+
+export function spendFeatureHintForLoad(id: FeatureHintId): void {
+  spentThisLoad.add(id);
+}
+
+export function isFeatureHintSpentForLoad(id: FeatureHintId): boolean {
+  return spentThisLoad.has(id);
+}
+
+export function resetFeatureHintsForTests(): void {
+  spentThisLoad.clear();
+}
+
 export function winningFeatureHint(
   wanting: Partial<Record<AttachedFeatureHintId, boolean>>,
 ): AttachedFeatureHintId | null {
   for (const id of ATTACHED_FEATURE_HINT_ORDER) {
-    if (wanting[id]) {
+    if (wanting[id] && !spentThisLoad.has(id)) {
       return id;
     }
   }
@@ -204,6 +242,51 @@ export function shouldOfferBringFriendsHint(input: {
     input.roomSize > 0 &&
     input.roomSize < 3
   );
+}
+
+/**
+ * A person who could put something on, in a call where nobody has.
+ *
+ * SPEAK is the difference between a tip and a lie: without it there is
+ * nothing this person may add. A track already playing draws the bar above
+ * the dock, so the card would be pointing at what they are reading; an open
+ * Fila is the same argument one step further on.
+ */
+export function shouldOfferMusicHint(input: {
+  seen: boolean;
+  automated: boolean;
+  connected: boolean;
+  canSpeak: boolean;
+  /** A track is on, so the composer bar is on screen. */
+  playing: boolean;
+  filaOpen: boolean;
+}): boolean {
+  return (
+    !input.seen &&
+    !input.automated &&
+    input.connected &&
+    input.canSpeak &&
+    !input.playing &&
+    !input.filaOpen
+  );
+}
+
+/**
+ * They have opened the queue and are looking straight at the field.
+ *
+ * The field says what it takes whenever it is empty, which is why this was
+ * dropped from the plan once that shipped. Watching somebody use it says
+ * otherwise: a line under a box is read after you have worked out that the
+ * box is for you, and this card is what says so. `canAdd` because without
+ * SPEAK the field is not theirs to use.
+ */
+export function shouldOfferMusicFieldHint(input: {
+  seen: boolean;
+  automated: boolean;
+  filaOpen: boolean;
+  canAdd: boolean;
+}): boolean {
+  return !input.seen && !input.automated && input.filaOpen && input.canAdd;
 }
 
 export function shouldOfferChannelPinHint(input: {

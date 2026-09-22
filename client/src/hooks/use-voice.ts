@@ -2749,6 +2749,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       send: (music) => transport.sendVoice({ type: "set-music", state: music }),
       sendListening: (listening) =>
         transport.sendVoice({ type: "set-music-listening", listening }),
+      canManage: () => state.canManageMusic,
     });
   }
 

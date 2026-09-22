@@ -4,13 +4,16 @@ import {
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError, resolveMusic, searchMusic } from "@/lib/api";
+import type { MessageKey } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import {
   addTrack,
@@ -22,6 +25,17 @@ import {
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import { formatMusicClock } from "@/components/voice/music-now-playing";
+
+/**
+ * LIVE SEARCH, WITHIN THE LIMITER.
+ *
+ * `GET /api/music/search` is rate limited per user at 20 burst and then one
+ * every two seconds, so the field asks only once the typing stops, never for
+ * the same text twice, and never below the floor. Two characters is the floor
+ * rather than three because bands are called U2 and MC.
+ */
+export const LIVE_SEARCH_DEBOUNCE_MS = 350;
+export const LIVE_SEARCH_MIN_CHARS = 2;
 
 export function shouldResolveQuery(text: string): boolean {
   const trimmed = text.trim();
@@ -36,6 +50,31 @@ export function shouldResolveQuery(text: string): boolean {
 }
 
 /** Add a resolved track at the front of the queue (two writes). */
+/**
+ * WHAT TO TELL SOMEBODY WHEN A LOOKUP FAILS.
+ *
+ * One mapping rather than two: this was written out in both the search
+ * handler and the paste handler, and the two had already drifted — 429
+ * was a rate limit in neither of them, so the per-user limiter told
+ * people the whole feature was unavailable. The field searches as you
+ * type, so that refusal is the one they actually meet.
+ */
+export function musicErrorKey(error: unknown): MessageKey {
+  if (!(error instanceof ApiError)) {
+    return "music.error.upstream";
+  }
+  if (error.status === 404) {
+    return "music.error.notFound";
+  }
+  if (error.status === 400) {
+    return "music.error.unsupported";
+  }
+  if (error.status === 429) {
+    return "music.error.busy";
+  }
+  return "music.error.upstream";
+}
+
 export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
   const before = new Set((getMusicSnapshot().state?.queue ?? []).map((track) => track.id));
   const outcome = addTrack(resolved);
@@ -51,7 +90,6 @@ export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
 export function MusicSearchPicker({
   compact = false,
   chrome = "default",
-  variant = "queue",
   canManage = false,
   autoFocus = false,
   onQueryActive,
@@ -60,7 +98,6 @@ export function MusicSearchPicker({
   compact?: boolean;
   /** Member-list field: icon in the box, paper tokens, square result thumbs. */
   chrome?: "default" | "rail";
-  variant?: "start" | "queue";
   canManage?: boolean;
   autoFocus?: boolean;
   onQueryActive?: (active: boolean) => void;
@@ -72,8 +109,12 @@ export function MusicSearchPicker({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [results, setResults] = useState<MusicResolved[] | null>(null);
+  /** The text these results answer, so a stale list cannot be added by Enter. */
+  const [resultsFor, setResultsFor] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rail = chrome === "rail";
+  const lastQueried = useRef("");
+  const runId = useRef(0);
 
   useEffect(() => {
     onQueryActive?.(Boolean(query.trim()) || results !== null);
@@ -89,10 +130,20 @@ export function MusicSearchPicker({
 
   const tellOutcome = useCallback(
     (outcome: MusicAddOutcome) => {
-      if (outcome === "queued" || outcome === "playing") {
-        setNotice(t("music.queued"));
+      if (
+        outcome === "queued" ||
+        outcome === "playing" ||
+        outcome === "playing-dropped"
+      ) {
+        setNotice(
+          outcome === "playing-dropped"
+            ? t("music.startedAndDropped")
+            : t("music.queued"),
+        );
         setQuery("");
         setResults(null);
+        setResultsFor("");
+        lastQueried.current = "";
       } else if (outcome === "full") {
         setNotice(t("music.full"));
       }
@@ -111,6 +162,12 @@ export function MusicSearchPicker({
   const runResolve = useCallback(
     async (text: string) => {
       const room = musicSessionChannelId();
+      /*
+       * A search may still be in flight, and its answer would land on top
+       * of what this paste resolves to. `runId` is the same guard
+       * `runSearch` checks, so bumping it here retires that answer.
+       */
+      runId.current += 1;
       try {
         const { track, tracks } = await resolveMusic(text);
         if (room === null || musicSessionChannelId() !== room) {
@@ -128,22 +185,14 @@ export function MusicSearchPicker({
             );
             setQuery("");
             setResults(null);
+            setResultsFor("");
+            lastQueried.current = "";
           }
         } else {
           tellOutcome(addTrack(track));
         }
       } catch (error) {
-        if (error instanceof ApiError) {
-          if (error.status === 404) {
-            setNotice(t("music.error.notFound"));
-          } else if (error.status === 400) {
-            setNotice(t("music.error.unsupported"));
-          } else {
-            setNotice(t("music.error.upstream"));
-          }
-        } else {
-          setNotice(t("music.error.upstream"));
-        }
+        setNotice(t(musicErrorKey(error)));
       }
     },
     [t, tellOutcome],
@@ -152,36 +201,65 @@ export function MusicSearchPicker({
   const runSearch = useCallback(
     async (text: string) => {
       const room = musicSessionChannelId();
+      /* A slower answer to an older query must not land on a newer one. */
+      runId.current += 1;
+      const mine = runId.current;
+      const stale = () =>
+        runId.current !== mine || room === null || musicSessionChannelId() !== room;
       try {
         const { tracks } = await searchMusic(text);
-        if (room === null || musicSessionChannelId() !== room) {
+        if (stale()) {
           return;
         }
         setResults(tracks.slice(0, 5));
+        setResultsFor(text);
         setHighlight(0);
         if (tracks.length === 0) {
           setNotice(t("music.error.notFound"));
         }
       } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          setResults([]);
-          setNotice(t("music.error.notFound"));
-        } else if (error instanceof ApiError && error.status === 400) {
-          setNotice(t("music.error.unsupported"));
-        } else {
-          setNotice(t("music.error.upstream"));
+        if (stale()) {
+          return;
         }
+        if (error instanceof ApiError && error.status === 404) {
+          // The only one that also empties the list: nothing matched.
+          setResults([]);
+          setResultsFor(text);
+        }
+        setNotice(t(musicErrorKey(error)));
       }
     },
     [t],
   );
+
+  /*
+   * Typing searches on its own. It deliberately does not raise `busy`: that
+   * disables the field, and a field that goes dead under the caret is worse
+   * than a slow list. A link is never live-searched, because resolving one
+   * ADDS it, and half a pasted URL is not a song.
+   */
+  useEffect(() => {
+    const text = query.trim();
+    if (
+      text.length < LIVE_SEARCH_MIN_CHARS ||
+      shouldResolveQuery(text) ||
+      text === lastQueried.current
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      lastQueried.current = text;
+      void runSearch(text);
+    }, LIVE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query, runSearch]);
 
   const submit = useCallback(async () => {
     const text = query.trim();
     if (!text || busy) {
       return;
     }
-    if (results && results.length > 0) {
+    if (results && results.length > 0 && resultsFor === text) {
       const pick = results[highlight] ?? results[0];
       if (pick) {
         addResolved(pick);
@@ -194,12 +272,42 @@ export function MusicSearchPicker({
       if (shouldResolveQuery(text)) {
         await runResolve(text);
       } else {
+        lastQueried.current = text;
         await runSearch(text);
       }
     } finally {
       setBusy(false);
     }
-  }, [addResolved, busy, highlight, query, results, runResolve, runSearch]);
+  }, [addResolved, busy, highlight, query, results, resultsFor, runResolve, runSearch]);
+
+  /*
+   * A pasted link resolves at once. Only a paste, never a keystroke: somebody
+   * typing a URL by hand would otherwise fire a resolve at every character
+   * that happens to parse, and each one costs the upstream budget.
+   */
+  const onFieldPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const field = event.currentTarget;
+    const pasted = event.clipboardData?.getData("text") ?? "";
+    const next = (
+      field.value.slice(0, field.selectionStart ?? field.value.length) +
+      pasted +
+      field.value.slice(field.selectionEnd ?? field.value.length)
+    ).trim();
+    if (!next || !shouldResolveQuery(next) || busy) {
+      return;
+    }
+    event.preventDefault();
+    setQuery(next);
+    setBusy(true);
+    setNotice(null);
+    void (async () => {
+      try {
+        await runResolve(next);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
 
   const onFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" && results && results.length > 0) {
@@ -217,6 +325,7 @@ export function MusicSearchPicker({
       event.stopPropagation();
       if (results) {
         setResults(null);
+        setResultsFor("");
         return;
       }
       if (!query.trim()) {
@@ -230,19 +339,29 @@ export function MusicSearchPicker({
     }
   };
 
+  /*
+   * The old list stays under the caret while the next one is on its way, so
+   * the panel does not blink on every keystroke. `resultsFor` is what keeps
+   * Enter honest about which text those rows answer.
+   */
   const onQueryChange = (value: string) => {
     setQuery(value);
-    if (results) {
+    if (results && !value.trim()) {
       setResults(null);
+      setResultsFor("");
     }
   };
 
-  const placeholder =
-    variant === "start"
-      ? t("music.placeholder.start")
-      : compact
-        ? t("music.placeholder.short")
-        : t("music.placeholder");
+  /*
+   * The visible placeholder is the one sentence that says the field takes
+   * both a link and a search, so it is only shortened where it genuinely
+   * does not fit: the drawer is 240px wide.
+   */
+  const placeholder = rail
+    ? t("music.placeholder.short")
+    : compact
+      ? t("music.placeholder.field")
+      : t("music.placeholder");
 
   const fieldProps = {
     value: query,
@@ -257,20 +376,21 @@ export function MusicSearchPicker({
     "aria-activedescendant":
       results && results[highlight] ? `${listId}-${highlight}` : undefined,
     onKeyDown: onFieldKeyDown,
+    onPaste: onFieldPaste,
     onFocus: (event: { currentTarget: HTMLInputElement }) => {
       event.currentTarget.scrollIntoView({ block: "nearest" as const });
     },
   };
 
+  /*
+   * NOT A FORM. The in-call panel renders inside the composer's own form,
+   * and a form inside a form is invalid HTML: the browser ran a real
+   * navigation on submit, which reloaded the SPA and dropped the person
+   * out of the voice call. Enter is handled on the field, and the + is an
+   * ordinary button calling the same path.
+   */
   return (
-    <form
-      data-music-search=""
-      className="space-y-1"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submit();
-      }}
-    >
+    <div data-music-search="" role="search" className="space-y-1">
       <div className={cn("flex items-center gap-1.5", rail && "relative")}>
         {rail ? (
           <>
@@ -301,11 +421,12 @@ export function MusicSearchPicker({
             />
             <Tooltip label={t("music.add")}>
               <Button
-                type="submit"
+                type="button"
                 size="icon"
                 variant="secondary"
                 className="h-8 w-8 shrink-0"
                 disabled={busy || !query.trim()}
+                onClick={() => void submit()}
               >
                 <Plus className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -400,6 +521,6 @@ export function MusicSearchPicker({
           {notice}
         </p>
       )}
-    </form>
+    </div>
   );
 }

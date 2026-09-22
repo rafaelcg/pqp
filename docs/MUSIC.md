@@ -29,12 +29,18 @@ costs nothing per listener.
 | `current` | the track playing, or null |
 | `queue` | what is up next, at most `MUSIC_QUEUE_LIMIT` (50) |
 | `status` | `playing` or `paused` |
-| `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why) |
+| `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why). This is the last sample ANYBODY seated sent, so the server does not take it for the room's clock: it keeps its own anchor (`voice_rooms.music_anchor_ms` / `music_anchor_at`, and `anchors` in `server/src/ws/music.ts`), moves it only for a write from whoever is running the music or for a change of `current` or `status` (a new track starts at zero, a pause freezes, a resume restarts), never for an append, a removal, a vote or a switch, and replaces a sample more than `MUSIC_POSITION_TOLERANCE_MS` ahead of that anchor with the anchor's own reading. Clamped, never refused, because the same write carries an ordinary queue append. A sample that is behind is kept as it is: a buffering player lags, it does not run ahead |
 | `rev`, `actorId` | the logical clock and its tie-break |
-| `openControls` | when true, anyone with SPEAK is treated as a manager. Only a manager writes it. A write that omits it keeps what the room already holds |
+| `openControls` | when true, anyone with SPEAK may write anything a manager may write EXCEPT the three room switches (`openControls`, `repeat`, `autoplay`), which stay with `MANAGE_MUSIC`: a promoted speaker runs the music, they do not decide who else may. Only a manager writes it. A write that omits it keeps what the room already holds |
 | `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
 | `skipVotes` | user ids that have voted to skip the current track. Any change of `current` clears it |
 | `history` | the last ten finished tracks, most recent first. A repeat of the same `videoId` moves that row to the front |
+| the end-of-track gate | reads the SERVER's clock, and refuses to decide without one. A room whose anchor is missing (the cold-row case, `musicCluster.anchorMissing`) falls back to votes rather than to `held.positionMs`, which is the last sample anybody seated wrote and therefore the very thing the anchor exists to distrust. The same rule applies to the seated roster: absent on the server, no held vote counts |
+| a skip vote | counted the same way on both sides: only the votes of people still seated. The client counted every held vote, reached the threshold first, wrote the advance and had it refused, so the vote was never recorded and pressing again did the same thing for ever. A vote that carries with "Continuar com parecidas" on takes the related pick rather than ending the room |
+| `actorId` | the writer's own peer id, and the tie-break between two writes at the same `rev` (higher string wins, in the cache and in the row alike). The server refuses a frame whose `actorId` is not the peer id of the socket it arrived on: it grants no permission, but an invented one wins every race it enters, including against a manager acting in the same instant |
+| filling a missing `durationMs` | the manager, or whoever added that track, **on every track and not only `current`**. The queue used to go through the same-tracks path, which allows null to a value for anybody: a listen-only seat could give a queued track a length of 1 ms and, once it became current, satisfy the end-of-track gate a millisecond later |
+| a position sample from a non-runner | clamped to the room's clock in BOTH directions past `MUSIC_POSITION_TOLERANCE_MS`. Forward was the original bypass; backward was left open on the reasoning that a buffering player lags and cannot reach the gate, which is true of the gate and beside the point for everyone else, since every client seeks to within 2.5s of the room's clock |
+| `durationMs` (on every track, `current` and queued) | null, or a real length: greater than zero and at most `MUSIC_MAX_DURATION_MS` (12 h). Refused otherwise, from anybody, before the rights are looked at. It is client-supplied and it is the other operand of the end-of-track gate, so an unbounded one is a way to end a track: zero satisfies the gate from the instant the track starts, and `matchesAdvance` does not ask for `canAdd`, so ANY seated person could then take the room's track away with no votes. The grace is also capped at half the declared length, so a short track cannot be over before it has played |
 | `autoplay` | when true and the queue is empty, the room keeps going with a related track. Only a manager writes it. A write that omits it keeps what the room already holds. A track the room picked itself carries `autoplayed: true` |
 
 Last-writer-wins, no host: whoever acted most recently controls the player,
@@ -84,10 +90,10 @@ already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
 | add a song, or a list, to the end | `SPEAK` |
 | remove a song you added | being in the call |
 | start music when nothing is on | `SPEAK` (your own song) |
-| skip, pause, resume, reorder, shuffle, remove others' songs, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on |
-| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` |
+| skip, pause, resume, seek, skip-back, reorder, shuffle, remove others' songs, put a song on once the current one has ended, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on. Seek and skip-back are on this row because both are ordinary writes for whoever is running the music, and skip-back and the end-of-track add both rewrite `history` |
+| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` only, never a promoted speaker |
 | autoplay the next related track when the queue ran out | being in the call, while `autoplay` is on, the queue is empty, and the current track has run out. The write must put on your own track with `autoplayed: true`, playing at 0, history as `musicAdvance` would, votes cleared |
-| vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once `held.skipVotes` plus that vote reaches `max(2, ceil(roomSize / 2))` |
+| vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once the held votes FROM PEOPLE STILL SEATED, plus that vote, reach `max(2, ceil(roomSize / 2))`. The threshold's denominator shrinks when somebody leaves, so its numerator does too: a vote is counted only while its owner holds a seat, and the votes themselves are left alone until the track changes |
 | play a history row again | `SPEAK` (it is an ordinary own-append under your name) |
 
 `channel-music` also carries `listeners`: how many seated peers have `listeningMusic` true. That flag lives on `voice_peers.listening_music` (default true) and on the roster as `listeningMusic`, the same way `sharingScreen` does. A client that predates `set-music-listening` never turns it off, so they still count. The count is sent again when it changes.
@@ -101,9 +107,16 @@ rights, handing the held state back on that socket with `forced: true`
 (the sender's optimistic copy is a `rev` ahead and would otherwise call the
 correction stale). The one subtlety is the end of a track: every player
 fires "ended" and tries to advance, and a member's advance looks exactly
-like a skip. The room's last writer samples the track's duration along
-with its position, and a member's advance is accepted only once the last
-sample is within `MUSIC_END_GRACE_MS` of that duration.
+like a skip. A member's advance is accepted only once the SERVER's own
+clock for the room is within `MUSIC_END_GRACE_MS` of the track's duration.
+Both halves of that used to be writable by anybody seated, which made the
+gate a formality: the position was the last sample, and the duration could
+go from null to any value. The position is the anchor above. The duration
+is filled at add time wherever possible (a pasted link has no duration from
+oEmbed, so `resolveYouTube` asks InnerTube for one), and where it is still
+null only a manager or the person who added the track may fill it in.
+No bound on the filled value would do instead: any floor still lets the
+filler end the track one grace later.
 
 ## Resolving a link
 
@@ -112,12 +125,13 @@ listName }` (and `track`, the first, for the first client build):
 
 | Pasted | What happens |
 |---|---|
-| YouTube video (`watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music) | id off the URL; title and thumbnail off YouTube's oEmbed, no key |
+| YouTube video (`watch?v=`, `watch/?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music, any of them with a trailing slash) | id off the URL; title and thumbnail off YouTube's oEmbed, no key; the duration from one InnerTube search, because oEmbed has none and the end-of-track gate needs one |
 | YouTube playlist (`playlist?list=`, `watch?v=X&list=Y`, YouTube Music) | up to 50 items off InnerTube `browse` (or `playlistItems` with a key). A `watch?v=X&list=Y` starts at X, and a video past the first page is resolved on its own and placed first. A mix (`list=RD...`) is generated per viewer and has no list, so it is treated as its single video |
 | Spotify track (`open.spotify.com/track/`, `intl-xx/track/`, `embed/track/`, `spotify:track:`) | title off Spotify's oEmbed, artist off the server-rendered embed page, then one search; keeps the Spotify URL for "abrir no Spotify" |
 | Spotify album or playlist (same shapes, `album/`, `playlist/`) | the track list off the embed page, then one search per track, three at a time with one retry, capped at `SPOTIFY_LIST_MAX` (25) |
 | `spotify.link/...` | followed, then parsed again |
 | Spotify artist, other sites | refused with a message |
+| Text that STARTS with a scheme and does not parse (`https://`) | refused the same way, rather than searched. Text that merely contains a colon or a scheme later on ("Rush 2112: Overture") is an ordinary search |
 | Anything else | a search |
 
 ### Search: InnerTube, the way every music bot does it
@@ -159,12 +173,35 @@ or a film, not a song). Unknown duration is kept. Those rows carry
 `autoplayed: true`. ENDED then uses the ordinary `advance()`. A fetch at
 ENDED is only the fallback when the buffer is empty.
 
+**Nothing sweeps for divergence, and nothing needs to.** The bus is
+fire-and-forget, so an instance that misses a `voice.music` frame holds a
+stale queue. What corrects it is the music itself: while a track plays the
+actor writes a position sample every ten seconds (`REPORT_MS`), and that
+sample is an absolute state at a higher `rev` which crosses the same bus.
+A stale instance is therefore at most about ten seconds behind, and when
+nothing is playing there is nothing to be stale about. A join reads the
+row directly, which covers the rest.
+
+**Skip takes the same fallback.** `musicAdvance` ends the room on an empty
+queue whatever `autoplay` says, so the skip button, which went straight to
+`advance()`, ended the queue for somebody who had just switched the mode
+on and pressed skip before the buffer had filled. `skipToNext` is the
+button's path now: with anything queued it is the write it always was, and
+into an empty queue with the mode on it asks for a related pick first and
+only ends the room when there is genuinely nothing to play, or the lookup
+fails.
+
 Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
 charged per call to YouTube or Spotify rather than per request, so a cache
 hit costs nothing, a pasted link costs one and a 25-track Spotify list costs
-twenty-six; a six-hour search cache; eight-second upstream timeouts; and no
-query string in an error message (the Data API key travels in one).
+twenty-six; ONE six-hour search cache shared by `/api/music/resolve` and
+`/api/music/search`, holding the list of hits so the first serves the
+single-track path and all five serve the add box, with one upstream call
+per key while it is in flight rather than one per caller; eight-second
+upstream timeouts; and no URL query string in an error message (the Data
+API key travels in one, which is why `fetchText` cuts the URL at the `?`;
+the text somebody searched for is their own and does appear).
 
 ## Measured
 
@@ -211,14 +248,32 @@ and registers a sender on every `welcome`.
 The player lives in the composer of the call you are in.
 The Music tile on the call dock opens Fila. Nothing draws in the
 composer until that tile is pressed or a track is on. A track on is a
-~72px bar: 56px art, title (marquee on hover), who added it, then
-shuffle, skip-back, a filled round play, skip or vote-skip, and repeat
-(managers; shuffle and repeat hide under 28rem and move into `…`).
-A seek with clocks sits across the full bar (managers seek; everyone
-else read-only). The right cluster is `…` then a speaker popover
-(mute, volume, ducking, Parar de ouvir). `…` opens upward: Todo mundo
-controla, Continuar com parecidas, and Parar pra todos behind a
-confirm. Members see none of shuffle, repeat, or `…`. Art and title
+~72px bar: 56px art, title (marquee on hover), who added it, then the
+infinity (Continuar com parecidas), skip-back, a filled round play, skip
+or vote-skip, and repeat (managers; both modes hide under 28rem and move
+into `…`). The infinity is Apple Music's glyph for the same idea, and it
+took shuffle's slot on purpose: both controls in that pair are now modes
+with a state you can see. Shuffle re-orders the QUEUE, so pressing it on
+a bar with no queue on screen looked like nothing happening; it lives in
+the Fila header now, where the list it re-orders is right below it, and
+it is disabled under two tracks.
+A seek with clocks sits across the full bar. Whoever runs the music seeks:
+a manager, or anybody with SPEAK while Todo mundo controla is on. For
+everybody else it is read-only. The bar holds a preview of the thumb's position only
+while a pointer drag is in progress (`use-scrub.ts`): the slider is
+controlled, so a key press arrives as commit-then-change, and a preview
+cleared on commit alone was set again by the change that followed and
+never cleared after that, freezing the clock for the rest of the track. A
+change with no drag in progress seeks straight through. The right cluster
+is the queue toggle, `…`, and a volume control on the bar itself. `…`
+opens upward and is grouped by WHO each row reaches rather than by how it
+is built: "Só pra você" (Abaixar durante a fala, and Parar de ouvir or
+Ouvir), then the room's own (Todo mundo controla, Continuar com
+parecidas, and Parar pra todos behind a confirm) for whoever may set
+them. The two stops used to sit in different popovers, neither of them
+labelled stop. A member sees the same bar as everybody else with the
+controls they may not use shown locked, rather than a bar with holes in
+it. Art and title
 open the queue; adds, skips, and someone else starting a track do not.
 Skip-back is client-only: past three seconds it restarts the current
 track, otherwise the last Tocadas row becomes current and the one you
@@ -240,7 +295,13 @@ keeps the 48px card, seek, and the five-item `…`, because that radio
 has no bar), without unmounting them.
 
 The YouTube iframe stays in a hidden dock in `music-mini-player.tsx` for
-the whole listen, including after the queue is cleared: ending the room
+the whole listen. Exactly one `MusicMiniPlayer` carries it, mounted in
+`App` outside every branch, because the sidebar footer has three call
+sites and two of them can be on screen at once (the sidebar stays mounted
+under Novidades while Novidades renders a footer of its own); two
+carriers portal two iframes into the one host and play the track twice.
+The footers render the radio and the queue with `embed={false}`. It stays
+mounted including after the queue is cleared: ending the room
 stops the iframe (`stopVideo`) and does not destroy it. Unmounting is what
 stops the sound, so that only happens on Parar de ouvir or leaving the
 call.

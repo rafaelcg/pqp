@@ -241,6 +241,34 @@ function sameIdList(a: string[], b: string[]): boolean {
  */
 export const MUSIC_END_GRACE_MS = 20_000;
 
+/**
+ * How far ahead of the server's own clock a non-manager's position sample
+ * may be before the server replaces it with the clock.
+ *
+ * The largest honest forward divergence is the client's 2.5 s seek
+ * threshold plus its 2 s check interval plus the round trip, so under five
+ * seconds. This is twice that and half the grace. Tighter would pull an
+ * honest append back a few seconds, which the room sees as a backward
+ * seek; looser lets somebody creep the room forward by the tolerance on
+ * every write, and position-only writes are coalesced rather than refused.
+ */
+/**
+ * THE LONGEST THING THE ROOM WILL CALL A TRACK.
+ *
+ * A 24/7 live mix answers the player's `getDuration()` with how long the
+ * STREAM has been up, not how long a song is, so a room was handed a
+ * duration of fifty days and drew a seek bar against it. It is also the
+ * other operand of the end-of-track gate, so a value like that means the
+ * gate never opens and nothing ever advances on its own.
+ *
+ * Twelve hours is far above any real DJ set and far below a stream that
+ * has been live for days. The bound is here to catch a category error, not
+ * to judge a long video.
+ */
+export const MUSIC_MAX_DURATION_MS = 12 * 60 * 60 * 1000;
+
+export const MUSIC_POSITION_TOLERANCE_MS = 10_000;
+
 export interface MusicRights {
   userId: string;
   /** `Permission.MANAGE_MUSIC` in this channel. */
@@ -249,6 +277,41 @@ export interface MusicRights {
   canAdd: boolean;
   /** People seated in the call, the same count the roster uses. */
   roomSize: number;
+  /**
+   * The room's position by the SERVER's clock, when the caller keeps one.
+   * The end-of-track gate reads this rather than `held.positionMs`, which
+   * is the last accepted sample and which anybody seated can write. The
+   * client omits it: it only uses this function to decide what to draw.
+   */
+  expectedPositionMs?: number;
+  /**
+   * The user ids behind that count, when the caller knows them. The skip
+   * threshold is half the LIVE room, so its numerator has to be live too:
+   * a vote is only counted while its owner is still seated. Omitted means
+   * "not known here", and every held vote counts, which is what the client
+   * does when it draws the button.
+   */
+  seatedUserIds?: string[];
+  /**
+   * The peer id of the socket this write arrived on, when the caller has
+   * one. `actorId` is the writer's own peer id and the tie-break between
+   * two writes at the same `rev`, chosen by the writer, so a client that
+   * picks a high string wins every race it enters. The server knows who
+   * is on the socket and checks the claim against it; the client omits
+   * this, because it only uses this function to decide what to draw.
+   */
+  peerId?: string;
+  /**
+   * Set only by `musicServerWriteAllowed`. It says "the fields above are
+   * the server's, and a missing one is a fact rather than an omission",
+   * which is what turns the lenient client reading off: no clock then
+   * means the gate falls back to votes rather than to `held.positionMs`.
+   *
+   * This used to be inferred from `peerId` being present. That worked and
+   * read as a coincidence, and two reviewers in a row stopped on it, so it
+   * says what it means now.
+   */
+  trustedContext?: boolean;
 }
 
 /** Votes needed to skip: half the room, at least two. */
@@ -444,7 +507,9 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * decides on this; the client uses it to draw only what will be allowed.
  *
  * A manager may do anything. `openControls` on the held state promotes
- * anyone with SPEAK to that same bar. Anybody else may: put on the first
+ * anyone with SPEAK to the same bar EXCEPT the three room switches, which
+ * stay with `MANAGE_MUSIC`: a promoted speaker runs the music, they do not
+ * decide who else may. Anybody else may: put on the first
  * song when nothing is on (and only their own); append their own songs to
  * the end; remove their own; add their own skip vote; move the queue along
  * once the current track has run out or enough skip votes are in; and, as
@@ -455,15 +520,185 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * empty and the current track has run out, a member may also write the
  * next related track under their own name with `autoplayed: true`.
  */
+/**
+ * A length a song could actually have: unknown, or inside the bounds.
+ * `MUSIC_MAX_DURATION_MS` is the live-stream ceiling; the floor is simply
+ * that zero and negatives are not lengths, they are a way of saying the
+ * track is already over.
+ */
+function plausibleDuration(durationMs: number | null | undefined): boolean {
+  if (durationMs === null || durationMs === undefined) {
+    return true;
+  }
+  return (
+    Number.isFinite(durationMs) &&
+    durationMs > 0 &&
+    durationMs <= MUSIC_MAX_DURATION_MS
+  );
+}
+
+/** What the room already believes this track is, if it holds it at all. */
+function heldDurationOf(
+  held: MusicState | null,
+  trackId: string,
+): number | null | undefined {
+  if (held === null) {
+    return undefined;
+  }
+  if (held.current?.id === trackId) {
+    return held.current.durationMs;
+  }
+  return held.queue.find((track) => track.id === trackId)?.durationMs;
+}
+
+/**
+ * Bounded on what a write INTRODUCES, not on what it carries.
+ *
+ * Every write is an absolute state, so it repeats every track already in
+ * the room. Checking all of them meant a room handed a bogus duration
+ * before this rule existed would have every later write refused, including
+ * the skip that would have got rid of the track: stuck until it emptied.
+ *
+ * A track therefore keeps whatever length it already had, and only a new
+ * or changed one has to be plausible. The gate is safe either way, because
+ * it needs a positive duration and caps the grace at half of it: a legacy
+ * zero ends nothing and a legacy fifty days never comes due.
+ */
+function durationsArePlausible(
+  held: MusicState | null,
+  incoming: MusicStateWrite,
+): boolean {
+  const introduced = (track: MusicTrack) => {
+    const before = heldDurationOf(held, track.id);
+    if (before !== undefined && before === track.durationMs) {
+      return true;
+    }
+    return plausibleDuration(track.durationMs);
+  };
+  if (incoming.current && !introduced(incoming.current)) {
+    return false;
+  }
+  return (incoming.queue ?? []).every(introduced);
+}
+
+/**
+ * THE SERVER'S DOOR, WHERE THE TRUSTED CONTEXT IS NOT OPTIONAL.
+ *
+ * `MusicRights` carries the three things only the server knows — the
+ * socket's peer id, the room's own clock, and who is seated — as optional
+ * fields, because the client calls the same rule with none of them to
+ * decide what to draw. That is convenient and it is also how a server
+ * caller forgets one: it still compiles, and it silently gets the client's
+ * lenient reading, where the end-of-track gate falls back to the last
+ * position sample anybody wrote.
+ *
+ * So the server does not call `musicWriteAllowed` directly. It calls this,
+ * which demands all three. `expectedPositionMs` is `number | null` rather
+ * than optional on purpose: a room with no anchor is a real state, and the
+ * caller has to say so rather than leave it out.
+ */
+export interface MusicServerRights {
+  userId: string;
+  canManage: boolean;
+  canAdd: boolean;
+  roomSize: number;
+  /** The peer id of the socket the write arrived on. */
+  peerId: string;
+  /** The room's own clock, or null when this instance holds no anchor. */
+  expectedPositionMs: number | null;
+  /** Who is seated, from the cluster when the registry is on. */
+  seatedUserIds: string[];
+}
+
+export function musicServerWriteAllowed(
+  held: MusicState | null,
+  incoming: MusicStateWrite | null,
+  rights: MusicServerRights,
+): boolean {
+  return musicWriteAllowed(held, incoming, {
+    ...rights,
+    trustedContext: true,
+    expectedPositionMs: rights.expectedPositionMs ?? undefined,
+  });
+}
+
+/**
+ * Whoever may fill in a missing length, for every track in the write.
+ *
+ * `null` to a value is the only change `sameTrack` allows to an existing
+ * track, so it is the only one this has to police. A manager may fill any
+ * of them; anybody else may fill only a track they added themselves.
+ */
+function fillsAllowed(
+  held: MusicState,
+  incoming: MusicStateWrite,
+  rights: MusicRights,
+): boolean {
+  if (rights.canManage) {
+    return true;
+  }
+  const before = new Map<string, MusicTrack>();
+  if (held.current) {
+    before.set(held.current.id, held.current);
+  }
+  for (const queued of held.queue) {
+    before.set(queued.id, queued);
+  }
+  const mayFill = (next: MusicTrack): boolean => {
+    const previous = before.get(next.id);
+    if (
+      previous === undefined ||
+      previous.durationMs !== null ||
+      next.durationMs === null
+    ) {
+      return true;
+    }
+    return previous.addedByUserId === rights.userId;
+  };
+  if (incoming.current && !mayFill(incoming.current)) {
+    return false;
+  }
+  return (incoming.queue ?? []).every(mayFill);
+}
+
 export function musicWriteAllowed(
   held: MusicState | null,
   incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): boolean {
-  const canManage =
-    rights.canManage || (held?.openControls === true && rights.canAdd);
-  if (canManage) {
+  /*
+   * Before the rights, because this is not a rights question.
+   *
+   * A track's declared length is the other operand of the end-of-track
+   * gate and it arrives from a client, so every track in the write is
+   * bounded, both ends, wherever it sits. The first version of this looked
+   * only at `incoming.current` and only while the held duration was still
+   * null, which left the ordinary append path wide open: a member could
+   * queue a track declaring fifty days (defeating the live-stream ceiling
+   * the moment it became current) or declaring zero, which satisfies the
+   * gate from the instant it starts and hands an advance to anybody at all.
+   *
+   * Null stays legal: that is what an unknown duration IS, and the room
+   * falls back to votes for an early skip.
+   */
+  if (incoming !== null && !durationsArePlausible(held, incoming)) {
+    return false;
+  }
+  if (rights.canManage) {
     return true;
+  }
+  /*
+   * "Todo mundo controla" is one rule, not a verb table: everything a
+   * manager may write except `openControls`, `repeat` and `autoplay`.
+   * A list of allowed verbs was tried and refuses two things the switch is
+   * meant to hand over, because both rewrite `history`: the skip-back, and
+   * an add while the current track has already ended.
+   */
+  if (held !== null && held.openControls === true && rights.canAdd) {
+    if (incoming === null) {
+      return true;
+    }
+    return controlsUnchanged(held, completeMusicState(held, incoming));
   }
   if (incoming === null) {
     return false;
@@ -493,6 +728,27 @@ export function musicWriteAllowed(
     if (!controlsUnchanged(held, incoming) || !sameHistory(historyHeld, historyIncoming)) {
       return false;
     }
+    /*
+     * The duration is the other half of the end-of-track gate, and
+     * `sameTrack` lets it go from null to any value so the room's writer
+     * can fill it in after the fact. A member who fills 1 makes the gate
+     * true at position zero, and no bound on the value closes that: any
+     * floor still lets the filler cut the track a grace later. So the fill
+     * belongs to the manager, or to whoever put the track on.
+     */
+    /*
+     * A duration may go from null to a value so the room's own writer can
+     * fill in what oEmbed did not carry, and that belongs to the manager
+     * or to whoever put the track on. This used to guard `current` only.
+     * The queue went through `sameTracks`, which allows exactly the same
+     * transition for ANYBODY, so a listen-only seat could give a queued
+     * track a length of 1 ms, wait for it to become current, and a
+     * millisecond later the end-of-track gate was satisfied: the room's
+     * track taken away with no votes, by somebody who cannot speak.
+     */
+    if (!fillsAllowed(held, incoming, rights)) {
+      return false;
+    }
     // Position sample, duration fill, and/or this person's skip vote.
     if (sameTracks(held.queue, incoming.queue)) {
       if (sameSkipVotes(votesHeld, votesIncoming)) {
@@ -516,17 +772,70 @@ export function musicWriteAllowed(
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
     return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
+  /*
+   * THE SERVER FAILS CLOSED HERE; THE CLIENT IS ONLY DRAWING.
+   *
+   * `trustedContext` is set by `musicServerWriteAllowed` and by nothing
+   * else, so it is how the two callers are told apart. The server's clock is the anchor, and
+   * when a room has none — the cold-row case counted as
+   * `musicCluster.anchorMissing` — falling back to `held.positionMs`
+   * handed the decision straight back to the last sample anybody seated
+   * wrote, which is the bypass the anchor exists to close. Without a
+   * trusted clock the room falls back to votes, which is safe and still
+   * lets it move on. The client has no anchor and never will; it asks
+   * this only to decide what to show.
+   */
+  const serverSide = rights.trustedContext === true;
+  const gatePosition =
+    rights.expectedPositionMs ?? (serverSide ? null : held.positionMs);
+  /*
+   * The grace never swallows the whole track. At a flat 20 s any track
+   * declaring less than that was "over" at position zero, so a short
+   * length — which nothing used to refuse — was an advance anybody could
+   * write. Half the track is the most the grace may take.
+   */
+  const declared = held.current?.durationMs ?? null;
+  const grace =
+    declared === null
+      ? MUSIC_END_GRACE_MS
+      : Math.min(MUSIC_END_GRACE_MS, Math.floor(declared / 2));
   const ranOut =
     held.status === "playing" &&
     held.current !== null &&
-    held.current.durationMs !== null &&
-    held.positionMs >= held.current.durationMs - MUSIC_END_GRACE_MS;
-  const votes = new Set([...votesHeld, rights.userId]);
+    declared !== null &&
+    declared > 0 &&
+    gatePosition !== null &&
+    gatePosition >= declared - grace;
+  // Only the votes of people still seated. `roomSize` shrinks when somebody
+  // leaves and their vote does not, so the two moved out of step and a
+  // ghost could carry the threshold.
+  /*
+   * Same rule for the roster. The server always knows who is seated
+   * (`musicRoomSeats` falls back to this instance's own peers rather than
+   * answering nothing), so an absent list server-side is a bug, and
+   * counting every held vote in that case would let the votes of people
+   * who have left carry the threshold. An empty set is the safe reading;
+   * the sender's own vote is still added below.
+   */
+  const seated =
+    rights.seatedUserIds !== undefined
+      ? new Set(rights.seatedUserIds)
+      : serverSide
+        ? new Set<string>()
+        : null;
+  const liveVotes = seated
+    ? votesHeld.filter((id) => seated.has(id))
+    : votesHeld;
+  const votes = new Set([...liveVotes, rights.userId]);
   const votedOut = votes.size >= musicSkipVotesNeeded(rights.roomSize);
   if (matchesAdvance(held, incoming)) {
     return ranOut || votedOut;
   }
-  return ranOut && matchesAutoplayAdvance(held, incoming, rights);
+  // The same two doors as an ordinary advance. A room that voted the track
+  // out with "Continuar com parecidas" on wants the next related track,
+  // not the end of the music, and refusing this left ending it as the only
+  // thing a client could write.
+  return (ranOut || votedOut) && matchesAutoplayAdvance(held, incoming, rights);
 }
 
 // ------------------------------------------------------------- link parsing
@@ -579,11 +888,23 @@ export function parseMusicInput(raw: string): MusicLink | null {
   } catch {
     url = null;
   }
+  /*
+   * A paste that did not survive the clipboard is not a search. Without
+   * this it fell past the "some other site" refusal below, which needs a
+   * parsed URL, and came back as a search for the broken text with an
+   * unrelated song attached. It has to START with a scheme: "bohemian
+   * rhapsody http://" is a search today and stays one, and so does any
+   * query with a colon in it.
+   */
+  if (url === null && /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    return null;
+  }
   if (url && YOUTUBE_HOSTS.has(url.hostname)) {
     let id: string | null = null;
     if (url.hostname.endsWith("youtu.be")) {
       id = url.pathname.slice(1).split("/")[0] ?? null;
-    } else if (url.pathname === "/watch") {
+      // `youtube.com/watch/?v=` is served by YouTube and was refused here.
+    } else if (url.pathname.replace(/\/+$/, "") === "/watch") {
       id = url.searchParams.get("v");
     } else {
       const match = url.pathname.match(/^\/(?:shorts|embed|live|v)\/([^/?]+)/);

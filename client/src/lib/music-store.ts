@@ -41,6 +41,13 @@ export interface MusicSession {
   displayName: string;
   send: (state: MusicState | null) => void;
   sendListening?: (listening: boolean) => void;
+  /**
+   * Whether this seat holds MANAGE_MUSIC, read when it is needed rather
+   * than captured: a cargo change re-resolves the bit without minting a new
+   * session. Only the duration fill asks, and only to avoid writing
+   * something the server will answer with a `forced` frame.
+   */
+  canManage?: () => boolean;
 }
 
 export interface MusicSnapshot {
@@ -77,7 +84,20 @@ function abandonAutoplayFill(): void {
 }
 
 function set(state: MusicState | null, channelId: string | null) {
-  if (localEndedTrackId && state?.current?.id !== localEndedTrackId) {
+  /*
+   * The mark says "this machine's player reported the end of the track the
+   * room is on". A different track clears it. So does the SAME track from
+   * the top, which is what repeat-one and an empty-queue repeat-all wrap
+   * both produce: without that case the mark outlived the track and the
+   * next add took the end-of-track path, pulling a looping song out
+   * mid-play. A manager seeking to zero clears it too, and correctly:
+   * `seekTo(0)` on an ended player restarts it.
+   */
+  const restartedFromTheTop =
+    state?.current?.id === localEndedTrackId &&
+    state?.positionMs === 0 &&
+    state?.status === "playing";
+  if (localEndedTrackId && (state?.current?.id !== localEndedTrackId || restartedFromTheTop)) {
     localEndedTrackId = null;
   }
   // A fill started for another room or another current track must not
@@ -175,16 +195,22 @@ export interface MusicDockSnapshot {
   open: boolean;
   /** A track is on. The composer bar is visible. */
   on: boolean;
+  /** This machine is hearing it. False after Parar de ouvir. */
+  listening: boolean;
 }
 
-let dockSnap: MusicDockSnapshot = { open: false, on: false };
+let dockSnap: MusicDockSnapshot = { open: false, on: false, listening: true };
 
 function getMusicDockSnapshot(): MusicDockSnapshot {
   const on = snapshot.state?.current != null;
-  if (dockSnap.open === snapshot.open && dockSnap.on === on) {
+  if (
+    dockSnap.open === snapshot.open &&
+    dockSnap.on === on &&
+    dockSnap.listening === snapshot.listening
+  ) {
     return dockSnap;
   }
-  dockSnap = { open: snapshot.open, on };
+  dockSnap = { open: snapshot.open, on, listening: snapshot.listening };
   return dockSnap;
 }
 
@@ -203,7 +229,7 @@ export function resetMusicStoreForTests(): void {
   localEndedTrackId = null;
   fillGeneration += 1;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
-  dockSnap = { open: false, on: false };
+  dockSnap = { open: false, on: false, listening: true };
   listeners.clear();
 }
 
@@ -309,22 +335,51 @@ export function markCurrentEnded(trackId: string): void {
   }
 }
 
+/**
+ * This machine's player left ENDED for the track it is on. The store's own
+ * rule in `set()` covers a restart the ROOM announced; this covers one only
+ * the player knows about, and the player is the authority on that.
+ */
+export function clearCurrentEnded(trackId: string | undefined): void {
+  if (trackId && localEndedTrackId === trackId) {
+    localEndedTrackId = null;
+  }
+}
+
 export function currentTrackHasEnded(): boolean {
   const currentId = snapshot.state?.current?.id;
   return Boolean(currentId && localEndedTrackId === currentId);
 }
 
-function startNow(track: MusicTrack, extra: MusicTrack[] = []): void {
+/** Returns how many tracks the room already had and lost to the cap. */
+function startNow(track: MusicTrack, extra: MusicTrack[] = []): number {
   const held = snapshot.state;
   if (!held?.current) {
-    return;
+    return 0;
   }
+  const finished = held.current;
   const advanced = musicAdvance({
     ...held,
     queue: dropAutoplayed(held.queue),
     positionMs: livePositionMs(held),
   });
-  const displaced = advanced.current ? [advanced.current, ...advanced.queue] : advanced.queue;
+  /*
+   * What `musicAdvance` answers with is only a DISPLACED track when it is
+   * a real upcoming one. Under repeat-one, and under repeat-all with an
+   * empty queue, it answers with the finished track looping, and it has
+   * already filed that track into `history`. Requeuing it then put the
+   * same song in both places from one write: it sat at the head of the
+   * queue where repeat-one could never reach it, and turning repeat off
+   * later replayed a song the room had just heard.
+   */
+  const looped =
+    advanced.current !== null &&
+    finished !== null &&
+    advanced.current.id === finished.id;
+  const displaced =
+    advanced.current && !looped
+      ? [advanced.current, ...advanced.queue]
+      : advanced.queue;
   const restFits = extra.slice(0, MUSIC_QUEUE_LIMIT);
   const displacedFits = displaced.slice(0, MUSIC_QUEUE_LIMIT - restFits.length);
   write({
@@ -334,9 +389,27 @@ function startNow(track: MusicTrack, extra: MusicTrack[] = []): void {
     status: "playing",
     positionMs: 0,
   });
+  // What the room already had and no longer has. The incoming tracks take
+  // the cap first, so a big add at the end of a track can push most of the
+  // queue off, and saying "30 added" without saying that is a lie. The
+  // autoplayed rows dropped above are not counted: that drop is on purpose,
+  // so the new pick becomes the radio's seed.
+  return displaced.length - displacedFits.length;
 }
 
-export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
+/**
+ * `playing-dropped` is `playing` plus the one thing the person cannot see:
+ * starting this track put the finished one back at the head of a queue that
+ * was already at the cap, so the last row fell off. `addTracks` has always
+ * counted that for a list; the single-track path threw the number away and
+ * said only "tocando agora".
+ */
+export type MusicAddOutcome =
+  | "playing"
+  | "playing-dropped"
+  | "queued"
+  | "full"
+  | "no-session";
 
 export interface MusicAddManyOutcome {
   /** How many went in, the first of them now playing if nothing was. */
@@ -360,11 +433,11 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   }
   if (currentTrackHasEnded() && held.current) {
     const extra = minted.slice(1);
-    startNow(minted[0] as MusicTrack, extra);
+    const evicted = startNow(minted[0] as MusicTrack, extra);
     const extraFits = Math.min(extra.length, MUSIC_QUEUE_LIMIT);
     return {
       added: 1 + extraFits,
-      dropped: extra.length - extraFits,
+      dropped: extra.length - extraFits + evicted,
       startedPlaying: true,
     };
   }
@@ -402,8 +475,7 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
     return "playing";
   }
   if (currentTrackHasEnded()) {
-    startNow(track);
-    return "playing";
+    return startNow(track) > 0 ? "playing-dropped" : "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
     return "full";
@@ -487,9 +559,20 @@ export function reportPosition(positionMs: number, durationMs?: number): void {
     return;
   }
   const next = base();
-  // The duration is what lets the server tell "the track ran out" from a
-  // skip, for people without MANAGE_MUSIC. Filled in by whoever samples.
-  if (next.current && next.current.durationMs === null && durationMs && durationMs > 0) {
+  /*
+   * The duration is what lets the server tell "the track ran out" from a
+   * skip. It is the other operand of that gate, so the server takes it
+   * only from a manager or from whoever put the track on, and filling it
+   * from anybody else would earn a `forced` correction every ten seconds.
+   */
+  const mine = next.current?.addedByUserId === session.userId;
+  if (
+    next.current &&
+    next.current.durationMs === null &&
+    durationMs &&
+    durationMs > 0 &&
+    (mine || session.canManage?.() === true)
+  ) {
     next.current = { ...next.current, durationMs: Math.round(durationMs) };
   }
   write({ ...next, positionMs: Math.max(0, Math.round(positionMs)) });
@@ -511,7 +594,20 @@ export function advance(endedTrackId?: string): void {
   write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
 }
 
-export function voteSkip(roomSize: number): void {
+/**
+ * `seatedUserIds` is not optional in spirit: the server counts only the
+ * votes of people still in the room, because the threshold is half the
+ * LIVE room and a vote whose owner left was carrying it. Counting every
+ * held vote here meant the client reached the threshold first, wrote the
+ * advance, and had it refused — the vote never recorded, the forced frame
+ * putting the old state back, and the button doing the same thing for
+ * ever. The two counts have to agree.
+ */
+export function voteSkip(
+  roomSize: number,
+  seatedUserIds: string[],
+  fetchRelated?: (videoId: string) => Promise<MusicResolved[]>,
+): void {
   if (!session) {
     return;
   }
@@ -523,8 +619,17 @@ export function voteSkip(roomSize: number): void {
   if (votes.includes(session.userId)) {
     return;
   }
+  const seated = new Set(seatedUserIds);
   const nextVotes = [...votes, session.userId];
-  if (new Set(nextVotes).size >= musicSkipVotesNeeded(roomSize)) {
+  const live = nextVotes.filter((id) => seated.has(id));
+  if (new Set(live).size >= musicSkipVotesNeeded(roomSize)) {
+    if (fetchRelated && shouldAutoplayOnEnd(held)) {
+      // The votes carried and the queue is empty with the mode on: the
+      // room asked for the next song, not for the music to stop. Same
+      // path the skip button takes.
+      void skipToNext(fetchRelated);
+      return;
+    }
     write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
     return;
   }
@@ -712,6 +817,68 @@ export function autoplayAdvance(endedTrackId: string, pick: MusicResolved): void
     status: "playing",
     positionMs: 0,
   });
+}
+
+/**
+ * THE SKIP BUTTON, WHICH HAS TO KNOW ABOUT THE INFINITY TOO.
+ *
+ * A track running out goes through `onTrackEnded`, which asks for a
+ * related pick before it gives up on the room. Skip went straight to
+ * `advance`, and `musicAdvance` ends the room on an empty queue whatever
+ * `autoplay` says: turning the mode on and pressing skip before the
+ * buffer had filled ended the queue with "keep playing similar songs"
+ * switched on, which is the opposite of what the switch promises.
+ *
+ * So a skip into an empty queue with the mode on looks for a pick first
+ * and only ends the room when there is genuinely nothing to play. With
+ * anything queued it stays what it was, one write and no lookup.
+ */
+export async function skipToNext(
+  fetchRelated: (videoId: string) => Promise<MusicResolved[]>,
+): Promise<void> {
+  const held = snapshot.state;
+  if (!held?.current) {
+    return;
+  }
+  if (!shouldAutoplayOnEnd(held)) {
+    advance();
+    return;
+  }
+  const trackId = held.current.id;
+  const videoId = held.current.videoId;
+  try {
+    const related = await fetchRelated(videoId);
+    // The room may have moved on while we were asking, and the person who
+    // pressed skip is not necessarily the only one pressing things. The
+    // mode is re-asked as well as the track: somebody turning it off, or
+    // queueing something, during the round trip means a forced pick is no
+    // longer the skip that was asked for.
+    if (snapshot.state?.current?.id !== trackId) {
+      return;
+    }
+    if (!shouldAutoplayOnEnd(snapshot.state)) {
+      advance(trackId);
+      return;
+    }
+    const pick = musicAutoplayCandidate(related, snapshot.state);
+    if (pick) {
+      autoplayAdvance(trackId, pick);
+      return;
+    }
+  } catch (error) {
+    // Offline, rate limited, upstream down: an ordinary end is better than
+    // a skip that does nothing at all.
+    console.warn("[music] related lookup failed on skip:", error);
+  }
+  try {
+    if (snapshot.state?.current?.id === trackId) {
+      advance(trackId);
+    }
+  } catch (error) {
+    // A button handler calls this with `void`, so a rejection escaping
+    // here is nobody's to catch and lands as an unhandled rejection.
+    console.warn("[music] skip could not advance:", error);
+  }
 }
 
 export async function onTrackEnded(

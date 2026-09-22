@@ -1,5 +1,6 @@
-import { MonitorPlay, Pause, Play, Plus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { MonitorPlay, Pause, Play, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { rememberMusicPip } from "@/lib/music-pip";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -14,9 +15,11 @@ import {
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import {
+  canSetMusicSwitches,
   effectiveCanManageMusic,
   MusicHistoryList,
   MusicOverflowMenu,
+  MusicShuffleButton,
 } from "@/components/voice/music-extras";
 import {
   formatMusicClock,
@@ -26,6 +29,11 @@ import {
 } from "@/components/voice/music-now-playing";
 import { MusicQueueList } from "@/components/voice/music-queue-list";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
+import {
+  FeatureHint,
+  useFeatureHintEnabled,
+} from "@/components/layout/feature-hint";
+import { useScrub } from "@/components/voice/use-scrub";
 
 const RAIL_ICON =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
@@ -40,6 +48,11 @@ const SHEET_ICON =
  * without unmounting them. The drawer keeps a now-playing card because
  * that radio has no seek and keeps the five-item `…`; the sheet does
  * not, because the bar under it is the player.
+ *
+ * ONE COLUMN, ALWAYS THE SAME ONE. The field is mounted for the whole life
+ * of the panel and search results land above the queue rather than in its
+ * place: adding to a queue you can no longer see is how you add the same
+ * song twice. Escape from an empty field closes the panel.
  */
 export function MusicFila({
   variant = "sheet",
@@ -53,16 +66,33 @@ export function MusicFila({
   const prefs = useMusicPrefs();
   const current = music.state?.current ?? null;
   const canManage = effectiveCanManageMusic(voiceState, music.state);
+  const canSetSwitches = canSetMusicSwitches(voiceState);
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
-  const [scrub, setScrub] = useState<number | null>(null);
-  const [adding, setAdding] = useState(current === null);
-  const [searchActive, setSearchActive] = useState(false);
+  const scrub = useScrub((value) => seekTo(value));
+  const fieldHintEnabled = useFeatureHintEnabled("musicField");
+  /** Empty field, so the line that says what it takes is still useful. */
+  const [fieldIdle, setFieldIdle] = useState(true);
+  // The picker reports this from an effect that lists the callback, so a
+  // stable identity keeps it from re-running on every render of this panel.
+  const onQueryActive = useCallback((active: boolean) => {
+    setFieldIdle(!active);
+  }, []);
+  // The panel is open, so the tile's NOVO mark has done its job. Here
+  // rather than on the tile, because the tile is only one of the four ways
+  // in (the sidebar radio, the bar's queue icon and the keyboard are the
+  // others) and the mark is about having opened this, not about the route.
+  const filaOpen = music.open;
+  useEffect(() => {
+    if (filaOpen) {
+      rememberMusicPip();
+    }
+  }, [filaOpen]);
   const onStage = prefs.placement === "stage";
   const queue = music.state?.queue ?? [];
   const history = music.state?.history ?? [];
   const duration = progress.durationMs ?? 0;
-  const position = scrub ?? progress.position;
+  const position = scrub.preview ?? progress.position;
   const durationKnown = progress.known;
   const addedBy = current
     ? lookupAddedBy(voiceState, current.addedByUserId, current.addedByName)
@@ -77,12 +107,6 @@ export function MusicFila({
   const tone = sheet ? "composer" : "rail";
 
   useEffect(() => {
-    if (current === null) {
-      setAdding(true);
-    }
-  }, [current]);
-
-  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setMusicOpen(false);
@@ -92,8 +116,34 @@ export function MusicFila({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const showSearch = adding || current === null;
-  const showQueue = !searchActive;
+  /*
+   * A press anywhere else closes the sheet, the way every popover does. The
+   * drawer has its own backdrop for this; the sheet sits in the composer
+   * with nothing over the page, so it listens instead.
+   *
+   * The player and the dock tile are not "elsewhere": both of them toggle
+   * this panel, and closing here before their click lands would leave the
+   * tile reopening what it had just shut. A menu or a dialog the panel
+   * itself opened is portalled out of the composer, so it is excluded too.
+   */
+  useEffect(() => {
+    if (!sheet || !music.open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (
+        target?.closest(
+          "[data-music-composer], [data-music-dock], [role='menu'], [role='dialog']",
+        )
+      ) {
+        return;
+      }
+      setMusicOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [sheet, music.open]);
 
   if (!music.open) {
     return null;
@@ -121,17 +171,14 @@ export function MusicFila({
           })}
         </p>
         <div className="flex shrink-0 items-center">
-          <Tooltip label={t("music.add")} side="left">
-            <button
-              type="button"
-              data-music-add=""
-              className={iconClass}
-              aria-label={t("music.add")}
-              onClick={() => setAdding(true)}
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </Tooltip>
+          {/* Shuffle belongs where the queue is: it re-orders the list
+              below, so here the re-order IS the feedback. On the bar,
+              with no queue on screen, pressing it looked like nothing
+              happening at all. */}
+          <MusicShuffleButton
+            className={iconClass}
+            disabled={!canManage || queue.length < 2}
+          />
           {current && !onStage ? (
             <Tooltip label={t("music.stage.watch")} side="left">
               <button
@@ -148,9 +195,13 @@ export function MusicFila({
           {!sheet ? (
             <MusicOverflowMenu
               canManage={canManage}
+              canSetSwitches={canSetSwitches}
+              listening={music.listening}
+              ducking={prefs.ducking}
               openControls={music.state?.openControls === true}
               autoplay={music.state?.autoplay === true}
               repeat={music.state?.repeat ?? "off"}
+              queueLength={music.state?.queue.length ?? 0}
               modes="all"
               side="bottom"
               triggerClassName={iconClass}
@@ -250,15 +301,15 @@ export function MusicFila({
                 step={250}
                 className="min-w-0 flex-1 px-1.5"
                 aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
+                {...scrub.rootProps}
                 onValueChange={(value) => {
                   if (canManage && durationKnown) {
-                    setScrub(value);
+                    scrub.onValueChange(value);
                   }
                 }}
                 onValueCommit={(value) => {
                   if (canManage && durationKnown) {
-                    seekTo(value);
-                    setScrub(null);
+                    scrub.onValueCommit(value);
                   }
                 }}
               />
@@ -267,59 +318,82 @@ export function MusicFila({
               </span>
             </div>
           </div>
-        ) : current ? null : (
-          <div className="shrink-0 space-y-1 px-3 pt-3">
-            <p className={cn("text-sm font-medium", title)}>{t("music.empty.title")}</p>
-            <p className={cn("text-[11px]", muted)}>{t("music.empty.hint")}</p>
-          </div>
-        )}
+        ) : null}
 
-        {showSearch ? (
-          <div className="shrink-0 px-2 pt-2">
-            <MusicSearchPicker
-              compact
-              chrome={sheet ? "default" : "rail"}
-              variant={current ? "queue" : "start"}
-              canManage={canManage}
-              autoFocus
-              onQueryActive={setSearchActive}
-              onEmptyEscape={current ? () => setAdding(false) : undefined}
+        <div className="shrink-0 px-2 pt-2">
+          <MusicSearchPicker
+            compact
+            chrome={sheet ? "default" : "rail"}
+            canManage={canManage}
+            autoFocus
+            onQueryActive={onQueryActive}
+            onEmptyEscape={() => setMusicOpen(false)}
+          />
+        </div>
+
+        {fieldHintEnabled ? (
+          /* Attached to the field, under it, where the answer to "what do I
+             type here" belongs. It only draws when it holds the one
+             attached slot; `lib/feature-hints.ts` is the queue. */
+          <div className="pointer-events-auto shrink-0 px-3 pt-2">
+            <FeatureHint
+              id="musicField"
+              enabled
+              title={t("featureHint.musicField.title")}
+              body={t("featureHint.musicField.body")}
             />
           </div>
         ) : null}
 
-        {showQueue ? (
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-            {queue.length > 0 && (
-              <div>
-                <p
-                  className={cn(
-                    "mb-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider",
-                    muted,
-                  )}
-                >
-                  {t("music.queue")}
-                </p>
-                <MusicQueueList
-                  queue={queue}
-                  voiceState={voiceState}
-                  canManage={canManage}
-                  tone={tone}
-                />
-              </div>
-            )}
-            {music.state?.autoplay && queue.length === 0 && current ? (
-              <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
-                {t("music.autoplay.next")}
+        {fieldIdle ? (
+          /* Under the field, not over it: the first thing a new person needs
+             is somewhere to paste, and the second is what may be pasted.
+             The sources line stays for as long as the field is empty, so
+             opening the queue mid-song answers the question too; the longer
+             explanation is for a room with nothing on. */
+          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2">
+            {current ? null : (
+              <p className={cn("text-[12px] leading-snug", muted)}>
+                {t("music.empty.what")}
               </p>
-            ) : null}
-            <MusicHistoryList
-              history={history}
-              defaultOpen={queue.length === 0}
-              tone={tone}
-            />
+            )}
+            <p className={cn("text-[11px]", muted)}>{t("music.empty.sources")}</p>
           </div>
         ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          {queue.length > 0 && (
+            <div>
+              <p
+                className={cn(
+                  "mb-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider",
+                  muted,
+                )}
+              >
+                {t("memberList.sectionHeading", {
+                  label: t("music.queue"),
+                  count: queue.length,
+                })}
+              </p>
+              <MusicQueueList
+                queue={queue}
+                voiceState={voiceState}
+                canManage={canManage}
+                tone={tone}
+              />
+            </div>
+          )}
+          {music.state?.autoplay && queue.length === 0 && current ? (
+            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
+              {t("music.autoplay.next")}
+            </p>
+          ) : null}
+          <MusicHistoryList
+            history={history}
+            defaultOpen={queue.length === 0}
+            tone={tone}
+          />
+        </div>
       </div>
     </>
   );

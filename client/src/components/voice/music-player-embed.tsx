@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -7,10 +8,11 @@ import {
   musicShouldDuck,
   stepDuckGain,
 } from "@/lib/music-duck";
-import { relatedMusic } from "@/lib/api";
+import { musicRelatedTracks } from "@/lib/music-related";
 import {
   expectedPositionMs,
   fillAutoplayBuffer,
+  clearCurrentEnded,
   markCurrentEnded,
   onTrackEnded,
   reportPosition,
@@ -92,6 +94,44 @@ export function applyYouTubeVolume(
 }
 
 /** Actor fills duration as soon as YouTube starts, not on the 10 s sample. */
+/**
+ * `getVideoData().isLive` is undocumented and absent on older embeds, so
+ * this answers `undefined` rather than guessing, and the ceiling in
+ * `reportableDurationMs` is what actually holds the line.
+ */
+function playerIsLive(player: YTPlayer): boolean | undefined {
+  try {
+    return player.getVideoData?.()?.isLive;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * WHAT THE PLAYER SAYS THE TRACK IS, WHEN IT IS A TRACK AT ALL.
+ *
+ * `getDuration()` on a 24/7 live mix answers with how long the STREAM has
+ * been up. One of those reached a room as 1209:42:45 and the bar drew a
+ * seek against fifty days; the same number is the other operand of the
+ * end-of-track gate, so nothing would ever have advanced on its own
+ * either. `isLive` comes off `getVideoData()`, which is not part of the
+ * documented iframe API, so the ceiling backs it up rather than trusting
+ * it. Null means "still unknown", which is what the room already knows how
+ * to draw.
+ */
+export function reportableDurationMs(
+  rawMs: number,
+  isLive: boolean | undefined,
+): number | null {
+  if (isLive) {
+    return null;
+  }
+  if (!Number.isFinite(rawMs) || rawMs <= 0 || rawMs > MUSIC_MAX_DURATION_MS) {
+    return null;
+  }
+  return rawMs;
+}
+
 export function shouldReportUnknownDuration(args: {
   isActor: boolean;
   trackId: string | null | undefined;
@@ -279,6 +319,12 @@ export function MusicPlayer({
             },
             onStateChange: (event) => {
               const snap = musicRef.current;
+              if (
+                event.data === YT_STATE.BUFFERING ||
+                event.data === YT_STATE.CUED
+              ) {
+                clearCurrentEnded(snap.state?.current?.id);
+              }
               if (event.data === YT_STATE.ENDED) {
                 // Only the video the room is on. A late "ended" from the
                 // video this player just left, or a transition with no id
@@ -292,13 +338,21 @@ export function MusicPlayer({
                 }
                 if (current && shouldAdvanceOnEnded(playing, current.videoId)) {
                   markCurrentEnded(current.id);
-                  void onTrackEnded(current.id, isActorRef.current, async (id) => {
-                    const { tracks } = await relatedMusic(id);
-                    return tracks;
-                  });
+                  void onTrackEnded(
+                    current.id,
+                    isActorRef.current,
+                    musicRelatedTracks,
+                  );
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
+                /*
+                 * Out of ENDED, so this machine's player is not at the end
+                 * any more and the mark is stale. The store clears it when
+                 * the ROOM restarts a track; this clears it when only the
+                 * player did, which the room never announces.
+                 */
+                clearCurrentEnded(snap.state?.current?.id);
                 const current = snap.state?.current;
                 if (
                   shouldReportUnknownDuration({
@@ -309,14 +363,17 @@ export function MusicPlayer({
                   })
                 ) {
                   let at = 0;
-                  let duration = 0;
+                  let duration: number | null = null;
                   try {
                     at = event.target.getCurrentTime() * 1000;
-                    duration = event.target.getDuration() * 1000;
+                    duration = reportableDurationMs(
+                      event.target.getDuration() * 1000,
+                      playerIsLive(event.target),
+                    );
                   } catch {
-                    duration = 0;
+                    duration = null;
                   }
-                  if (duration > 0 && current) {
+                  if (duration !== null && current) {
                     durationReportedFor.current = current.id;
                     reportPosition(at, duration);
                   }
@@ -388,10 +445,7 @@ export function MusicPlayer({
     if (!isActor || !shouldFillAutoplayBuffer(musicRef.current.state)) {
       return;
     }
-    void fillAutoplayBuffer(true, async (id) => {
-      const { tracks } = await relatedMusic(id);
-      return tracks;
-    });
+    void fillAutoplayBuffer(true, musicRelatedTracks);
   }, [isActor, autoplayOn, repeatMode, trackId, autoplayedQueued, queueLength]);
 
   // Play or pause, and the drift loop.
@@ -475,13 +529,16 @@ export function MusicPlayer({
       }
       if (isActorRef.current && Date.now() - lastReport >= REPORT_MS) {
         lastReport = Date.now();
-        let duration = 0;
+        let duration: number | null = null;
         try {
-          duration = player.getDuration() * 1000;
+          duration = reportableDurationMs(
+            player.getDuration() * 1000,
+            playerIsLive(player),
+          );
         } catch {
-          duration = 0;
+          duration = null;
         }
-        reportPosition(at, duration);
+        reportPosition(at, duration ?? undefined);
       }
     }, 2_000);
     return () => {

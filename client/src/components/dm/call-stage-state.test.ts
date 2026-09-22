@@ -7,6 +7,8 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  STAGE_COLUMN_RESERVE_PX,
+  stageHeightClass,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -98,6 +100,68 @@ describe("isMusicPictureOnlyStage", () => {
     expect(
       isMusicPictureOnlyStage({ musicOnStage: false, hasLiveVideo: false }),
     ).toBe(false);
+  });
+});
+
+describe("stageHeightClass", () => {
+  /*
+   * WHAT THE STAGE TAKES OFF THE COLUMN BELOW IT.
+   *
+   * The call lives in the composer now, so under a self-sized stage sit the
+   * music bar, the call dock and the message box: about 300px of furniture
+   * that cannot shrink. Two thirds of the window above that leaves nothing
+   * for the transcript and cuts the composer off at the bottom edge on a
+   * laptop. A camera or a share is worth the room. An album cover is not:
+   * it is a square, it says the same thing at 38svh, and the picture-only
+   * stage is exactly the case where nobody is publishing anything.
+   */
+  it("gives a camera or a share two thirds of the window", () => {
+    expect(
+      stageHeightClass({ anyVideo: true, musicPictureOnly: false }),
+    ).toContain("68svh");
+  });
+
+  it("does not, for music on its own", () => {
+    const music = stageHeightClass({ anyVideo: true, musicPictureOnly: true });
+    expect(music).not.toContain("68svh");
+    expect(music).toContain("38svh");
+  });
+
+  it("keeps the short rule for a stage with no picture at all", () => {
+    expect(
+      stageHeightClass({ anyVideo: false, musicPictureOnly: false }),
+    ).toContain("38svh");
+  });
+
+  /* A camera coming on over the music is a picture again. */
+  it("grows once somebody publishes over the music", () => {
+    expect(
+      stageHeightClass({ anyVideo: true, musicPictureOnly: false }),
+    ).toContain("68svh");
+  });
+
+  /*
+   * The composer cannot shrink, so the stage is what gives way on a short
+   * window. Both rules carry the cap; neither may be a bare viewport
+   * fraction, which is what put the message box off the bottom edge.
+   */
+  it("leaves the rest of the column its room, on the short rule", () => {
+    const rule = stageHeightClass({ anyVideo: true, musicPictureOnly: true });
+    expect(rule).toContain(`calc(100svh-${STAGE_COLUMN_RESERVE_PX}px)`);
+    expect(rule).toContain("min(");
+  });
+
+  /*
+   * And NOT on the tall one. `68svh` for a camera or a share is a product
+   * rule the e2e suite measures: the stage is exactly that before anybody
+   * drags the divider, and a 1:1 call gives the remote person half the
+   * viewport. A 300px reserve costs 12px of it at 900px tall, which was
+   * enough to fail both.
+   */
+  it("leaves a published picture at a clean 68svh", () => {
+    const rule = stageHeightClass({ anyVideo: true, musicPictureOnly: false });
+    expect(rule).toContain("h-[68svh]");
+    expect(rule).not.toContain("calc(");
   });
 });
 

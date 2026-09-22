@@ -199,6 +199,8 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { isAutomatedBrowser } from "@/lib/hints";
+import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
@@ -210,6 +212,7 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  stageHeightClass,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -1655,9 +1658,7 @@ function ActiveCall({
               // floor, because the floor is enforced in `clampSplit` against
               // the live pane: a second one here would fight it.
               "h-full min-h-0"
-            : anyVideo
-              ? "h-[68svh] min-h-[280px]"
-              : "h-[38svh] max-h-[420px] min-h-[220px]",
+            : stageHeightClass({ anyVideo, musicPictureOnly }),
       )}
       onPointerMove={(event) => {
         // Touch "moves" are scrolls and drags, answered on pointer up.
@@ -2407,6 +2408,15 @@ export function CallControls({
   const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
   const musicHintEnabled = useFeatureHintEnabled("music");
   const musicDock = useMusicDock();
+  // The pip outlives the card: it is spent by opening the panel, which the
+  // card's own impression never waits for. `lib/music-pip.ts` says why the
+  // two do not share a key, and why "spent" is a store rather than a read.
+  const musicPip = shouldShowMusicPip({
+    seen: useMusicPipSpent(),
+    automated: isAutomatedBrowser(),
+    canSpeak: voiceState.canSpeak,
+    playing: musicDock.on,
+  });
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -2488,16 +2498,17 @@ export function CallControls({
             <BringFriendsHint enabled />
           </div>
         )}
-        {musicHintEnabled && (
-          <div className="pointer-events-auto mb-1">
-            <FeatureHint
-              id="music"
-              enabled
-              title={t("featureHint.music.title")}
-              body={t("featureHint.music.body")}
-            />
-          </div>
-        )}
+        {/* Mounted whether or not it wins, so the card can tell "the gate
+            turned off" (a track started, the panel opened) from "the strip
+            swapped under me". The first spends it; the second must not. */}
+        <div className={cn("pointer-events-auto", musicHintEnabled && "mb-1")}>
+          <FeatureHint
+            id="music"
+            enabled={musicHintEnabled}
+            title={t("featureHint.music.title")}
+            body={t("featureHint.music.body")}
+          />
+        </div>
       </div>
 
       {/* The queue sits above the bar, where the room is, rather than in a
@@ -2555,8 +2566,14 @@ export function CallControls({
       >
         {collapsed && leading && (
           <div
+            data-call-dock-people=""
             className={cn(
               "flex h-9 min-w-0 items-center",
+              // Under 35rem the bar is a COLUMN, and a column centres what it
+              // holds: the name drifted to the middle of its own line while
+              // the tiles under it stayed right. Full width here puts it back
+              // against the same left edge as the message below it.
+              "w-full @min-[35rem]:w-auto",
               // Sized to its content: what the row has spare goes to the
               // pill, and past the pill's cap to the gap before the tiles.
               pushToTalk
@@ -2981,7 +2998,7 @@ export function CallControls({
           aria-label={musicDock.open ? t("music.close") : t("music.open")}
           data-music-dock={musicDock.on ? "playing" : "idle"}
           className={cn(
-            "flex items-center justify-center rounded-full",
+            "relative flex items-center justify-center rounded-full",
             size,
             musicDock.open
               ? "bg-signal/20 text-signal"
@@ -2990,6 +3007,24 @@ export function CallControls({
           onClick={toggleMusicOpen}
         >
           <Music className={iconSize} />
+          {/* NOVO, until the panel has been opened once. Never beside the
+              dot below: that one needs a track on and this one needs none. */}
+          {musicPip ? (
+            <span
+              data-music-pip=""
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          ) : null}
+          {/* The room has music and this machine is not hearing it. Nothing
+              else on this tile can say that with the panel shut. */}
+          {musicDock.on && !musicDock.listening ? (
+            <span
+              data-music-dock-dot=""
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          ) : null}
         </button>
       </Tooltip>
       {/* The grid / focus toggle used to sit here. It has no question left to

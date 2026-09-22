@@ -123,6 +123,8 @@ import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
   shouldOfferBringFriendsHint,
+  shouldOfferMusicFieldHint,
+  shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
@@ -264,6 +266,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicComposer } from "@/components/voice/music-composer";
+import { useMusicDock } from "@/lib/music-store";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -1201,6 +1204,13 @@ function MainAppContent({
     featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  const [wantsMusicFieldHint] = useState(() =>
+    featureHintEligible("musicField"),
+  );
+  // Open + whether a track is on, which is what the music hint's live half
+  // reads. The snapshot deliberately ignores position samples, so this does
+  // not put the playhead on App's render path.
+  const musicDock = useMusicDock();
   const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
   // The cargos card decides for itself whether it was seen; the corner queue
   // has to know too, or the corner stays "taken" by a card that never draws
@@ -6956,7 +6966,22 @@ function MainAppContent({
       canInvite: canCreateInviteForVoice,
       roomSize: voiceRoomSize,
     }),
-    music: wantsMusicHint && voiceState.status === "connected",
+    // Before `music` in the order: they have the panel open and are looking
+    // at the field, which beats a card pointing at the tile they just used.
+    musicField: shouldOfferMusicFieldHint({
+      seen: !wantsMusicFieldHint,
+      automated: false,
+      filaOpen: musicDock.open,
+      canAdd: voiceState.canSpeak,
+    }),
+    music: shouldOfferMusicHint({
+      seen: !wantsMusicHint,
+      automated: false,
+      connected: voiceState.status === "connected",
+      canSpeak: voiceState.canSpeak,
+      playing: musicDock.on,
+      filaOpen: musicDock.open,
+    }),
     composerFormat:
       wantsComposerFormatHint &&
       selectedChannel?.type === "text" &&
@@ -6982,6 +7007,9 @@ function MainAppContent({
   // only one that can ever pass `compact={true}` — the other two
   // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
   // their `compact` is always `false` regardless of `sidebarIconsOnly`.
+  // Those three call sites are also why the footer carries no music embed:
+  // two of them can be mounted at once (the sidebar stays mounted under
+  // Novidades), and two embeds is two iframes playing the same track.
   // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
   // looser than the render guard for any of the three: it can only be
   // *stricter* than necessary on the two branches where compact never
@@ -7120,10 +7148,15 @@ function MainAppContent({
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
+      {/* Chrome only. The embed is mounted once, below, because this
+          function has three call sites and two of them can be on screen at
+          the same time: the sidebar stays mounted under Novidades while
+          Novidades renders its own footer. */}
       <MusicMiniPlayer
         voiceState={voiceState}
         compact={compact}
         chrome={!musicInComposer}
+        embed={false}
       />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
@@ -8408,7 +8441,12 @@ function MainAppContent({
       serverId={voiceServerId}
       canCreateInvite={canCreateInviteForVoice}
     >
-    <FeatureHintProvider winner={liveAttachedHint}>
+    <FeatureHintProvider
+      winner={attachedFeatureHint}
+      /* Standing aside for a corner card, not a gate turning off: the
+         attached card hides and spends nothing. */
+      yielding={liveAttachedHint === null && attachedFeatureHint !== null}
+    >
     {/* One provider for the whole app: the profile card is opened from the
         transcript, the members panel and the conversation list, and every one of
         them wants the same block list, the same "open this DM" navigation and
@@ -8636,6 +8674,12 @@ function MainAppContent({
           void handleToggleProfileVisibility(id, showOnProfile)
         }
       />
+
+      {/* THE ONE EMBED. Mounted here, outside every branch, because it must
+          never unmount while somebody is listening: unmounting the iframe is
+          what stops the sound. The footers below draw the radio and the
+          queue, and carry no player of their own. */}
+      <MusicMiniPlayer voiceState={voiceState} chrome={false} />
 
       {/* Stay mounted under Novidades so a half-typed message is still there
           when Escape puts the app back. `hidden` takes it out of layout. */}

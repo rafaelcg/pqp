@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
+import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import type { MusicResolved, MusicState, MusicTrack } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -19,7 +20,12 @@ import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
-import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
+import {
+  formatMusicClockOrUnknown,
+  isLivePlayback,
+  musicListenerCount,
+  MusicNowPlaying,
+} from "@/components/voice/music-now-playing";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
@@ -35,6 +41,7 @@ import {
   shouldCallPlayVideo,
   shouldKeepMusicEmbed,
   shouldReportPositionSample,
+  reportableDurationMs,
   shouldReportUnknownDuration,
 } from "@/components/voice/music-player-embed";
 import { YT_STATE } from "@/lib/youtube-iframe";
@@ -74,6 +81,22 @@ const state = (partial: Partial<MusicState> = {}): MusicState => ({
   history: [],
   ...partial,
 });
+
+const seat = (
+  peerId: string,
+  extra: Record<string, unknown> = {},
+): VoiceState["occupancy"][string][number] =>
+  ({
+    peerId,
+    userId: `user-${peerId}`,
+    displayName: peerId,
+    avatarUrl: null,
+    sharingScreen: false,
+    muted: false,
+    deafened: false,
+    serverMuted: false,
+    ...extra,
+  }) as VoiceState["occupancy"][string][number];
 
 const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
   ({
@@ -322,6 +345,56 @@ describe("shouldKeepMusicEmbed", () => {
   });
 });
 
+describe("the clocks on a stream that has no end", () => {
+  /*
+   * With the duration refused, the elapsed still ticks from the room's
+   * sample, and on a stream that has been up for weeks that reads
+   * 598:52:31 beside a seek bar measured against nothing. An elapsed past
+   * the same ceiling with no duration is not a track playing: it is a
+   * stream, and the bar should say so rather than count.
+   */
+  it("calls it live when the elapsed is past the ceiling with no duration", () => {
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, null)).toBe(true);
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, undefined)).toBe(true);
+  });
+
+  it("leaves an ordinary track alone, however long", () => {
+    expect(isLivePlayback(5_000, 200_000)).toBe(false);
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS - 1, null)).toBe(false);
+    // A duration the room does know beats the elapsed, whatever it says.
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, 200_000)).toBe(false);
+  });
+});
+
+describe("a live stream's idea of a duration", () => {
+  /*
+   * `getDuration()` on a 24/7 mix answers with how long the STREAM has
+   * been up. A room was handed fifty days and drew a seek bar against it.
+   * The player is asked first, and its answer is bounded either way,
+   * because `isLive` is not part of the documented iframe API.
+   */
+  it("reports nothing when the player says the video is live", () => {
+    expect(reportableDurationMs(120_000, true)).toBeNull();
+  });
+
+  it("reports nothing past the ceiling, whatever the player says", () => {
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS + 1, false)).toBeNull();
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS + 1, undefined)).toBeNull();
+  });
+
+  it("reports an ordinary track, and a long mix under the ceiling", () => {
+    expect(reportableDurationMs(200_000, false)).toBe(200_000);
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS - 1, undefined)).toBe(
+      MUSIC_MAX_DURATION_MS - 1,
+    );
+  });
+
+  it("reports nothing for a duration the player could not read", () => {
+    expect(reportableDurationMs(0, false)).toBeNull();
+    expect(reportableDurationMs(Number.NaN, false)).toBeNull();
+  });
+});
+
 describe("shouldReportUnknownDuration", () => {
   it("fires once per track for the actor while duration is empty", () => {
     expect(
@@ -366,28 +439,46 @@ describe("musicOverflowItems", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
+      listening: true,
+      ducking: true,
       openControls: false,
       autoplay: true,
       repeat: "off",
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
+      "scope-you",
+      "duck",
+      "stop-listening",
+      "sep-scope",
+      "scope-room",
       "open-controls",
-      "autoplay",
       "repeat",
+      "autoplay-mode",
       "shuffle",
       "sep-stop",
       "stop-all",
     ]);
-    expect(items.find((item) => item.id === "autoplay")?.checked).toBe(true);
+    expect(items.find((item) => item.id === "autoplay-mode")?.checked).toBe(
+      true,
+    );
     expect(items.find((item) => item.id === "stop-all")?.danger).toBe(true);
-    expect(items.filter((item) => !item.separator).every((item) => item.icon)).toBe(true);
+    /* Headings and separators carry no icon; every real row does. */
+    expect(
+      items
+        .filter((item) => !item.separator && !item.heading)
+        .every((item) => item.icon),
+    ).toBe(true);
   });
 
   it("puts shuffle and repeat first on the bar menu", () => {
     const items = musicOverflowItems({
       t,
       canManage: true,
+      canSetSwitches: true,
+      listening: true,
+      ducking: true,
       openControls: true,
       autoplay: false,
       repeat: "one",
@@ -395,43 +486,132 @@ describe("musicOverflowItems", () => {
       onStopAll: () => {},
     });
     expect(items.map((item) => item.id)).toEqual([
+      "scope-you",
+      "duck",
+      "stop-listening",
+      "sep-scope",
+      "scope-room",
       "shuffle",
       "repeat",
+      "autoplay-mode",
       "open-controls",
-      "autoplay",
       "sep-stop",
       "stop-all",
     ]);
     expect(items.find((item) => item.id === "repeat")?.checked).toBe(true);
   });
 
-  it("drops shuffle and repeat when the bar already shows them", () => {
-    const items = musicOverflowItems({
-      t,
-      canManage: true,
-      openControls: false,
-      autoplay: false,
-      repeat: "off",
-      modes: "none",
-      onStopAll: () => {},
-    });
-    expect(items.map((item) => item.id)).toEqual([
-      "open-controls",
-      "autoplay",
-      "sep-stop",
-      "stop-all",
-    ]);
-  });
 
-  it("is empty when the viewer cannot manage", () => {
+  /* The one stop a member has. No heading: a label over a single row is
+     noise, and there is no second group to tell it apart from. */
+  it("is the personal row alone when the viewer cannot manage", () => {
     const items = musicOverflowItems({
       t,
       canManage: false,
+      canSetSwitches: false,
+      listening: true,
+      ducking: true,
       openControls: false,
       autoplay: false,
       repeat: "off",
     });
-    expect(items).toEqual([]);
+    expect(items.map((item) => item.id)).toEqual(["duck", "stop-listening"]);
+    expect(items[1]?.label).toBe(translateMessage("music.dismiss"));
+  });
+
+  it("offers the way back in once this machine has stopped", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: false,
+      canSetSwitches: false,
+      listening: false,
+      ducking: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+    });
+    expect(items.map((item) => item.id)).toEqual(["duck", "listen"]);
+    expect(items[1]?.label).toBe(translateMessage("music.listen"));
+  });
+
+  it("leads a manager's menu with the same personal row", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      canSetSwitches: true,
+      listening: true,
+      ducking: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    });
+    const stopYou = items.findIndex((item) => item.id === "stop-listening");
+    const stopAll = items.findIndex((item) => item.id === "stop-all");
+    expect(stopYou).toBeGreaterThanOrEqual(0);
+    expect(stopAll).toBeGreaterThan(stopYou);
+    expect(items.find((item) => item.id === "scope-you")?.heading).toBe(true);
+    expect(items.find((item) => item.id === "scope-room")?.heading).toBe(true);
+  });
+
+  /*
+   * The server stopped letting a promoted speaker touch the three room
+   * switches, so the client must stop drawing them. Everything else the
+   * switch hands over stays: shuffle reorders the queue, and Parar pra
+   * todos is the null write, which a promoted speaker may still send.
+   */
+  it("hides the switches from a promoted speaker, and keeps the rest", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      canSetSwitches: false,
+      listening: true,
+      ducking: true,
+      openControls: true,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    });
+    const ids = items.map((item) => item.id);
+    expect(ids).toContain("shuffle");
+    expect(ids).toContain("stop-all");
+    // The room's own policy stays hidden: those are not theirs to set.
+    expect(ids).not.toContain("open-controls");
+    /*
+     * The two MODES stay, locked. This menu is the only place they exist
+     * below 28rem, where the bar hides both icons, and "dimmed in place,
+     * never missing" is the rule everywhere else in this player.
+     */
+    for (const id of ["repeat", "autoplay-mode"]) {
+      expect(ids).toContain(id);
+      expect(items.find((item) => item.id === id)?.disabled).toBe(true);
+    }
+  });
+
+  it("keeps all of it for a real manager", () => {
+    const ids = musicOverflowItems({
+      t,
+      canManage: true,
+      canSetSwitches: true,
+      listening: true,
+      ducking: true,
+      openControls: true,
+      autoplay: false,
+      repeat: "off",
+      modes: "menu",
+      onStopAll: () => {},
+    }).map((item) => item.id);
+    for (const id of [
+      "shuffle",
+      "repeat",
+      "autoplay-mode",
+      "open-controls",
+      "stop-all",
+    ]) {
+      expect(ids).toContain(id);
+    }
   });
 
   it("cycles repeat off, one, all", () => {
@@ -465,7 +645,6 @@ describe("MusicNowPlaying", () => {
     onOpenFila: () => {},
     onMute: () => {},
     onVolume: () => {},
-    onToggleDucking: () => {},
   };
 
   it("shows the adder and a vote skip when the viewer cannot manage", () => {
@@ -482,6 +661,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
+          canSetSwitches={false}
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -500,7 +680,8 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("opacity-40");
     expect(html).toContain("role=\"progressbar\"");
     expect(html).toContain("h-8 w-8");
-    expect(html.match(/aria-expanded/g)?.length).toBe(3);
+    /* Art and title open Fila; the speaker is a mute toggle now. */
+    expect(html.match(/aria-expanded/g)?.length).toBe(2);
   });
 
   it("says the room picked a similar track", () => {
@@ -517,6 +698,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -549,6 +731,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -562,16 +745,19 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("h-14 w-14");
     expect(html).toContain("rounded-full");
     expect(html).toContain("data-slider=\"scrub\"");
-    expect(html).toContain("col-span-full");
-    expect(html).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    /* One column stacked, three columns past 48rem. */
+    expect(html).toContain("grid-cols-1");
+    expect(html).toContain("@min-[48rem]:grid-cols-3");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("hidden @min-[28rem]:inline-flex");
-    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).toContain("data-music-queue-toggle");
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
     expect(html).not.toContain("data-slider=\"edge\"");
+    /* Art, title, the overflow and the up-next row. The speaker stopped
+       being a popover trigger when the volume went inline. */
     expect(html.match(/aria-expanded/g)?.length).toBe(4);
   });
 
@@ -590,6 +776,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -620,6 +807,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
+          canSetSwitches={false}
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -632,9 +820,12 @@ describe("MusicNowPlaying", () => {
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
     expect(html).toContain("lucide-skip-back");
     expect(html).toContain("disabled=\"\"");
-    expect(html).not.toContain("data-music-shuffle");
-    expect(html).not.toContain("data-music-repeat");
-    expect(html).not.toContain("data-music-overflow");
+    /* Dimmed in place, not removed: see "the composer bar a member sees".
+       Shuffle left this row for the Fila header, where the queue it
+       re-orders is on screen; the infinity took its slot. */
+    expect(html).toContain("data-music-autoplay");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
   });
 
   it("cycles the repeat icon to Repeat1 when the mode is one", () => {
@@ -652,6 +843,7 @@ describe("MusicNowPlaying", () => {
           }}
           voiceState={voiceState()}
           canManage
+          canSetSwitches
           playing
           needsTap={false}
           onPlayPause={() => {}}
@@ -664,6 +856,395 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain('data-music-repeat="one"');
     expect(html).toContain("lucide-repeat1");
     expect(html).toContain('aria-pressed="true"');
+  });
+});
+
+/** The bar states the room: what is next, and how many people are hearing it. */
+describe("the composer bar's up-next line", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+  };
+  const bar = (
+    music: Partial<MusicState>,
+    voice: Partial<VoiceState> = {},
+    listening = true,
+  ) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(music),
+            receivedAt: Date.now(),
+            open: false,
+            listening,
+          }}
+          voiceState={voiceState(voice)}
+          canManage
+          canSetSwitches
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening={listening}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  /*
+   * `Tooltip` forwards `aria-label` through Radix `asChild`, which merges
+   * onto its immediate child. Here that is the span the disabled-button
+   * tooltip needs, not the button, so the name was dropped.
+   */
+  it("gives the play button a name of its own", () => {
+    const html = bar({ queue: [] });
+    expect(html).toMatch(
+      new RegExp(`aria-pressed="true"[^>]*aria-label="${translateMessage("music.pause")}"`),
+    );
+  });
+
+  it("puts the queue behind an icon with its count, where Spotify keeps it", () => {
+    const html = bar({
+      queue: [track("q1", { title: "Daft Punk - One More Time" }), track("q2"), track("q3")],
+    });
+    expect(html).toContain("data-music-queue-toggle");
+    expect(html).toMatch(/data-music-queue-count=""[^>]*>3</);
+    /* The full-width "A seguir <track>" line is gone with it. */
+    expect(html).not.toContain("data-music-next");
+  });
+
+  it("drops the count when there is nothing queued", () => {
+    const html = bar({ queue: [] });
+    expect(html).toContain("data-music-queue-toggle");
+    expect(html).not.toContain("data-music-queue-count");
+  });
+
+  it("stays out of the sidebar radio, which has no room for it", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1")] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          canSetSwitches
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).not.toContain("data-music-queue-toggle");
+  });
+
+  it("counts the listeners once there is more than one", () => {
+    const alone = bar({ queue: [] }, { occupancy: { [CHANNEL]: [] } });
+    expect(alone).not.toContain("data-music-listeners");
+
+    const html = bar(
+      { queue: [] },
+      {
+        occupancy: {
+          [CHANNEL]: [
+            seat("peer-ana", { displayName: "Ana" }),
+            seat("peer-bia", { displayName: "Bia", listeningMusic: false }),
+          ],
+        },
+      },
+    );
+    expect(html).toContain("data-music-listeners");
+    expect(html).toContain(translateMessage("music.listening", { count: 2 }));
+  });
+});
+
+describe("the composer bar a member sees", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    listening: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+  };
+  const bar = (canManage: boolean, music: Partial<MusicState> = {}) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state(music),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState({ canManageMusic: canManage })}
+          canManage={canManage}
+          canSetSwitches={canManage}
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  it("keeps the two modes in place, disabled", () => {
+    const html = bar(false);
+    expect(html).toContain("data-music-autoplay");
+    expect(html).toContain("data-music-repeat");
+    expect(html.match(/disabled=""/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  /* Live, not dimmed: since the stops were gathered into one menu it holds
+     Parar de ouvir, which is a member's to use. */
+  it("keeps the overflow in place and usable", () => {
+    const html = bar(false);
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toMatch(/data-music-overflow=""[^>]*disabled=""/);
+  });
+
+  it("puts vote-skip in the skip slot, with the count on the button", () => {
+    const html = bar(false, { skipVotes: ["22222222-2222-4222-8222-222222222222"] });
+    expect(html).toContain("data-music-vote-skip");
+    expect(html).toContain(translateMessage("music.voteSkip.badge", { count: 1, needed: 2 }));
+  });
+
+  it("leaves a manager's bar working", () => {
+    const html = bar(true);
+    expect(html).toContain("data-music-autoplay");
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toContain("data-music-vote-skip");
+  });
+});
+
+/**
+ * Stopping is personal: the room plays on without you. The bar has to say
+ * that, because a player that just goes quiet reads as broken.
+ */
+/**
+ * Three full-width rows above a composer is most of the bottom of a wide
+ * window. The elements do not change; where they sit does.
+ */
+describe("the composer bar folds to one row when it has the width", () => {
+  const html = () =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1", { title: "Daft Punk" })] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          canSetSwitches
+          playing
+          needsTap={false}
+          listening
+          volume={40}
+          muted={false}
+          ducking
+          onOpenFila={() => {}}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          onMute={() => {}}
+          onVolume={() => {}}
+        />
+      </TooltipProvider>,
+    );
+
+  /* Thirds scale with the bar; a fixed cap does not. A cap wide enough at
+     1920 took half of a 1050px bar and left the title 163px. */
+  it("is three columns: track, transport over seek, icons", () => {
+    expect(html()).toContain("@min-[48rem]:grid-cols-3");
+  });
+
+  it("keeps the seek in the middle column, under the transport", () => {
+    expect(html()).toMatch(
+      /@min-\[48rem\]:col-start-2[^"]*@min-\[48rem\]:row-start-2/,
+    );
+  });
+
+  it("centres the right cluster against both lines", () => {
+    expect(html()).toContain("@min-[48rem]:row-span-2");
+  });
+
+  it("puts the volume beside the speaker instead of behind it", () => {
+    const markup = html();
+    expect(markup).toContain("data-music-volume");
+    expect(markup).not.toContain("data-music-speaker-popover");
+  });
+
+  /* One column below the breakpoint: the transport alone is wider than a
+     narrow bar, so nothing shares a line with it. */
+  it("stacks in one column below the breakpoint", () => {
+    const markup = html();
+    expect(markup).toContain("grid-cols-1");
+    expect(markup).not.toContain("@min-[28rem]:grid-cols-");
+  });
+});
+
+describe("the composer bar after Parar de ouvir", () => {
+  const knobs = {
+    volume: 40,
+    muted: false,
+    ducking: true,
+    onOpenFila: () => {},
+    onMute: () => {},
+    onVolume: () => {},
+  };
+  const bar = (listening: boolean) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          tone="composer"
+          current={track("now")}
+          music={{
+            channelId: CHANNEL,
+            state: state({ queue: [track("q1", { title: "Daft Punk" })] }),
+            receivedAt: Date.now(),
+            open: false,
+            listening,
+          }}
+          voiceState={voiceState({
+            occupancy: {
+              [CHANNEL]: [seat("peer-ana"), seat("peer-bia")],
+            },
+          })}
+          canManage
+          canSetSwitches
+          playing
+          needsTap={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          listening={listening}
+          {...knobs}
+        />
+      </TooltipProvider>,
+    );
+
+  it("says the room is still playing, and who for", () => {
+    const html = bar(false);
+    expect(html).toContain('data-music-listening="off"');
+    expect(html).toContain(translateMessage("music.stopped.playing", { count: 2 }));
+    expect(html).toContain(translateMessage("music.listen"));
+  });
+
+  it("drops the seek, because a position you cannot hear is noise", () => {
+    expect(bar(false)).not.toContain('data-slider="scrub"');
+    expect(bar(true)).toContain('data-slider="scrub"');
+  });
+
+  it("keeps the way back to the queue, so the room stays legible", () => {
+    expect(bar(false)).toContain("data-music-queue-toggle");
+  });
+
+  it("is the ordinary bar again while listening", () => {
+    const html = bar(true);
+    expect(html).not.toContain('data-music-listening="off"');
+    expect(html).not.toContain(translateMessage("music.stopped.playing", { count: 2 }));
+  });
+});
+
+describe("musicListenerCount", () => {
+  const room = (...flags: Array<boolean | undefined>): VoiceState =>
+    voiceState({
+      occupancy: {
+        [CHANNEL]: flags.map((listeningMusic, index) =>
+          seat(`peer-${index}`, listeningMusic === undefined ? {} : { listeningMusic }),
+        ),
+      },
+    });
+
+  it("reads an absent flag as listening, because an older client never sends it", () => {
+    expect(musicListenerCount(room(undefined, undefined), true)).toBe(3);
+  });
+
+  it("drops the seats that stopped, and this machine when it stopped", () => {
+    expect(musicListenerCount(room(false, true), true)).toBe(2);
+    expect(musicListenerCount(room(true, true), false)).toBe(2);
+  });
+});
+
+/*
+ * Two `MusicMiniPlayer`s can be on screen at once: App keeps the sidebar
+ * mounted but hidden under Novidades and gives Novidades its own footer.
+ * Both would portal a YouTube iframe into the one singleton host, so two
+ * players, two audio streams, and whichever unmounts first nulls the
+ * position probe the survivor needs. Only the one mount that never
+ * unmounts carries the embed.
+ */
+describe("who carries the YouTube embed", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    resetMusicLocalPlaybackForTests();
+    resetMusicEmbedHostForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
+    receiveMusic(CHANNEL, state({ current: track("now") }));
+  });
+
+  it("is not the footer's copy", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} embed={false} />
+      </TooltipProvider>,
+    );
+    expect(html).not.toContain("data-music-embed-dock");
+  });
+
+  it("is the single mount that owns it", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} chrome={false} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-embed-dock");
+  });
+
+  it("renders nothing at all when it carries neither", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} chrome={false} embed={false} />
+      </TooltipProvider>,
+    );
+    expect(html).toBe("");
   });
 });
 
@@ -717,12 +1298,12 @@ describe("MusicComposer", () => {
     expect(html).toContain("h-14 w-14");
     expect(html).toContain("rounded-full");
     expect(html).toContain("data-slider=\"scrub\"");
-    expect(html).toContain("col-span-full");
+    expect(html).toContain("grid-cols-1");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
-    expect(html).not.toContain("data-music-queue-toggle");
+    expect(html).toContain("data-music-queue-toggle");
     expect(html).not.toContain("data-music-composer-start");
     expect(html).not.toContain("data-slider=\"edge\"");
     expect(html).not.toContain("data-music-fila");
@@ -743,7 +1324,7 @@ describe("MusicComposer", () => {
     expect(html).toContain("max-h-[min(28rem,50dvh)]");
     expect(html).not.toContain("data-music-composer-start");
     expect(html).not.toContain("data-music-fila-play");
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
   });
@@ -801,7 +1382,7 @@ describe("MusicFila", () => {
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 
-  it("hides search until Adicionar when a track is on", () => {
+  it("keeps the field mounted with a track on, and drops the header's plus", () => {
     receiveMusic(CHANNEL, state());
     setMusicOpen(true);
     const html = renderToStaticMarkup(
@@ -809,8 +1390,8 @@ describe("MusicFila", () => {
         <MusicFila voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-add");
-    expect(html).not.toContain("data-music-search");
+    expect(html).toContain("data-music-search");
+    expect(html).not.toContain("data-music-add");
     expect(html).not.toContain("data-music-repeat");
   });
 

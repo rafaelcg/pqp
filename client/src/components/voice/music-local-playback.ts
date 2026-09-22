@@ -62,10 +62,15 @@ export function setMusicLocalNeedsTap(needsTap: boolean): void {
 }
 
 export function tapMusicLocalToPlay(): void {
-  if (player && !snapshot.muted) {
+  if (!player) {
+    // Nothing answered, so the tap bought nothing: the button stays up
+    // rather than disappearing over a player that is not playing.
+    return;
+  }
+  if (!snapshot.muted) {
     player.unMute();
   }
-  player?.playVideo();
+  player.playVideo();
   if (snapshot.needsTap) {
     snapshot = { ...snapshot, needsTap: false };
     emit();

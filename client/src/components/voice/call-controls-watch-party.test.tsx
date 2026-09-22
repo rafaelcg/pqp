@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   receiveMusic,
   resetMusicStoreForTests,
+  setListening,
   setMusicOpen,
   setMusicSession,
 } from "@/lib/music-store";
@@ -175,6 +176,37 @@ describe("CallControls collapsed push-to-talk", () => {
   });
 });
 
+/** The bar is a column under 35rem, and a column centres what it holds. */
+describe("CallControls people cell", () => {
+  it("fills the line at narrow widths so the name is not centred", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <CallControls
+          voiceState={idle}
+          collapsed
+          leading={<span>Dev User</span>}
+          canExpand={false}
+          userCollapsed={false}
+          fullscreenAvailable={false}
+          isFullscreen={false}
+          onToggleFullscreen={() => {}}
+          onToggleMute={() => {}}
+          onToggleCamera={() => {}}
+          videoQuality="720p"
+          onVideoQualityChange={() => {}}
+          qualityMenuOpen={false}
+          onQualityMenuOpenChange={() => {}}
+          onStartScreenShare={() => {}}
+          onStopScreenShare={() => {}}
+          onToggleCollapsed={() => {}}
+          onLeave={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toMatch(/data-call-dock-people=""[^>]*w-full[^>]*@min-\[35rem\]:w-auto/);
+  });
+});
+
 describe("CallControls music tile", () => {
   beforeEach(() => {
     resetMusicStoreForTests();
@@ -248,5 +280,46 @@ describe("CallControls music tile", () => {
       history: [],
     });
     expect(render(idle)).toContain('data-music-dock="playing"');
+  });
+
+  /* The one thing the tile can say when the panel is shut and the bar is
+     not this channel's: the room has music and you are not hearing it. */
+  it("carries a dot once this machine has stopped listening", () => {
+    const channelId = idle.voiceChannelId ?? "33333333-3333-4333-8333-333333333333";
+    setMusicSession({
+      channelId,
+      peerId: "peer-me",
+      userId: "u1",
+      displayName: "Eu",
+      send: () => {},
+    });
+    receiveMusic(channelId, {
+      current: {
+        id: "t1",
+        provider: "youtube",
+        videoId: "aaaaaaaaaaa",
+        title: "A",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 1,
+        addedByUserId: "u1",
+        addedByName: "Eu",
+      },
+      queue: [],
+      status: "playing",
+      positionMs: 0,
+      atMs: 1,
+      rev: 1,
+      actorId: "peer-me",
+      openControls: false,
+      repeat: "off",
+      skipVotes: [],
+      history: [],
+    });
+    expect(render(idle)).not.toContain("data-music-dock-dot");
+    setListening(false);
+    expect(render(idle)).toContain("data-music-dock-dot");
+    setListening(true);
+    expect(render(idle)).not.toContain("data-music-dock-dot");
   });
 });

@@ -3,19 +3,19 @@ import { useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
+import { useMusicJoinGate, useMusicPrefs } from "@/lib/music-prefs";
+import { musicRelatedTracks } from "@/lib/music-related";
 import {
-  setMusicDucking,
-  useMusicJoinGate,
-  useMusicPrefs,
-} from "@/lib/music-prefs";
-import {
-  advance,
   setMusicOpen,
   setPlaying,
   useMusic,
+  skipToNext,
 } from "@/lib/music-store";
 import { setChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
-import { effectiveCanManageMusic } from "@/components/voice/music-extras";
+import {
+  canSetMusicSwitches,
+  effectiveCanManageMusic,
+} from "@/components/voice/music-extras";
 import { MusicFila } from "@/components/voice/music-fila";
 import {
   setMusicLocalNeedsTap,
@@ -46,15 +46,25 @@ export function MusicMiniPlayer({
   voiceState,
   compact = false,
   chrome = true,
+  embed = true,
 }: {
   voiceState: VoiceState;
-  /** The icons-only sidebar: nothing drawn, but the embed stays mounted so the sound does not stop. */
+  /** The icons-only sidebar: nothing drawn, but the chrome still decides. */
   compact?: boolean;
   /**
-   * False while the call's composer is drawing the bar. The dock still
-   * mounts so the paint host has a sizer.
+   * False while the call's composer is drawing the bar.
    */
   chrome?: boolean;
+  /**
+   * Whether THIS instance carries the YouTube iframe. Exactly one mount may,
+   * and it is the one in `App` that never unmounts. The footer renders this
+   * component up to twice at once, because the sidebar stays mounted but
+   * hidden under Novidades while Novidades renders a footer of its own; two
+   * carriers would portal two iframes into the one singleton host, play the
+   * track twice, and leave the survivor's position probe pointing at the
+   * player that unmounted first.
+   */
+  embed?: boolean;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
@@ -81,6 +91,7 @@ export function MusicMiniPlayer({
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, state);
+  const canSetSwitches = canSetMusicSwitches(voiceState);
   const embedHeldRef = useRef(false);
   embedHeldRef.current = shouldKeepMusicEmbed({
     inCall,
@@ -114,15 +125,22 @@ export function MusicMiniPlayer({
   ]);
 
   useLayoutEffect(() => {
+    if (!embed) {
+      // Only the mount that OWNS the iframe may put the shared player
+      // down. A footer copy going away — Novidades opening, a switch to
+      // the server home — used to clear the live player's reference and
+      // leave "Toque para tocar" with nothing to press.
+      return;
+    }
     return () => setMusicLocalPlayer(null);
-  }, []);
+  }, [embed]);
 
   if (!inCall) {
     return null;
   }
 
-  const keepEmbed = embedHeldRef.current;
-  const embed = keepEmbed ? (
+  const keepEmbed = embed && embedHeldRef.current;
+  const player = keepEmbed ? (
     <MusicPlayer
       music={music}
       isActor={isActor}
@@ -136,17 +154,20 @@ export function MusicMiniPlayer({
       deafened={voiceState.isDeafened}
     />
   ) : null;
-  const dock = (
+  const dock = embed ? (
     <div
       ref={dockRef}
       data-music-embed-dock=""
       className="h-0 overflow-hidden"
     >
-      {embed}
+      {player}
     </div>
-  );
+  ) : null;
 
   if (!chrome) {
+    if (!embed) {
+      return null;
+    }
     return (
       <div
         data-music-mini-player={current ? (music.listening ? "dock" : "dismissed") : "idle"}
@@ -164,6 +185,7 @@ export function MusicMiniPlayer({
       music={music}
       voiceState={voiceState}
       canManage={canManage}
+      canSetSwitches={canSetSwitches}
       playing={playing}
       needsTap={local.needsTap}
       listening={music.listening}
@@ -172,11 +194,10 @@ export function MusicMiniPlayer({
       ducking={prefs.ducking}
       onOpenFila={() => setMusicOpen(true)}
       onPlayPause={() => setPlaying(!playing)}
-      onSkip={() => advance()}
+      onSkip={() => void skipToNext(musicRelatedTracks)}
       onTapToPlay={tapMusicLocalToPlay}
       onMute={toggleMusicLocalMuted}
       onVolume={setMusicLocalVolume}
-      onToggleDucking={setMusicDucking}
     />
   ) : null;
 

@@ -21,6 +21,13 @@ export interface ContextMenuItemDef {
   danger?: boolean;
   disabled?: boolean;
   separator?: boolean;
+  /**
+   * A non-interactive label over the rows below it. For a menu whose items
+   * differ in WHO they affect rather than in what they do, where the
+   * difference is not in any one label ("Parar de ouvir" against "Parar pra
+   * todos") and a separator alone does not say it.
+   */
+  heading?: boolean;
   /** Left of the label. Menus that set this on any row reserve the column. */
   icon?: LucideIcon;
   /** Tick on the right. Used for exclusive choices like notification level. */
