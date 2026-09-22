@@ -122,12 +122,13 @@ import {
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
+  winningFeatureHint,
   shouldOfferBringFriendsHint,
   shouldOfferMusicFieldHint,
   shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
-  winningFeatureHint,
+  useFeatureHintsSpent,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
 import {
@@ -1234,6 +1235,11 @@ function MainAppContent({
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
+  // Dismissing an attached hint writes to a set in `lib/feature-hints.ts`
+  // that `winningFeatureHint` reads while this renders. Subscribing here is
+  // what makes the next tip arrive on that click rather than on whatever
+  // happens to re-render App next.
+  useFeatureHintsSpent();
   const [shortcutsQuietReady, setShortcutsQuietReady] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setShortcutsQuietReady(true), 1600);

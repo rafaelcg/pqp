@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import {
   isAutomatedBrowser,
   isHintSeen,
@@ -112,8 +113,39 @@ export function rememberFeatureHint(
  */
 const spentThisLoad = new Set<FeatureHintId>();
 
+/**
+ * AND SPENT IS A STORE, NOT A READ, FOR THE SAME REASON THE PIP IS ONE.
+ *
+ * The queue reads this set while it renders and the card writes to it from
+ * a click handler three trees down. Nothing subscribed, so the winner was
+ * recomputed only when something ELSE re-rendered App: Entendi on the call
+ * dock card emptied the slot and left it empty until an unrelated state
+ * change came along, which could be a message arriving or nothing at all.
+ * `lib/music-pip.ts` has the same shape and says the same thing.
+ */
+let spentVersion = 0;
+const spentListeners = new Set<() => void>();
+
+export function subscribeFeatureHintsSpent(listener: () => void): () => void {
+  spentListeners.add(listener);
+  return () => {
+    spentListeners.delete(listener);
+  };
+}
+
+export function featureHintsSpentVersion(): number {
+  return spentVersion;
+}
+
 export function spendFeatureHintForLoad(id: FeatureHintId): void {
+  if (spentThisLoad.has(id)) {
+    return;
+  }
   spentThisLoad.add(id);
+  spentVersion += 1;
+  for (const listener of spentListeners) {
+    listener();
+  }
 }
 
 export function isFeatureHintSpentForLoad(id: FeatureHintId): boolean {
@@ -122,6 +154,8 @@ export function isFeatureHintSpentForLoad(id: FeatureHintId): boolean {
 
 export function resetFeatureHintsForTests(): void {
   spentThisLoad.clear();
+  spentVersion += 1;
+  spentListeners.clear();
 }
 
 export function winningFeatureHint(
@@ -133,6 +167,24 @@ export function winningFeatureHint(
     }
   }
   return null;
+}
+
+/**
+ * Subscribe to the set above, so the component that runs the queue renders
+ * again on the spot when a card is spent instead of waiting for the next
+ * unrelated update. The number it returns is a version and means nothing on
+ * its own; `winningFeatureHint` is still what answers the question.
+ *
+ * App calls this high up with its other hooks rather than beside the queue:
+ * the queue is computed far down the body, past an early return, and a hook
+ * there would not run on every render.
+ */
+export function useFeatureHintsSpent(): number {
+  return useSyncExternalStore(
+    subscribeFeatureHintsSpent,
+    featureHintsSpentVersion,
+    featureHintsSpentVersion,
+  );
 }
 
 /**
