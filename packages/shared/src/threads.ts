@@ -29,11 +29,26 @@ import { z } from "zod";
  * read-time computation over the thread's last activity — there is no sweeper,
  * no stored flag, and nothing to un-archive: saying something in an archived
  * thread makes it active again by making the condition false.
+ *
+ * Three days, which is Discord's default for the same setting. It was seven,
+ * chosen before threads had a sidebar; a week is a long time for somebody
+ * else's finished conversation to keep a row in a busy channel.
  */
-export const THREAD_AUTO_ARCHIVE_DAYS = 7;
+export const THREAD_AUTO_ARCHIVE_DAYS = 3;
 
 /** Thread names are titles, not slugs — spaces and punctuation are fine. */
 export const THREAD_NAME_MAX_LENGTH = 80;
+
+/** Faces on the chip. Three is what fits beside a count without wrapping. */
+export const THREAD_PARTICIPANT_FACES = 3;
+
+/**
+ * How many threads the channel list nests under one channel row. Shared
+ * because the server caps the read and the client caps again when a
+ * `thread-update` puts a thread back on top; two copies of this number is two
+ * places to change it and one place to forget.
+ */
+export const SIDEBAR_THREADS_PER_CHANNEL = 3;
 
 // Same rule as `safeTextSchema` in api.ts, restated because this module must
 // not import api.ts (api.ts imports this one for the message shape).
@@ -60,6 +75,27 @@ export const threadSummarySchema = z.object({
   lastActivityAt: z.string(),
   /** Computed from `lastActivityAt` at read time — see THREAD_AUTO_ARCHIVE_DAYS. */
   archived: z.boolean(),
+  /**
+   * Up to three faces for the chip, most recent speaker first. The chip used
+   * to say nothing about who was in a thread, which is the thing that makes a
+   * side conversation worth opening. Empty for a thread with no replies yet.
+   *
+   * Capped in SQL rather than trimmed in the client: this rides on every
+   * history page and every `thread-update`, so the cap is what keeps it small
+   * on the wire. The SCHEMA deliberately does not enforce that cap — a
+   * `.max()` here would make an older client reject a whole `thread-update`
+   * from a newer server that sends one face more, instead of drawing what it
+   * understands. The chip slices what it draws.
+   */
+  participants: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        displayName: z.string(),
+        avatarUrl: z.string().nullable(),
+      }),
+    )
+    .default([]),
 });
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>;

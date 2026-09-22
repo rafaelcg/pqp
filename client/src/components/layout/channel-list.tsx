@@ -13,6 +13,7 @@ import {
   Hand,
   History,
   Lock,
+  MessageSquareText,
   Mic,
   MicOff,
   PanelLeftOpen,
@@ -57,6 +58,7 @@ import {
   type ChannelLiveState,
   type ChannelType,
   type Server,
+  type ThreadSummary,
   type VoiceParticipant,
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
@@ -124,6 +126,8 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
 
+const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set();
+
 export interface UnreadState {
   count: number;
   mentions: number;
@@ -162,6 +166,17 @@ function sortByPosition(list: Channel[]): Channel[] {
 
 interface ChannelListProps {
   server: Server | null;
+  /**
+   * --- threads --- channelId -> the active threads under it, newest first,
+   * already capped by the server. A thread was only ever reachable by
+   * scrolling its parent channel to the message it grew out of, so nothing in
+   * the sidebar said a server had threads at all.
+   */
+  threadsByChannel?: Record<string, ThreadSummary[]>;
+  /** Thread channel ids with activity this reader has not opened. */
+  unreadThreadIds?: ReadonlySet<string>;
+  /** Selects the parent channel and opens the panel, like the chip does. */
+  onOpenThread?: (thread: ThreadSummary) => void;
   /** channelId -> upcoming/live session start time, for the sidebar's "próxima: sex 21h" hint. Behind VITE_WATCH_PARTY_SCHEDULE upstream. */
   upcomingSessionStartsAtByChannel?: Record<string, string>;
   channels: Channel[];
@@ -349,6 +364,9 @@ export function liveStateForChannel(
 
 export function ChannelList({
   server,
+  threadsByChannel = {},
+  unreadThreadIds = EMPTY_THREAD_IDS,
+  onOpenThread,
   channels,
   selectedChannelId,
   canManage,
@@ -1122,6 +1140,44 @@ export function ChannelList({
           onDragOverRow={(event) => handleRowDragOver(event, channel)}
           onDrop={() => handleRowDrop(channel)}
         />
+        {/* --- threads --- nested under the channel they hang off, the same
+            shape the voice occupants below use. */}
+        {(threadsByChannel[channel.id]?.length ?? 0) > 0 && onOpenThread && (
+          <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2">
+            {threadsByChannel[channel.id]!.map((thread) => {
+              const threadUnread = unreadThreadIds.has(thread.channelId);
+              return (
+                <li key={thread.channelId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenThread(thread);
+                      onMobileClose?.();
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-surface-2/60",
+                      threadUnread
+                        ? "font-semibold text-text"
+                        : "text-text-tertiary hover:text-text",
+                    )}
+                  >
+                    <MessageSquareText
+                      className="h-3 w-3 shrink-0 text-accent"
+                      aria-hidden
+                    />
+                    <span className="min-w-0 truncate">{thread.name}</span>
+                    {threadUnread && (
+                      <span
+                        className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                        aria-hidden
+                      />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
         {channelMusic[channel.id] && (
           <ChannelMusicCard
             channelId={channel.id}

@@ -1025,6 +1025,16 @@ export const fetchUnread = (serverId: string) =>
 export const fetchChannels = (serverId: string) =>
   apiFetch<{ channels: Channel[] }>(`/api/servers/${serverId}/channels`);
 
+/**
+ * --- threads --- the active threads of a server, keyed by the channel they
+ * hang off. Separate from `fetchChannels` on purpose: that response is etagged
+ * because channels barely change, and threads move on every reply.
+ */
+export const fetchServerThreads = (serverId: string) =>
+  apiFetch<{ threads: Record<string, ThreadSummary[]> }>(
+    `/api/servers/${serverId}/threads`,
+  );
+
 export const createChannel = (
   serverId: string,
   name: string,

@@ -19,7 +19,9 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { canAccessChannel, upsertUser } = await import("./users.js");
+const { canAccessChannel, markChannelRead, upsertUser } = await import(
+  "./users.js"
+);
 const {
   addChannelMember,
   createChannel,
@@ -34,6 +36,7 @@ const { createMessage, listMessages } = await import("./messages.js");
 const {
   createThreadForMessage,
   getThreadInfo,
+  listActiveThreadsByParent,
   listThreadChannelIds,
   listThreadsForMessages,
   ThreadTargetError,
@@ -156,6 +159,169 @@ describeDb("threads", () => {
 
     const byMessage = await listThreadsForMessages([origin.id]);
     expect(byMessage.get(origin.id)?.replyCount).toBe(2);
+  });
+
+  it("names who is in a thread, newest speaker first and capped", async () => {
+    const origin = await postMessage(publicChannelId, owner, "who is here");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    expect(thread.participants).toEqual([]);
+
+    await postMessage(thread.channelId, owner, "first");
+    await postMessage(thread.channelId, member, "second");
+    const fresh = await getThreadInfo(thread.channelId);
+    expect(fresh?.participants.map((p) => p.id)).toEqual([member.id, owner.id]);
+
+    // Somebody who spoke twice appears once, at their most recent turn.
+    await postMessage(thread.channelId, owner, "third");
+    const again = await getThreadInfo(thread.channelId);
+    expect(again?.participants.map((p) => p.id)).toEqual([owner.id, member.id]);
+  });
+
+  it("lists a channel's active threads for the sidebar, newest first", async () => {
+    const first = await postMessage(publicChannelId, owner, "older topic");
+    const older = (await createThreadForMessage(first.id, null))!.thread;
+    const second = await postMessage(publicChannelId, owner, "newer topic");
+    const newer = (await createThreadForMessage(second.id, null))!.thread;
+    await postMessage(newer.channelId, owner, "keeps it on top");
+
+    const byParent = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 3, owner.id);
+    const ids = byParent.get(publicChannelId)?.map((one) => one.channelId);
+    expect(ids?.[0]).toBe(newer.channelId);
+    expect(ids).toContain(older.channelId);
+
+    // The cap is per parent, so one busy channel cannot crowd out the rest.
+    expect(
+      (await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 1, owner.id)).get(
+        publicChannelId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("carries faces on a thread handed back to a second creator", async () => {
+    const origin = await postMessage(publicChannelId, owner, "race the create");
+    const first = (await createThreadForMessage(origin.id, null))!;
+    await postMessage(first.thread.channelId, member, "said something");
+
+    // The idempotent branch: somebody else taps "start thread" on the same
+    // message and gets the existing one back. It is the same summary the chip
+    // draws, so it needs the same faces.
+    const second = (await createThreadForMessage(origin.id, null))!;
+    expect(second.created).toBe(false);
+    expect(second.thread.participants.map((p) => p.id)).toEqual([member.id]);
+  });
+
+  it("lists only the threads the reader is in", async () => {
+    // Somebody else's conversation, which this reader has never touched.
+    // outsider wrote it and member threaded it, so the two halves of "started
+    // it" are different people and the query cannot conflate them.
+    const theirs = await postMessage(publicChannelId, member, "their topic");
+    const theirThread = (await createThreadForMessage(theirs.id, null))!.thread;
+    await postMessage(theirThread.channelId, member, "their reply");
+
+    const forOwner = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(theirThread.channelId);
+
+    // Its own author is in it, by having started it and spoken in it.
+    const forMember = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      member.id,
+    );
+    expect(
+      (forMember.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(theirThread.channelId);
+
+    // Replying is joining.
+    await postMessage(theirThread.channelId, owner, "now I am in it");
+    const afterReply = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (afterReply.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(theirThread.channelId);
+  });
+
+  it("admits the origin's author, not whoever tapped start thread", async () => {
+    // owner wrote the message; member threads it and replies. The query has
+    // no creator column to read, so what it can honestly test is the author
+    // of the origin, and the creator is admitted by having opened the panel.
+    const origin = await postMessage(publicChannelId, owner, "my message");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    await postMessage(thread.channelId, member, "member replies");
+
+    const forOwner = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(thread.channelId);
+
+    // outsider neither wrote the origin nor took part.
+    const forOutsider = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      outsider.id,
+    );
+    expect(
+      (forOutsider.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(thread.channelId);
+  });
+
+  it("counts opening a thread as joining it", async () => {
+    const theirs = await postMessage(publicChannelId, member, "opened topic");
+    const thread = (await createThreadForMessage(theirs.id, null))!.thread;
+    await postMessage(thread.channelId, member, "their reply");
+
+    // What the panel does on open: a read cursor, and nothing else.
+    await markChannelRead(thread.channelId, owner.id);
+
+    const forOwner = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      owner.id,
+    );
+    expect(
+      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).toContain(thread.channelId);
+  });
+
+  it("leaves archived threads out of the sidebar list", async () => {
+    const origin = await postMessage(publicChannelId, owner, "quiet topic");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    const longAgo = new Date(
+      Date.now() - (THREAD_AUTO_ARCHIVE_DAYS + 1) * 24 * 3600 * 1000,
+    );
+    await getPool().query(
+      `UPDATE channels SET created_at = $2 WHERE id = $1`,
+      [thread.channelId, longAgo],
+    );
+
+    const byParent = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId], 3, owner.id);
+    expect(
+      (byParent.get(publicChannelId) ?? []).map((one) => one.channelId),
+    ).not.toContain(thread.channelId);
   });
 
   it("FAILS CLOSED: a thread under a private channel is invisible to a plain member", async () => {

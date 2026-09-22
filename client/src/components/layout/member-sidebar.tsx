@@ -23,6 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PublicUser, VoiceParticipant } from "@pqp/shared";
+import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
@@ -98,6 +99,8 @@ const EMPTY_MEMBERS: readonly ServerMember[] = [];
  */
 
 interface MemberSidebarProps {
+  /** Set while a thread is stashed behind this list — see RightColumnTabs. */
+  onSelectThread?: (() => void) | null;
   open: boolean;
   /** Column beside the transcript (true) or drawer over it. */
   wide: boolean;
@@ -206,6 +209,7 @@ function asRosterRow(person: PublicUser): ServerMember {
 
 export function MemberSidebar({
   open,
+  onSelectThread = null,
   wide,
   onClose,
   serverId,
@@ -627,13 +631,38 @@ export function MemberSidebar({
             : "fixed inset-y-0 right-0 z-30 w-[min(100%,15rem)] shadow-[var(--shadow-popover)]",
         )}
       >
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 px-3">
-          <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("memberList.sectionHeading", {
-              label: t("memberList.title"),
-              count: total,
-            })}
-          </p>
+        {/* --- threads --- a thread that was swapped out for this list is
+            still open as far as the reader is concerned, so it keeps a seat
+            here rather than being silently discarded. */}
+        {onSelectThread && (
+          <div className="shrink-0 px-3 pt-2">
+            <RightColumnTabs
+              active="members"
+              membersLabel={t("memberList.sectionHeading", {
+                label: t("memberList.title"),
+                count: total,
+              })}
+              threadLabel={t("thread.title")}
+              onSelectMembers={() => {}}
+              onSelectThread={onSelectThread}
+            />
+          </div>
+        )}
+        <div
+          className={cn(
+            "flex shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 px-3",
+            // The switch above already carries the heading and the count.
+            onSelectThread ? "h-10" : "h-14",
+          )}
+        >
+          {!onSelectThread && (
+            <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+              {t("memberList.sectionHeading", {
+                label: t("memberList.title"),
+                count: total,
+              })}
+            </p>
+          )}
           {/* `side="left"`: this sits in the top-right corner of the window,
               where a bubble above or beside it would run off the edge. */}
           <Tooltip label={t("memberList.close")} side="left">

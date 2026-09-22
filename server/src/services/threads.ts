@@ -1,6 +1,8 @@
 import {
   deriveThreadName,
   isThreadArchived,
+  THREAD_AUTO_ARCHIVE_DAYS,
+  THREAD_PARTICIPANT_FACES,
   type ThreadSummary,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -39,6 +41,89 @@ const THREAD_COLUMNS = `c.id, c.parent_id, c.thread_root_message_id, c.name, c.c
        (SELECT count(*) FROM messages m WHERE m.channel_id = c.id)::int AS reply_count,
        (SELECT max(m.created_at) FROM messages m WHERE m.channel_id = c.id) AS last_message_at`;
 
+/** The predicate behind `archived`, in SQL, so a read can exclude them. */
+const ACTIVE_THREAD_SQL = `coalesce(
+    (SELECT max(m.created_at) FROM messages m WHERE m.channel_id = c.id),
+    c.created_at
+  ) > now() - interval '${THREAD_AUTO_ARCHIVE_DAYS} days'`;
+
+/**
+ * The faces on the chip: up to THREAD_PARTICIPANT_FACES people per thread,
+ * most recent speaker first.
+ *
+ * ITS OWN QUERY, over thread ids the caller has ALREADY narrowed. As a column
+ * on THREAD_COLUMNS it ran for every candidate row before any cap applied,
+ * and its LIMIT sits after a GROUP BY, so the limit never shortened the scan.
+ * Asked separately it runs once, over the handful of threads actually being
+ * returned, and a caller that does not draw faces does not pay for them.
+ */
+async function participantsFor(
+  threadIds: string[],
+): Promise<Map<string, ThreadSummary["participants"]>> {
+  const byThread = new Map<string, ThreadSummary["participants"]>();
+  if (threadIds.length === 0) {
+    return byThread;
+  }
+  const result = await getPool().query<{
+    channel_id: string;
+    id: string;
+    display_name: string;
+    avatar_url: string | null;
+  }>(
+    `SELECT spoke.channel_id, u.id, u.display_name, u.avatar_url
+       FROM (
+         SELECT m.channel_id,
+                m.author_id,
+                max(m.created_at) AS said_at,
+                row_number() OVER (
+                  PARTITION BY m.channel_id ORDER BY max(m.created_at) DESC
+                ) AS rank
+           FROM messages m
+          WHERE m.channel_id = ANY($1::uuid[])
+          GROUP BY m.channel_id, m.author_id
+       ) spoke
+       JOIN users u ON u.id = spoke.author_id
+      WHERE spoke.rank <= $2
+      ORDER BY spoke.channel_id, spoke.rank`,
+    [threadIds, THREAD_PARTICIPANT_FACES],
+  );
+  for (const row of result.rows) {
+    const list = byThread.get(row.channel_id) ?? [];
+    list.push({
+      id: row.id,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+    });
+    byThread.set(row.channel_id, list);
+  }
+  return byThread;
+}
+
+/**
+ * Fold `participantsFor` into summaries that were built without faces.
+ *
+ * NEVER THROWS. Its callers include the path that runs after a message has
+ * already been written, where the work is done and only the chip's decoration
+ * is outstanding; letting a failed read there surface would report a
+ * successful send as an error. A summary that misses its faces draws the
+ * generic icon and is corrected by the next update.
+ */
+async function withParticipants(
+  summaries: ThreadSummary[],
+): Promise<ThreadSummary[]> {
+  try {
+    const faces = await participantsFor(
+      summaries.filter((one) => one.replyCount > 0).map((one) => one.channelId),
+    );
+    for (const summary of summaries) {
+      summary.participants = faces.get(summary.channelId) ?? [];
+    }
+  } catch {
+    // Left as [], which is what every summary already carries.
+  }
+  return summaries;
+}
+
 function toSummary(row: ThreadRow): ThreadSummary {
   const lastActivity = row.last_message_at ?? row.created_at;
   return {
@@ -52,6 +137,8 @@ function toSummary(row: ThreadRow): ThreadSummary {
     replyCount: row.reply_count,
     lastActivityAt: lastActivity.toISOString(),
     archived: isThreadArchived(lastActivity),
+    // Filled by withParticipants, which asks for them once per capped set.
+    participants: [],
   };
 }
 
@@ -162,7 +249,7 @@ export async function createThreadForMessage(
     return null;
   }
   return {
-    thread: toSummary(existingRow),
+    thread: (await withParticipants([toSummary(existingRow)]))[0]!,
     created: false,
     parentChannelId: row.channel_id,
   };
@@ -175,6 +262,7 @@ export async function createThreadForMessage(
  */
 export async function getThreadInfo(
   channelId: string,
+  { faces = true }: { faces?: boolean } = {},
 ): Promise<ThreadSummary | null> {
   const result = await getPool().query<ThreadRow>(
     `SELECT ${THREAD_COLUMNS}
@@ -183,7 +271,13 @@ export async function getThreadInfo(
     [channelId],
   );
   const row = result.rows[0];
-  return row ? toSummary(row) : null;
+  if (!row) {
+    return null;
+  }
+  const summary = toSummary(row);
+  // A caller that only asks "is this a thread" (thread-join) never draws the
+  // chip, so it does not pay for the faces on it.
+  return faces ? ((await withParticipants([summary]))[0] ?? null) : summary;
 }
 
 /**
@@ -204,12 +298,101 @@ export async function listThreadsForMessages(
      WHERE c.thread_root_message_id = ANY($1::uuid[])`,
     [messageIds],
   );
+  const summaries: ThreadSummary[] = [];
   for (const row of result.rows) {
     if (row.thread_root_message_id) {
-      byMessage.set(row.thread_root_message_id, toSummary(row));
+      const summary = toSummary(row);
+      byMessage.set(row.thread_root_message_id, summary);
+      summaries.push(summary);
     }
   }
+  // One query for the page's threads, not one per thread root.
+  await withParticipants(summaries);
   return byMessage;
+}
+
+/**
+ * The active threads under a set of parent channels that THIS READER is in,
+ * newest activity first, capped per parent — what the channel list nests
+ * under a channel row.
+ *
+ * Archived threads are left out on purpose: the sidebar is for what is going
+ * on now, and a thread quiet for THREAD_AUTO_ARCHIVE_DAYS is reachable the
+ * way it always was, from its origin message. The cap is per parent rather
+ * than overall so a busy channel cannot crowd out every other one.
+ */
+export async function listActiveThreadsByParent(
+  serverId: string,
+  parentChannelIds: string[],
+  perParent: number,
+  viewerId: string,
+): Promise<Map<string, ThreadSummary[]>> {
+  const byParent = new Map<string, ThreadSummary[]>();
+  if (parentChannelIds.length === 0 || perParent <= 0) {
+    return byParent;
+  }
+  // Both the archived filter and the per-parent cap live in SQL. Applied in
+  // TypeScript afterwards they bounded what was RETURNED and nothing else:
+  // Postgres had already produced, summarised and serialised every thread the
+  // reader was in, on a server that may have thousands.
+  const result = await getPool().query<ThreadRow>(
+    `WITH mine AS (
+       SELECT c.id
+         FROM channels c
+        WHERE c.server_id = $4
+          -- server_id first so idx_channels_parent (server_id, parent_id,
+          -- position) is usable at all: without its leading column this was a
+          -- sequential scan of the channels table on every server switch.
+          AND c.parent_id = ANY($1::uuid[])
+          AND c.type = 'thread'
+          AND ${ACTIVE_THREAD_SQL}
+          -- ONLY THREADS THIS READER IS IN. A thread has no members of its
+          -- own (its audience is its parent's) and no creator column, so
+          -- membership is derived from three things this reader did leave a
+          -- trace of: said something in it, WROTE THE MESSAGE IT GREW OUT OF
+          -- (not the same as having started it — anyone may thread anyone's
+          -- message, and the author is the one with the stake in the answers),
+          -- or opened it. Whoever taps "start thread" is admitted by the third
+          -- clause, because starting one opens its panel, which marks it read.
+          -- Between them that is Discord's "created, replied, or joined".
+          AND (
+            EXISTS (SELECT 1 FROM messages said
+                     WHERE said.channel_id = c.id AND said.author_id = $3)
+            OR EXISTS (SELECT 1 FROM messages root
+                        WHERE root.id = c.thread_root_message_id
+                          AND root.author_id = $3)
+            -- Opening the panel writes a read cursor, so this is "joined". A
+            -- thread never opened has no row here, which is also why unread
+            -- cannot be the test: with no cursor everything reads unread.
+            OR EXISTS (SELECT 1 FROM channel_reads cr
+                        WHERE cr.channel_id = c.id AND cr.user_id = $3)
+          )
+     ),
+     ranked AS (
+       SELECT c.id,
+              row_number() OVER (
+                PARTITION BY c.parent_id
+                ORDER BY coalesce(
+                  (SELECT max(m.created_at) FROM messages m
+                    WHERE m.channel_id = c.id), c.created_at) DESC
+              ) AS rank
+         FROM channels c
+         JOIN mine ON mine.id = c.id
+     )
+     SELECT ${THREAD_COLUMNS}
+       FROM channels c
+       JOIN ranked ON ranked.id = c.id AND ranked.rank <= $2
+      ORDER BY c.parent_id, ranked.rank`,
+    [parentChannelIds, perParent, viewerId, serverId],
+  );
+  const summaries = result.rows.map(toSummary);
+  await withParticipants(summaries);
+  for (const summary of summaries) {
+    const list = byParent.get(summary.parentChannelId) ?? [];
+    list.push(summary);
+    byParent.set(summary.parentChannelId, list);
+  }
+  return byParent;
 }
 
 /**
