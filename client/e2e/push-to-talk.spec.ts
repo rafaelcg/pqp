@@ -47,7 +47,7 @@ const BACKQUOTE = {
  * dialog is a dozen ways for it to fail for reasons that are not push-to-talk.
  * The dialog's own wiring is covered by the last test in the file.
  */
-async function usePushToTalk(page: Page): Promise<void> {
+async function usePushToTalk(page: Page, binding: object = BACKQUOTE): Promise<void> {
   await page.addInitScript(
     ([binding]) => {
       const raw = localStorage.getItem("pqp-local-settings");
@@ -61,7 +61,7 @@ async function usePushToTalk(page: Page): Promise<void> {
         }),
       );
     },
-    [BACKQUOTE] as const,
+    [binding] as const,
   );
 }
 
@@ -161,6 +161,35 @@ test.describe("push-to-talk", () => {
 
     await page.keyboard.up("Backquote");
     expect(await isTransmitting(page)).toBe(false);
+  });
+
+  test("a modifier binding DOES fire while typing in the composer", async ({
+    page,
+  }) => {
+    // The founder's report: push-to-talk "only worked on the voice channel's
+    // view". Focus lives in the composer while you read a text channel, and
+    // every binding used to be refused there. A key that cannot type has
+    // nothing to steal from the composer, so it must work from it.
+    await usePushToTalk(page, {
+      code: "AltRight",
+      label: "Right Alt",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+    await joinLobby(page);
+
+    const composer = page.locator("textarea").first();
+    await composer.click();
+    await expect(composer).toBeFocused();
+
+    await page.keyboard.down("AltRight");
+    await expect(holdButton(page)).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.up("AltRight");
+    await expect(holdButton(page)).toHaveAttribute("aria-pressed", "false");
+    // Nothing typed, nothing lost.
+    await expect(composer).toHaveValue("");
   });
 
   test("releasing works even when focus moved into the composer mid-press", async ({

@@ -92,18 +92,25 @@ export function pttHintMessageKey({
   platformSupported,
   platformReason,
   permission,
+  global = true,
 }: {
   isDesktop: boolean;
   platformSupported: boolean;
   platformReason?: "wayland" | "platform";
   permission: PttPermissionStatus;
+  /** `LocalSettings.pttGlobal`: the person turned the background reach off. */
+  global?: boolean;
 }):
   | "settings.voice.pttHint"
+  | "settings.voice.pttHintDesktopOff"
   | "settings.voice.pttHintDesktopWayland"
   | "settings.voice.pttHintDesktopDenied"
   | "settings.voice.pttHintDesktopNative" {
   if (!isDesktop) {
     return "settings.voice.pttHint";
+  }
+  if (!global) {
+    return "settings.voice.pttHintDesktopOff";
   }
   if (!platformSupported && platformReason === "wayland") {
     return "settings.voice.pttHintDesktopWayland";

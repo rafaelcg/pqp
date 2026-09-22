@@ -75,6 +75,7 @@ import {
   type ScreenFrameRate,
 } from "@/lib/hls-capture-rate";
 import {
+  bindingTypesText,
   defaultPttBinding,
   formatBinding,
   parsePttBinding,
@@ -230,6 +231,14 @@ export interface LocalSettings {
    */
   pttBeep: boolean;
   /**
+   * Desktop only: whether the shell holds the push-to-talk binding while the
+   * window is in the background (the native hook, or its `globalShortcut`
+   * fallback). Off keeps push-to-talk in-window, which is what someone wants
+   * when the same key means something in the game they are playing. On by
+   * default: working outside the window is the point of the desktop app.
+   */
+  pttGlobal: boolean;
+  /**
    * Remapped Discord-style shortcuts. Device-local for the same reason as
    * the PTT key: a `KeyboardEvent.code` is this keyboard. Absent keys keep
    * the platform default (Cmd on Apple, Ctrl elsewhere).
@@ -283,6 +292,7 @@ export const defaultLocalSettings: LocalSettings = {
   pushToTalkKey: defaultPttBinding(),
   pttReleaseDelayMs: DEFAULT_RELEASE_DELAY_MS,
   pttBeep: true,
+  pttGlobal: true,
   shortcuts: {},
   micProcessing: defaultMicProcessing,
   // Auto, always. A default that pins a size would be a default that is wrong
@@ -336,6 +346,10 @@ export function loadLocalSettings(): LocalSettings {
         typeof parsed.pttBeep === "boolean"
           ? parsed.pttBeep
           : defaultLocalSettings.pttBeep,
+      pttGlobal:
+        typeof parsed.pttGlobal === "boolean"
+          ? parsed.pttGlobal
+          : defaultLocalSettings.pttGlobal,
       shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
@@ -1030,6 +1044,7 @@ function PttControls({
     platformSupported: native.platformSupported,
     platformReason: native.platformReason,
     permission: native.permission,
+    global: draftLocal.pttGlobal,
   });
 
   return (
@@ -1081,6 +1096,23 @@ function PttControls({
         </label>
       )}
 
+      {isDesktop && (
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+            checked={draftLocal.pttGlobal}
+            onChange={(e) => patchLocal({ pttGlobal: e.target.checked })}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm">{t("settings.voice.pttGlobal")}</span>
+            <span className="block text-xs text-paper-muted">
+              {t("settings.voice.pttGlobalHint")}
+            </span>
+          </span>
+        </label>
+      )}
+
       <PttBeepRow
         enabled={draftLocal.pttBeep}
         soundsOn={sounds.enabled}
@@ -1090,7 +1122,7 @@ function PttControls({
         }}
       />
 
-      {isDesktop && native.permission === "denied" && (
+      {isDesktop && draftLocal.pttGlobal && native.permission === "denied" && (
         <PttPermissionNudge onOpenSettings={native.openSettings} />
       )}
 
@@ -1098,7 +1130,28 @@ function PttControls({
           discovered later by talking to nobody. */}
       <p className="text-xs text-paper-muted">
         {t(hintKey, { key: formatBinding(draftLocal.pushToTalkKey) })}
+        {!isDesktop && (
+          <>
+            {" "}
+            <a
+              href="/download"
+              target="_blank"
+              rel="noopener"
+              className="text-accent underline underline-offset-2"
+            >
+              {t("settings.voice.pttGetDesktop")}
+            </a>
+          </>
+        )}
       </p>
+      {draftLocal.pushToTalkKey.device === "keyboard" &&
+        bindingTypesText(draftLocal.pushToTalkKey) && (
+          <p className="text-xs text-paper-muted">
+            {t("settings.voice.pttTypingNote", {
+              key: formatBinding(draftLocal.pushToTalkKey),
+            })}
+          </p>
+        )}
     </div>
   );
 }
