@@ -101,6 +101,52 @@ export const ADMIN_METRICS_TOKEN_MIN_LENGTH = 16;
 
 const CACHE_TTL_MS = 30_000;
 
+/**
+ * Max concurrent queries `computeAdminMetrics` runs at once. Production sets
+ * `PG_POOL_MAX=22` per API replica. The two fan-outs below used to run
+ * unbounded (`Promise.all` over every thunk at once) — up to 17 queries in
+ * the second block alone — so a single metrics compute could grab 17 of 22
+ * pool connections, leaving ~5 for real traffic. With a metrics exporter
+ * scraping both replicas every 20s against a 30s cache, that burst reliably
+ * overlapped normal load and exhausted the pool: `/ready` waited for a
+ * connection, its latency crossed the 200ms alert threshold, and readiness
+ * flapped false for about a minute at a time (2026-09-22 incident). This
+ * endpoint is cached for `CACHE_TTL_MS` and read only by an exporter and an
+ * operator dashboard, so its own latency is irrelevant; pool safety is what
+ * matters. 4 keeps the compute comfortably parallel without threatening the
+ * pool even if both replicas race each other.
+ */
+const METRICS_QUERY_CONCURRENCY = 4;
+
+/**
+ * Runs `thunks` with at most `limit` in flight at once, preserving result
+ * order and each element's own type (the way `Promise.all` does for a tuple
+ * literal) so callers can still destructure the results positionally. Any
+ * thunk starts only when a slot is free, so the pool never sees more than
+ * `limit` of these queries outstanding at a time. A rejection propagates
+ * like `Promise.all` (the caller sees the first error); thunks still in
+ * flight are not cancelled, but no new ones are started.
+ */
+export async function runWithConcurrencyLimit<T extends readonly unknown[]>(
+  thunks: { [K in keyof T]: () => Promise<T[K]> },
+  limit: number,
+): Promise<T> {
+  const results: unknown[] = new Array(thunks.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex++;
+      if (i >= thunks.length) return;
+      results[i] = await thunks[i]();
+    }
+  }
+
+  const workerCount = Math.min(limit, thunks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results as unknown as T;
+}
+
 /** Accounts that are not people are excluded from every count here. */
 const EXCLUDED_ACCOUNTS = ["webhook", "character"] as const;
 
@@ -907,32 +953,33 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activation,
     callRatings,
     connections,
-  ] = await Promise.all([
-    pool.query<{ total: string; last24h: string }>(
+  ] = await runWithConcurrencyLimit(
+    [
+    () => pool.query<{ total: string; last24h: string }>(
       `SELECT COUNT(*)::text AS total,
               COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours')::text AS last24h
          FROM users
         WHERE NOT is_webhook AND NOT is_character`,
     ),
-    pool.query<{ hours_ago: number; n: string }>(
+    () => pool.query<{ hours_ago: number; n: string }>(
       `SELECT ${hoursAgo("created_at")} AS hours_ago, COUNT(*)::text AS n
          FROM users
         WHERE created_at >= date_trunc('hour', now()) - interval '23 hours'
           AND NOT is_webhook AND NOT is_character
         GROUP BY 1`,
     ),
-    pool.query<{ total: string; last24h: string }>(
+    () => pool.query<{ total: string; last24h: string }>(
       `SELECT COUNT(*)::text AS total,
               COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours')::text AS last24h
          FROM servers`,
     ),
-    pool.query<{ type: string; n: string }>(
+    () => pool.query<{ type: string; n: string }>(
       `SELECT type, COUNT(*)::text AS n
          FROM channels
         WHERE kind = 'server'
         GROUP BY type`,
     ),
-    pool.query<{
+    () => pool.query<{
       last24h: string;
       previous24h: string;
       last_hour: string;
@@ -963,7 +1010,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          ) f
         WHERE m.created_at >= now() - interval '48 hours'`,
     ),
-    pool.query<{ hours_ago: number; n: string }>(
+    () => pool.query<{ hours_ago: number; n: string }>(
       `SELECT ${hoursAgo("m.created_at")} AS hours_ago,
               COUNT(*)::text AS n
          FROM messages m
@@ -972,7 +1019,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           AND NOT u.is_webhook AND NOT u.is_character
         GROUP BY 1`,
     ),
-    pool.query<{
+    () => pool.query<{
       name: string;
       tagline: string | null;
       channels: string;
@@ -1002,12 +1049,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          JOIN servers s ON s.id = a.server_id
         ORDER BY a.messages_24h DESC, s.name`,
     ),
-    acquisitionReport(7),
-    retentionBySource(30),
-    activationFunnel(),
-    callRatingSummary(7),
-    connectionAdoption(),
-  ]);
+    () => acquisitionReport(7),
+    () => retentionBySource(30),
+    () => activationFunnel(),
+    () => callRatingSummary(7),
+    () => connectionAdoption(),
+    ],
+    METRICS_QUERY_CONCURRENCY,
+  );
 
   // One snapshot, used both to look up room names below and to build the
   // payload further down. Calling it twice would let a room open between the
@@ -1047,8 +1096,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     voiceRoomNames,
     productCounts,
     statusHistory,
-  ] = await Promise.all([
-    pool.query<{ private_text: string; dm: string; grp: string }>(
+  ] = await runWithConcurrencyLimit(
+    [
+    () => pool.query<{ private_text: string; dm: string; grp: string }>(
       `SELECT COUNT(*) FILTER (
                 WHERE kind = 'server' AND type = 'text' AND is_private
               )::text AS private_text,
@@ -1056,7 +1106,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
               COUNT(*) FILTER (WHERE kind = 'group')::text AS grp
          FROM channels`,
     ),
-    pool.query<{ servers_with_channels: string; max_channels: string }>(
+    () => pool.query<{ servers_with_channels: string; max_channels: string }>(
       `SELECT COUNT(*)::text AS servers_with_channels,
               COALESCE(MAX(n), 0)::text AS max_channels
          FROM (
@@ -1066,13 +1116,13 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
             GROUP BY server_id
          ) t`,
     ),
-    pool.query<{ n: string }>(
+    () => pool.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n
          FROM channels c
         WHERE c.kind = 'server' AND c.type = 'text'
           AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel_id = c.id)`,
     ),
-    pool.query<{ channel: string; server: string; messages_24h: string; senders_24h: string }>(
+    () => pool.query<{ channel: string; server: string; messages_24h: string; senders_24h: string }>(
       `SELECT c.name AS channel,
               s.name AS server,
               COUNT(*)::text AS messages_24h,
@@ -1088,7 +1138,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY COUNT(*) DESC, c.name
         LIMIT 8`,
     ),
-    pool.query<{
+    () => pool.query<{
       with_handle: string;
       with_avatar: string;
       with_banner: string;
@@ -1107,14 +1157,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM users
         WHERE NOT is_webhook AND NOT is_character`,
     ),
-    pool.query<{ n: string }>(
+    () => pool.query<{ n: string }>(
       `SELECT COUNT(DISTINCT m.author_id)::text AS n
          FROM messages m
          JOIN users u ON u.id = m.author_id
         WHERE m.created_at >= now() - interval '7 days'
           AND NOT u.is_webhook AND NOT u.is_character`,
     ),
-    pool.query<{ day: string; n: string }>(
+    () => pool.query<{ day: string; n: string }>(
       `SELECT to_char(
                 date_trunc('day', created_at AT TIME ZONE 'America/Sao_Paulo'),
                 'YYYY-MM-DD'
@@ -1126,7 +1176,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         GROUP BY 1
         ORDER BY 1`,
     ),
-    pool.query<{ eligible: string; active: string }>(
+    () => pool.query<{ eligible: string; active: string }>(
       `SELECT COUNT(*)::text AS eligible,
               COUNT(*) FILTER (
                 WHERE EXISTS (
@@ -1139,7 +1189,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         WHERE NOT u.is_webhook AND NOT u.is_character
           AND u.created_at < now() - interval '24 hours'`,
     ),
-    pool.query<{ total: string; listed: string; suspended: string; with_slug: string }>(
+    () => pool.query<{ total: string; listed: string; suspended: string; with_slug: string }>(
       // `total` counts communities with a PUBLIC ADDRESS; `listed` counts the
       // subset that is also in the directory. The two stopped being the same
       // number when the switches were split, and the operator needs the second
@@ -1153,14 +1203,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM servers
         WHERE is_community`,
     ),
-    pool.query<{ category: string; n: string }>(
+    () => pool.query<{ category: string; n: string }>(
       `SELECT community_category AS category, COUNT(*)::text AS n
          FROM servers
         WHERE is_community
         GROUP BY 1
         ORDER BY COUNT(*) DESC, 1`,
     ),
-    pool.query<{
+    () => pool.query<{
       name: string;
       slug: string | null;
       category: string;
@@ -1188,7 +1238,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY s.member_count DESC, s.name
         LIMIT 20`,
     ),
-    pool.query<{ open: string; actioned: string; dismissed: string; last24h: string }>(
+    () => pool.query<{ open: string; actioned: string; dismissed: string; last24h: string }>(
       `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
               COUNT(*) FILTER (WHERE status = 'actioned')::text AS actioned,
               COUNT(*) FILTER (WHERE status = 'dismissed')::text AS dismissed,
@@ -1197,7 +1247,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
               )::text AS last24h
          FROM reports`,
     ),
-    pool.query<{ open: string; confirmed: string; closed: string; last24h: string }>(
+    () => pool.query<{ open: string; confirmed: string; closed: string; last24h: string }>(
       `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
               COUNT(*) FILTER (WHERE status = 'confirmed')::text AS confirmed,
               COUNT(*) FILTER (WHERE status = 'closed')::text AS closed,
@@ -1206,12 +1256,12 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
               )::text AS last24h
          FROM feedback`,
     ),
-    pool.query<{ bans: string; timeouts: string }>(
+    () => pool.query<{ bans: string; timeouts: string }>(
       `SELECT (SELECT COUNT(*) FROM server_bans)::text AS bans,
               (SELECT COUNT(*) FROM member_timeouts
                 WHERE expires_at > now())::text AS timeouts`,
     ),
-    pool.query<{ kind: string; status: string; created_at: Date; body: string }>(
+    () => pool.query<{ kind: string; status: string; created_at: Date; body: string }>(
       `SELECT kind, status, created_at, left(body, 160) AS body
          FROM feedback
         ORDER BY id DESC
@@ -1220,7 +1270,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     // Names for the rooms that have somebody in them right now. The snapshot
     // holds channel ids only; an empty list skips the query entirely rather
     // than sending `IN ()` to Postgres.
-    (async () => {
+    async () => {
       const ids = voice.rooms.map((room) => room.voiceChannelId);
       if (ids.length === 0) {
         return { rows: [] as { id: string; channel: string; server: string | null }[] };
@@ -1232,8 +1282,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           WHERE c.id = ANY($1::uuid[])`,
         [ids],
       );
-    })(),
-    pool.query<{
+    },
+    () => pool.query<{
       friendships: string;
       friend_pending: string;
       attachments: string;
@@ -1259,8 +1309,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     ),
     // A history that failed to read must not cost the dashboard its counts:
     // the sparklines vanish, every number stays.
-    readStatusHistory().catch(() => null),
-  ]);
+    () => readStatusHistory().catch(() => null),
+    ],
+    METRICS_QUERY_CONCURRENCY,
+  );
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
   for (const row of channels.rows) {
