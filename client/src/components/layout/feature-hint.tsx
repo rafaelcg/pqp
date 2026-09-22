@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -45,6 +46,25 @@ export function useFeatureHintEnabled(id: AttachedFeatureHintId): boolean {
  */
 const eligibleThisLoad = new Set<FeatureHintId>();
 
+/**
+ * And a dismissal that survives one too, for the same reason.
+ *
+ * `open` used to start true on every mount, which was invisible while a
+ * hint's gate was a standing condition that could not move during a call:
+ * nothing unmounted the card except leaving. A gate that follows live
+ * state (a track starting, a panel opening) unmounts it and hands it
+ * straight back, so Entendi stops meaning anything and the card becomes
+ * something people learn to swat. The impression is already in storage by
+ * then, so this only has to cover the rest of the page load.
+ */
+const dismissedThisLoad = new Set<FeatureHintId>();
+
+/** Both sets are per page load, so a suite has to start each test fresh. */
+export function resetFeatureHintsForTests(): void {
+  eligibleThisLoad.clear();
+  dismissedThisLoad.clear();
+}
+
 function takeEligibility(id: FeatureHintId): boolean {
   if (eligibleThisLoad.has(id)) {
     return true;
@@ -84,11 +104,29 @@ export function FeatureHint({
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(() => takeEligibility(id));
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() => !dismissedThisLoad.has(id));
 
+  const close = () => {
+    dismissedThisLoad.add(id);
+    setOpen(false);
+  };
+
+  const shown = useRef(false);
   useEffect(() => {
     if (eligible && enabled) {
       rememberFeatureHint(id);
+      shown.current = true;
+      return;
+    }
+    if (shown.current) {
+      /*
+       * The gate that justified this card turned off after it was shown.
+       * The moment has passed, so handing the card back when the gate
+       * returns is the repeating card, not a second chance. A remount
+       * with the gate unchanged does not come through here at all, which
+       * is what `eligibleThisLoad` exists to protect.
+       */
+      dismissedThisLoad.add(id);
     }
   }, [eligible, enabled, id]);
 
@@ -98,7 +136,7 @@ export function FeatureHint({
     <CornerCard
       layout="inline"
       open={show}
-      onClose={() => setOpen(false)}
+      onClose={close}
       label={title ?? body}
       dismissLabel={t("featureHint.dismiss")}
       dataAttribute={id}
@@ -111,13 +149,10 @@ export function FeatureHint({
           disabled={actionBusy}
           onClick={() => {
             if (!onAction) {
-              setOpen(false);
+              close();
               return;
             }
-            void Promise.resolve(onAction()).then(
-              () => setOpen(false),
-              () => {},
-            );
+            void Promise.resolve(onAction()).then(close, () => {});
           }}
         >
           {actionLabel ?? t("featureHint.gotIt")}

@@ -35,6 +35,18 @@ Adding one means adding a row here.
 
 ## The rules
 
+**Once means once, including within a page load.** `components/layout/feature-hint.tsx`
+keeps two per-load sets. `eligibleThisLoad` holds a card eligible through a
+remount that changed nothing, because the call stage swaps its collapsed
+strip for the expanded one and React StrictMode remounts in dev, and neither
+should hide a card on the real tree. `dismissedThisLoad` is the other half:
+Entendi, the X, and a gate that turns off after the card was shown all spend
+the card for the rest of the load. Without it a hint whose gate follows live
+state (a track starting, a panel opening) unmounts and is handed straight
+back, which teaches people to swat it. A hint with a live gate is therefore
+mounted with `enabled={...}` rather than behind a `&&` that unmounts it, or
+the card cannot tell the two cases apart.
+
 **One corner at a time.** Every corner card renders through
 `components/layout/corner-card.tsx` and is arbitrated by
 `lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, qg, voiceClean,

@@ -2506,16 +2506,17 @@ export function CallControls({
             <BringFriendsHint enabled />
           </div>
         )}
-        {musicHintEnabled && (
-          <div className="pointer-events-auto mb-1">
-            <FeatureHint
-              id="music"
-              enabled
-              title={t("featureHint.music.title")}
-              body={t("featureHint.music.body")}
-            />
-          </div>
-        )}
+        {/* Mounted whether or not it wins, so the card can tell "the gate
+            turned off" (a track started, the panel opened) from "the strip
+            swapped under me". The first spends it; the second must not. */}
+        <div className={cn("pointer-events-auto", musicHintEnabled && "mb-1")}>
+          <FeatureHint
+            id="music"
+            enabled={musicHintEnabled}
+            title={t("featureHint.music.title")}
+            body={t("featureHint.music.body")}
+          />
+        </div>
       </div>
 
       {/* The queue sits above the bar, where the room is, rather than in a
