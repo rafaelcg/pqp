@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError, resolveMusic, searchMusic } from "@/lib/api";
+import type { MessageKey } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 import {
   addTrack,
@@ -49,6 +50,31 @@ export function shouldResolveQuery(text: string): boolean {
 }
 
 /** Add a resolved track at the front of the queue (two writes). */
+/**
+ * WHAT TO TELL SOMEBODY WHEN A LOOKUP FAILS.
+ *
+ * One mapping rather than two: this was written out in both the search
+ * handler and the paste handler, and the two had already drifted — 429
+ * was a rate limit in neither of them, so the per-user limiter told
+ * people the whole feature was unavailable. The field searches as you
+ * type, so that refusal is the one they actually meet.
+ */
+export function musicErrorKey(error: unknown): MessageKey {
+  if (!(error instanceof ApiError)) {
+    return "music.error.upstream";
+  }
+  if (error.status === 404) {
+    return "music.error.notFound";
+  }
+  if (error.status === 400) {
+    return "music.error.unsupported";
+  }
+  if (error.status === 429) {
+    return "music.error.busy";
+  }
+  return "music.error.upstream";
+}
+
 export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
   const before = new Set((getMusicSnapshot().state?.queue ?? []).map((track) => track.id));
   const outcome = addTrack(resolved);
@@ -166,17 +192,7 @@ export function MusicSearchPicker({
           tellOutcome(addTrack(track));
         }
       } catch (error) {
-        if (error instanceof ApiError) {
-          if (error.status === 404) {
-            setNotice(t("music.error.notFound"));
-          } else if (error.status === 400) {
-            setNotice(t("music.error.unsupported"));
-          } else {
-            setNotice(t("music.error.upstream"));
-          }
-        } else {
-          setNotice(t("music.error.upstream"));
-        }
+        setNotice(t(musicErrorKey(error)));
       }
     },
     [t, tellOutcome],
@@ -206,14 +222,11 @@ export function MusicSearchPicker({
           return;
         }
         if (error instanceof ApiError && error.status === 404) {
+          // The only one that also empties the list: nothing matched.
           setResults([]);
           setResultsFor(text);
-          setNotice(t("music.error.notFound"));
-        } else if (error instanceof ApiError && error.status === 400) {
-          setNotice(t("music.error.unsupported"));
-        } else {
-          setNotice(t("music.error.upstream"));
         }
+        setNotice(t(musicErrorKey(error)));
       }
     },
     [t],

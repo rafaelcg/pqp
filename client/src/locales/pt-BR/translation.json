@@ -1026,6 +1026,7 @@
   "music.full": "A fila está cheia",
   "music.error.unsupported": "Só links do YouTube ou do Spotify (música, álbum ou playlist), ou uma busca",
   "music.error.notFound": "Não achei nada com isso",
+  "music.error.busy": "Muita busca de uma vez. Espera um pouquinho.",
   "music.error.upstream": "A busca de música está indisponível agora",
   "music.error.playback": "Esse vídeo não pode tocar aqui",
   "music.more": "+{count} mais",

@@ -1026,6 +1026,7 @@
   "music.full": "The queue is full",
   "music.error.unsupported": "Only YouTube or Spotify links (song, album or playlist), or a search",
   "music.error.notFound": "Nothing found for that",
+  "music.error.busy": "Too many searches at once. Give it a moment.",
   "music.error.upstream": "Music search is unavailable right now",
   "music.error.playback": "This video cannot be played here",
   "music.more": "+{count} more",
