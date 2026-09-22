@@ -225,18 +225,20 @@ export function VoiceStatusBar({
 
   return (
     <div className="border-t border-ink-4/60 bg-ink px-2 py-2">
-      {shareHintEnabled && (
-        <div className="mb-2">
-          <FeatureHint
-            id="watchParty"
-            enabled
-            body={t("featureHint.watchParty.strip")}
-          />
-        </div>
-      )}
-      {bringFriendsHintEnabled && (
-        <div className="mb-2">
-          <BringFriendsHint enabled />
+      {/* Above the strip, out of the flow: in it the card lifted the whole
+          bar (and the user row under it) by its own height. */}
+      {(shareHintEnabled || bringFriendsHintEnabled) && (
+        <div className="pointer-events-none relative z-30 h-0 [&>*]:pointer-events-auto">
+          <div className="absolute inset-x-0 bottom-2">
+            {shareHintEnabled && (
+              <FeatureHint
+                id="watchParty"
+                enabled
+                body={t("featureHint.watchParty.strip")}
+              />
+            )}
+            {bringFriendsHintEnabled && <BringFriendsHint enabled />}
+          </div>
         </div>
       )}
       <div className="flex items-center gap-1">

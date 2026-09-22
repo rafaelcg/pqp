@@ -35,6 +35,7 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
+  type ReactElement,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
@@ -150,6 +151,7 @@ import {
 } from "@/components/voice/call-control-groups";
 import {
   CallDockPortal,
+  useCallDockHintHost,
   useCallDockPublisher,
 } from "@/components/voice/call-dock";
 import {
@@ -162,6 +164,7 @@ import {
   tapIsOnStage,
   useIdleChrome,
 } from "@/hooks/use-idle-chrome";
+import { createPortal } from "react-dom";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -2304,6 +2307,22 @@ function CallDuration({
 }
 
 /**
+ * Draw the call's coachmarks where they cannot move anything.
+ *
+ * Docked, that is a host the outlet hangs above its own clipped row (see
+ * `useCallDockHintHost`); on the expanded stage there is no host and the
+ * node positions itself. Kept as a function so both branches render the
+ * SAME element, which is what stops a card remounting (and asking for its
+ * slot again) when a call is docked or undocked mid-session.
+ */
+function renderCallHints(
+  host: HTMLElement | null,
+  node: ReactElement,
+): ReactNode {
+  return host === null ? node : createPortal(node, host);
+}
+
+/**
  * The control bar under the stage. Exported for the unit test that pins the
  * audience rule below; `CallStage` is the only runtime caller.
  */
@@ -2404,6 +2423,7 @@ export function CallControls({
   // already recorded by then (`FeatureHint` remembers on first paint), so it
   // does not come back either way.
   const callDockHintEnabled = useFeatureHintEnabled("callDock");
+  const hintHost = useCallDockHintHost();
   const [dockControlUsed, setDockControlUsed] = useState(false);
   const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
   const musicHintEnabled = useFeatureHintEnabled("music");
@@ -2469,13 +2489,31 @@ export function CallControls({
   return (
     <div
       className={cn(
-        "flex flex-col",
+        "relative flex flex-col",
         collapsed ? "w-full gap-0" : "items-center gap-1.5",
       )}
     >
-      <div data-call-hints>
+      {/* ABOVE THE BAR, OUT OF THE FLOW.
+          These sat in the column and pushed the bar (and with it the whole
+          composer) down by the height of whichever card was up, so the
+          controls moved the moment a card explaining them appeared. Docked,
+          they go through `useCallDockHintHost` into a host the outlet hangs
+          above its own clipped row; on the expanded stage there is no dock
+          and nothing clips, so the same markup is anchored here. Either way
+          the wrapper passes pointer events through, so the row underneath
+          still takes the click that spends the call dock card. */}
+      {renderCallHints(
+        hintHost,
+        <div
+          data-call-hints
+          className={cn(
+            "flex flex-col",
+            hintHost === null &&
+              "pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-full [&>*]:pointer-events-auto",
+          )}
+        >
         {collapsed && callDockHintEnabled && (
-          <div className="pointer-events-auto mb-2">
+          <div className="mb-1">
             <FeatureHint
               id="callDock"
               enabled={!dockControlUsed}
@@ -2485,7 +2523,7 @@ export function CallControls({
           </div>
         )}
         {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
-          <div className="pointer-events-auto mb-1">
+          <div className="mb-1">
             <FeatureHint
               id="watchParty"
               enabled
@@ -2494,14 +2532,14 @@ export function CallControls({
           </div>
         )}
         {bringFriendsHintEnabled && voiceState.isSharingScreen && !collapsed && (
-          <div className="pointer-events-auto mb-1">
+          <div className="mb-1">
             <BringFriendsHint enabled />
           </div>
         )}
         {/* Mounted whether or not it wins, so the card can tell "the gate
             turned off" (a track started, the panel opened) from "the strip
             swapped under me". The first spends it; the second must not. */}
-        <div className={cn("pointer-events-auto", musicHintEnabled && "mb-1")}>
+        <div className={cn(musicHintEnabled && "mb-1")}>
           <FeatureHint
             id="music"
             enabled={musicHintEnabled}
@@ -2509,7 +2547,8 @@ export function CallControls({
             body={t("featureHint.music.body")}
           />
         </div>
-      </div>
+        </div>,
+      )}
 
       {/* The queue sits above the bar, where the room is, rather than in a
           panel somebody has to go and open. Hidden on the slim bar, which has

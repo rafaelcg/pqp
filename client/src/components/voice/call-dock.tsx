@@ -98,6 +98,25 @@ function createDockStore(): DockStore {
 
 const PublishContext = createContext<Publish | null>(null);
 const StoreContext = createContext<DockStore | null>(null);
+
+/**
+ * WHERE A COACHMARK ABOUT THE BAR GOES, WHICH IS NOT INSIDE THE BAR.
+ *
+ * The dock opens and closes by animating `grid-template-rows` between `0fr`
+ * and `1fr`, and that only works because the row's inner box is
+ * `overflow-hidden`. Anything the bar draws above itself is clipped by that
+ * box, so a card anchored to the top of the bar was invisible; in the flow,
+ * where it started, it pushed the bar and the whole composer down by its own
+ * height the moment it appeared, which is the one thing a card explaining a
+ * control must not do. The outlet therefore hangs a host OUTSIDE the clipped
+ * row, above the dock, and the bar portals its cards into it.
+ */
+const HintHostContext = createContext<HTMLElement | null>(null);
+
+/** Null outside a dock (the expanded stage), where nothing clips the card. */
+export function useCallDockHintHost(): HTMLElement | null {
+  return useContext(HintHostContext);
+}
 const OccupiedContext = createContext<ReportOccupied | null>(null);
 
 const subscribeNone = () => () => {};
@@ -227,6 +246,7 @@ const EXIT_BACKSTOP_MS = 600;
  * Under reduced motion the row snaps both ways.
  */
 export function CallDockOutlet({ channelId }: { channelId: string }) {
+  const [hintHost, setHintHost] = useState<HTMLElement | null>(null);
   const store = useContext(StoreContext);
   const published = useSyncExternalStore(
     store ? store.subscribe : subscribeNone,
@@ -325,24 +345,34 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
   }
 
   return (
-    <div
-      data-call-dock=""
-      data-state={open ? "open" : "closed"}
-      aria-hidden={active ? undefined : true}
-      className={cn(
-        "grid transition-[grid-template-rows,opacity] duration-[var(--duration-base)] motion-reduce:transition-none",
-        open
-          ? "grid-rows-[1fr] opacity-100 ease-[var(--ease-emphasized)]"
-          : "pointer-events-none grid-rows-[0fr] opacity-0 ease-in",
-      )}
-      onTransitionEnd={onTransitionEnd}
-    >
-      <div className="min-h-0 overflow-hidden">
-        {/* Same 12px sides as the text field, so the first face, the pill
-            and the field's text share a left edge. On a 360 phone that
-            leaves 238px, and the six tiles a phone gets (mute, hand, music,
-            camera, share, hang up) take 236 of it. */}
-        <div className="border-b border-border/60 px-3 pb-2 pt-2.5">{shown}</div>
+    <div className="relative">
+      <div
+        ref={setHintHost}
+        className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-2 [&>*]:pointer-events-auto"
+      />
+      <div
+        data-call-dock=""
+        data-state={open ? "open" : "closed"}
+        aria-hidden={active ? undefined : true}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-[var(--duration-base)] motion-reduce:transition-none",
+          open
+            ? "grid-rows-[1fr] opacity-100 ease-[var(--ease-emphasized)]"
+            : "pointer-events-none grid-rows-[0fr] opacity-0 ease-in",
+        )}
+        onTransitionEnd={onTransitionEnd}
+      >
+        <div className="min-h-0 overflow-hidden">
+          {/* Same 12px sides as the text field, so the first face, the pill
+              and the field's text share a left edge. On a 360 phone that
+              leaves 238px, and the six tiles a phone gets (mute, hand, music,
+              camera, share, hang up) take 236 of it. */}
+          <div className="border-b border-border/60 px-3 pb-2 pt-2.5">
+            <HintHostContext.Provider value={hintHost}>
+              {shown}
+            </HintHostContext.Provider>
+          </div>
+        </div>
       </div>
     </div>
   );
