@@ -3033,6 +3033,10 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS nickname TEXT;
 -- identifier, never shown to anybody, read only as a COUNT by
 -- `GET /api/admin/metrics` (`imports`, `product.invites.joinsByRef7d`).
 ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_ref TEXT;
+-- The metrics read "tagged joins in the last 7 days" every 30 seconds. Partial,
+-- so it holds only tagged rows and never the membership history before them.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_ref
+  ON server_members (joined_at) WHERE join_ref IS NOT NULL;
 
 -- Servers that began as a Discord Guild Template copy. The audit row is the
 -- only record of that, and the operator dashboard counts it every 30 seconds,

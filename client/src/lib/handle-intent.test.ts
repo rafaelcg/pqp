@@ -8,6 +8,7 @@ import {
   rememberImportIntentFromLocation,
   rememberInviteRefFromLocation,
   stashAddIntent,
+  stashInviteRef,
   stashHandleClaim,
   stashJoinIntent,
   takeAddIntent,
@@ -289,6 +290,21 @@ describe("the invite link's ref", () => {
       pathname: "/app/invite/abc123",
       search: "?ref=not ok",
     });
+    expect(storage.map.size).toBe(0);
+  });
+});
+
+describe("putting an invite ref back", () => {
+  it("lets a retry after a failed join send the same tag", () => {
+    const storage = memoryStorage();
+    stashInviteRef(storage, "abc123", "discord");
+    const ref = takeInviteRef(storage, "abc123", "");
+    expect(ref).toBe("discord");
+    // The join failed: put it back, and the panel's retry reads it.
+    stashInviteRef(storage, "abc123", ref);
+    expect(takeInviteRef(storage, "abc123", "")).toBe("discord");
+    // Nothing to put back is a no-op.
+    stashInviteRef(storage, "abc123", null);
     expect(storage.map.size).toBe(0);
   });
 });

@@ -340,11 +340,30 @@ export function rememberInviteRefFromLocation(
   if (target?.kind !== "invite") {
     return;
   }
-  const ref = normalizeJoinRef(new URLSearchParams(location.search).get("ref"));
-  if (ref) {
+  stashInviteRef(
+    storage,
+    target.code,
+    new URLSearchParams(location.search).get("ref"),
+    now,
+  );
+}
+
+/**
+ * Keep a tag for `code`. Also how a join that FAILED puts back the tag it
+ * took, so the retry (the join panel, which the failure opens with the code in
+ * it) still sends it.
+ */
+export function stashInviteRef(
+  storage: WritableStorage | null,
+  code: string,
+  rawRef: string | null,
+  now: number = Date.now(),
+): void {
+  const ref = normalizeJoinRef(rawRef);
+  if (ref && code && !code.includes(" ")) {
     // A code is base64url and a ref is `[a-z0-9_-]`, so a space cannot
     // appear in either and splits them unambiguously.
-    write(storage, INVITE_REF_KEY, `${target.code} ${ref}`, now);
+    write(storage, INVITE_REF_KEY, `${code} ${ref}`, now);
   }
 }
 

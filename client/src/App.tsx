@@ -352,6 +352,8 @@ import {
   takeCreateIntent,
   takeHandleClaim,
   takeImportIntent,
+  stashImportIntent,
+  stashInviteRef,
   takeInviteRef,
   takeJoinIntent,
   type ImportIntent,
@@ -6315,11 +6317,11 @@ function MainAppContent({
   const acceptInviteFromLink = useCallback(
     async (code: string) => {
       setInviteErrorFromUrl(null);
+      const storage = browserStorage();
+      // The link's `?ref=` tag, or the one stashed at boot before a sign-in
+      // redirect dropped the query. Attribution only.
+      const ref = takeInviteRef(storage, code, window.location.search);
       try {
-        const storage = browserStorage();
-        // The link's `?ref=` tag, or the one stashed at boot before a sign-in
-        // redirect dropped the query. Attribution only.
-        const ref = takeInviteRef(storage, code, window.location.search);
         const result = await joinInvite(code, ref);
         // Only welcome them somewhere this device has not welcomed them before.
         // Invite links get re-clicked weeks later, and the join succeeds again.
@@ -6332,6 +6334,9 @@ function MainAppContent({
         // Expired, revoked, used up, banned, or mistyped. Fall back to the panel
         // with the code and the reason, so there is somewhere to go from here —
         // ask for a fresh link, or paste a different one.
+        // Put the tag back for the panel's retry: it was taken before the
+        // server confirmed anything.
+        stashInviteRef(storage, code, ref);
         setInviteCodeFromUrl(code);
         setInviteErrorFromUrl(
           error instanceof ApiError
@@ -6430,6 +6435,8 @@ function MainAppContent({
     if (!bootstrapReady || needsOnboarding || !pendingImport) {
       return;
     }
+    // Shown now, so spend the stash the arrival effect put back.
+    takeImportIntent(browserStorage());
     setCreateServerStart({ mode: "import", source: pendingImport.source });
     setShowCreateServer(true);
     setPendingImport(null);
@@ -6483,6 +6490,9 @@ function MainAppContent({
     const importIntent = importIntentFromSearch(location.search) ?? stashedImport;
     if (importIntent) {
       setPendingImport(importIntent);
+      // Kept in storage until the dialog actually opens, so a reload during
+      // onboarding (the param is already gone from the URL) still gets there.
+      stashImportIntent(storage, importIntent);
     }
 
     if (
