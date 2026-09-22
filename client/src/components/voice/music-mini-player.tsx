@@ -4,11 +4,12 @@ import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import { useMusicJoinGate, useMusicPrefs } from "@/lib/music-prefs";
+import { musicRelatedTracks } from "@/lib/music-related";
 import {
-  advance,
   setMusicOpen,
   setPlaying,
   useMusic,
+  skipToNext,
 } from "@/lib/music-store";
 import { setChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
 import {
@@ -186,7 +187,7 @@ export function MusicMiniPlayer({
       ducking={prefs.ducking}
       onOpenFila={() => setMusicOpen(true)}
       onPlayPause={() => setPlaying(!playing)}
-      onSkip={() => advance()}
+      onSkip={() => void skipToNext(musicRelatedTracks)}
       onTapToPlay={tapMusicLocalToPlay}
       onMute={toggleMusicLocalMuted}
       onVolume={setMusicLocalVolume}

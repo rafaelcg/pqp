@@ -167,6 +167,15 @@ or a film, not a song). Unknown duration is kept. Those rows carry
 `autoplayed: true`. ENDED then uses the ordinary `advance()`. A fetch at
 ENDED is only the fallback when the buffer is empty.
 
+**Skip takes the same fallback.** `musicAdvance` ends the room on an empty
+queue whatever `autoplay` says, so the skip button, which went straight to
+`advance()`, ended the queue for somebody who had just switched the mode
+on and pressed skip before the buffer had filled. `skipToNext` is the
+button's path now: with anything queued it is the write it always was, and
+into an empty queue with the mode on it asks for a related pick first and
+only ends the room when there is genuinely nothing to play, or the lookup
+fails.
+
 Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
 charged per call to YouTube or Spotify rather than per request, so a cache

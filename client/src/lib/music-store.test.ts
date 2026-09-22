@@ -23,6 +23,7 @@ import {
   setOpenControls,
   setRepeat,
   shuffle,
+  skipToNext,
   voteSkip,
 } from "./music-store";
 
@@ -264,6 +265,78 @@ describe("music store writes", () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     markCurrentEnded(getMusicSnapshot().state!.current!.id);
     expect(addTrack(resolved("zzzzzzzzzzz"))).toBe("playing");
+  });
+
+  /*
+   * SKIPPING WITH THE INFINITY ON MUST NOT END THE ROOM.
+   *
+   * A track running out goes through `onTrackEnded`, which asks for a
+   * related pick before it gives up. The skip button went straight to
+   * `advance`, which ends the room when the queue is empty whatever
+   * `autoplay` says. So turning the mode on and pressing skip before the
+   * buffer had filled was the one sequence that killed the queue with
+   * "keep playing similar songs" switched on.
+   */
+  it("finds a similar track instead of ending the room", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    expect(getMusicSnapshot().state?.queue).toHaveLength(0);
+
+    await skipToNext(async () => [resolved("similarrrrr")]);
+
+    const state = getMusicSnapshot().state!;
+    expect(state.current?.videoId).toBe("similarrrrr");
+    expect(state.current?.autoplayed).toBe(true);
+    expect(state.status).toBe("playing");
+  });
+
+  it("ends the room when there is nothing similar left", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    await skipToNext(async () => []);
+    expect(getMusicSnapshot().state?.current).toBeNull();
+  });
+
+  it("ends the room when the lookup fails, rather than hanging on a track", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    await skipToNext(async () => {
+      throw new Error("offline");
+    });
+    expect(getMusicSnapshot().state?.current).toBeNull();
+  });
+
+  it("is an ordinary skip when the queue has something in it", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    addTracks([resolved("nextttttttt")]);
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    let asked = false;
+    await skipToNext(async () => {
+      asked = true;
+      return [resolved("similarrrrr")];
+    });
+    expect(asked).toBe(false);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("nextttttttt");
   });
 
   it("starts the first track and queues the rest, in one write for a list", () => {

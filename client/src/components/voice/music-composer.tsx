@@ -1,11 +1,12 @@
 import type { VoiceState } from "@/hooks/use-voice";
 import { useMusicPrefs } from "@/lib/music-prefs";
+import { musicRelatedTracks } from "@/lib/music-related";
 import {
-  advance,
   musicPrevious,
   setMusicOpen,
   setPlaying,
   useMusic,
+  skipToNext,
 } from "@/lib/music-store";
 import {
   canSetMusicSwitches,
@@ -84,7 +85,7 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
           ducking={prefs.ducking}
           onOpenFila={() => setMusicOpen(true)}
           onPlayPause={() => setPlaying(!playing)}
-          onSkip={() => advance()}
+          onSkip={() => void skipToNext(musicRelatedTracks)}
           onPrevious={() => musicPrevious()}
           onTapToPlay={tapMusicLocalToPlay}
           onMute={toggleMusicLocalMuted}

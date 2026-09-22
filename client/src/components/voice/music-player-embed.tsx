@@ -8,7 +8,7 @@ import {
   musicShouldDuck,
   stepDuckGain,
 } from "@/lib/music-duck";
-import { relatedMusic } from "@/lib/api";
+import { musicRelatedTracks } from "@/lib/music-related";
 import {
   expectedPositionMs,
   fillAutoplayBuffer,
@@ -338,10 +338,11 @@ export function MusicPlayer({
                 }
                 if (current && shouldAdvanceOnEnded(playing, current.videoId)) {
                   markCurrentEnded(current.id);
-                  void onTrackEnded(current.id, isActorRef.current, async (id) => {
-                    const { tracks } = await relatedMusic(id);
-                    return tracks;
-                  });
+                  void onTrackEnded(
+                    current.id,
+                    isActorRef.current,
+                    musicRelatedTracks,
+                  );
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
@@ -444,10 +445,7 @@ export function MusicPlayer({
     if (!isActor || !shouldFillAutoplayBuffer(musicRef.current.state)) {
       return;
     }
-    void fillAutoplayBuffer(true, async (id) => {
-      const { tracks } = await relatedMusic(id);
-      return tracks;
-    });
+    void fillAutoplayBuffer(true, musicRelatedTracks);
   }, [isActor, autoplayOn, repeatMode, trackId, autoplayedQueued, queueLength]);
 
   // Play or pause, and the drift loop.

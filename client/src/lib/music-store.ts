@@ -780,6 +780,54 @@ export function autoplayAdvance(endedTrackId: string, pick: MusicResolved): void
   });
 }
 
+/**
+ * THE SKIP BUTTON, WHICH HAS TO KNOW ABOUT THE INFINITY TOO.
+ *
+ * A track running out goes through `onTrackEnded`, which asks for a
+ * related pick before it gives up on the room. Skip went straight to
+ * `advance`, and `musicAdvance` ends the room on an empty queue whatever
+ * `autoplay` says: turning the mode on and pressing skip before the
+ * buffer had filled ended the queue with "keep playing similar songs"
+ * switched on, which is the opposite of what the switch promises.
+ *
+ * So a skip into an empty queue with the mode on looks for a pick first
+ * and only ends the room when there is genuinely nothing to play. With
+ * anything queued it stays what it was, one write and no lookup.
+ */
+export async function skipToNext(
+  fetchRelated: (videoId: string) => Promise<MusicResolved[]>,
+): Promise<void> {
+  const held = snapshot.state;
+  if (!held?.current) {
+    return;
+  }
+  if (!shouldAutoplayOnEnd(held)) {
+    advance();
+    return;
+  }
+  const trackId = held.current.id;
+  const videoId = held.current.videoId;
+  try {
+    const related = await fetchRelated(videoId);
+    // The room may have moved on while we were asking, and the person who
+    // pressed skip is not necessarily the only one pressing things.
+    if (snapshot.state?.current?.id !== trackId) {
+      return;
+    }
+    const pick = musicAutoplayCandidate(related, snapshot.state);
+    if (pick) {
+      autoplayAdvance(trackId, pick);
+      return;
+    }
+  } catch {
+    // Offline, rate limited, upstream down: an ordinary end is better than
+    // a skip that does nothing at all.
+  }
+  if (snapshot.state?.current?.id === trackId) {
+    advance(trackId);
+  }
+}
+
 export async function onTrackEnded(
   endedTrackId: string,
   isActor: boolean,
