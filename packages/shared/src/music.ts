@@ -744,11 +744,23 @@ export function musicWriteAllowed(
         history: [],
       },
     );
+    /*
+     * A start is a start: playing, from zero. Anything else is a pause or
+     * a seek the member is not allowed to write, and since a change of
+     * `current` moves the server's clock without the sample clamp, a
+     * start "at 3:19" would also hand the end-of-track gate straight to
+     * the person who wrote it. A queued track keeps whatever length it
+     * had; the fill from null belongs to a manager or the track's own
+     * adder, exactly as on the append path.
+     */
     return (
       rights.canAdd &&
       incoming.current !== null &&
       own(incoming.current) &&
+      incoming.status === "playing" &&
+      incoming.positionMs === 0 &&
       appendsOwn(base.queue, incoming.queue, own) &&
+      (held === null || fillsAllowed(held, incoming, rights)) &&
       controlsUnchanged(base, incoming) &&
       sameSkipVotes(base.skipVotes, incoming.skipVotes ?? []) &&
       sameHistory(base.history, incoming.history ?? [])
