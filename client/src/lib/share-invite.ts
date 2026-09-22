@@ -43,11 +43,11 @@ export function shareInviteText(
   if (locale === "pt-BR") {
     return kind === "short"
       ? `Vem pra pqp: ${url} #vemprapqp`
-      : `Discord tá sem tela no BR. A gente tá no pqp, abre no navegador e já entra: ${url} #vemprapqp`;
+      : `A gente mudou pra pqp. Abre no navegador, entra na call e já era: ${url} #vemprapqp`;
   }
   return kind === "short"
     ? `Come hang out on pqp: ${url} #vemprapqp`
-    : `Discord has no screen share in Brazil right now. We're on pqp, it opens in the browser: ${url} #vemprapqp`;
+    : `We moved to pqp. Opens in the browser, join the call and that's it: ${url} #vemprapqp`;
 }
 
 /**

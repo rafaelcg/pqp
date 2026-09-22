@@ -40,7 +40,7 @@ describe("shareInviteText", () => {
       `Vem pra pqp: ${URL} #vemprapqp`,
     );
     expect(shareInviteText("long", "pt-BR", URL)).toBe(
-      `Discord tá sem tela no BR. A gente tá no pqp, abre no navegador e já entra: ${URL} #vemprapqp`,
+      `A gente mudou pra pqp. Abre no navegador, entra na call e já era: ${URL} #vemprapqp`,
     );
   });
 
@@ -51,7 +51,16 @@ describe("shareInviteText", () => {
     expect(long).toContain(URL);
     expect(long).toContain("#vemprapqp");
     expect(short).not.toContain("Vem pra");
-    expect(long).not.toContain("tá sem tela");
+    expect(long).not.toContain("tela no BR");
+  });
+
+  it("never references the Discord screen-share suspension", () => {
+    for (const locale of ["pt-BR", "en"]) {
+      for (const kind of ["short", "long"] as const) {
+        const text = shareInviteText(kind, locale, URL).toLowerCase();
+        expect(text).not.toMatch(/anpd|suspen|sem tela|screen share in brazil/);
+      }
+    }
   });
 });
 
@@ -91,7 +100,7 @@ describe("shareInvite", () => {
       shareInvite("long", "en", URL, { copy }),
     ).resolves.toBe("copied");
     expect(copy).toHaveBeenCalledWith(
-      `Discord has no screen share in Brazil right now. We're on pqp, it opens in the browser: ${URL} #vemprapqp`,
+      `We moved to pqp. Opens in the browser, join the call and that's it: ${URL} #vemprapqp`,
     );
   });
 
