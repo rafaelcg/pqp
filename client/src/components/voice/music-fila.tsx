@@ -1,10 +1,11 @@
 import { MonitorPlay, Pause, Play, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { rememberMusicPip } from "@/lib/music-pip";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
+import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { setMusicPlacement, useMusicPrefs } from "@/lib/music-prefs";
 import {
@@ -39,6 +40,10 @@ const RAIL_ICON =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
 const SHEET_ICON =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-3 hover:text-text";
+
+function onPage(node: ReactNode): ReactNode {
+  return typeof document === "undefined" ? node : createPortal(node, document.body);
+}
 
 /**
  * THE QUEUE.
@@ -405,22 +410,34 @@ export function MusicFila({
   return (
     <>
       {variant === "drawer" ? (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-20 bg-ink/70"
-            aria-label={t("music.close")}
-            onClick={() => setMusicOpen(false)}
-          />
-          <aside
-            data-music-fila="drawer"
-            data-immersive-hide=""
-            aria-label={t("music.fila")}
-            className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)]"
-          >
-            {panel}
-          </aside>
-        </>
+        /*
+         * On the page body, not where it is mounted. The mount is the
+         * channel sidebar's footer, and that sidebar has a `transform` for
+         * its mobile slide-in, which makes `position: fixed` relative to the
+         * sidebar instead of the window: this "right-edge drawer over the
+         * members list" drew over the CHANNEL list, with a backdrop that
+         * darkened only that column. Same width as the members list.
+         * Rendered in place where there is no page to portal to (a static
+         * render), which draws the same markup.
+         */
+        onPage(
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-20 bg-ink/70"
+              aria-label={t("music.close")}
+              onClick={() => setMusicOpen(false)}
+            />
+            <aside
+              data-music-fila="drawer"
+              data-immersive-hide=""
+              aria-label={t("music.fila")}
+              className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)]"
+            >
+              {panel}
+            </aside>
+          </>,
+        )
       ) : (
         <section
           data-music-fila="sheet"
