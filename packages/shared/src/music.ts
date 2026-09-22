@@ -252,6 +252,21 @@ export const MUSIC_END_GRACE_MS = 20_000;
  * seek; looser lets somebody creep the room forward by the tolerance on
  * every write, and position-only writes are coalesced rather than refused.
  */
+/**
+ * THE LONGEST THING THE ROOM WILL CALL A TRACK.
+ *
+ * A 24/7 live mix answers the player's `getDuration()` with how long the
+ * STREAM has been up, not how long a song is, so a room was handed a
+ * duration of fifty days and drew a seek bar against it. It is also the
+ * other operand of the end-of-track gate, so a value like that means the
+ * gate never opens and nothing ever advances on its own.
+ *
+ * Twelve hours is far above any real DJ set and far below a stream that
+ * has been live for days. The bound is here to catch a category error, not
+ * to judge a long video.
+ */
+export const MUSIC_MAX_DURATION_MS = 12 * 60 * 60 * 1000;
+
 export const MUSIC_POSITION_TOLERANCE_MS = 10_000;
 
 export interface MusicRights {
@@ -490,6 +505,17 @@ export function musicWriteAllowed(
   incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): boolean {
+  /*
+   * Before the rights, because this is not a rights question. A duration
+   * longer than `MUSIC_MAX_DURATION_MS` is a live stream answering with its
+   * own uptime, and a manager mis-reading one is as wrong as anybody else
+   * mis-reading one. Refusing sends the writer a `forced` correction and
+   * leaves the duration null, which is what an unknown duration IS.
+   */
+  const tooLong = (incoming?.current?.durationMs ?? 0) > MUSIC_MAX_DURATION_MS;
+  if (tooLong && (held?.current?.durationMs ?? null) === null) {
+    return false;
+  }
   if (rights.canManage) {
     return true;
   }

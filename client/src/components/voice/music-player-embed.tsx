@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -93,6 +94,44 @@ export function applyYouTubeVolume(
 }
 
 /** Actor fills duration as soon as YouTube starts, not on the 10 s sample. */
+/**
+ * `getVideoData().isLive` is undocumented and absent on older embeds, so
+ * this answers `undefined` rather than guessing, and the ceiling in
+ * `reportableDurationMs` is what actually holds the line.
+ */
+function playerIsLive(player: YTPlayer): boolean | undefined {
+  try {
+    return player.getVideoData?.()?.isLive;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * WHAT THE PLAYER SAYS THE TRACK IS, WHEN IT IS A TRACK AT ALL.
+ *
+ * `getDuration()` on a 24/7 live mix answers with how long the STREAM has
+ * been up. One of those reached a room as 1209:42:45 and the bar drew a
+ * seek against fifty days; the same number is the other operand of the
+ * end-of-track gate, so nothing would ever have advanced on its own
+ * either. `isLive` comes off `getVideoData()`, which is not part of the
+ * documented iframe API, so the ceiling backs it up rather than trusting
+ * it. Null means "still unknown", which is what the room already knows how
+ * to draw.
+ */
+export function reportableDurationMs(
+  rawMs: number,
+  isLive: boolean | undefined,
+): number | null {
+  if (isLive) {
+    return null;
+  }
+  if (!Number.isFinite(rawMs) || rawMs <= 0 || rawMs > MUSIC_MAX_DURATION_MS) {
+    return null;
+  }
+  return rawMs;
+}
+
 export function shouldReportUnknownDuration(args: {
   isActor: boolean;
   trackId: string | null | undefined;
@@ -323,14 +362,17 @@ export function MusicPlayer({
                   })
                 ) {
                   let at = 0;
-                  let duration = 0;
+                  let duration: number | null = null;
                   try {
                     at = event.target.getCurrentTime() * 1000;
-                    duration = event.target.getDuration() * 1000;
+                    duration = reportableDurationMs(
+                      event.target.getDuration() * 1000,
+                      playerIsLive(event.target),
+                    );
                   } catch {
-                    duration = 0;
+                    duration = null;
                   }
-                  if (duration > 0 && current) {
+                  if (duration !== null && current) {
                     durationReportedFor.current = current.id;
                     reportPosition(at, duration);
                   }
@@ -489,13 +531,16 @@ export function MusicPlayer({
       }
       if (isActorRef.current && Date.now() - lastReport >= REPORT_MS) {
         lastReport = Date.now();
-        let duration = 0;
+        let duration: number | null = null;
         try {
-          duration = player.getDuration() * 1000;
+          duration = reportableDurationMs(
+            player.getDuration() * 1000,
+            playerIsLive(player),
+          );
         } catch {
-          duration = 0;
+          duration = null;
         }
-        reportPosition(at, duration);
+        reportPosition(at, duration ?? undefined);
       }
     }, 2_000);
     return () => {

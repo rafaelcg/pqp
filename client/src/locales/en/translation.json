@@ -1037,6 +1037,7 @@
   "music.placeholder.short": "Add: link or search",
   "music.placeholder.field": "Paste a YouTube link or search by name",
   "music.listen": "Listen",
+  "music.live": "Live",
   "music.noManage": "Needs Manage music in this channel",
   "music.dismiss": "Stop listening",
   "music.stopAll": "Stop for everyone",

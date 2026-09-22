@@ -8,6 +8,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import type { MusicTrack, VoiceParticipant } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { MarqueeText } from "@/components/ui/marquee-text";
@@ -87,6 +88,27 @@ export function lookupActorName(voiceState: VoiceState, peerId: string | null): 
     return null;
   }
   return musicRoomPeople(voiceState).find((entry) => entry.peerId === peerId)?.displayName ?? null;
+}
+
+/**
+ * A STREAM, NOT A TRACK.
+ *
+ * The room's clock is a position sample from whoever is running the music,
+ * and on a 24/7 mix the player answers with how long the STREAM has been
+ * up. With the duration refused (see `MUSIC_MAX_DURATION_MS`) the elapsed
+ * kept counting on its own and read 598:52:31 beside a seek bar measured
+ * against nothing. An elapsed past that same ceiling with no duration is
+ * not a track playing, so the bar says so instead of counting. A duration
+ * the room does know always wins: a long mix is still a mix.
+ */
+export function isLivePlayback(
+  positionMs: number,
+  durationMs: number | null | undefined,
+): boolean {
+  if (durationMs != null && durationMs > 0) {
+    return false;
+  }
+  return positionMs > MUSIC_MAX_DURATION_MS;
 }
 
 export function formatMusicClockOrUnknown(ms: number | null | undefined): string {
@@ -556,6 +578,30 @@ function MusicSeekBar({
   scrub: Scrub;
 }): ReactNode {
   const { t } = useTranslation();
+  const live = isLivePlayback(position, durationKnown ? duration : null);
+  if (live) {
+    return (
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-danger">
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 rounded-full bg-danger"
+          />
+          {t("music.live")}
+        </span>
+        <Slider
+          variant="scrub"
+          readOnly
+          indeterminate
+          value={1}
+          min={0}
+          max={1}
+          className="min-w-0 flex-1 px-1"
+          aria-label={t("music.live")}
+        />
+      </div>
+    );
+  }
   return (
     <div className="flex min-w-0 items-center gap-1.5">
       <span className="shrink-0 text-left text-[11px] tabular-nums text-text-secondary">

@@ -23,7 +23,13 @@ export interface YTPlayer {
   mute(): void;
   unMute(): void;
   isMuted(): boolean;
-  getVideoData(): { video_id?: string };
+  /**
+   * `isLive` is not in YouTube's documented surface but every current embed
+   * answers it, and a 24/7 mix's `getDuration()` is its stream uptime
+   * rather than a track length. Optional on purpose: the bound in
+   * `reportableDurationMs` is what holds when it is missing.
+   */
+  getVideoData(): { video_id?: string; isLive?: boolean };
   destroy(): void;
 }
 

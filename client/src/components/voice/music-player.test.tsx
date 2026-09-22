@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
+import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import type { MusicResolved, MusicState, MusicTrack } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -21,6 +22,7 @@ import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/
 import { translateMessage } from "@/lib/i18n";
 import {
   formatMusicClockOrUnknown,
+  isLivePlayback,
   musicListenerCount,
   MusicNowPlaying,
 } from "@/components/voice/music-now-playing";
@@ -39,6 +41,7 @@ import {
   shouldCallPlayVideo,
   shouldKeepMusicEmbed,
   shouldReportPositionSample,
+  reportableDurationMs,
   shouldReportUnknownDuration,
 } from "@/components/voice/music-player-embed";
 import { YT_STATE } from "@/lib/youtube-iframe";
@@ -339,6 +342,56 @@ describe("shouldKeepMusicEmbed", () => {
         previouslyHeld: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("the clocks on a stream that has no end", () => {
+  /*
+   * With the duration refused, the elapsed still ticks from the room's
+   * sample, and on a stream that has been up for weeks that reads
+   * 598:52:31 beside a seek bar measured against nothing. An elapsed past
+   * the same ceiling with no duration is not a track playing: it is a
+   * stream, and the bar should say so rather than count.
+   */
+  it("calls it live when the elapsed is past the ceiling with no duration", () => {
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, null)).toBe(true);
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, undefined)).toBe(true);
+  });
+
+  it("leaves an ordinary track alone, however long", () => {
+    expect(isLivePlayback(5_000, 200_000)).toBe(false);
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS - 1, null)).toBe(false);
+    // A duration the room does know beats the elapsed, whatever it says.
+    expect(isLivePlayback(MUSIC_MAX_DURATION_MS + 1, 200_000)).toBe(false);
+  });
+});
+
+describe("a live stream's idea of a duration", () => {
+  /*
+   * `getDuration()` on a 24/7 mix answers with how long the STREAM has
+   * been up. A room was handed fifty days and drew a seek bar against it.
+   * The player is asked first, and its answer is bounded either way,
+   * because `isLive` is not part of the documented iframe API.
+   */
+  it("reports nothing when the player says the video is live", () => {
+    expect(reportableDurationMs(120_000, true)).toBeNull();
+  });
+
+  it("reports nothing past the ceiling, whatever the player says", () => {
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS + 1, false)).toBeNull();
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS + 1, undefined)).toBeNull();
+  });
+
+  it("reports an ordinary track, and a long mix under the ceiling", () => {
+    expect(reportableDurationMs(200_000, false)).toBe(200_000);
+    expect(reportableDurationMs(MUSIC_MAX_DURATION_MS - 1, undefined)).toBe(
+      MUSIC_MAX_DURATION_MS - 1,
+    );
+  });
+
+  it("reports nothing for a duration the player could not read", () => {
+    expect(reportableDurationMs(0, false)).toBeNull();
+    expect(reportableDurationMs(Number.NaN, false)).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import {
   MUSIC_AUTOPLAY_MAX_MS,
   MUSIC_AUTOPLAY_MIN_MS,
   MUSIC_END_GRACE_MS,
+  MUSIC_MAX_DURATION_MS,
   completeMusicState,
   musicAdvance,
   musicAutoplayCandidate,
@@ -698,3 +699,50 @@ describe("musicAutoplayCandidate", () => {
     ]);
   });
 });
+
+describe("a duration no music track has", () => {
+  /*
+   * A 24/7 live mix answers `getDuration()` with how long the STREAM has
+   * been up, so the room was handed 1209:42:45 and a seek bar measured
+   * against fifty days. The duration is the other operand of the
+   * end-of-track gate, so a value like that also means the gate never
+   * opens and the room never advances on its own.
+   *
+   * The bound is deliberately far above any real mix (twelve hours) and
+   * far below a stream that has been live for days: it is there to catch
+   * a category error, not to judge long videos.
+   */
+  const live = MUSIC_MAX_DURATION_MS + 1;
+  const held = state();
+  const withDuration = (durationMs: number): MusicState => ({
+    ...held,
+    current: { ...(held.current as MusicTrack), durationMs },
+    rev: held.rev + 1,
+    actorId: "p2",
+  });
+
+  it("refuses a fill past the ceiling, from anybody", () => {
+    const incoming = withDuration(live);
+    expect(
+      musicWriteAllowed(held, incoming, {
+        userId: "u1",
+        canManage: true,
+        canAdd: true,
+        roomSize: 3,
+      }),
+    ).toBe(false);
+  });
+
+  it("still takes an honest long mix", () => {
+    const incoming = withDuration(MUSIC_MAX_DURATION_MS - 1);
+    expect(
+      musicWriteAllowed(held, incoming, {
+        userId: "u1",
+        canManage: true,
+        canAdd: true,
+        roomSize: 3,
+      }),
+    ).toBe(true);
+  });
+});
+
