@@ -427,7 +427,16 @@ async function validateSkipUserIds(
   userIds: string[] | undefined,
   db: Sql = getPool(),
 ): Promise<string[]> {
-  const unique = [...new Set(userIds ?? [])];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of userIds ?? []) {
+    const key = id.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(id);
+  }
   if (unique.length === 0) {
     return [];
   }
@@ -436,13 +445,15 @@ async function validateSkipUserIds(
       WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
     [serverId, unique],
   );
-  if (result.rows.length !== unique.length) {
-    throw new HttpError(
-      400,
-      "Every skipped user must be a member of this server",
-    );
-  }
-  return unique;
+  const byId = new Map(
+    result.rows.map((row) => [row.user_id.toLowerCase(), row.user_id]),
+  );
+  // A person who left stays on the hook with no row in the picker, and one
+  // leftover rejects the whole save. Drop them. An empty skip list is valid.
+  return unique.flatMap((id) => {
+    const memberId = byId.get(id.toLowerCase());
+    return memberId ? [memberId] : [];
+  });
 }
 
 function normalizeAuth(

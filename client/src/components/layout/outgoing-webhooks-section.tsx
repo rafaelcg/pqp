@@ -245,6 +245,7 @@ function ChannelChips({
 
 function SkipPicker({
   members,
+  former,
   selected,
   query,
   disabled,
@@ -253,6 +254,7 @@ function SkipPicker({
   onToggle,
 }: {
   members: ServerMember[];
+  former: { id: string; displayName: string; tag: string | null }[];
   selected: string[];
   query: string;
   disabled?: boolean;
@@ -260,6 +262,10 @@ function SkipPicker({
   onQuery: (value: string) => void;
   onToggle: (id: string) => void;
 }) {
+  const { t } = useTranslation();
+  const memberIds = new Set(members.map((member) => member.id));
+  const formerById = new Map(former.map((user) => [user.id, user]));
+  const unknown = selected.filter((id) => !memberIds.has(id));
   const visible = members.filter(
     (member) =>
       !query.trim() ||
@@ -277,6 +283,31 @@ function SkipPicker({
         onChange={(e) => onQuery(e.target.value)}
       />
       <ul className="max-h-48 overflow-y-auto rounded-2xl bg-ink-2">
+        {unknown.map((id) => {
+          const person = formerById.get(id);
+          const name = person
+            ? person.tag
+              ? `${person.displayName} (${person.tag})`
+              : person.displayName
+            : null;
+          return (
+            <li key={id}>
+              <div className="flex items-center gap-2 px-1">
+                <Switch
+                  className="min-w-0 flex-1"
+                  checked
+                  disabled={disabled}
+                  label={
+                    name
+                      ? t("integrations.skipGone", { name })
+                      : t("integrations.skipGoneUnknown")
+                  }
+                  onCheckedChange={() => onToggle(id)}
+                />
+              </div>
+            </li>
+          );
+        })}
         {visible.map((member) => {
           const shown = memberDisplayName(member);
           return (
@@ -311,6 +342,7 @@ function HookForm({
   draft,
   textChannels,
   resolvedChannels,
+  formerSkipUsers,
   members,
   memberQuery,
   disabled,
@@ -327,6 +359,7 @@ function HookForm({
   draft: Draft;
   textChannels: Channel[];
   resolvedChannels: { id: string; name: string }[];
+  formerSkipUsers: { id: string; displayName: string; tag: string | null }[];
   members: ServerMember[];
   memberQuery: string;
   disabled?: boolean;
@@ -437,6 +470,7 @@ function HookForm({
             <p className="text-xs text-paper-muted">{t("integrations.skipHint")}</p>
             <SkipPicker
               members={members}
+              former={formerSkipUsers}
               selected={draft.skipUserIds}
               query={memberQuery}
               disabled={disabled}
@@ -833,6 +867,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
             draft={draft}
             textChannels={textChannels}
             resolvedChannels={[]}
+            formerSkipUsers={[]}
             members={members}
             memberQuery={memberQuery}
             disabled={creating}
@@ -928,6 +963,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                   draft={editDraft}
                   textChannels={textChannels}
                   resolvedChannels={hook.channels ?? []}
+                  formerSkipUsers={hook.skipUsers ?? []}
                   members={members}
                   memberQuery={memberQuery}
                   disabled={busyId === hook.id}

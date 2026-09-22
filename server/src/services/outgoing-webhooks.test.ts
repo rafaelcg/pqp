@@ -425,6 +425,31 @@ describeDb("outgoing webhooks", () => {
     expect(updated.body.webhook.skipUserIds).toEqual([member.id]);
   });
 
+  it("drops a skipped user who is no longer a member and still saves", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ skipUserIds: [member.id, member.id.toUpperCase()] }),
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.webhook.skipUserIds).toEqual([member.id]);
+
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      {
+        skipUserIds: [
+          member.id,
+          "00000000-0000-4000-8000-0000000000cc",
+        ],
+      },
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.webhook.skipUserIds).toEqual([member.id]);
+  });
+
   it("names a channel that is not text and still saves the ones that are", async () => {
     const created = await call<{ webhook: OutgoingWebhook }>(
       owner,

@@ -2959,6 +2959,8 @@
   "integrations.skipLabel": "Skip these members",
   "integrations.skipHint": "Their messages will not fire this hook. Use this for a helper that is a normal account, like Caio.",
   "integrations.skipSearch": "Search members",
+  "integrations.skipGone": "{name} is no longer a member",
+  "integrations.skipGoneUnknown": "no longer a member",
   "integrations.channelsSummary": "Channels: {names}",
   "integrations.channelsUnknown": "selected channels",
   "integrations.channelUnlisted_one": "1 channel not in the list",
