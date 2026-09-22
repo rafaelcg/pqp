@@ -244,6 +244,61 @@ export function nextWrongVideoRepair(
 }
 
 /**
+ * Put a player on a track, reporting instead of throwing.
+ *
+ * The repair calls this from a timer, and a player that is failing or being
+ * torn down can throw from `loadVideoById`; from inside `setInterval` that
+ * escaped as an uncaught error. False means the command did not take.
+ */
+export function applyRoomTrack(
+  player: YTPlayer,
+  id: string,
+  playing: boolean,
+  seconds: number,
+): boolean {
+  try {
+    if (playing) {
+      player.loadVideoById(id, seconds);
+    } else {
+      player.cueVideoById(id, seconds);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const FRESH_WRONG_VIDEO_REPAIR: WrongVideoRepair = {
+  videoId: null,
+  attempts: 0,
+  nextAtMs: 0,
+};
+
+/**
+ * The repair budget, started over whenever the ROOM changes track.
+ *
+ * `nextWrongVideoRepair` alone keys the budget by the video the room wants,
+ * and it is only asked on a mismatch, so it never saw the room move on and
+ * come back: a track that used up its tries stayed used up, and the next
+ * time the room returned to it (repeat-all, a re-add) and the player missed
+ * the change, nothing tried again. `trackKey` is the room's current track
+ * id, which changes on every transition, including A to B and back to A.
+ */
+export function useWrongVideoRepair(
+  trackKey: string | null,
+): (roomVideoId: string, nowMs: number) => boolean {
+  const budget = useRef<WrongVideoRepair>(FRESH_WRONG_VIDEO_REPAIR);
+  useEffect(() => {
+    budget.current = FRESH_WRONG_VIDEO_REPAIR;
+  }, [trackKey]);
+  return useCallback((roomVideoId: string, nowMs: number) => {
+    const step = nextWrongVideoRepair(budget.current, roomVideoId, nowMs);
+    budget.current = step.next;
+    return step.allowed;
+  }, []);
+}
+
+/**
  * Whether the drift/play effect should call `playVideo()`. YouTube replays
  * from the start when the player is ENDED; that is only correct for
  * repeat-one. A loaded id that is not the room's is the load effect's job.
@@ -485,31 +540,26 @@ export function MusicPlayer({
    */
   const loadRoomTrack = useCallback(
     (player: YTPlayer, id: string, playing: boolean) => {
-      setFailed(false);
       const seconds = expectedPositionMs(musicRef.current) / 1000;
-      if (playing) {
-        player.loadVideoById(id, seconds);
-      } else {
-        player.cueVideoById(id, seconds);
-      }
+      // A player that throws here cannot play this track, and saying so is
+      // better than leaving a stale picture with no explanation.
+      setFailed(!applyRoomTrack(player, id, playing, seconds));
     },
     [],
   );
 
-  const repairRef = useRef<WrongVideoRepair>({ videoId: null, attempts: 0, nextAtMs: 0 });
+  const tryRepair = useWrongVideoRepair(trackId);
   /**
-   * The tick's repair: bounded by `nextWrongVideoRepair`, and reading the
+   * The tick's repair: bounded by `useWrongVideoRepair`, and reading the
    * ROOM's status at the call, so a paused room is cued rather than started.
    */
   const repairWrongVideo = useCallback(
     (player: YTPlayer, roomVideoId: string) => {
-      const step = nextWrongVideoRepair(repairRef.current, roomVideoId, Date.now());
-      repairRef.current = step.next;
-      if (step.allowed) {
+      if (tryRepair(roomVideoId, Date.now())) {
         loadRoomTrack(player, roomVideoId, musicRef.current.state?.status === "playing");
       }
     },
-    [loadRoomTrack],
+    [loadRoomTrack, tryRepair],
   );
 
   // A new track: load it where the room is. An empty queue stops this
