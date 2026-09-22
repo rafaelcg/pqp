@@ -174,6 +174,58 @@ describe("applyMusicWrite", () => {
  * sends the advance. Two live voters must not clear a threshold sized for
  * the room they are in.
  */
+describe("the actor a write claims to be", () => {
+  beforeEach(() => resetMusicForTests());
+
+  /*
+   * `actorId` is the writer's own peer id, chosen by the writer, and it is
+   * the tie-break when two writes share a `rev`: `musicWriteIsStale`
+   * prefers the higher string, and so does the row's own WHERE clause. A
+   * client that sets it to a run of \uFFFF therefore wins every race it
+   * enters, including against a manager acting in the same instant. It
+   * cannot do anything it was not already allowed to do, but it can
+   * always be the one who does it.
+   *
+   * The socket's peer id is not a guess on this side, so the claim is
+   * simply checked against it.
+   */
+  it("refuses a write that signs itself as somebody else", () => {
+    applyMusicWrite(ROOM, state(), { ...MANAGER, peerId: "p1" });
+    const held = getMusicState(ROOM) as MusicState;
+    const write = applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 1_000, rev: held.rev + 1, actorId: "\uFFFF\uFFFF" },
+      { ...MEMBER, peerId: "p2" },
+    );
+    expect(write.kind).toBe("refused");
+    expect((getMusicState(ROOM) as MusicState).rev).toBe(held.rev);
+  });
+
+  it("takes the write when the claim matches the socket", () => {
+    applyMusicWrite(ROOM, state(), { ...MANAGER, peerId: "p1" });
+    const held = getMusicState(ROOM) as MusicState;
+    const write = applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 1_000, rev: held.rev + 1, actorId: "p2" },
+      { ...MEMBER, peerId: "p2" },
+    );
+    expect(write.kind).toBe("accepted");
+  });
+
+  /* The client draws with this function too, and knows no peer id there. */
+  it("checks nothing when the caller does not say who is writing", () => {
+    applyMusicWrite(ROOM, state(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    expect(
+      applyMusicWrite(
+        ROOM,
+        { ...held, positionMs: 1_000, rev: held.rev + 1, actorId: "anything" },
+        MEMBER,
+      ).kind,
+    ).toBe("accepted");
+  });
+});
+
 describe("a skip vote from somebody who left", () => {
   beforeEach(() => resetMusicForTests());
 

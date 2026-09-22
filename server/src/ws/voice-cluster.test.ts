@@ -400,6 +400,11 @@ function musicTrack(id: string, addedBy: string): MusicTrack {
   };
 }
 
+/**
+ * `actorId` is the writer's own PEER id, which the server checks against
+ * the socket the frame arrived on. Passing a user id here was harmless
+ * until it was checked, and then it was every music test at once.
+ */
 function queue(
   rev: number,
   actorId: string,
@@ -834,7 +839,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(1, userA, musicTrack("aaaaaaaaaaa", userA)),
+          state: queue(1, dj.peerId, musicTrack("aaaaaaaaaaa", userA)),
         },
       );
 
@@ -852,7 +857,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(2, userA, musicTrack("aaaaaaaaaaa", userA), {
+          state: queue(2, dj.peerId, musicTrack("aaaaaaaaaaa", userA), {
             status: "paused",
             positionMs: 30_000,
           }),
@@ -890,7 +895,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(4, userA, musicTrack("bbbbbbbbbbb", userA), {
+          state: queue(4, dj.peerId, musicTrack("bbbbbbbbbbb", userA), {
             positionMs: 180_000,
           }),
         },
@@ -922,7 +927,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(1, userA, musicTrack("fffffffffff", userA)),
+          state: queue(1, dj.peerId, musicTrack("fffffffffff", userA)),
         },
       );
       await waitFor(() => frames(listenerOnB, "music").length === 1, "rev 1 on B");
@@ -933,7 +938,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(2, userA, musicTrack("ggggggggggg", userA)),
+          state: queue(2, dj.peerId, musicTrack("ggggggggggg", userA)),
         },
       );
       expect(frames(listenerOnB, "music")).toHaveLength(1);
@@ -967,7 +972,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(1, userA, musicTrack("hhhhhhhhhhh", userA)),
+          state: queue(1, dj.peerId, musicTrack("hhhhhhhhhhh", userA)),
         },
       );
       await waitFor(() => frames(writerOnB, "music").length === 1, "rev 1 on B");
@@ -977,7 +982,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(5, userA, musicTrack("iiiiiiiiiii", userA)),
+          state: queue(5, dj.peerId, musicTrack("iiiiiiiiiii", userA)),
         },
       );
 
@@ -986,7 +991,7 @@ describeDb("voice across two instances", () => {
         { socket: writerOnB.socket, user: asUser(userB) },
         {
           type: "set-music",
-          state: queue(3, userB, musicTrack("jjjjjjjjjjj", userB)),
+          state: queue(3, writerOnB.peerId, musicTrack("jjjjjjjjjjj", userB)),
         },
       );
 
@@ -1016,7 +1021,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(1, userA, musicTrack("ccccccccccc", userA)),
+          state: queue(1, dj.peerId, musicTrack("ccccccccccc", userA)),
         },
       );
       await waitFor(() => frames(writerOnB, "music").length === 1, "rev 1 on B");
@@ -1027,7 +1032,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(5, userA, musicTrack("ddddddddddd", userA)),
+          state: queue(5, dj.peerId, musicTrack("ddddddddddd", userA)),
         },
       );
       expect(frames(writerOnB, "music")).toHaveLength(1);
@@ -1037,7 +1042,7 @@ describeDb("voice across two instances", () => {
         { socket: writerOnB.socket, user: asUser(userB) },
         {
           type: "set-music",
-          state: queue(3, userB, musicTrack("eeeeeeeeeee", userB)),
+          state: queue(3, writerOnB.peerId, musicTrack("eeeeeeeeeee", userB)),
         },
       );
 
@@ -1086,7 +1091,7 @@ describeDb("voice across two instances", () => {
         { socket: dj.socket, user: asUser(userA) },
         {
           type: "set-music",
-          state: queue(1, userA, musicTrack("kkkkkkkkkkk", userA)),
+          state: queue(1, dj.peerId, musicTrack("kkkkkkkkkkk", userA)),
         },
       );
       await waitFor(

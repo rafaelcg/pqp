@@ -7209,6 +7209,7 @@ export async function handleVoiceMessage(
       canAdd: peer.canSpeak,
       roomSize,
       seatedUserIds,
+      peerId: peer.id,
     });
     if (write.kind === "coalesced") {
       return;

@@ -275,6 +275,21 @@ export function applyMusicWrite(
   const now = Date.now();
   const expected = musicExpectedPositionMs(voiceChannelId, now);
   let next = incoming === null ? null : completeMusicState(held, incoming);
+  if (
+    next !== null &&
+    rights.peerId !== undefined &&
+    next.actorId !== rights.peerId
+  ) {
+    // Signed as somebody else. Nothing here is a permission this write
+    // did not have, but `actorId` decides same-`rev` ties in both the
+    // cache and the row, so an invented one wins every race it enters.
+    logEvent("voice.musicRefused", {
+      voiceChannelId,
+      userId: actorUserId,
+      reason: "actor",
+    });
+    return { kind: "refused", held };
+  }
   if (musicWriteIsStale(held, next)) {
     return { kind: "stale", held: held as MusicState };
   }

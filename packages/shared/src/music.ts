@@ -292,6 +292,15 @@ export interface MusicRights {
    * does when it draws the button.
    */
   seatedUserIds?: string[];
+  /**
+   * The peer id of the socket this write arrived on, when the caller has
+   * one. `actorId` is the writer's own peer id and the tie-break between
+   * two writes at the same `rev`, chosen by the writer, so a client that
+   * picks a high string wins every race it enters. The server knows who
+   * is on the socket and checks the claim against it; the client omits
+   * this, because it only uses this function to decide what to draw.
+   */
+  peerId?: string;
 }
 
 /** Votes needed to skip: half the room, at least two. */
