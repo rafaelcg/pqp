@@ -70,6 +70,42 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.positionMs).toBe(45_000);
   });
 
+  /**
+   * THE SERVER HAS ALREADY DECIDED, SO THE CLIENT MUST NOT DECIDE AGAIN.
+   *
+   * `musicWriteIsStale` is the room's conflict rule and the SERVER is where
+   * it belongs: it picks which of two writes the room keeps. Applying it a
+   * second time to what the server then broadcasts let a client throw the
+   * room's truth away and go on playing alone, with nothing to bring it
+   * back: on 22 Sep 2026 a call skipped its last track, it ended for two
+   * people and the third kept hearing it.
+   *
+   * Our own echo is the one frame we may still refuse, because our
+   * optimistic copy is a write ahead of it.
+   */
+  it("takes another peer's state even when ours looks newer", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const held = getMusicSnapshot().state!;
+    receiveMusic(CHANNEL, {
+      ...held,
+      current: null,
+      queue: [],
+      status: "paused",
+      // Same rev, and a peer id that loses the old tie-break.
+      rev: held.rev,
+      actorId: "peer-a-aaa" < held.actorId ? "peer-a-aaa" : "peer-0",
+    });
+    expect(getMusicSnapshot().state?.current).toBeNull();
+  });
+
+  it("still refuses our own echo from behind our optimistic write", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const held = getMusicSnapshot().state!;
+    seekTo(30_000);
+    receiveMusic(CHANNEL, { ...held, positionMs: 0 });
+    expect(getMusicSnapshot().state?.positionMs).toBe(30_000);
+  });
+
   it("restarts skip-back when past three seconds", () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     const now = getMusicSnapshot().state!.current!;

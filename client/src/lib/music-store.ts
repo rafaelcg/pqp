@@ -169,7 +169,33 @@ export function receiveMusic(
   // A refusal hands back what the server holds; our optimistic copy is
   // ahead of it by one `rev` and would otherwise call the correction stale.
   const next = state === null ? null : completeMusicState(snapshot.state, state);
-  if (!forced && next !== null && musicWriteIsStale(snapshot.state, next)) {
+  /*
+   * THE SERVER HAS ALREADY DECIDED, SO WE DO NOT DECIDE AGAIN.
+   *
+   * `musicWriteIsStale` is the room's conflict rule, and the server is
+   * where it belongs: it picks which of two writes the room keeps. Running
+   * it again on what the server then broadcasts let this client throw the
+   * room's truth away — a write from somebody else at our own `rev`, or
+   * behind it because we had just written optimistically, lost the
+   * tie-break and was dropped, with nothing to bring us back. On 22 Sep
+   * 2026 a call skipped its last track: it ended for two people and the
+   * third went on hearing it.
+   *
+   * A frame genuinely BEHIND us is still dropped, whoever sent it: the
+   * fan-out crosses instances in production and an out-of-order relay must
+   * not rewind the room. What is gone is the tie-break at an equal `rev`,
+   * which is the server saying "this is the write I kept" and is never
+   * ours to overrule. Our own echo keeps the whole rule, because our copy
+   * is genuinely a write ahead of it.
+   */
+  const ourEcho = next !== null && next.actorId === session.peerId;
+  const behind =
+    next !== null &&
+    snapshot.state !== null &&
+    (ourEcho
+      ? musicWriteIsStale(snapshot.state, next)
+      : next.rev < snapshot.state.rev);
+  if (!forced && behind) {
     return;
   }
   set(next, channelId);

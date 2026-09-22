@@ -38,6 +38,7 @@ import {
   musicEmbedCommand,
   playerNeedsRoomSeek,
   shouldAdvanceOnEnded,
+  playerIsOnWrongVideo,
   shouldCallPlayVideo,
   shouldKeepMusicEmbed,
   shouldReportPositionSample,
@@ -238,6 +239,29 @@ describe("musicEmbedCommand", () => {
   it("loads a playing track and cues a paused one", () => {
     expect(musicEmbedCommand("dQw4w9WgXcQ", "playing")).toBe("load");
     expect(musicEmbedCommand("dQw4w9WgXcQ", "paused")).toBe("cue");
+  });
+});
+
+describe("playerIsOnWrongVideo", () => {
+  /**
+   * The tick read the loaded id already and did nothing with it: a player
+   * left on the wrong video was noticed every two seconds and ignored,
+   * while the drift loop went on seeking THAT video to the room's clock.
+   * The 22 Sep 2026 screenshot is the whole bug in one frame: the bar says
+   * Toto, the picture is another song, and it stays that way.
+   */
+  it("is the loaded id disagreeing with the room's", () => {
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", "bbbbbbbbbbb")).toBe(true);
+  });
+
+  it("is not a player on the room's track", () => {
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", "aaaaaaaaaaa")).toBe(false);
+  });
+
+  it("is not a player with nothing loaded yet, or a room with nothing on", () => {
+    expect(playerIsOnWrongVideo(undefined, "aaaaaaaaaaa")).toBe(false);
+    expect(playerIsOnWrongVideo("", "aaaaaaaaaaa")).toBe(false);
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", null)).toBe(false);
   });
 });
 

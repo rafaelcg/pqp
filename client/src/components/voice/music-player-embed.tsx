@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
@@ -174,6 +174,30 @@ export function musicEmbedCommand(
     return "stop";
   }
   return status === "playing" ? "load" : "cue";
+}
+
+/**
+ * THE PLAYER IS ON A VIDEO THE ROOM IS NOT ON.
+ *
+ * The load effect fires on a change of track, and a change it misses (a
+ * frame this client dropped, a `loadVideoById` YouTube swallowed, an error
+ * mid-load) used to last for the rest of the session: the tick read the
+ * loaded id, `shouldCallPlayVideo` returned false because it disagreed, and
+ * nothing put it right, while the drift loop went on seeking the WRONG
+ * video to the room's clock. On 22 Sep 2026 the bar read Toto and the
+ * picture was another song, in sync, for as long as anybody watched.
+ *
+ * So the check is also a repair: see `reloadRoomTrack`. An unloaded player
+ * (no id yet) is not wrong, and a room with nothing on is the stop path.
+ */
+export function playerIsOnWrongVideo(
+  loadedVideoId: string | null | undefined,
+  roomVideoId: string | null,
+): boolean {
+  if (!loadedVideoId || !roomVideoId) {
+    return false;
+  }
+  return loadedVideoId !== roomVideoId;
 }
 
 /**
@@ -409,6 +433,26 @@ export function MusicPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Put this iframe on the room's track, at the room's position.
+   *
+   * Called on a change of track, and again by the tick whenever the player
+   * is found on something else (`playerIsOnWrongVideo`). The second caller
+   * is the repair: a missed edge used to last the whole session.
+   */
+  const loadRoomTrack = useCallback(
+    (player: YTPlayer, id: string, playing: boolean) => {
+      setFailed(false);
+      const seconds = expectedPositionMs(musicRef.current) / 1000;
+      if (playing) {
+        player.loadVideoById(id, seconds);
+      } else {
+        player.cueVideoById(id, seconds);
+      }
+    },
+    [],
+  );
+
   // A new track: load it where the room is. An empty queue stops this
   // iframe rather than unmounting it (`musicEmbedCommand`).
   useEffect(() => {
@@ -425,13 +469,7 @@ export function MusicPlayer({
       }
       return;
     }
-    setFailed(false);
-    const seconds = expectedPositionMs(musicRef.current) / 1000;
-    if (command === "load") {
-      player.loadVideoById(videoId!, seconds);
-    } else {
-      player.cueVideoById(videoId!, seconds);
-    }
+    loadRoomTrack(player, videoId!, command === "load");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, videoId, trackId]);
 
@@ -461,6 +499,12 @@ export function MusicPlayer({
       ytState = player.getPlayerState();
     } catch {
       // player not ready to read
+    }
+    if (playerIsOnWrongVideo(loaded, videoId)) {
+      // The room moved on and this iframe did not. Put it back before the
+      // drift loop below starts seeking the wrong song to the room's clock.
+      loadRoomTrack(player, videoId!, status === "playing");
+      return;
     }
     const repeat = musicRef.current.state?.repeat ?? "off";
     if (
@@ -512,6 +556,19 @@ export function MusicPlayer({
       try {
         ytState = player.getPlayerState();
       } catch {
+        return;
+      }
+      // The one check that makes this loop self-healing: seeking a video
+      // the room is not on is worse than doing nothing.
+      let playing: string | undefined;
+      try {
+        playing = player.getVideoData().video_id;
+      } catch {
+        playing = undefined;
+      }
+      const roomVideoId = snap.state?.current?.videoId ?? null;
+      if (playerIsOnWrongVideo(playing, roomVideoId)) {
+        loadRoomTrack(player, roomVideoId!, true);
         return;
       }
       if (!shouldReportPositionSample(ytState)) {
