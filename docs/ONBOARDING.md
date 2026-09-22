@@ -29,11 +29,21 @@ Adding one means adding a row here.
 | Watch party | `components/layout/feature-hint.tsx` in the call dock's hint slot or above the stage controls, and on the sidebar's voice bar | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
 | Watch party viewer | `components/watch-party/watch-party-panel.tsx` (live bar) | Inline CornerCard, under the party bar | first time watching a live party without a seat | `pqp:feature-hint-watch-party-viewer-…` |
 | Bring friends | `components/layout/bring-friends-hint.tsx` on the call bar or the in-call strip | Inline CornerCard | first time you are presenting a screen share in a server call with fewer than three people. Not DMs, not viewers | `pqp:feature-hint-bring-friends-2026-09`. CTA copies the short invite paste |
+| Music field | `components/layout/feature-hint.tsx` in the Fila panel, under the field | Inline CornerCard | first time the queue panel is opened, by somebody with SPEAK (`shouldOfferMusicFieldHint`). Before `music` in the order: a moment beats a standing tip, the same rule the two watch party hints follow | `pqp:feature-hint-music-field-2026-09` (impression) |
 | Music | `components/layout/feature-hint.tsx` in the call dock's hint slot (`CallControls`) | Inline CornerCard above the dock's control row, plus a lime pip on the Música tile | in a call, with SPEAK, nothing playing in the room and the Fila panel shut (`shouldOfferMusicHint`). After the share tips: both fire for anyone in any call, and share is the older control | `pqp:feature-hint-music-2026-09-2` (impression). The pip is separate, `pqp:music-pip-2026-09` in `lib/music-pip.ts`, and is spent by opening the panel rather than by the card painting |
 | Channel pin | `components/layout/feature-hint.tsx` in the channel list | Inline CornerCard | first time a server list is open | `pqp:feature-hint-channel-pin-…` |
 | Shortcuts | `components/layout/shortcuts-hint.tsx` | Corner card, last in the queue | `/app` on a keyboard, after a quiet beat, no attached hint up | `pqp:feature-hint-shortcuts-…` |
 
 ## The rules
+
+**A hint that has had its turn stops holding the slot.** `winningFeatureHint`
+hands the one attached slot to the first id that wants it, and `wanting` is
+built from standing conditions (connected, in a call, a dock on screen) that
+do not change when somebody presses Entendi. So a card already seen went on
+winning for the rest of the load and every tip behind it waited for good. On
+a developer's machine, where nothing is remembered so every card can be seen
+again, that is every session: `callDock` is first, so the music card could
+never once be drawn. `spendFeatureHintForLoad` is what the queue skips on.
 
 **Once means once, including within a page load.** `components/layout/feature-hint.tsx`
 keeps two per-load sets. `eligibleThisLoad` holds a card eligible through a

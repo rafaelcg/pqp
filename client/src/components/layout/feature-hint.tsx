@@ -10,7 +10,10 @@ import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import {
   isFeatureHintSeen,
+  isFeatureHintSpentForLoad,
   rememberFeatureHint,
+  resetFeatureHintsForTests as resetSpentFeatureHints,
+  spendFeatureHintForLoad,
   type AttachedFeatureHintId,
   type FeatureHintId,
 } from "@/lib/feature-hints";
@@ -56,13 +59,19 @@ const eligibleThisLoad = new Set<FeatureHintId>();
  * straight back, so Entendi stops meaning anything and the card becomes
  * something people learn to swat. The impression is already in storage by
  * then, so this only has to cover the rest of the page load.
+ *
+ * It lives in `lib/feature-hints.ts` rather than here because the QUEUE
+ * has to read it too: a card that has had its turn must stop winning the
+ * one attached slot, or every tip behind it waits for good.
  */
-const dismissedThisLoad = new Set<FeatureHintId>();
+function markDismissed(id: FeatureHintId): void {
+  spendFeatureHintForLoad(id);
+}
 
 /** Both sets are per page load, so a suite has to start each test fresh. */
 export function resetFeatureHintsForTests(): void {
   eligibleThisLoad.clear();
-  dismissedThisLoad.clear();
+  resetSpentFeatureHints();
 }
 
 function takeEligibility(id: FeatureHintId): boolean {
@@ -104,10 +113,10 @@ export function FeatureHint({
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(() => takeEligibility(id));
-  const [open, setOpen] = useState(() => !dismissedThisLoad.has(id));
+  const [open, setOpen] = useState(() => !isFeatureHintSpentForLoad(id));
 
   const close = () => {
-    dismissedThisLoad.add(id);
+    markDismissed(id);
     setOpen(false);
   };
 
@@ -126,7 +135,7 @@ export function FeatureHint({
        * with the gate unchanged does not come through here at all, which
        * is what `eligibleThisLoad` exists to protect.
        */
-      dismissedThisLoad.add(id);
+      markDismissed(id);
     }
   }, [eligible, enabled, id]);
 

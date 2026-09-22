@@ -29,6 +29,10 @@ import {
 } from "@/components/voice/music-now-playing";
 import { MusicQueueList } from "@/components/voice/music-queue-list";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
+import {
+  FeatureHint,
+  useFeatureHintEnabled,
+} from "@/components/layout/feature-hint";
 import { useScrub } from "@/components/voice/use-scrub";
 
 const RAIL_ICON =
@@ -66,6 +70,7 @@ export function MusicFila({
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
   const scrub = useScrub((value) => seekTo(value));
+  const fieldHintEnabled = useFeatureHintEnabled("musicField");
   /** Empty field, so the line that says what it takes is still useful. */
   const [fieldIdle, setFieldIdle] = useState(true);
   // The picker reports this from an effect that lists the callback, so a
@@ -324,6 +329,20 @@ export function MusicFila({
             onEmptyEscape={() => setMusicOpen(false)}
           />
         </div>
+
+        {fieldHintEnabled ? (
+          /* Attached to the field, under it, where the answer to "what do I
+             type here" belongs. It only draws when it holds the one
+             attached slot; `lib/feature-hints.ts` is the queue. */
+          <div className="pointer-events-auto shrink-0 px-3 pt-2">
+            <FeatureHint
+              id="musicField"
+              enabled
+              title={t("featureHint.musicField.title")}
+              body={t("featureHint.musicField.body")}
+            />
+          </div>
+        ) : null}
 
         {fieldIdle ? (
           /* Under the field, not over it: the first thing a new person needs

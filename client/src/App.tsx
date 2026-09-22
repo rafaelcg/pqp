@@ -123,6 +123,7 @@ import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
   shouldOfferBringFriendsHint,
+  shouldOfferMusicFieldHint,
   shouldOfferMusicHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
@@ -1203,6 +1204,9 @@ function MainAppContent({
     featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  const [wantsMusicFieldHint] = useState(() =>
+    featureHintEligible("musicField"),
+  );
   // Open + whether a track is on, which is what the music hint's live half
   // reads. The snapshot deliberately ignores position samples, so this does
   // not put the playhead on App's render path.
@@ -6961,6 +6965,14 @@ function MainAppContent({
       inServer: voiceServerId !== null,
       canInvite: canCreateInviteForVoice,
       roomSize: voiceRoomSize,
+    }),
+    // Before `music` in the order: they have the panel open and are looking
+    // at the field, which beats a card pointing at the tile they just used.
+    musicField: shouldOfferMusicFieldHint({
+      seen: !wantsMusicFieldHint,
+      automated: false,
+      filaOpen: musicDock.open,
+      canAdd: voiceState.canSpeak,
     }),
     music: shouldOfferMusicHint({
       seen: !wantsMusicHint,

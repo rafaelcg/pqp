@@ -22,6 +22,7 @@ export const FEATURE_HINT_IDS = [
   "watchParty",
   "bringFriends",
   "music",
+  "musicField",
   "composerFormat",
   "channelPin",
   "shortcuts",
@@ -39,6 +40,7 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   // left the sidebar for the call dock), so everybody who saw the old
   // copy had it stamped and would never be shown the one that is true.
   music: "pqp:feature-hint-music-2026-09-2",
+  musicField: "pqp:feature-hint-music-field-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
@@ -62,6 +64,10 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // After the watch-party tips so those still win if both want the slot,
   // before the standing share/music tips.
   "bringFriends",
+  // The queue's field, the first time somebody opens the panel. A moment,
+  // like the two watch party hints above, so it comes BEFORE the standing
+  // tip that points at the tile they have just pressed.
+  "musicField",
   // The music queue, on the Música tile in the call dock, the first time a
   // person who may speak is in a call with nothing on. After the share tip:
   // both fire for anyone in any call, and share is the older, less
@@ -89,11 +95,40 @@ export function rememberFeatureHint(
   rememberHint(FEATURE_HINT_STORAGE_KEYS[id], storage, persist);
 }
 
+/**
+ * SPENT FOR THIS PAGE LOAD, WHICH IS NOT THE SAME AS SEEN.
+ *
+ * `wanting` is built from standing conditions — connected, in a call, a
+ * dock on screen — and none of them changes when somebody presses Entendi.
+ * So the card that had already had its turn went on winning the slot and
+ * every tip behind it waited for good. On a developer's machine, where
+ * `lib/hints.ts` deliberately remembers nothing so every card can be seen
+ * again, "for good" is every session: `callDock` is first in the order, so
+ * the music card could never once be drawn.
+ *
+ * A hint is spent when it is dismissed, or when the gate that justified it
+ * turns off after it was shown. `components/layout/feature-hint.tsx` is
+ * what decides that; this is where the queue reads it.
+ */
+const spentThisLoad = new Set<FeatureHintId>();
+
+export function spendFeatureHintForLoad(id: FeatureHintId): void {
+  spentThisLoad.add(id);
+}
+
+export function isFeatureHintSpentForLoad(id: FeatureHintId): boolean {
+  return spentThisLoad.has(id);
+}
+
+export function resetFeatureHintsForTests(): void {
+  spentThisLoad.clear();
+}
+
 export function winningFeatureHint(
   wanting: Partial<Record<AttachedFeatureHintId, boolean>>,
 ): AttachedFeatureHintId | null {
   for (const id of ATTACHED_FEATURE_HINT_ORDER) {
-    if (wanting[id]) {
+    if (wanting[id] && !spentThisLoad.has(id)) {
       return id;
     }
   }
@@ -234,6 +269,24 @@ export function shouldOfferMusicHint(input: {
     !input.playing &&
     !input.filaOpen
   );
+}
+
+/**
+ * They have opened the queue and are looking straight at the field.
+ *
+ * The field says what it takes whenever it is empty, which is why this was
+ * dropped from the plan once that shipped. Watching somebody use it says
+ * otherwise: a line under a box is read after you have worked out that the
+ * box is for you, and this card is what says so. `canAdd` because without
+ * SPEAK the field is not theirs to use.
+ */
+export function shouldOfferMusicFieldHint(input: {
+  seen: boolean;
+  automated: boolean;
+  filaOpen: boolean;
+  canAdd: boolean;
+}): boolean {
+  return !input.seen && !input.automated && input.filaOpen && input.canAdd;
 }
 
 export function shouldOfferChannelPinHint(input: {

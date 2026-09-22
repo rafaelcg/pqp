@@ -1432,6 +1432,8 @@
   "featureHint.watchParty.body": "Watch party na barra da call. Clica e escolhe a guia do YouTube, com o áudio.",
   "featureHint.music.title": "Música na call",
   "featureHint.music.body": "Na barra da call, o botão de Música abre a fila. Cole um link ou busca pelo nome. Todo mundo na call ouve junto.",
+  "featureHint.musicField.title": "Coloca uma música",
+  "featureHint.musicField.body": "Digita o nome, como no YouTube, ou cola um link. Quem estiver na call ouve junto.",
   "featureHint.watchParty.strip": "Compartilhar na barra da call. Watch party fica na stage: guia do YouTube, com o áudio.",
   "featureHint.channelPin.body": "Botão direito no canal, Fixar. Sobe pra Pinados.",
   "featureHint.shortcuts.title": "Atalhos",

@@ -714,8 +714,14 @@ Decisions a human has to take before the code is written:
    its `<form>`.** The `+` becomes an ordinary button calling the same
    submit path, Enter keeps working as it does. The change stays inside one
    component and the shared composer is not touched.
-4. ~~**4.4** stays or goes once 3.2 is visible.~~ **Decided 22 September
-   2026: dropped, and 4.5 with it.** 3.2 shipped, so the field names its
+4. ~~**4.4** stays or goes once 3.2 is visible.~~ ~~**Decided 22 September
+   2026: dropped, and 4.5 with it.**~~ **Reversed 22 September 2026, after
+   watching it used: 4.4 is built.** The reasoning below was sound and the
+   conclusion was wrong. A line under a box is read once you have worked
+   out that the box is for you; the card is what says so. 4.5, the
+   re-arm, stays dropped. The original note follows.
+
+   **Decided 22 September 2026: dropped, and 4.5 with it.** 3.2 shipped, so the field names its
    sources in place whenever it is empty, for everybody, with no key and no
    queue slot. A card attached to that same field at that same moment says
    the same thing twice and would take an arbitration slot ahead of the

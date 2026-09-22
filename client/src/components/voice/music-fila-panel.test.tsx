@@ -22,6 +22,7 @@ import {
 } from "@/lib/music-pip";
 import { MusicFila } from "@/components/voice/music-fila";
 import { MusicComposer } from "@/components/voice/music-composer";
+import { FeatureHintProvider } from "@/components/layout/feature-hint";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -107,6 +108,22 @@ function mountComposerAs(overrides: Record<string, unknown> = {}) {
 
 function mountComposer() {
   return mountComposerAs();
+}
+
+function mountWithHint(winner: "musicField" | "music") {
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  act(() => {
+    root.render(
+      <TooltipProvider>
+        <FeatureHintProvider winner={winner}>
+          <MusicFila variant="sheet" voiceState={voiceState()} />
+        </FeatureHintProvider>
+      </TooltipProvider>,
+    );
+  });
+  return host;
 }
 
 function mountAs(
@@ -441,5 +458,24 @@ describe("the Fila panel is one column", () => {
       (host.querySelector("[data-music-autoplay]") as HTMLButtonElement)
         .disabled,
     ).toBe(true);
+  });
+
+  /*
+   * The card that points at the field, when the queue has just been
+   * opened. It renders only when it holds the one attached slot, which is
+   * what the provider says here, and nothing at all when it does not.
+   */
+  it("points at the field when it wins the slot", () => {
+    mountWithHint("musicField");
+    const card = host.querySelector("[data-corner-card='musicField']");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain(
+      translateMessage("featureHint.musicField.body"),
+    );
+  });
+
+  it("draws nothing when another hint holds the slot", () => {
+    mountWithHint("music");
+    expect(host.querySelector("[data-corner-card='musicField']")).toBeNull();
   });
 });
