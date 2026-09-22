@@ -762,7 +762,11 @@ telemetry (`POST /api/live-hls/telemetry`, `docs/plans/BROADCAST_PIPELINE.md`
 B0.5). `byRung[].p50Ms`/`p95Ms` are correctly bucketed **per rung** from every
 sampled viewer's own readings; that is the number to trust, and it is what the
 acceptance criterion below points at. It is in-process and resets on a
-restart, the same as `voice.seats`'s counters above.
+restart, the same as `voice.seats`'s counters above. The low-latency path's
+rungs are `ll` and `ll-audio` (the edge Worker's own names, `LL_VIDEO_RUNG` /
+`LL_AUDIO_RUNG` in `tools/hls-edge/src/ll-state.js`), distinct from the
+conventional ladder's rung names, and both are now recorded here rather than
+silently dropped.
 
 Grafana has no direct line to that endpoint — it only sees log lines, the same
 constraint every other panel on this dashboard works under — so the panel

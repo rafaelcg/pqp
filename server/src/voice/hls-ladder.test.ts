@@ -611,6 +611,16 @@ describe("isKnownHlsRung / hlsRungVideoKbps", () => {
     expect(hlsRungVideoKbps("some-made-up-rung")).toBeNull();
   });
 
+  it("recognises the two low-latency rung names (LL_VIDEO_RUNG / LL_AUDIO_RUNG in tools/hls-edge/src/ll-state.js)", () => {
+    // Neither is a LADDER_RUNGS entry -- the LL path has no ladder of its
+    // own -- so there is no real bitrate to report, same as any other name
+    // with no LadderRung.
+    expect(isKnownHlsRung("ll")).toBe(true);
+    expect(isKnownHlsRung("ll-audio")).toBe(true);
+    expect(hlsRungVideoKbps("ll")).toBeNull();
+    expect(hlsRungVideoKbps("ll-audio")).toBeNull();
+  });
+
   it("refuses every inherited Object.prototype property name -- the exact bypass a plain object literal lookup allows", () => {
     // A Farol finding, 2026-09-13: `({...})[key]` for an attacker-controlled
     // `key` like "toString" or "constructor" returns a real, truthy value

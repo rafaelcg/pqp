@@ -236,6 +236,37 @@ describeDb("POST /api/live-hls/telemetry", () => {
     );
   });
 
+  it("accepts the low-latency path's rung names and keeps them in the log line's rungs", async () => {
+    // The edge Worker's multivariant playlist names its renditions "ll" and
+    // "ll-audio" (LL_VIDEO_RUNG / LL_AUDIO_RUNG in
+    // tools/hls-edge/src/ll-state.js), and hlsRungFromPlaylistUrl reports
+    // exactly those names -- neither is a conventional ladder rung, but
+    // both must go through the same acceptance path as "720p30".
+    const result = await post(
+      {
+        sessionId: "session-abc",
+        samples: [
+          { rung: "ll", latencyMs: 3_000 },
+          { rung: "ll-audio", latencyMs: 3_200 },
+        ],
+      },
+      viewer,
+    );
+    expect(result.status).toBe(200);
+    const activity = hlsTelemetryActivity();
+    expect(activity.batchesAccepted).toBe(1);
+    expect(activity.samplesRecorded).toBe(2);
+    expect(activity.samplesRejectedUnknownRung).toBe(0);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsTelemetryBatch",
+      expect.objectContaining({
+        samples: 2,
+        droppedUnknownRungSamples: 0,
+        rungs: expect.arrayContaining(["ll", "ll-audio"]),
+      }),
+    );
+  });
+
   it("refuses a batch with no session id", async () => {
     const result = await post(
       { samples: [{ rung: "720p30", latencyMs: 1_000 }] },
