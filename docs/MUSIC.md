@@ -227,16 +227,23 @@ composer until that tile is pressed or a track is on. A track on is a
 ~72px bar: 56px art, title (marquee on hover), who added it, then
 shuffle, skip-back, a filled round play, skip or vote-skip, and repeat
 (managers; shuffle and repeat hide under 28rem and move into `…`).
-A seek with clocks sits across the full bar (managers seek; everyone
-else read-only). The bar holds a preview of the thumb's position only
+A seek with clocks sits across the full bar. Whoever runs the music seeks:
+a manager, or anybody with SPEAK while Todo mundo controla is on. For
+everybody else it is read-only. The bar holds a preview of the thumb's position only
 while a pointer drag is in progress (`use-scrub.ts`): the slider is
 controlled, so a key press arrives as commit-then-change, and a preview
 cleared on commit alone was set again by the change that followed and
 never cleared after that, freezing the clock for the rest of the track. A
-change with no drag in progress seeks straight through. The right cluster is `…` then a speaker popover
-(mute, volume, ducking, Parar de ouvir). `…` opens upward: Todo mundo
-controla, Continuar com parecidas, and Parar pra todos behind a
-confirm. Members see none of shuffle, repeat, or `…`. Art and title
+change with no drag in progress seeks straight through. The right cluster
+is the queue toggle, `…`, and a volume control on the bar itself. `…`
+opens upward and is grouped by WHO each row reaches rather than by how it
+is built: "Só pra você" (Abaixar durante a fala, and Parar de ouvir or
+Ouvir), then the room's own (Todo mundo controla, Continuar com
+parecidas, and Parar pra todos behind a confirm) for whoever may set
+them. The two stops used to sit in different popovers, neither of them
+labelled stop. A member sees the same bar as everybody else with the
+controls they may not use shown locked, rather than a bar with holes in
+it. Art and title
 open the queue; adds, skips, and someone else starting a track do not.
 Skip-back is client-only: past three seconds it restarts the current
 track, otherwise the last Tocadas row becomes current and the one you

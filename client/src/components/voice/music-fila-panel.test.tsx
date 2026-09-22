@@ -14,6 +14,12 @@ import {
 } from "@/lib/music-store";
 import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { translateMessage } from "@/lib/i18n";
+import { HINTS_PERSIST_OVERRIDE_KEY } from "@/lib/hints";
+import {
+  MUSIC_PIP_KEY,
+  musicPipSpent,
+  resetMusicPipForTests,
+} from "@/lib/music-pip";
 import { MusicFila } from "@/components/voice/music-fila";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -279,5 +285,20 @@ describe("the Fila panel is one column", () => {
     mount();
     const field = host.querySelector("input") as HTMLInputElement;
     expect(field.placeholder).toBe(translateMessage("music.placeholder.field"));
+  });
+
+  /*
+   * The tile's NOVO mark says "there is something here you have not opened".
+   * Opening it is what answers that, whichever of the four ways in was used,
+   * so the panel spends the mark rather than the tile that happens to be one
+   * of them.
+   */
+  it("spends the tile's NOVO mark, however the panel was opened", () => {
+    window.localStorage.setItem(HINTS_PERSIST_OVERRIDE_KEY, "1");
+    resetMusicPipForTests();
+    expect(musicPipSpent()).toBe(false);
+    mount();
+    expect(musicPipSpent()).toBe(true);
+    expect(window.localStorage.getItem(MUSIC_PIP_KEY)).toBe("1");
   });
 });

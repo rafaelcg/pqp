@@ -1,6 +1,13 @@
 # Music queue: bugs, discoverability, and the hint campaign
 
-Status: plan. Nothing here is built yet.
+Status: **built, 22 September 2026**, on branch `pr-757` stacked on PR 757.
+Every item is on the branch except 4.4 and 4.5, which section 7 records as
+dropped. A Fable 5.1 review of the stack then found a rights bypass this
+plan had opened rather than closed (the anchor moved for any structural
+write, not for a change of `current` or `status`), a hint card that came
+back on every gate flicker, and two cross-instance anchor faults; all four
+are fixed on the branch. The item text below is the specification, kept as
+written, with a note wherever the code ended up somewhere else.
 
 This is the consolidated work list after the player redesign landed
 (commits `fb749ffc` through `149215c5`). It gathers three things that were
@@ -648,6 +655,15 @@ Grouped by what ships together and what must ship alone.
 6. **Section 3.** Small, and it reduces what the hints have to carry.
 7. **Section 4, last**, so it announces a player without known bugs, and
    after 3.2 has settled whether 4.4 is still needed.
+
+**What actually shipped.** The order above was followed, but not the
+isolation: everything is on one branch stacked on PR 757, including 0.2,
+because that is what was asked for. So 0.2's counters
+(`voice.musicClamped`, `voice.musicRefused`'s reason, `musicCluster
+.anchorMissing`) are watched alongside everything else rather than on
+their own deploy, and the tolerance in section 7 is still unmeasured. If
+that trade turns out badly, 0.2 is `33e929cf` plus `ce9f524b` plus
+`fe8ededf` and reverts as those three.
 
 Labels. `restarts-api`: sections 0 (shared and server), 1.6, 1.7, 1.8,
 1.9. The first draft called 1.7 and 1.8 client-only; `parseMusicInput` is

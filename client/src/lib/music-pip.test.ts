@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { beforeEach } from "vitest";
 import {
   MUSIC_PIP_KEY,
+  musicPipSpent,
+  resetMusicPipForTests,
+  subscribeMusicPip,
   isMusicPipSeen,
   rememberMusicPip,
   shouldShowMusicPip,
@@ -17,6 +21,8 @@ function memory(seed: Record<string, string> = {}) {
 }
 
 describe("the NOVO pip on the Música tile", () => {
+  beforeEach(() => resetMusicPipForTests());
+
   const ready = { seen: false, automated: false, canSpeak: true, playing: false };
 
   it("marks the tile for somebody who could put something on", () => {
@@ -45,5 +51,27 @@ describe("the NOVO pip on the Música tile", () => {
     expect(isMusicPipSeen(storage, true)).toBe(true);
     // Private browsing: nothing is written, and nothing is remembered.
     expect(isMusicPipSeen(storage, false)).toBe(false);
+  });
+
+  /*
+   * THE PANEL IS WHAT SPENDS IT, WHEREVER IT WAS OPENED FROM.
+   *
+   * The pip was spent by the dock tile's own click, so opening the queue
+   * from the sidebar radio's start button or the bar's queue icon left the
+   * mark standing: the person had plainly found the feature and the tile
+   * went on telling them it was new. And the tile read storage once at
+   * mount, so even a stamp written elsewhere did not reach it until the
+   * strip remounted.
+   */
+  it("reports spent to whoever is drawing the pip, and says so once", () => {
+    const seen: boolean[] = [];
+    const stop = subscribeMusicPip(() => seen.push(musicPipSpent()));
+    expect(musicPipSpent()).toBe(false);
+    rememberMusicPip(memory(), true);
+    expect(musicPipSpent()).toBe(true);
+    // Opening the panel again is not a second event for the same fact.
+    rememberMusicPip(memory(), true);
+    expect(seen).toEqual([true]);
+    stop();
   });
 });

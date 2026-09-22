@@ -1,5 +1,6 @@
 import { MonitorPlay, Pause, Play, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { rememberMusicPip } from "@/lib/music-pip";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -71,6 +72,16 @@ export function MusicFila({
   const onQueryActive = useCallback((active: boolean) => {
     setFieldIdle(!active);
   }, []);
+  // The panel is open, so the tile's NOVO mark has done its job. Here
+  // rather than on the tile, because the tile is only one of the four ways
+  // in (the sidebar radio, the bar's queue icon and the keyboard are the
+  // others) and the mark is about having opened this, not about the route.
+  const filaOpen = music.open;
+  useEffect(() => {
+    if (filaOpen) {
+      rememberMusicPip();
+    }
+  }, [filaOpen]);
   const onStage = prefs.placement === "stage";
   const queue = music.state?.queue ?? [];
   const history = music.state?.history ?? [];

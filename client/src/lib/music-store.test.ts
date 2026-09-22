@@ -233,6 +233,39 @@ describe("music store writes", () => {
     expect(state.queue.some((track) => track.id === tail.id)).toBe(false);
   });
 
+  /*
+   * ONE TRACK CAN PUSH ONE OFF, AND SAYING NOTHING IS THE BUG.
+   *
+   * `addTracks` counts what a big add displaces; the single-track path
+   * called the same helper and threw the number away. With repeat-one the
+   * finished track goes back to the front of a queue already at the cap,
+   * so the last row falls off and the person is told only "tocando agora".
+   */
+  it("says when starting one track pushed another off the end", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    addTracks(
+      Array.from({ length: MUSIC_QUEUE_LIMIT }, (_, index) =>
+        resolved(`q${index.toString().padStart(10, "0")}`),
+      ),
+    );
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      repeat: "one",
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    // The track has run out, so the add starts rather than queues.
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    expect(addTrack(resolved("zzzzzzzzzzz"))).toBe("playing-dropped");
+    expect(getMusicSnapshot().state?.queue).toHaveLength(MUSIC_QUEUE_LIMIT);
+  });
+
+  it("still just says playing when nothing was pushed off", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    expect(addTrack(resolved("zzzzzzzzzzz"))).toBe("playing");
+  });
+
   it("starts the first track and queues the rest, in one write for a list", () => {
     expect(addTrack(resolved("a"))).toBe("playing");
     expect(getMusicSnapshot().open).toBe(false);

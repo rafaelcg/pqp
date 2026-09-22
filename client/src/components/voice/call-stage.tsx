@@ -200,11 +200,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
 import { isAutomatedBrowser } from "@/lib/hints";
-import {
-  isMusicPipSeen,
-  rememberMusicPip,
-  shouldShowMusicPip,
-} from "@/lib/music-pip";
+import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
@@ -2414,13 +2410,10 @@ export function CallControls({
   const musicDock = useMusicDock();
   // The pip outlives the card: it is spent by opening the panel, which the
   // card's own impression never waits for. `lib/music-pip.ts` says why the
-  // two do not share a key.
-  const [musicPipUnseen, setMusicPipUnseen] = useState(
-    () => !isAutomatedBrowser() && !isMusicPipSeen(),
-  );
+  // two do not share a key, and why "spent" is a store rather than a read.
   const musicPip = shouldShowMusicPip({
-    seen: !musicPipUnseen,
-    automated: false,
+    seen: useMusicPipSpent(),
+    automated: isAutomatedBrowser(),
     canSpeak: voiceState.canSpeak,
     playing: musicDock.on,
   });
@@ -3011,13 +3004,7 @@ export function CallControls({
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
           )}
-          onClick={() => {
-            if (musicPipUnseen) {
-              rememberMusicPip();
-              setMusicPipUnseen(false);
-            }
-            toggleMusicOpen();
-          }}
+          onClick={toggleMusicOpen}
         >
           <Music className={iconSize} />
           {/* NOVO, until the panel has been opened once. Never beside the

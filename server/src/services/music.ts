@@ -163,8 +163,12 @@ export async function resolveYouTube(
 /** The duration InnerTube knows for one video id, or null if it does not. */
 async function youtubeDurationMs(videoId: string): Promise<number | null> {
   try {
-    const videos = await innertubeSearch(videoId, 5);
-    const match = videos?.find((video) => video.videoId === videoId);
+    // Through the cache, which the comment above has always claimed and the
+    // code did not do: the same link pasted twice spent two budget tokens.
+    const hits = await searchHits(videoId, SEARCH_HITS_MAX, () =>
+      searchUnofficial(videoId),
+    );
+    const match = hits.find((hit) => hit.videoId === videoId);
     return match?.durationMs ?? null;
   } catch {
     return null;
@@ -289,7 +293,18 @@ async function searchByScraping(query: string): Promise<SearchHit | null> {
 const SEARCH_CACHE_MAX = 500;
 const SEARCH_CACHE_TTL_MS = 6 * 60 * 60_000;
 const SEARCH_HITS_MAX = 5;
-const searchCache = new Map<string, { at: number; hits: SearchHit[] }>();
+/**
+ * `wanted` is how many hits the call that filled this entry ASKED for, not
+ * how many came back. The resolve path needs one and the candidates path
+ * needs five, and both read this key: without it a resolve's single hit
+ * answered for a list, so pasting a Spotify link (which resolves by
+ * searching its title) and then typing the same words showed one candidate
+ * and called it everything YouTube had.
+ */
+const searchCache = new Map<
+  string,
+  { at: number; hits: SearchHit[]; wanted: number }
+>();
 /** One upstream call per key while it is in flight, not one per caller. */
 const searchInFlight = new Map<string, Promise<SearchHit[]>>();
 
@@ -298,8 +313,13 @@ function searchCacheKey(query: string): string {
   return query.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function rememberSearch(key: string, hits: SearchHit[]) {
+function rememberSearch(key: string, hits: SearchHit[], wanted: number) {
   if (hits.length === 0) {
+    return;
+  }
+  const held = searchCache.get(key);
+  if (held && held.wanted > wanted && Date.now() - held.at < SEARCH_CACHE_TTL_MS) {
+    // A narrower answer must not replace a wider one that is still good.
     return;
   }
   if (searchCache.size >= SEARCH_CACHE_MAX) {
@@ -308,15 +328,19 @@ function rememberSearch(key: string, hits: SearchHit[]) {
       searchCache.delete(oldest);
     }
   }
-  searchCache.set(key, { at: Date.now(), hits: hits.slice(0, SEARCH_HITS_MAX) });
+  searchCache.set(key, {
+    at: Date.now(),
+    hits: hits.slice(0, SEARCH_HITS_MAX),
+    wanted,
+  });
 }
 
-function cachedSearch(key: string): SearchHit[] | null {
+function cachedSearch(key: string, wanted: number): SearchHit[] | null {
   const entry = searchCache.get(key);
   if (!entry || Date.now() - entry.at >= SEARCH_CACHE_TTL_MS) {
     return null;
   }
-  return entry.hits;
+  return entry.wanted >= wanted ? entry.hits : null;
 }
 
 /**
@@ -326,27 +350,28 @@ function cachedSearch(key: string): SearchHit[] | null {
  */
 async function searchHits(
   query: string,
+  wanted: number,
   fetchHits: () => Promise<SearchHit[]>,
 ): Promise<SearchHit[]> {
   const key = searchCacheKey(query);
-  const cached = cachedSearch(key);
+  const cached = cachedSearch(key, wanted);
   if (cached) {
     return cached;
   }
-  const running = searchInFlight.get(key);
+  const running = searchInFlight.get(`${wanted}:${key}`);
   if (running) {
     return running;
   }
   const attempt = (async () => {
     try {
       const hits = await fetchHits();
-      rememberSearch(key, hits);
+      rememberSearch(key, hits, wanted);
       return hits;
     } finally {
-      searchInFlight.delete(key);
+      searchInFlight.delete(`${wanted}:${key}`);
     }
   })();
-  searchInFlight.set(key, attempt);
+  searchInFlight.set(`${wanted}:${key}`, attempt);
   return attempt;
 }
 
@@ -358,14 +383,16 @@ export function resetMusicCachesForTests(): void {
 
 export async function searchYouTube(query: string): Promise<MusicResolved> {
   const apiKey = process.env.YOUTUBE_API_KEY?.trim();
-  const hits = await searchHits(query, async () => {
-    // One hit is all this path needs, and one hit is a list of one: the
-    // candidates path reads the same entry and is right to.
-    const one = apiKey
-      ? await searchWithDataApi(query, apiKey)
-      : await searchUnofficial(query);
-    return one ? [one] : [];
-  });
+  // One hit is all this path needs. Without a Data API key the unofficial
+  // search returns a list anyway, so it is stored as a list and the
+  // candidates path can use it; the Data API answer is genuinely one, and
+  // `wanted` keeps it from standing in for five.
+  const hits = apiKey
+    ? await searchHits(query, 1, async () => {
+        const one = await searchWithDataApi(query, apiKey);
+        return one ? [one] : [];
+      })
+    : await searchHits(query, SEARCH_HITS_MAX, () => searchUnofficial(query));
   const hit = hits[0] ?? null;
   if (!hit) {
     throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
@@ -385,19 +412,20 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
  * a client fallback), the results page as the last resort when every
  * client fails. Both are unofficial; the page is the more fragile of the two.
  */
-async function searchUnofficial(query: string): Promise<SearchHit | null> {
+async function searchUnofficial(query: string): Promise<SearchHit[]> {
   try {
-    const videos = await innertubeSearch(query, 5);
+    const videos = await innertubeSearch(query, SEARCH_HITS_MAX);
     if (videos && videos.length > 0) {
-      const first = videos[0]!;
-      return {
-        videoId: first.videoId,
-        title: first.title,
-        thumbnailUrl: first.thumbnailUrl,
-        durationMs: first.durationMs,
-      };
+      // Every hit, not the first: this path already paid for the list, and
+      // the candidates path reads the same entry.
+      return videos.slice(0, SEARCH_HITS_MAX).map((video) => ({
+        videoId: video.videoId,
+        title: video.title,
+        thumbnailUrl: video.thumbnailUrl,
+        durationMs: video.durationMs,
+      }));
     }
-    return null;
+    return [];
   } catch (error) {
     if (error instanceof MusicResolveError) {
       throw error;
@@ -406,7 +434,10 @@ async function searchUnofficial(query: string): Promise<SearchHit | null> {
       "[music] innertube search failed, falling back to the results page:",
       error instanceof Error ? error.message : String(error),
     );
-    return searchByScraping(query);
+    // The results page gives one hit at best, which is why this is the last
+    // resort; a list of one is still a list.
+    const scraped = await searchByScraping(query);
+    return scraped ? [scraped] : [];
   }
 }
 
@@ -758,7 +789,7 @@ export async function searchMusicCandidates(query: string): Promise<MusicResolve
   }
   let hits: SearchHit[] = [];
   try {
-    hits = await searchHits(query, async () => {
+    hits = await searchHits(query, SEARCH_HITS_MAX, async () => {
       const videos = await innertubeSearch(query, SEARCH_HITS_MAX);
       return (videos ?? []).slice(0, SEARCH_HITS_MAX).map((video) => ({
         videoId: video.videoId,

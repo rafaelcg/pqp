@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceState } from "@/hooks/use-voice";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HINTS_PERSIST_OVERRIDE_KEY } from "@/lib/hints";
-import { MUSIC_PIP_KEY } from "@/lib/music-pip";
+import {
+  MUSIC_PIP_KEY,
+  rememberMusicPip,
+  resetMusicPipForTests,
+} from "@/lib/music-pip";
 import {
   receiveMusic,
   resetMusicStoreForTests,
@@ -174,6 +178,7 @@ function playSomething() {
 describe("the NOVO pip on the call dock's Musica tile", () => {
   beforeEach(() => {
     resetMusicStoreForTests();
+    resetMusicPipForTests();
     window.localStorage.clear();
     // jsdom answers localhost, where `lib/hints.ts` deliberately remembers
     // nothing so a developer sees every card on every reload. The override
@@ -201,17 +206,33 @@ describe("the NOVO pip on the call dock's Musica tile", () => {
     expect(mount(idle).querySelector("[data-music-pip]")).toBeNull();
   });
 
-  it("is spent by opening the panel, and does not come back", () => {
-    const tile = mount(idle).querySelector(
-      "[data-music-dock]",
-    ) as HTMLButtonElement;
+  /*
+   * The panel spends the mark, from wherever it was opened, and the tile
+   * hears about it without waiting for a remount. It used to read storage
+   * once at mount and clear itself on its own click, so a queue opened from
+   * the sidebar radio or the bar left the tile still saying NOVO.
+   */
+  it("clears the moment the panel spends it, and does not come back", () => {
+    mount(idle);
     expect(host.querySelector("[data-music-pip]")).not.toBeNull();
-    act(() => tile.click());
+    act(() => rememberMusicPip());
     expect(host.querySelector("[data-music-pip]")).toBeNull();
     expect(window.localStorage.getItem(MUSIC_PIP_KEY)).toBe("1");
 
-    // Closing it again is not a second chance.
-    act(() => tile.click());
+    // Closing the panel is not a second chance.
+    act(() => rememberMusicPip());
     expect(host.querySelector("[data-music-pip]")).toBeNull();
+  });
+
+  it("still opens the queue when the tile is pressed", () => {
+    const tile = mount(idle).querySelector(
+      "[data-music-dock]",
+    ) as HTMLButtonElement;
+    expect(tile.getAttribute("aria-pressed")).toBe("false");
+    act(() => tile.click());
+    expect(
+      (host.querySelector("[data-music-dock]") as HTMLButtonElement)
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 });

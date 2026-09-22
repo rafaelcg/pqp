@@ -1020,6 +1020,7 @@
   "music.openSource": "Open on Spotify",
   "music.tapToPlay": "Tap to play",
   "music.queued": "Added to the queue",
+  "music.startedAndDropped": "Playing now. The queue was full, so the last one dropped.",
   "music.queuedMany": "{count} songs added",
   "music.queuedManyDropped": "{count} songs added, {dropped} did not fit",
   "music.full": "The queue is full",

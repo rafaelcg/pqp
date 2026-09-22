@@ -239,12 +239,22 @@ export function adoptMusicState(
 export function adoptMusicWithAnchor(
   voiceChannelId: string,
   state: MusicState | null,
-  anchor: MusicAnchor | null,
+  /**
+   * `null` is a source that HAS no clock (a row written before this field,
+   * a teardown): the clamp and the clock-based gate stand down until a
+   * trusted write sets one. `undefined` is a source that says NOTHING about
+   * the clock, which is a `voice.music` frame from an instance older than
+   * the field, and clearing this instance's on the strength of it would
+   * hand the room to whichever sample arrived next.
+   */
+  anchor: MusicAnchor | null | undefined,
 ): boolean {
   if (!adoptMusicState(voiceChannelId, state)) {
     return false;
   }
-  adoptMusicAnchor(voiceChannelId, anchor);
+  if (anchor !== undefined) {
+    adoptMusicAnchor(voiceChannelId, anchor);
+  }
   return true;
 }
 

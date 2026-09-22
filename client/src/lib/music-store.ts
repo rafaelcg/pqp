@@ -380,7 +380,19 @@ function startNow(track: MusicTrack, extra: MusicTrack[] = []): number {
   return displaced.length - displacedFits.length;
 }
 
-export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
+/**
+ * `playing-dropped` is `playing` plus the one thing the person cannot see:
+ * starting this track put the finished one back at the head of a queue that
+ * was already at the cap, so the last row fell off. `addTracks` has always
+ * counted that for a list; the single-track path threw the number away and
+ * said only "tocando agora".
+ */
+export type MusicAddOutcome =
+  | "playing"
+  | "playing-dropped"
+  | "queued"
+  | "full"
+  | "no-session";
 
 export interface MusicAddManyOutcome {
   /** How many went in, the first of them now playing if nothing was. */
@@ -446,8 +458,7 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
     return "playing";
   }
   if (currentTrackHasEnded()) {
-    startNow(track);
-    return "playing";
+    return startNow(track) > 0 ? "playing-dropped" : "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
     return "full";

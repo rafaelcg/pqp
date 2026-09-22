@@ -203,10 +203,8 @@ import {
 } from "./watch-party.js";
 import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
 import {
-  adoptMusicAnchor,
   adoptMusicWithAnchor,
   type MusicAnchor,
-  adoptMusicState,
   applyMusicWrite,
   channelMusicTrack,
   endMusic,
@@ -2926,7 +2924,12 @@ async function countMusicListeners(channelId: string): Promise<number> {
  * drift apart. With the registry on this is the cluster room, so a voter on
  * the other instance still counts.
  */
-async function musicRoomSeats(
+/**
+ * Exported for `music-room-seats-registry.test.ts`: with the registry on
+ * this must read the CLUSTER's seats, because a vote is counted against
+ * who is still in the room and a room can span two machines.
+ */
+export async function musicRoomSeats(
   channelId: string,
 ): Promise<{ roomSize: number; seatedUserIds: string[] }> {
   if (registryOn()) {
@@ -9690,19 +9693,20 @@ subscribeToCluster(VOICE_MUSIC_TOPIC, (data) => {
   }
   noteClusterFrameReceived();
   const before = channelMusicTrack(channelId)?.videoId ?? null;
-  if (!adoptMusicState(channelId, state)) {
+  // The frame's clock with the frame's queue. `undefined` is an instance
+  // older than the field saying nothing about the clock, which is not the
+  // same as a row that has none: `adoptMusicWithAnchor` keeps them apart.
+  const framed =
+    anchorPositionMs !== undefined && anchorAt !== undefined
+      ? { positionMs: anchorPositionMs, at: anchorAt }
+      : undefined;
+  if (!adoptMusicWithAnchor(channelId, state, framed)) {
     // Older than what is held (a straggler behind a frame that already
     // landed, or behind the row a joiner just read). The room has the newer
     // queue already; repeating the older one would roll it back.
     return;
   }
   musicCluster.adopted += 1;
-  // After the state, and only when the frame carried one: `adoptMusicState`
-  // sets its own anchor for a structural change, which is the right answer
-  // when the other instance is older than this field.
-  if (anchorPositionMs !== undefined && anchorAt !== undefined) {
-    adoptMusicAnchor(channelId, { positionMs: anchorPositionMs, at: anchorAt });
-  }
   broadcastToRoom(channelId, { type: "music", channelId, state });
   if ((state?.current?.videoId ?? null) !== before) {
     void broadcastChannelMusic(channelId);

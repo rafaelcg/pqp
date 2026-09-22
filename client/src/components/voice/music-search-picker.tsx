@@ -104,8 +104,16 @@ export function MusicSearchPicker({
 
   const tellOutcome = useCallback(
     (outcome: MusicAddOutcome) => {
-      if (outcome === "queued" || outcome === "playing") {
-        setNotice(t("music.queued"));
+      if (
+        outcome === "queued" ||
+        outcome === "playing" ||
+        outcome === "playing-dropped"
+      ) {
+        setNotice(
+          outcome === "playing-dropped"
+            ? t("music.startedAndDropped")
+            : t("music.queued"),
+        );
         setQuery("");
         setResults(null);
         setResultsFor("");

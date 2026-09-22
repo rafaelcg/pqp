@@ -530,6 +530,49 @@ describe("the server's own clock for the room", () => {
     expect(musicExpectedPositionMs(ROOM, now)).toBe(150_000);
   });
 
+  /*
+   * A FRAME FROM AN OLDER INSTANCE CARRIES NO ANCHOR AT ALL.
+   *
+   * `undefined` is not `null` here. Null is a row that has no clock, and
+   * standing down is right. Undefined is a machine that predates the field
+   * and says nothing about the clock, so clearing this instance's would
+   * hand the room to the first sample that arrived after it.
+   */
+  it("leaves the clock alone for a frame that carries none", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const seeked = getMusicState(ROOM) as MusicState;
+    const now = Date.now();
+    adoptMusicWithAnchor(
+      ROOM,
+      {
+        ...seeked,
+        queue: [],
+        positionMs: 151_000,
+        rev: seeked.rev + 1,
+        actorId: "p2",
+      },
+      undefined,
+    );
+    expect(musicExpectedPositionMs(ROOM, now)).toBeGreaterThanOrEqual(150_000);
+  });
+
+  it("stands the clock down for a row that has none", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    adoptMusicWithAnchor(
+      ROOM,
+      { ...held, positionMs: 151_000, rev: held.rev + 1, actorId: "p2" },
+      null,
+    );
+    expect(musicExpectedPositionMs(ROOM, Date.now())).toBeNull();
+  });
+
   it("accepts a sample that is behind, because a slow player never runs ahead", () => {
     applyMusicWrite(ROOM, playing(), MANAGER);
     const held = getMusicState(ROOM) as MusicState;
