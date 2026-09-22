@@ -425,6 +425,94 @@ describeDb("outgoing webhooks", () => {
     expect(updated.body.webhook.skipUserIds).toEqual([member.id]);
   });
 
+  it("keeps a skipped member who left, and still skips them if they rejoin", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ skipUserIds: [member.id.toUpperCase()] }),
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.webhook.skipUserIds).toEqual([member.id]);
+
+    await getPool().query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+
+    const renamed = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { name: "Renamed" },
+    );
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.webhook.skipUserIds).toEqual([member.id]);
+
+    // Someone ADDED in this edit who is not a member is refused by name,
+    // not dropped: a quiet drop answered 200 for a save that ignored part
+    // of what was asked.
+    const stranger = "00000000-0000-4000-8000-0000000000cc";
+    const refused = await call<{
+      code: string;
+      users: { id: string }[];
+    }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { skipUserIds: [stranger, member.id.toUpperCase(), manager.id] },
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("outgoing_webhook_skip_users");
+    expect(refused.body.users).toEqual([{ id: stranger }]);
+
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { skipUserIds: [member.id.toUpperCase(), manager.id] },
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.webhook.skipUserIds).toEqual([member.id, manager.id]);
+
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role)
+       VALUES ($1, $2, 'member')`,
+      [serverId, member.id],
+    );
+    await say(member, channelId, "back in the server");
+    expect(await deliveryCount()).toBe(0);
+    await say(owner, channelId, "a human asking");
+    expect(await deliveryCount()).toBe(1);
+  });
+
+  it("refuses a skipped user who is not a member when the hook is created", async () => {
+    await getPool().query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+    const refused = await call<{
+      code: string;
+      users: { id: string }[];
+    }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ skipUserIds: [member.id, manager.id] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("outgoing_webhook_skip_users");
+    // Ids only: a name looked up from the global users table would let an
+    // admin read the display name of any account by probing ids.
+    expect(refused.body.users).toEqual([{ id: member.id }]);
+    expect(JSON.stringify(refused.body)).not.toContain("member\"");
+    const count = await getPool().query(
+      `SELECT 1 FROM outgoing_webhooks WHERE server_id = $1`,
+      [serverId],
+    );
+    expect(count.rowCount).toBe(0);
+  });
+
   it("names a channel that is not text and still saves the ones that are", async () => {
     const created = await call<{ webhook: OutgoingWebhook }>(
       owner,

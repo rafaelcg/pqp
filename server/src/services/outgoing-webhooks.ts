@@ -276,6 +276,29 @@ export class OutgoingWebhookChannelsError extends HttpError {
   }
 }
 
+/**
+ * A skip id added in this edit that is not a member now. Somebody ticked
+ * them and they left before Save. Dropping the id quietly answered 200 for a
+ * save that ignored part of what was asked, so the form closed as if it had
+ * worked. Each id is listed, like a bad channel, so the form can say who.
+ *
+ * An id already on the hook never lands here: it is kept even after that
+ * person leaves (see `validateSkipUserIds`).
+ */
+export class OutgoingWebhookSkipUsersError extends HttpError {
+  readonly code = "outgoing_webhook_skip_users";
+
+  constructor(readonly users: { id: string }[]) {
+    super(
+      400,
+      users.length === 1
+        ? "A skipped user is not a member of this server."
+        : `${users.length} skipped users are not members of this server.`,
+    );
+    this.name = "OutgoingWebhookSkipUsersError";
+  }
+}
+
 function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string {
   const name = problem.name.replace(/^#/, "");
   if (problem.reason === "server") {
@@ -426,8 +449,18 @@ async function validateSkipUserIds(
   serverId: string,
   userIds: string[] | undefined,
   db: Sql = getPool(),
+  alreadyStored: readonly string[] = [],
 ): Promise<string[]> {
-  const unique = [...new Set(userIds ?? [])];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of userIds ?? []) {
+    const key = id.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(id);
+  }
   if (unique.length === 0) {
     return [];
   }
@@ -436,13 +469,35 @@ async function validateSkipUserIds(
       WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
     [serverId, unique],
   );
-  if (result.rows.length !== unique.length) {
-    throw new HttpError(
-      400,
-      "Every skipped user must be a member of this server",
-    );
+  const members = new Map(
+    result.rows.map((row) => [row.user_id.toLowerCase(), row.user_id]),
+  );
+  const stored = new Map(
+    alreadyStored.map((id) => [id.toLowerCase(), id]),
+  );
+  // An id already on the hook stays, even if that person left. The next
+  // edit must not forget them: if they rejoin, their messages still must
+  // not fire the hook. Only a newly added id has to be a member now, and one
+  // that is not is refused by name rather than dropped.
+  const kept: string[] = [];
+  const refused: string[] = [];
+  for (const id of unique) {
+    const key = id.toLowerCase();
+    const keptId = members.get(key) ?? stored.get(key);
+    if (keptId) {
+      kept.push(keptId);
+    } else {
+      refused.push(id);
+    }
   }
-  return unique;
+  if (refused.length > 0) {
+    // Ids only, never names. An id that is not a member here could be
+    // anybody's, and naming it would let a server admin look up the display
+    // name of any account by probing UUIDs. The form picked these people
+    // from its own member list, so it names them itself.
+    throw new OutgoingWebhookSkipUsersError(refused.map((id) => ({ id })));
+  }
+  return kept;
 }
 
 function normalizeAuth(
@@ -619,7 +674,12 @@ export async function updateOutgoingWebhook(
         : existing.channel_ids;
     const skipUserIds =
       body.skipUserIds !== undefined
-        ? await validateSkipUserIds(existing.server_id, body.skipUserIds, client)
+        ? await validateSkipUserIds(
+            existing.server_id,
+            body.skipUserIds,
+            client,
+            existing.skip_user_ids ?? [],
+          )
         : (existing.skip_user_ids ?? []);
 
     let authName = existing.auth_header_name;

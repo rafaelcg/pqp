@@ -419,6 +419,7 @@ import {
   getOutgoingWebhookRow,
   listOutgoingWebhooks,
   OutgoingWebhookChannelsError,
+  OutgoingWebhookSkipUsersError,
   rotateOutgoingWebhookSecret,
   serverHasActiveOutgoingWebhook,
   statusWithCharacterHook,
@@ -9998,6 +9999,15 @@ export async function handleApi(
         res,
         error.status,
         { error: error.message, code: error.code, channels: error.channels },
+        req,
+      );
+      return;
+    }
+    if (error instanceof OutgoingWebhookSkipUsersError) {
+      sendJson(
+        res,
+        error.status,
+        { error: error.message, code: error.code, users: error.users },
         req,
       );
       return;

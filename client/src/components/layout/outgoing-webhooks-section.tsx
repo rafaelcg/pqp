@@ -84,13 +84,47 @@ function channelRejectionMessage(
   return lines.length > 0 ? lines.join(" ") : null;
 }
 
+function skipRejectionMessage(
+  error: ApiError,
+  t: Translator["t"],
+  nameOf?: (id: string) => string | undefined,
+): string | null {
+  const body = error.details;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const code = "code" in body ? body.code : null;
+  const users = "users" in body ? body.users : null;
+  if (code !== "outgoing_webhook_skip_users" || !Array.isArray(users)) {
+    return null;
+  }
+  // The server sends ids only (a name for an arbitrary id would leak it), so
+  // the person is named from the member list the picker was drawn from.
+  const lines = users.map((row) => {
+    const id =
+      row && typeof row === "object" && "id" in row && typeof row.id === "string"
+        ? row.id
+        : "";
+    const name = (id && nameOf?.(id)) || "";
+    return name
+      ? t("integrations.skipNotMember", { name })
+      : t("integrations.skipNotMemberUnknown");
+  });
+  return lines.length > 0 ? lines.join(" ") : null;
+}
+
 function messageOf(
   error: unknown,
   fallback: string,
   t: Translator["t"],
+  nameOf?: (id: string) => string | undefined,
 ): string {
   if (error instanceof ApiError) {
-    return channelRejectionMessage(error, t) ?? error.message;
+    return (
+      channelRejectionMessage(error, t) ??
+      skipRejectionMessage(error, t, nameOf) ??
+      error.message
+    );
   }
   return error instanceof Error ? error.message : fallback;
 }
@@ -245,6 +279,7 @@ function ChannelChips({
 
 function SkipPicker({
   members,
+  former,
   selected,
   query,
   disabled,
@@ -253,6 +288,7 @@ function SkipPicker({
   onToggle,
 }: {
   members: ServerMember[];
+  former: { id: string; displayName: string; tag: string | null }[];
   selected: string[];
   query: string;
   disabled?: boolean;
@@ -260,6 +296,30 @@ function SkipPicker({
   onQuery: (value: string) => void;
   onToggle: (id: string) => void;
 }) {
+  const { t } = useTranslation();
+  const memberIds = new Set(members.map((member) => member.id));
+  const formerById = new Map(former.map((user) => [user.id, user]));
+  // Everyone on the saved hook who has left, plus anything selected that is
+  // not a member. From the saved list and not only `selected`, so switching
+  // one off keeps its row and a misclick can be switched back on.
+  const leftovers = [
+    ...new Set([...former.map((user) => user.id), ...selected]),
+  ].flatMap((id) => {
+    if (memberIds.has(id)) {
+      return [];
+    }
+    const person = formerById.get(id);
+    const name = person
+      ? person.tag
+        ? `${person.displayName} (${person.tag})`
+        : person.displayName
+      : null;
+    const matches =
+      !query.trim() ||
+      selected.includes(id) ||
+      (name !== null && name.toLowerCase().includes(query.trim().toLowerCase()));
+    return matches ? [{ id, name }] : [];
+  });
   const visible = members.filter(
     (member) =>
       !query.trim() ||
@@ -277,6 +337,25 @@ function SkipPicker({
         onChange={(e) => onQuery(e.target.value)}
       />
       <ul className="max-h-48 overflow-y-auto rounded-2xl bg-ink-2">
+        {leftovers.map(({ id, name }) => {
+          return (
+            <li key={id}>
+              <div className="flex items-center gap-2 px-1">
+                <Switch
+                  className="min-w-0 flex-1"
+                  checked={selected.includes(id)}
+                  disabled={disabled}
+                  label={
+                    name
+                      ? t("integrations.skipGone", { name })
+                      : t("integrations.skipGoneUnknown")
+                  }
+                  onCheckedChange={() => onToggle(id)}
+                />
+              </div>
+            </li>
+          );
+        })}
         {visible.map((member) => {
           const shown = memberDisplayName(member);
           return (
@@ -311,6 +390,7 @@ function HookForm({
   draft,
   textChannels,
   resolvedChannels,
+  formerSkipUsers,
   members,
   memberQuery,
   disabled,
@@ -327,6 +407,7 @@ function HookForm({
   draft: Draft;
   textChannels: Channel[];
   resolvedChannels: { id: string; name: string }[];
+  formerSkipUsers: { id: string; displayName: string; tag: string | null }[];
   members: ServerMember[];
   memberQuery: string;
   disabled?: boolean;
@@ -437,6 +518,7 @@ function HookForm({
             <p className="text-xs text-paper-muted">{t("integrations.skipHint")}</p>
             <SkipPicker
               members={members}
+              former={formerSkipUsers}
               selected={draft.skipUserIds}
               query={memberQuery}
               disabled={disabled}
@@ -598,6 +680,12 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on server change only
   }, [serverId]);
 
+  /** Names a refused skip id from the list the picker was drawn from. */
+  function memberNameOf(id: string): string | undefined {
+    const member = members.find((one) => one.id === id);
+    return member ? memberDisplayName(member) : undefined;
+  }
+
   const channelName = useMemo(() => {
     const map = new Map(textChannels.map((channel) => [channel.id, channel.name]));
     return (id: string) => map.get(id);
@@ -651,7 +739,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         });
       }
     } catch (err) {
-      setError(messageOf(err, t("integrations.createFailed"), t));
+      setError(messageOf(err, t("integrations.createFailed"), t, memberNameOf));
     } finally {
       setCreating(false);
     }
@@ -693,7 +781,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
       setEditingId(null);
     } catch (err) {
-      setError(messageOf(err, t("integrations.updateFailed"), t));
+      setError(messageOf(err, t("integrations.updateFailed"), t, memberNameOf));
     } finally {
       setBusyId(null);
     }
@@ -833,6 +921,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
             draft={draft}
             textChannels={textChannels}
             resolvedChannels={[]}
+            formerSkipUsers={[]}
             members={members}
             memberQuery={memberQuery}
             disabled={creating}
@@ -928,6 +1017,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                   draft={editDraft}
                   textChannels={textChannels}
                   resolvedChannels={hook.channels ?? []}
+                  formerSkipUsers={hook.skipUsers ?? []}
                   members={members}
                   memberQuery={memberQuery}
                   disabled={busyId === hook.id}
