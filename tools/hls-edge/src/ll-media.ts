@@ -192,6 +192,25 @@ export interface LlMediaRoute {
   rung: string;
   /** The media file name the playlist emitted: `init.mp4`, `seg-41.m4s`, `part-164.m4s`, or an `audio-` twin. */
   name: string;
+  /**
+   * Which route is being served. Absent means an LL part (everything this
+   * module did before `segment-media.ts` shared its serving path); a
+   * conventional segment's events are logged under `hlsEdge.segment*` so the
+   * two never blur into one counter.
+   */
+  kind?: "ll" | "segment";
+}
+
+/**
+ * The event name for `route`: the LL name as written, or its `hlsEdge.segment*`
+ * twin for a conventional segment (`hlsEdge.llPartCacheHit` ->
+ * `hlsEdge.segmentCacheHit`, `hlsEdge.llMediaHardTimeout` ->
+ * `hlsEdge.segmentHardTimeout`).
+ */
+function mediaEvent(route: LlMediaRoute, llName: string): string {
+  return route.kind === "segment"
+    ? llName.replace(/^hlsEdge\.ll(?:Part|Media)/, "hlsEdge.segment")
+    : llName;
 }
 
 /**
@@ -203,6 +222,12 @@ export interface LlMediaRoute {
  * `mediastreamvalidator` happy rather than changing what plays.
  */
 function contentTypeFor(name: string): string {
+  if (name.endsWith(".ts")) {
+    return "video/mp2t";
+  }
+  if (name.endsWith(".aac")) {
+    return "audio/aac";
+  }
   return name.endsWith(".m4s") ? "video/iso.segment" : "video/mp4";
 }
 
@@ -474,7 +499,7 @@ async function fetchMediaCoalesced(
     } catch (error) {
       // Logged HERE, once, however many callers share this fetch -- the
       // same rule `fetchRenditionCoalesced` documents.
-      logEvent("hlsEdge.llPartOriginError", {
+      logEvent(mediaEvent(route, "hlsEdge.llPartOriginError"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -483,7 +508,7 @@ async function fetchMediaCoalesced(
       throw new Error("ll media fetch failed");
     }
     if (fetched.ok) {
-      logEvent("hlsEdge.llPartOriginFetch", {
+      logEvent(mediaEvent(route, "hlsEdge.llPartOriginFetch"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -508,7 +533,7 @@ async function fetchMediaCoalesced(
     setTimer: timers.setTimer ?? defaultSetTimer,
     keepAlive: (promise) => ctx.waitUntil(promise),
     onDetach: ({ reason, attempt }) => {
-      logEvent("hlsEdge.llMediaJoinDetached", {
+      logEvent(mediaEvent(route, "hlsEdge.llMediaJoinDetached"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -556,11 +581,11 @@ function json(status: number, body: unknown): Response {
  */
 function refusalFor(fetched: FetchedMedia, route: LlMediaRoute): Response | null {
   if (fetched.status === 404) {
-    countEvent("hlsEdge.llPartMissing", route);
+    countEvent(mediaEvent(route, "hlsEdge.llPartMissing"), route);
     return text(404, "Not found", { "Cache-Control": "no-store" });
   }
   if (!fetched.ok) {
-    logEvent("hlsEdge.llPartOriginRejected", {
+    logEvent(mediaEvent(route, "hlsEdge.llPartOriginRejected"), {
       channelId: route.channelId,
       rung: route.rung,
       name: route.name,
@@ -597,7 +622,7 @@ async function serveFromPendingWrite(
       // NEXT arrival does not spend its own bound queueing behind the same
       // corpse, then read the cache anyway -- the write may still have
       // landed before its owner went away.
-      countEvent("hlsEdge.llMediaWriteJoinTimeout", route);
+      countEvent(mediaEvent(route, "hlsEdge.llMediaWriteJoinTimeout"), route);
       if (settledMediaWrites.get(key) === pending) {
         settledMediaWrites.delete(key);
       }
@@ -701,7 +726,7 @@ async function serveDirect(
   try {
     fetched = await origin.fetchMedia(route.channelId, route.startedAt, route.name);
   } catch (error) {
-    logEvent("hlsEdge.llPartOriginError", {
+    logEvent(mediaEvent(route, "hlsEdge.llPartOriginError"), {
       channelId: route.channelId,
       rung: route.rung,
       name: route.name,
@@ -763,7 +788,7 @@ export async function handleLlMediaRequest(
   // the rung check above: this is "that file does not exist here", not
   // "you may not have it".
   if (!nameBelongsToRung(route.name, route.rung)) {
-    countEvent("hlsEdge.llPartNameRefused", route);
+    countEvent(mediaEvent(route, "hlsEdge.llPartNameRefused"), route);
     return json(404, { error: "Not found" });
   }
 
@@ -791,17 +816,37 @@ export async function handleLlMediaRequest(
     // `LL_ORIGIN_BASE` unset: no LL playlist was ever rendered, so nothing
     // legitimately points at this URL. Same 404 as an unknown rung rather
     // than a new failure shape.
-    logEvent("hlsEdge.llMediaOriginNotConfigured", {
+    logEvent(mediaEvent(route, "hlsEdge.llMediaOriginNotConfigured"), {
       channelId: route.channelId,
       rung: route.rung,
     });
     return json(404, { error: "Not found" });
   }
 
+  return serveImmutableMedia(request, origin, cache, ctx, route, timers);
+}
+
+/**
+ * The part of this route that does not care what the bytes are: the colo
+ * cache, the one-fetch-per-key coalescing, the bounded joins and the hard
+ * timeout, for any object that is written once under a name that never
+ * changes. Shared with `segment-media.ts` (conventional segments out of R2),
+ * which runs its own credential check first and hands its route in with
+ * `kind: "segment"`. CALLERS MUST HAVE AUTHORIZED THE REQUEST ALREADY: this
+ * function serves whatever the cache or the origin has under the path.
+ */
+export async function serveImmutableMedia(
+  request: Request,
+  origin: LlMediaOrigin,
+  cache: Cache,
+  ctx: ExecutionContext,
+  route: LlMediaRoute,
+  timers: LlMediaTimers = {},
+): Promise<Response> {
   const cacheKey = cacheKeyRequest(request);
   const cached = await safeCacheMatch(cache, cacheKey);
   if (cached) {
-    countEvent("hlsEdge.llPartCacheHit", route);
+    countEvent(mediaEvent(route, "hlsEdge.llPartCacheHit"), route);
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
     return new Response(cached.body, { status: cached.status, headers });
@@ -830,7 +875,7 @@ export async function handleLlMediaRequest(
   if (served !== HARD_TIMEOUT) {
     return served;
   }
-  logEvent("hlsEdge.llMediaHardTimeout", {
+  logEvent(mediaEvent(route, "hlsEdge.llMediaHardTimeout"), {
     channelId: route.channelId,
     rung: route.rung,
     name: route.name,

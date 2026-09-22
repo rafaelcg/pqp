@@ -691,6 +691,103 @@ describe("segment URLs are stable across playlist refreshes", () => {
   });
 });
 
+describe("segments at the edge (LIVE_HLS_SEGMENT_BASE_URL)", () => {
+  const EDGE = "https://hls.example.test";
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function segmentLines(body: string): string[] {
+    return body.split("\n").filter((line) => line.startsWith("https://"));
+  }
+
+  beforeEach(() => {
+    disableHls();
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    fetchMock = vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    delete process.env.LIVE_HLS_SEGMENT_BASE_URL;
+    disableHls();
+    resetHlsPlaylistCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("off by default: every segment line is still a presigned bucket URL", async () => {
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    for (const line of segmentLines(body)) {
+      expect(new URL(line).searchParams.get("X-Amz-Signature")).not.toBeNull();
+    }
+  });
+
+  it("on: segment lines point at the edge route with a session capability, and nothing presigned", async () => {
+    process.env.LIVE_HLS_SEGMENT_BASE_URL = EDGE;
+    const { describeHlsSegmentToken } = await import("./hls-segment-token.js");
+    const now = 1_800_000_000_000;
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    const lines = segmentLines(body);
+    expect(lines).toHaveLength(2);
+    for (const [index, line] of lines.entries()) {
+      const url = new URL(line);
+      const name = `${STARTED_AT}_0000${index}.ts`;
+      expect(url.origin).toBe(EDGE);
+      expect(url.pathname).toBe(`/api/voice/hls-segment/${CHANNEL}/${STARTED_AT}/${name}`);
+      expect(url.searchParams.get("X-Amz-Signature")).toBeNull();
+      expect(
+        describeHlsSegmentToken(
+          url.searchParams.get("s"),
+          { channelId: CHANNEL, startedAt: STARTED_AT, name },
+          now,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("on: a listed segment keeps one URL across renders and across a bucket boundary", async () => {
+    process.env.LIVE_HLS_SEGMENT_BASE_URL = EDGE;
+    const bucket = SEGMENT_URL_BUCKET_MAX_MS;
+    const t0 = Math.floor(1_800_000_000_000 / bucket) * bucket + 1_000;
+    const first = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0);
+    const second = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      t0 + HLS_PLAYLIST_CACHE_TTL_MS + 500,
+    );
+    const third = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0 + bucket);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(segmentLines(second)).toEqual(segmentLines(first));
+    expect(segmentLines(third)).toEqual(segmentLines(first));
+  });
+
+  it("flipping the flag mid-session moves every listed segment on the next render, both ways", async () => {
+    const t0 = 1_800_000_000_000;
+    const presigned = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0);
+    process.env.LIVE_HLS_SEGMENT_BASE_URL = EDGE;
+    const edge = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0 + 2_000);
+    expect(segmentLines(edge).every((line) => line.startsWith(`${EDGE}/`))).toBe(true);
+    delete process.env.LIVE_HLS_SEGMENT_BASE_URL;
+    const back = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0 + 4_000);
+    expect(segmentLines(back)).toEqual(segmentLines(presigned));
+  });
+
+  it("on, but with no key to sign with: falls back to presigned rather than serving dead links", async () => {
+    process.env.LIVE_HLS_SEGMENT_BASE_URL = EDGE;
+    const saved = process.env.CLERK_SECRET_KEY;
+    delete process.env.CLERK_SECRET_KEY;
+    try {
+      const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+      for (const line of segmentLines(body)) {
+        expect(new URL(line).searchParams.get("X-Amz-Signature")).not.toBeNull();
+      }
+    } finally {
+      process.env.CLERK_SECRET_KEY = saved;
+    }
+  });
+});
+
 describe("buildMasterPlaylistFor", () => {
   let clock = 5_000_000;
 

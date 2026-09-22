@@ -80,9 +80,8 @@
   // provision for nothing at worst. Uncomment both together with the
   // implementation that uses them, not before.
   //
-  // "r2_buckets": [
-  //   { "binding": "SEGMENTS", "bucket_name": "pqp-live-hls" }
-  // ],
+  // (The R2 binding it needs now exists: `LIVE_SEGMENTS` below, added for
+  // segments at the edge.)
   // "durable_objects": {
   //   "bindings": [
   //     { "name": "SESSION_WINDOW", "class_name": "SessionWindow" }
@@ -95,8 +94,43 @@
   "kv_namespaces": [
     { "binding": "HLS_REVOKED_USERS", "id": "056d7e5a2f0748f6beafd60cf3b2b203" }
   ],
+  // SEGMENTS AT THE EDGE (src/segment-media.ts, README.md "Segments at the
+  // edge"): the live-HLS bucket, read through the binding so segment bytes are
+  // served from the colo cache instead of from R2's S3 endpoint in ENAM. Only
+  // ever `get`. Inert until the API sets LIVE_HLS_SEGMENT_BASE_URL to this
+  // host AND this Worker holds HLS_SEGMENT_TOKEN_SECRET (without the secret
+  // every segment request is a 401, which is why the secret goes on first).
+  "r2_buckets": [
+    { "binding": "LIVE_SEGMENTS", "bucket_name": "pqp-live-enam" }
+  ],
   "routes": [
     { "pattern": "hls.pqp.gg", "custom_domain": true }
   ],
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // STAGING: `npx wrangler deploy --env staging` deploys pqp-hls-edge-staging
+  // on workers.dev, in front of pqp-api-staging and its own bucket. Bindings
+  // and vars are not inherited by an environment, so every one is restated.
+  // Secrets are per environment too: `wrangler secret put <NAME> --env staging`,
+  // derived from STAGING's CLERK_SECRET_KEY, never production's.
+  "env": {
+    "staging": {
+      "name": "pqp-hls-edge-staging",
+      "workers_dev": true,
+      "routes": [],
+      "vars": {
+        "ORIGIN_BASE": "https://pqp-api-staging.fly.dev",
+        "ENVIRONMENT": "staging",
+        "LL_ORIGIN_BASE": "",
+        "LL_PART_HOLD_BACK_PARTS": "6"
+      },
+      // No revocation KV on staging: ENVIRONMENT is not "production", so the
+      // gate fails open exactly as it does for a local `wrangler dev`.
+      "kv_namespaces": [],
+      "r2_buckets": [
+        { "binding": "LIVE_SEGMENTS", "bucket_name": "pqp-live-staging" }
+      ],
+      "observability": { "enabled": true }
+    }
+  }
 }

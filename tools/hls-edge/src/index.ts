@@ -104,7 +104,8 @@ import { PartyPassRevocationGate } from "./party-pass-revocation.js";
 import { authorizeViewer, logRejection, statusForRejection } from "./viewer-access.js";
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { handleLlMediaRequest } from "./ll-media.js";
-import { parsePlaylistPath, requestsLlMode } from "./playlist-route.js";
+import { parsePlaylistPath, parseSegmentPath, requestsLlMode } from "./playlist-route.js";
+import { handleSegmentRequest, type SegmentEnv } from "./segment-media.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
 import { applyLlRenditionCredential } from "./ll-playlist.js";
@@ -114,7 +115,7 @@ import { logEvent } from "./log.js";
 import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
 import { coalesceFetch } from "./coalesced-fetch.js";
 
-export interface Env {
+export interface Env extends SegmentEnv {
   /** The API origin this Worker fetches playlists from, e.g. https://api.pqp.gg (a var). */
   ORIGIN_BASE?: string;
   /**
@@ -918,6 +919,22 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // CONVENTIONAL SEGMENT BYTES (`segment-media.ts`): its own path, its own
+    // capability, R2 behind the colo cache. Only reachable once the API is
+    // told to point segment lines here (`LIVE_HLS_SEGMENT_BASE_URL`).
+    const segment = parseSegmentPath(url.pathname);
+    if (segment) {
+      const segmentResponse = await handleSegmentRequest(
+        request,
+        env,
+        caches.default,
+        ctx,
+        segment,
+      );
+      return withCors(segmentResponse, env, request);
+    }
+
     const match = parsePlaylistPath(url.pathname);
     if (!match) {
       return withCors(json(404, { error: "Not found" }), env, request);
