@@ -49,7 +49,7 @@ const rooms = new Map<string, MusicState>();
  * `at` is server time. The state's own `atMs` is the client's clock and is
  * already documented as not to be trusted.
  */
-interface MusicAnchor {
+export interface MusicAnchor {
   positionMs: number;
   at: number;
 }
@@ -221,6 +221,30 @@ export function adoptMusicState(
   if (movesTheClock(held, state)) {
     setMusicAnchor(voiceChannelId, state.positionMs, Date.now());
   }
+  return true;
+}
+
+/**
+ * THE CLOCK COMES WITH THE QUEUE, AND ONLY WITH IT.
+ *
+ * Every place that takes a queue decided elsewhere (the registry row on a
+ * join, a `voice.music` frame, the row's winner after this instance lost)
+ * gets the anchor that was stored beside that queue. Adopting one without
+ * the other is a bug in both directions: a queue with no clock leaves the
+ * clamp measuring against a reading from before the frame, and a clock
+ * from a queue this instance REFUSED rolls the room back by whatever the
+ * refused write was worth, then clamps every honest sample to the older
+ * reading and broadcasts it. So the two move together or not at all.
+ */
+export function adoptMusicWithAnchor(
+  voiceChannelId: string,
+  state: MusicState | null,
+  anchor: MusicAnchor | null,
+): boolean {
+  if (!adoptMusicState(voiceChannelId, state)) {
+    return false;
+  }
+  adoptMusicAnchor(voiceChannelId, anchor);
   return true;
 }
 

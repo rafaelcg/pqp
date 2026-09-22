@@ -1223,7 +1223,17 @@ export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
 
 export type MusicPersist =
   | { kind: "updated" }
-  | { kind: "stale"; held: MusicState | null }
+  /**
+   * The row won. `held` is its queue and `anchor` is the clock stored
+   * beside that queue, because the caller adopts both or neither: a
+   * winner's queue under this instance's older clock clamps every honest
+   * sample back and then wins the row with the rolled-back reading.
+   */
+  | {
+      kind: "stale";
+      held: MusicState | null;
+      anchor: { positionMs: number; at: number } | null;
+    }
   /** No room row: the room emptied under the writer. Nothing to hold. */
   | { kind: "missing" };
 
@@ -1276,11 +1286,11 @@ export async function persistMusic(
   if ((result.rowCount ?? 0) > 0) {
     return { kind: "updated" };
   }
-  const held = await readMusic(channelId);
-  if (held === undefined) {
+  const row = await readMusicWithAnchor(channelId);
+  if (row === undefined) {
     return { kind: "missing" };
   }
-  return { kind: "stale", held };
+  return { kind: "stale", held: row.state, anchor: row.anchor };
 }
 
 /** The row's queue: null when the room has none, undefined when there is no room. */

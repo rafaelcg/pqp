@@ -112,6 +112,35 @@ describeDb("the room's clock in the registry row", () => {
     expect(row?.anchor?.positionMs).toBe(150_000);
   });
 
+  /*
+   * A LOSER IS HANDED THE WINNER'S CLOCK TOO.
+   *
+   * `persistMusic` answering "stale" is how an instance that missed a frame
+   * learns what the cluster holds, and the caller adopts that queue. Reading
+   * it back without the anchor left this instance holding the winner's queue
+   * and its own pre-seek clock, so the next honest sample was clamped back
+   * and, being a higher rev, won the row and undid the seek for everybody.
+   */
+  it("hands the loser the row's clock with the row's queue", async () => {
+    const { persistMusic } = await import("./registry.js");
+    const at = Date.now();
+    const winner = state({ positionMs: 150_000, rev: 9, actorId: "peer-a" });
+    await persistMusic(channelId, winner, { positionMs: 150_000, at });
+
+    const lost = await persistMusic(
+      channelId,
+      state({ positionMs: 1_000, rev: 4, actorId: "peer-b" }),
+      { positionMs: 1_000, at },
+    );
+    expect(lost.kind).toBe("stale");
+    if (lost.kind !== "stale") {
+      return;
+    }
+    expect(lost.held?.rev).toBe(9);
+    expect(lost.anchor?.positionMs).toBe(150_000);
+    expect(lost.anchor?.at).toBe(at);
+  });
+
   it("does not clamp an honest sample on the instance that adopted the seek", async () => {
     const { persistMusic, readMusicWithAnchor } = await import("./registry.js");
     const {

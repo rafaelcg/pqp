@@ -6,6 +6,7 @@ import {
 } from "@pqp/shared";
 import {
   adoptMusicState,
+  adoptMusicWithAnchor,
   applyMusicWrite,
   endMusic,
   getMusicState,
@@ -487,6 +488,46 @@ describe("the server's own clock for the room", () => {
       actorId: "p2",
     });
     expect(musicExpectedPositionMs(ROOM, Date.now())).toBeLessThan(1_000);
+  });
+
+  /*
+   * THE CLOCK COMES WITH THE QUEUE, AND ONLY WITH IT.
+   *
+   * A row or a frame this instance refuses carries the clock that belongs
+   * to the queue it refused. Adopting that clock beside a queue we kept
+   * rolls the room back by whatever the refused write was worth, and every
+   * honest sample afterwards is clamped to the older reading and broadcast.
+   */
+  it("keeps its own clock when it refuses the row's queue", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const now = Date.now();
+    const adopted = adoptMusicWithAnchor(
+      ROOM,
+      // Two revs behind: the row this instance has already moved past.
+      { ...held, positionMs: 0, rev: 1, actorId: "p0" },
+      { positionMs: 0, at: now },
+    );
+    expect(adopted).toBe(false);
+    expect(musicExpectedPositionMs(ROOM, now)).toBeGreaterThanOrEqual(150_000);
+  });
+
+  it("takes the clock when it takes the queue", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    const now = Date.now();
+    const adopted = adoptMusicWithAnchor(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p9" },
+      { positionMs: 150_000, at: now },
+    );
+    expect(adopted).toBe(true);
+    expect(musicExpectedPositionMs(ROOM, now)).toBe(150_000);
   });
 
   it("accepts a sample that is behind, because a slow player never runs ahead", () => {

@@ -204,6 +204,8 @@ import {
 import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
 import {
   adoptMusicAnchor,
+  adoptMusicWithAnchor,
+  type MusicAnchor,
   adoptMusicState,
   applyMusicWrite,
   channelMusicTrack,
@@ -5672,6 +5674,7 @@ function planVoiceResume(
 function adoptMusicFromRow(
   voiceChannelId: string,
   held: MusicState | null,
+  anchor: MusicAnchor | null,
   joinerPeerId: string,
 ): void {
   const previous = getMusicState(voiceChannelId);
@@ -5681,8 +5684,14 @@ function adoptMusicFromRow(
       : held !== null &&
         held.rev === previous.rev &&
         held.actorId === previous.actorId;
-  if (unchanged || !adoptMusicState(voiceChannelId, held)) {
+  if (unchanged || !adoptMusicWithAnchor(voiceChannelId, held, anchor)) {
     return;
+  }
+  if (held !== null && anchor === null) {
+    // A room whose anchor predates this column or was never set. The clamp
+    // and the clock-based gate stand down until a trusted write sets one,
+    // which is the documented cold-cache behaviour.
+    musicCluster.anchorMissing += 1;
   }
   const before = previous?.current?.videoId ?? null;
   // The joiner is excluded: `welcomeVoicePeer` hands it the state itself, a
@@ -5741,15 +5750,14 @@ async function welcomeVoicePeer(
         }),
       ]);
       if (heldMusic !== undefined) {
-        adoptMusicFromRow(peer.voiceChannelId, heldMusic.state, peer.id);
-        // The row's clock comes with the row's queue. Null is a room whose
-        // anchor predates this field or was never set: the clamp and the
-        // clock-based gate stand down until a trusted write sets one, which
-        // is the documented cold-cache behaviour.
-        adoptMusicAnchor(peer.voiceChannelId, heldMusic.anchor);
-        if (heldMusic.state !== null && heldMusic.anchor === null) {
-          musicCluster.anchorMissing += 1;
-        }
+        // The row's clock comes with the row's queue, and only with it: a
+        // row refused as stale carries the clock of the queue we refused.
+        adoptMusicFromRow(
+          peer.voiceChannelId,
+          heldMusic.state,
+          heldMusic.anchor,
+          peer.id,
+        );
       }
       noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
@@ -7247,7 +7255,11 @@ export async function handleVoiceMessage(
         });
       }
       if (persisted?.kind === "stale") {
-        adoptMusicState(peer.voiceChannelId, persisted.held);
+        adoptMusicWithAnchor(
+          peer.voiceChannelId,
+          persisted.held,
+          persisted.anchor,
+        );
         // TO THE ROOM, NOT ONLY TO THE LOSER. This instance lost in the row
         // because it had missed the frame that put the winner there, which
         // means every peer here is on the stale queue and not just the
