@@ -365,6 +365,7 @@ const REPLAY_CACHE_TTL_MS = 30_000;
 const replayBodyCache = new Map<string, { body: string; at: number }>();
 const replayRungCache = new Map<string, { rungs: string[]; at: number }>();
 const llReplayMasterCache = new Map<string, { body: string | null; at: number }>();
+const llReplayMasterInFlight = new Map<string, Promise<string | null>>();
 
 function pruneStale<K, V extends { at: number }>(
   cache: Map<K, V>,
@@ -381,6 +382,7 @@ export function resetHlsReplayCachesForTests(): void {
   replayBodyCache.clear();
   replayRungCache.clear();
   llReplayMasterCache.clear();
+  llReplayMasterInFlight.clear();
 }
 
 /**
@@ -744,6 +746,27 @@ async function llReplayMasterBody(
   if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
     return cached.body;
   }
+  // An audience pressing Watch together all miss the cache together; one
+  // read answers them all.
+  const inFlight = llReplayMasterInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const read = readLlReplayMasterBody(channelId, startedAt, cacheKey, now);
+  llReplayMasterInFlight.set(cacheKey, read);
+  try {
+    return await read;
+  } finally {
+    llReplayMasterInFlight.delete(cacheKey);
+  }
+}
+
+async function readLlReplayMasterBody(
+  channelId: string,
+  startedAt: number,
+  cacheKey: string,
+  now: number,
+): Promise<string | null> {
   const prefix = await llReplayPrefix(channelId, startedAt);
   let body: string | null = null;
   if (prefix !== null) {

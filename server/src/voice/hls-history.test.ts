@@ -346,6 +346,27 @@ describeDb("LL replay", () => {
     expect(fetched.filter((key) => key.endsWith("/master.m3u8"))).toHaveLength(1);
   });
 
+  it("coalesces an audience that misses the cache at the same moment", async () => {
+    // A slow bucket, so every viewer is still waiting when the next arrives.
+    const stubbed = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).includes("master.m3u8")) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return stubbed(input, init);
+      }),
+    );
+    const masters = await Promise.all(
+      ["a", "b", "c"].map((token) =>
+        buildReplayMasterPlaylist({ channelId, startedAt: LL_STARTED_AT, token }),
+      ),
+    );
+    expect(masters.every((m) => m?.includes("/llvideo?t="))).toBe(true);
+    expect(fetched.filter((key) => key.endsWith("/master.m3u8"))).toHaveLength(1);
+  });
+
   it("answers no master for a broadcast the box never wrote playlists for", async () => {
     delete objects[`${boxPrefix}/master.m3u8`];
     expect(
