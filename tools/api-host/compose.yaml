@@ -24,7 +24,20 @@
 #
 # Deploy sets three variables before `docker compose pull && up -d`:
 #   APP_IMAGE_TAG                the commit sha, becomes part of the image
-#                                 reference
+#                                 reference. REQUIRED: Compose fails to
+#                                 even parse this file without it (the
+#                                 `${APP_IMAGE_TAG:?...}` form below), no
+#                                 fallback. On 2026-09-21 a bare interactive
+#                                 `docker compose up -d --force-recreate`
+#                                 with no APP_IMAGE_TAG in scope floated to
+#                                 a `:latest` that was still the old,
+#                                 pre-FCM image cached on the box, and both
+#                                 API replicas crash-looped for ~6 minutes
+#                                 during a live watch party (Compose does
+#                                 not pull on `up` when the tag already
+#                                 exists locally). A pinned APP_IMAGE_TAG in
+#                                 /opt/pqp/.env also satisfies this, since
+#                                 Compose reads that file too, see below.
 #   APP_VERSION                  the same sha, becomes the env var GET
 #                                 /health and GET /ready report — this is
 #                                 what the post-deploy check in
@@ -37,10 +50,11 @@
 #                                 many api replicas this run starts — see
 #                                 api-a/api-b's PG_POOL_MAX override below.
 # Compose reads them from the shell environment or a second --env-file
-# layered on top of .env (see the workflow); APP_IMAGE_TAG/APP_VERSION
-# default to `dev` and API_PG_POOL_MAX_PER_REPLICA to `10` so a manual
-# `docker compose up` without any of them still starts something
-# recognisable rather than failing to interpolate.
+# layered on top of .env (see the workflow). APP_IMAGE_TAG has no default
+# and Compose refuses to run without it (see above); APP_VERSION defaults
+# to `dev` and API_PG_POOL_MAX_PER_REPLICA to `10` so a manual
+# `docker compose up` with APP_IMAGE_TAG set but the other two unset still
+# starts something recognisable rather than failing to interpolate.
 #
 # .env (NOT in git — see docs/deploy-vultr.md "Secrets") carries everything
 # with a credential in it: DATABASE_URL, CLERK_SECRET_KEY, TURN/ICE vars,
@@ -57,7 +71,7 @@
 
 services:
   api-a:
-    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}
     env_file:
       - .env
     environment:
@@ -122,7 +136,7 @@ services:
     # same as the single-`api` setup this replaces.
 
   api-b:
-    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}
     env_file:
       - .env
     environment:
@@ -163,7 +177,7 @@ services:
       - replicas
 
   worker:
-    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:?APP_IMAGE_TAG must be set to a commit sha, see docs/deploy-vultr.md}
     env_file:
       - .env
     environment:
