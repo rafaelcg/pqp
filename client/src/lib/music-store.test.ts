@@ -251,7 +251,10 @@ describe("music store writes", () => {
     );
     receiveMusic(CHANNEL, {
       ...getMusicSnapshot().state!,
-      repeat: "one",
+      // Repeat-all rotates the finished track to the BACK, so a queue at
+      // the cap genuinely loses its last row. Repeat-one does not: the
+      // looped track is not requeued at all, so nothing is displaced.
+      repeat: "all",
       rev: getMusicSnapshot().state!.rev + 1,
       actorId: "peer-b",
     });
@@ -337,6 +340,57 @@ describe("music store writes", () => {
     });
     expect(asked).toBe(false);
     expect(getMusicSnapshot().state?.current?.videoId).toBe("nextttttttt");
+  });
+
+  /*
+   * A TRACK THAT LOOPED WAS NEVER DISPLACED, SO IT MUST NOT BE REQUEUED.
+   *
+   * `startNow` asks `musicAdvance` what would have played next and puts
+   * that back at the front of the queue, which is right when it is a real
+   * upcoming track. Under repeat-one, and under repeat-all with an empty
+   * queue, `musicAdvance` answers with the FINISHED track looping, and it
+   * has already filed that track into `history`. Requeuing it put the same
+   * song in both places from one write: it then sat at the head of the
+   * queue where repeat-one could never reach it, and turning repeat off
+   * later replayed a song the room had just heard. One ghost per add, up
+   * to the cap.
+   */
+  it("does not requeue the track that merely looped", () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 180_000 });
+    setRepeat("one");
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    addTrack(resolved("bbbbbbbbbbb"));
+    const state = getMusicSnapshot().state!;
+    expect(state.current?.videoId).toBe("bbbbbbbbbbb");
+    expect(state.queue).toHaveLength(0);
+    expect(state.history.map((track) => track.videoId)).toEqual([
+      "aaaaaaaaaaa",
+    ]);
+  });
+
+  it("same for repeat-all with nothing else queued", () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 180_000 });
+    setRepeat("all");
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    addTrack(resolved("bbbbbbbbbbb"));
+    const state = getMusicSnapshot().state!;
+    expect(state.queue).toHaveLength(0);
+    expect(state.history.map((track) => track.videoId)).toEqual([
+      "aaaaaaaaaaa",
+    ]);
+  });
+
+  /* The ordinary case is untouched: a real next track goes back in front. */
+  it("still puts a genuinely displaced track back at the front", () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 180_000 });
+    addTracks([resolved("nnnnnnnnnnn")]);
+    markCurrentEnded(getMusicSnapshot().state!.current!.id);
+    addTrack(resolved("bbbbbbbbbbb"));
+    const state = getMusicSnapshot().state!;
+    expect(state.current?.videoId).toBe("bbbbbbbbbbb");
+    expect(state.queue.map((track) => track.videoId)).toEqual([
+      "nnnnnnnnnnn",
+    ]);
   });
 
   it("starts the first track and queues the rest, in one write for a list", () => {

@@ -357,12 +357,29 @@ function startNow(track: MusicTrack, extra: MusicTrack[] = []): number {
   if (!held?.current) {
     return 0;
   }
+  const finished = held.current;
   const advanced = musicAdvance({
     ...held,
     queue: dropAutoplayed(held.queue),
     positionMs: livePositionMs(held),
   });
-  const displaced = advanced.current ? [advanced.current, ...advanced.queue] : advanced.queue;
+  /*
+   * What `musicAdvance` answers with is only a DISPLACED track when it is
+   * a real upcoming one. Under repeat-one, and under repeat-all with an
+   * empty queue, it answers with the finished track looping, and it has
+   * already filed that track into `history`. Requeuing it then put the
+   * same song in both places from one write: it sat at the head of the
+   * queue where repeat-one could never reach it, and turning repeat off
+   * later replayed a song the room had just heard.
+   */
+  const looped =
+    advanced.current !== null &&
+    finished !== null &&
+    advanced.current.id === finished.id;
+  const displaced =
+    advanced.current && !looped
+      ? [advanced.current, ...advanced.queue]
+      : advanced.queue;
   const restFits = extra.slice(0, MUSIC_QUEUE_LIMIT);
   const displacedFits = displaced.slice(0, MUSIC_QUEUE_LIMIT - restFits.length);
   write({
