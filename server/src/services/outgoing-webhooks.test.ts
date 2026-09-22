@@ -425,29 +425,49 @@ describeDb("outgoing webhooks", () => {
     expect(updated.body.webhook.skipUserIds).toEqual([member.id]);
   });
 
-  it("drops a skipped user who is no longer a member and still saves", async () => {
+  it("keeps a skipped member who left, and still skips them if they rejoin", async () => {
     const created = await call<{ webhook: OutgoingWebhook }>(
       owner,
       "POST",
       `/api/servers/${serverId}/outgoing-webhooks`,
-      createBody({ skipUserIds: [member.id, member.id.toUpperCase()] }),
+      createBody({ skipUserIds: [member.id.toUpperCase()] }),
     );
     expect(created.status).toBe(201);
     expect(created.body.webhook.skipUserIds).toEqual([member.id]);
 
+    await getPool().query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+
+    const renamed = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { name: "Renamed" },
+    );
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.webhook.skipUserIds).toEqual([member.id]);
+
+    const stranger = "00000000-0000-4000-8000-0000000000cc";
     const saved = await call<{ webhook: OutgoingWebhook }>(
       owner,
       "PATCH",
       `/api/outgoing-webhooks/${created.body.webhook.id}`,
-      {
-        skipUserIds: [
-          member.id,
-          "00000000-0000-4000-8000-0000000000cc",
-        ],
-      },
+      { skipUserIds: [stranger, member.id.toUpperCase(), manager.id] },
     );
     expect(saved.status).toBe(200);
-    expect(saved.body.webhook.skipUserIds).toEqual([member.id]);
+    expect(saved.body.webhook.skipUserIds).toEqual([member.id, manager.id]);
+
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role)
+       VALUES ($1, $2, 'member')`,
+      [serverId, member.id],
+    );
+    await say(member, channelId, "back in the server");
+    expect(await deliveryCount()).toBe(0);
+    await say(owner, channelId, "a human asking");
+    expect(await deliveryCount()).toBe(1);
   });
 
   it("names a channel that is not text and still saves the ones that are", async () => {

@@ -426,6 +426,7 @@ async function validateSkipUserIds(
   serverId: string,
   userIds: string[] | undefined,
   db: Sql = getPool(),
+  alreadyStored: readonly string[] = [],
 ): Promise<string[]> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -445,14 +446,23 @@ async function validateSkipUserIds(
       WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
     [serverId, unique],
   );
-  const byId = new Map(
+  const members = new Map(
     result.rows.map((row) => [row.user_id.toLowerCase(), row.user_id]),
   );
-  // A person who left stays on the hook with no row in the picker, and one
-  // leftover rejects the whole save. Drop them. An empty skip list is valid.
+  const stored = new Map(
+    alreadyStored.map((id) => [id.toLowerCase(), id]),
+  );
+  // An id already on the hook stays, even if that person left. The next
+  // edit must not forget them: if they rejoin, their messages still must
+  // not fire the hook. Only a newly added id has to be a member now.
   return unique.flatMap((id) => {
-    const memberId = byId.get(id.toLowerCase());
-    return memberId ? [memberId] : [];
+    const key = id.toLowerCase();
+    const memberId = members.get(key);
+    if (memberId) {
+      return [memberId];
+    }
+    const storedId = stored.get(key);
+    return storedId ? [storedId] : [];
   });
 }
 
@@ -630,7 +640,12 @@ export async function updateOutgoingWebhook(
         : existing.channel_ids;
     const skipUserIds =
       body.skipUserIds !== undefined
-        ? await validateSkipUserIds(existing.server_id, body.skipUserIds, client)
+        ? await validateSkipUserIds(
+            existing.server_id,
+            body.skipUserIds,
+            client,
+            existing.skip_user_ids ?? [],
+          )
         : (existing.skip_user_ids ?? []);
 
     let authName = existing.auth_header_name;
