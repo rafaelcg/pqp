@@ -136,6 +136,14 @@ export const outgoingWebhookSchema = z.object({
   name: z.string(),
   url: z.string(),
   channelIds: z.array(z.string().uuid()),
+  /**
+   * Text channels on this server that still exist, including ones this
+   * viewer cannot see. Absent ids in `channelIds` are gone. Defaulted so a
+   * response from an API that predates the field still parses.
+   */
+  channels: z
+    .array(z.object({ id: z.string().uuid(), name: z.string() }))
+    .default([]),
   skipUserIds: z.array(z.string().uuid()),
   skipUsers: z.array(outgoingWebhookSkipUserSchema),
   secretHint: z.string(),

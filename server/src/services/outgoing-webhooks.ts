@@ -165,6 +165,29 @@ async function skipUsersFor(ids: string[]): Promise<
   });
 }
 
+async function channelsFor(
+  serverId: string,
+  ids: string[],
+): Promise<OutgoingWebhook["channels"]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<{ id: string; name: string }>(
+    `SELECT id, name FROM channels
+      WHERE server_id = $1
+        AND kind = 'server'
+        AND type = 'text'
+        AND id = ANY($2::uuid[])`,
+    [serverId, unique],
+  );
+  const byId = new Map(result.rows.map((row) => [row.id, row]));
+  return unique.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [{ id: row.id, name: row.name }] : [];
+  });
+}
+
 export async function mapOutgoingWebhook(
   row: OutgoingWebhookRow,
   options: { includeSecret?: boolean } = {},
@@ -176,6 +199,7 @@ export async function mapOutgoingWebhook(
     name: row.name,
     url: row.url,
     channelIds: row.channel_ids,
+    channels: await channelsFor(row.server_id, row.channel_ids),
     skipUserIds,
     skipUsers: await skipUsersFor(skipUserIds),
     secretHint: secretHint(row.signing_secret),
@@ -332,7 +356,8 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
             END,
             disabled_reason = CASE
               WHEN cardinality(kept.ids) >= 1 THEN w.disabled_reason
-              ELSE COALESCE(w.disabled_reason, 'The last text channel was deleted')
+              WHEN w.status = 'disabled' THEN w.disabled_reason
+              ELSE 'The last text channel was deleted'
             END,
             updated_at = NOW()
        FROM (

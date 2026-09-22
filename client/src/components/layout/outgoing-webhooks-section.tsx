@@ -152,6 +152,7 @@ function draftFromHook(hook: OutgoingWebhook): Draft {
 
 function ChannelChips({
   channels,
+  resolved,
   selected,
   disabled,
   empty,
@@ -159,6 +160,8 @@ function ChannelChips({
   onToggle,
 }: {
   channels: Channel[];
+  /** Text channels that still exist, including ones this viewer cannot see. */
+  resolved: { id: string; name: string }[];
   selected: string[];
   disabled?: boolean;
   empty: string;
@@ -166,12 +169,32 @@ function ChannelChips({
   onToggle: (id: string) => void;
 }) {
   const known = new Set(channels.map((channel) => channel.id));
-  const unknown = selected.filter((id) => !known.has(id));
-  if (channels.length === 0 && unknown.length === 0) {
+  const resolvedById = new Map(resolved.map((channel) => [channel.id, channel.name]));
+  const hidden = selected.filter((id) => !known.has(id) && resolvedById.has(id));
+  const unknown = selected.filter((id) => !known.has(id) && !resolvedById.has(id));
+  if (channels.length === 0 && hidden.length === 0 && unknown.length === 0) {
     return <p className="text-sm text-paper-muted">{empty}</p>;
   }
   return (
     <ul className="flex flex-wrap gap-2">
+      {hidden.map((id) => (
+        <li key={id}>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-pressed
+            onClick={() => onToggle(id)}
+            className={cn(
+              "inline-flex max-w-full items-center gap-1.5 rounded-full border border-signal/45 bg-signal/12 px-3 py-1.5 text-sm text-paper",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              disabled && "opacity-50",
+            )}
+          >
+            <Hash className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">{resolvedById.get(id)}</span>
+          </button>
+        </li>
+      ))}
       {unknown.map((id) => (
         <li key={id}>
           <button
@@ -287,6 +310,7 @@ function SkipPicker({
 function HookForm({
   draft,
   textChannels,
+  resolvedChannels,
   members,
   memberQuery,
   disabled,
@@ -302,6 +326,7 @@ function HookForm({
 }: {
   draft: Draft;
   textChannels: Channel[];
+  resolvedChannels: { id: string; name: string }[];
   members: ServerMember[];
   memberQuery: string;
   disabled?: boolean;
@@ -382,6 +407,7 @@ function HookForm({
         </legend>
         <ChannelChips
           channels={textChannels}
+          resolved={resolvedChannels}
           selected={draft.channelIds}
           disabled={disabled}
           empty={t("integrations.channelsEmpty")}
@@ -806,6 +832,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
           <HookForm
             draft={draft}
             textChannels={textChannels}
+            resolvedChannels={[]}
             members={members}
             memberQuery={memberQuery}
             disabled={creating}
@@ -852,8 +879,11 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       <ul className="space-y-3">
         {hooks.map((hook) => {
           const editing = editingId === hook.id;
+          const resolvedName = new Map(
+            (hook.channels ?? []).map((channel) => [channel.id, channel.name]),
+          );
           const channelNames = hook.channelIds
-            .map((id) => channelName(id))
+            .map((id) => channelName(id) ?? resolvedName.get(id))
             .filter((name): name is string => Boolean(name));
           const unknownCount = hook.channelIds.length - channelNames.length;
           return (
@@ -897,6 +927,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                 <HookForm
                   draft={editDraft}
                   textChannels={textChannels}
+                  resolvedChannels={hook.channels ?? []}
                   members={members}
                   memberQuery={memberQuery}
                   disabled={busyId === hook.id}

@@ -611,6 +611,76 @@ describeDb("outgoing webhooks", () => {
     expect(hook?.status).toBe("disabled");
   });
 
+  it("asks for a text channel when every selected id is gone", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+    const rejected = await call<{ error: string }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { channelIds: ["00000000-0000-4000-8000-0000000000bb"] },
+    );
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toBe("Select at least one text channel");
+  });
+
+  it("keeps a manager's disable reason when the last channel is deleted", async () => {
+    const only = await createChannel(serverId, "solo-reason", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    const disabled = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { status: "disabled" },
+    );
+    expect(disabled.status).toBe(200);
+    expect(await deleteChannel(only.id)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+    expect(hook?.disabledReason).toBe("disabled by a manager");
+  });
+
+  it("disables a failing hook when its last channel is deleted", async () => {
+    const only = await createChannel(serverId, "solo-failing", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET status = 'failing', disabled_reason = NULL WHERE id = $1`,
+      [created.body.webhook.id],
+    );
+    expect(await deleteChannel(only.id)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+    expect(hook?.disabledReason).toBe("The last text channel was deleted");
+    expect(hook?.channels).toEqual([]);
+  });
+
   it("still broadcasts when the POST fails", async () => {
     vi.mocked(safePost).mockRejectedValue(new Error("endpoint down"));
     expect(
