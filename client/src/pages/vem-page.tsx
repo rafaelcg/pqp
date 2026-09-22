@@ -10,7 +10,13 @@ import {
   Lock,
   Mic,
 } from "lucide-react";
-import { Fragment, useEffect, type CSSProperties, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { DiscordImportPlan } from "@pqp/shared";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
@@ -18,6 +24,7 @@ import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
+import { useScrollReveal } from "@/hooks/use-scroll-reveal";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import {
@@ -55,7 +62,19 @@ import { cn } from "@/lib/utils";
  *
  * Role tokens only, so it follows the visitor's theme; it sits outside
  * `DarkRoutes` in `main.tsx`.
+ *
+ * MOTION tells the same story as the copy: the headline lands word by word,
+ * the old sidebar empties while the pqp one fills in the same order and the
+ * crew turns up in the voice channel, and each step of the walkthrough plays
+ * its one click when it scrolls in. CSS keyframes on transform and opacity
+ * only (`vem-*` in `index.css`); `useScrollReveal` starts the clock per block.
+ * The DOM is always the finished page: reduced motion, no JavaScript and
+ * crawlers all get it as is.
  */
+
+/** The hero's clock (ms): eyebrow, then the words, then everything else. */
+const HERO_WORDS = 90;
+const HERO_BODY = 760;
 
 /** In page order. The edge serves the same pairs as FAQPage (`VEM_FAQ`). */
 export const VEM_FAQ_IDS = [
@@ -109,8 +128,9 @@ const COMES_KEYS: MessageKey[] = [
 const SAMPLE_SERVER = "Friends & Family";
 const SAMPLE_INVITE = "https://pqp.gg/app/invite/fR3nds";
 
-function stagger(i: number): CSSProperties {
-  return { "--stagger": i } as CSSProperties;
+/** An animation delay in milliseconds, read by every `vem-*` class as `--d`. */
+function at(ms: number): CSSProperties {
+  return { "--d": Math.round(ms) } as CSSProperties;
 }
 
 const EYEBROW = "text-xs font-semibold uppercase tracking-[0.18em] text-accent";
@@ -131,7 +151,7 @@ interface VemCtaProps {
   className?: string;
 }
 
-const CTA_CLASS = "cta-lift h-12 px-6 text-base";
+const CTA_CLASS = "cta-lift vem-cta h-12 px-6 text-base";
 
 function appHref(intent: CreateIntent): string {
   return `/app?create=${intent}`;
@@ -318,9 +338,114 @@ function Bar({ className }: { className?: string }) {
   );
 }
 
+/**
+ * The walkthrough's pointer. It sits inside the control it clicks, glides in,
+ * presses at 60% of its run and leaves, so its own style is invisible and a
+ * page with no motion simply has no cursor. The click lands at `delay + ~1s`
+ * (`CLICK_AFTER`), which is when the control's own reaction is timed.
+ */
+const CLICK_AFTER = 1000;
+
+/** When a step's pointer sets off, after its frame has risen into place. */
+const STEP_CURSOR = 380;
+/** Step 3 waits for the real preview's tree to finish assembling first. */
+const PREVIEW_CURSOR = 900;
+
+function FakeCursor({ delay }: { delay: number }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 16 20"
+      className="vem-cursor pointer-events-none absolute left-[62%] top-[58%] z-10 h-5 w-4"
+      style={at(delay)}
+    >
+      <path
+        d="M1.5 1.5v14.2l3.9-3.6 2.6 6 2.4-1-2.6-5.9h5.3z"
+        className="fill-text stroke-surface-0"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Copy becomes a check when the pointer clicks it; both stay in the DOM. */
+function CopiedIcon({
+  at: when,
+  className,
+}: {
+  at: number;
+  className: string;
+}) {
+  return (
+    <span className={cn("relative inline-flex shrink-0", className)}>
+      <Copy
+        className="vem-swap-out absolute inset-0 h-full w-full"
+        style={at(when)}
+      />
+      <Check className="vem-swap-in h-full w-full" style={at(when)} />
+    </span>
+  );
+}
+
+/**
+ * The headline, one word at a time, each rising out of its own clipped box.
+ * A beat after a full stop, so "Muda de casa." lands before "Leva a galera."
+ * Real words in real text: it reads, wraps and balances like any heading.
+ */
+function HeadlineWords({
+  lead,
+  accent,
+  start,
+}: {
+  lead: string;
+  accent: string;
+  start: number;
+}) {
+  const words = [
+    ...lead
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => ({ word, accent: false })),
+    ...accent
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => ({ word, accent: true })),
+  ];
+  let delay = start;
+  return words.map(({ word, accent: isAccent }, index) => {
+    const style = at(delay);
+    delay += /[.!?]$/.test(word) ? 210 : 75;
+    return (
+      <Fragment key={index}>
+        {index > 0 && " "}
+        <span className="vem-word-clip">
+          <span
+            className={cn("vem-word", isAccent && "text-accent")}
+            style={style}
+          >
+            {word}
+          </span>
+        </span>
+      </Fragment>
+    );
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The hero's picture: the same room, there and here
 // ---------------------------------------------------------------------------
+
+/*
+ * The move, as a timeline (ms after the picture scrolls in). The old sidebar
+ * empties top to bottom while the pqp one fills in the same order, each pqp
+ * row entering from the side the old place is on; then `general` is selected
+ * and the crew turns up in Lounge, one of them already talking.
+ */
+const MOVE_START = 820;
+const MOVE_STEP = 105;
+const MOVE_SELECT = MOVE_START + 8 * MOVE_STEP + 120;
+const MOVE_CREW = MOVE_SELECT + 180;
 
 function SidebarSilhouette() {
   const rows = [
@@ -331,37 +456,40 @@ function SidebarSilhouette() {
     { w: "w-20", lock: true },
     { w: "w-24", lock: false },
   ];
+  // Header, category, three rows, category, three rows: nine pieces leaving
+  // in the order their counterparts arrive on the right.
+  const leave = (piece: number) => at(MOVE_START - 60 + piece * MOVE_STEP);
+  const row = (item: (typeof rows)[number], piece: number) => (
+    <div
+      key={piece}
+      className="vem-dim flex items-center gap-2"
+      style={leave(piece)}
+    >
+      {item.lock ? (
+        <Lock className="h-3 w-3 text-text-tertiary" />
+      ) : (
+        <span className="h-3 w-3 rounded-sm bg-surface-3" />
+      )}
+      <Bar className={item.w} />
+    </div>
+  );
   return (
     <div className="flex h-full flex-col gap-4 p-4 opacity-60 blur-[1px]">
-      <div className="flex items-center gap-2.5">
+      <div className="vem-dim flex items-center gap-2.5" style={leave(0)}>
         <span className="h-8 w-8 rounded-[var(--radius-card)] bg-surface-3" />
         <Bar className="w-24" />
       </div>
-      <Bar className="h-2 w-14 opacity-70" />
+      <span className="vem-dim block" style={leave(1)}>
+        <Bar className="h-2 w-14 opacity-70" />
+      </span>
       <div className="space-y-3">
-        {rows.slice(0, 3).map((row, index) => (
-          <div key={index} className="flex items-center gap-2">
-            {row.lock ? (
-              <Lock className="h-3 w-3 text-text-tertiary" />
-            ) : (
-              <span className="h-3 w-3 rounded-sm bg-surface-3" />
-            )}
-            <Bar className={row.w} />
-          </div>
-        ))}
+        {rows.slice(0, 3).map((item, index) => row(item, 2 + index))}
       </div>
-      <Bar className="h-2 w-16 opacity-70" />
+      <span className="vem-dim block" style={leave(5)}>
+        <Bar className="h-2 w-16 opacity-70" />
+      </span>
       <div className="space-y-3">
-        {rows.slice(3).map((row, index) => (
-          <div key={index} className="flex items-center gap-2">
-            {row.lock ? (
-              <Lock className="h-3 w-3 text-text-tertiary" />
-            ) : (
-              <span className="h-3 w-3 rounded-sm bg-surface-3" />
-            )}
-            <Bar className={row.w} />
-          </div>
-        ))}
+        {rows.slice(3).map((item, index) => row(item, 6 + index))}
       </div>
     </div>
   );
@@ -370,32 +498,84 @@ function SidebarSilhouette() {
 function SidebarRow({
   icon: Icon,
   name,
+  piece,
   selected = false,
+  children,
 }: {
   icon: typeof Hash;
   name: string;
+  piece: number;
   selected?: boolean;
+  children?: ReactNode;
 }) {
   return (
-    <div
-      className={cn(
-        "flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm",
-        selected
-          ? "bg-accent-soft font-semibold text-on-accent-soft"
-          : "text-text-secondary",
-      )}
-    >
-      <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" />
-      <span className="truncate">{name}</span>
+    <div className="vem-from-left" style={at(MOVE_START + piece * MOVE_STEP)}>
+      <div
+        className={cn(
+          "relative flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm",
+          selected
+            ? "font-semibold text-on-accent-soft"
+            : "text-text-secondary",
+        )}
+      >
+        {selected && (
+          // The selection is its own layer so it can fade in: opacity, not a
+          // background-colour transition.
+          <span
+            className="vem-fade absolute inset-0 rounded-[var(--radius-control)] bg-accent-soft"
+            style={at(MOVE_SELECT)}
+          />
+        )}
+        <Icon className="relative h-3.5 w-3.5 shrink-0 opacity-80" />
+        <span className="relative truncate">{name}</span>
+      </div>
+      {children}
     </div>
   );
 }
 
-function SidebarCategory({ label }: { label: string }) {
+function SidebarCategory({ label, piece }: { label: string; piece: number }) {
   return (
-    <div className="flex items-center gap-1 px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+    <div
+      className="vem-from-left flex items-center gap-1 px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary"
+      style={at(MOVE_START + piece * MOVE_STEP)}
+    >
       <ChevronRight className="h-3 w-3 rotate-90" />
       {label}
+    </div>
+  );
+}
+
+/** Initials only: the crew is anyone's, and nobody on it is a real person. */
+const CREW = ["M", "J", "L", "R"];
+
+/** Who is in Lounge, drawn like the app's voice roster, the first one talking. */
+function LoungeCrew() {
+  return (
+    <div className="flex items-center gap-1.5 pb-1 pl-7 pt-0.5">
+      {CREW.map((initial, index) => (
+        <span
+          key={initial}
+          className="vem-pop relative flex h-6 w-6 items-center justify-center"
+          style={at(MOVE_CREW + index * 85)}
+        >
+          {index === 0 && (
+            <span
+              className="vem-ring absolute inset-0 rounded-full border-2 border-accent"
+              style={at(MOVE_CREW + 500)}
+            />
+          )}
+          <span
+            className={cn(
+              "relative flex h-6 w-6 items-center justify-center rounded-full bg-surface-3 text-[10px] font-bold text-text-secondary",
+              index === 0 &&
+                "text-text shadow-[var(--shadow-speaking)] ring-2 ring-accent",
+            )}
+          >
+            {initial}
+          </span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -404,7 +584,10 @@ function SidebarCategory({ label }: { label: string }) {
 function PqpSidebar() {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+      <div
+        className="vem-from-left flex items-center gap-2.5 border-b border-border px-4 py-3"
+        style={at(MOVE_START - 60)}
+      >
         <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-card)] bg-surface-2 font-display text-xs font-bold text-text">
           FR
         </span>
@@ -413,13 +596,15 @@ function PqpSidebar() {
         </span>
       </div>
       <div className="px-2 pb-3">
-        <SidebarCategory label="Text Channels" />
-        <SidebarRow icon={Hash} name="general" selected />
-        <SidebarRow icon={Hash} name="games" />
-        <SidebarRow icon={Hash} name="music" />
-        <SidebarCategory label="Voice Channels" />
-        <SidebarRow icon={Mic} name="Lounge" />
-        <SidebarRow icon={Mic} name="Stream Room" />
+        <SidebarCategory label="Text Channels" piece={1} />
+        <SidebarRow icon={Hash} name="general" piece={2} selected />
+        <SidebarRow icon={Hash} name="games" piece={3} />
+        <SidebarRow icon={Hash} name="music" piece={4} />
+        <SidebarCategory label="Voice Channels" piece={5} />
+        <SidebarRow icon={Mic} name="Lounge" piece={6}>
+          <LoungeCrew />
+        </SidebarRow>
+        <SidebarRow icon={Mic} name="Stream Room" piece={7} />
       </div>
     </div>
   );
@@ -437,7 +622,7 @@ function MoveVisual() {
         aria-hidden
         className="grid grid-cols-[minmax(0,0.8fr)_auto_minmax(0,1fr)] items-stretch gap-2 sm:gap-3"
       >
-        <div className="flex flex-col">
+        <div className="vem-rise flex flex-col" style={at(280)}>
           <span className="mb-2 flex min-h-10 items-end text-[11px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">
             {t("vem.hero.before")}
           </span>
@@ -445,10 +630,12 @@ function MoveVisual() {
             <SidebarSilhouette />
           </div>
         </div>
-        <div className="flex items-center pt-6">
-          <ArrowRight className="h-5 w-5 text-text-tertiary" />
+        <div className="vem-fade flex items-center pt-6" style={at(330)}>
+          <span className="vem-nudge block" style={at(MOVE_START)}>
+            <ArrowRight className="h-5 w-5 text-text-tertiary" />
+          </span>
         </div>
-        <div className="flex flex-col">
+        <div className="vem-rise flex flex-col" style={at(380)}>
           <span className="mb-2 flex min-h-10 items-end text-[11px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
             {t("vem.hero.after")}
           </span>
@@ -499,9 +686,16 @@ function TemplatesMock() {
               <span className="min-w-0 flex-1 truncate rounded-[var(--radius-control)] border border-border bg-surface-1 px-2.5 py-2 font-mono text-xs text-text">
                 discord.new/fR3nds
               </span>
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] bg-surface-3 px-3 py-2 text-xs font-semibold text-text">
-                <Copy className="h-3.5 w-3.5" />
+              <span
+                className="vem-press relative inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] bg-surface-3 px-3 py-2 text-xs font-semibold text-text"
+                style={at(STEP_CURSOR + CLICK_AFTER)}
+              >
+                <CopiedIcon
+                  at={STEP_CURSOR + CLICK_AFTER + 40}
+                  className="h-3.5 w-3.5"
+                />
                 {t("vem.import.mock.copy")}
+                <FakeCursor delay={STEP_CURSOR} />
               </span>
             </div>
           </div>
@@ -533,9 +727,17 @@ function CreateDialogMock() {
           {t("importDiscord.mode.or")}
           <span className="h-px flex-1 bg-border" />
         </div>
-        <div className="flex w-full items-start gap-3 rounded-[var(--radius-card)] border-2 border-accent bg-accent-soft px-4 py-3.5 text-left">
-          <LayoutList className="mt-0.5 h-5 w-5 shrink-0 text-on-accent-soft" />
-          <span className="min-w-0 flex-1">
+        <div
+          className="vem-press relative flex w-full items-start gap-3 rounded-[var(--radius-card)] border-2 border-border px-4 py-3.5 text-left"
+          style={at(STEP_CURSOR + CLICK_AFTER)}
+        >
+          {/* Chosen on the click: the selected look is a layer that fades in. */}
+          <span
+            className="vem-fade absolute -inset-0.5 rounded-[var(--radius-card)] border-2 border-accent bg-accent-soft"
+            style={at(STEP_CURSOR + CLICK_AFTER + 60)}
+          />
+          <LayoutList className="relative mt-0.5 h-5 w-5 shrink-0 text-on-accent-soft" />
+          <span className="relative min-w-0 flex-1">
             <span className="block font-semibold text-on-accent-soft">
               {t("importDiscord.mode.discord")}
             </span>
@@ -543,7 +745,8 @@ function CreateDialogMock() {
               {t("importDiscord.mode.discordBody")}
             </span>
           </span>
-          <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" />
+          <ChevronRight className="relative mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" />
+          <FakeCursor delay={STEP_CURSOR} />
         </div>
       </div>
       <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
@@ -682,8 +885,12 @@ function PreviewMock() {
         <span className="rounded-[var(--radius-control)] px-4 py-2 text-sm text-text-tertiary">
           {t("importDiscord.preview.back")}
         </span>
-        <span className="rounded-[var(--radius-control)] bg-accent px-4 py-2 text-sm font-semibold text-on-accent">
+        <span
+          className="vem-press relative rounded-[var(--radius-control)] bg-accent px-4 py-2 text-sm font-semibold text-on-accent"
+          style={at(PREVIEW_CURSOR + CLICK_AFTER)}
+        >
           {t("importDiscord.preview.confirm")}
+          <FakeCursor delay={PREVIEW_CURSOR} />
         </span>
       </div>
     </FrameShell>
@@ -720,9 +927,16 @@ function DoneMock() {
             <span className="min-w-0 flex-1 truncate rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 py-2 text-text-secondary">
               {SAMPLE_INVITE}
             </span>
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-text">
-              <Copy className="h-4 w-4" />
+            <span
+              className="vem-press relative inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-text"
+              style={at(STEP_CURSOR + CLICK_AFTER)}
+            >
+              <CopiedIcon
+                at={STEP_CURSOR + CLICK_AFTER + 40}
+                className="h-4 w-4"
+              />
               {t("importDiscord.done.copyInvite")}
+              <FakeCursor delay={STEP_CURSOR} />
             </span>
           </div>
         </div>
@@ -763,7 +977,7 @@ function PasteBackMock() {
             <Bar className="w-4/5 max-w-[16rem]" />
           </div>
         </div>
-        <div className="flex gap-3">
+        <div className="vem-rise flex gap-3" style={at(STEP_CURSOR + 200)}>
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-xs font-bold text-text">
             {t("vem.import.mock.you").slice(0, 1).toUpperCase()}
           </span>
@@ -849,23 +1063,36 @@ function ImportSteps() {
             key={step.title}
             className="grid grid-cols-[minmax(0,1fr)] items-center gap-6 lg:grid-cols-2 lg:gap-14"
           >
-            <div className={cn(index % 2 === 1 && "lg:order-2")}>
+            <div data-reveal className={cn(index % 2 === 1 && "lg:order-2")}>
               <p className="flex items-center gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent font-display text-sm font-bold text-on-accent">
+                <span
+                  className="vem-pop flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent font-display text-sm font-bold text-on-accent"
+                  style={at(0)}
+                >
                   {index + 1}
                 </span>
                 <span className="sr-only">
                   {t("vem.import.stepLabel", { n: index + 1 })}
                 </span>
-                <span className="font-display text-2xl font-bold tracking-tight text-text">
+                <span
+                  className="vem-rise font-display text-2xl font-bold tracking-tight text-text"
+                  style={at(70)}
+                >
                   {t(step.title)}
                 </span>
               </p>
-              <p className="mt-4 max-w-lg text-pretty text-base leading-relaxed text-text-secondary sm:text-lg">
+              <p
+                className="vem-rise mt-4 max-w-lg text-pretty text-base leading-relaxed text-text-secondary sm:text-lg"
+                style={at(150)}
+              >
                 {body}
               </p>
             </div>
-            <div className={cn("w-full", index % 2 === 1 && "lg:order-1")}>
+            <div
+              data-reveal="late"
+              className={cn("vem-rise w-full", index % 2 === 1 && "lg:order-1")}
+              style={at(60)}
+            >
               {step.visual}
             </div>
           </li>
@@ -879,23 +1106,36 @@ function ComesAndStays() {
   const { t } = useTranslation();
   return (
     <div className="mt-16 grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
-      <div className={cn(PANEL, "p-6 sm:p-8")}>
+      <div
+        data-reveal
+        className={cn(PANEL, "vem-rise p-6 sm:p-8")}
+        style={at(0)}
+      >
         <h3 className="font-display text-xl font-bold tracking-tight text-text">
           {t("vem.import.comes.title")}
         </h3>
         <ul className="mt-5 space-y-3">
-          {COMES_KEYS.map((key) => (
-            <li key={key} className="flex items-start gap-3 text-text">
+          {COMES_KEYS.map((key, index) => (
+            <li
+              key={key}
+              className="vem-rise flex items-start gap-3 text-text"
+              style={at(160 + index * 70)}
+            >
               <Check
                 aria-hidden
-                className="mt-0.5 h-4 w-4 shrink-0 text-success"
+                className="vem-pop mt-0.5 h-4 w-4 shrink-0 text-success"
+                style={at(260 + index * 70)}
               />
               <span className="text-pretty leading-relaxed">{t(key)}</span>
             </li>
           ))}
         </ul>
       </div>
-      <div className={cn(PANEL, "space-y-6 p-6 sm:p-8")}>
+      <div
+        data-reveal
+        className={cn(PANEL, "vem-rise space-y-6 p-6 sm:p-8")}
+        style={at(120)}
+      >
         <div>
           <h3 className="font-display text-xl font-bold tracking-tight text-text">
             {t("vem.import.stays.title")}
@@ -924,7 +1164,11 @@ function Compare() {
   const { t } = useTranslation();
   return (
     <>
-      <div className="mt-10 hidden overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface-1 md:block">
+      <div
+        data-reveal
+        className="vem-rise mt-10 hidden overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface-1 md:block"
+        style={at(0)}
+      >
         <table className="w-full border-collapse text-left text-sm">
           <caption className="sr-only">{t("vem.compare.caption")}</caption>
           <thead>
@@ -977,7 +1221,9 @@ function Compare() {
         {COMPARE_IDS.map((id) => (
           <li
             key={id}
-            className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1"
+            data-reveal
+            className="vem-rise overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1"
+            style={at(0)}
           >
             <p className="border-b border-border px-4 py-3 text-sm font-semibold text-text">
               {t(`vem.compare.${id}.label` as MessageKey)}
@@ -1030,7 +1276,9 @@ function useScrollToHash() {
 
 export function VemPage() {
   const { t, locale } = useTranslation();
+  const mainRef = useRef<HTMLElement>(null);
   useScrollToHash();
+  useScrollReveal(mainRef);
   // The anchor is the Portuguese word everywhere (`/discord` points at it and
   // it is what gets shared); English readers get it as an alias below.
   const importAnchor = "importar";
@@ -1045,7 +1293,7 @@ export function VemPage() {
       />
       <MarketingNav />
 
-      <main className="relative flex-1 overflow-hidden">
+      <main ref={mainRef} className="relative flex-1 overflow-hidden">
         <div
           className="pointer-events-none absolute inset-x-0 top-0 h-[42rem] bg-[radial-gradient(ellipse_at_top,var(--glow-accent),transparent_60%)]"
           aria-hidden
@@ -1057,26 +1305,28 @@ export function VemPage() {
           aria-labelledby="vem-title"
         >
           <div>
-            <p className={cn(EYEBROW, "animate-rise")} style={stagger(0)}>
+            <p className={cn(EYEBROW, "vem-rise")} style={at(0)}>
               {t("vem.hero.eyebrow")}
             </p>
             <h1
               id="vem-title"
-              className="animate-rise mt-5 text-balance font-display text-5xl font-extrabold leading-[1.02] tracking-tight text-text sm:text-6xl lg:text-7xl"
-              style={stagger(1)}
+              className="mt-5 text-balance font-display text-5xl font-extrabold leading-[1.02] tracking-tight text-text sm:text-6xl lg:text-7xl"
             >
-              {t("vem.hero.titleLead")}{" "}
-              <span className="text-accent">{t("vem.hero.titleAccent")}</span>
+              <HeadlineWords
+                lead={t("vem.hero.titleLead")}
+                accent={t("vem.hero.titleAccent")}
+                start={HERO_WORDS}
+              />
             </h1>
             <p
-              className="animate-rise mt-6 max-w-xl text-pretty text-lg leading-relaxed text-text-secondary sm:text-xl"
-              style={stagger(2)}
+              className="vem-rise mt-6 max-w-xl text-pretty text-lg leading-relaxed text-text-secondary sm:text-xl"
+              style={at(HERO_BODY)}
             >
               {t("vem.hero.body")}
             </p>
             <div
-              className="animate-rise mt-9 flex flex-col gap-3 sm:flex-row sm:items-center"
-              style={stagger(3)}
+              className="vem-rise mt-9 flex flex-col gap-3 sm:flex-row sm:items-center"
+              style={at(HERO_BODY + 90)}
             >
               <VemCta
                 intent="new"
@@ -1087,7 +1337,7 @@ export function VemPage() {
               <Button
                 asChild
                 variant="secondary"
-                className={cn(CTA_CLASS, "w-full sm:w-auto")}
+                className={cn(CTA_CLASS, "vem-cta-arrow w-full sm:w-auto")}
               >
                 <a
                   href={`#${importAnchor}`}
@@ -1107,14 +1357,16 @@ export function VemPage() {
               </Button>
             </div>
             <p
-              className="animate-rise mt-5 text-sm text-text-tertiary"
-              style={stagger(4)}
+              className="vem-rise mt-5 text-sm text-text-tertiary"
+              style={at(HERO_BODY + 180)}
             >
               {t("vem.hero.hint")} {t("vem.hero.signInPrompt")} <SignInLink />
             </p>
           </div>
 
-          <div className="animate-rise" style={stagger(3)}>
+          {/* Its own clock: on a desktop it starts with the page, on a phone it
+              sits below the fold and plays when the reader gets to it. */}
+          <div data-reveal="late">
             <MoveVisual />
           </div>
         </section>
@@ -1124,8 +1376,11 @@ export function VemPage() {
           className="relative border-y border-border bg-surface-1"
           aria-label={t("vem.hero.eyebrow")}
         >
-          <ul className="mx-auto grid max-w-6xl gap-x-8 gap-y-4 px-4 py-8 text-sm leading-relaxed text-text-secondary sm:grid-cols-2 sm:px-8 lg:grid-cols-4">
-            <li className="flex gap-3">
+          <ul
+            data-reveal
+            className="mx-auto grid max-w-6xl gap-x-8 gap-y-4 px-4 py-8 text-sm leading-relaxed text-text-secondary sm:grid-cols-2 sm:px-8 lg:grid-cols-4"
+          >
+            <li className="vem-rise flex gap-3" style={at(0)}>
               <Check
                 aria-hidden
                 className="mt-0.5 h-4 w-4 shrink-0 text-success"
@@ -1146,8 +1401,12 @@ export function VemPage() {
                 "vem.proof.region",
                 "vem.proof.platforms",
               ] as const
-            ).map((key) => (
-              <li key={key} className="flex gap-3">
+            ).map((key, index) => (
+              <li
+                key={key}
+                className="vem-rise flex gap-3"
+                style={at(80 + index * 80)}
+              >
                 <Check
                   aria-hidden
                   className="mt-0.5 h-4 w-4 shrink-0 text-success"
@@ -1166,12 +1425,21 @@ export function VemPage() {
         >
           {/* English speakers guess `#import`; keep it working. */}
           <span id="import" className="absolute -top-20" aria-hidden />
-          <div className="max-w-3xl">
-            <p className={EYEBROW}>{t("vem.import.eyebrow")}</p>
-            <h2 id="vem-import-title" className={cn(H2, "mt-4")}>
+          <div data-reveal className="max-w-3xl">
+            <p className={cn(EYEBROW, "vem-rise")} style={at(0)}>
+              {t("vem.import.eyebrow")}
+            </p>
+            <h2
+              id="vem-import-title"
+              className={cn(H2, "vem-rise mt-4")}
+              style={at(80)}
+            >
               {t("vem.import.title")}
             </h2>
-            <p className="mt-5 max-w-2xl text-pretty text-lg leading-relaxed text-text-secondary">
+            <p
+              className="vem-rise mt-5 max-w-2xl text-pretty text-lg leading-relaxed text-text-secondary"
+              style={at(160)}
+            >
               {t("vem.import.lede")}
             </p>
           </div>
@@ -1179,7 +1447,11 @@ export function VemPage() {
           <ImportSteps />
           <ComesAndStays />
 
-          <div className="mt-12 flex justify-center">
+          <div
+            data-reveal
+            className="vem-rise mt-12 flex justify-center"
+            style={at(0)}
+          >
             <VemCta
               intent="discord"
               label="vem.cta.import"
@@ -1194,17 +1466,25 @@ export function VemPage() {
           aria-labelledby="vem-features-title"
         >
           <div className="mx-auto max-w-6xl px-4 py-20 sm:px-8 sm:py-28">
-            <div className="max-w-3xl">
-              <p className={EYEBROW}>{t("vem.features.eyebrow")}</p>
-              <h2 id="vem-features-title" className={cn(H2, "mt-4")}>
+            <div data-reveal className="max-w-3xl">
+              <p className={cn(EYEBROW, "vem-rise")} style={at(0)}>
+                {t("vem.features.eyebrow")}
+              </p>
+              <h2
+                id="vem-features-title"
+                className={cn(H2, "vem-rise mt-4")}
+                style={at(80)}
+              >
                 {t("vem.features.title")}
               </h2>
             </div>
             <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {FEATURE_IDS.map((id) => (
+              {FEATURE_IDS.map((id, index) => (
                 <li
                   key={id}
-                  className="rounded-[var(--radius-panel)] border border-border bg-surface-0 p-6"
+                  data-reveal
+                  className="vem-rise rounded-[var(--radius-panel)] border border-border bg-surface-0 p-6"
+                  style={at((index % 3) * 90)}
                 >
                   <h3 className="text-balance font-display text-lg font-bold leading-snug tracking-tight text-text">
                     {t(`vem.features.${id}.title` as MessageKey)}
@@ -1223,17 +1503,30 @@ export function VemPage() {
           className="mx-auto max-w-6xl px-4 py-20 sm:px-8 sm:py-28"
           aria-labelledby="vem-compare-title"
         >
-          <div className="max-w-3xl">
-            <p className={EYEBROW}>{t("vem.compare.eyebrow")}</p>
-            <h2 id="vem-compare-title" className={cn(H2, "mt-4")}>
+          <div data-reveal className="max-w-3xl">
+            <p className={cn(EYEBROW, "vem-rise")} style={at(0)}>
+              {t("vem.compare.eyebrow")}
+            </p>
+            <h2
+              id="vem-compare-title"
+              className={cn(H2, "vem-rise mt-4")}
+              style={at(80)}
+            >
               {t("vem.compare.title")}
             </h2>
-            <p className="mt-5 text-pretty text-lg leading-relaxed text-text-secondary">
+            <p
+              className="vem-rise mt-5 text-pretty text-lg leading-relaxed text-text-secondary"
+              style={at(160)}
+            >
               {t("vem.compare.intro")}
             </p>
           </div>
           <Compare />
-          <p className="mt-8 max-w-3xl text-pretty leading-relaxed text-text-secondary">
+          <p
+            data-reveal
+            className="vem-rise mt-8 max-w-3xl text-pretty leading-relaxed text-text-secondary"
+            style={at(0)}
+          >
             {t("vem.compare.closing")}
           </p>
         </section>
@@ -1244,12 +1537,22 @@ export function VemPage() {
           aria-labelledby="vem-faq-title"
         >
           <div className="mx-auto max-w-3xl px-4 py-20 sm:px-8 sm:py-28">
-            <h2 id="vem-faq-title" className={H2}>
+            <h2
+              id="vem-faq-title"
+              data-reveal
+              className={cn(H2, "vem-rise")}
+              style={at(0)}
+            >
               {t("vem.faq.title")}
             </h2>
             <dl className="mt-10 divide-y divide-border border-y border-border">
               {VEM_FAQ_IDS.map((id) => (
-                <div key={id} className="py-6">
+                <div
+                  key={id}
+                  data-reveal
+                  className="vem-rise py-6"
+                  style={at(0)}
+                >
                   <dt className="font-display text-lg font-bold tracking-tight text-text">
                     {t(`vem.faq.${id}.q` as MessageKey)}
                   </dt>
@@ -1267,13 +1570,26 @@ export function VemPage() {
           className="relative mx-auto max-w-4xl px-4 py-20 text-center sm:px-8 sm:py-28"
           aria-labelledby="vem-final-title"
         >
-          <h2 id="vem-final-title" className={cn(H2, "sm:text-5xl")}>
-            {t("vem.final.title")}
-          </h2>
-          <p className="mx-auto mt-5 max-w-2xl text-pretty text-lg leading-relaxed text-text-secondary">
-            {t("vem.final.body")}
-          </p>
-          <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+          <div data-reveal>
+            <h2
+              id="vem-final-title"
+              className={cn(H2, "vem-rise sm:text-5xl")}
+              style={at(0)}
+            >
+              {t("vem.final.title")}
+            </h2>
+            <p
+              className="vem-rise mx-auto mt-5 max-w-2xl text-pretty text-lg leading-relaxed text-text-secondary"
+              style={at(90)}
+            >
+              {t("vem.final.body")}
+            </p>
+          </div>
+          <div
+            data-reveal
+            className="vem-rise mt-9 flex flex-col justify-center gap-3 sm:flex-row"
+            style={at(180)}
+          >
             <VemCta intent="new" label="vem.cta.create" placement="final" />
             <VemCta
               intent="discord"
@@ -1282,7 +1598,11 @@ export function VemPage() {
               variant="secondary"
             />
           </div>
-          <p className="mt-10 font-display text-2xl font-bold tracking-tight text-text">
+          <p
+            data-reveal
+            className="vem-rise mt-10 font-display text-2xl font-bold tracking-tight text-text"
+            style={at(0)}
+          >
             {t("vem.final.closing")}
           </p>
           <p className="mx-auto mt-6 max-w-2xl text-pretty text-sm leading-relaxed text-text-tertiary">

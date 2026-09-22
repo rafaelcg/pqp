@@ -283,8 +283,18 @@
   /* The community tint pair: a per-community hue (set inline as
      --community-hue) mixed into the surfaces, so the literals live here and
      the hue math lives with the card. */
-  --community-tint-near: color-mix(in oklab, oklch(0.72 0.17 var(--community-hue, 140)) var(--community-tint-strength, 30%), var(--color-surface-2));
-  --community-tint-far: color-mix(in oklab, oklch(0.62 0.16 var(--community-hue-far, 188)) var(--community-tint-strength-far, 18%), var(--color-surface-1));
+  --community-tint-near: color-mix(
+    in oklab,
+    oklch(0.72 0.17 var(--community-hue, 140))
+      var(--community-tint-strength, 30%),
+    var(--color-surface-2)
+  );
+  --community-tint-far: color-mix(
+    in oklab,
+    oklch(0.62 0.16 var(--community-hue-far, 188))
+      var(--community-tint-strength-far, 18%),
+    var(--color-surface-1)
+  );
   --scrim-media: rgba(0, 0, 0, 0.42);
 
   /*
@@ -301,8 +311,16 @@
    * the top third of a page somebody is going to screenshot, and a wash so
    * polite it reads as grey is a page nobody shares.
    */
-  --hero-tint-near: color-mix(in oklab, oklch(0.72 0.19 var(--hero-hue, 125)) var(--hero-tint-strength, 45%), var(--color-surface-2));
-  --hero-tint-far: color-mix(in oklab, oklch(0.58 0.17 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 32%), var(--color-surface-0));
+  --hero-tint-near: color-mix(
+    in oklab,
+    oklch(0.72 0.19 var(--hero-hue, 125)) var(--hero-tint-strength, 45%),
+    var(--color-surface-2)
+  );
+  --hero-tint-far: color-mix(
+    in oklab,
+    oklch(0.58 0.17 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 32%),
+    var(--color-surface-0)
+  );
   /*
    * The default community cover when nobody has uploaded a banner.
    *
@@ -319,7 +337,13 @@
    * banner dissolves into the page instead of ending in a bar. Black would be
    * a band across the foot of every banner in light mode.
    */
-  --scrim-hero: linear-gradient(to top, var(--color-surface-0) 0%, color-mix(in oklab, var(--color-surface-0) 62%, transparent) 42%, color-mix(in oklab, var(--color-surface-0) 12%, transparent) 78%, transparent 100%);
+  --scrim-hero: linear-gradient(
+    to top,
+    var(--color-surface-0) 0%,
+    color-mix(in oklab, var(--color-surface-0) 62%, transparent) 42%,
+    color-mix(in oklab, var(--color-surface-0) 12%, transparent) 78%,
+    transparent 100%
+  );
   /* The avatar overlapping the hero needs to read as ON TOP of it, and a ring
      alone does not do that over a busy photograph. */
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0 0 0 / 0.7);
@@ -348,7 +372,9 @@
    * Die-face ink is printed on the sourced art, so it stays the same
    * colour in both themes, like the medal gold.
    */
-  --shadow-chance-card: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 2px oklch(0 0 0 / 0.1), 0 12px 28px -20px oklch(0 0 0 / 0.55);
+  --shadow-chance-card:
+    inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 2px oklch(0 0 0 / 0.1),
+    0 12px 28px -20px oklch(0 0 0 / 0.55);
   --shadow-chance-highlight: inset 0 1px 0 oklch(1 0 0 / 0.05);
   --shadow-chance-option: inset 0 1px 0 oklch(1 0 0 / 0.04);
   --shadow-chance-piece: 0 4px 8px oklch(0 0 0 / 0.4);
@@ -358,7 +384,8 @@
   --color-die-ink: oklch(0.15 0.01 280);
   --color-die-ink-nat20: oklch(0.32 0.09 145);
   --color-die-ink-nat1: oklch(0.32 0.12 25);
-  --shadow-die-face-text: 0 0 6px oklch(1 0 0), 0 0 2px oklch(1 0 0), 0 1px 0 oklch(1 0 0);
+  --shadow-die-face-text:
+    0 0 6px oklch(1 0 0), 0 0 2px oklch(1 0 0), 0 1px 0 oklch(1 0 0);
   /* A barely-there accent wash behind a section, for the depoimento wall and
      the community stat block. Weaker than --glow-accent, which is a spotlight. */
   --glow-accent-soft: oklch(0.88 0.19 125 / 0.07);
@@ -481,13 +508,23 @@
      the two shadows have to stop being black smears on it. `--scrim-hero`
      needs no override: it is written in terms of `--color-surface-0`, which
      this block has already inverted. */
-  --hero-tint-near: color-mix(in oklab, oklch(0.62 0.16 var(--hero-hue, 125)) var(--hero-tint-strength, 30%), var(--color-surface-2));
-  --hero-tint-far: color-mix(in oklab, oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%), var(--color-surface-0));
+  --hero-tint-near: color-mix(
+    in oklab,
+    oklch(0.62 0.16 var(--hero-hue, 125)) var(--hero-tint-strength, 30%),
+    var(--color-surface-2)
+  );
+  --hero-tint-far: color-mix(
+    in oklab,
+    oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%),
+    var(--color-surface-0)
+  );
   --hero-mosaic-tile: color-mix(in oklab, var(--color-text) 12%, transparent);
   --hero-mosaic-mark: color-mix(in oklab, var(--color-text) 40%, transparent);
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0.4 0.02 250 / 0.28);
   --shadow-testimonial: 0 10px 30px -18px oklch(0.4 0.02 250 / 0.22);
-  --shadow-chance-card: inset 0 1px 0 oklch(1 0 0 / 0.35), 0 1px 2px oklch(0.4 0.02 250 / 0.08), 0 12px 28px -20px oklch(0.4 0.02 250 / 0.22);
+  --shadow-chance-card:
+    inset 0 1px 0 oklch(1 0 0 / 0.35), 0 1px 2px oklch(0.4 0.02 250 / 0.08),
+    0 12px 28px -20px oklch(0.4 0.02 250 / 0.22);
   --shadow-chance-highlight: inset 0 1px 0 oklch(1 0 0 / 0.4);
   --shadow-chance-option: inset 0 1px 0 oklch(1 0 0 / 0.35);
   --shadow-chance-piece: 0 4px 8px oklch(0.4 0.02 250 / 0.18);
@@ -976,7 +1013,8 @@
   height: 5rem;
   overflow: hidden;
   border-radius: 0.45rem;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--swatch-ink) 18%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklch, var(--swatch-ink) 18%, transparent);
 }
 
 .appearance-preview-rail {
@@ -1061,7 +1099,11 @@
   margin-top: auto;
   height: 0.5rem;
   border-radius: var(--radius-pill);
-  background: color-mix(in oklch, var(--swatch-ink) 16%, var(--preview-surface));
+  background: color-mix(
+    in oklch,
+    var(--swatch-ink) 16%,
+    var(--preview-surface)
+  );
 }
 
 .appearance-preview-composer::after {
@@ -1136,8 +1178,16 @@ body {
   font-family: var(--font-sans);
   background-color: var(--color-surface-0);
   background-image:
-    radial-gradient(1200px 600px at 10% -10%, var(--gradient-app-1), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, var(--gradient-app-2), transparent 50%);
+    radial-gradient(
+      1200px 600px at 10% -10%,
+      var(--gradient-app-1),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 500px at 100% 0%,
+      var(--gradient-app-2),
+      transparent 50%
+    );
   color: var(--color-text);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -1524,7 +1574,11 @@ h2,
   }
   12% {
     opacity: 1;
-    transform: translate3d(calc(var(--live-reaction-drift, 0px) * 0.15), -1rem, 0)
+    transform: translate3d(
+        calc(var(--live-reaction-drift, 0px) * 0.15),
+        -1rem,
+        0
+      )
       scale(1);
   }
   70% {
@@ -1532,7 +1586,8 @@ h2,
   }
   100% {
     opacity: 0;
-    transform: translate3d(var(--live-reaction-drift, 0px), -11rem, 0) scale(1.1);
+    transform: translate3d(var(--live-reaction-drift, 0px), -11rem, 0)
+      scale(1.1);
   }
 }
 
@@ -1558,6 +1613,262 @@ h2,
   animation: live-reaction-burst 0.42s ease-out both;
 }
 
+/*
+ * /vem: the campaign page's motion. Keyframes only on transform and opacity,
+ * so every one of them stays on the compositor on a mid-range phone.
+ *
+ * Every class here is written so the element's OWN style is the end state and
+ * the keyframes start from somewhere else. With the animation removed (reduced
+ * motion, below) the page is simply its finished self. A class whose end state
+ * is "gone" (the cursor, the icon it swaps out) sets that as its own style.
+ *
+ * `--d` is the delay in milliseconds. Inside `[data-reveal]` the clock does not
+ * start until the block scrolls in: `useScrollReveal` marks it `data-shown`,
+ * and until then the rule below holds every animation on its first frame.
+ */
+[data-reveal-root] [data-reveal]:not([data-shown]),
+[data-reveal-root] [data-reveal]:not([data-shown]) * {
+  animation-play-state: paused;
+}
+
+[data-reveal-off] * {
+  animation: none !important;
+}
+
+@keyframes vem-word {
+  from {
+    transform: translateY(108%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes vem-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vem-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes vem-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes vem-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes vem-dim {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.28;
+  }
+}
+
+@keyframes vem-press {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(0.96);
+  }
+}
+
+@keyframes vem-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+}
+
+@keyframes vem-swap-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.25);
+  }
+}
+
+@keyframes vem-swap-in {
+  from {
+    opacity: 0;
+    transform: scale(0.25);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* A pointer glides in, clicks, rests, and leaves. The click lands at 60%. */
+@keyframes vem-cursor {
+  0% {
+    opacity: 0;
+    transform: translate(52px, 34px);
+  }
+  18% {
+    opacity: 1;
+  }
+  52% {
+    transform: translate(0, 0) scale(1);
+  }
+  60% {
+    transform: translate(0, 0) scale(0.86);
+  }
+  68% {
+    transform: translate(0, 0) scale(1);
+  }
+  86% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, 6px);
+  }
+}
+
+@keyframes vem-ring {
+  from {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+.vem-word-clip {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: top;
+  /* Room for descenders (the g in galera) and the side bearings of a heavy
+     face, handed back with negative margins so the line box does not move. */
+  padding: 0 0.06em 0.2em;
+  margin: 0 -0.06em -0.2em;
+}
+
+.vem-word {
+  display: inline-block;
+  animation: vem-word 0.95s var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-rise {
+  animation: vem-rise 0.75s var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-from-left {
+  animation: vem-from-left 0.6s var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-pop {
+  animation: vem-pop 0.5s var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-fade {
+  animation: vem-fade 0.5s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-dim {
+  opacity: 0.28;
+  animation: vem-dim 0.6s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-press {
+  animation: vem-press 0.32s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-nudge {
+  animation: vem-nudge 0.7s var(--ease-standard) 2 backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-swap-out {
+  opacity: 0;
+  animation: vem-swap-out 0.3s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-swap-in {
+  animation: vem-swap-in 0.3s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.vem-cursor {
+  opacity: 0;
+  animation: vem-cursor 1.7s var(--ease-standard) backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+/* The speaking ring: a second circle that swells and fades behind the avatar,
+   the page's only loop. Scale and opacity, nothing that repaints. */
+.vem-ring {
+  opacity: 0;
+  animation: vem-ring 1.8s var(--ease-standard) infinite backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+/* The page's CTAs: the lift is `cta-lift`, the press is the one scale every
+   pressable thing uses. The arrow on "see how" points where it will take you. */
+.cta-lift.vem-cta:active {
+  transform: scale(0.96);
+}
+
+.vem-cta-arrow svg {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) {
+  .vem-cta-arrow:hover svg {
+    transform: translateY(2px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pqp-marquee,
   .animate-toast-in,
@@ -1571,8 +1882,28 @@ h2,
   .animate-rise,
   .animate-fade-in,
   .hero-parallax,
-  .music-eq-bar {
+  .music-eq-bar,
+  .vem-word,
+  .vem-rise,
+  .vem-from-left,
+  .vem-pop,
+  .vem-fade,
+  .vem-dim,
+  .vem-press,
+  .vem-nudge,
+  .vem-swap-out,
+  .vem-swap-in,
+  .vem-cursor,
+  .vem-ring {
     animation: none;
+  }
+
+  .vem-cta-arrow svg {
+    transition: none;
+  }
+
+  .cta-lift.vem-cta:active {
+    transform: none;
   }
 
   .cta-lift,
@@ -1604,7 +1935,9 @@ h2,
  * pointer device or a wide window keeps the tighter type.
  */
 @media (max-width: 639px), (pointer: coarse) {
-  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="color"]
+    ),
   select,
   textarea {
     font-size: 16px;
@@ -1727,7 +2060,8 @@ h2,
   padding: 0.15em 0.4em;
 }
 .blog-prose blockquote {
-  border-left: 2px solid color-mix(in oklab, var(--color-paper) 22%, transparent);
+  border-left: 2px solid
+    color-mix(in oklab, var(--color-paper) 22%, transparent);
   color: var(--color-paper-muted);
   font-style: italic;
   padding-left: 1em;
@@ -1744,7 +2078,8 @@ h2,
 }
 .blog-prose th,
 .blog-prose td {
-  border-bottom: 1px solid color-mix(in oklab, var(--color-paper) 12%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--color-paper) 12%, transparent);
   padding: 0.6em 0.9em 0.6em 0;
   text-align: left;
 }
@@ -1888,7 +2223,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   display: none;
 }
 
-[data-call-split][data-watch-cinema][data-watch-chat-overlay] [data-call-split-chat] {
+[data-call-split][data-watch-cinema][data-watch-chat-overlay]
+  [data-call-split-chat] {
   display: flex;
   position: absolute;
   top: 0;
