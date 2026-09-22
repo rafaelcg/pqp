@@ -311,10 +311,29 @@ describe("the Fila panel is one column", () => {
     menu.remove();
   });
 
+  /*
+   * THE DRAWER BELONGS TO THE WINDOW, NOT TO WHERE IT IS MOUNTED.
+   *
+   * It is mounted in the channel sidebar's footer, and that sidebar carries
+   * a `transform` for its mobile slide-in. A transform makes `position:
+   * fixed` relative to that element rather than the viewport, so the
+   * "right-edge drawer over the members list" drew at the right edge of the
+   * CHANNEL LIST, covering the channels, with a backdrop that darkened only
+   * that column. Seen in production on 22 Sep 2026.
+   */
+  it("draws the drawer on the page body, outside its mount", () => {
+    mount("drawer");
+    const drawer = document.querySelector('[data-music-fila="drawer"]');
+    expect(drawer).not.toBeNull();
+    expect(host.contains(drawer)).toBe(false);
+    expect(drawer!.parentElement).toBe(document.body);
+  });
+
   it("puts the field above the queue in the drawer too", () => {
     mount("drawer");
-    const search = host.querySelector("[data-music-search]");
-    const queue = host.querySelector("[data-music-queue]");
+    const drawer = document.querySelector('[data-music-fila="drawer"]')!;
+    const search = drawer.querySelector("[data-music-search]");
+    const queue = drawer.querySelector("[data-music-queue]");
     expect(search).not.toBeNull();
     expect(queue).not.toBeNull();
     expect(
@@ -335,7 +354,8 @@ describe("the Fila panel is one column", () => {
 
   it("keeps the short one in the 240px drawer", () => {
     mount("drawer");
-    const field = host.querySelector("input") as HTMLInputElement;
+    const drawer = document.querySelector('[data-music-fila="drawer"]')!;
+    const field = drawer.querySelector("input") as HTMLInputElement;
     expect(field.placeholder).toBe(translateMessage("music.placeholder.short"));
   });
 
