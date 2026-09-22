@@ -188,18 +188,51 @@ async function channelsFor(
   });
 }
 
+function channelsNamed(
+  channels: OutgoingWebhook["channels"],
+  ids: string[],
+): OutgoingWebhook["channels"] {
+  const byId = new Map(channels.map((channel) => [channel.id, channel]));
+  return ids.flatMap((id) => {
+    const channel = byId.get(id);
+    return channel ? [channel] : [];
+  });
+}
+
 export async function mapOutgoingWebhook(
   row: OutgoingWebhookRow,
-  options: { includeSecret?: boolean } = {},
+  options: {
+    includeSecret?: boolean;
+    /** Already loaded for every hook in a list, so mapping does not query again. */
+    channels?: OutgoingWebhook["channels"];
+    /**
+     * After a create or update has committed, a failed name lookup must not
+     * turn that success into an error the client will retry.
+     */
+    bestEffortChannels?: boolean;
+  } = {},
 ): Promise<OutgoingWebhook> {
   const skipUserIds = row.skip_user_ids ?? [];
+  let channels = options.channels
+    ? channelsNamed(options.channels, row.channel_ids)
+    : undefined;
+  if (!channels) {
+    try {
+      channels = await channelsFor(row.server_id, row.channel_ids);
+    } catch (error) {
+      if (!options.bestEffortChannels) {
+        throw error;
+      }
+      channels = [];
+    }
+  }
   const mapped: OutgoingWebhook = {
     id: row.id,
     serverId: row.server_id,
     name: row.name,
     url: row.url,
     channelIds: row.channel_ids,
-    channels: await channelsFor(row.server_id, row.channel_ids),
+    channels,
     skipUserIds,
     skipUsers: await skipUsersFor(skipUserIds),
     secretHint: secretHint(row.signing_secret),
@@ -474,7 +507,13 @@ export async function listOutgoingWebhooks(
       ORDER BY created_at ASC`,
     [serverId],
   );
-  return Promise.all(result.rows.map((row) => mapOutgoingWebhook(row)));
+  const channels = await channelsFor(
+    serverId,
+    result.rows.flatMap((row) => row.channel_ids),
+  );
+  return Promise.all(
+    result.rows.map((row) => mapOutgoingWebhook(row, { channels })),
+  );
 }
 
 export async function getOutgoingWebhookRow(
@@ -537,7 +576,10 @@ export async function createOutgoingWebhook(
   } finally {
     client.release();
   }
-  return mapOutgoingWebhook(row!, { includeSecret: true });
+  return mapOutgoingWebhook(row!, {
+    includeSecret: true,
+    bestEffortChannels: true,
+  });
 }
 
 export async function updateOutgoingWebhook(
@@ -638,7 +680,9 @@ export async function updateOutgoingWebhook(
   } finally {
     client.release();
   }
-  return saved ? mapOutgoingWebhook(saved) : null;
+  return saved
+    ? mapOutgoingWebhook(saved, { bestEffortChannels: true })
+    : null;
 }
 
 export async function deleteOutgoingWebhook(id: string): Promise<boolean> {
@@ -668,7 +712,10 @@ export async function rotateOutgoingWebhookSecret(
     [id, PREVIOUS_SECRET_TTL_MS, next],
   );
   return result.rows[0]
-    ? mapOutgoingWebhook(result.rows[0], { includeSecret: true })
+    ? mapOutgoingWebhook(result.rows[0], {
+        includeSecret: true,
+        bestEffortChannels: true,
+      })
     : null;
 }
 
