@@ -7,7 +7,8 @@ import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
 
 /**
- * Hand a binding back to the shell and never leave the rejection unhandled.
+ * Hand a binding back to the shell, retry once if it refuses, and never
+ * leave the rejection unhandled.
  *
  * Nothing better is available on failure: the IPC call is the only door to
  * the main process, and it is the main process that holds the hook. What
@@ -16,9 +17,18 @@ import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
  * force-released) the moment it regains focus, and every renderer press path
  * still goes through `set`, whose releases are unconditional.
  */
-function unbindQuietly(pending: Promise<unknown>): void {
+function unbindQuietly(
+  pending: Promise<unknown>,
+  retry?: () => Promise<unknown>,
+): void {
   pending.catch((err: unknown) => {
-    console.warn("[pqp] push-to-talk: shell refused to release the binding", err);
+    if (!retry) {
+      console.warn("[pqp] push-to-talk: shell refused to release the binding", err);
+      return;
+    }
+    // One retry: an IPC hiccup is the likely cause, and a second refusal is
+    // logged rather than looped on.
+    window.setTimeout(() => unbindQuietly(retry()), 500);
   });
 }
 
@@ -181,7 +191,7 @@ export function usePushToTalk({
     const wanted = enabled && globalEnabled;
     if (bindNative && subscribeNative) {
       if (!wanted) {
-        unbindQuietly(bindNative(null, releaseDelayMs));
+        unbindQuietly(bindNative(null, releaseDelayMs), () => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         return;
       }
@@ -211,7 +221,7 @@ export function usePushToTalk({
       return () => {
         cancelled = true;
         off();
-        unbindQuietly(bindNative(null, releaseDelayMs));
+        unbindQuietly(bindNative(null, releaseDelayMs), () => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         set(false);
       };
@@ -229,7 +239,7 @@ export function usePushToTalk({
     }
     const accelerator = wanted ? bindingToAccelerator(stableBinding) : null;
     if (!accelerator) {
-      unbindQuietly(bind(null));
+      unbindQuietly(bind(null), () => bind(null));
       setGlobalHotkey(false);
       return;
     }
@@ -250,7 +260,7 @@ export function usePushToTalk({
     return () => {
       cancelled = true;
       off();
-      unbindQuietly(bind(null));
+      unbindQuietly(bind(null), () => bind(null));
       setGlobalHotkey(false);
       set(false);
     };

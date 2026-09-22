@@ -252,13 +252,15 @@ export function bindingTypesText(binding: KeyBinding): boolean {
   if (isModifierCode(binding.code)) {
     return false;
   }
+  // Checked before the chord: a key that types nothing on its own types
+  // nothing under AltGr either.
+  if (isFunctionKeyCode(binding.code) || NON_TYPING_CODES.has(binding.code)) {
+    return false;
+  }
   if (binding.ctrl && binding.alt) {
     return true;
   }
   if (binding.ctrl || binding.meta) {
-    return false;
-  }
-  if (isFunctionKeyCode(binding.code) || NON_TYPING_CODES.has(binding.code)) {
     return false;
   }
   return true;

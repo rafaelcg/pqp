@@ -205,6 +205,7 @@ describe("bindings that cannot type work from the composer", () => {
     // of Ctrl+Alt: both are held to type "@" or "€".
     expect(bindingTypesText(binding({ code: "AltRight" }))).toBe(true);
     expect(bindingTypesText(binding({ code: "KeyQ", ctrl: true, alt: true }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "F9", ctrl: true, alt: true }))).toBe(false);
 
     expect(bindingTypesText(binding({ code: "ControlLeft" }))).toBe(false);
     expect(bindingTypesText(binding({ code: "AltLeft" }))).toBe(false);
