@@ -1189,8 +1189,14 @@ function MainAppContent({
    * Captured once per mount so recording the impression cannot drop the
    * card mid-session (and cannot leave the slot empty while the next card
    * waits). A refresh reads storage again and the queue moves on.
+   *
+   * The card calls `onDismiss` when it is closed, which is a different
+   * thing from its impression: it no longer wants the corner, and holding
+   * it for a card nobody can see buries every tip behind it.
    */
-  const [wantsMobileBeta] = useState(() => shouldShowMobileBetaHint());
+  const [wantsMobileBeta, setWantsMobileBeta] = useState(() =>
+    shouldShowMobileBetaHint(),
+  );
   const [wantsWhatsNew, setWantsWhatsNew] = useState(
     () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
@@ -1214,14 +1220,18 @@ function MainAppContent({
   const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
   // The cargos card decides for itself whether it was seen; the corner queue
   // has to know too, or the corner stays "taken" by a card that never draws
-  // and every attached tip behind it (share, music) waits for good.
-  const [wantsCargosHint] = useState(
+  // and every attached tip behind it (share, music) waits for good. Same for
+  // a card that HAS drawn and was then dismissed, which is what the
+  // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
+  // on purpose, so this card wanted the corner on every load and the in-call
+  // tips could not be drawn once.
+  const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
-  const [wantsShortcutsHint] = useState(() =>
+  const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
   const [shortcutsQuietReady, setShortcutsQuietReady] = useState(false);
@@ -9630,6 +9640,7 @@ function MainAppContent({
 
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}
+        onDismiss={() => setWantsCargosHint(false)}
         onOpenRoles={() => {
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
@@ -9644,12 +9655,17 @@ function MainAppContent({
       <ShortcutsHint
         enabled={effectiveCornerHint === "shortcuts"}
         shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
+        onDismiss={() => setWantsShortcutsHint(false)}
       />
       <WhatsNewPrompt
         enabled={effectiveCornerHint === "whatsNew"}
         onOpen={handleOpenWhatsNew}
+        onDismiss={() => setWantsWhatsNew(false)}
       />
-      <MobileBetaHint enabled={effectiveCornerHint === "mobileBeta"} />
+      <MobileBetaHint
+        enabled={effectiveCornerHint === "mobileBeta"}
+        onDismiss={() => setWantsMobileBeta(false)}
+      />
       <QgHint
         enabled={effectiveCornerHint === "qg"}
         onWantedChange={handleQgHintWantedChange}
