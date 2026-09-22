@@ -8,6 +8,7 @@ Operational scripts that are not part of the API. Nothing here is imported by
 | `load-fanout.ts` | The realtime load harness: what one machine costs to hold a big room. |
 | `seed-qg.mjs`, `qg.config.mjs` | Seed the QG layout into a local database. |
 | `grant-turma-1000.mjs` | One-off badge grant. |
+| `hls-reconcile-ll-prefixes.ts` | The one exception to "never production": an operator runs it by hand, dry run first, to repoint `mode = 'll'` rows at the prefix pqp-remux actually wrote before 2026-09-22. Usage and the safety rules are in its header. |
 
 ---
 
