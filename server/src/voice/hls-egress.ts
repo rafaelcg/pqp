@@ -2515,12 +2515,10 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     if (room.stream.hasAudio === false) {
       silentSessions += 1;
     }
-    if (room.micArchive) {
-      micArchives += 1;
-    }
   }
-  // An LL broadcast's archive is an egress on the same box all the same.
-  for (const room of llCompanions.values()) {
+  // Ladder rooms AND LL companions, like `cameraSessions` below: an LL
+  // broadcast's archive and camera are egresses on the same box all the same.
+  for (const room of companionHosts()) {
     if (room.micArchive) {
       micArchives += 1;
     }
@@ -3428,6 +3426,12 @@ export function parkLlCompanion(input: {
     micArchiveUntil: 0,
     announced: true,
   });
+}
+
+/** Whether a ladder room for exactly this session is in `rooms`, which is
+ * what a camera or archive adopts onto without any LL question at all. */
+export function hasLadderRoomFor(channelId: string, startedAt: number): boolean {
+  return rooms.get(channelId)?.stream.startedAt === startedAt;
 }
 
 /** Stop an LL broadcast's camera and archive and close their rows. */

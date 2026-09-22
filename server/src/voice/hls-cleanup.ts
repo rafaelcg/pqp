@@ -31,6 +31,7 @@ import {
   liveHlsStorageConfig,
   adoptLiveHlsMicArchive,
   adoptLiveHlsSession,
+  hasLadderRoomFor,
   listActiveEgresses,
   parkLlCompanion,
   // `hls-egress.ts` builds `object_prefix`, so it is also where it is read
@@ -369,10 +370,22 @@ export async function reconcileStaleHlsSessions(): Promise<{
   // this pass. So a camera or archive whose session has an open LL row is
   // given an LL companion to be adopted onto (`llCompanions` in
   // hls-egress.ts), which the monitor stops if that session does not return.
+  //
+  // COULD NOT ASK IS NOT "NO LL SESSION". When that lookup fails, a camera or
+  // archive with no ladder room is neither stopped nor ended on this pass: it
+  // is left as skipped, which is what makes `reconcileSkippedHlsSessions`
+  // run the pass again a minute later and decide it then.
+  const deferredIds = new Set<string>();
   if (cameras.length > 0 || micArchives.length > 0) {
     const openLl = await openLlSessions();
     for (const { row } of [...cameras, ...micArchives]) {
       const session = sessionFromPrefix(row.object_prefix)!;
+      if (openLl === null) {
+        if (!hasLadderRoomFor(row.channel_id, session.startedAt)) {
+          deferredIds.add(row.id);
+        }
+        continue;
+      }
       if (openLl.has(`${row.channel_id}:${session.startedAt}`)) {
         parkLlCompanion({
           channelId: row.channel_id,
@@ -382,9 +395,15 @@ export async function reconcileStaleHlsSessions(): Promise<{
         });
       }
     }
+    for (const id of deferredIds) {
+      skippedIds.add(id);
+    }
   }
 
   for (const { info, row } of cameras) {
+    if (deferredIds.has(row.id)) {
+      continue;
+    }
     const session = sessionFromPrefix(row.object_prefix)!;
     const stream = adoptLiveHlsSession({
       channelId: row.channel_id,
@@ -410,6 +429,9 @@ export async function reconcileStaleHlsSessions(): Promise<{
   }
 
   for (const { info, row } of micArchives) {
+    if (deferredIds.has(row.id)) {
+      continue;
+    }
     const session = sessionFromPrefix(row.object_prefix)!;
     const attached = adoptLiveHlsMicArchive({
       channelId: row.channel_id,
@@ -446,7 +468,9 @@ export async function reconcileStaleHlsSessions(): Promise<{
   }
   const skippedEnds: StaleSession[] = [];
   const toEnd = rows.rows
-    .filter((row) => row.still_open && !adoptedIds.has(row.id))
+    .filter(
+      (row) => row.still_open && !adoptedIds.has(row.id) && !deferredIds.has(row.id),
+    )
     .filter((row) => {
       if (ownedElsewhere(row)) {
         skippedEnds.push(row);
@@ -502,10 +526,9 @@ export async function reconcileStaleHlsSessions(): Promise<{
   return { adopted, ended, stopped };
 }
 
-/** `<channelId>:<startedAt ms>` of every LL session whose row is still open.
- * Empty when the read fails: the companions are then stopped as before,
- * which loses a recording rather than leaking an egress. */
-async function openLlSessions(): Promise<Set<string>> {
+/** `<channelId>:<startedAt ms>` of every LL session whose row is still open,
+ * or null when the read failed. */
+async function openLlSessions(): Promise<Set<string> | null> {
   try {
     const result = await getPool().query<{ channel_id: string; started_at_ms: string }>(
       `SELECT channel_id, (EXTRACT(EPOCH FROM started_at) * 1000)::bigint AS started_at_ms
@@ -519,7 +542,7 @@ async function openLlSessions(): Promise<Set<string>> {
     logEvent("voice.hlsBootLlLookupFailed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return new Set();
+    return null;
   }
 }
 

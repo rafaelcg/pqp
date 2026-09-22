@@ -628,6 +628,45 @@ describeDb("sweepHlsSessions", () => {
       expect(liveHlsStreamFor(channelA)).toBeNull();
     });
 
+    it("leaves an LL broadcast's archive alone when the LL lookup fails", async () => {
+      await getPool().query(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, mode)
+         VALUES ($1, $2, to_timestamp(8600 / 1000.0), 'll')`,
+        [channelA, `live/${channelA}/8600-ll`],
+      );
+      const id = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8600-mic`,
+        endedMinutesAgo: null,
+        egressId: "MIC_LL_2",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "mic",
+      });
+      const { stop } = mediaServer([{ egressId: "MIC_LL_2", roomName: channelA }]);
+      const pool = getPool();
+      const original = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      const spy = vi
+        .spyOn(pool, "query")
+        .mockImplementation(((...args: unknown[]) =>
+          typeof args[0] === "string" && args[0].includes("WHERE mode = 'll' AND ended_at IS NULL")
+            ? Promise.reject(new Error("database down"))
+            : original(...args)) as never);
+      try {
+        const result = await reconcileStaleHlsSessions();
+        // Could not ask is not "no LL session": neither stopped nor ended.
+        expect(stop).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ adopted: 0, stopped: 0 });
+      } finally {
+        spy.mockRestore();
+      }
+      const row = await getPool().query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM hls_sessions WHERE id = $1`,
+        [id],
+      );
+      expect(row.rows[0]!.ended_at).toBeNull();
+    });
+
     it("STOPS an egress no session row owns", async () => {
       const { stop } = mediaServer([
         { egressId: "EG_orphan", roomName: channelB },

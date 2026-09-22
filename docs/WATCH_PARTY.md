@@ -2562,7 +2562,8 @@ session: its `object_prefix` is a directory of CMAF objects
 (`video-init-N.mp4`, `video-seg-N.m4s`, `audio-*`), and until 2026-09-22 nothing
 named them in order, so an LL show listed in the history and could not be
 played. The box now writes `master.m3u8`, `video.m3u8` and `audio.m3u8` there,
-rewritten whole after every segment (`tools/pqp-remux/internal/r2/vod.go`):
+rewritten whole at most every 30 s and once more at the end
+(`tools/pqp-remux/internal/r2/vod.go`):
 plain HLS over the whole session, `EVENT` while live and `VOD` plus
 `#EXT-X-ENDLIST` at the end, one `#EXT-X-MAP` per init segment with an
 `#EXT-X-DISCONTINUITY` ahead of every change (a presenter's encoder restarting

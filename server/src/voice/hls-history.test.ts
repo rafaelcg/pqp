@@ -337,6 +337,15 @@ describeDb("LL replay", () => {
     expect(audio).toContain(`${boxPrefix}/audio-init.mp4?X-Amz-`);
   });
 
+  it("reads the box's master once for an audience, not once per viewer", async () => {
+    for (const token of ["a", "b", "c"]) {
+      expect(
+        await buildReplayMasterPlaylist({ channelId, startedAt: LL_STARTED_AT, token }),
+      ).toContain(`llvideo?t=${token}`);
+    }
+    expect(fetched.filter((key) => key.endsWith("/master.m3u8"))).toHaveLength(1);
+  });
+
   it("answers no master for a broadcast the box never wrote playlists for", async () => {
     delete objects[`${boxPrefix}/master.m3u8`];
     expect(

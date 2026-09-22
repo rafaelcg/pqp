@@ -340,6 +340,31 @@ type Session struct {
 	// while the encoder reader may still be doing the same.
 	vodVideoAdded atomic.Bool
 	vodAudioAdded atomic.Bool
+	// vodVideoPublishedAt/vodAudioPublishedAt are when each track's replay
+	// playlist was last enqueued, Unix nanoseconds, zero before the first:
+	// see vodPlaylistInterval.
+	vodVideoPublishedAt atomic.Int64
+	vodAudioPublishedAt atomic.Int64
+}
+
+// vodPlaylistInterval is how often, at most, a live session rewrites its
+// replay playlists. Each render is the WHOLE session, so rewriting one per
+// segment would upload bytes that grow with the square of the show's length
+// (a six-hour party is some 5,400 segments) and put a PUT per segment into
+// the same bounded queue as the media (Farol review, PR #769). Every
+// interval is enough for anybody opening the recording of a party still on
+// air, and Close always writes the final version whatever the interval says.
+const vodPlaylistInterval = 30 * time.Second
+
+// vodPublishDue reports whether a track's playlist should be written now,
+// and claims the slot if so. The first call always is: a session's replay
+// exists from its first segment.
+func vodPublishDue(last *atomic.Int64, now time.Time, interval time.Duration) bool {
+	prev := last.Load()
+	if prev != 0 && now.UnixNano()-prev < int64(interval) {
+		return false
+	}
+	return last.CompareAndSwap(prev, now.UnixNano())
 }
 
 // New builds a Session that writes into r using cfg's part/segment
@@ -535,8 +560,8 @@ func (s *Session) objectPrefix() string {
 // prefix. Through the SAME async writer the segments go through, so a slow
 // or dead bucket degrades the replay copy and never blocks the media
 // pipeline; a PUT that fails is logged by the writer and simply rewritten
-// whole on the next segment, since every render is the complete playlist and
-// the object is last-write-wins.
+// whole on the next write (vodPlaylistInterval later, or at Close), since
+// every render is the complete playlist and the object is last-write-wins.
 func (s *Session) publishVodPlaylist(name string, body string, ok bool) {
 	if !ok || s.r2Writer == nil {
 		return
@@ -546,8 +571,8 @@ func (s *Session) publishVodPlaylist(name string, body string, ok bool) {
 
 // publishVodVideoPlaylists writes the video media playlist and, when there is
 // an init to describe, the multivariant playlist beside it. The master is
-// rewritten on every segment rather than once: it costs one small PUT per
-// segment and it is the only thing that picks up a parameter-set change's new
+// rewritten with the video playlist rather than once: it is one small PUT and
+// it is the only thing that picks up a parameter-set change's new
 // CODECS/RESOLUTION without a second code path to get wrong.
 func (s *Session) publishVodVideoPlaylists() {
 	if s.vod == nil || s.r2Writer == nil {
@@ -1286,7 +1311,9 @@ func (s *Session) uploadVideoSegment(index int) {
 			InitURI:       s.vodInitNameFor(meta.InitURI),
 			Discontinuity: meta.Discontinuity || !s.vodVideoAdded.Swap(true),
 		}, len(b))
-		s.publishVodVideoPlaylists()
+		if vodPublishDue(&s.vodVideoPublishedAt, time.Now(), vodPlaylistInterval) {
+			s.publishVodVideoPlaylists()
+		}
 	}
 }
 
@@ -1323,7 +1350,9 @@ func (s *Session) uploadAudioSegment(index int) {
 			InitURI:       meta.InitURI,
 			Discontinuity: !s.vodAudioAdded.Swap(true),
 		}, len(b))
-		s.publishVodAudioPlaylist()
+		if vodPublishDue(&s.vodAudioPublishedAt, time.Now(), vodPlaylistInterval) {
+			s.publishVodAudioPlaylist()
+		}
 	}
 }
 

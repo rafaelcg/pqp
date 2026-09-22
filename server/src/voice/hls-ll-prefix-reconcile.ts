@@ -53,7 +53,8 @@ export function llPrefixStartedAt(prefix: string, channelId: string): number | n
 /**
  * What to do with one row, given every LL directory the bucket has for its
  * channel (`live/<channel>/<startedAt>-ll`, no trailing slash) and every
- * `object_prefix` some OTHER row already claims.
+ * `object_prefix` any row claims. The row's own may be in that set: a
+ * candidate equal to it is answered "ok" before the set is consulted.
  */
 export function planLlPrefixRepair(input: {
   row: LlPrefixRow;

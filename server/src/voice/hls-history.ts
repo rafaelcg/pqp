@@ -364,6 +364,7 @@ function replayObjectKey(
 const REPLAY_CACHE_TTL_MS = 30_000;
 const replayBodyCache = new Map<string, { body: string; at: number }>();
 const replayRungCache = new Map<string, { rungs: string[]; at: number }>();
+const llReplayMasterCache = new Map<string, { body: string | null; at: number }>();
 
 function pruneStale<K, V extends { at: number }>(
   cache: Map<K, V>,
@@ -379,6 +380,7 @@ function pruneStale<K, V extends { at: number }>(
 export function resetHlsReplayCachesForTests(): void {
   replayBodyCache.clear();
   replayRungCache.clear();
+  llReplayMasterCache.clear();
 }
 
 /**
@@ -454,7 +456,12 @@ export async function buildReplayMasterPlaylist(input: {
     // No ladder rung: either a pre-ladder single rendition (the caller falls
     // through to the rung-less playlist) or a low-latency broadcast, which
     // has a master of its own.
-    return buildLlReplayMasterPlaylist(input.channelId, input.startedAt, query);
+    return buildLlReplayMasterPlaylist(
+      input.channelId,
+      input.startedAt,
+      query,
+      input.now ?? Date.now(),
+    );
   }
   const variants: MasterVariant[] = rungs.map((rung) => ({
     rung: LADDER_RUNGS[rung]!,
@@ -683,23 +690,11 @@ async function buildLlReplayMasterPlaylist(
   channelId: string,
   startedAt: number,
   query: string,
+  now = Date.now(),
 ): Promise<string | null> {
-  const prefix = await llReplayPrefix(channelId, startedAt);
-  if (prefix === null) {
+  const raw = await llReplayMasterBody(channelId, startedAt, now);
+  if (raw === null) {
     return null;
-  }
-  const config = liveHlsStorageConfig();
-  if (!config) {
-    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
-  }
-  const response = await fetchPlaylistObject(config, `${prefix}/master.m3u8`);
-  if (response.status === 404) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new HlsPlaylistUnavailable(
-      `Storage returned HTTP ${response.status} for the LL replay master`,
-    );
   }
   const routeFor = (name: string): string | null => {
     const track = (Object.keys(LL_REPLAY_TRACKS) as LlReplayTrack[]).find(
@@ -710,7 +705,7 @@ async function buildLlReplayMasterPlaylist(
           `/${startedAt}/${track}${query}`
       : null;
   };
-  return (await response.text())
+  return raw
     .split("\n")
     .map((line) => {
       const trimmed = line.trim();
@@ -729,6 +724,46 @@ async function buildLlReplayMasterPlaylist(
       return routeFor(trimmed) ?? line;
     })
     .join("\n");
+}
+
+/**
+ * The box's own `master.m3u8` for this broadcast, or null (no available LL
+ * row, or none written). Cached for the same `REPLAY_CACHE_TTL_MS` as a
+ * rung's availability, token-free, because an audience opening one replay
+ * all asks for the same tiny object and the per-viewer part is only the
+ * query string `buildLlReplayMasterPlaylist` puts on the two URIs. A null is
+ * cached too: it is as stable as a body for a finished broadcast.
+ */
+async function llReplayMasterBody(
+  channelId: string,
+  startedAt: number,
+  now: number,
+): Promise<string | null> {
+  const cacheKey = `${channelId}:${startedAt}:llmaster`;
+  const cached = llReplayMasterCache.get(cacheKey);
+  if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
+    return cached.body;
+  }
+  const prefix = await llReplayPrefix(channelId, startedAt);
+  let body: string | null = null;
+  if (prefix !== null) {
+    const config = liveHlsStorageConfig();
+    if (!config) {
+      throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+    }
+    const response = await fetchPlaylistObject(config, `${prefix}/master.m3u8`);
+    if (response.ok) {
+      body = await response.text();
+    } else if (response.status !== 404) {
+      // Not cached: an outage is not a fact about the recording.
+      throw new HlsPlaylistUnavailable(
+        `Storage returned HTTP ${response.status} for the LL replay master`,
+      );
+    }
+  }
+  pruneStale(llReplayMasterCache, now);
+  llReplayMasterCache.set(cacheKey, { body, at: now });
+  return body;
 }
 
 /**

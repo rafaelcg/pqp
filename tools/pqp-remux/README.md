@@ -339,14 +339,16 @@ in-flight and queued attempt and counts what never got a real try as
 **Parts are never uploaded** (only closed segments and each rendition's init
 segment) — per the plan §1: parts are served from the box itself.
 
-**Replay playlists** (`internal/r2.VodIndex`): after every closed segment the
-session also PUTs `video.m3u8`, `audio.m3u8` and `master.m3u8` under the same
-prefix. Plain HLS media playlists over the WHOLE session (never trimmed to the
+**Replay playlists** (`internal/r2.VodIndex`): the session also PUTs
+`video.m3u8`, `audio.m3u8` and `master.m3u8` under the same prefix, on its
+first segment, then at most every 30 s while live (each write is the whole
+session, so one per segment would upload bytes growing with the square of the
+show's length), and always once more on close. Plain HLS media playlists over the WHOLE session (never trimmed to the
 ring), `#EXT-X-PLAYLIST-TYPE:EVENT` while live and `VOD` plus
 `#EXT-X-ENDLIST` once the session closes, one `#EXT-X-MAP` per init with an
 `#EXT-X-DISCONTINUITY` ahead of every change. They go through the same
 `r2.Writer` as the segments, so a slow bucket drops a playlist PUT rather
-than blocking anything, and the next segment rewrites the whole playlist
+than blocking anything, and the next write replaces the whole playlist
 anyway. The index belongs to the control-plane session, not the pipeline, so
 a watchdog restart appends to it, and the init generation is carried across
 the restart like the segment index is, so the replacement never overwrites

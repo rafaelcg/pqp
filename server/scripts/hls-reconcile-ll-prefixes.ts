@@ -17,13 +17,16 @@
  *   DATABASE_URL=... LIVE_HLS_S3_ENDPOINT=... LIVE_HLS_S3_BUCKET=... \
  *   LIVE_HLS_S3_ACCESS_KEY_ID=... LIVE_HLS_S3_SECRET_ACCESS_KEY=... \
  *     pnpm --filter @pqp/server exec tsx scripts/hls-reconcile-ll-prefixes.ts \
- *       [--prefix <object_prefix>] [--include-cleaned] [--apply]
+ *       [--prefix <object_prefix>] [--include-cleaned] [--check-playlists] [--apply]
  *
  *   --prefix <p>         only the row whose object_prefix is exactly p
  *   --include-cleaned    also rows a sweep already marked cleaned (it deleted
  *                        nothing, since their prefix was empty); those are
  *                        revived, cleaned_at back to NULL
  *   --window-ms <n>      how far from started_at a directory may be (5000)
+ *   --check-playlists    HEAD each repointed prefix's master.m3u8 and say
+ *                        whether the recording will play or only list (one
+ *                        request per row, so off for a big backlog)
  *   --replay-hours <n>   the LIVE_HLS_REPLAY_HOURS the sweep runs with (720);
  *                        a row that ended longer ago than this is refused,
  *                        because the next sweep would delete it at once
@@ -132,6 +135,7 @@ function describePlan(plan: LlPrefixPlan): string {
 async function main(): Promise<void> {
   const apply = flag("--apply");
   const includeCleaned = flag("--include-cleaned");
+  const checkPlaylists = flag("--check-playlists");
   const onlyPrefix = option("--prefix");
   const windowMs = Number(option("--window-ms") ?? 5_000);
   const replayHours = Number(option("--replay-hours") ?? 720);
@@ -184,19 +188,24 @@ async function main(): Promise<void> {
       if (!directories.has(row.channelId)) {
         directories.set(row.channelId, await llDirectories(config, row.channelId));
       }
-      const others = new Set(claimed);
-      others.delete(row.objectPrefix);
+      // The row's own prefix is in `claimed` too, and harmless there: a
+      // candidate equal to it is the "ok" answer, decided before this set is
+      // ever consulted.
       const plan = planLlPrefixRepair({
         row,
         bucketPrefixes: directories.get(row.channelId)!,
-        claimedPrefixes: others,
+        claimedPrefixes: claimed,
         windowMs,
         replayHours,
         now: Date.now(),
       });
       counts[plan.kind] = (counts[plan.kind] ?? 0) + 1;
       let line = describePlan(plan);
-      if (plan.kind === "repoint" && !(await hasMaster(config, plan.prefix))) {
+      if (
+        plan.kind === "repoint" &&
+        checkPlaylists &&
+        !(await hasMaster(config, plan.prefix))
+      ) {
         // Kept and accounted for (retention will collect it), but it
         // predates the box writing replay playlists: it lists in the
         // history and answers 404 on Watch.
