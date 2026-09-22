@@ -2984,7 +2984,7 @@ function SidebarThreadRow({
             onClick={onOpen}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs",
-              onLeave && "pr-7",
+              onLeave && "pr-7 [@media(hover:none)]:pr-9",
               unread
                 ? "font-semibold text-text"
                 : "text-text-tertiary hover:text-text",
@@ -2999,8 +2999,10 @@ function SidebarThreadRow({
               <span
                 className={cn(
                   "ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent",
+                  // Makes way for the X on hover. On touch the X is always
+                  // there beside it, in the room `pr-7` keeps, so both stay.
                   onLeave &&
-                    "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 [@media(hover:none)]:opacity-0",
+                    "[@media(hover:hover)]:group-hover/thread:opacity-0 [@media(hover:hover)]:group-focus-within/thread:opacity-0",
                 )}
                 aria-hidden
               />
@@ -3013,7 +3015,7 @@ function SidebarThreadRow({
                 data-thread-leave=""
                 aria-label={t("thread.leaveNamed", { name: thread.name })}
                 onClick={onLeave}
-                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100"
+                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100"
               >
                 <X className="h-3 w-3" aria-hidden />
               </button>
