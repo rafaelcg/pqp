@@ -1075,6 +1075,8 @@
   "music.listening_other": "{count} ouvindo",
   "music.autoplay": "Continuar com parecidas",
   "music.autoplay.hint": "Quando a fila acabar, a call segue com músicas parecidas",
+  "music.autoplay.on": "Parecidas: ligado",
+  "music.autoplay.off": "Parecidas: desligado",
   "music.autoplayed": "Tocando parecidas",
   "voice.bar.connected": "Na call",
   "voice.bar.connecting": "Conectando…",

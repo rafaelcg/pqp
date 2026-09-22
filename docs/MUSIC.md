@@ -224,9 +224,15 @@ and registers a sender on every `welcome`.
 The player lives in the composer of the call you are in.
 The Music tile on the call dock opens Fila. Nothing draws in the
 composer until that tile is pressed or a track is on. A track on is a
-~72px bar: 56px art, title (marquee on hover), who added it, then
-shuffle, skip-back, a filled round play, skip or vote-skip, and repeat
-(managers; shuffle and repeat hide under 28rem and move into `…`).
+~72px bar: 56px art, title (marquee on hover), who added it, then the
+infinity (Continuar com parecidas), skip-back, a filled round play, skip
+or vote-skip, and repeat (managers; both modes hide under 28rem and move
+into `…`). The infinity is Apple Music's glyph for the same idea, and it
+took shuffle's slot on purpose: both controls in that pair are now modes
+with a state you can see. Shuffle re-orders the QUEUE, so pressing it on
+a bar with no queue on screen looked like nothing happening; it lives in
+the Fila header now, where the list it re-orders is right below it, and
+it is disabled under two tracks.
 A seek with clocks sits across the full bar. Whoever runs the music seeks:
 a manager, or anybody with SPEAK while Todo mundo controla is on. For
 everybody else it is read-only. The bar holds a preview of the thumb's position only

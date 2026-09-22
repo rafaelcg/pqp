@@ -19,6 +19,7 @@ import {
   effectiveCanManageMusic,
   MusicHistoryList,
   MusicOverflowMenu,
+  MusicShuffleButton,
 } from "@/components/voice/music-extras";
 import {
   formatMusicClock,
@@ -165,6 +166,14 @@ export function MusicFila({
           })}
         </p>
         <div className="flex shrink-0 items-center">
+          {/* Shuffle belongs where the queue is: it re-orders the list
+              below, so here the re-order IS the feedback. On the bar,
+              with no queue on screen, pressing it looked like nothing
+              happening at all. */}
+          <MusicShuffleButton
+            className={iconClass}
+            disabled={!canManage || queue.length < 2}
+          />
           {current && !onStage ? (
             <Tooltip label={t("music.stage.watch")} side="left">
               <button

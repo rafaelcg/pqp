@@ -66,7 +66,7 @@ const state = (partial: Partial<MusicState> = {}): MusicState => ({
   ...partial,
 });
 
-const voiceState = (): VoiceState =>
+const voiceState = (overrides: Record<string, unknown> = {}): VoiceState =>
   ({
     status: "connected",
     peerId: "peer-me",
@@ -85,19 +85,41 @@ const voiceState = (): VoiceState =>
     isDeafened: false,
     isTransmitting: false,
     channelMusic: {},
+    ...overrides,
   }) as unknown as VoiceState;
 
 let host: HTMLDivElement;
 let root: Root;
 
-function mountComposer() {
+function mountComposerAs(overrides: Record<string, unknown> = {}) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
     root.render(
       <TooltipProvider>
-        <MusicComposer voiceState={voiceState()} />
+        <MusicComposer voiceState={voiceState(overrides)} />
+      </TooltipProvider>,
+    );
+  });
+  return host;
+}
+
+function mountComposer() {
+  return mountComposerAs();
+}
+
+function mountAs(
+  overrides: Record<string, unknown> = {},
+  variant: "sheet" | "drawer" = "sheet",
+) {
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  act(() => {
+    root.render(
+      <TooltipProvider>
+        <MusicFila variant={variant} voiceState={voiceState(overrides)} />
       </TooltipProvider>,
     );
   });
@@ -105,16 +127,13 @@ function mountComposer() {
 }
 
 function mount(variant: "sheet" | "drawer" = "sheet") {
+  mountAs({}, variant);
+}
+
+function unmount() {
+  act(() => root.unmount());
+  host.remove();
   host = document.createElement("div");
-  document.body.appendChild(host);
-  root = createRoot(host);
-  act(() => {
-    root.render(
-      <TooltipProvider>
-        <MusicFila variant={variant} voiceState={voiceState()} />
-      </TooltipProvider>,
-    );
-  });
 }
 
 describe("the Fila panel is one column", () => {
@@ -358,5 +377,69 @@ describe("the Fila panel is one column", () => {
     );
     expect(host.querySelector("[data-music-art]")).not.toBe(artBefore);
     expect(host.querySelector("[data-music-title]")).not.toBe(titleBefore);
+  });
+
+  /*
+   * SHUFFLE MOVES TO WHERE THE QUEUE IS, AND THE BAR TAKES A MODE INSTEAD.
+   *
+   * Shuffle re-orders the QUEUE, so on a bar with no queue on screen
+   * nothing moved and it read as broken. It sat beside repeat, which is a
+   * mode with three visible states, so it also looked like a toggle
+   * somebody had switched on. Its home is this header, where the list is
+   * on screen and the re-order is the feedback.
+   *
+   * The bar gets the infinity instead: Apple Music's Autoplay is that
+   * glyph beside shuffle and repeat, and it means exactly what
+   * "Continuar com parecidas" already means here. Unlike shuffle it is a
+   * mode, which is what the slot next to repeat is for.
+   */
+  it("puts shuffle in the panel header, next to the list it reorders", () => {
+    mount();
+    expect(host.querySelector("[data-music-shuffle]")).not.toBeNull();
+  });
+
+  it("locks it for somebody who may not reorder the room's queue", () => {
+    mountAs({ canManageMusic: false });
+    const shuffleButton = host.querySelector(
+      "[data-music-shuffle]",
+    ) as HTMLButtonElement | null;
+    expect(shuffleButton).not.toBeNull();
+    expect(shuffleButton?.disabled).toBe(true);
+  });
+
+  it("gives the bar the infinity in shuffle's place", () => {
+    mountComposer();
+    // Scoped to the bar: the panel above it has its own shuffle now, which
+    // is the whole point of the move.
+    expect(
+      host.querySelector("[data-music-now-playing] [data-music-shuffle]"),
+    ).toBeNull();
+    expect(host.querySelector("[data-music-shuffle]")).not.toBeNull();
+    const autoplay = host.querySelector("[data-music-autoplay]");
+    expect(autoplay).not.toBeNull();
+    expect(autoplay?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows the mode as on, and locks it for a member", () => {
+    act(() => {
+      receiveMusic(CHANNEL, state({
+        autoplay: true,
+        rev: getMusicSnapshot().state!.rev + 1,
+        actorId: "peer-b",
+      }));
+    });
+    mountComposer();
+    const autoplay = host.querySelector(
+      "[data-music-autoplay]",
+    ) as HTMLButtonElement;
+    expect(autoplay.getAttribute("aria-pressed")).toBe("true");
+    // It is a room switch, so a member sees it dimmed in place.
+    expect(autoplay.disabled).toBe(false);
+    unmount();
+    mountComposerAs({ canManageMusic: false });
+    expect(
+      (host.querySelector("[data-music-autoplay]") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 });

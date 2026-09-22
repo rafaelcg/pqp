@@ -1075,6 +1075,8 @@
   "music.listening_other": "{count} listening",
   "music.autoplay": "Keep playing similar",
   "music.autoplay.hint": "When the queue runs out, the call keeps going with similar songs",
+  "music.autoplay.on": "Similar songs: on",
+  "music.autoplay.off": "Similar songs: off",
   "music.autoplayed": "Playing similar",
   "voice.bar.connected": "Voice connected",
   "voice.bar.connecting": "Connecting…",

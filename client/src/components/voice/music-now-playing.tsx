@@ -29,7 +29,7 @@ import { useScrub, type Scrub } from "@/components/voice/use-scrub";
 import {
   MusicOverflowMenu,
   MusicRepeatButton,
-  MusicShuffleButton,
+  MusicAutoplayButton,
   MusicSpeakerControl,
   MusicVoteSkipButton,
 } from "@/components/voice/music-extras";
@@ -537,7 +537,11 @@ export function MusicNowPlaying({
           </div>
           <div className="flex items-center justify-end gap-1 @min-[48rem]:contents">
             <div className="flex items-center justify-center gap-1">
-              <MusicShuffleButton className={modeHide} disabled={!canManage} />
+              <MusicAutoplayButton
+                autoplay={music.state?.autoplay === true}
+                className={modeHide}
+                disabled={!canSetSwitches}
+              />
               {previousControl}
               {playControl}
               {skipControl}

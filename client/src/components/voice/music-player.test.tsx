@@ -758,7 +758,7 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("grid-cols-1");
     expect(html).toContain("@min-[48rem]:grid-cols-3");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("hidden @min-[28rem]:inline-flex");
@@ -829,8 +829,10 @@ describe("MusicNowPlaying", () => {
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
     expect(html).toContain("lucide-skip-back");
     expect(html).toContain("disabled=\"\"");
-    /* Dimmed in place, not removed: see "the composer bar a member sees". */
-    expect(html).toContain("data-music-shuffle");
+    /* Dimmed in place, not removed: see "the composer bar a member sees".
+       Shuffle left this row for the Fila header, where the queue it
+       re-orders is on screen; the infinity took its slot. */
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
   });
@@ -1019,9 +1021,9 @@ describe("the composer bar a member sees", () => {
       </TooltipProvider>,
     );
 
-  it("keeps shuffle and repeat in place, disabled", () => {
+  it("keeps the two modes in place, disabled", () => {
     const html = bar(false);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html.match(/disabled=""/g)?.length).toBeGreaterThanOrEqual(4);
   });
@@ -1042,7 +1044,7 @@ describe("the composer bar a member sees", () => {
 
   it("leaves a manager's bar working", () => {
     const html = bar(true);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
     expect(html).not.toContain("data-music-vote-skip");
@@ -1307,7 +1309,7 @@ describe("MusicComposer", () => {
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).toContain("grid-cols-1");
     expect(html).toMatch(/Previous|Voltar|music\.previous/);
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("data-music-queue-toggle");
@@ -1331,7 +1333,7 @@ describe("MusicComposer", () => {
     expect(html).toContain("max-h-[min(28rem,50dvh)]");
     expect(html).not.toContain("data-music-composer-start");
     expect(html).not.toContain("data-music-fila-play");
-    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-autoplay");
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-overflow");
   });

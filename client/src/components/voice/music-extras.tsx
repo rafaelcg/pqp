@@ -4,6 +4,7 @@ import {
   HeadphoneOff,
   Headphones,
   ListStart,
+  Infinity as InfinityIcon,
   MoreHorizontal,
   Plus,
   Radio,
@@ -107,6 +108,54 @@ export function MusicRepeatButton({
         ) : (
           <Repeat className={cn("h-4 w-4", on && "text-signal")} aria-hidden="true" />
         )}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/**
+ * CONTINUAR COM PARECIDAS, AS THE INFINITY.
+ *
+ * It took shuffle's place beside repeat, and the swap is the point: both
+ * of the controls in that slot are now MODES with a state you can see,
+ * where shuffle was a one-shot re-order of a queue the bar does not show,
+ * so pressing it looked like nothing happening. Apple Music draws Autoplay
+ * as this glyph beside shuffle and repeat and means the same thing by it.
+ *
+ * It is a room switch, so a member sees it dimmed in place rather than
+ * missing, the same rule repeat follows.
+ */
+export function MusicAutoplayButton({
+  autoplay,
+  className,
+  disabled = false,
+}: {
+  autoplay: boolean;
+  className?: string;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = autoplay ? t("music.autoplay.on") : t("music.autoplay.off");
+  return (
+    <Tooltip
+      label={label}
+      detail={disabled ? t("music.noManage") : t("music.autoplay.hint")}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        data-music-autoplay={autoplay ? "on" : "off"}
+        className={cn(ghostIcon, className)}
+        aria-label={label}
+        aria-pressed={autoplay}
+        disabled={disabled}
+        onClick={() => setAutoplay(!autoplay)}
+      >
+        <InfinityIcon
+          className={cn("h-4 w-4", autoplay && "text-signal")}
+          aria-hidden="true"
+        />
       </Button>
     </Tooltip>
   );
