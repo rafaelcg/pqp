@@ -144,6 +144,33 @@ function macAccessibilityPermission(platform, systemPreferences) {
 }
 
 /**
+ * Ask macOS to list pqp under Accessibility, showing its one-time system
+ * prompt (`isTrustedAccessibilityClient(true)`).
+ *
+ * WHY THIS EXISTS. macOS only adds an app to the Accessibility list once
+ * that app has asked with the prompt flag. `macAccessibilityPermission`
+ * deliberately never prompts (a background probe must not throw dialogs at
+ * people), and the hook is never started while that probe says "denied", so
+ * before this nothing ever asked: pqp was absent from System Settings and
+ * the only way in was the "+" button. This runs only on an explicit click
+ * of "Open System Settings" in the voice settings, which is a person asking
+ * for exactly this. Answers the same vocabulary as the probe.
+ */
+function requestMacAccessibility(platform, systemPreferences) {
+  if (platform !== "darwin") {
+    return "not-required";
+  }
+  if (!systemPreferences || typeof systemPreferences.isTrustedAccessibilityClient !== "function") {
+    return "unknown";
+  }
+  try {
+    return systemPreferences.isTrustedAccessibilityClient(true) === true ? "granted" : "denied";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * A translated hardware event, the same shape whether it came from a key or
  * a mouse button; `matchesEngage` / `matchesRelease` do not care which.
  * @typedef {{ device: "keyboard" | "mouse", code: string, down: boolean, ctrl: boolean, alt: boolean, shift: boolean, meta: boolean }} HookEvent
@@ -383,6 +410,7 @@ module.exports = {
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_INPUT_MONITORING_SETTINGS_URL,
   macAccessibilityPermission,
+  requestMacAccessibility,
   isModifierCode,
   matchesEngage,
   matchesRelease,

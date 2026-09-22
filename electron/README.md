@@ -109,13 +109,16 @@ key-down / key-up and mouse-button-down/up, not an inference:
   never racing it for the same keystroke. This is a structural argument, not
   a verified fix; nobody on this change reproduced #54 on real Windows
   hardware to confirm it.
-- **macOS permission.** Global key/mouse capture needs Input Monitoring (and
-  possibly Accessibility) under Privacy & Security. macOS never re-prompts
-  once denied, so the settings dialog checks silently
-  (`systemPreferences.isTrustedAccessibilityClient(false)`, the Accessibility
-  half only; Electron has **no** query API for Input Monitoring at all) and
-  shows an in-app nudge with a button that deep-links to both panes
-  (`pqpDesktop.openPttPermissionSettings()`,
+- **macOS permission.** Global key/mouse capture needs **Accessibility**
+  under Privacy & Security: libuiohook refuses to start without it
+  ("Accessibility API is disabled", verified 2026-09-23), and Input
+  Monitoring may be asked for as well. The settings dialog checks silently
+  (`systemPreferences.isTrustedAccessibilityClient(false)`; Electron has
+  **no** query API for Input Monitoring at all) and shows an in-app nudge
+  whose button first calls `isTrustedAccessibilityClient(true)`, which is
+  what makes macOS list pqp in the Accessibility pane at all (an app that
+  never asked with the prompt flag is simply absent from it), then
+  deep-links to both panes (`pqpDesktop.openPttPermissionSettings()`,
   `MAC_ACCESSIBILITY_SETTINGS_URL` / `MAC_INPUT_MONITORING_SETTINGS_URL`).
   It never fails silently: a denied/unknown permission still tries the
   `globalShortcut` fallback for a keyboard binding, and the UI says which
