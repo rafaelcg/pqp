@@ -18,7 +18,7 @@ import {
   updateOutgoingWebhook,
   type ServerMember,
 } from "@/lib/api";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const STATUS_KEYS: Record<OutgoingWebhook["status"], MessageKey> = {
@@ -34,9 +34,63 @@ const AUTH_HEADER_OPTIONS = [
   "X-Api-Key",
 ] as const;
 
-function messageOf(error: unknown, fallback: string): string {
+function isServerTextChannel(channel: Channel): boolean {
+  return (channel.kind ?? "server") === "server" && channel.type === "text";
+}
+
+function channelKindKey(type: string): MessageKey {
+  switch (type) {
+    case "voice":
+      return "integrations.channelKind.voice";
+    case "thread":
+      return "integrations.channelKind.thread";
+    case "category":
+      return "integrations.channelKind.category";
+    case "watch_party":
+      return "integrations.channelKind.watch_party";
+    default:
+      return "integrations.channelKind.other";
+  }
+}
+
+function channelRejectionMessage(
+  error: ApiError,
+  t: Translator["t"],
+): string | null {
+  const body = error.details;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const code = "code" in body ? body.code : null;
+  const channels = "channels" in body ? body.channels : null;
+  if (code !== "outgoing_webhook_channels" || !Array.isArray(channels)) {
+    return null;
+  }
+  const lines = channels.flatMap((row) => {
+    if (!row || typeof row !== "object") {
+      return [];
+    }
+    const name = "name" in row && typeof row.name === "string" ? row.name : "";
+    const type = "type" in row && typeof row.type === "string" ? row.type : "";
+    const reason = "reason" in row && typeof row.reason === "string" ? row.reason : "";
+    if (!name) {
+      return [];
+    }
+    if (reason === "type") {
+      return [t("integrations.channelNotText", { name, type: t(channelKindKey(type)) })];
+    }
+    return [t("integrations.channelNotHere", { name })];
+  });
+  return lines.length > 0 ? lines.join(" ") : null;
+}
+
+function messageOf(
+  error: unknown,
+  fallback: string,
+  t: Translator["t"],
+): string {
   if (error instanceof ApiError) {
-    return error.message;
+    return channelRejectionMessage(error, t) ?? error.message;
   }
   return error instanceof Error ? error.message : fallback;
 }
@@ -98,22 +152,69 @@ function draftFromHook(hook: OutgoingWebhook): Draft {
 
 function ChannelChips({
   channels,
+  resolved,
   selected,
   disabled,
   empty,
+  unknownLabel,
   onToggle,
 }: {
   channels: Channel[];
+  /** Text channels that still exist, including ones this viewer cannot see. */
+  resolved: { id: string; name: string }[];
   selected: string[];
   disabled?: boolean;
   empty: string;
+  unknownLabel: string;
   onToggle: (id: string) => void;
 }) {
-  if (channels.length === 0) {
+  const known = new Set(channels.map((channel) => channel.id));
+  const resolvedById = new Map(resolved.map((channel) => [channel.id, channel.name]));
+  const hidden = selected.filter((id) => !known.has(id) && resolvedById.has(id));
+  const unknown = selected.filter((id) => !known.has(id) && !resolvedById.has(id));
+  if (channels.length === 0 && hidden.length === 0 && unknown.length === 0) {
     return <p className="text-sm text-paper-muted">{empty}</p>;
   }
   return (
     <ul className="flex flex-wrap gap-2">
+      {hidden.map((id) => (
+        <li key={id}>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-pressed
+            onClick={() => onToggle(id)}
+            className={cn(
+              "inline-flex max-w-full items-center gap-1.5 rounded-full border border-signal/45 bg-signal/12 px-3 py-1.5 text-sm text-paper",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              disabled && "opacity-50",
+            )}
+          >
+            <Hash className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">{resolvedById.get(id)}</span>
+          </button>
+        </li>
+      ))}
+      {unknown.map((id) => (
+        <li key={id}>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-pressed
+            onClick={() => onToggle(id)}
+            className={cn(
+              "inline-flex max-w-full items-center gap-1.5 rounded-full border border-ink-4 bg-ink px-3 py-1.5 text-sm text-paper-muted",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              disabled && "opacity-50",
+            )}
+          >
+            <Hash className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">
+              {unknownLabel} {id.slice(-4)}
+            </span>
+          </button>
+        </li>
+      ))}
       {channels.map((channel) => {
         const on = selected.includes(channel.id);
         return (
@@ -209,6 +310,7 @@ function SkipPicker({
 function HookForm({
   draft,
   textChannels,
+  resolvedChannels,
   members,
   memberQuery,
   disabled,
@@ -224,6 +326,7 @@ function HookForm({
 }: {
   draft: Draft;
   textChannels: Channel[];
+  resolvedChannels: { id: string; name: string }[];
   members: ServerMember[];
   memberQuery: string;
   disabled?: boolean;
@@ -304,9 +407,11 @@ function HookForm({
         </legend>
         <ChannelChips
           channels={textChannels}
+          resolved={resolvedChannels}
           selected={draft.channelIds}
           disabled={disabled}
           empty={t("integrations.channelsEmpty")}
+          unknownLabel={t("integrations.channelUnlistedChip")}
           onToggle={toggleChannel}
         />
       </fieldset>
@@ -468,7 +573,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       fetchMembers(serverId),
     ]);
     setHooks(hookRes.webhooks);
-    setTextChannels(channelRes.channels.filter((channel) => channel.type === "text"));
+    setTextChannels(channelRes.channels.filter(isServerTextChannel));
     setMembers(memberRes.members);
   }
 
@@ -479,7 +584,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     void reload()
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(messageOf(err, t("integrations.loadFailed")));
+          setError(messageOf(err, t("integrations.loadFailed"), t));
         }
       })
       .finally(() => {
@@ -546,7 +651,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         });
       }
     } catch (err) {
-      setError(messageOf(err, t("integrations.createFailed")));
+      setError(messageOf(err, t("integrations.createFailed"), t));
     } finally {
       setCreating(false);
     }
@@ -588,7 +693,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
       setEditingId(null);
     } catch (err) {
-      setError(messageOf(err, t("integrations.updateFailed")));
+      setError(messageOf(err, t("integrations.updateFailed"), t));
     } finally {
       setBusyId(null);
     }
@@ -601,7 +706,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       const res = await updateOutgoingWebhook(hook.id, { status });
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
     } catch (err) {
-      setError(messageOf(err, t("integrations.updateFailed")));
+      setError(messageOf(err, t("integrations.updateFailed"), t));
     } finally {
       setBusyId(null);
     }
@@ -621,7 +726,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         });
       }
     } catch (err) {
-      setError(messageOf(err, t("integrations.rotateFailed")));
+      setError(messageOf(err, t("integrations.rotateFailed"), t));
     } finally {
       setBusyId(null);
     }
@@ -645,7 +750,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         setEditingId(null);
       }
     } catch (err) {
-      setError(messageOf(err, t("integrations.deleteFailed")));
+      setError(messageOf(err, t("integrations.deleteFailed"), t));
     } finally {
       setBusyId(null);
     }
@@ -727,6 +832,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
           <HookForm
             draft={draft}
             textChannels={textChannels}
+            resolvedChannels={[]}
             members={members}
             memberQuery={memberQuery}
             disabled={creating}
@@ -773,9 +879,13 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       <ul className="space-y-3">
         {hooks.map((hook) => {
           const editing = editingId === hook.id;
+          const resolvedName = new Map(
+            (hook.channels ?? []).map((channel) => [channel.id, channel.name]),
+          );
           const channelNames = hook.channelIds
-            .map((id) => channelName(id))
+            .map((id) => channelName(id) ?? resolvedName.get(id))
             .filter((name): name is string => Boolean(name));
+          const unknownCount = hook.channelIds.length - channelNames.length;
           return (
             <li
               key={hook.id}
@@ -817,6 +927,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                 <HookForm
                   draft={editDraft}
                   textChannels={textChannels}
+                  resolvedChannels={hook.channels ?? []}
                   members={members}
                   memberQuery={memberQuery}
                   disabled={busyId === hook.id}
@@ -836,21 +947,25 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
               ) : (
                 <>
                   <div className="flex flex-wrap gap-1.5">
-                    {channelNames.length > 0
-                      ? channelNames.map((name) => (
-                          <span
-                            key={name}
-                            className="inline-flex items-center gap-1 rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted"
-                          >
-                            <Hash className="h-3 w-3" aria-hidden />
-                            {name}
-                          </span>
-                        ))
-                      : (
-                          <span className="text-xs text-paper-muted">
-                            {t("integrations.channelsUnknown")}
-                          </span>
-                        )}
+                    {channelNames.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1 rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted"
+                      >
+                        <Hash className="h-3 w-3" aria-hidden />
+                        {name}
+                      </span>
+                    ))}
+                    {unknownCount > 0 && (
+                      <span className="inline-flex items-center rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted">
+                        {t("integrations.channelUnlisted", { count: unknownCount })}
+                      </span>
+                    )}
+                    {channelNames.length === 0 && unknownCount === 0 && (
+                      <span className="text-xs text-paper-muted">
+                        {t("integrations.channelsUnknown")}
+                      </span>
+                    )}
                     {hook.skipUsers.map((user) => (
                       <span
                         key={user.id}

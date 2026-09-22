@@ -13,6 +13,7 @@ import {
 import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
 import { recordActivationStep } from "./activation.js";
+import { detachDeletedChannelsFromOutgoingWebhooks } from "./outgoing-webhooks.js";
 import {
   applyPrivateChannelOverwrites,
   bumpPermissionsVersion,
@@ -675,6 +676,13 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
           ]);
         }
       }
+    }
+
+    if (deleted) {
+      await detachDeletedChannelsFromOutgoingWebhooks(client, [
+        channelId,
+        ...threadIds,
+      ]);
     }
 
     await client.query("COMMIT");

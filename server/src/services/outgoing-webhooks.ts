@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import type {
   CreateOutgoingWebhookBody,
   OutgoingMessageCreatedPayload,
@@ -164,17 +165,74 @@ async function skipUsersFor(ids: string[]): Promise<
   });
 }
 
+async function channelsFor(
+  serverId: string,
+  ids: string[],
+): Promise<OutgoingWebhook["channels"]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<{ id: string; name: string }>(
+    `SELECT id, name FROM channels
+      WHERE server_id = $1
+        AND kind = 'server'
+        AND type = 'text'
+        AND id = ANY($2::uuid[])`,
+    [serverId, unique],
+  );
+  const byId = new Map(result.rows.map((row) => [row.id, row]));
+  return unique.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [{ id: row.id, name: row.name }] : [];
+  });
+}
+
+function channelsNamed(
+  channels: OutgoingWebhook["channels"],
+  ids: string[],
+): OutgoingWebhook["channels"] {
+  const byId = new Map(channels.map((channel) => [channel.id, channel]));
+  return ids.flatMap((id) => {
+    const channel = byId.get(id);
+    return channel ? [channel] : [];
+  });
+}
+
 export async function mapOutgoingWebhook(
   row: OutgoingWebhookRow,
-  options: { includeSecret?: boolean } = {},
+  options: {
+    includeSecret?: boolean;
+    /** Already loaded for every hook in a list, so mapping does not query again. */
+    channels?: OutgoingWebhook["channels"];
+    /**
+     * After a create or update has committed, a failed name lookup must not
+     * turn that success into an error the client will retry.
+     */
+    bestEffortChannels?: boolean;
+  } = {},
 ): Promise<OutgoingWebhook> {
   const skipUserIds = row.skip_user_ids ?? [];
+  let channels = options.channels
+    ? channelsNamed(options.channels, row.channel_ids)
+    : undefined;
+  if (!channels) {
+    try {
+      channels = await channelsFor(row.server_id, row.channel_ids);
+    } catch (error) {
+      if (!options.bestEffortChannels) {
+        throw error;
+      }
+      channels = [];
+    }
+  }
   const mapped: OutgoingWebhook = {
     id: row.id,
     serverId: row.server_id,
     name: row.name,
     url: row.url,
     channelIds: row.channel_ids,
+    channels,
     skipUserIds,
     skipUsers: await skipUsersFor(skipUserIds),
     secretHint: secretHint(row.signing_secret),
@@ -194,40 +252,186 @@ export async function mapOutgoingWebhook(
   return mapped;
 }
 
+export type OutgoingWebhookChannelProblem = {
+  id: string;
+  name: string;
+  type: string;
+  /** `type` is not text. `server` is on this server but not a server text channel. */
+  reason: "type" | "server";
+};
+
+type Sql = Pick<PoolClient, "query">;
+
+/**
+ * One bad id used to reject the whole selection with a sentence that named
+ * nobody. A deleted channel has no FK out of `channel_ids`, so it stays
+ * selected with no chip, and ticking `#debug` looks like `#debug` failed.
+ */
+export class OutgoingWebhookChannelsError extends HttpError {
+  readonly code = "outgoing_webhook_channels";
+
+  constructor(readonly channels: OutgoingWebhookChannelProblem[]) {
+    super(400, channels.map(describeChannelProblem).join(" "));
+    this.name = "OutgoingWebhookChannelsError";
+  }
+}
+
+function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string {
+  const name = problem.name.replace(/^#/, "");
+  if (problem.reason === "server") {
+    return `#${name} is not a text channel in this server.`;
+  }
+  switch (problem.type) {
+    case "voice":
+      return `#${name} is a voice channel, not a text channel.`;
+    case "thread":
+      return `#${name} is a thread, not a text channel.`;
+    case "category":
+      return `#${name} is a category, not a text channel.`;
+    case "watch_party":
+      return `#${name} is a watch party channel, not a text channel.`;
+    default:
+      return `#${name} is not a text channel.`;
+  }
+}
+
 async function validateTextChannelIds(
   serverId: string,
   channelIds: string[],
+  db: Sql = getPool(),
+  share = false,
 ): Promise<string[]> {
-  const unique = [...new Set(channelIds)];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of channelIds) {
+    const key = id.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(id);
+  }
   if (unique.length === 0) {
     throw new HttpError(400, "Select at least one text channel");
   }
-  const result = await getPool().query<{ id: string }>(
-    `SELECT id FROM channels
+  // Server id is in the WHERE, not applied after the read. A manager of
+  // this server must not learn the name of a channel on another server by
+  // submitting its id. Those ids are dropped, the same as a deleted one.
+  // FOR SHARE is only for create, which does not already hold the webhook
+  // row. Update locks that row first; taking the channel lock second would
+  // deadlock with delete, which deletes the channel and then updates the hook.
+  const result = await db.query<{
+    id: string;
+    name: string;
+    type: string;
+    kind: string;
+  }>(
+    `SELECT id, name, type, kind
+       FROM channels
       WHERE server_id = $1
-        AND kind = 'server'
-        AND type = 'text'
-        AND id = ANY($2::uuid[])`,
+        AND id = ANY($2::uuid[])
+      ${share ? "FOR SHARE" : ""}`,
     [serverId, unique],
   );
-  if (result.rows.length !== unique.length) {
-    throw new HttpError(
-      400,
-      "Every channel must be a text channel in this server",
-    );
+  const byId = new Map(
+    result.rows.map((row) => [row.id.toLowerCase(), row]),
+  );
+  const kept: string[] = [];
+  const problems: OutgoingWebhookChannelProblem[] = [];
+  for (const id of unique) {
+    const row = byId.get(id.toLowerCase());
+    if (!row) {
+      continue;
+    }
+    if (row.kind === "server" && row.type === "text") {
+      kept.push(row.id);
+      continue;
+    }
+    problems.push({
+      id,
+      name: row.name,
+      type: row.type,
+      reason: row.type === "text" ? "server" : "type",
+    });
   }
-  return unique;
+  if (problems.length > 0) {
+    throw new OutgoingWebhookChannelsError(problems);
+  }
+  if (kept.length === 0) {
+    throw new HttpError(400, "Select at least one text channel");
+  }
+  return kept;
+}
+
+/**
+ * A deleted channel id is not a foreign key, so it would sit in
+ * `channel_ids` and fail the next save. One statement: keep only ids that
+ * are still server text channels on that hook's server. An id left behind
+ * by an earlier delete does not count as a survivor. When nothing real
+ * remains, leave the array alone (it cannot be empty) and disable the hook.
+ */
+export async function detachDeletedChannelsFromOutgoingWebhooks(
+  client: Sql,
+  channelIds: string[],
+): Promise<void> {
+  if (channelIds.length === 0) {
+    return;
+  }
+  await client.query(
+    `WITH locked AS (
+       SELECT ow.id, ow.server_id, ow.channel_ids, ow.status
+         FROM outgoing_webhooks ow
+        WHERE ow.channel_ids && $1::uuid[]
+        FOR UPDATE
+     )
+     UPDATE outgoing_webhooks AS w
+        SET channel_ids = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN kept.ids
+              ELSE w.channel_ids
+            END,
+            status = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN w.status
+              ELSE 'disabled'
+            END,
+            disabled_reason = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN w.disabled_reason
+              WHEN kept.status = 'disabled' THEN w.disabled_reason
+              ELSE 'The last text channel was deleted'
+            END,
+            updated_at = NOW()
+       FROM (
+         SELECT locked.id,
+                locked.status,
+                ARRAY(
+                  SELECT cid
+                    FROM unnest(locked.channel_ids) WITH ORDINALITY AS u(cid, ord)
+                   WHERE NOT (cid = ANY($1::uuid[]))
+                     AND EXISTS (
+                       SELECT 1 FROM channels c
+                        WHERE c.id = cid
+                          AND c.server_id = locked.server_id
+                          AND c.kind = 'server'
+                          AND c.type = 'text'
+                     )
+                   ORDER BY ord
+                ) AS ids
+           FROM locked
+       ) AS kept
+      WHERE w.id = kept.id`,
+    [channelIds],
+  );
 }
 
 async function validateSkipUserIds(
   serverId: string,
   userIds: string[] | undefined,
+  db: Sql = getPool(),
 ): Promise<string[]> {
   const unique = [...new Set(userIds ?? [])];
   if (unique.length === 0) {
     return [];
   }
-  const result = await getPool().query<{ user_id: string }>(
+  const result = await db.query<{ user_id: string }>(
     `SELECT user_id FROM server_members
       WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
     [serverId, unique],
@@ -303,7 +507,13 @@ export async function listOutgoingWebhooks(
       ORDER BY created_at ASC`,
     [serverId],
   );
-  return Promise.all(result.rows.map((row) => mapOutgoingWebhook(row)));
+  const channels = await channelsFor(
+    serverId,
+    result.rows.flatMap((row) => row.channel_ids),
+  );
+  return Promise.all(
+    result.rows.map((row) => mapOutgoingWebhook(row, { channels })),
+  );
 }
 
 export async function getOutgoingWebhookRow(
@@ -322,107 +532,157 @@ export async function createOutgoingWebhook(
   body: CreateOutgoingWebhookBody,
 ): Promise<OutgoingWebhook> {
   await assertOutgoingWebhookUrl(body.url);
-  const channelIds = await validateTextChannelIds(serverId, body.channelIds);
   const skipUserIds = await validateSkipUserIds(serverId, body.skipUserIds);
   const auth = normalizeAuth(
     body.authHeaderName ?? null,
     body.authHeaderValue ?? null,
   );
   const signingSecret = generateSigningSecret();
-  const result = await getPool().query<OutgoingWebhookRow>(
-    `INSERT INTO outgoing_webhooks (
-       server_id, name, url, channel_ids, skip_user_ids, signing_secret,
-       auth_header_name, auth_header_value, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING ${HOOK_COLUMNS}`,
-    [
+  const client = await getPool().connect();
+  let row: OutgoingWebhookRow | undefined;
+  try {
+    await client.query("BEGIN");
+    // Share-lock the channels so a delete cannot commit between this check
+    // and the insert, then fail to see the new row in its cleanup.
+    const channelIds = await validateTextChannelIds(
       serverId,
-      body.name.trim(),
-      body.url.trim(),
-      channelIds,
-      skipUserIds,
-      signingSecret,
-      auth.name,
-      auth.value,
-      createdBy,
-    ],
-  );
-  return mapOutgoingWebhook(result.rows[0]!, { includeSecret: true });
+      body.channelIds,
+      client,
+      true,
+    );
+    const result = await client.query<OutgoingWebhookRow>(
+      `INSERT INTO outgoing_webhooks (
+         server_id, name, url, channel_ids, skip_user_ids, signing_secret,
+         auth_header_name, auth_header_value, created_by
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING ${HOOK_COLUMNS}`,
+      [
+        serverId,
+        body.name.trim(),
+        body.url.trim(),
+        channelIds,
+        skipUserIds,
+        signingSecret,
+        auth.name,
+        auth.value,
+        createdBy,
+      ],
+    );
+    await client.query("COMMIT");
+    row = result.rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return mapOutgoingWebhook(row!, {
+    includeSecret: true,
+    bestEffortChannels: true,
+  });
 }
 
 export async function updateOutgoingWebhook(
   id: string,
   body: UpdateOutgoingWebhookBody,
 ): Promise<OutgoingWebhook | null> {
-  const existing = await getOutgoingWebhookRow(id);
-  if (!existing) {
-    return null;
+  if (body.url !== undefined) {
+    await assertOutgoingWebhookUrl(body.url.trim());
   }
-  const name = body.name?.trim() ?? existing.name;
-  const url = body.url?.trim() ?? existing.url;
-  if (url !== existing.url) {
-    await assertOutgoingWebhookUrl(url);
-  }
-  const channelIds =
-    body.channelIds !== undefined
-      ? await validateTextChannelIds(existing.server_id, body.channelIds)
-      : existing.channel_ids;
-  const skipUserIds =
-    body.skipUserIds !== undefined
-      ? await validateSkipUserIds(existing.server_id, body.skipUserIds)
-      : (existing.skip_user_ids ?? []);
-
-  let authName = existing.auth_header_name;
-  let authValue = existing.auth_header_value;
-  if (body.authHeaderName !== undefined || body.authHeaderValue !== undefined) {
-    const auth = normalizeAuth(
-      body.authHeaderName !== undefined
-        ? body.authHeaderName
-        : existing.auth_header_name,
-      body.authHeaderValue !== undefined
-        ? body.authHeaderValue
-        : existing.auth_header_value,
+  // Lock the hook before re-reading its channels. A delete that commits
+  // first is visible here, so this write cannot put a removed id back.
+  // A delete that is still in flight waits on this row, then strips the id
+  // from whatever this write stored. Channel rows are not locked here:
+  // delete takes those first and this row second.
+  const client = await getPool().connect();
+  let saved: OutgoingWebhookRow | undefined;
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query<OutgoingWebhookRow>(
+      `SELECT ${HOOK_COLUMNS} FROM outgoing_webhooks WHERE id = $1 FOR UPDATE`,
+      [id],
     );
-    authName = auth.name;
-    authValue = auth.value;
-  }
+    const existing = locked.rows[0];
+    if (!existing) {
+      await client.query("COMMIT");
+      return null;
+    }
+    const name = body.name?.trim() ?? existing.name;
+    const url = body.url?.trim() ?? existing.url;
+    const channelIds =
+      body.channelIds !== undefined || body.status === "active"
+        ? await validateTextChannelIds(
+            existing.server_id,
+            body.channelIds ?? existing.channel_ids,
+            client,
+          )
+        : existing.channel_ids;
+    const skipUserIds =
+      body.skipUserIds !== undefined
+        ? await validateSkipUserIds(existing.server_id, body.skipUserIds, client)
+        : (existing.skip_user_ids ?? []);
 
-  let status = existing.status;
-  let disabledReason = existing.disabled_reason;
-  if (body.status === "disabled") {
-    status = "disabled";
-    disabledReason = disabledReason ?? "disabled by a manager";
-  } else if (body.status === "active") {
-    status = "active";
-    disabledReason = null;
-  }
+    let authName = existing.auth_header_name;
+    let authValue = existing.auth_header_value;
+    if (body.authHeaderName !== undefined || body.authHeaderValue !== undefined) {
+      const auth = normalizeAuth(
+        body.authHeaderName !== undefined
+          ? body.authHeaderName
+          : existing.auth_header_name,
+        body.authHeaderValue !== undefined
+          ? body.authHeaderValue
+          : existing.auth_header_value,
+      );
+      authName = auth.name;
+      authValue = auth.value;
+    }
 
-  const result = await getPool().query<OutgoingWebhookRow>(
-    `UPDATE outgoing_webhooks
-        SET name = $2,
-            url = $3,
-            channel_ids = $4,
-            skip_user_ids = $5,
-            auth_header_name = $6,
-            auth_header_value = $7,
-            status = $8,
-            disabled_reason = $9,
-            updated_at = NOW()
-      WHERE id = $1
-      RETURNING ${HOOK_COLUMNS}`,
-    [
-      id,
-      name,
-      url,
-      channelIds,
-      skipUserIds,
-      authName,
-      authValue,
-      status,
-      disabledReason,
-    ],
-  );
-  return result.rows[0] ? mapOutgoingWebhook(result.rows[0]) : null;
+    let status = existing.status;
+    let disabledReason = existing.disabled_reason;
+    if (body.status === "disabled") {
+      status = "disabled";
+      disabledReason = disabledReason ?? "disabled by a manager";
+    } else if (body.status === "active") {
+      status = "active";
+      disabledReason = null;
+    }
+
+    const result = await client.query<OutgoingWebhookRow>(
+      `UPDATE outgoing_webhooks
+          SET name = $2,
+              url = $3,
+              channel_ids = $4,
+              skip_user_ids = $5,
+              auth_header_name = $6,
+              auth_header_value = $7,
+              status = $8,
+              disabled_reason = $9,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING ${HOOK_COLUMNS}`,
+      [
+        id,
+        name,
+        url,
+        channelIds,
+        skipUserIds,
+        authName,
+        authValue,
+        status,
+        disabledReason,
+      ],
+    );
+    await client.query("COMMIT");
+    saved = result.rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return saved
+    ? mapOutgoingWebhook(saved, { bestEffortChannels: true })
+    : null;
 }
 
 export async function deleteOutgoingWebhook(id: string): Promise<boolean> {
@@ -452,7 +712,10 @@ export async function rotateOutgoingWebhookSecret(
     [id, PREVIOUS_SECRET_TTL_MS, next],
   );
   return result.rows[0]
-    ? mapOutgoingWebhook(result.rows[0], { includeSecret: true })
+    ? mapOutgoingWebhook(result.rows[0], {
+        includeSecret: true,
+        bestEffortChannels: true,
+      })
     : null;
 }
 

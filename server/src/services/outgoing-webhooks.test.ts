@@ -57,7 +57,7 @@ vi.mock("./outgoing-webhook-poller.js", () => ({
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
-const { createServer: createChatServer, createChannel } = await import(
+const { createServer: createChatServer, createChannel, deleteChannel } = await import(
   "./servers.js"
 );
 const { assignRole } = await import("./roles.js");
@@ -423,6 +423,262 @@ describeDb("outgoing webhooks", () => {
     expect(updated.body.webhook.url).toBe("http://127.0.0.1:9/hook-b");
     expect(updated.body.webhook.channelIds).toEqual([otherChannelId]);
     expect(updated.body.webhook.skipUserIds).toEqual([member.id]);
+  });
+
+  it("names a channel that is not text and still saves the ones that are", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+    const voice = await createChannel(serverId, "debug", "voice");
+    const rejected = await call<{
+      error: string;
+      code: string;
+      channels: Array<{ name: string; type: string; reason: string }>;
+    }>(owner, "PATCH", `/api/outgoing-webhooks/${created.body.webhook.id}`, {
+      channelIds: [channelId, voice.id],
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.code).toBe("outgoing_webhook_channels");
+    expect(rejected.body.error).toContain("#debug");
+    expect(rejected.body.channels).toEqual([
+      expect.objectContaining({ name: "debug", type: "voice", reason: "type" }),
+    ]);
+
+    const thread = await getPool().query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type, kind, parent_id)
+       VALUES ($1, 'debug', 'thread', 'server', $2)
+       RETURNING id`,
+      [serverId, channelId],
+    );
+    const threadRejected = await call<{
+      error: string;
+      channels: Array<{ name: string; type: string }>;
+    }>(owner, "PATCH", `/api/outgoing-webhooks/${created.body.webhook.id}`, {
+      channelIds: [channelId, thread.rows[0]!.id],
+    });
+    expect(threadRejected.status).toBe(400);
+    expect(threadRejected.body.error).toContain("#debug is a thread");
+
+    const gone = await createChannel(serverId, "old-debug", "text");
+    await deleteChannel(gone.id);
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { channelIds: [gone.id, otherChannelId] },
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.webhook.channelIds).toEqual([otherChannelId]);
+  });
+
+  it("drops a deleted channel from the hook when another text channel remains", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, otherChannelId] }),
+    );
+    expect(created.status).toBe(201);
+
+    expect(await deleteChannel(otherChannelId)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body.webhooks[0]?.channelIds).toEqual([channelId]);
+    expect(listed.body.webhooks[0]?.status).toBe("active");
+  });
+
+  it("disables a hook whose only text channel was deleted", async () => {
+    const only = await createChannel(serverId, "solo", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+
+    expect(await deleteChannel(only.id)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(listed.body.webhooks[0]?.status).toBe("disabled");
+    expect(listed.body.webhooks[0]?.channelIds).toEqual([only.id]);
+    expect(listed.body.webhooks[0]?.disabledReason).toBe(
+      "The last text channel was deleted",
+    );
+  });
+
+  it("does not treat a stale id as a channel that survived the delete", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, otherChannelId] }),
+    );
+    expect(created.status).toBe(201);
+    const stale = "00000000-0000-4000-8000-0000000000aa";
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET channel_ids = $2::uuid[] WHERE id = $1`,
+      [created.body.webhook.id, [stale, channelId, otherChannelId]],
+    );
+
+    expect(await deleteChannel(channelId)).toBe(true);
+    const kept = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(kept.body.webhooks[0]?.status).toBe("active");
+    expect(kept.body.webhooks[0]?.channelIds).toEqual([otherChannelId]);
+
+    expect(await deleteChannel(otherChannelId)).toBe(true);
+    const gone = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(gone.body.webhooks[0]?.status).toBe("disabled");
+  });
+
+  it("does not reveal a channel that belongs to another server", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+    const elsewhere = await createChatServer("Elsewhere", owner.id);
+    const secret = await createChannel(elsewhere.server.id, "secret-room", "voice");
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { channelIds: [channelId, secret.id] },
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.webhook.channelIds).toEqual([channelId]);
+    expect(JSON.stringify(saved.body)).not.toContain("secret-room");
+  });
+
+  it("stores one id when the same channel is sent in two cases", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, channelId.toUpperCase()] }),
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.webhook.channelIds).toEqual([channelId]);
+  });
+
+  it("refuses to enable a hook whose channels are all gone", async () => {
+    const only = await createChannel(serverId, "solo-enable", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    expect(await deleteChannel(only.id)).toBe(true);
+
+    const enabled = await call<{ error: string }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { status: "active" },
+    );
+    expect(enabled.status).toBe(400);
+    expect(enabled.body.error).toContain("Select at least one text channel");
+
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+  });
+
+  it("asks for a text channel when every selected id is gone", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+    const rejected = await call<{ error: string }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { channelIds: ["00000000-0000-4000-8000-0000000000bb"] },
+    );
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toBe("Select at least one text channel");
+  });
+
+  it("keeps a manager's disable reason when the last channel is deleted", async () => {
+    const only = await createChannel(serverId, "solo-reason", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    const disabled = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { status: "disabled" },
+    );
+    expect(disabled.status).toBe(200);
+    expect(await deleteChannel(only.id)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+    expect(hook?.disabledReason).toBe("disabled by a manager");
+  });
+
+  it("disables a failing hook when its last channel is deleted", async () => {
+    const only = await createChannel(serverId, "solo-failing", "text");
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [only.id] }),
+    );
+    expect(created.status).toBe(201);
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET status = 'failing', disabled_reason = NULL WHERE id = $1`,
+      [created.body.webhook.id],
+    );
+    expect(await deleteChannel(only.id)).toBe(true);
+    const listed = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    const hook = listed.body.webhooks.find((one) => one.id === created.body.webhook.id);
+    expect(hook?.status).toBe("disabled");
+    expect(hook?.disabledReason).toBe("The last text channel was deleted");
+    expect(hook?.channels).toEqual([]);
   });
 
   it("still broadcasts when the POST fails", async () => {
