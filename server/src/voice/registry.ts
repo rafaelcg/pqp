@@ -1348,8 +1348,12 @@ export async function readMusicWithAnchor(
 export function clearMusicIfEmpty(channelId: string): Promise<boolean> {
   return track(
     getPool().query(
+      // The clock goes with the queue, as it does in `persistMusic`'s own
+      // teardown: a row left holding an anchor for a room that no longer
+      // has music plants an entry in the next instance that reads it.
       `UPDATE voice_rooms r
-          SET music = NULL, music_rev = 0
+          SET music = NULL, music_rev = 0,
+              music_anchor_ms = NULL, music_anchor_at = NULL
         WHERE r.channel_id = $1
           AND r.music IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
