@@ -106,6 +106,51 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.positionMs).toBe(30_000);
   });
 
+  /**
+   * THE END OF A QUEUE IS A STATE, NOT A DISAPPEARANCE.
+   *
+   * `musicAdvance` leaves `current` null when the last track is skipped,
+   * and the bar keyed on `current`, so the whole player vanished from the
+   * composer mid-gesture: the thing you were just using, gone, with the
+   * song you had just heard nowhere to be found. The finished track is
+   * held here so the surface can park on it and offer Tocar de novo.
+   */
+  it("parks on the track the queue ended with", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      current: null,
+      queue: [],
+      status: "paused",
+      history: [now],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    expect(getMusicSnapshot().parked?.id).toBe(now.id);
+  });
+
+  it("stops parking the moment something is on again", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      current: null,
+      queue: [],
+      status: "paused",
+      history: [now],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    addTrack(resolved("nextttttttt"));
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
+  it("does not park a room that was already empty when we arrived", () => {
+    receiveMusic(CHANNEL, null);
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
   it("restarts skip-back when past three seconds", () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     const now = getMusicSnapshot().state!.current!;

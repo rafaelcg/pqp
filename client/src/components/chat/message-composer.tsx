@@ -47,6 +47,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
+import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
 import { PollComposer } from "@/components/chat/poll-composer";
@@ -380,6 +381,7 @@ export function MessageComposer({
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
+  const [callHintHost, setCallHintHost] = useState<HTMLElement | null>(null);
   const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
   const formatHintEnabled = useFeatureHintEnabled("composerFormat");
   const [gifQuery, setGifQuery] = useState("");
@@ -1395,6 +1397,15 @@ export function MessageComposer({
       onSubmit={(event) => void handleSubmit(event)}
       className={COMPOSER_FORM_CLASS}
     >
+      {/* The call's coachmarks, above the WHOLE composer. The dock cannot
+          hang them itself: its row animates open by collapsing and has to
+          be `overflow-hidden`, and the queue panel sits above it in the
+          same well, so a card anchored there was either clipped away or
+          laid over the field it names. */}
+      <div
+        ref={setCallHintHost}
+        className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
+      />
       {formatHintEnabled && !isFormatBarOpen && !feedback && (
         <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
           <FeatureHint
@@ -1517,7 +1528,7 @@ export function MessageComposer({
           pointer that was aiming at them.
         */}
         {music}
-        {dock}
+        <MusicHintHostProvider value={callHintHost}>{dock}</MusicHintHostProvider>
         {(replyTarget ||
           isPollComposerOpen ||
           pending.length > 0 ||

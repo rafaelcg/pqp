@@ -2,7 +2,9 @@ import type { VoiceState } from "@/hooks/use-voice";
 import { useMusicPrefs } from "@/lib/music-prefs";
 import { musicRelatedTracks } from "@/lib/music-related";
 import {
+  clearParkedMusic,
   musicPrevious,
+  readdFromHistory,
   setMusicOpen,
   setPlaying,
   useMusic,
@@ -19,6 +21,7 @@ import {
   toggleMusicLocalMuted,
   useMusicLocalPlayback,
 } from "@/components/voice/music-local-playback";
+import { MusicEndedBar } from "@/components/voice/music-ended-bar";
 import { MusicNowPlaying } from "@/components/voice/music-now-playing";
 
 /**
@@ -32,11 +35,12 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
   const prefs = useMusicPrefs();
   const local = useMusicLocalPlayback();
   const current = music.state?.current ?? null;
+  const parked = music.parked;
   const playing = music.state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, music.state);
   const canSetSwitches = canSetMusicSwitches(voiceState);
 
-  if (!current && !music.open) {
+  if (!current && !parked && !music.open) {
     return null;
   }
 
@@ -90,6 +94,15 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
           onTapToPlay={tapMusicLocalToPlay}
           onMute={toggleMusicLocalMuted}
           onVolume={setMusicLocalVolume}
+        />
+      ) : parked ? (
+        <MusicEndedBar
+          track={parked}
+          canAdd={voiceState.canSpeak}
+          onPlayAgain={() => {
+            readdFromHistory(parked.id);
+          }}
+          onDismiss={clearParkedMusic}
         />
       ) : null}
     </div>

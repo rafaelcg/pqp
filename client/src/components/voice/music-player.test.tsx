@@ -682,6 +682,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
@@ -719,6 +720,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -752,6 +754,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -797,6 +800,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -828,6 +832,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
@@ -864,6 +869,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -909,6 +915,7 @@ describe("the composer bar's up-next line", () => {
             receivedAt: Date.now(),
             open: false,
             listening,
+            parked: null,
           }}
           voiceState={voiceState(voice)}
           canManage
@@ -963,6 +970,7 @@ describe("the composer bar's up-next line", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -1022,6 +1030,7 @@ describe("the composer bar a member sees", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: canManage })}
           canManage={canManage}
@@ -1087,6 +1096,7 @@ describe("the composer bar folds to one row when it has the width", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -1159,6 +1169,7 @@ describe("the composer bar after Parar de ouvir", () => {
             receivedAt: Date.now(),
             open: false,
             listening,
+            parked: null,
           }}
           voiceState={voiceState({
             occupancy: {

@@ -63,10 +63,34 @@ export interface MusicSnapshot {
    * else, and a pill offers the way back. Reset on every new seat.
    */
   listening: boolean;
+  /**
+   * THE TRACK THE QUEUE ENDED WITH, AND WHY IT IS KEPT.
+   *
+   * `musicAdvance` leaves `current` null when the last track finishes or is
+   * skipped, and every surface keyed on `current`, so the player vanished
+   * from the composer in the middle of a gesture: the control you were
+   * using, gone, and the song you had just heard with it. The end of a
+   * queue is a state, so this holds the finished track and the bar parks on
+   * it with Tocar de novo.
+   *
+   * Local on purpose, and not in `MusicState`: `status` is a two-value enum
+   * the iOS and Android clients parse, and nothing about the room has
+   * changed — only what this machine should still be showing. It is set on
+   * the TRANSITION, so somebody joining a room that ended an hour ago gets
+   * the empty panel rather than a stranger's last song.
+   */
+  parked: MusicTrack | null;
 }
 
 let session: MusicSession | null = null;
-let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+let snapshot: MusicSnapshot = {
+  channelId: null,
+  state: null,
+  receivedAt: 0,
+  open: false,
+  listening: true,
+  parked: null,
+};
 /** This machine saw YouTube ENDED for this current track id. */
 let localEndedTrackId: string | null = null;
 /** Bumped to abandon an in-flight related fill. */
@@ -106,7 +130,20 @@ function set(state: MusicState | null, channelId: string | null) {
   if (snapshot.channelId !== channelId || snapshot.state?.current?.id !== state?.current?.id) {
     abandonAutoplayFill();
   }
-  snapshot = { ...snapshot, channelId, state, receivedAt: Date.now() };
+  // Parked on the transition only: a track was on, and now nothing is.
+  const wasOn = snapshot.channelId === channelId ? snapshot.state?.current ?? null : null;
+  const isOn = state?.current ?? null;
+  const parked = isOn !== null ? null : (wasOn ?? (channelId === snapshot.channelId ? snapshot.parked : null));
+  snapshot = { ...snapshot, channelId, state, receivedAt: Date.now(), parked };
+  emit();
+}
+
+/** The person put the parked bar down. Nothing else clears it but a new track. */
+export function clearParkedMusic(): void {
+  if (snapshot.parked === null) {
+    return;
+  }
+  snapshot = { ...snapshot, parked: null };
   emit();
 }
 
@@ -228,7 +265,9 @@ export interface MusicDockSnapshot {
 let dockSnap: MusicDockSnapshot = { open: false, on: false, listening: true };
 
 function getMusicDockSnapshot(): MusicDockSnapshot {
-  const on = snapshot.state?.current != null;
+  // Parked counts as on: the end of a queue keeps the bar, so the player
+  // does not vanish under the hand that skipped the last track.
+  const on = snapshot.state?.current != null || snapshot.parked !== null;
   if (
     dockSnap.open === snapshot.open &&
     dockSnap.on === on &&
@@ -254,7 +293,14 @@ export function resetMusicStoreForTests(): void {
   seekApply = null;
   localEndedTrackId = null;
   fillGeneration += 1;
-  snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+  snapshot = {
+    channelId: null,
+    state: null,
+    receivedAt: 0,
+    open: false,
+    listening: true,
+    parked: null,
+  };
   dockSnap = { open: false, on: false, listening: true };
   listeners.clear();
 }

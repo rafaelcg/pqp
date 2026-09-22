@@ -113,6 +113,13 @@ const StoreContext = createContext<DockStore | null>(null);
  */
 const HintHostContext = createContext<HTMLElement | null>(null);
 
+/**
+ * The composer owns the host, because the composer is what the card has to
+ * clear: the queue panel sits in the same well, ABOVE the dock, so a card
+ * anchored to the dock's own top edge covered the field it was pointing at.
+ */
+export const MusicHintHostProvider = HintHostContext.Provider;
+
 /** Null outside a dock (the expanded stage), where nothing clips the card. */
 export function useCallDockHintHost(): HTMLElement | null {
   return useContext(HintHostContext);
@@ -246,7 +253,6 @@ const EXIT_BACKSTOP_MS = 600;
  * Under reduced motion the row snaps both ways.
  */
 export function CallDockOutlet({ channelId }: { channelId: string }) {
-  const [hintHost, setHintHost] = useState<HTMLElement | null>(null);
   const store = useContext(StoreContext);
   const published = useSyncExternalStore(
     store ? store.subscribe : subscribeNone,
@@ -347,10 +353,6 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
   return (
     <div className="relative">
       <div
-        ref={setHintHost}
-        className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-2 [&>*]:pointer-events-auto"
-      />
-      <div
         data-call-dock=""
         data-state={open ? "open" : "closed"}
         aria-hidden={active ? undefined : true}
@@ -367,11 +369,7 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
               and the field's text share a left edge. On a 360 phone that
               leaves 238px, and the six tiles a phone gets (mute, hand, music,
               camera, share, hang up) take 236 of it. */}
-          <div className="border-b border-border/60 px-3 pb-2 pt-2.5">
-            <HintHostContext.Provider value={hintHost}>
-              {shown}
-            </HintHostContext.Provider>
-          </div>
+          <div className="border-b border-border/60 px-3 pb-2 pt-2.5">{shown}</div>
         </div>
       </div>
     </div>
