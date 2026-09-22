@@ -40,7 +40,27 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
   }
 
   return (
-    <div data-music-composer="" className="@container border-b border-border/60">
+    /*
+     * ONE STEP UP THE SURFACE LADDER, AS ONE BLOCK.
+     *
+     * The queue and the player used to set no background at all, so they
+     * inherited the column and the whole thing read as one flat slab with
+     * a message box floating in it. In a dark theme elevation is
+     * luminance, not shadow: a surface that sits ON something is lighter,
+     * and a surface that sits IN it is darker. This panel is attached
+     * above the composer, so it goes up one: surface-1 between the
+     * column's surface-0 and the message box's surface-2, which keeps the
+     * box the brightest thing in the composer and the field inside this
+     * panel (an `Input`, surface-0) still reading as a well.
+     *
+     * One surface for both halves rather than one each: the queue and the
+     * player are one feature, and three tones stacked in 200px reads as
+     * stripes rather than hierarchy. The borders are the seams.
+     */
+    <div
+      data-music-composer=""
+      className="@container border-y border-border/60 bg-surface-1"
+    >
       <MusicFila variant="sheet" voiceState={voiceState} />
       {current ? (
         <MusicNowPlaying
