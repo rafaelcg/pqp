@@ -9,6 +9,12 @@ interface SeoProps {
   ogDescription?: string;
   path?: string;
   noIndex?: boolean;
+  /**
+   * Site-relative path of the share card. Defaults to the product card; a
+   * campaign page with its own art passes it here and in `marketing-meta.ts`,
+   * which is what an unfurler actually reads.
+   */
+  image?: string;
 }
 
 const SITE_URL = "https://pqp.gg";
@@ -22,6 +28,7 @@ export function Seo({
   ogDescription,
   path = "/",
   noIndex = false,
+  image = "/images/og-image.jpg",
 }: SeoProps) {
   const socialTitle = ogTitle ?? title;
   const socialDescription = ogDescription ?? description;
@@ -34,7 +41,7 @@ export function Seo({
     setMeta("og:description", socialDescription, "property");
     setMeta("og:url", `${SITE_URL}${path}`, "property");
     setMeta("og:type", "website", "property");
-    setMeta("og:image", `${SITE_URL}/images/og-image.jpg`, "property");
+    setMeta("og:image", `${SITE_URL}${image}`, "property");
     setMeta("og:site_name", "pqp", "property");
     // SEO i18n: the same URL serves both languages by negotiation, and ?lang=
     // is the crawlable way to force each. hreflang tells engines the pairing,
@@ -47,7 +54,7 @@ export function Seo({
     setMeta("twitter:card", "summary_large_image");
     setMeta("twitter:title", socialTitle);
     setMeta("twitter:description", socialDescription);
-    setMeta("twitter:image", `${SITE_URL}/images/og-image.jpg`);
+    setMeta("twitter:image", `${SITE_URL}${image}`);
     setLink("canonical", `${SITE_URL}${path}`);
 
     if (noIndex) {
@@ -55,7 +62,7 @@ export function Seo({
     } else {
       setMeta("robots", "index, follow");
     }
-  }, [title, description, socialTitle, socialDescription, path, noIndex]);
+  }, [title, description, socialTitle, socialDescription, path, noIndex, image]);
 
   return null;
 }

@@ -24,4 +24,10 @@
 # admits nobody who has not joined the tester group first, so a link straight
 # to the opt-in URL sends people to a Google page that does nothing for them.
 
+# The URL people guess for the campaign. `/vem` is the page; this sends the
+# guess to its Discord import section. Kept as a real 301 here (and a client
+# route in main.tsx for builds served outside Pages) so the address can later
+# become the public paste box without breaking links already shared.
+/discord      /vem#importar        301
+
 /*    /index.html   200

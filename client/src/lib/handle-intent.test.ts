@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addIntentFromSearch,
+  createIntentFromSearch,
   HANDLE_INTENT_TTL_MS,
+  stashCreateIntent,
   stashAddIntent,
   stashHandleClaim,
   stashJoinIntent,
   takeAddIntent,
+  takeCreateIntent,
   takeHandleClaim,
   takeJoinIntent,
 } from "./handle-intent";
@@ -151,5 +154,53 @@ describe("addIntentFromSearch", () => {
     ]) {
       expect(addIntentFromSearch(search)).toBeNull();
     }
+  });
+});
+
+describe("the create-community intent", () => {
+  let storage: ReturnType<typeof memoryStorage>;
+
+  beforeEach(() => {
+    storage = memoryStorage();
+  });
+
+  it("survives the trip through sign-up and is consumed on arrival", () => {
+    stashCreateIntent(storage, "discord");
+    expect(takeCreateIntent(storage)).toBe("discord");
+    // Opening the dialog on every reload would be a nag, not an intent.
+    expect(takeCreateIntent(storage)).toBeNull();
+  });
+
+  it("expires like the others", () => {
+    stashCreateIntent(storage, "new", 0);
+    expect(takeCreateIntent(storage, HANDLE_INTENT_TTL_MS + 1)).toBeNull();
+  });
+
+  it("keeps its own key", () => {
+    stashJoinIntent(storage, "valorant-brasil");
+    stashCreateIntent(storage, "discord");
+    expect(takeJoinIntent(storage)).toBe("valorant-brasil");
+    expect(takeCreateIntent(storage)).toBe("discord");
+  });
+
+  it("refuses a stashed value that is not one of the two", () => {
+    storage.setItem(
+      "pqp:pending-create-community",
+      JSON.stringify({ handle: "rm -rf", at: Date.now() }),
+    );
+    expect(takeCreateIntent(storage)).toBeNull();
+  });
+
+  it("does nothing at all when storage is denied", () => {
+    expect(() => stashCreateIntent(hostileStorage, "discord")).not.toThrow();
+    expect(takeCreateIntent(hostileStorage)).toBeNull();
+  });
+
+  it("reads only the two known values from the URL", () => {
+    expect(createIntentFromSearch("?create=discord")).toBe("discord");
+    expect(createIntentFromSearch("?x=1&create=new")).toBe("new");
+    expect(createIntentFromSearch("?create=DISCORD")).toBeNull();
+    expect(createIntentFromSearch("?create=")).toBeNull();
+    expect(createIntentFromSearch("")).toBeNull();
   });
 });
