@@ -280,7 +280,7 @@ export class OutgoingWebhookChannelsError extends HttpError {
  * A skip id added in this edit that is not a member now. Somebody ticked
  * them and they left before Save. Dropping the id quietly answered 200 for a
  * save that ignored part of what was asked, so the form closed as if it had
- * worked. Named, like a bad channel, so the form can say who.
+ * worked. Each id is listed, like a bad channel, so the form can say who.
  *
  * An id already on the hook never lands here: it is kept even after that
  * person leaves (see `validateSkipUserIds`).
@@ -288,16 +288,12 @@ export class OutgoingWebhookChannelsError extends HttpError {
 export class OutgoingWebhookSkipUsersError extends HttpError {
   readonly code = "outgoing_webhook_skip_users";
 
-  constructor(readonly users: { id: string; name: string | null }[]) {
+  constructor(readonly users: { id: string }[]) {
     super(
       400,
-      users
-        .map((user) =>
-          user.name
-            ? `${user.name} is no longer a member of this server.`
-            : "A skipped user is not a member of this server.",
-        )
-        .join(" "),
+      users.length === 1
+        ? "A skipped user is not a member of this server."
+        : `${users.length} skipped users are not members of this server.`,
     );
     this.name = "OutgoingWebhookSkipUsersError";
   }
@@ -495,19 +491,11 @@ async function validateSkipUserIds(
     }
   }
   if (refused.length > 0) {
-    const names = await db.query<{ id: string; display_name: string }>(
-      `SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])`,
-      [refused],
-    );
-    const byId = new Map(
-      names.rows.map((row) => [row.id.toLowerCase(), row.display_name]),
-    );
-    throw new OutgoingWebhookSkipUsersError(
-      refused.map((id) => ({
-        id,
-        name: byId.get(id.toLowerCase()) ?? null,
-      })),
-    );
+    // Ids only, never names. An id that is not a member here could be
+    // anybody's, and naming it would let a server admin look up the display
+    // name of any account by probing UUIDs. The form picked these people
+    // from its own member list, so it names them itself.
+    throw new OutgoingWebhookSkipUsersError(refused.map((id) => ({ id })));
   }
   return kept;
 }

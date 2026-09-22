@@ -87,6 +87,7 @@ function channelRejectionMessage(
 function skipRejectionMessage(
   error: ApiError,
   t: Translator["t"],
+  nameOf?: (id: string) => string | undefined,
 ): string | null {
   const body = error.details;
   if (!body || typeof body !== "object") {
@@ -97,11 +98,14 @@ function skipRejectionMessage(
   if (code !== "outgoing_webhook_skip_users" || !Array.isArray(users)) {
     return null;
   }
+  // The server sends ids only (a name for an arbitrary id would leak it), so
+  // the person is named from the member list the picker was drawn from.
   const lines = users.map((row) => {
-    const name =
-      row && typeof row === "object" && "name" in row && typeof row.name === "string"
-        ? row.name
+    const id =
+      row && typeof row === "object" && "id" in row && typeof row.id === "string"
+        ? row.id
         : "";
+    const name = (id && nameOf?.(id)) || "";
     return name
       ? t("integrations.skipNotMember", { name })
       : t("integrations.skipNotMemberUnknown");
@@ -113,11 +117,12 @@ function messageOf(
   error: unknown,
   fallback: string,
   t: Translator["t"],
+  nameOf?: (id: string) => string | undefined,
 ): string {
   if (error instanceof ApiError) {
     return (
       channelRejectionMessage(error, t) ??
-      skipRejectionMessage(error, t) ??
+      skipRejectionMessage(error, t, nameOf) ??
       error.message
     );
   }
@@ -675,6 +680,12 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on server change only
   }, [serverId]);
 
+  /** Names a refused skip id from the list the picker was drawn from. */
+  function memberNameOf(id: string): string | undefined {
+    const member = members.find((one) => one.id === id);
+    return member ? memberDisplayName(member) : undefined;
+  }
+
   const channelName = useMemo(() => {
     const map = new Map(textChannels.map((channel) => [channel.id, channel.name]));
     return (id: string) => map.get(id);
@@ -728,7 +739,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         });
       }
     } catch (err) {
-      setError(messageOf(err, t("integrations.createFailed"), t));
+      setError(messageOf(err, t("integrations.createFailed"), t, memberNameOf));
     } finally {
       setCreating(false);
     }
@@ -770,7 +781,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
       setEditingId(null);
     } catch (err) {
-      setError(messageOf(err, t("integrations.updateFailed"), t));
+      setError(messageOf(err, t("integrations.updateFailed"), t, memberNameOf));
     } finally {
       setBusyId(null);
     }
