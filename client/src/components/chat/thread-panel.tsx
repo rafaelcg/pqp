@@ -2,7 +2,14 @@ import {
   THREAD_AUTO_ARCHIVE_DAYS,
   type ThreadSummary,
 } from "@pqp/shared";
-import { Archive, ChevronLeft, MessageSquareText, X } from "lucide-react";
+import {
+  Archive,
+  ChevronLeft,
+  LogOut,
+  MessageSquareText,
+  Plus,
+  X,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import {
   MessageComposer,
@@ -56,6 +63,10 @@ interface ThreadPanelProps {
   mentionCandidates: MentionCandidate[];
   isLoading: boolean;
   showLinkEmbeds: boolean;
+  /** Whether this thread is listed in the reader's sidebar. */
+  joined?: boolean;
+  /** Join or leave; absent hides the toggle. */
+  onToggleJoined?: ((joined: boolean) => void) | null;
   onClose: () => void;
   onReportMessage?: (message: ChatMessage) => void;
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
@@ -85,6 +96,8 @@ export function ThreadPanel({
   mentionCandidates,
   isLoading,
   showLinkEmbeds,
+  joined = false,
+  onToggleJoined = null,
   onClose,
   onReportMessage,
   authors,
@@ -223,9 +236,34 @@ export function ThreadPanel({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <p className="truncate font-display text-sm font-bold text-text">
-            {thread.name}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate font-display text-sm font-bold text-text">
+              {thread.name}
+            </p>
+            {/* Join / leave: whether this thread is listed under its channel
+                in the sidebar. Not offered on an archived thread, which the
+                sidebar leaves out whatever the answer. */}
+            {onToggleJoined && !thread.archived && (
+              <button
+                type="button"
+                data-thread-membership={joined ? "joined" : "not-joined"}
+                onClick={() => onToggleJoined(!joined)}
+                className={cn(
+                  "flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-2 py-0.5 text-[11px] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+                  joined
+                    ? "text-text-tertiary hover:bg-surface-2 hover:text-text"
+                    : "bg-accent/15 text-accent hover:bg-accent/25",
+                )}
+              >
+                {joined ? (
+                  <LogOut className="h-3 w-3" aria-hidden />
+                ) : (
+                  <Plus className="h-3 w-3" aria-hidden />
+                )}
+                {joined ? t("thread.leave") : t("thread.join")}
+              </button>
+            )}
+          </div>
           <p className="truncate text-[11px] text-text-tertiary">
             {[
               threadChipLabel(t, thread.replyCount),

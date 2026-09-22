@@ -293,6 +293,57 @@ describeDb("threads over HTTP and WS", () => {
         .flat()
         .map((one) => one.channelId),
     ).not.toContain(threadId);
+
+    // Joining or leaving is the same answer: the thread does not exist.
+    for (const method of ["PUT", "DELETE"]) {
+      const refused = await call(
+        member,
+        method,
+        `/api/threads/${threadId}/membership`,
+      );
+      expect(refused.status).toBe(404);
+    }
+    const rows = await getPool().query(
+      `SELECT 1 FROM thread_memberships WHERE thread_id = $1 AND user_id = $2`,
+      [threadId, member.id],
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it("leaves and rejoins a thread over HTTP, and refuses an id that is not one", async () => {
+    const originId = await postOrigin("leave me");
+    const started = await call<{ thread: { channelId: string } }>(
+      owner,
+      "POST",
+      `/api/messages/${originId}/threads`,
+    );
+    const threadId = started.body.thread.channelId;
+    const listed = async () => {
+      const list = await call<{
+        threads: Record<string, { channelId: string }[]>;
+      }>(owner, "GET", `/api/servers/${serverId}/threads`);
+      return (list.body.threads[textChannelId] ?? []).map(
+        (one) => one.channelId,
+      );
+    };
+    expect(await listed()).toContain(threadId);
+
+    expect(
+      (await call(owner, "DELETE", `/api/threads/${threadId}/membership`))
+        .status,
+    ).toBe(200);
+    expect(await listed()).not.toContain(threadId);
+
+    expect(
+      (await call(owner, "PUT", `/api/threads/${threadId}/membership`)).status,
+    ).toBe(200);
+    expect(await listed()).toContain(threadId);
+
+    // A plain text channel is a channel the caller can see, not a thread.
+    expect(
+      (await call(owner, "PUT", `/api/threads/${textChannelId}/membership`))
+        .status,
+    ).toBe(404);
   });
 
   it("refuses to start a thread anywhere but a server text channel message", async () => {

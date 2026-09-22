@@ -39,6 +39,7 @@ const {
   listActiveThreadsByParent,
   listThreadChannelIds,
   listThreadsForMessages,
+  setThreadMembership,
   ThreadTargetError,
 } = await import("./threads.js");
 const { searchMessages } = await import("./search.js");
@@ -256,53 +257,97 @@ describeDb("threads", () => {
     ).toContain(theirThread.channelId);
   });
 
-  it("admits the origin's author, not whoever tapped start thread", async () => {
-    // owner wrote the message; member threads it and replies. The query has
-    // no creator column to read, so what it can honestly test is the author
-    // of the origin, and the creator is admitted by having opened the panel.
+  async function listedFor(user: TestUser): Promise<string[]> {
+    const byParent = await listActiveThreadsByParent(
+      serverId,
+      [publicChannelId],
+      10,
+      user.id,
+    );
+    return (byParent.get(publicChannelId) ?? []).map((one) => one.channelId);
+  }
+
+  it("admits the origin's author and whoever started the thread", async () => {
+    // owner wrote the message; member threads it without saying anything.
+    // Both are in it: the author has a stake in the answers, and starting a
+    // thread is joining it.
     const origin = await postMessage(publicChannelId, owner, "my message");
-    const { thread } = (await createThreadForMessage(origin.id, null))!;
-    await postMessage(thread.channelId, member, "member replies");
+    const { thread } = (await createThreadForMessage(
+      origin.id,
+      null,
+      member.id,
+    ))!;
 
-    const forOwner = await listActiveThreadsByParent(
-      serverId,
-      [publicChannelId],
-      10,
-      owner.id,
-    );
-    expect(
-      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
-    ).toContain(thread.channelId);
-
-    // outsider neither wrote the origin nor took part.
-    const forOutsider = await listActiveThreadsByParent(
-      serverId,
-      [publicChannelId],
-      10,
-      outsider.id,
-    );
-    expect(
-      (forOutsider.get(publicChannelId) ?? []).map((one) => one.channelId),
-    ).not.toContain(thread.channelId);
+    expect(await listedFor(owner)).toContain(thread.channelId);
+    expect(await listedFor(member)).toContain(thread.channelId);
+    // outsider neither wrote the origin, started it, nor took part.
+    expect(await listedFor(outsider)).not.toContain(thread.channelId);
   });
 
-  it("counts opening a thread as joining it", async () => {
+  it("joins only the starter who created it, not one who tapped start on an existing thread", async () => {
+    const origin = await postMessage(publicChannelId, owner, "one thread");
+    const { thread } = (await createThreadForMessage(
+      origin.id,
+      null,
+      owner.id,
+    ))!;
+    const again = await createThreadForMessage(origin.id, null, member.id);
+    expect(again!.created).toBe(false);
+    expect(await listedFor(member)).not.toContain(thread.channelId);
+  });
+
+  it("does not count opening a thread as joining it", async () => {
     const theirs = await postMessage(publicChannelId, member, "opened topic");
     const thread = (await createThreadForMessage(theirs.id, null))!.thread;
     await postMessage(thread.channelId, member, "their reply");
 
-    // What the panel does on open: a read cursor, and nothing else.
+    // What the panel does on open: a read cursor, and nothing else. One
+    // curious click used to pin a stranger's thread for days.
     await markChannelRead(thread.channelId, owner.id);
 
-    const forOwner = await listActiveThreadsByParent(
-      serverId,
-      [publicChannelId],
-      10,
-      owner.id,
+    expect(await listedFor(owner)).not.toContain(thread.channelId);
+  });
+
+  it("leaving hides a thread until the reader speaks in it again", async () => {
+    const origin = await postMessage(publicChannelId, owner, "leave topic");
+    const { thread } = (await createThreadForMessage(origin.id, null))!;
+    await postMessage(thread.channelId, owner, "said before leaving");
+    await postMessage(thread.channelId, member, "somebody else keeps going");
+    expect(await listedFor(owner)).toContain(thread.channelId);
+
+    // A leave overrides every derived reason at once: author of the origin,
+    // and having spoken before.
+    await setThreadMembership(thread.channelId, owner.id, false);
+    expect(await listedFor(owner)).not.toContain(thread.channelId);
+
+    // Other people's replies do not bring it back.
+    await postMessage(thread.channelId, member, "still going");
+    expect(await listedFor(owner)).not.toContain(thread.channelId);
+    // Nor does leaving change anybody else's list.
+    expect(await listedFor(member)).toContain(thread.channelId);
+
+    // Speaking after the leave does. Nudge the leave into the past so the
+    // reply is unambiguously after it, whatever the clock resolution.
+    await getPool().query(
+      `UPDATE thread_memberships SET updated_at = now() - interval '1 second'
+        WHERE thread_id = $1 AND user_id = $2`,
+      [thread.channelId, owner.id],
     );
-    expect(
-      (forOwner.get(publicChannelId) ?? []).map((one) => one.channelId),
-    ).toContain(thread.channelId);
+    await postMessage(thread.channelId, owner, "back in");
+    expect(await listedFor(owner)).toContain(thread.channelId);
+  });
+
+  it("joining lists a thread the reader never spoke in, and leaving undoes it", async () => {
+    const theirs = await postMessage(publicChannelId, member, "lurk topic");
+    const { thread } = (await createThreadForMessage(theirs.id, null))!;
+    await postMessage(thread.channelId, member, "their reply");
+    expect(await listedFor(owner)).not.toContain(thread.channelId);
+
+    await setThreadMembership(thread.channelId, owner.id, true);
+    expect(await listedFor(owner)).toContain(thread.channelId);
+
+    await setThreadMembership(thread.channelId, owner.id, false);
+    expect(await listedFor(owner)).not.toContain(thread.channelId);
   });
 
   it("leaves archived threads out of the sidebar list", async () => {

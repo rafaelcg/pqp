@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   Archive,
+  CheckCheck,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -13,6 +14,7 @@ import {
   Hand,
   History,
   Lock,
+  LogOut,
   MessageSquareText,
   Mic,
   MicOff,
@@ -177,6 +179,9 @@ interface ChannelListProps {
   unreadThreadIds?: ReadonlySet<string>;
   /** Selects the parent channel and opens the panel, like the chip does. */
   onOpenThread?: (thread: ThreadSummary) => void;
+  /** Takes the thread out of this reader's sidebar until they reply in it. */
+  onLeaveThread?: (thread: ThreadSummary) => void;
+  onMarkThreadRead?: (thread: ThreadSummary) => void;
   /** channelId -> upcoming/live session start time, for the sidebar's "próxima: sex 21h" hint. Behind VITE_WATCH_PARTY_SCHEDULE upstream. */
   upcomingSessionStartsAtByChannel?: Record<string, string>;
   channels: Channel[];
@@ -367,6 +372,8 @@ export function ChannelList({
   threadsByChannel = {},
   unreadThreadIds = EMPTY_THREAD_IDS,
   onOpenThread,
+  onLeaveThread,
+  onMarkThreadRead,
   channels,
   selectedChannelId,
   canManage,
@@ -1144,38 +1151,21 @@ export function ChannelList({
             shape the voice occupants below use. */}
         {(threadsByChannel[channel.id]?.length ?? 0) > 0 && onOpenThread && (
           <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2">
-            {threadsByChannel[channel.id]!.map((thread) => {
-              const threadUnread = unreadThreadIds.has(thread.channelId);
-              return (
-                <li key={thread.channelId}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onOpenThread(thread);
-                      onMobileClose?.();
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-surface-2/60",
-                      threadUnread
-                        ? "font-semibold text-text"
-                        : "text-text-tertiary hover:text-text",
-                    )}
-                  >
-                    <MessageSquareText
-                      className="h-3 w-3 shrink-0 text-accent"
-                      aria-hidden
-                    />
-                    <span className="min-w-0 truncate">{thread.name}</span>
-                    {threadUnread && (
-                      <span
-                        className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                        aria-hidden
-                      />
-                    )}
-                  </button>
-                </li>
-              );
-            })}
+            {threadsByChannel[channel.id]!.map((thread) => (
+              <SidebarThreadRow
+                key={thread.channelId}
+                thread={thread}
+                unread={unreadThreadIds.has(thread.channelId)}
+                onOpen={() => {
+                  onOpenThread(thread);
+                  onMobileClose?.();
+                }}
+                onLeave={onLeaveThread ? () => onLeaveThread(thread) : undefined}
+                onMarkRead={
+                  onMarkThreadRead ? () => onMarkThreadRead(thread) : undefined
+                }
+              />
+            ))}
           </ul>
         )}
         {channelMusic[channel.id] && (
@@ -2942,5 +2932,95 @@ function ChannelRow({
         )}
       </div>
     </ContextMenu>
+  );
+}
+
+/**
+ * --- threads --- one row under a channel: open it, or leave it.
+ *
+ * Two sibling buttons rather than an X inside the row's button, which would be
+ * a button inside a button. The X takes the unread dot's slot on hover and
+ * focus, and is always there on a touch screen, where there is no hover.
+ * Leaving is not destructive (the thread, its messages and its chip are all
+ * still there, and replying rejoins it), so it asks for no confirmation.
+ */
+function SidebarThreadRow({
+  thread,
+  unread,
+  onOpen,
+  onLeave,
+  onMarkRead,
+}: {
+  thread: ThreadSummary;
+  unread: boolean;
+  onOpen: () => void;
+  onLeave?: () => void;
+  onMarkRead?: () => void;
+}) {
+  const { t } = useTranslation();
+  const items: ContextMenuItemDef[] = [];
+  if (unread && onMarkRead) {
+    items.push({
+      id: "mark-read",
+      label: t("chat.markRead"),
+      icon: CheckCheck,
+      onSelect: onMarkRead,
+    });
+  }
+  if (onLeave) {
+    items.push({
+      id: "leave",
+      label: t("thread.leave"),
+      icon: LogOut,
+      onSelect: onLeave,
+    });
+  }
+  return (
+    <li>
+      <ContextMenu items={items} disabled={items.length === 0}>
+        <div className="group/thread relative flex items-center rounded-md hover:bg-surface-2/60">
+          <button
+            type="button"
+            onClick={onOpen}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs",
+              onLeave && "pr-7",
+              unread
+                ? "font-semibold text-text"
+                : "text-text-tertiary hover:text-text",
+            )}
+          >
+            <MessageSquareText
+              className="h-3 w-3 shrink-0 text-accent"
+              aria-hidden
+            />
+            <span className="min-w-0 truncate">{thread.name}</span>
+            {unread && (
+              <span
+                className={cn(
+                  "ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent",
+                  onLeave &&
+                    "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 [@media(hover:none)]:opacity-0",
+                )}
+                aria-hidden
+              />
+            )}
+          </button>
+          {onLeave && (
+            <Tooltip label={t("thread.leave")}>
+              <button
+                type="button"
+                data-thread-leave=""
+                aria-label={t("thread.leaveNamed", { name: thread.name })}
+                onClick={onLeave}
+                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100"
+              >
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+      </ContextMenu>
+    </li>
   );
 }

@@ -177,6 +177,7 @@ export interface CreateThreadResult {
 export async function createThreadForMessage(
   messageId: string,
   requestedName: string | null,
+  starterId?: string,
 ): Promise<CreateThreadResult | null> {
   const origin = await getPool().query<{
     channel_id: string;
@@ -229,6 +230,12 @@ export async function createThreadForMessage(
 
   const createdRow = inserted.rows[0];
   if (createdRow) {
+    // Starting a thread is joining it. Only the winner of the race writes
+    // this: whoever tapped "start thread" on a message that already had one
+    // opened somebody else's thread, and opening is not joining.
+    if (starterId) {
+      await setThreadMembership(createdRow.id, starterId, true);
+    }
     return {
       thread: toSummary(createdRow),
       created: true,
@@ -339,6 +346,8 @@ export async function listActiveThreadsByParent(
     `WITH mine AS (
        SELECT c.id
          FROM channels c
+         LEFT JOIN thread_memberships tm
+           ON tm.thread_id = c.id AND tm.user_id = $3
         WHERE c.server_id = $4
           -- server_id first so idx_channels_parent (server_id, parent_id,
           -- position) is usable at all: without its leading column this was a
@@ -346,27 +355,38 @@ export async function listActiveThreadsByParent(
           AND c.parent_id = ANY($1::uuid[])
           AND c.type = 'thread'
           AND ${ACTIVE_THREAD_SQL}
-          -- ONLY THREADS THIS READER IS IN. A thread has no members of its
-          -- own (its audience is its parent's) and no creator column, so
-          -- membership is derived from three things this reader did leave a
-          -- trace of: said something in it, WROTE THE MESSAGE IT GREW OUT OF
-          -- (not the same as having started it — anyone may thread anyone's
-          -- message, and the author is the one with the stake in the answers),
-          -- or opened it. Whoever taps "start thread" is admitted by the third
-          -- clause, because starting one opens its panel, which marks it read.
-          -- Between them that is Discord's "created, replied, or joined".
-          AND (
-            EXISTS (SELECT 1 FROM messages said
-                     WHERE said.channel_id = c.id AND said.author_id = $3)
-            OR EXISTS (SELECT 1 FROM messages root
-                        WHERE root.id = c.thread_root_message_id
-                          AND root.author_id = $3)
-            -- Opening the panel writes a read cursor, so this is "joined". A
-            -- thread never opened has no row here, which is also why unread
-            -- cannot be the test: with no cursor everything reads unread.
-            OR EXISTS (SELECT 1 FROM channel_reads cr
-                        WHERE cr.channel_id = c.id AND cr.user_id = $3)
-          )
+          -- ONLY THREADS THIS READER IS IN. A thread's audience is its
+          -- parent's, so membership is its own question, answered in order:
+          --
+          -- 1. An explicit row wins. TRUE is starting the thread or tapping
+          --    Join. FALSE is Leave, which holds until this reader SPEAKS in
+          --    the thread again after leaving (Discord's "rejoin by replying").
+          --    Mentions deliberately do not re-admit: role and @everyone
+          --    mentions expand into the same table, so one @everyone would put
+          --    the thread back in every sidebar in the server.
+          -- 2. With no row, membership is derived from a trace this reader
+          --    left: said something in it, or WROTE THE MESSAGE IT GREW OUT OF
+          --    (anyone may thread anyone's message, and the author is the one
+          --    with a stake in the answers).
+          --
+          -- Opening a thread is NOT joining it. It used to be, through the
+          -- read cursor the panel writes, and one curious click then pinned a
+          -- stranger's thread under the channel for days.
+          AND CASE
+            WHEN tm.joined THEN TRUE
+            WHEN NOT tm.joined THEN EXISTS (
+              SELECT 1 FROM messages said
+               WHERE said.channel_id = c.id
+                 AND said.author_id = $3
+                 AND said.created_at > tm.updated_at)
+            ELSE (
+              EXISTS (SELECT 1 FROM messages said
+                       WHERE said.channel_id = c.id AND said.author_id = $3)
+              OR EXISTS (SELECT 1 FROM messages root
+                          WHERE root.id = c.thread_root_message_id
+                            AND root.author_id = $3)
+            )
+          END
      ),
      ranked AS (
        SELECT c.id,
@@ -409,4 +429,27 @@ export async function listThreadChannelIds(
     [parentChannelId],
   );
   return result.rows.map((r) => r.id);
+}
+
+/**
+ * Join or leave a thread: the explicit row `listActiveThreadsByParent` reads
+ * before anything it derives. Idempotent, and a fresh `updated_at` on every
+ * call, because a leave is measured from its own moment: only what this person
+ * says after it brings the thread back.
+ *
+ * ACCESS IS NOT CHECKED HERE, as with starting one: the route checks the
+ * caller can see the thread, which is the parent's answer.
+ */
+export async function setThreadMembership(
+  threadId: string,
+  userId: string,
+  joined: boolean,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO thread_memberships (thread_id, user_id, joined, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (thread_id, user_id)
+     DO UPDATE SET joined = EXCLUDED.joined, updated_at = EXCLUDED.updated_at`,
+    [threadId, userId, joined],
+  );
 }

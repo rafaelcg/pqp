@@ -599,6 +599,7 @@ import {
   createThreadForMessage,
   listActiveThreadsByParent,
   listThreadChannelIds,
+  setThreadMembership,
   ThreadTargetError,
 } from "../services/threads.js";
 import { mergePreferences } from "../services/preferences.js";
@@ -7042,7 +7043,11 @@ router.post(
     const body = createThreadSchema.parse(await readJsonBody(req));
     let result;
     try {
-      result = await createThreadForMessage(messageId!, body.name ?? null);
+      result = await createThreadForMessage(
+        messageId!,
+        body.name ?? null,
+        user.id,
+      );
     } catch (error) {
       if (error instanceof ThreadTargetError) {
         throw new HttpError(400, error.message);
@@ -7065,6 +7070,38 @@ router.post(
     return result.created
       ? created({ thread: result.thread })
       : { thread: result.thread };
+  },
+);
+
+/**
+ * Join (PUT) or leave (DELETE) a thread: whether it is listed under its
+ * channel in this person's sidebar, and nothing else. Access to the thread and
+ * its messages is the parent's answer either way, so leaving hides nothing
+ * the chip does not still offer, and joining grants nothing new.
+ *
+ * 404 for an id that is not a thread, and for a thread whose parent the
+ * caller cannot see: `requireChannelAccess` answers for a thread with its
+ * parent's answer, so a thread under a private channel fails closed here too.
+ */
+async function requireThread(threadId: string, userId: string) {
+  const channel = await requireChannelAccess(threadId, userId);
+  if (channel.type !== "thread") {
+    throw new NotFound("Thread not found");
+  }
+}
+
+router.put("/api/threads/:threadId/membership", async ({ user }, { threadId }) => {
+  await requireThread(threadId!, user.id);
+  await setThreadMembership(threadId!, user.id, true);
+  return { ok: true };
+});
+
+router.delete(
+  "/api/threads/:threadId/membership",
+  async ({ user }, { threadId }) => {
+    await requireThread(threadId!, user.id);
+    await setThreadMembership(threadId!, user.id, false);
+    return { ok: true };
   },
 );
 
