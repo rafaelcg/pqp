@@ -136,6 +136,12 @@ export function MusicSearchPicker({
   const runResolve = useCallback(
     async (text: string) => {
       const room = musicSessionChannelId();
+      /*
+       * A search may still be in flight, and its answer would land on top
+       * of what this paste resolves to. `runId` is the same guard
+       * `runSearch` checks, so bumping it here retires that answer.
+       */
+      runId.current += 1;
       try {
         const { track, tracks } = await resolveMusic(text);
         if (room === null || musicSessionChannelId() !== room) {

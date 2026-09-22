@@ -827,8 +827,15 @@ export async function skipToNext(
   try {
     const related = await fetchRelated(videoId);
     // The room may have moved on while we were asking, and the person who
-    // pressed skip is not necessarily the only one pressing things.
+    // pressed skip is not necessarily the only one pressing things. The
+    // mode is re-asked as well as the track: somebody turning it off, or
+    // queueing something, during the round trip means a forced pick is no
+    // longer the skip that was asked for.
     if (snapshot.state?.current?.id !== trackId) {
+      return;
+    }
+    if (!shouldAutoplayOnEnd(snapshot.state)) {
+      advance(trackId);
       return;
     }
     const pick = musicAutoplayCandidate(related, snapshot.state);

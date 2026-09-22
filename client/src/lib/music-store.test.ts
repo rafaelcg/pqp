@@ -324,6 +324,44 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.current).toBeNull();
   });
 
+  /*
+   * The lookup takes a round trip, and the room does not stand still for
+   * it. Somebody turning the mode off, or queueing a track, during that
+   * window means the pick is no longer what was asked for: the skip
+   * should then be the ordinary one it would have been.
+   */
+  it("does not force a pick when the mode went off mid-lookup", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    addTracks([resolved("nextttttttt")]);
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      queue: [],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    await skipToNext(async () => {
+      setAutoplay(false);
+      return [resolved("similarrrrr")];
+    });
+    expect(getMusicSnapshot().state?.current?.videoId).not.toBe("similarrrrr");
+  });
+
+  it("does not force a pick when a track was queued mid-lookup", async () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      autoplay: true,
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    await skipToNext(async () => {
+      addTracks([resolved("queuedddddd")]);
+      return [resolved("similarrrrr")];
+    });
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("queuedddddd");
+  });
+
   it("is an ordinary skip when the queue has something in it", async () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     addTracks([resolved("nextttttttt")]);
