@@ -70,6 +70,114 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.positionMs).toBe(45_000);
   });
 
+  /**
+   * THE SERVER HAS ALREADY DECIDED, SO THE CLIENT MUST NOT DECIDE AGAIN.
+   *
+   * `musicWriteIsStale` is the room's conflict rule and the SERVER is where
+   * it belongs: it picks which of two writes the room keeps. Applying it a
+   * second time to what the server then broadcasts let a client throw the
+   * room's truth away and go on playing alone, with nothing to bring it
+   * back: on 22 Sep 2026 a call skipped its last track, it ended for two
+   * people and the third kept hearing it.
+   *
+   * Our own echo is the one frame we may still refuse, because our
+   * optimistic copy is a write ahead of it.
+   */
+  it("takes another peer's state even when ours looks newer", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const held = getMusicSnapshot().state!;
+    receiveMusic(CHANNEL, {
+      ...held,
+      current: null,
+      queue: [],
+      status: "paused",
+      // Same rev, and a peer id that loses the old tie-break.
+      rev: held.rev,
+      actorId: "peer-a-aaa" < held.actorId ? "peer-a-aaa" : "peer-0",
+    });
+    expect(getMusicSnapshot().state?.current).toBeNull();
+  });
+
+  it("still refuses our own echo from behind our optimistic write", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const held = getMusicSnapshot().state!;
+    seekTo(30_000);
+    receiveMusic(CHANNEL, { ...held, positionMs: 0 });
+    expect(getMusicSnapshot().state?.positionMs).toBe(30_000);
+  });
+
+  /**
+   * THE END OF A QUEUE IS A STATE, NOT A DISAPPEARANCE.
+   *
+   * `musicAdvance` leaves `current` null when the last track is skipped,
+   * and the bar keyed on `current`, so the whole player vanished from the
+   * composer mid-gesture: the thing you were just using, gone, with the
+   * song you had just heard nowhere to be found. The finished track is
+   * held here so the surface can park on it and offer Tocar de novo.
+   */
+  it("parks on the track the queue ended with", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      current: null,
+      queue: [],
+      status: "paused",
+      history: [now],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    expect(getMusicSnapshot().parked?.id).toBe(now.id);
+  });
+
+  it("stops parking the moment something is on again", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    const now = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      current: null,
+      queue: [],
+      status: "paused",
+      history: [now],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    addTrack(resolved("nextttttttt"));
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
+  /**
+   * A STOP IS NOT AN END.
+   *
+   * The queue running dry leaves the room behind with `current: null`;
+   * "Parar para todos" and a session reset tear it down to `null`. Parking
+   * on both told the person who had just stopped the music that the queue
+   * ended and offered to play it again, and a reconnect in the same room
+   * flashed the same bar over a song that was still playing.
+   */
+  it("does not park when somebody stops the music for everyone", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, null);
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
+  it("does not park when the seat is set up again in the same room", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-a",
+      userId: "u1",
+      displayName: "Ana",
+      send: () => {},
+    });
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
+  it("does not park a room that was already empty when we arrived", () => {
+    receiveMusic(CHANNEL, null);
+    expect(getMusicSnapshot().parked).toBeNull();
+  });
+
   it("restarts skip-back when past three seconds", () => {
     addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
     const now = getMusicSnapshot().state!.current!;

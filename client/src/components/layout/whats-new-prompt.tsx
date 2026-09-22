@@ -20,9 +20,12 @@ import {
 export function WhatsNewPrompt({
   enabled = true,
   onOpen,
+  onDismiss,
 }: {
   enabled?: boolean;
   onOpen: () => void;
+  /** See `CargosHint`: a dismissed card has to give the corner back. */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const [state] = useState(() =>
@@ -30,6 +33,10 @@ export function WhatsNewPrompt({
   );
   const [open, setOpen] = useState(true);
   const automated = isAutomatedBrowser();
+  const close = () => {
+    setOpen(false);
+    onDismiss?.();
+  };
 
   useEffect(() => {
     if (automated || !state || !enabled) {
@@ -43,7 +50,7 @@ export function WhatsNewPrompt({
   return (
     <CornerCard
       open={show}
-      onClose={() => setOpen(false)}
+      onClose={close}
       label={t("whatsNew.label")}
       dismissLabel={t("whatsNew.dismiss")}
       dataAttribute="whats-new"
@@ -61,7 +68,7 @@ export function WhatsNewPrompt({
           size="sm"
           className="cta-lift rounded-full px-4"
           onClick={() => {
-            setOpen(false);
+            close();
             onOpen();
           }}
         >

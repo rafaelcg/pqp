@@ -38,6 +38,10 @@ import {
   musicEmbedCommand,
   playerNeedsRoomSeek,
   shouldAdvanceOnEnded,
+  nextWrongVideoRepair,
+  playerIsOnWrongVideo,
+  WRONG_VIDEO_REPAIR_LIMIT,
+  type WrongVideoRepair,
   shouldCallPlayVideo,
   shouldKeepMusicEmbed,
   shouldReportPositionSample,
@@ -238,6 +242,74 @@ describe("musicEmbedCommand", () => {
   it("loads a playing track and cues a paused one", () => {
     expect(musicEmbedCommand("dQw4w9WgXcQ", "playing")).toBe("load");
     expect(musicEmbedCommand("dQw4w9WgXcQ", "paused")).toBe("cue");
+  });
+});
+
+describe("playerIsOnWrongVideo", () => {
+  /**
+   * The tick read the loaded id already and did nothing with it: a player
+   * left on the wrong video was noticed every two seconds and ignored,
+   * while the drift loop went on seeking THAT video to the room's clock.
+   * The 22 Sep 2026 screenshot is the whole bug in one frame: the bar says
+   * Toto, the picture is another song, and it stays that way.
+   */
+  it("is the loaded id disagreeing with the room's", () => {
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", "bbbbbbbbbbb")).toBe(true);
+  });
+
+  it("is not a player on the room's track", () => {
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", "aaaaaaaaaaa")).toBe(false);
+  });
+
+  it("is not a player with nothing loaded yet, or a room with nothing on", () => {
+    expect(playerIsOnWrongVideo(undefined, "aaaaaaaaaaa")).toBe(false);
+    expect(playerIsOnWrongVideo("", "aaaaaaaaaaa")).toBe(false);
+    expect(playerIsOnWrongVideo("aaaaaaaaaaa", null)).toBe(false);
+  });
+});
+
+describe("nextWrongVideoRepair", () => {
+  /**
+   * The repair has to give up. A video YouTube will not load (embedding
+   * off, region-blocked, removed) keeps reporting the old id, and without a
+   * limit every viewer's player reloaded it every two seconds for the rest
+   * of the call.
+   */
+  const fresh: WrongVideoRepair = { videoId: null, attempts: 0, nextAtMs: 0 };
+
+  it("tries straight away, then backs off", () => {
+    const first = nextWrongVideoRepair(fresh, "aaaaaaaaaaa", 1_000);
+    expect(first.allowed).toBe(true);
+    const tooSoon = nextWrongVideoRepair(first.next, "aaaaaaaaaaa", 1_500);
+    expect(tooSoon.allowed).toBe(false);
+    const later = nextWrongVideoRepair(first.next, "aaaaaaaaaaa", first.next.nextAtMs);
+    expect(later.allowed).toBe(true);
+    expect(later.next.nextAtMs - first.next.nextAtMs).toBeGreaterThan(
+      first.next.nextAtMs - 1_000,
+    );
+  });
+
+  it("stops after the limit", () => {
+    let state = fresh;
+    let now = 0;
+    for (let i = 0; i < WRONG_VIDEO_REPAIR_LIMIT; i += 1) {
+      const step = nextWrongVideoRepair(state, "aaaaaaaaaaa", now);
+      expect(step.allowed).toBe(true);
+      state = step.next;
+      now = state.nextAtMs;
+    }
+    expect(nextWrongVideoRepair(state, "aaaaaaaaaaa", now + 60_000).allowed).toBe(false);
+  });
+
+  it("starts over when the room moves to another track", () => {
+    let state = fresh;
+    let now = 0;
+    for (let i = 0; i < WRONG_VIDEO_REPAIR_LIMIT; i += 1) {
+      const step = nextWrongVideoRepair(state, "aaaaaaaaaaa", now);
+      state = step.next;
+      now = state.nextAtMs;
+    }
+    expect(nextWrongVideoRepair(state, "bbbbbbbbbbb", now).allowed).toBe(true);
   });
 });
 
@@ -658,6 +730,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
@@ -695,6 +768,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -728,6 +802,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -773,6 +848,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -804,6 +880,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: false })}
           canManage={false}
@@ -840,6 +917,7 @@ describe("MusicNowPlaying", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -885,6 +963,7 @@ describe("the composer bar's up-next line", () => {
             receivedAt: Date.now(),
             open: false,
             listening,
+            parked: null,
           }}
           voiceState={voiceState(voice)}
           canManage
@@ -939,6 +1018,7 @@ describe("the composer bar's up-next line", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -998,6 +1078,7 @@ describe("the composer bar a member sees", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState({ canManageMusic: canManage })}
           canManage={canManage}
@@ -1063,6 +1144,7 @@ describe("the composer bar folds to one row when it has the width", () => {
             receivedAt: Date.now(),
             open: false,
             listening: true,
+            parked: null,
           }}
           voiceState={voiceState()}
           canManage
@@ -1135,6 +1217,7 @@ describe("the composer bar after Parar de ouvir", () => {
             receivedAt: Date.now(),
             open: false,
             listening,
+            parked: null,
           }}
           voiceState={voiceState({
             occupancy: {

@@ -73,7 +73,7 @@ which put it and the update notice on screen together with an Escape listener
 each, and one keypress silenced the update instead of the card the person was
 aiming at. Composer format, Watch party / share,
 and Fixar use the same `CornerCard` frame with `layout="inline"` next to the
-control; they share `lib/feature-hints.ts` so only one of those mounts, and they
+control, always out of the flow so the control does not move; they share `lib/feature-hints.ts` so only one of those mounts, and they
 yield while a campaign owns the corner. "The call controls moved" is first in
 `ATTACHED_FEATURE_HINT_ORDER`: the voice-only call bar docks in the composer
 since September 2026, and every in-call hint points at a control that now
@@ -134,7 +134,15 @@ that arrive together stagger (`--stagger`). All of it is off under
 
 1. Decide its persistence: preference (account question) or `lib/hints.ts`
    key (campaign).
-2. Render it with `CornerCard` (corner, or `layout="inline"` next to a control).
+2. Render it with `CornerCard` (corner, or `layout="inline"` next to a
+   control). An inline card must be **out of the flow**: wrap it in something
+   that takes no room (`absolute`, or a `relative h-0` sibling) with
+   `pointer-events-none` on the wrapper and `[&>*]:pointer-events-auto` on the
+   card, or it pushes the control it explains down the screen the moment it
+   appears and swallows clicks on whatever it spans. The call dock's cards go
+   one step further: the dock animates open by collapsing a row that has to be
+   `overflow-hidden`, so they portal into a host the outlet hangs above it
+   (`useCallDockHintHost`).
 3. If it is a corner card, add its id to `CORNER_HINT_ORDER` in product
    order and pass `enabled={cornerHint === "<id>"}` from `App`. Render nothing
    when `enabled` is false, and do not spend the impression either: a card that

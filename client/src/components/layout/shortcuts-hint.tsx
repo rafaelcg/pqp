@@ -14,15 +14,22 @@ import { useTranslation } from "@/lib/i18n";
 export function ShortcutsHint({
   enabled,
   shortcutLabel,
+  onDismiss,
 }: {
   enabled: boolean;
   shortcutLabel: string;
+  /** See `CargosHint`: a dismissed card has to give the corner back. */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
     () => !isAutomatedBrowser() && !isFeatureHintSeen("shortcuts"),
   );
   const [open, setOpen] = useState(true);
+  const close = () => {
+    setOpen(false);
+    onDismiss?.();
+  };
 
   useEffect(() => {
     if (eligible && enabled) {
@@ -35,7 +42,7 @@ export function ShortcutsHint({
   return (
     <CornerCard
       open={show}
-      onClose={() => setOpen(false)}
+      onClose={close}
       label={t("featureHint.shortcuts.title")}
       dismissLabel={t("featureHint.dismiss")}
       dataAttribute="shortcuts"
@@ -45,7 +52,7 @@ export function ShortcutsHint({
         <Button
           size="sm"
           className="cta-lift rounded-full px-4"
-          onClick={() => setOpen(false)}
+          onClick={close}
         >
           {t("featureHint.gotIt")}
         </Button>

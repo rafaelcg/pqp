@@ -21,13 +21,24 @@ import {
  * the X closes it. Android goes to `/android`, iPhone to `/beta`. The
  * queue in `corner-hints.ts` is what stops this stacking on the others.
  */
-export function MobileBetaHint({ enabled }: { enabled: boolean }) {
+export function MobileBetaHint({
+  enabled,
+  onDismiss,
+}: {
+  enabled: boolean;
+  /** See `CargosHint`: a dismissed card has to give the corner back. */
+  onDismiss?: () => void;
+}) {
   const { t } = useTranslation();
   const [eligible] = useState(
     () => !isAutomatedBrowser() && !isMobileBetaHintSeen(),
   );
   const [open, setOpen] = useState(true);
   const [android] = useState(() => isAndroidDevice());
+  const close = () => {
+    setOpen(false);
+    onDismiss?.();
+  };
 
   useEffect(() => {
     if (eligible && enabled) {
@@ -51,7 +62,7 @@ export function MobileBetaHint({ enabled }: { enabled: boolean }) {
   return (
     <CornerCard
       open={show}
-      onClose={() => setOpen(false)}
+      onClose={close}
       label={t(titleKey)}
       dismissLabel={t("mobileBetaHint.dismiss")}
       dataAttribute="mobile-beta"
@@ -59,7 +70,7 @@ export function MobileBetaHint({ enabled }: { enabled: boolean }) {
       body={t(bodyKey)}
       footer={
         <Button asChild size="sm" className="cta-lift rounded-full px-4">
-          <Link to={to} onClick={() => setOpen(false)}>
+          <Link to={to} onClick={close}>
             {t(ctaKey)}
           </Link>
         </Button>

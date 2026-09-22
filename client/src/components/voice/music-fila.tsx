@@ -333,15 +333,19 @@ export function MusicFila({
 
         {fieldHintEnabled ? (
           /* Attached to the field, under it, where the answer to "what do I
-             type here" belongs. It only draws when it holds the one
-             attached slot; `lib/feature-hints.ts` is the queue. */
-          <div className="pointer-events-auto shrink-0 px-3 pt-2">
+             type here" belongs, and OUT OF THE FLOW: in it the card pushed
+             the queue and the sources line down by its own height, so the
+             panel jumped the moment it opened. It only draws when it holds
+             the one attached slot; `lib/feature-hints.ts` is the queue. */
+          <div className="pointer-events-none relative z-30 h-0 [&>*]:pointer-events-auto">
+            <div className="absolute inset-x-3 top-2">
             <FeatureHint
               id="musicField"
               enabled
               title={t("featureHint.musicField.title")}
               body={t("featureHint.musicField.body")}
             />
+            </div>
           </div>
         ) : null}
 

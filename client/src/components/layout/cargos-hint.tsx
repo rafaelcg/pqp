@@ -26,13 +26,27 @@ const PREVIEW = [
 export function CargosHint({
   enabled,
   onOpenRoles,
+  onDismiss,
 }: {
   enabled: boolean;
   onOpenRoles: () => void;
+  /**
+   * Fired when this card is dismissed, so the queue in `lib/corner-hints.ts`
+   * can hand the corner on. Without it the corner stays "taken" by a card
+   * nobody can see any more, and `App` keeps the one attached-hint slot
+   * yielded behind it for the rest of the page load. On localhost that is
+   * every load, because `lib/hints.ts` deliberately remembers no dismissal
+   * there, so the in-call tips could never be drawn once.
+   */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(() => !isAutomatedBrowser() && !isCargosHintSeen());
   const [open, setOpen] = useState(true);
+  const close = () => {
+    setOpen(false);
+    onDismiss?.();
+  };
 
   useEffect(() => {
     if (eligible && enabled) {
@@ -45,7 +59,7 @@ export function CargosHint({
   return (
     <CornerCard
       open={show}
-      onClose={() => setOpen(false)}
+      onClose={close}
       label={t("cargosHint.title")}
       dismissLabel={t("cargosHint.dismiss")}
       dataAttribute="cargos"
@@ -56,7 +70,7 @@ export function CargosHint({
           size="sm"
           className="cta-lift rounded-full px-4"
           onClick={() => {
-            setOpen(false);
+            close();
             onOpenRoles();
           }}
         >

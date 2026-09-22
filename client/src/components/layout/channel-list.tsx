@@ -1440,15 +1440,6 @@ export function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
-            {channelPinHintEnabled && server && (
-              <div className="mb-2">
-                <FeatureHint
-                  id="channelPin"
-                  enabled
-                  body={t("featureHint.channelPin.body")}
-                />
-              </div>
-            )}
             {server &&
               (visibleFavs.length > 0 ||
                 Boolean(
@@ -1713,6 +1704,25 @@ export function ChannelList({
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {/* UNDER THE LAST CHANNEL, AND OUT OF THE FLOW.
+                At the top of the list it pushed every channel down, which
+                is what a coachmark must never do, and it covered the
+                Pinados block the moment somebody did what it asks, which
+                reads as the feature not working. Here it points at the
+                list it names: `h-0` takes no room, and the wrapper passes
+                pointer events through so the right-click the copy asks
+                for still reaches the channel under it. */}
+            {channelPinHintEnabled && server && (
+              <div className="pointer-events-none relative z-30 h-0 [&>*]:pointer-events-auto">
+                <div className="absolute inset-x-0 top-2">
+                  <FeatureHint
+                    id="channelPin"
+                    enabled
+                    body={t("featureHint.channelPin.body")}
+                  />
+                </div>
               </div>
             )}
           </>

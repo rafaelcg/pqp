@@ -63,10 +63,34 @@ export interface MusicSnapshot {
    * else, and a pill offers the way back. Reset on every new seat.
    */
   listening: boolean;
+  /**
+   * THE TRACK THE QUEUE ENDED WITH, AND WHY IT IS KEPT.
+   *
+   * `musicAdvance` leaves `current` null when the last track finishes or is
+   * skipped, and every surface keyed on `current`, so the player vanished
+   * from the composer in the middle of a gesture: the control you were
+   * using, gone, and the song you had just heard with it. The end of a
+   * queue is a state, so this holds the finished track and the bar parks on
+   * it with Tocar de novo.
+   *
+   * Local on purpose, and not in `MusicState`: `status` is a two-value enum
+   * the iOS and Android clients parse, and nothing about the room has
+   * changed — only what this machine should still be showing. It is set on
+   * the TRANSITION, so somebody joining a room that ended an hour ago gets
+   * the empty panel rather than a stranger's last song.
+   */
+  parked: MusicTrack | null;
 }
 
 let session: MusicSession | null = null;
-let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+let snapshot: MusicSnapshot = {
+  channelId: null,
+  state: null,
+  receivedAt: 0,
+  open: false,
+  listening: true,
+  parked: null,
+};
 /** This machine saw YouTube ENDED for this current track id. */
 let localEndedTrackId: string | null = null;
 /** Bumped to abandon an in-flight related fill. */
@@ -106,7 +130,28 @@ function set(state: MusicState | null, channelId: string | null) {
   if (snapshot.channelId !== channelId || snapshot.state?.current?.id !== state?.current?.id) {
     abandonAutoplayFill();
   }
-  snapshot = { ...snapshot, channelId, state, receivedAt: Date.now() };
+  /*
+   * Parked on one transition only: a track was on, and the room is still
+   * there with nothing on, which is the shape `musicAdvance` leaves when
+   * the queue runs dry. A `null` state is the room torn down ("Parar para
+   * todos", or a session being set up again) and is never an end: parking
+   * on it told the person who had just stopped the music that the queue
+   * ended, and flashed the same bar over a reconnect mid-song.
+   */
+  const sameRoom = snapshot.channelId === channelId;
+  const wasOn = sameRoom ? snapshot.state?.current ?? null : null;
+  const ranDry = state !== null && state.current === null;
+  const parked = !ranDry ? null : (wasOn ?? (sameRoom ? snapshot.parked : null));
+  snapshot = { ...snapshot, channelId, state, receivedAt: Date.now(), parked };
+  emit();
+}
+
+/** The person put the parked bar down. Nothing else clears it but a new track. */
+export function clearParkedMusic(): void {
+  if (snapshot.parked === null) {
+    return;
+  }
+  snapshot = { ...snapshot, parked: null };
   emit();
 }
 
@@ -169,7 +214,33 @@ export function receiveMusic(
   // A refusal hands back what the server holds; our optimistic copy is
   // ahead of it by one `rev` and would otherwise call the correction stale.
   const next = state === null ? null : completeMusicState(snapshot.state, state);
-  if (!forced && next !== null && musicWriteIsStale(snapshot.state, next)) {
+  /*
+   * THE SERVER HAS ALREADY DECIDED, SO WE DO NOT DECIDE AGAIN.
+   *
+   * `musicWriteIsStale` is the room's conflict rule, and the server is
+   * where it belongs: it picks which of two writes the room keeps. Running
+   * it again on what the server then broadcasts let this client throw the
+   * room's truth away — a write from somebody else at our own `rev`, or
+   * behind it because we had just written optimistically, lost the
+   * tie-break and was dropped, with nothing to bring us back. On 22 Sep
+   * 2026 a call skipped its last track: it ended for two people and the
+   * third went on hearing it.
+   *
+   * A frame genuinely BEHIND us is still dropped, whoever sent it: the
+   * fan-out crosses instances in production and an out-of-order relay must
+   * not rewind the room. What is gone is the tie-break at an equal `rev`,
+   * which is the server saying "this is the write I kept" and is never
+   * ours to overrule. Our own echo keeps the whole rule, because our copy
+   * is genuinely a write ahead of it.
+   */
+  const ourEcho = next !== null && next.actorId === session.peerId;
+  const behind =
+    next !== null &&
+    snapshot.state !== null &&
+    (ourEcho
+      ? musicWriteIsStale(snapshot.state, next)
+      : next.rev < snapshot.state.rev);
+  if (!forced && behind) {
     return;
   }
   set(next, channelId);
@@ -202,7 +273,9 @@ export interface MusicDockSnapshot {
 let dockSnap: MusicDockSnapshot = { open: false, on: false, listening: true };
 
 function getMusicDockSnapshot(): MusicDockSnapshot {
-  const on = snapshot.state?.current != null;
+  // Parked counts as on: the end of a queue keeps the bar, so the player
+  // does not vanish under the hand that skipped the last track.
+  const on = snapshot.state?.current != null || snapshot.parked !== null;
   if (
     dockSnap.open === snapshot.open &&
     dockSnap.on === on &&
@@ -228,7 +301,14 @@ export function resetMusicStoreForTests(): void {
   seekApply = null;
   localEndedTrackId = null;
   fillGeneration += 1;
-  snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+  snapshot = {
+    channelId: null,
+    state: null,
+    receivedAt: 0,
+    open: false,
+    listening: true,
+    parked: null,
+  };
   dockSnap = { open: false, on: false, listening: true };
   listeners.clear();
 }
