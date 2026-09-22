@@ -12,7 +12,10 @@ class FakeDocument extends EventTarget {
   visibilityState = "visible";
 }
 
-function key(type: "keydown" | "keyup", init: Partial<KeyboardEventInit> & { code: string; target?: unknown }) {
+function key(
+  type: "keydown" | "keyup",
+  init: Partial<KeyboardEventInit> & { code: string; target?: unknown },
+) {
   const event = new Event(type, { cancelable: true });
   Object.assign(event, {
     code: init.code,
@@ -25,7 +28,9 @@ function key(type: "keydown" | "keyup", init: Partial<KeyboardEventInit> & { cod
     isComposing: false,
   });
   // `target` is read-only on a real Event; the handlers only read it.
-  Object.defineProperty(event, "target", { value: init.target ?? { tagName: "BODY" } });
+  Object.defineProperty(event, "target", {
+    value: init.target ?? { tagName: "BODY" },
+  });
   return event;
 }
 
@@ -77,7 +82,11 @@ describe("push-to-talk listeners: where it works", () => {
 
   it("a modifier binding transmits from the composer without eating the keystroke", () => {
     const { win, isHeld } = setup(leftCtrl);
-    const down = key("keydown", { code: "ControlLeft", ctrlKey: true, target: composer });
+    const down = key("keydown", {
+      code: "ControlLeft",
+      ctrlKey: true,
+      target: composer,
+    });
     win.dispatchEvent(down);
     expect(isHeld()).toBe(true);
     // Ctrl+C, Ctrl+V still work while talking.
