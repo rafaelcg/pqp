@@ -56,10 +56,16 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
      * One surface for both halves rather than one each: the queue and the
      * player are one feature, and three tones stacked in 200px reads as
      * stripes rather than hierarchy. The borders are the seams.
+     *
+     * The top corners are the well's, less its 1px border, because this is
+     * the well's FIRST child and a square fill painted over a rounded box
+     * squares it off. Matching here rather than clipping at the well: that
+     * well holds a focus ring, a seek thumb and a marquee, none of which
+     * should be cut to solve a corner.
      */
     <div
       data-music-composer=""
-      className="@container border-y border-border/60 bg-surface-1"
+      className="@container rounded-t-[calc(var(--radius-card)-1px)] border-b border-border/60 bg-surface-1"
     >
       <MusicFila variant="sheet" voiceState={voiceState} />
       {current ? (
