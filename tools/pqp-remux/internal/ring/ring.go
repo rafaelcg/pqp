@@ -317,6 +317,32 @@ func (r *Ring) Segment(index int) ([]byte, bool) {
 	return s.bytes(), true
 }
 
+// SegmentMeta is what a VOD playlist line needs about one segment, and
+// nothing else: its true duration in seconds, the init segment it was built
+// against, and whether it opened a discontinuity.
+type SegmentMeta struct {
+	Seconds       float64
+	InitURI       string
+	Discontinuity bool
+}
+
+// SegmentMeta answers for one segment by index, taken under the ring's own
+// lock so the duration and the init can never be read from two different
+// moments. False when the index has already been evicted or never existed.
+func (r *Ring) SegmentMeta(index int) (SegmentMeta, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s := r.findSegment(index)
+	if s == nil || r.timescale == 0 {
+		return SegmentMeta{}, false
+	}
+	return SegmentMeta{
+		Seconds:       float64(s.durationTicks()) / float64(r.timescale),
+		InitURI:       s.initURI,
+		Discontinuity: s.discontinuity,
+	}, true
+}
+
 func (r *Ring) findSegment(index int) *segment {
 	for _, s := range r.segments {
 		if s.index == index {

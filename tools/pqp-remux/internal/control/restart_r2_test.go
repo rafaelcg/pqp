@@ -63,27 +63,41 @@ func realishPPS() []byte { return []byte{0x08, 0xAA} }
 type keyTrackingUploader struct {
 	mu   sync.Mutex
 	seen map[string]int
+	last map[string]string
 }
 
 func newKeyTrackingUploader() *keyTrackingUploader {
-	return &keyTrackingUploader{seen: map[string]int{}}
+	return &keyTrackingUploader{seen: map[string]int{}, last: map[string]string{}}
 }
 
 func (u *keyTrackingUploader) PutObject(ctx context.Context, key string, body []byte, contentType string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.seen[key]++
+	u.last[key] = string(body)
 	return nil
 }
 
+// lastBodyForSuffix is the body of the most recent PUT to the key ending in
+// suffix, for the replay playlists, which are rewritten whole on every
+// segment and only mean anything as their final version.
+func (u *keyTrackingUploader) lastBodyForSuffix(suffix string) string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for k, body := range u.last {
+		if strings.HasSuffix(k, suffix) {
+			return body
+		}
+	}
+	return ""
+}
+
 // duplicates reports every key PUT more than once, EXCLUDING each
-// rendition's *-init.mp4 -- that object is a fixed key (unlike
-// video-seg-N.m4s/audio-seg-N.m4s, it carries no segment index), and every
-// pipeline generation, restart included, re-publishes it from its own
-// SPS/PPS on purpose: it is expected, harmless, idempotent-in-content
-// (the codec parameters do not change because the room reconnected) and
-// entirely unrelated to the segment-numbering collision this fix guards
-// against. This is what makes the assertion this type exists for
+// rendition's *-init.mp4 -- `audio-init.mp4` is a fixed key every pipeline
+// generation re-publishes with the same content. (`video-init.mp4` used to
+// be too, until the replay playlist made the difference matter: see
+// TestManagedSession_RestartKeepsTheWholeShowInTheReplay, which pins that
+// separately.) This is what makes the assertion this type exists for
 // ("no key is PUT twice across a restart") mean "no NUMBERED segment
 // object is silently overwritten", which is what Farol's review actually
 // asked for.
@@ -140,8 +154,12 @@ func newRealSessionPipelineFactory(writer *r2.Writer) PipelineFactory {
 		if cfg.StartVideoPartSeq > 0 {
 			sess.SetStartPartSequence(cfg.StartVideoPartSeq)
 		}
+		if cfg.StartVideoInitGeneration > 0 {
+			sess.SetStartInitGeneration(cfg.StartVideoInitGeneration)
+		}
 		if writer != nil {
 			sess.EnableR2(writer, cfg.ChannelID, cfg.StartedAtMs, "ll")
+			sess.EnableVodIndex(cfg.VodIndex)
 		}
 		_, cancel := context.WithCancel(context.Background())
 		return &realSessionPipeline{sess: sess, cancel: cancel}, nil
@@ -157,6 +175,8 @@ func (p *realSessionPipeline) Health() PipelineHealth {
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
 		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
 		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
+
+		VideoInitGeneration: p.sess.CurrentInitGeneration(),
 	}
 	if p.sess.HasPart() {
 		ph.LastPartAt = p.sess.Started().Add(msDuration(h.LastPartAtMs))
@@ -632,5 +652,72 @@ func TestManagedSession_RestartNeverReusesPartName(t *testing.T) {
 	p2.pushIDRFrames(frames, frames, restartTestFrameStep)
 	if got := p2.sess.CurrentVideoPartSequence(); got <= lastSeq {
 		t.Fatalf("replacement emitted %d parts past the predecessor's final %d", got-lastSeq, lastSeq)
+	}
+}
+
+// TestManagedSession_RestartKeepsTheWholeShowInTheReplay drives a real
+// restart with the session's VodIndex attached, and reads back the replay
+// playlist the bucket ends up holding. Two things went wrong here before
+// the index existed or before the init generation was carried across: the
+// replacement re-PUT `video-init.mp4` over the predecessor's (so every
+// segment before the restart pointed at an init that no longer described
+// it), and a playlist owned by the pipeline would have started at the
+// restart. The final `video.m3u8` must name both pipelines' segments, both
+// inits, a DISCONTINUITY between them, and ENDLIST once the session closes.
+func TestManagedSession_RestartKeepsTheWholeShowInTheReplay(t *testing.T) {
+	uploader := newKeyTrackingUploader()
+	writer := r2.NewWriter(uploader, r2.WriterConfig{Workers: 1})
+
+	factory := newRealSessionPipelineFactory(writer)
+	req := testStartReq(sessA, chanA, chanA)
+	req.PartMs = 500
+	req.SegmentMs = 500
+
+	ms, err := newManagedSession(context.Background(), req, time.Now().UnixMilli(), GlobalConfig{
+		LiveHlsS3Endpoint:        "http://localhost:9000",
+		LiveHlsS3Bucket:          "pqp-live",
+		LiveHlsS3AccessKeyID:     "key",
+		LiveHlsS3SecretAccessKey: "secret",
+	}, fixedWatchdogCfg(), factory)
+	if err != nil {
+		t.Fatalf("unexpected error starting session: %v", err)
+	}
+
+	p1 := ms.currentPipelineForTest().(*realSessionPipeline)
+	p1.pushSPSPPS(0)
+	p1.pushIDRFrames(0, framesPerGenerationForTest, restartTestFrameStep)
+
+	ms.restart()
+
+	p2 := ms.currentPipelineForTest().(*realSessionPipeline)
+	p2.pushSPSPPS(framesPerGenerationForTest * restartTestFrameStep)
+	p2.pushIDRFrames(framesPerGenerationForTest, framesPerGenerationForTest, restartTestFrameStep)
+	p2.Close()
+	writer.Close()
+
+	if n := uploader.putsForSuffix("/video-init.mp4"); n != 1 {
+		t.Fatalf("video-init.mp4 PUT %d times; the replacement must name its init past the predecessor's", n)
+	}
+	if uploader.putsForSuffix("/video-init-2.mp4") != 1 {
+		t.Fatal("expected the replacement's init as video-init-2.mp4")
+	}
+
+	playlist := uploader.lastBodyForSuffix("/video.m3u8")
+	for _, want := range []string{
+		`#EXT-X-MAP:URI="video-init.mp4"`,
+		"video-seg-0.m4s",
+		"#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"video-init-2.mp4\"",
+		"#EXT-X-PLAYLIST-TYPE:VOD",
+		"#EXT-X-ENDLIST",
+	} {
+		if !strings.Contains(playlist, want) {
+			t.Fatalf("final video.m3u8 is missing %q:\n%s", want, playlist)
+		}
+	}
+	if strings.Index(playlist, "video-init.mp4") > strings.Index(playlist, "video-init-2.mp4") {
+		t.Fatalf("inits out of order:\n%s", playlist)
+	}
+	if master := uploader.lastBodyForSuffix("/master.m3u8"); !strings.Contains(master, "video.m3u8") || !strings.Contains(master, `CODECS="avc1.`) {
+		t.Fatalf("expected a master naming video.m3u8 with an avc1 CODECS, got:\n%s", master)
 	}
 }

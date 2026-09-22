@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 )
 
 // watchdogTick is how often a session's watchdog goroutine evaluates its
@@ -78,6 +80,14 @@ func newManagedSession(ctx context.Context, req StartSessionRequest, startedAtMs
 		PliPaceMs:      req.PliPaceMs,
 		PliGateFactor:  req.PliGateFactor,
 		Global:         global,
+	}
+	// ONE INDEX PER SESSION, built here rather than in the factory, because
+	// the factory runs again on every watchdog restart and the replay is the
+	// whole show, not the part after the last stall. Only when there is a
+	// bucket to write it to; r2.VodIndex's methods are all nil-safe, so the
+	// pipeline needs no second branch for the unconfigured case.
+	if global.LiveHlsS3Configured() {
+		cfg.VodIndex = r2.NewVodIndex()
 	}
 
 	// The part target is per session, so the part-stuck threshold cannot
@@ -235,6 +245,9 @@ func (m *ManagedSession) restart() {
 		// that cache lives (Farol review, PR #621).
 		cfg.StartVideoPartSeq = oldHealth.VideoPartSeq + 1
 		cfg.StartAudioPartSeq = oldHealth.AudioPartSeq + 1
+		// Not +1: the generation is a count, and the replacement's first
+		// init increments it before naming the object.
+		cfg.StartVideoInitGeneration = oldHealth.VideoInitGeneration
 
 		m.mu.Lock()
 		m.current = nil

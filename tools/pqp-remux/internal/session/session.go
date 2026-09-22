@@ -316,6 +316,30 @@ type Session struct {
 	r2ChannelID   string
 	r2StartedAtMs int64
 	r2Rung        string
+
+	// --- the VOD index (nil until EnableVodIndex is called) ---
+
+	// vod accumulates every closed segment this session uploads and renders
+	// the media and multivariant playlists that make those objects playable
+	// after the party ends -- see internal/r2.VodIndex. It is owned by the
+	// SESSION (internal/control's ManagedSession), not by this Session, so a
+	// watchdog restart does not lose everything before it.
+	vod *r2.VodIndex
+	// vodInitNames maps a RING init file name (init.mp4, init-2.mp4) onto
+	// the object name that init was actually PUT under (video-init.mp4,
+	// video-init-2.mp4). Recorded at publishInit rather than re-derived at
+	// upload time, so the playlist can never name an object nothing wrote.
+	// Guarded by videoMu: written in publishInit and read in
+	// uploadVideoSegment, both of which run under it.
+	vodInitNames map[string]string
+	// vodVideoAdded/vodAudioAdded record whether THIS Session has added a
+	// segment to each track yet. The first one it adds is flagged a
+	// discontinuity: to the index it follows whatever a predecessor
+	// pipeline wrote, and the fragmenter's timestamps start over here.
+	// Atomic because Close's timeout branch uploads the last audio segment
+	// while the encoder reader may still be doing the same.
+	vodVideoAdded atomic.Bool
+	vodAudioAdded atomic.Bool
 }
 
 // New builds a Session that writes into r using cfg's part/segment
@@ -488,8 +512,72 @@ func (s *Session) EnableR2(writer *r2.Writer, channelID string, startedAtMs int6
 	s.r2Rung = rung
 }
 
+// EnableVodIndex hands this Session the index it records every closed
+// segment into, so the session's `video.m3u8` / `audio.m3u8` / `master.m3u8`
+// can be written beside the media. A no-op path when never called (every
+// method on a nil *r2.VodIndex is), which is what keeps a Session with no
+// replay copy behaving exactly as it did.
+//
+// The index belongs to the SESSION, not to this pipeline: pass the same one
+// to a replacement built by internal/control's watchdog restart, or the
+// replay loses everything the predecessor wrote (see r2.VodIndex's own doc
+// comment). Call at most once, before the session receives anything.
+func (s *Session) EnableVodIndex(index *r2.VodIndex) {
+	s.vod = index
+	s.vodInitNames = make(map[string]string)
+}
+
 func (s *Session) objectPrefix() string {
 	return r2.ObjectPrefix(s.r2ChannelID, s.r2StartedAtMs, s.r2Rung)
+}
+
+// publishVodPlaylist enqueues one rendered playlist under this session's
+// prefix. Through the SAME async writer the segments go through, so a slow
+// or dead bucket degrades the replay copy and never blocks the media
+// pipeline; a PUT that fails is logged by the writer and simply rewritten
+// whole on the next segment, since every render is the complete playlist and
+// the object is last-write-wins.
+func (s *Session) publishVodPlaylist(name string, body string, ok bool) {
+	if !ok || s.r2Writer == nil {
+		return
+	}
+	s.enqueueR2(name, []byte(body), r2.PlaylistContentType)
+}
+
+// publishVodVideoPlaylists writes the video media playlist and, when there is
+// an init to describe, the multivariant playlist beside it. The master is
+// rewritten on every segment rather than once: it costs one small PUT per
+// segment and it is the only thing that picks up a parameter-set change's new
+// CODECS/RESOLUTION without a second code path to get wrong.
+func (s *Session) publishVodVideoPlaylists() {
+	if s.vod == nil || s.r2Writer == nil {
+		return
+	}
+	body, ok := s.vod.VideoPlaylist()
+	s.publishVodPlaylist(r2.VodVideoPlaylistName, body, ok)
+	master, ok := s.vod.MasterPlaylist()
+	s.publishVodPlaylist(r2.VodMasterPlaylistName, master, ok)
+}
+
+func (s *Session) publishVodAudioPlaylist() {
+	if s.vod == nil || s.r2Writer == nil {
+		return
+	}
+	body, ok := s.vod.AudioPlaylist()
+	s.publishVodPlaylist(r2.VodAudioPlaylistName, body, ok)
+}
+
+// finishVodPlaylists stamps #EXT-X-ENDLIST on whatever exists and rewrites
+// all three objects one last time. Called from Close, which runs BEFORE
+// r2.Writer.Close in every teardown path (see internal/control's
+// remuxPipeline.Close), so these last PUTs still get a worker.
+func (s *Session) finishVodPlaylists() {
+	if s.vod == nil || s.r2Writer == nil {
+		return
+	}
+	s.vod.Finish()
+	s.publishVodVideoPlaylists()
+	s.publishVodAudioPlaylist()
 }
 
 // enqueueR2 is a no-op when EnableR2 was never called, so every call site
@@ -528,6 +616,22 @@ func (s *Session) SetStartSegmentIndex(index int) { s.frag.SetStartSegmentIndex(
 // if at all, immediately after New and before the first
 // HandleVideoPacket.
 func (s *Session) SetStartPartSequence(next uint32) { s.frag.SetStartSequence(next) }
+
+// SetStartInitGeneration makes the video track's FIRST init segment the
+// (n+1)th this session has published, so its R2 object is
+// `video-init-<n+1>.mp4` rather than `video-init.mp4` again. The init-level
+// twin of SetStartSegmentIndex: a watchdog replacement numbering its inits
+// from 1 overwrote the predecessor's `video-init.mp4` with its own, and
+// every earlier segment in the replay's playlist would then be decoded
+// against an init that does not describe it. Call it, if at all,
+// immediately after New and before the first HandleVideoPacket.
+func (s *Session) SetStartInitGeneration(n uint64) { s.initGeneration.Store(n) }
+
+// CurrentInitGeneration is how many video inits this session has published,
+// counting any SetStartInitGeneration offset. Read through Health after
+// Close by the watchdog restart, for the replacement's
+// SetStartInitGeneration.
+func (s *Session) CurrentInitGeneration() uint64 { return s.initGeneration.Load() }
 
 // CurrentVideoPartSequence returns the sequence number of the last part
 // the video fragmenter emitted (0 before the first). internal/control
@@ -750,7 +854,28 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 		r2Name = fmt.Sprintf("video-init-%d.mp4", gen)
 	}
 	s.enqueueR2(r2Name, initSeg, "video/mp4")
+	if s.vodInitNames != nil {
+		s.vodInitNames[uri] = r2Name
+	}
+	// The codec string and picture size the replay's multivariant playlist
+	// states, taken from the SPS this init was just built from rather than
+	// re-parsed out of the init segment afterwards.
+	w, h, _, _ := spsSummary(sps)
+	s.vod.SetVideoInit(avcCodecString(sps), int(w), int(h))
 	return true
+}
+
+// avcCodecString builds the RFC 6381 `avc1.PPCCLL` string a CODECS attribute
+// needs, straight from the SPS NAL's first three payload bytes
+// (profile_idc, the constraint-set/reserved byte, level_idc) -- which is
+// exactly what an avcC record carries and what tools/hls-edge's
+// ll-init-codecs.js reads back out of one. Empty for a payload too short to
+// hold them, in which case the master playlist simply is not written yet.
+func avcCodecString(sps []byte) string {
+	if len(sps) < 4 {
+		return ""
+	}
+	return fmt.Sprintf("avc1.%02x%02x%02x", sps[1], sps[2], sps[3])
 }
 
 // refreshRepeater rebuilds the repeat-frame synthesizer for the parameter
@@ -981,6 +1106,13 @@ func (s *Session) Close() {
 	s.videoStopped = true
 	s.videoMu.Unlock()
 
+	// DEFERRED, because this method has four early returns and the replay
+	// playlists have to be stamped ENDLIST on every one of them. Last, so
+	// the audio tail below is already in the index when they are rendered,
+	// and still inside Close, which every teardown path runs BEFORE
+	// r2.Writer.Close -- so these final PUTs get a worker.
+	defer s.finishVodPlaylists()
+
 	s.audioMu.Lock()
 	s.audioClosed = true
 	enc := s.loadEncoder()
@@ -1142,7 +1274,33 @@ func (s *Session) uploadVideoSegment(index int) {
 	if !ok {
 		return
 	}
-	s.enqueueR2(fmt.Sprintf("video-seg-%d.m4s", index), b, "video/mp4")
+	name := fmt.Sprintf("video-seg-%d.m4s", index)
+	s.enqueueR2(name, b, "video/mp4")
+	// The playlist line for what was just uploaded, and only then: an entry
+	// naming an object no PUT was ever enqueued for is a 404 in somebody's
+	// player two days from now.
+	if meta, found := s.ring.SegmentMeta(index); found && s.vod != nil {
+		s.vod.AddVideoSegment(r2.VodSegment{
+			Name:          name,
+			Seconds:       meta.Seconds,
+			InitURI:       s.vodInitNameFor(meta.InitURI),
+			Discontinuity: meta.Discontinuity || !s.vodVideoAdded.Swap(true),
+		}, len(b))
+		s.publishVodVideoPlaylists()
+	}
+}
+
+// vodInitNameFor translates a ring init file name into the R2 object name
+// publishInit uploaded it under. The fallback derivation exists only for a
+// segment stamped with an init this Session never published itself (nothing
+// produces one today), because a VOD entry with no EXT-X-MAP is a segment no
+// decoder can configure itself for, which is worse than one naming the
+// object by its own rule.
+func (s *Session) vodInitNameFor(ringName string) string {
+	if name, ok := s.vodInitNames[ringName]; ok {
+		return name
+	}
+	return "video-" + ringName
 }
 
 func (s *Session) uploadAudioSegment(index int) {
@@ -1153,7 +1311,20 @@ func (s *Session) uploadAudioSegment(index int) {
 	if !ok {
 		return
 	}
-	s.enqueueR2(fmt.Sprintf("audio-seg-%d.m4s", index), b, "audio/mp4")
+	name := fmt.Sprintf("audio-seg-%d.m4s", index)
+	s.enqueueR2(name, b, "audio/mp4")
+	if meta, found := s.audioRing.SegmentMeta(index); found && s.vod != nil {
+		// The audio ring's init is the fixed "audio-init.mp4" EnableAudio
+		// named it, which is also the object name it was PUT under, so
+		// (unlike video) there is no name to translate.
+		s.vod.AddAudioSegment(r2.VodSegment{
+			Name:          name,
+			Seconds:       meta.Seconds,
+			InitURI:       meta.InitURI,
+			Discontinuity: !s.vodAudioAdded.Swap(true),
+		}, len(b))
+		s.publishVodAudioPlaylist()
+	}
 }
 
 // HandleAudioPacket decodes the presenter's screen-share audio and mixes

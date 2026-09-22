@@ -111,9 +111,15 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	if cfg.StartVideoPartSeq > 0 {
 		sess.SetStartPartSequence(cfg.StartVideoPartSeq)
 	}
+	if cfg.StartVideoInitGeneration > 0 {
+		sess.SetStartInitGeneration(cfg.StartVideoInitGeneration)
+	}
 
 	if r2Writer != nil {
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, rung)
+		// The session's replay index, which outlives this pipeline: see
+		// PipelineConfig.VodIndex.
+		sess.EnableVodIndex(cfg.VodIndex)
 	}
 
 	audioRing := ring.New(ring.AudioSegments(cfg.RingSegments), aacenc.SampleRate)
@@ -260,6 +266,8 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
 		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
 		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
+
+		VideoInitGeneration: p.sess.CurrentInitGeneration(),
 
 		LastVideoPacketAt:    st.LastVideoPacket,
 		LastVideoFrameAt:     st.LastVideoFrame,

@@ -339,6 +339,23 @@ in-flight and queued attempt and counts what never got a real try as
 **Parts are never uploaded** (only closed segments and each rendition's init
 segment) — per the plan §1: parts are served from the box itself.
 
+**Replay playlists** (`internal/r2.VodIndex`): after every closed segment the
+session also PUTs `video.m3u8`, `audio.m3u8` and `master.m3u8` under the same
+prefix. Plain HLS media playlists over the WHOLE session (never trimmed to the
+ring), `#EXT-X-PLAYLIST-TYPE:EVENT` while live and `VOD` plus
+`#EXT-X-ENDLIST` once the session closes, one `#EXT-X-MAP` per init with an
+`#EXT-X-DISCONTINUITY` ahead of every change. They go through the same
+`r2.Writer` as the segments, so a slow bucket drops a playlist PUT rather
+than blocking anything, and the next segment rewrites the whole playlist
+anyway. The index belongs to the control-plane session, not the pipeline, so
+a watchdog restart appends to it, and the init generation is carried across
+the restart like the segment index is, so the replacement never overwrites
+`video-init.mp4`. `pqp-api` serves these back through the signed replay route
+(`server/src/voice/hls-history.ts`). The prefix's `<startedAt>` is the one the
+API sends in `startedAtMs` on `POST /sessions`, so it matches
+`hls_sessions.object_prefix` exactly; a request without it (an older API)
+falls back to this box's own clock.
+
 **Shutdown order matters, and got it wrong once** (Farol caught it):
 `cmd/pqp-remux/main.go`'s `runServer` registers the R2 writer's `Close`
 *before* the session's, specifically so it executes *last* — defers run
@@ -899,6 +916,26 @@ ffprobe http://localhost:8089/audio-init.mp4
 
 Never point this at `sfu.pqp.gg` (production). A live smoke test is
 optional — `make test` is what CI and the acceptance bar for this PR run.
+
+## Deploying `pqp-remuxd`
+
+By hand, and only while no LL session is live: a restart kills every session
+on the box and its viewers see 502/404 until the API demotes them.
+
+```
+cd tools/pqp-remux
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/pqp-remuxd ./cmd/pqp-remuxd
+# on the egress box: confirm nothing is live (0 means idle)
+journalctl -u pqp-remux --since "2 min ago" | grep -c "stats session"
+# copy out/pqp-remuxd over, keep the old binary, swap, restart
+cp /usr/local/bin/pqp-remuxd /usr/local/bin/pqp-remuxd.prev
+install -m 0755 /tmp/pqp-remuxd /usr/local/bin/pqp-remuxd
+systemctl restart pqp-remux.service
+```
+
+Rollback is the same swap with `pqp-remuxd.prev`. The API side of a contract
+change is always written to be deployable first (an older box ignores a
+field it does not know).
 
 ## Testing
 

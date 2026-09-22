@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -221,4 +222,140 @@ func uuidForIndex(i int) string {
 	digit := rune('0' + i%10)
 	base[len(base)-1] = digit
 	return string(base)
+}
+
+// The API's own started_at is what names the R2 objects, so a request that
+// carries one must not be re-stamped with this box's clock. Two prefixes that
+// differ by a few milliseconds are two prefixes: the row points at one and
+// every byte lands under the other (see StartSessionRequest.StartedAtMs).
+func TestRegistry_StartOrGet_UsesTheRequestsStartedAtMs(t *testing.T) {
+	spy := &pipelineSpy{}
+	reg := NewRegistry(
+		context.Background(),
+		spy.factory(),
+		GlobalConfig{},
+		fixedWatchdogCfg(),
+		func() time.Time { return time.UnixMilli(1_790_029_999_999) },
+	)
+	t.Cleanup(reg.StopAll)
+
+	req := testStartReq(sessA, chanA, chanA)
+	req.StartedAtMs = 1_790_029_937_773
+	info, isNew, err := reg.StartOrGet(req)
+	if err != nil || !isNew {
+		t.Fatalf("StartOrGet: isNew=%v err=%v", isNew, err)
+	}
+	if info.StartedAtMs != req.StartedAtMs {
+		t.Fatalf("StartedAtMs = %d, want the request's %d", info.StartedAtMs, req.StartedAtMs)
+	}
+}
+
+// Without the field (an older pqp-api, and every other test in this file),
+// the box keeps stamping its own clock -- the behaviour that existed before
+// the field did.
+func TestRegistry_StartOrGet_FallsBackToItsOwnClock(t *testing.T) {
+	spy := &pipelineSpy{}
+	const boxNowMs = 1_790_029_999_999
+	reg := NewRegistry(
+		context.Background(),
+		spy.factory(),
+		GlobalConfig{},
+		fixedWatchdogCfg(),
+		func() time.Time { return time.UnixMilli(boxNowMs) },
+	)
+	t.Cleanup(reg.StopAll)
+
+	info, _, err := reg.StartOrGet(testStartReq(sessA, chanA, chanA))
+	if err != nil {
+		t.Fatalf("StartOrGet: %v", err)
+	}
+	if info.StartedAtMs != boxNowMs {
+		t.Fatalf("StartedAtMs = %d, want the box clock's %d", info.StartedAtMs, boxNowMs)
+	}
+}
+
+// A retried POST for a session that already exists keeps the session it
+// already has, startedAt included: re-stamping it would move the whole
+// session's object prefix mid-show.
+func TestRegistry_StartOrGet_RetryKeepsTheOriginalStartedAt(t *testing.T) {
+	spy := &pipelineSpy{}
+	reg := newTestRegistry(t, spy.factory())
+
+	req := testStartReq(sessA, chanA, chanA)
+	req.StartedAtMs = 1_790_029_937_773
+	first, _, err := reg.StartOrGet(req)
+	if err != nil {
+		t.Fatalf("StartOrGet: %v", err)
+	}
+
+	retried := req
+	retried.StartedAtMs = req.StartedAtMs + 5_000
+	second, isNew, err := reg.StartOrGet(retried)
+	if err != nil {
+		t.Fatalf("retried StartOrGet: %v", err)
+	}
+	if isNew {
+		t.Fatal("expected the retry to find the existing session")
+	}
+	if second.StartedAtMs != first.StartedAtMs {
+		t.Fatalf("StartedAtMs moved on a retry: %d -> %d", first.StartedAtMs, second.StartedAtMs)
+	}
+	if spy.count() != 1 {
+		t.Fatalf("expected one pipeline built, got %d", spy.count())
+	}
+}
+
+// The session's replay index is built once and handed to every pipeline this
+// session ever builds -- including the watchdog's replacement, which is the
+// whole reason it does not live on the pipeline.
+func TestRegistry_StartOrGet_GivesThePipelineTheSessionsVodIndex(t *testing.T) {
+	spy := &pipelineSpy{}
+	reg := NewRegistry(
+		context.Background(),
+		spy.factory(),
+		GlobalConfig{
+			LiveHlsS3Endpoint:        "http://localhost:9000",
+			LiveHlsS3Bucket:          "pqp-live",
+			LiveHlsS3AccessKeyID:     "key",
+			LiveHlsS3SecretAccessKey: "secret",
+		},
+		fixedWatchdogCfg(),
+		nil,
+	)
+	t.Cleanup(reg.StopAll)
+
+	if _, _, err := reg.StartOrGet(testStartReq(sessA, chanA, chanA)); err != nil {
+		t.Fatalf("StartOrGet: %v", err)
+	}
+	ms, ok := reg.Get(sessA)
+	if !ok {
+		t.Fatal("expected the session to be registered")
+	}
+	if ms.cfg.VodIndex == nil {
+		t.Fatal("expected a VodIndex on the pipeline config when S3 is configured")
+	}
+
+	// A restart reuses m.cfg, so the replacement gets the SAME index.
+	before := ms.cfg.VodIndex
+	ms.restart()
+	if ms.cfg.VodIndex != before {
+		t.Fatal("the session's VodIndex must not be replaced by a restart")
+	}
+	if spy.count() != 2 {
+		t.Fatalf("expected a replacement pipeline, got %d built", spy.count())
+	}
+}
+
+// No bucket, no index: the playlists have nowhere to go, and every method on
+// a nil *r2.VodIndex is a no-op, so nothing downstream needs a branch.
+func TestRegistry_StartOrGet_NoVodIndexWithoutStorage(t *testing.T) {
+	spy := &pipelineSpy{}
+	reg := newTestRegistry(t, spy.factory())
+	if _, _, err := reg.StartOrGet(testStartReq(sessA, chanA, chanA)); err != nil {
+		t.Fatalf("StartOrGet: %v", err)
+	}
+	ms, _ := reg.Get(sessA)
+	if ms.cfg.VodIndex != nil {
+		t.Fatal("expected no VodIndex when the box has no S3 configuration")
+	}
 }
