@@ -263,6 +263,7 @@ import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
+import { MusicComposer } from "@/components/voice/music-composer";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -6919,6 +6920,8 @@ function MainAppContent({
       (voiceState.voiceChannelId === selectedChannelId ||
         voiceState.voiceChannelId === activeConversation?.channelId),
   );
+  const musicInComposer =
+    voiceState.status === "connected" && viewingThisCall;
   const voiceIsDmCall = Boolean(
     voiceState.voiceChannelId &&
       conversations.some((one) => one.channelId === voiceState.voiceChannelId),
@@ -7117,7 +7120,11 @@ function MainAppContent({
     watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
-      <MusicMiniPlayer voiceState={voiceState} compact={compact} />
+      <MusicMiniPlayer
+        voiceState={voiceState}
+        compact={compact}
+        chrome={!musicInComposer}
+      />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
           channelName={
@@ -8383,6 +8390,9 @@ function MainAppContent({
         // The voice-only call bar, when this channel is the one we are in.
         // Keyed by channel so the composer of any other channel stays plain.
         dock={<CallDockOutlet channelId={selectedChannel.id} />}
+        music={
+          musicInComposer ? <MusicComposer voiceState={voiceState} /> : undefined
+        }
       />
       </CallSplit>
       </CallDockProvider>

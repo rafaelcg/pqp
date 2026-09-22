@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { VoiceState } from "@/hooks/use-voice";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  receiveMusic,
+  resetMusicStoreForTests,
+  setMusicOpen,
+  setMusicSession,
+} from "@/lib/music-store";
 
 // A browser that can share, outside Electron: the only shape in which the
 // Watch party button exists at all, so the test is about the grant and not
@@ -166,5 +172,81 @@ describe("CallControls collapsed push-to-talk", () => {
     expect(html).toContain("lucide-mic-off");
     expect(html).not.toContain("text-warning");
     expect(html).toContain("opacity-50");
+  });
+});
+
+describe("CallControls music tile", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+  });
+
+  it("shows the tile collapsed and expanded, never hiding under 22rem", () => {
+    const expanded = render(idle);
+    expect(expanded).toContain('data-music-dock="idle"');
+    expect(expanded).toContain("aria-pressed=\"false\"");
+    expect(expanded).not.toMatch(/data-music-dock="idle"[^>]*@min-\[22rem\]/);
+
+    const collapsed = renderToStaticMarkup(
+      <TooltipProvider>
+        <CallControls
+          voiceState={idle}
+          collapsed
+          canExpand={false}
+          userCollapsed
+          fullscreenAvailable={false}
+          isFullscreen={false}
+          onToggleFullscreen={() => {}}
+          onToggleMute={() => {}}
+          onToggleCamera={() => {}}
+          videoQuality="720p"
+          onVideoQualityChange={() => {}}
+          qualityMenuOpen={false}
+          onQualityMenuOpenChange={() => {}}
+          onStartScreenShare={() => {}}
+          onStopScreenShare={() => {}}
+          onToggleCollapsed={() => {}}
+          onLeave={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(collapsed).toContain('data-music-dock="idle"');
+    expect(collapsed).not.toMatch(/data-music-dock="idle"[^>]*@min-\[22rem\]/);
+  });
+
+  it("presses when Fila is open and marks playing when a track is on", () => {
+    setMusicOpen(true);
+    expect(render(idle)).toContain("aria-pressed=\"true\"");
+    setMusicOpen(false);
+    setMusicSession({
+      channelId: idle.voiceChannelId ?? "33333333-3333-4333-8333-333333333333",
+      peerId: "peer-me",
+      userId: "u1",
+      displayName: "Eu",
+      send: () => {},
+    });
+    receiveMusic(idle.voiceChannelId ?? "33333333-3333-4333-8333-333333333333", {
+      current: {
+        id: "t1",
+        provider: "youtube",
+        videoId: "aaaaaaaaaaa",
+        title: "A",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 1,
+        addedByUserId: "u1",
+        addedByName: "Eu",
+      },
+      queue: [],
+      status: "playing",
+      positionMs: 0,
+      atMs: 1,
+      rev: 1,
+      actorId: "peer-me",
+      openControls: false,
+      repeat: "off",
+      skipVotes: [],
+      history: [],
+    });
+    expect(render(idle)).toContain('data-music-dock="playing"');
   });
 });

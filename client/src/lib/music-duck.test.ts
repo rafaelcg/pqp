@@ -4,6 +4,7 @@ import {
   MUSIC_DUCK_RELEASE_MS,
   MUSIC_DUCK_TARGET,
   duckGain,
+  duckedMusicVolume,
   musicShouldDuck,
   stepDuckGain,
 } from "./music-duck";
@@ -51,6 +52,14 @@ describe("duckGain", () => {
     expect(edge).toBeCloseTo((1 + MUSIC_DUCK_TARGET) / 2);
     expect(duckGain(400, 400, null, edge)).toBeCloseTo(edge);
     expect(duckGain(600, 400, null, edge)).toBe(MUSIC_DUCK_TARGET);
+  });
+});
+
+describe("duckedMusicVolume", () => {
+  it("scales the slider by gain and never treats mute as zero", () => {
+    expect(duckedMusicVolume(40, MUSIC_DUCK_TARGET)).toBe(14);
+    expect(duckedMusicVolume(40, 1)).toBe(40);
+    expect(duckedMusicVolume(200, 1)).toBe(100);
   });
 });
 

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import {
   MUSIC_DUCK_TICK_MS,
+  duckedMusicVolume,
   musicShouldDuck,
   stepDuckGain,
 } from "@/lib/music-duck";
@@ -35,7 +36,60 @@ import { getMusicEmbedHost } from "@/components/voice/music-embed-host";
 
 const DRIFT_MS = 2_500;
 const REPORT_MS = 10_000;
-const VOLUME_KEY = "pqp:music-volume";
+export const MUSIC_VOLUME_KEY = "pqp:music-volume";
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // per-viewer convenience only
+  }
+}
+
+/** One parser for the slider and for onReady. Default 40. */
+export function readMusicVolume(): number {
+  const parsed = Number(readStored(MUSIC_VOLUME_KEY) ?? NaN);
+  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
+}
+
+export function writeMusicVolume(value: number): void {
+  const next = Math.min(100, Math.max(0, value));
+  writeStored(MUSIC_VOLUME_KEY, String(next));
+}
+
+type VolumeTarget = {
+  setVolume(volume: number): void;
+  mute(): void;
+  unMute(): void;
+};
+
+/**
+ * Duck with `setVolume` only. Mute is YouTube `mute()`, never volume 0.
+ * This function does not `unMute`: ads and the play loop must not lift it.
+ */
+export function applyYouTubeVolume(
+  player: VolumeTarget | null | undefined,
+  args: { volume: number; muted: boolean; duckGain: number },
+): void {
+  if (!player) {
+    return;
+  }
+  const volume = Math.min(100, Math.max(0, args.volume));
+  if (args.muted) {
+    player.setVolume(volume);
+    player.mute();
+    return;
+  }
+  player.setVolume(duckedMusicVolume(volume, args.duckGain));
+}
 
 /** Actor fills duration as soon as YouTube starts, not on the 10 s sample. */
 export function shouldReportUnknownDuration(args: {
@@ -139,23 +193,11 @@ export function shouldKeepMusicEmbed(args: {
   return args.hasCurrent || args.previouslyHeld;
 }
 
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function readVolume(): number {
-  const parsed = Number(readStored(VOLUME_KEY) ?? NaN);
-  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
-}
-
 export function MusicPlayer({
   music,
   isActor,
   volume,
+  muted = false,
   playerRef,
   onNeedsTap,
   duckEnabled = false,
@@ -166,6 +208,7 @@ export function MusicPlayer({
   music: MusicSnapshot;
   isActor: boolean;
   volume: number;
+  muted?: boolean;
   playerRef: MutableRefObject<YTPlayer | null>;
   onNeedsTap: (needs: boolean) => void;
   duckEnabled?: boolean;
@@ -178,6 +221,8 @@ export function MusicPlayer({
   musicRef.current = music;
   const isActorRef = useRef(isActor);
   isActorRef.current = isActor;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const { t } = useTranslation();
@@ -221,11 +266,13 @@ export function MusicPlayer({
                 return;
               }
               playerRef.current = event.target;
-              event.target.setVolume(readVolume());
-              event.target.unMute();
+              applyYouTubeVolume(event.target, {
+                volume: readMusicVolume(),
+                muted: mutedRef.current,
+                duckGain: 1,
+              });
               setPositionProbe(() => event.target.getCurrentTime() * 1000);
               setSeekApply((positionMs) => {
-                event.target.unMute();
                 event.target.seekTo(positionMs / 1000, true);
               });
               setReady(true);
@@ -371,13 +418,6 @@ export function MusicPlayer({
         repeat,
       })
     ) {
-      try {
-        if (player.getVolume() > 0 && player.isMuted()) {
-          player.unMute();
-        }
-      } catch {
-        // volume read is best-effort
-      }
       player.playVideo();
     } else if (status !== "playing" || !videoId) {
       try {
@@ -466,11 +506,27 @@ export function MusicPlayer({
   const gainRef = useRef(1);
 
   useEffect(() => {
+    const player = playerRef.current;
+    if (!ready || !player) {
+      return;
+    }
+    if (muted) {
+      player.mute();
+    } else {
+      player.unMute();
+    }
+  }, [ready, muted, playerRef]);
+
+  useEffect(() => {
     if (!ready) {
       return;
     }
     const apply = () => {
-      playerRef.current?.setVolume(volumeRef.current * gainRef.current);
+      applyYouTubeVolume(playerRef.current, {
+        volume: volumeRef.current,
+        muted: mutedRef.current,
+        duckGain: gainRef.current,
+      });
     };
     if (!duckEnabled) {
       gainRef.current = 1;
@@ -495,7 +551,7 @@ export function MusicPlayer({
       }
     }, MUSIC_DUCK_TICK_MS);
     return () => window.clearInterval(timer);
-  }, [ready, duckEnabled, duckSpeech, volume, playerRef]);
+  }, [ready, duckEnabled, duckSpeech, volume, muted, playerRef]);
 
   const frame = (
     <div className="relative h-full w-full overflow-hidden bg-surface-0">

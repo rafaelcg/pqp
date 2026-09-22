@@ -1,89 +1,79 @@
-import { ChevronDown, Music } from "lucide-react";
-import { useRef, useState } from "react";
+import { Music } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import {
   setMusicDucking,
-  setMusicPlacement,
   useMusicJoinGate,
   useMusicPrefs,
 } from "@/lib/music-prefs";
 import {
   advance,
-  setListening,
   setMusicOpen,
   setPlaying,
-  toggleMusicOpen,
   useMusic,
 } from "@/lib/music-store";
+import { setChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
 import { effectiveCanManageMusic } from "@/components/voice/music-extras";
+import { MusicFila } from "@/components/voice/music-fila";
 import {
-  ghostIconButton,
-  MusicNowPlaying,
-} from "@/components/voice/music-now-playing";
-import { MusicPanel } from "@/components/voice/music-panel";
-import { MusicPlayer, shouldKeepMusicEmbed } from "@/components/voice/music-player-embed";
-import { MusicSearchPicker } from "@/components/voice/music-search-picker";
-import { MusicEmbedOutlet, useMusicEmbedDock } from "@/components/voice/music-embed-host";
-import { cn } from "@/lib/utils";
+  setMusicLocalNeedsTap,
+  setMusicLocalPlayer,
+  setMusicLocalVolume,
+  tapMusicLocalToPlay,
+  toggleMusicLocalMuted,
+  useMusicLocalPlayback,
+} from "@/components/voice/music-local-playback";
+import { MusicNowPlaying } from "@/components/voice/music-now-playing";
+import {
+  MusicPlayer,
+  shouldKeepMusicEmbed,
+} from "@/components/voice/music-player-embed";
+import { useMusicEmbedDock } from "@/components/voice/music-embed-host";
 import type { YTPlayer } from "@/lib/youtube-iframe";
 
 /**
- * THE PLAYER, AT THE BOTTOM OF THE SIDEBAR, ABOVE THE CALL CONTROLS.
+ * THE EMBED, AND THE SIDEBAR RADIO WHEN THE COMPOSER IS NOT THIS CALL.
  *
- * Nothing playing: a "Tocar música" row above the call status. That opens
- * the add box (the sheet). A track on is the compact bar by default; adding
- * a song or tapping art/title/chevron opens the sheet. "Parar de ouvir"
- * leaves a one-line pill. The embed stays mounted after the queue is
- * cleared (the iframe is stopped, not destroyed) and is portalled between
- * this dock, the panel's video slot, and the call-stage tile. The dock is
- * the first child of every listening branch, so React does not throw the
- * player away when the idle row comes back.
+ * The iframe stays here for the whole listen so hiding the chrome does not
+ * stop the sound. When this call's composer is on screen, chrome is false
+ * and the bar lives there. Opening another channel brings the compact radio
+ * back, with Fila as a drawer over members.
  */
-
-const VOLUME_KEY = "pqp:music-volume";
-const VIDEO_KEY = "pqp:music-video";
-
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // per-viewer convenience only
-  }
-}
-
-function readVolume(): number {
-  const parsed = Number(readStored(VOLUME_KEY) ?? NaN);
-  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
-}
 
 export function MusicMiniPlayer({
   voiceState,
   compact = false,
+  chrome = true,
 }: {
   voiceState: VoiceState;
   /** The icons-only sidebar: nothing drawn, but the embed stays mounted so the sound does not stop. */
   compact?: boolean;
+  /**
+   * False while the call's composer is drawing the bar. The dock still
+   * mounts so the paint host has a sizer.
+   */
+  chrome?: boolean;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
   const prefs = useMusicPrefs();
+  const local = useMusicLocalPlayback();
   useMusicJoinGate();
   const dockRef = useMusicEmbedDock();
-  const [volume, setVolume] = useState(readVolume);
-  const [muted, setMuted] = useState(false);
-  const [showVideo, setShowVideo] = useState(() => readStored(VIDEO_KEY) === "1");
-  const [needsTap, setNeedsTap] = useState(false);
-  const playerRef = useRef<YTPlayer | null>(null);
+  const playerRef = useMemo((): MutableRefObject<YTPlayer | null> => {
+    let inner: YTPlayer | null = null;
+    return {
+      get current() {
+        return inner;
+      },
+      set current(value) {
+        inner = value;
+        setMusicLocalPlayer(value);
+      },
+    };
+  }, []);
   const inCall =
     voiceState.status === "connected" && voiceState.voiceChannelId !== null;
   const state = music.state;
@@ -91,7 +81,6 @@ export function MusicMiniPlayer({
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, state);
-  const onStage = prefs.placement === "stage" && Boolean(current) && music.listening;
   const embedHeldRef = useRef(false);
   embedHeldRef.current = shouldKeepMusicEmbed({
     inCall,
@@ -99,6 +88,34 @@ export function MusicMiniPlayer({
     hasCurrent: current !== null,
     previouslyHeld: embedHeldRef.current,
   });
+
+  useLayoutEffect(() => {
+    if (voiceState.status !== "connected" || !voiceState.voiceChannelId) {
+      return;
+    }
+    const channelId = voiceState.voiceChannelId;
+    const seated = voiceState.occupancy[channelId] ?? [];
+    const self = voiceState.self;
+    const room =
+      self && !seated.some((person) => person.peerId === self.peerId)
+        ? [...seated, self]
+        : seated;
+    setChannelMusicCardRights({
+      canManageMusic: voiceState.canManageMusic,
+      userId: self?.userId ?? null,
+      roomSize: room.length,
+    });
+  }, [
+    voiceState.status,
+    voiceState.voiceChannelId,
+    voiceState.canManageMusic,
+    voiceState.occupancy,
+    voiceState.self,
+  ]);
+
+  useLayoutEffect(() => {
+    return () => setMusicLocalPlayer(null);
+  }, []);
 
   if (!inCall) {
     return null;
@@ -109,9 +126,10 @@ export function MusicMiniPlayer({
     <MusicPlayer
       music={music}
       isActor={isActor}
-      volume={muted ? 0 : volume}
+      volume={local.volume}
+      muted={local.muted}
       playerRef={playerRef}
-      onNeedsTap={setNeedsTap}
+      onNeedsTap={setMusicLocalNeedsTap}
       duckEnabled={prefs.ducking}
       speakingPeerCount={voiceState.speakingPeerIds.length}
       transmitting={voiceState.isTransmitting}
@@ -119,186 +137,109 @@ export function MusicMiniPlayer({
     />
   ) : null;
   const dock = (
-    <div ref={dockRef} data-music-embed-dock="" className="h-0 overflow-hidden">
+    <div
+      ref={dockRef}
+      data-music-embed-dock=""
+      className="h-0 overflow-hidden"
+    >
       {embed}
     </div>
   );
 
-  if (!current) {
-    if (!music.open) {
-      if (compact) {
-        return (
-          <div
-            data-music-mini-player="idle"
-            className="flex flex-col items-center border-t border-border bg-surface-0 py-2"
-          >
-            {dock}
-            <button
-              type="button"
-              aria-label={t("music.bar.start")}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-text hover:bg-surface-2"
-              onClick={() => setMusicOpen(true)}
-            >
-              <Music className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-        );
-      }
+  if (!chrome) {
+    return (
+      <div
+        data-music-mini-player={current ? (music.listening ? "dock" : "dismissed") : "idle"}
+        className="h-0 overflow-hidden"
+      >
+        {dock}
+      </div>
+    );
+  }
+
+  const fila = <MusicFila variant="drawer" voiceState={voiceState} />;
+  const nowPlaying = current ? (
+    <MusicNowPlaying
+      current={current}
+      music={music}
+      voiceState={voiceState}
+      canManage={canManage}
+      playing={playing}
+      needsTap={local.needsTap}
+      listening={music.listening}
+      volume={local.volume}
+      muted={local.muted}
+      ducking={prefs.ducking}
+      onOpenFila={() => setMusicOpen(true)}
+      onPlayPause={() => setPlaying(!playing)}
+      onSkip={() => advance()}
+      onTapToPlay={tapMusicLocalToPlay}
+      onMute={toggleMusicLocalMuted}
+      onVolume={setMusicLocalVolume}
+      onToggleDucking={setMusicDucking}
+    />
+  ) : null;
+
+  if (compact) {
+    if (!current) {
       return (
         <div
           data-music-mini-player="idle"
-          className="border-t border-border bg-surface-0"
+          className="flex flex-col items-center border-t border-ink-4/60 bg-ink py-2"
         >
           {dock}
-          <button
+          <Button
             type="button"
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-surface-2"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            aria-label={t("music.bar.start")}
             onClick={() => setMusicOpen(true)}
           >
-            <Music className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
-            {t("music.bar.start")}
-          </button>
+            <Music className="h-4 w-4" aria-hidden="true" />
+          </Button>
+          {fila}
         </div>
       );
     }
     return (
-      <div
-        data-music-mini-player="start"
-        className="border-t border-border bg-surface-0 px-3 py-2"
-      >
-        {dock}
-        <div className="mb-1.5 flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-text">{t("music.empty.title")}</p>
-          <button
-            type="button"
-            className={cn(ghostIconButton, "h-7 w-7")}
-            aria-expanded
-            aria-label={t("music.collapse")}
-            onClick={() => toggleMusicOpen()}
-          >
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-        <MusicSearchPicker compact variant="start" canManage={canManage} autoFocus />
-      </div>
-    );
-  }
-
-  if (compact) {
-    return (
       <div data-music-mini-player="compact" className="h-0 overflow-hidden">
         {dock}
+        {fila}
       </div>
     );
   }
 
-  if (!music.listening) {
+  if (!current) {
     return (
       <div
-        data-music-mini-player="dismissed"
-        className="flex items-center gap-2 border-t border-border bg-surface-0 px-3 py-2"
+        data-music-mini-player="idle"
+        className="border-t border-ink-4/60 bg-ink"
       >
-        <span className="relative h-5 w-5 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2">
-          {current.thumbnailUrl ? (
-            <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Music className="m-auto h-3 w-3 text-accent" aria-hidden="true" />
-          )}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[11px] text-text-secondary" title={current.title}>
-          {t("music.pill.playing", { title: current.title })}
-        </span>
-        <Button size="sm" onClick={() => setListening(true)}>
-          {t("music.listen")}
-        </Button>
+        {dock}
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-paper hover:bg-ink-3"
+          onClick={() => setMusicOpen(true)}
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-ink-3 text-paper-muted">
+            <Music className="h-4 w-4" aria-hidden="true" />
+          </span>
+          {t("music.bar.start")}
+        </button>
+        {fila}
       </div>
     );
   }
-
-  const toggleVideo = () => {
-    setShowVideo((value) => {
-      writeStored(VIDEO_KEY, value ? "0" : "1");
-      return !value;
-    });
-  };
-
-  const showPanelVideo = music.open && showVideo && !onStage;
-  const showStagePlaceholder = music.open && onStage;
 
   return (
     <div
-      data-music-mini-player=""
-      data-video={showPanelVideo ? "shown" : "folded"}
-      data-music-placement={prefs.placement}
-      className="border-t border-border bg-surface-0 text-xs"
+      data-music-mini-player={music.listening ? "" : "dismissed"}
+      className="border-t border-ink-4/60 bg-ink text-xs"
     >
       {dock}
-      {showStagePlaceholder && (
-        <p
-          data-music-stage-placeholder=""
-          className="px-3 pt-2 text-[11px] text-text-secondary"
-        >
-          {t("music.stage.playing")}
-        </p>
-      )}
-      <div
-        className={
-          showPanelVideo
-            ? "max-h-[135px] overflow-hidden px-2 pt-2"
-            : "h-0 overflow-hidden"
-        }
-      >
-        <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
-          {showPanelVideo ? <MusicEmbedOutlet home={dockRef} /> : null}
-        </div>
-      </div>
-
-      {music.open ? (
-        <MusicPanel
-          current={current}
-          music={music}
-          voiceState={voiceState}
-          canManage={canManage}
-          playing={playing}
-          needsTap={needsTap}
-          showVideo={showVideo}
-          volume={volume}
-          muted={muted}
-          onStage={onStage}
-          ducking={prefs.ducking}
-          onPlayPause={() => setPlaying(!playing)}
-          onSkip={() => advance()}
-          onTapToPlay={() => {
-            playerRef.current?.playVideo();
-            setNeedsTap(false);
-          }}
-          onMute={() => setMuted((value) => !value)}
-          onVolume={(next) => {
-            setMuted(false);
-            setVolume(next);
-            writeStored(VOLUME_KEY, String(next));
-          }}
-          onToggleVideo={toggleVideo}
-          onWatchOnStage={() => setMusicPlacement(onStage ? "panel" : "stage")}
-          onToggleDucking={setMusicDucking}
-        />
-      ) : (
-        <MusicNowPlaying
-          current={current}
-          music={music}
-          voiceState={voiceState}
-          canManage={canManage}
-          playing={playing}
-          needsTap={needsTap}
-          onExpand={() => toggleMusicOpen()}
-          onPlayPause={() => setPlaying(!playing)}
-          onSkip={() => advance()}
-          onTapToPlay={() => {
-            playerRef.current?.playVideo();
-            setNeedsTap(false);
-          }}
-        />
-      )}
+      {nowPlaying}
+      {fila}
     </div>
   );
 }

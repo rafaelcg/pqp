@@ -9,6 +9,8 @@ import {
 import {
   applyMusicJoinGate,
   getMusicPrefs,
+  musicPictureMode,
+  musicStagePictureActive,
   resetMusicPrefsForTests,
   setMusicAutoJoin,
   setMusicDucking,
@@ -88,9 +90,9 @@ describe("music prefs store", () => {
     resetMusicPrefsForTests();
   });
 
-  it("defaults on and remembers each switch", () => {
+  it("defaults hidden and remembers each switch", () => {
     expect(getMusicPrefs()).toEqual({
-      placement: "panel",
+      placement: "hidden",
       ducking: true,
       autoJoin: true,
     });
@@ -105,6 +107,28 @@ describe("music prefs store", () => {
     expect(localStorage.getItem("pqp:music-placement")).toBe("stage");
     expect(localStorage.getItem("pqp:music-duck")).toBe("0");
     expect(localStorage.getItem("pqp:music-auto-join")).toBe("0");
+    setMusicPlacement("hidden");
+    expect(getMusicPrefs().placement).toBe("hidden");
+    expect(localStorage.getItem("pqp:music-placement")).toBe("hidden");
+  });
+
+  it("treats the stage as the only picture", () => {
+    expect(musicPictureMode({ placement: "hidden" })).toBe("hidden");
+    expect(musicPictureMode({ placement: "stage" })).toBe("stage");
+    expect(
+      musicStagePictureActive({
+        hasCurrent: true,
+        listening: true,
+        onStage: false,
+      }),
+    ).toBe(false);
+    expect(
+      musicStagePictureActive({
+        hasCurrent: true,
+        listening: true,
+        onStage: true,
+      }),
+    ).toBe(true);
   });
 
   it("turns listening off when auto-join is off and a track appears", () => {

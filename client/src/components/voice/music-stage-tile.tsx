@@ -1,12 +1,15 @@
-import { Maximize2, Minimize2 } from "lucide-react";
-import type { RefObject } from "react";
-import { Button } from "@/components/ui/button";
+import { Maximize2, Minimize2, X } from "lucide-react";
+import { useLayoutEffect, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { setMusicPlacement } from "@/lib/music-prefs";
 import { cn } from "@/lib/utils";
 import { STAGE_LAYER } from "@/lib/stage-layers";
-import { MusicEmbedOutlet } from "@/components/voice/music-embed-host";
+import {
+  MusicEmbedOutlet,
+  getMusicPaintDock,
+} from "@/components/voice/music-embed-host";
 import { lookupAddedBy } from "@/components/voice/music-now-playing";
 import type { VoiceState } from "@/hooks/use-voice";
 
@@ -65,61 +68,85 @@ export function MusicStageTile({
   const fullscreenLabel = isFullscreen
     ? t("voice.share.exitFullscreen")
     : t("voice.share.fullscreen");
+  const [overlay, setOverlay] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const paint = getMusicPaintDock();
+    setOverlay(paint.hasAttribute("data-music-embed-overlay") ? paint : null);
+  });
+
+  const chrome = (
+    <>
+      {clickToFullscreen && onToggleFullscreen ? (
+        <button
+          type="button"
+          data-testid="tile-click-target"
+          aria-label={fullscreenLabel}
+          className={cn(
+            "pointer-events-auto absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
+            STAGE_LAYER.tileTarget,
+          )}
+          onClick={onToggleFullscreen}
+        />
+      ) : null}
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-surface-0/90 to-transparent p-2",
+          STAGE_LAYER.labels,
+        )}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-[13px] font-medium text-text">{title}</p>
+          <p className="truncate text-[11px] text-text-secondary">
+            {t("music.addedBy", { name: addedBy.name })}
+          </p>
+        </div>
+        <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+          <Tooltip label={t("music.stage.hide")} side="top">
+            <button
+              type="button"
+              data-music-stage-hide=""
+              aria-label={t("music.stage.hide")}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-0/80 text-text hover:bg-surface-2"
+              onClick={() => setMusicPlacement("hidden")}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </Tooltip>
+          {onToggleFullscreen ? (
+            <Tooltip label={fullscreenLabel} side="top">
+              <button
+                type="button"
+                data-testid="music-stage-fullscreen"
+                aria-pressed={isFullscreen}
+                aria-label={fullscreenLabel}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-0/80 text-text hover:bg-surface-2"
+                onClick={onToggleFullscreen}
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
+      </div>
+    </>
+  );
 
   return (
     <div
       data-music-stage-tile=""
       className={cn(
-        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-surface-0",
+        "group relative flex h-full w-full items-center justify-center overflow-hidden bg-transparent",
+        STAGE_LAYER.labels,
         className,
       )}
     >
-      <div className="relative aspect-video max-h-full w-full overflow-hidden bg-surface-1">
+      <div className="relative aspect-video max-h-full w-full overflow-hidden bg-transparent">
         <MusicEmbedOutlet home={home} />
-        {clickToFullscreen && onToggleFullscreen ? (
-          <button
-            type="button"
-            data-testid="tile-click-target"
-            aria-label={fullscreenLabel}
-            className={cn("absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring", STAGE_LAYER.tileTarget)}
-            onClick={onToggleFullscreen}
-          />
-        ) : null}
-        <div className={cn("pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-surface-0/90 to-transparent p-2", STAGE_LAYER.labels)}>
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium text-text">{title}</p>
-            <p className="truncate text-[11px] text-text-secondary">
-              {t("music.addedBy", { name: addedBy.name })}
-            </p>
-          </div>
-          <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setMusicPlacement("panel")}
-            >
-              {t("music.stage.dock")}
-            </Button>
-            {onToggleFullscreen ? (
-              <Tooltip label={fullscreenLabel} side="top">
-                <button
-                  type="button"
-                  data-testid="music-stage-fullscreen"
-                  aria-pressed={isFullscreen}
-                  aria-label={fullscreenLabel}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-0/80 text-text hover:bg-surface-2"
-                  onClick={onToggleFullscreen}
-                >
-                  {isFullscreen ? (
-                    <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  ) : (
-                    <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  )}
-                </button>
-              </Tooltip>
-            ) : null}
-          </div>
-        </div>
+        {overlay ? createPortal(chrome, overlay) : chrome}
       </div>
     </div>
   );

@@ -23,6 +23,7 @@ import {
   Scan,
   ScreenShare,
   ScreenShareOff,
+  Music,
   Video,
   VideoOff,
 } from "lucide-react";
@@ -83,7 +84,6 @@ import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
-import { MusicDock } from "@/components/voice/music-dock";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
@@ -198,6 +198,7 @@ import {
   requestSettingsSection,
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
+import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
@@ -1505,7 +1506,6 @@ function ActiveCall({
             participants={roomParticipants}
             selfUserId={voiceState.self?.userId ?? null}
           />
-          <MusicDock compact voiceState={voiceState} />
         </div>
       );
     })()
@@ -2406,6 +2406,7 @@ export function CallControls({
   const [dockControlUsed, setDockControlUsed] = useState(false);
   const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
   const musicHintEnabled = useFeatureHintEnabled("music");
+  const musicDock = useMusicDock();
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -2513,7 +2514,6 @@ export function CallControls({
           className="mb-1.5"
         />
       )}
-      {!collapsed && <MusicDock voiceState={voiceState} className="mb-1.5" />}
       {/* THE SLIM BAR IS ONE ROW WHEN IT FITS, AND FOLDS FROM THE LEFT.
           Its cells are the people, the hold-to-talk pill (push-to-talk only)
           and the tiles. Breakpoints are container queries against the bar's
@@ -2579,9 +2579,10 @@ export function CallControls({
           />
         )}
     {/* The tile row wraps rather than clips. On a 360 phone the bar is
-        ~238px wide and six 36px tiles fill it to the pixel, so anything the
-        width budget did not foresee goes to a second line, where it can
-        still be pressed, instead of off the edge. */}
+        ~238px wide and six 36px tiles fill it to the pixel (mute, hand,
+        camera, share, music, leave; cursor, watch party and bell hide
+        under 22rem). Anything the width budget did not foresee goes to a
+        second line, where it can still be pressed, instead of off the edge. */}
     <div
       className={cn(
         "flex items-center gap-1",
@@ -2971,6 +2972,26 @@ export function CallControls({
             </button>
           </Tooltip>
         )}
+      <Tooltip
+        label={musicDock.open ? t("music.close") : t("music.open")}
+      >
+        <button
+          type="button"
+          aria-pressed={musicDock.open}
+          aria-label={musicDock.open ? t("music.close") : t("music.open")}
+          data-music-dock={musicDock.on ? "playing" : "idle"}
+          className={cn(
+            "flex items-center justify-center rounded-full",
+            size,
+            musicDock.open
+              ? "bg-signal/20 text-signal"
+              : "bg-ink-3 text-paper hover:bg-ink-4",
+          )}
+          onClick={toggleMusicOpen}
+        >
+          <Music className={iconSize} />
+        </button>
+      </Tooltip>
       {/* The grid / focus toggle used to sit here. It has no question left to
           answer: publishers are always a grid and everyone else is always a
           chip, so the only remaining "make this one big" is fullscreen, which

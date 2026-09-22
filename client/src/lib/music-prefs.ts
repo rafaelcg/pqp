@@ -6,13 +6,13 @@ import {
 } from "@/lib/music-store";
 
 /**
- * Personal music choices for this browser: where the video lives, whether
- * speech ducks the track, and whether a room starting music puts the player
- * on automatically. Kept out of `music-store.ts` so the room's queue and a
- * later controls PR can merge without touching this file.
+ * Personal music choices for this browser: whether the clip is on the
+ * stage, whether speech ducks the track, and whether a room starting
+ * music puts the player on automatically. Video never lives in the
+ * sidebar; stage is the only picture.
  */
 
-export type MusicPlacement = "panel" | "stage";
+export type MusicPlacement = "hidden" | "stage";
 
 export interface MusicPrefs {
   placement: MusicPlacement;
@@ -20,12 +20,14 @@ export interface MusicPrefs {
   autoJoin: boolean;
 }
 
+export type MusicPictureMode = "hidden" | "stage";
+
 const PLACEMENT_KEY = "pqp:music-placement";
 const DUCKING_KEY = "pqp:music-duck";
 const AUTO_JOIN_KEY = "pqp:music-auto-join";
 
 const DEFAULTS: MusicPrefs = {
-  placement: "panel",
+  placement: "hidden",
   ducking: true,
   autoJoin: true,
 };
@@ -52,7 +54,7 @@ function writeStored(key: string, value: string) {
 }
 
 function parsePlacement(raw: string | null): MusicPlacement {
-  return raw === "stage" ? "stage" : "panel";
+  return raw === "stage" ? "stage" : "hidden";
 }
 
 function parseFlag(raw: string | null, fallback: boolean): boolean {
@@ -121,6 +123,13 @@ export function setMusicPlacement(placement: MusicPlacement): void {
   setPrefs({ placement });
 }
 
+/** Hide or stage: never two pictures, never a sidebar 16:9. */
+export function musicPictureMode(
+  prefs: Pick<MusicPrefs, "placement">,
+): MusicPictureMode {
+  return prefs.placement === "stage" ? "stage" : "hidden";
+}
+
 export function setMusicDucking(ducking: boolean): void {
   setPrefs({ ducking });
 }
@@ -142,8 +151,9 @@ export function useMusicAutoJoin(): boolean {
 }
 
 /**
- * Off + a track appearing (or already on when you sit down) means the pill,
- * not the player. A skip from one track to another is not that transition.
+ * Off + a track appearing (or already on when you sit down) means Ouvir
+ * on the compact bar, not the player. A skip from one track to another is
+ * not that transition.
  */
 export function shouldAutoDeclineListen(input: {
   autoJoin: boolean;
@@ -218,6 +228,14 @@ export interface MusicStagePresence {
   addedByUserId: string;
 }
 
+export function musicStagePictureActive(input: {
+  hasCurrent: boolean;
+  listening: boolean;
+  onStage: boolean;
+}): boolean {
+  return input.hasCurrent && input.listening && input.onStage;
+}
+
 let presenceCache: MusicStagePresence = {
   active: false,
   title: "",
@@ -229,7 +247,11 @@ function getMusicStagePresence(): MusicStagePresence {
   const snap = getMusicSnapshot();
   const current = snap.state?.current ?? null;
   const next: MusicStagePresence = {
-    active: Boolean(current) && snap.listening,
+    active: musicStagePictureActive({
+      hasCurrent: Boolean(current),
+      listening: snap.listening,
+      onStage: load().placement === "stage",
+    }),
     title: current?.title ?? "",
     addedByName: current?.addedByName ?? "",
     addedByUserId: current?.addedByUserId ?? "",
@@ -246,12 +268,22 @@ function getMusicStagePresence(): MusicStagePresence {
   return presenceCache;
 }
 
+function subscribeMusicStagePresence(listener: () => void): () => void {
+  const unsubMusic = subscribeMusic(listener);
+  const unsubPrefs = subscribeMusicPrefs(listener);
+  return () => {
+    unsubMusic();
+    unsubPrefs();
+  };
+}
+
 /**
- * Track / listening only. A position sample must not re-render the stage.
+ * Track / listening / local picture. A position sample must not re-render
+ * the stage. Leaving the stage is the only way this turns off.
  */
 export function useMusicStagePresence(): MusicStagePresence {
   return useSyncExternalStore(
-    subscribeMusic,
+    subscribeMusicStagePresence,
     getMusicStagePresence,
     getMusicStagePresence,
   );

@@ -187,6 +187,12 @@ interface MessageComposerProps {
    * the channel. The composer knows nothing about what is in it.
    */
   dock?: ReactNode;
+  /**
+   * The in-call music bar and its Fila sheet. Same well as the call dock,
+   * above it, so the queue grows up from the composer instead of stealing
+   * the members rail.
+   */
+  music?: ReactNode;
 }
 
 /**
@@ -355,6 +361,7 @@ export function MessageComposer({
   onEditLastOwn,
   variant = "default",
   dock,
+  music,
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -1501,6 +1508,7 @@ export function MessageComposer({
           "rounded-[var(--radius-card)] border border-border bg-surface-2 transition-colors focus-within:border-border-strong",
         )}
       >
+        {music}
         {dock}
         {(replyTarget ||
           isPollComposerOpen ||
