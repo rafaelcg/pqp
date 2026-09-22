@@ -1280,10 +1280,12 @@ async function findRemuxSessionById(
 function buildStartRequest(input: {
   sessionId: string;
   channelId: string;
+  startedAt: number;
 }): {
   sessionId: string;
   room: string;
   channelId: string;
+  startedAtMs: number;
   partMs: number;
   segmentMs: number;
   ringSegments: number;
@@ -1300,6 +1302,17 @@ function buildStartRequest(input: {
     // inventing a second name for the same room.
     room: input.channelId,
     channelId: input.channelId,
+    // THE ONE VALUE BOTH SIDES HAVE TO AGREE ON, and until 2026-09-22 the one
+    // value neither side sent. `llObjectPrefix` below builds the row's
+    // `object_prefix` from this number; the box built its own from its own
+    // clock at the moment it constructed the session. They were 24 ms apart on
+    // the broadcast that exposed it, which is to say the prefix on the row
+    // pointed at nothing and every object under the real prefix was invisible
+    // to retention, to `keep_replay` and to replay alike. It is `startedAt`
+    // and not `Date.now()` for the resume path's sake: a resumed session keeps
+    // the row's original instant, so the box keeps writing under the prefix it
+    // was already writing under.
+    startedAtMs: input.startedAt,
     partMs: cfg.partMs,
     segmentMs: cfg.segmentMs,
     ringSegments: cfg.ringSegments,
@@ -1464,11 +1477,13 @@ async function recordLlSessionStarted(
 ): Promise<boolean> {
   try {
     await getPool().query(
+      // `keep_replay = TRUE`: kept by default, like every other watch-party
+      // row (`DEFAULT_REPLAY_HOURS` in hls-egress.ts).
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, mode, remux_session_id,
           presenter_peer_id, part_target_ms, origin_base_url, instance_id,
-          watch_party_session_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9)
+          watch_party_session_id, keep_replay)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9, TRUE)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
@@ -1855,7 +1870,9 @@ async function startLlSession(
       logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId });
       info = existing;
     } else {
-      info = await remuxStartSession(buildStartRequest({ sessionId, channelId }));
+      info = await remuxStartSession(
+        buildStartRequest({ sessionId, channelId, startedAt }),
+      );
     }
   } catch (error) {
     // The row is left exactly as it is: open, unresolved, `remux_session_id`

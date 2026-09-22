@@ -39,7 +39,11 @@ Never run `docker compose up` on this box without `APP_IMAGE_TAG=<sha>` set
 (`compose.yaml` refuses to parse without it now, see its header comment for
 the 2026-09-21 incident that made this the rule). If you need to recreate a
 container by hand, do it one replica at a time (`api-a`, confirm healthy,
-then `api-b`) and never while a watch party is live.
+then `api-b`) and never while a watch party is live. `.env`'s own
+`APP_IMAGE_TAG`/`APP_VERSION` fallback pin is maintained automatically now:
+every `pqp-deploy.sh` run rewrites it to the tag it just verified healthy,
+so a bare manual recreate with no tag in scope lands on the last deployed
+build, not a stale hand-written one.
 
 ## Apply a Caddyfile-only change by hand
 

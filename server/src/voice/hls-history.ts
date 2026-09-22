@@ -364,6 +364,8 @@ function replayObjectKey(
 const REPLAY_CACHE_TTL_MS = 30_000;
 const replayBodyCache = new Map<string, { body: string; at: number }>();
 const replayRungCache = new Map<string, { rungs: string[]; at: number }>();
+const llReplayMasterCache = new Map<string, { body: string | null; at: number }>();
+const llReplayMasterInFlight = new Map<string, Promise<string | null>>();
 
 function pruneStale<K, V extends { at: number }>(
   cache: Map<K, V>,
@@ -379,6 +381,8 @@ function pruneStale<K, V extends { at: number }>(
 export function resetHlsReplayCachesForTests(): void {
   replayBodyCache.clear();
   replayRungCache.clear();
+  llReplayMasterCache.clear();
+  llReplayMasterInFlight.clear();
 }
 
 /**
@@ -447,12 +451,20 @@ export async function buildReplayMasterPlaylist(input: {
     input.startedAt,
     input.now ?? Date.now(),
   );
-  if (rungs.length === 0) {
-    return null;
-  }
   const query = input.token
     ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(input.token)}`
     : "";
+  if (rungs.length === 0) {
+    // No ladder rung: either a pre-ladder single rendition (the caller falls
+    // through to the rung-less playlist) or a low-latency broadcast, which
+    // has a master of its own.
+    return buildLlReplayMasterPlaylist(
+      input.channelId,
+      input.startedAt,
+      query,
+      input.now ?? Date.now(),
+    );
+  }
   const variants: MasterVariant[] = rungs.map((rung) => ({
     rung: LADDER_RUNGS[rung]!,
     uri:
@@ -475,26 +487,46 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+type ReplayStorageConfig = NonNullable<ReturnType<typeof liveHlsStorageConfig>>;
+
 /** The accumulated `-index.m3u8` for one rendition, fetched from storage.
  * Shared by the replay rewrite below and by the download builder further
  * down, which needs the same object read for the same reason -- it is the
  * only record of what segments this run wrote AND in what order. */
 async function fetchReplayPlaylistBody(
-  config: NonNullable<ReturnType<typeof liveHlsStorageConfig>>,
+  config: ReplayStorageConfig,
   channelId: string,
   startedAt: number,
   rung: string | undefined,
 ): Promise<string> {
+  const response = await fetchPlaylistObject(
+    config,
+    replayObjectKey(channelId, startedAt, rung),
+  );
+  if (!response.ok) {
+    throw new HlsPlaylistUnavailable(
+      `Storage returned HTTP ${response.status} for the replay playlist`,
+    );
+  }
+  return response.text();
+}
+
+/** One playlist object, read with a short-lived signature. Storage being
+ * unreachable throws; any HTTP answer is handed back for the caller to
+ * judge, because a 404 means different things to different callers. */
+async function fetchPlaylistObject(
+  config: ReplayStorageConfig,
+  key: string,
+): Promise<Response> {
   const playlistUrl = signRequest({
     method: "GET",
-    key: replayObjectKey(channelId, startedAt, rung),
+    key,
     ttlSeconds: 60,
     forRead: false,
     config,
   }).url;
-  let response: Response;
   try {
-    response = await fetch(playlistUrl, {
+    return await fetch(playlistUrl, {
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -503,12 +535,55 @@ async function fetchReplayPlaylistBody(
       error instanceof Error ? error.message : "Storage unreachable",
     );
   }
-  if (!response.ok) {
-    throw new HlsPlaylistUnavailable(
-      `Storage returned HTTP ${response.status} for the replay playlist`,
-    );
+}
+
+/**
+ * Every object a media playlist names, rewritten into a presigned GET: the
+ * segment lines, and the `URI` of every `#EXT-X-MAP` (the init segment of a
+ * fragmented-MP4 playlist, which LiveKit's MPEG-TS never has and pqp-remux's
+ * CMAF always does). Every other tag, `#EXT-X-DISCONTINUITY` included, passes
+ * through untouched. A relative name resolves against `dir`; one with a `/`
+ * in it is already a key.
+ */
+async function signPlaylistObjects(
+  body: string,
+  dir: string,
+  config: ReplayStorageConfig,
+  now: number,
+): Promise<string> {
+  const ttl = hlsUrlTtlSeconds();
+  const signedAt = new Date(now);
+  const sign = (name: string): string =>
+    signRequest({
+      method: "GET",
+      key: name.includes("/") ? name : `${dir}${name}`,
+      ttlSeconds: ttl,
+      forRead: true,
+      config,
+      now: signedAt,
+    }).url;
+  const lines = body.split("\n");
+  const rewrittenLines = new Array<string>(lines.length);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#EXT-X-MAP:")) {
+      rewrittenLines[i] = line.replace(
+        /URI="([^"]+)"/,
+        (_match, uri: string) => `URI="${sign(uri)}"`,
+      );
+      continue;
+    }
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      rewrittenLines[i] = line;
+      continue;
+    }
+    rewrittenLines[i] = sign(trimmed);
+    if (i > 0 && i % SIGN_YIELD_EVERY === 0) {
+      await yieldToEventLoop();
+    }
   }
-  return response.text();
+  return rewrittenLines.join("\n");
 }
 
 /** One rendition of a replay: the accumulated `-index.m3u8`, segment lines
@@ -522,6 +597,9 @@ export async function buildReplaySignedPlaylist(
   rung: string | undefined,
   now = Date.now(),
 ): Promise<string> {
+  if (rung !== undefined && isLlReplayTrack(rung)) {
+    return buildLlReplaySignedPlaylist(channelId, startedAt, rung, now);
+  }
   const cacheKey = `${channelId}:${startedAt}:${rung ?? ""}`;
   const cached = replayBodyCache.get(cacheKey);
   if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
@@ -546,35 +624,233 @@ export async function buildReplaySignedPlaylist(
     );
   }
   const body = await fetchReplayPlaylistBody(config, channelId, startedAt, rung);
-  const ttl = hlsUrlTtlSeconds();
-  const signedAt = new Date(now);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
-  const lines = body.split("\n");
-  const rewrittenLines = new Array<string>(lines.length);
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) {
-      rewrittenLines[i] = line;
-      continue;
-    }
-    const key = trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`;
-    rewrittenLines[i] = signRequest({
-      method: "GET",
-      key,
-      ttlSeconds: ttl,
-      forRead: true,
-      config,
-      now: signedAt,
-    }).url;
-    if (i > 0 && i % SIGN_YIELD_EVERY === 0) {
-      await yieldToEventLoop();
-    }
-  }
-  const rewritten = rewrittenLines.join("\n");
+  const rewritten = await signPlaylistObjects(body, prefixDir, config, now);
   pruneStale(replayBodyCache, now);
   replayBodyCache.set(cacheKey, { body: rewritten, at: now });
   return rewritten;
+}
+
+// --------------------------------------------------------------------------
+// Replaying a low-latency broadcast.
+//
+// A `mode = 'll'` row is one pqp-remux session, and its objects are laid out
+// differently from a LiveKit rung's: `object_prefix` is a DIRECTORY
+// (`live/<channel>/<startedAt>-ll/video-seg-12.m4s`), the media is CMAF with
+// its own init segments, and video and audio are two renditions rather than
+// two tracks of one. Since 2026-09-22 the box also writes `master.m3u8`,
+// `video.m3u8` and `audio.m3u8` there (`internal/r2.VodIndex` in
+// tools/pqp-remux): ordinary HLS playlists over the whole session, one
+// `#EXT-X-MAP` per init and a `#EXT-X-DISCONTINUITY` ahead of every change.
+// So replay is the same job as for a rung: read what the box wrote and sign
+// what it names. The two media playlists are served under the rung route as
+// `llvideo` and `llaudio`, names no ladder rung can ever take.
+//
+// THE ROW'S OWN PREFIX, NEVER ONE REBUILT FROM `startedAt`. Every LL session
+// before 2026-09-22 was written under the box's clock rather than the API's,
+// a few milliseconds off `started_at`, and the reconcile script
+// (`server/scripts/hls-reconcile-ll-prefixes.ts`) repairs such a row by
+// rewriting `object_prefix` alone. Deriving the prefix here would undo that.
+// --------------------------------------------------------------------------
+
+const LL_REPLAY_TRACKS = {
+  llvideo: "video.m3u8",
+  llaudio: "audio.m3u8",
+} as const;
+
+type LlReplayTrack = keyof typeof LL_REPLAY_TRACKS;
+
+function isLlReplayTrack(rung: string): rung is LlReplayTrack {
+  return Object.prototype.hasOwnProperty.call(LL_REPLAY_TRACKS, rung);
+}
+
+/** The still-available LL row of this broadcast's `object_prefix`, or null. */
+async function llReplayPrefix(
+  channelId: string,
+  startedAt: number,
+): Promise<string | null> {
+  const result = await getPool().query<{ object_prefix: string }>(
+    `SELECT object_prefix FROM hls_sessions
+     WHERE channel_id = $1
+       AND started_at = to_timestamp($2 / 1000.0)
+       AND mode = 'll'
+       AND ${availablePredicate(3, 4)}
+     LIMIT 1`,
+    [channelId, startedAt, hlsRetentionMinutes(), hlsReplayHours()],
+  );
+  return result.rows[0]?.object_prefix ?? null;
+}
+
+/**
+ * The box's `master.m3u8` with its two playlist references pointed at this
+ * API's replay route, or null when there is no LL row or the box never wrote
+ * one (every LL broadcast from before the box knew how). Null rather than a
+ * throw for the second case: "this recording has no playlist" is a 404, not a
+ * storage outage.
+ */
+async function buildLlReplayMasterPlaylist(
+  channelId: string,
+  startedAt: number,
+  query: string,
+  now = Date.now(),
+): Promise<string | null> {
+  const raw = await llReplayMasterBody(channelId, startedAt, now);
+  if (raw === null) {
+    return null;
+  }
+  const routeFor = (name: string): string | null => {
+    const track = (Object.keys(LL_REPLAY_TRACKS) as LlReplayTrack[]).find(
+      (key) => LL_REPLAY_TRACKS[key] === name,
+    );
+    return track
+      ? `/api/voice/hls-replay/${encodeURIComponent(channelId)}` +
+          `/${startedAt}/${track}${query}`
+      : null;
+  };
+  return raw
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#EXT-X-MEDIA:")) {
+        return line.replace(
+          /URI="([^"]+)"/,
+          (match, uri: string) => {
+            const route = routeFor(uri);
+            return route ? `URI="${route}"` : match;
+          },
+        );
+      }
+      if (trimmed === "" || trimmed.startsWith("#")) {
+        return line;
+      }
+      return routeFor(trimmed) ?? line;
+    })
+    .join("\n");
+}
+
+/**
+ * The box's own `master.m3u8` for this broadcast, or null (no available LL
+ * row, or none written). Cached for the same `REPLAY_CACHE_TTL_MS` as a
+ * rung's availability, token-free, because an audience opening one replay
+ * all asks for the same tiny object and the per-viewer part is only the
+ * query string `buildLlReplayMasterPlaylist` puts on the two URIs. A null is
+ * cached too: it is as stable as a body for a finished broadcast.
+ */
+async function llReplayMasterBody(
+  channelId: string,
+  startedAt: number,
+  now: number,
+): Promise<string | null> {
+  const cacheKey = `${channelId}:${startedAt}:llmaster`;
+  const cached = llReplayMasterCache.get(cacheKey);
+  if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
+    return cached.body;
+  }
+  // An audience pressing Watch together all miss the cache together; one
+  // read answers them all.
+  const inFlight = llReplayMasterInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const read = readLlReplayMasterBody(channelId, startedAt, cacheKey, now);
+  llReplayMasterInFlight.set(cacheKey, read);
+  try {
+    return await read;
+  } finally {
+    llReplayMasterInFlight.delete(cacheKey);
+  }
+}
+
+async function readLlReplayMasterBody(
+  channelId: string,
+  startedAt: number,
+  cacheKey: string,
+  now: number,
+): Promise<string | null> {
+  const prefix = await llReplayPrefix(channelId, startedAt);
+  let body: string | null = null;
+  if (prefix !== null) {
+    const config = liveHlsStorageConfig();
+    if (!config) {
+      throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+    }
+    const response = await fetchPlaylistObject(config, `${prefix}/master.m3u8`);
+    if (response.ok) {
+      body = await response.text();
+    } else if (response.status !== 404) {
+      // Not cached: an outage is not a fact about the recording.
+      throw new HlsPlaylistUnavailable(
+        `Storage returned HTTP ${response.status} for the LL replay master`,
+      );
+    }
+  }
+  pruneStale(llReplayMasterCache, now);
+  llReplayMasterCache.set(cacheKey, { body, at: now });
+  return body;
+}
+
+/**
+ * One of an LL broadcast's two media playlists, every segment and init
+ * signed. Always served as a finished VOD: the row is ended (the availability
+ * predicate requires it), and a box that died before its final write left the
+ * playlist as an open `EVENT` with no `#EXT-X-ENDLIST`, which a player would
+ * keep polling for segments that are never coming.
+ */
+async function buildLlReplaySignedPlaylist(
+  channelId: string,
+  startedAt: number,
+  track: LlReplayTrack,
+  now: number,
+): Promise<string> {
+  const cacheKey = `${channelId}:${startedAt}:${track}`;
+  const cached = replayBodyCache.get(cacheKey);
+  if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
+    return cached.body;
+  }
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+  }
+  const prefix = await llReplayPrefix(channelId, startedAt);
+  if (prefix === null) {
+    replayBodyCache.delete(cacheKey);
+    throw new HlsPlaylistNotFound(
+      `No LL replay for channel ${channelId} at ${startedAt}`,
+    );
+  }
+  const response = await fetchPlaylistObject(
+    config,
+    `${prefix}/${LL_REPLAY_TRACKS[track]}`,
+  );
+  if (response.status === 404) {
+    throw new HlsPlaylistNotFound(`No ${track} playlist under ${prefix}`);
+  }
+  if (!response.ok) {
+    throw new HlsPlaylistUnavailable(
+      `Storage returned HTTP ${response.status} for the LL replay ${track}`,
+    );
+  }
+  const signed = await signPlaylistObjects(
+    closeLlPlaylist(await response.text()),
+    `${prefix}/`,
+    config,
+    now,
+  );
+  pruneStale(replayBodyCache, now);
+  replayBodyCache.set(cacheKey, { body: signed, at: now });
+  return signed;
+}
+
+/** `EVENT` becomes `VOD`, and a missing `#EXT-X-ENDLIST` is appended. */
+function closeLlPlaylist(body: string): string {
+  const closed = body.replace(
+    /^#EXT-X-PLAYLIST-TYPE:EVENT$/m,
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+  );
+  if (/^#EXT-X-ENDLIST\s*$/m.test(closed)) {
+    return closed;
+  }
+  return `${closed.replace(/\n*$/, "\n")}#EXT-X-ENDLIST\n`;
 }
 
 // --------------------------------------------------------------------------

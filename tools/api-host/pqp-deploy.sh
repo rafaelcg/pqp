@@ -34,6 +34,7 @@ DEST=/opt/pqp
 STAGING=/home/pqp-deploy/incoming
 VERIFIED=""
 tmp_bin=""
+env_tmp=""
 
 # Unconditional, on every exit path (success, a rejected/tampered config,
 # a failed pull, a healthcheck timeout -- anything). pqp-deploy owns
@@ -47,7 +48,7 @@ tmp_bin=""
 # pqp-deploy's, but the same "never leave residue for the next run" logic
 # applies -- quoted with defaults so this fires safely even before either
 # variable is ever assigned (a run that exits before reaching that point).
-trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}"' EXIT
+trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}" "${env_tmp:-}"' EXIT
 
 cd "$DEST"
 
@@ -390,5 +391,77 @@ docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
 # this tag, is this the box's new known-good release.
 echo "$TAG" >"$DEST/.deployed-tag"
 chmod 0644 "$DEST/.deployed-tag"
+
+# Also keep .env's own APP_IMAGE_TAG/APP_VERSION (see the export above --
+# always the same value) equal to this now-verified release. The
+# 2026-09-21 incident (PR #762, compose.yaml's header comment) pinned a
+# fallback tag into .env by hand so a bare manual `docker compose up` with
+# no tag in scope can no longer float to a stale local `:latest`, but this
+# script never wrote that pin itself, so it drifted behind every
+# pipeline-driven deploy and a later manual recreate could still resurrect
+# whatever sha was last hand-written there. Attempted only here, after
+# every replica and the worker have already passed
+# wait_healthy/verify_version above -- a failed or rolled-back run exits
+# before this line and never touches the fallback pin.
+#
+# $TAG is ALREADY this box's known-good release by this point
+# (.deployed-tag is written above), so nothing in this block may fail the
+# deploy: persist_fallback_pin warns on stderr and returns non-zero
+# instead, which the call below deliberately ignores. A stale fallback
+# only matters to a FUTURE bare manual recreate, not to what is running
+# right now.
+persist_fallback_pin() {
+  if [[ ! -f "$DEST/.env" ]]; then
+    echo "warning: $DEST/.env not found; skipping the APP_IMAGE_TAG/APP_VERSION fallback pin" >&2
+    return 0
+  fi
+  env_tmp="$(mktemp "$DEST/.env.pin.XXXXXX")" || {
+    echo "warning: could not create a temp file to persist the APP_IMAGE_TAG/APP_VERSION fallback pin; $TAG is already live, only the fallback used by a bare manual recreate is stale" >&2
+    return 1
+  }
+  # Keep every line except the two we're about to replace. `grep -v` exits
+  # 1 (no match, not an error) the first time this runs against a .env
+  # that predates this script ever writing the pin -- e.g. right after PR
+  # #762's by-hand write, before either key exists yet -- so only a status
+  # above 1 is a genuine read failure. Swallowing that too (a bare
+  # `|| true`) would let a half-read .env collapse the temp file down to
+  # just the two appended lines below, and the rename that follows would
+  # then replace the real .env -- DB credentials and everything else in it
+  # -- with that.
+  local grep_rc=0
+  grep -v -E '^(APP_IMAGE_TAG|APP_VERSION)=' "$DEST/.env" >"$env_tmp" || grep_rc=$?
+  if (( grep_rc > 1 )); then
+    echo "warning: reading $DEST/.env failed (grep exit $grep_rc); leaving the fallback pin untouched -- $TAG is already live, only the fallback used by a bare manual recreate is stale" >&2
+    rm -f "$env_tmp"
+    env_tmp=""
+    return 1
+  fi
+  {
+    echo "APP_IMAGE_TAG=${TAG}"
+    echo "APP_VERSION=${TAG}"
+  } >>"$env_tmp"
+  # `mktemp` in the SAME directory as .env is what makes the `mv` below a
+  # same-filesystem rename(2) -- every reader sees either the complete old
+  # file or the complete new one, never neither and never a partial one.
+  # Deliberately NOT `install` the way compose.yaml/Caddyfile above use
+  # it: GNU coreutils' `install` unlinks the destination and only THEN
+  # opens a fresh file at that same name (cp_option_init's
+  # unlink_dest_before_opening), so there is a window where $DEST/.env
+  # does not exist at all, and a disk-full error or a killed process
+  # mid-copy leaves a partial file sitting at the final path instead of
+  # the untouched original -- exactly the corruption this pin exists to
+  # avoid, on the one file here that holds secrets. Mode and ownership are
+  # set on the temp file BEFORE the rename, so there is no window where
+  # the final path exists with the wrong permissions.
+  if chown pqp:pqp "$env_tmp" && chmod 0600 "$env_tmp" && mv -f -- "$env_tmp" "$DEST/.env"; then
+    env_tmp=""
+    return 0
+  fi
+  echo "warning: could not persist APP_IMAGE_TAG/APP_VERSION to $DEST/.env; $TAG is already live, only the fallback used by a bare manual recreate is stale" >&2
+  rm -f "$env_tmp"
+  env_tmp=""
+  return 1
+}
+persist_fallback_pin || true
 
 docker compose ps

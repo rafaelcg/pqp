@@ -583,6 +583,90 @@ describeDb("sweepHlsSessions", () => {
       expect(liveHlsStreamFor(channelA)).toBeNull();
     });
 
+    /**
+     * An LL broadcast's camera and archive have no ladder room to attach to,
+     * and stopping them would cut the recording of a party still on air. With
+     * the LL row open they are adopted onto an LL companion instead
+     * (`parkLlCompanion`), which the monitor retires if the LL session itself
+     * does not come back.
+     */
+    it("adopts an LL broadcast's camera and archive instead of stopping them", async () => {
+      await getPool().query(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, mode)
+         VALUES ($1, $2, to_timestamp(8500 / 1000.0), 'll')`,
+        [channelA, `live/${channelA}/8500-ll`],
+      );
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8500-mic`,
+        endedMinutesAgo: 0,
+        egressId: "MIC_LL",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "mic",
+      });
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8500-cam360p30`,
+        endedMinutesAgo: 0,
+        egressId: "EG_CAM_LL",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_CAM",
+        rung: "cam360p30",
+      });
+      const { stop } = mediaServer([
+        { egressId: "MIC_LL", roomName: channelA },
+        { egressId: "EG_CAM_LL", roomName: channelA },
+      ]);
+
+      const result = await reconcileStaleHlsSessions();
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ adopted: 2, stopped: 0 });
+      // Recording, and still no ladder: the film is pqp-remux's.
+      expect(liveHlsActivity()).toMatchObject({ sessions: 0, micArchives: 1, cameraSessions: 1 });
+      expect(liveHlsStreamFor(channelA)).toBeNull();
+    });
+
+    it("leaves an LL broadcast's archive alone when the LL lookup fails", async () => {
+      await getPool().query(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, mode)
+         VALUES ($1, $2, to_timestamp(8600 / 1000.0), 'll')`,
+        [channelA, `live/${channelA}/8600-ll`],
+      );
+      const id = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8600-mic`,
+        endedMinutesAgo: null,
+        egressId: "MIC_LL_2",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "mic",
+      });
+      const { stop } = mediaServer([{ egressId: "MIC_LL_2", roomName: channelA }]);
+      const pool = getPool();
+      const original = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      const spy = vi
+        .spyOn(pool, "query")
+        .mockImplementation(((...args: unknown[]) =>
+          typeof args[0] === "string" && args[0].includes("WHERE mode = 'll' AND ended_at IS NULL")
+            ? Promise.reject(new Error("database down"))
+            : original(...args)) as never);
+      try {
+        const result = await reconcileStaleHlsSessions();
+        // Could not ask is not "no LL session": neither stopped nor ended.
+        expect(stop).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ adopted: 0, stopped: 0 });
+      } finally {
+        spy.mockRestore();
+      }
+      const row = await getPool().query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM hls_sessions WHERE id = $1`,
+        [id],
+      );
+      expect(row.rows[0]!.ended_at).toBeNull();
+    });
+
     it("STOPS an egress no session row owns", async () => {
       const { stop } = mediaServer([
         { egressId: "EG_orphan", roomName: channelB },

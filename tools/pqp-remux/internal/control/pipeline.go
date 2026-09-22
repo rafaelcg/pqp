@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 )
 
 // PipelineHealth is the minimal snapshot a Pipeline reports at an instant:
@@ -56,6 +58,13 @@ type PipelineHealth struct {
 	// predecessor (Farol review, PR #621).
 	VideoPartSeq uint32
 	AudioPartSeq uint32
+
+	// VideoInitGeneration is how many video init segments the pipeline has
+	// published (internal/session.Session.CurrentInitGeneration), read at
+	// the same moment as the two pairs above, so a replacement names its
+	// first init past the predecessor's last instead of overwriting
+	// `video-init.mp4` in R2.
+	VideoInitGeneration uint64
 
 	// DemoteReason is non-empty when the pipeline itself has asked to be
 	// taken off the LL rung (today: an H.264 parameter-set change that
@@ -169,6 +178,22 @@ type PipelineConfig struct {
 	// internal/session.Session.SetStartPartSequence.
 	StartVideoPartSeq uint32
 	StartAudioPartSeq uint32
+
+	// StartVideoInitGeneration is the predecessor's
+	// PipelineHealth.VideoInitGeneration (0 for a session's first
+	// pipeline): see internal/session.Session.SetStartInitGeneration.
+	StartVideoInitGeneration uint64
+
+	// VodIndex is the SESSION's replay index, not this pipeline's: every
+	// closed segment either this pipeline or any predecessor uploaded, and
+	// the renderer of the `video.m3u8` / `audio.m3u8` / `master.m3u8` that
+	// make a finished LL broadcast playable. Built once, in
+	// newManagedSession, and handed to every pipeline this session ever
+	// builds -- a restart replaces the ring and the upload queue, and an
+	// index living on either of those would publish a playlist that starts
+	// in the middle of the show. Nil when the box has no S3 configuration,
+	// in which case there is nothing to write playlists to either.
+	VodIndex *r2.VodIndex
 
 	Global GlobalConfig
 }

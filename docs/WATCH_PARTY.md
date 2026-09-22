@@ -1773,8 +1773,9 @@ playlist and the keep-warm loop both filter the rows to rungs the build knows,
 so the archive is invisible to viewers for free, while retention, `keep_replay`
 and the cleanup sweep work on the `object_prefix` and know nothing about
 ladders. **So the recording is kept or deleted with the party it belongs to,
-under exactly the rules that were already there** — ten minutes by default, a
-day with `keep_replay`.
+under exactly the rules that were already there**: thirty days by default,
+since every new row is written with `keep_replay` on (see "Past broadcasts"
+below), and ten minutes once a moderator switches it off.
 
 **The track shows up late, and that is the normal case.** The browser publishes
 it only once the mix is running, which is after the share is published, which
@@ -2546,6 +2547,55 @@ the roster at request time and never written anywhere, so there is nothing
 durable to read back. The field is left off the response rather than
 invented.
 
+**Recordings are kept by default (2026-09-22).** Every row a watch party
+inserts (each ladder rung, the camera, the mic archive and the LL session) is
+written with `keep_replay = TRUE`, and `LIVE_HLS_REPLAY_HOURS` defaults to 720,
+so a broadcast stays watchable and downloadable for thirty days without anybody
+having remembered to press "Manter gravação" in the ten minutes after it ended.
+The toggle and its `PATCH` are unchanged; what changed is the starting position,
+so switching it off is now the way to say "delete this one after the short
+window" (`LIVE_HLS_RETENTION_MINUTES`, still 10). The column default in
+`schema.sql` stays `FALSE`, so rows written before this keep the window they had.
+
+**Low-latency broadcasts replay too.** A `mode = 'll'` row is one pqp-remux
+session: its `object_prefix` is a directory of CMAF objects
+(`video-init-N.mp4`, `video-seg-N.m4s`, `audio-*`), and until 2026-09-22 nothing
+named them in order, so an LL show listed in the history and could not be
+played. The box now writes `master.m3u8`, `video.m3u8` and `audio.m3u8` there,
+rewritten whole at most every 30 s and once more at the end
+(`tools/pqp-remux/internal/r2/vod.go`):
+plain HLS over the whole session, `EVENT` while live and `VOD` plus
+`#EXT-X-ENDLIST` at the end, one `#EXT-X-MAP` per init segment with an
+`#EXT-X-DISCONTINUITY` ahead of every change (a presenter's encoder restarting
+produces dozens of those in one show). Replay reads the master and points its
+two references at `/api/voice/hls-replay/:channelId/:startedAt/llvideo` and
+`.../llaudio`, which sign every segment and every `#EXT-X-MAP` the same way a
+rung's segments are signed (`buildLlReplaySignedPlaylist` in `hls-history.ts`).
+The row's own `object_prefix` is read, never one rebuilt from `started_at`.
+An LL show from before the box wrote playlists answers 404 on Watch.
+
+That prefix used to be wrong. The API wrote `live/<channel>/<Date.now()>-ll`
+into the row and the box wrote under its own `time.Now()`, a few milliseconds
+later, so the row pointed at an empty prefix: retention "cleaned" nothing and
+every LL show leaked in the bucket, while `keep_replay` protected nothing. The
+start request now carries `startedAtMs` and the box uses it. Rows from before
+that are repaired by hand with `server/scripts/hls-reconcile-ll-prefixes.ts`
+(dry run by default; it also turns `keep_replay` on for every row it repoints,
+because a repointed row with the old ten-minute window would have the sweep
+delete the real recording on its next tick).
+
+**An LL broadcast records the camera and the voice as well.** The picture is
+pqp-remux's, but the presenter's `cam360p30` rung and the `-mic.ogg` archive
+are LiveKit egresses either way, so an LL session gets a rungless companion
+room (`llCompanions` in `hls-egress.ts`) that runs the same camera and archive
+code a ladder room does, under the LL row's `started_at`. The three group into
+one broadcast, and **Baixar** offers the camera and the voice. It offers no
+film for an LL show: its segments are fragmented MP4 against several init
+segments, which do not concatenate into one playable file the way MPEG-TS does.
+An API restart mid-show adopts the companion's egresses like a ladder's; the
+archive is never started twice for one session, because a second egress would
+write over the same `.ogg`.
+
 **Availability mirrors the retention sweep exactly**, not `cleaned_at IS
 NULL` alone. A broadcast is `replayAvailable` when none of its rows are
 cleaned AND either `keep_replay` is off and `ended_at` is within
@@ -2629,7 +2679,7 @@ was missing from rather than reading as an error:
 
 | Entry | What it is | Absent when |
 |---|---|---|
-| Vídeo (stream) | The top available ladder rung's segments, concatenated | never, while the broadcast is available |
+| Vídeo (stream) | The top available ladder rung's segments, concatenated | a low-latency broadcast (see "Low-latency broadcasts replay too" above) |
 | Câmera do apresentador | The `cam360p30` pip rung, the same way | the presenter kept the camera off |
 | Voz do apresentador | The `<startedAt>-mic.ogg` Track Egress wrote | `LIVE_HLS_MIC_ARCHIVE` was off (see above) |
 
