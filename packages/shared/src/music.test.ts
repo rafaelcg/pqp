@@ -32,6 +32,17 @@ const track = (id: string): MusicTrack => ({
   addedByName: "Ana",
 });
 
+/**
+ * `musicAdvance` answers without `rev` / `actorId` / `atMs`, because those
+ * belong to whoever writes it. A test that hands its answer straight to
+ * `musicWriteAllowed` is skipping the step a real client does, and the
+ * types say so even though `vitest` never asked.
+ */
+const written = (
+  next: Omit<MusicState, "rev" | "actorId" | "atMs">,
+  overrides: Partial<Pick<MusicState, "rev" | "actorId" | "atMs">> = {},
+): MusicState => ({ atMs: 0, rev: 2, actorId: "p2", ...next, ...overrides });
+
 const state = (overrides: Partial<MusicState> = {}): MusicState => ({
   current: track("a"),
   queue: [],
@@ -427,7 +438,7 @@ describe("musicWriteAllowed", () => {
 
     it("may do what the room switch promises", () => {
       expect(promoted({ ...held, status: "paused" })).toBe(true);
-      expect(promoted(musicAdvance(held))).toBe(true);
+      expect(promoted(written(musicAdvance(held)))).toBe(true);
       expect(promoted({ ...held, queue: [track("c"), track("b")] })).toBe(true);
       expect(promoted({ ...held, queue: [track("c")] })).toBe(true);
       expect(promoted({ ...held, positionMs: 120_000 })).toBe(true);
@@ -477,7 +488,7 @@ describe("musicWriteAllowed", () => {
   describe("the end-of-track gate", () => {
     const current = { ...track("a"), durationMs: 200_000 };
     const held = state({ current, queue: [track("b")], positionMs: 190_000 });
-    const advance = () => musicAdvance(held);
+    const advance = () => written(musicAdvance(held));
 
     it("ignores a held sample the server's clock does not agree with", () => {
       expect(
@@ -488,7 +499,7 @@ describe("musicWriteAllowed", () => {
     it("opens once the server's clock is inside the grace, stale sample or not", () => {
       const stale = state({ current, queue: [track("b")], positionMs: 0 });
       expect(
-        musicWriteAllowed(stale, musicAdvance(stale), {
+        musicWriteAllowed(stale, written(musicAdvance(stale)), {
           ...member,
           expectedPositionMs: 200_000 - MUSIC_END_GRACE_MS,
         }),
@@ -530,17 +541,17 @@ describe("musicWriteAllowed", () => {
     const seated = { userId: "u2", canManage: false, canAdd: true, roomSize: 6, seatedUserIds: ["u1", "u2", "u3", "u4", "u5", "u6"] };
 
     it("does not let two departed votes plus the sender clear a room of six", () => {
-      expect(musicWriteAllowed(held, musicAdvance(held), seated)).toBe(false);
+      expect(musicWriteAllowed(held, written(musicAdvance(held)), seated)).toBe(false);
     });
 
     it("counts the votes of people still seated", () => {
       const live = state({ current, queue: [track("b")], skipVotes: ["u3", "u4"] });
-      expect(musicWriteAllowed(live, musicAdvance(live), seated)).toBe(true);
+      expect(musicWriteAllowed(live, written(musicAdvance(live)), seated)).toBe(true);
     });
 
     it("falls back to counting every held vote when the seats are not known", () => {
       const { seatedUserIds: _omitted, ...withoutSeats } = seated;
-      expect(musicWriteAllowed(held, musicAdvance(held), withoutSeats)).toBe(true);
+      expect(musicWriteAllowed(held, written(musicAdvance(held)), withoutSeats)).toBe(true);
     });
   });
 

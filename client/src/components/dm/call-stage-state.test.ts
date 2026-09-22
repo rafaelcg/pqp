@@ -145,12 +145,23 @@ describe("stageHeightClass", () => {
    * window. Both rules carry the cap; neither may be a bare viewport
    * fraction, which is what put the message box off the bottom edge.
    */
-  it("leaves the rest of the column its room, whichever rule applies", () => {
-    for (const musicPictureOnly of [false, true]) {
-      const rule = stageHeightClass({ anyVideo: true, musicPictureOnly });
-      expect(rule).toContain(`calc(100svh-${STAGE_COLUMN_RESERVE_PX}px)`);
-      expect(rule).toContain("min(");
-    }
+  it("leaves the rest of the column its room, on the short rule", () => {
+    const rule = stageHeightClass({ anyVideo: true, musicPictureOnly: true });
+    expect(rule).toContain(`calc(100svh-${STAGE_COLUMN_RESERVE_PX}px)`);
+    expect(rule).toContain("min(");
+  });
+
+  /*
+   * And NOT on the tall one. `68svh` for a camera or a share is a product
+   * rule the e2e suite measures: the stage is exactly that before anybody
+   * drags the divider, and a 1:1 call gives the remote person half the
+   * viewport. A 300px reserve costs 12px of it at 900px tall, which was
+   * enough to fail both.
+   */
+  it("leaves a published picture at a clean 68svh", () => {
+    const rule = stageHeightClass({ anyVideo: true, musicPictureOnly: false });
+    expect(rule).toContain("h-[68svh]");
+    expect(rule).not.toContain("calc(");
   });
 });
 

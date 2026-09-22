@@ -77,13 +77,17 @@ export function isMusicPictureOnlyStage(input: {
  * square, it says the same thing in 38svh, and a picture-only stage is by
  * definition the case where nobody is publishing.
  *
- * Either way the height is capped so that `STAGE_COLUMN_RESERVE_PX` of the
- * window is left for the header above and the composer below. Without it a
- * short window (a laptop with the dock open, a resized Electron pane) put a
- * two-thirds stage on top of furniture that cannot shrink, and the message
- * box went off the bottom edge. The floors below the cap are deliberate: at
- * some height the picture has to lose and be clipped rather than the stage
- * disappearing to nothing.
+ * The SHORT rule is capped so `STAGE_COLUMN_RESERVE_PX` of the window is
+ * left for the header above and the composer below, because on a short
+ * window that furniture cannot shrink and the message box went off the
+ * bottom edge. The tall rule is deliberately NOT capped: `68svh` for a
+ * camera or a share is a product rule with its own e2e assertions behind
+ * it (`call-split-layout.spec.ts` checks the stage is exactly 68svh of the
+ * window before anybody drags the divider, and `dm-call-video-stage.spec.ts`
+ * checks a 1:1 call gives the remote person at least half the viewport).
+ * A 300px reserve costs 12px of that at 900px tall, which is enough to
+ * break both. A picture somebody is publishing wins; an album cover does
+ * not need to.
  */
 /**
  * Written out rather than built, both of them, because Tailwind generates a
@@ -91,7 +95,7 @@ export function isMusicPictureOnlyStage(input: {
  * from a template literal produces no CSS at all and the element falls back
  * to whatever it inherits, which here would be no height rule whatsoever.
  */
-const STAGE_HEIGHT_TALL = "h-[min(68svh,calc(100svh-300px))] min-h-[280px]";
+const STAGE_HEIGHT_TALL = "h-[68svh] min-h-[280px]";
 const STAGE_HEIGHT_SHORT =
   "h-[min(38svh,calc(100svh-300px))] max-h-[420px] min-h-[220px]";
 
