@@ -300,6 +300,7 @@ import {
   fetchBlocks,
   fetchChannels,
   fetchServerThreads,
+  setThreadMembership,
   fetchCommunityHomeUnread,
   fetchConversations,
   fetchIceServers,
@@ -2900,6 +2901,9 @@ function MainAppContent({
       threadsRequestRef.current += 1;
     };
   }, [selectedServerId, reloadServerThreads]);
+  /** The thread this reader last replied in from the panel, until its frame. */
+  const ownThreadReplyRef = useRef<string | null>(null);
+  const ownReplyReloadInFlightRef = useRef(false);
   const threadsByChannelRef = useRef<Record<string, ThreadSummary[]>>({});
   threadsByChannelRef.current = threadsByChannel;
   const [stashedThread, setStashedThread] = useState<{
@@ -3062,6 +3066,12 @@ function MainAppContent({
         // The chip appears on the actor's own copy immediately; everyone
         // else's arrives on the `thread-update` broadcast.
         chat.applyThreadUpdate(message.id, thread);
+        // Starting a thread joins it, and nothing else would list it: no
+        // frame is owed to the starter's own sidebar until somebody replies.
+        const serverId = selectedServerIdRef.current;
+        if (serverId) {
+          void reloadServerThreads(serverId);
+        }
         await openThreadPanel(thread, message);
       } catch (error) {
         setAppError(
@@ -3071,7 +3081,69 @@ function MainAppContent({
         );
       }
     },
-    [chat, openThreadPanel],
+    [chat, openThreadPanel, reloadServerThreads],
+  );
+
+  /**
+   * Join or leave a thread: the sidebar row's X and right-click menu, and the
+   * panel header's toggle. A leave drops the row at once; a join waits for
+   * the server, because only the server knows whether the thread makes the
+   * per-channel cap. Either way the list is re-read afterwards, which also
+   * discards a reload that was already in flight with the old answer (it
+   * bumps the request token) and backfills a slot the leave freed.
+   */
+  const membershipQueueRef = useRef(new Map<string, Promise<void>>());
+  const handleThreadMembership = useCallback(
+    async (thread: ThreadSummary, joined: boolean) => {
+      // A read already in flight carries the answer from before this change.
+      threadsRequestRef.current += 1;
+      if (!joined) {
+        setThreadsByChannel((prev) => {
+          const current = prev[thread.parentChannelId];
+          if (!current) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [thread.parentChannelId]: current.filter(
+              (one) => one.channelId !== thread.channelId,
+            ),
+          };
+        });
+      }
+      // One thread's changes go out one at a time, in the order they were
+      // asked for. Sent concurrently, a Leave then Join could reach the
+      // server as Join then Leave, and the last write wins there.
+      const previous =
+        membershipQueueRef.current.get(thread.channelId) ?? Promise.resolve();
+      const request = previous.then(() =>
+        setThreadMembership(thread.channelId, joined),
+      );
+      const settled = request.then(
+        () => undefined,
+        () => undefined,
+      );
+      membershipQueueRef.current.set(thread.channelId, settled);
+      void settled.then(() => {
+        if (membershipQueueRef.current.get(thread.channelId) === settled) {
+          membershipQueueRef.current.delete(thread.channelId);
+        }
+      });
+      try {
+        await request;
+      } catch (error) {
+        setAppError(
+          error instanceof Error
+            ? error.message
+            : translateMessage("thread.error.membership"),
+        );
+      }
+      const serverId = selectedServerIdRef.current;
+      if (serverId) {
+        void reloadServerThreads(serverId);
+      }
+    },
+    [reloadServerThreads],
   );
 
   const handleMarkUnread = useCallback(
@@ -3719,37 +3791,62 @@ function MainAppContent({
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {
             chat.applyThreadUpdate(message.messageId, message.thread);
-            // A thread neither listed nor open could be a stranger's, or one
+            // A thread not listed could be a stranger's, or one
             // of this reader's own that the per-channel cap had pushed out and
             // this reply has just brought back. Only the server can tell the
             // two apart, because only it knows who is in what, so ask it —
             // coalesced, since a busy channel produces these constantly.
             // Beside the state updater rather than inside it: an updater is
             // not a place to start work.
+            //
+            // That includes the thread open right now. Opening is not joining,
+            // so an open thread is no more "mine" than any other: this reader
+            // may have left it a moment ago, and their own reply is what
+            // brings it back, which only the server can see.
+            //
+            // Right away, not coalesced, when this is the frame for a reply
+            // this reader just sent from the panel: that reply is what (re)joins
+            // the thread, and the row appearing five seconds later reads as
+            // broken. Waiting for the frame, rather than asking on send, is
+            // what guarantees the message is written before the question.
             if (
               !(threadsByChannelRef.current[message.thread.parentChannelId] ?? [])
-                .some((one) => one.channelId === message.thread.channelId) &&
-              openThreadChannelIdRef.current !== message.thread.channelId
+                .some((one) => one.channelId === message.thread.channelId)
             ) {
-              scheduleThreadsReload();
+              // One immediate read at a time: several replies sent before
+              // the first read lands fall back to the coalesced reload
+              // instead of each starting a full read of their own.
+              const serverId = selectedServerIdRef.current;
+              if (
+                ownThreadReplyRef.current === message.thread.channelId &&
+                serverId &&
+                !ownReplyReloadInFlightRef.current
+              ) {
+                ownThreadReplyRef.current = null;
+                ownReplyReloadInFlightRef.current = true;
+                void reloadServerThreadsRef
+                  .current(serverId)
+                  .finally(() => {
+                    ownReplyReloadInFlightRef.current = false;
+                  });
+              } else {
+                scheduleThreadsReload();
+              }
             }
             // The sidebar row moves to the top of its channel on every reply,
             // which is the whole point of listing the active ones.
             //
-            // A thread NOT already listed is somebody else's: the list is
+            // A thread NOT already listed is left alone here: the list is
             // only the threads this reader is in, and the server decided that.
-            // The one exception is the thread open right now, which this
-            // reader has just joined by opening it. Adding every thread that
-            // gets a reply would undo the filter one frame at a time.
+            // Adding every thread that gets a reply would undo the filter one
+            // frame at a time.
             setThreadsByChannel((prev) => {
               const parent = message.thread.parentChannelId;
               const current = prev[parent] ?? [];
               const listed = current.some(
                 (one) => one.channelId === message.thread.channelId,
               );
-              const mine =
-                openThreadChannelIdRef.current === message.thread.channelId;
-              if (!listed && !mine) {
+              if (!listed) {
                 return prev;
               }
               const rest = current.filter(
@@ -8743,6 +8840,8 @@ function MainAppContent({
           threadsByChannel={threadsByChannel}
           unreadThreadIds={unreadThreadIds}
           onOpenThread={(thread) => void openThreadFromSidebar(thread)}
+          onLeaveThread={(thread) => void handleThreadMembership(thread, false)}
+          onMarkThreadRead={(thread) => void clearUnread(thread.channelId)}
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}
@@ -9154,6 +9253,15 @@ function MainAppContent({
           mentionCandidates={mentionCandidates}
           isLoading={threadLoading}
           showLinkEmbeds={localSettings.showLinkEmbeds}
+          // Listed in the sidebar is what "in it" looks like to this reader.
+          // A thread past the per-channel cap reads as not joined, and Join
+          // is idempotent, so the worst case is a no-op tap.
+          joined={(threadsByChannel[openThread.thread.parentChannelId] ?? []).some(
+            (one) => one.channelId === openThread.thread.channelId,
+          )}
+          onToggleJoined={(joined) =>
+            void handleThreadMembership(openThread.thread, joined)
+          }
           onClose={closeThreadPanel}
           onReportMessage={(message) =>
             setReportTarget({
@@ -9170,6 +9278,7 @@ function MainAppContent({
           onMarkUnread={handleMarkUnread}
           onMarkRead={() => clearUnread(openThread.thread.channelId)}
           onSent={() => {
+            ownThreadReplyRef.current = openThread.thread.channelId;
             if (unreadHoldRef.current.has(openThread.thread.channelId)) {
               clearUnread(openThread.thread.channelId);
             }

@@ -1926,6 +1926,26 @@ EXCEPTION
   WHEN others THEN NULL;
 END $$;
 
+-- Who is in a thread, where an action said so. Membership is otherwise
+-- derived (spoke in it, or wrote the message it grew out of; see
+-- `listActiveThreadsByParent`), and this row is the explicit override on top:
+-- `joined = TRUE` for starting a thread or tapping Join, `joined = FALSE` for
+-- Leave. A leave hides the thread from this person's sidebar until they speak
+-- in it again after `updated_at`, which is Discord's "rejoin by replying".
+-- Per person on purpose: leaving changes nobody else's list.
+CREATE TABLE IF NOT EXISTS thread_memberships (
+  thread_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined BOOLEAN NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (thread_id, user_id)
+);
+
+-- Deleting an account cascades here by user_id, which the primary key does
+-- not lead with. Without this that cascade is a scan of the whole table.
+CREATE INDEX IF NOT EXISTS idx_thread_memberships_user
+  ON thread_memberships (user_id);
+
 -- Slow mode: seconds a member must wait between sends in this channel.
 -- 0 is off. Ceiling is Discord's 6 hours. DMs stay 0 and have no control.
 -- Every server channel a message can land in reads this: text, thread, voice

@@ -1035,6 +1035,15 @@ export const fetchServerThreads = (serverId: string) =>
     `/api/servers/${serverId}/threads`,
   );
 
+/**
+ * Join (true) or leave (false) a thread: whether it is listed under its
+ * channel in this person's sidebar. Replying after a leave rejoins it.
+ */
+export const setThreadMembership = (threadId: string, joined: boolean) =>
+  apiFetch<{ ok: true }>(`/api/threads/${threadId}/membership`, {
+    method: joined ? "PUT" : "DELETE",
+  });
+
 export const createChannel = (
   serverId: string,
   name: string,
