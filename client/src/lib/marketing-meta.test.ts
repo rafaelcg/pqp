@@ -11,6 +11,7 @@ import {
   renderMarketingHead,
   LANDING_FAQ,
   TELA_FAQ,
+  VEM_FAQ,
   VS_DISCORD_FAQ,
   type MarketingPage,
 } from "./marketing-meta";
@@ -34,6 +35,7 @@ describe("marketingPageFromMetaPath", () => {
       "/",
       "/vs-discord",
       "/tela",
+      "/vem",
       "/beta",
       "/android",
       "/download",
@@ -93,6 +95,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/", prefix: "landing" },
     { path: "/vs-discord", prefix: "vsDiscord" },
     { path: "/tela", prefix: "tela" },
+    { path: "/vem", prefix: "vem" },
     { path: "/beta", prefix: "betaPage" },
     { path: "/android", prefix: "androidPage" },
     { path: "/download", prefix: "downloadPage" },
@@ -247,6 +250,67 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
         answer: ptBR[`tela.faq.${id}.a`],
       });
     });
+  });
+});
+
+describe("the /vem campaign page", () => {
+  it("every FAQ pair matches its vem.faq.* twin, both locales", () => {
+    const ids = [
+      "friends",
+      "safe",
+      "free",
+      "bots",
+      "messages",
+      "install",
+      "size",
+      "back",
+    ] as const;
+    expect(VEM_FAQ.en).toHaveLength(ids.length);
+    expect(VEM_FAQ["pt-BR"]).toHaveLength(ids.length);
+    ids.forEach((id, index) => {
+      expect(VEM_FAQ.en[index]).toEqual({
+        question: en[`vem.faq.${id}.q`],
+        answer: en[`vem.faq.${id}.a`],
+      });
+      expect(VEM_FAQ["pt-BR"][index]).toEqual({
+        question: ptBR[`vem.faq.${id}.q`],
+        answer: ptBR[`vem.faq.${id}.a`],
+      });
+    });
+  });
+
+  it("carries its own share card, one per language", () => {
+    const pt = renderMarketingHead("/vem", "pt-BR");
+    const english = renderMarketingHead("/vem", "en");
+    expect(pt).toContain(
+      '<meta property="og:image" content="https://pqp.gg/images/og-vem.png" />',
+    );
+    expect(pt).toContain(
+      '<meta name="twitter:image" content="https://pqp.gg/images/og-vem.png" />',
+    );
+    expect(english).toContain(
+      '<meta property="og:image" content="https://pqp.gg/images/og-vem-en.png" />',
+    );
+    expect(pt).toContain('"FAQPage"');
+    // Every other page keeps the product card.
+    expect(renderMarketingHead("/tela", "pt-BR")).toContain(
+      "https://pqp.gg/images/og-image.jpg",
+    );
+  });
+
+  it("never mentions the ANPD or the suspension, in either language", () => {
+    for (const locale of ["pt-BR", "en"] as const) {
+      const head = renderMarketingHead("/vem", locale).toLowerCase();
+      for (const word of ["anpd", "suspen", "vpn"]) {
+        expect(head).not.toContain(word);
+      }
+    }
+    for (const catalogue of [en, ptBR]) {
+      for (const [key, value] of Object.entries(catalogue)) {
+        if (!key.startsWith("vem.")) continue;
+        expect(value.toLowerCase(), key).not.toMatch(/anpd|suspen/);
+      }
+    }
   });
 });
 

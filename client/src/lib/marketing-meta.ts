@@ -42,6 +42,7 @@ export type MarketingPage =
   | "/"
   | "/vs-discord"
   | "/tela"
+  | "/vem"
   | "/beta"
   | "/android"
   | "/download"
@@ -58,6 +59,7 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/vs-discord",
   "/tela",
+  "/vem",
   "/beta",
   "/android",
   "/download",
@@ -105,6 +107,11 @@ interface PageCopy {
    * Paste-card description. When omitted, `description` is reused.
    */
   ogDescription?: Record<MarketingLocale, string>;
+  /**
+   * Site-relative share-card path per locale. When omitted, the product card.
+   * `/vem` is the only page with its own art, one card per language.
+   */
+  image?: Record<MarketingLocale, string>;
 }
 
 /**
@@ -155,6 +162,22 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     ogDescription: {
       "pt-BR": "Abre no navegador. Sem instalar. A galera entra pelo link.",
       en: "Opens in the browser. Nothing to install. People join from the link.",
+    },
+  },
+  "/vem": {
+    canonicalPath: "/vem",
+    title: {
+      "pt-BR": "Vem pra pqp: traz a galera e a estrutura do seu Discord em dois minutos",
+      en: "Come to pqp: bring your crew and your Discord layout in two minutes",
+    },
+    description: {
+      "pt-BR":
+        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, servidores em São Paulo.",
+      en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, hosted in São Paulo.",
+    },
+    image: {
+      "pt-BR": "/images/og-vem.png",
+      en: "/images/og-vem-en.png",
     },
   },
   "/beta": {
@@ -488,6 +511,101 @@ export const TELA_FAQ: Record<
   ],
 };
 
+/**
+ * The `/vem` FAQ, duplicated from `vem.faq.*` in the JSON catalogues and served
+ * as FAQPage JSON-LD, in the page's own order (`VEM_FAQ_IDS` in
+ * `pages/vem-page.tsx`). The suite pins every string here against its twin.
+ */
+export const VEM_FAQ: Record<
+  MarketingLocale,
+  { question: string; answer: string }[]
+> = {
+  "pt-BR": [
+    {
+      question: "Meus amigos não vão mudar.",
+      answer:
+        "Não precisam mudar. Precisam clicar num link. A sala deles nasce igual aqui, com os mesmos canais e os mesmos cargos, e o convite abre no navegador. Muita turma mantém os dois: o Discord pra o que já era, o pqp pra call e pra tela. Quando a call é melhor de um lado, a galera vai sozinha.",
+    },
+    {
+      question: "Isso é seguro?",
+      answer:
+        "É um site: não instala nada. Os servidores ficam em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
+    },
+    {
+      question: "É de graça mesmo? Qual é a pegadinha?",
+      answer:
+        "Não tem plano pago hoje e não tem limite artificial de sala. O projeto é código aberto sob AGPL, então o que existe continua existindo pra quem roda a própria cópia. Dá pra doar pra ajudar na hospedagem, e doar não desbloqueia nada. A pegadinha é ser beta: vai ter aresta, e a gente conserta em público.",
+    },
+    {
+      question: "E os bots?",
+      answer:
+        "Webhook de entrada compatível com o do Discord (o que posta lá, posta aqui), webhook de saída pra quem quer automatizar, e comandos nativos: /roll, /flip, /draw, /poll, fila de música. Loja de bots ainda não tem. Se o seu servidor vive de bot, é a coisa mais honesta que a gente pode te dizer.",
+    },
+    {
+      question: "E as minhas mensagens?",
+      answer:
+        "Ficam no Discord. O template não carrega mensagem, e o pqp não pede login na sua conta de lá. O que nasce aqui é a estrutura; a conversa começa do zero, com a galera que chegar. As mensagens do pqp são suas: busca, exporta, apaga.",
+    },
+    {
+      question: "Preciso instalar alguma coisa?",
+      answer:
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone (TestFlight) e Android (APK), se você preferir.",
+    },
+    {
+      question: "Quantas pessoas cabem numa call?",
+      answer:
+        "A sala inteira. Centenas de pessoas já assistiram junto numa sala só no pqp.gg. Uma cópia auto-hospedada sem servidor de mídia fica em torno de oito por canal.",
+    },
+    {
+      question: "E se eu quiser voltar?",
+      answer:
+        "Volta. O Discord não mudou em nada. E a sua comunidade do pqp exporta quando você quiser.",
+    },
+  ],
+  en: [
+    {
+      question: "My friends won't move.",
+      answer:
+        "They don't have to move. They have to click a link. Their room is born here with the same channels and the same roles, and the invite opens in the browser. Plenty of groups keep both: Discord for what it already was, pqp for the call and the screen. When the call is better on one side, people drift there on their own.",
+    },
+    {
+      question: "Is it safe?",
+      answer:
+        "It is a website: nothing to install. Servers are in São Paulo. You delete your account from inside the app and export your data whenever you want. Blocking, reports and automod exist. The code is public if you want to look, and you don't need to read it to use it. pqp is for adults, 18 and over.",
+    },
+    {
+      question: "Is it really free? What's the catch?",
+      answer:
+        "There is no paid plan today and no artificial room limit. The project is open source under the AGPL, so what exists keeps existing for anyone who runs their own copy. You can donate to help with hosting, and donating unlocks nothing. The catch is that it is a beta: there will be rough edges, and we fix them in public.",
+    },
+    {
+      question: "What about bots?",
+      answer:
+        "Incoming webhooks compatible with Discord's (what posts there posts here), outgoing webhooks for anyone who wants to automate, and built-in commands: /roll, /flip, /draw, /poll, a music queue. No bot store yet. If your server runs on bots, that is the most honest thing we can tell you.",
+    },
+    {
+      question: "What about my messages?",
+      answer:
+        "They stay on Discord. A template carries no messages, and pqp never asks to log into your account there. What is born here is the structure; the conversation starts fresh with whoever shows up. Messages on pqp are yours: search them, export them, delete them.",
+    },
+    {
+      question: "Do I have to install anything?",
+      answer:
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone (TestFlight) and Android (APK), if you prefer.",
+    },
+    {
+      question: "How many people fit in a call?",
+      answer:
+        "The whole room. Hundreds of people have already watched together in one room on pqp.gg. A self-hosted copy with no media server sits around eight per channel.",
+    },
+    {
+      question: "What if I want to go back?",
+      answer:
+        "Go back. Discord was never touched. And your pqp community exports whenever you want.",
+    },
+  ],
+};
+
 /** `&`, `<`, `>` and `"` — everything that can escape an attribute. */
 export function escapeHtml(value: string): string {
   return value
@@ -558,7 +676,9 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
         ? VS_DISCORD_FAQ[locale]
         : page === "/tela"
           ? TELA_FAQ[locale]
-          : null;
+          : page === "/vem"
+            ? VEM_FAQ[locale]
+            : null;
   if (faq) {
     graph.push({
       "@type": "FAQPage",
@@ -595,7 +715,7 @@ export function renderMarketingHead(
   const description = copy.description[locale];
   const ogTitle = copy.ogTitle?.[locale] ?? title;
   const ogDescription = copy.ogDescription?.[locale] ?? description;
-  const image = `${CANONICAL_ORIGIN}/images/og-image.jpg`;
+  const image = `${CANONICAL_ORIGIN}${copy.image?.[locale] ?? "/images/og-image.jpg"}`;
   const e = escapeHtml;
   const langSuffix = url.includes("?") ? "&" : "?";
 

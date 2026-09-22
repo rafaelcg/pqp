@@ -71,6 +71,9 @@ const DownloadPage = lazy(() =>
 const TelaPage = lazy(() =>
   import("./pages/tela-page").then((m) => ({ default: m.TelaPage })),
 );
+const VemPage = lazy(() =>
+  import("./pages/vem-page").then((m) => ({ default: m.VemPage })),
+);
 const ApoieRoute = lazy(() =>
   import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
 );
@@ -239,6 +242,16 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               believe the file. */}
           <Route path="/:handleSegment" element={<PublicProfileRoute />} />
         </Route>
+        {/* `/vem`: the "Vem pra pqp" campaign page. Outside `DarkRoutes` on
+            purpose: it draws only with role tokens and no hero photograph, so
+            it follows the visitor's theme like the app does. `/discord` is the
+            URL people guess; Pages answers it with a 301 in `_redirects`, and
+            this route covers every build served outside Pages. */}
+        <Route path="/vem" element={<VemPage />} />
+        <Route
+          path="/discord"
+          element={<Navigate to="/vem#importar" replace />}
+        />
         <Route path="/app/*" element={<App devBypass={devBypass} />} />
         {/* The design system's token sheet. A sibling of `/app/*` rather than a
             path inside it: `/app` has no react-router children (it parses its

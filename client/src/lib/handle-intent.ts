@@ -201,3 +201,42 @@ export function intentStorage(): WritableStorage | null {
     return null;
   }
 }
+
+/**
+ * The community somebody came to CREATE, which is the fourth intention a
+ * sign-up has to carry: `pqp.gg/vem` sells "paste your Discord template and the
+ * room is born here", and its buttons are sign-up buttons. Without this the new
+ * account lands on the onboarding's generic last step and the Discord import,
+ * the one thing the page was about, is two menus away.
+ *
+ * Two values and nothing else. `discord` opens Create community already on the
+ * paste step; `new` opens it on the name field. Anything else is no intent,
+ * because this string arrives from a URL anybody can type.
+ */
+export type CreateIntent = "discord" | "new";
+
+const CREATE_KEY = "pqp:pending-create-community";
+
+function asCreateIntent(value: string | null): CreateIntent | null {
+  return value === "discord" || value === "new" ? value : null;
+}
+
+export function stashCreateIntent(
+  storage: WritableStorage | null,
+  intent: CreateIntent,
+  now: number = Date.now(),
+): void {
+  write(storage, CREATE_KEY, intent, now);
+}
+
+export function takeCreateIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): CreateIntent | null {
+  return asCreateIntent(take(storage, CREATE_KEY, now));
+}
+
+/** `?create=discord` or `?create=new` on any `/app` URL. */
+export function createIntentFromSearch(search: string): CreateIntent | null {
+  return asCreateIntent(new URLSearchParams(search).get("create"));
+}

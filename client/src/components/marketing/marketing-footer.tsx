@@ -55,6 +55,9 @@ export function MarketingFooter() {
             <Link to="/vs-discord" className={FOOTER_LINK}>
               {t("footer.vsDiscord")}
             </Link>
+            <Link to="/vem" className={FOOTER_LINK}>
+              {t("footer.vem")}
+            </Link>
             <Link to="/tela" className={FOOTER_LINK}>
               {t("footer.tela")}
             </Link>

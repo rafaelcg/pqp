@@ -1,0 +1,163 @@
+<!doctype html>
+<!--
+  Source of the /vem share cards (public/images/og-vem.png, og-vem-en.png).
+  Rendered to PNG by render-og.mjs in this folder, so the text is real type,
+  not a raster from a design tool. Art direction: the campaign's VISUALS.md
+  section 2. Colours are the Classic dark theme values from src/index.css,
+  copied here because this page is rendered outside the app.
+  Open it in a browser with ?lang=en for the English card.
+-->
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Gabarito:wght@700;800&family=Instrument+Sans:wght@400;500;600&display=block"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --surface-0: oklch(0.16 0.012 250);
+        --surface-1: oklch(0.2 0.014 250);
+        --surface-2: oklch(0.24 0.016 250);
+        --surface-3: oklch(0.3 0.018 250);
+        --border: oklch(0.3 0.018 250);
+        --text: oklch(0.93 0.015 95);
+        --text-secondary: oklch(0.82 0.015 95);
+        --text-tertiary: oklch(0.72 0.02 95);
+        --accent: oklch(0.88 0.19 125);
+        --glow: oklch(0.35 0.12 125 / 0.22);
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 1200px; height: 630px; overflow: hidden; }
+      body {
+        position: relative;
+        background: var(--surface-0);
+        color: var(--text);
+        font-family: "Instrument Sans", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .glow {
+        position: absolute; inset: 0;
+        background: radial-gradient(ellipse 70% 90% at 78% 40%, var(--glow), transparent 70%);
+      }
+      /* Left: the place they are leaving. A generic silhouette, no product. */
+      .ghost {
+        position: absolute; left: 40px; top: 56px; width: 420px; height: 500px;
+        border: 2px dashed var(--border); border-radius: 16px;
+        padding: 28px; opacity: 0.5; filter: blur(2px);
+        display: flex; flex-direction: column; gap: 18px;
+      }
+      .ghost .head { display: flex; align-items: center; gap: 14px; }
+      .ghost .icon { width: 44px; height: 44px; border-radius: 10px; background: var(--surface-3); }
+      .bar { height: 14px; border-radius: 999px; background: var(--surface-3); }
+      .row { display: flex; align-items: center; gap: 12px; }
+      .row .dot { width: 16px; height: 16px; border-radius: 4px; background: var(--surface-3); }
+      .lock { width: 16px; height: 16px; color: var(--text-tertiary); }
+      /* Right: the same room, already built on pqp. */
+      .panel {
+        position: absolute; left: 700px; top: 86px; width: 440px; height: 404px;
+        background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 12px 40px oklch(0.1 0.02 250 / 0.55);
+        overflow: hidden;
+      }
+      .panel .top {
+        display: flex; align-items: center; gap: 14px; padding: 20px 24px;
+        border-bottom: 1px solid var(--border);
+      }
+      .panel .srv {
+        width: 44px; height: 44px; border-radius: 10px; background: var(--surface-2);
+        display: grid; place-items: center; font-family: Gabarito; font-weight: 800; font-size: 16px;
+      }
+      .panel .name { font-family: Gabarito; font-weight: 800; font-size: 22px; }
+      .panel .body { padding: 8px 14px; }
+      .cat {
+        display: flex; align-items: center; gap: 6px; padding: 14px 10px 6px;
+        font-size: 13px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+        color: var(--text-tertiary);
+      }
+      .ch {
+        display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px;
+        font-size: 19px; color: var(--text-secondary);
+      }
+      .ch svg { width: 17px; height: 17px; flex: none; opacity: 0.8; }
+      .ch.sel { background: var(--surface-3); color: var(--text); font-weight: 600; }
+      /* Type */
+      .headline {
+        position: absolute; left: 96px; top: 176px; width: 640px;
+        font-family: Gabarito; font-weight: 800; font-size: 76px; line-height: 1.02;
+        letter-spacing: -0.02em;
+        text-shadow: 0 2px 24px oklch(0.16 0.012 250 / 0.9);
+      }
+      .headline .accent { color: var(--accent); }
+      .sub {
+        position: absolute; left: 96px; top: 366px; width: 480px;
+        font-size: 26px; line-height: 1.35; color: var(--text-tertiary);
+        text-shadow: 0 2px 16px oklch(0.16 0.012 250 / 0.9);
+      }
+      .mark {
+        position: absolute; left: 96px; top: 540px;
+        font-family: "Dela Gothic One"; font-size: 40px; line-height: 1;
+      }
+      .url {
+        position: absolute; right: 60px; top: 552px;
+        font-size: 22px; font-weight: 500; color: var(--text-tertiary);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glow"></div>
+
+    <div class="ghost" aria-hidden="true">
+      <div class="head"><span class="icon"></span><span class="bar" style="width: 140px"></span></div>
+      <span class="bar" style="width: 80px; height: 10px"></span>
+      <div class="row"><span class="dot"></span><span class="bar" style="width: 150px"></span></div>
+      <div class="row"><span class="dot"></span><span class="bar" style="width: 120px"></span></div>
+      <div class="row"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="bar" style="width: 100px"></span></div>
+      <span class="bar" style="width: 90px; height: 10px; margin-top: 8px"></span>
+      <div class="row"><span class="dot"></span><span class="bar" style="width: 170px"></span></div>
+      <div class="row"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span class="bar" style="width: 130px"></span></div>
+      <div class="row"><span class="dot"></span><span class="bar" style="width: 110px"></span></div>
+    </div>
+
+    <div class="panel">
+      <div class="top"><span class="srv">FR</span><span class="name">Friends &amp; Family</span></div>
+      <div class="body">
+        <div class="cat"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>Text Channels</div>
+        <div class="ch sel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></svg>general</div>
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></svg>games</div>
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></svg>music</div>
+        <div class="cat"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>Voice Channels</div>
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>Lounge</div>
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>Stream Room</div>
+      </div>
+    </div>
+
+    <h1 class="headline" id="headline"></h1>
+    <p class="sub" id="sub"></p>
+    <div class="mark">pqp</div>
+    <div class="url">pqp.gg/vem</div>
+
+    <script>
+      const copy = {
+        "pt-BR": {
+          lead: "Muda de casa.<br />Leva a ",
+          accent: "galera.",
+          sub: "Cola o template do seu Discord. A sala nasce igual no pqp.",
+        },
+        en: {
+          lead: "Move house.<br />Bring ",
+          accent: "everyone.",
+          sub: "Paste your Discord template. Your room shows up on pqp.",
+        },
+      };
+      const lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "pt-BR";
+      document.documentElement.lang = lang;
+      const c = copy[lang];
+      document.getElementById("headline").innerHTML =
+        c.lead + '<span class="accent">' + c.accent + "</span>";
+      document.getElementById("sub").textContent = c.sub;
+    </script>
+  </body>
+</html>

@@ -347,7 +347,9 @@ import {
 } from "@/lib/connection-callback";
 import {
   addIntentFromSearch,
+  createIntentFromSearch,
   takeAddIntent,
+  takeCreateIntent,
   takeHandleClaim,
   takeJoinIntent,
 } from "@/lib/handle-intent";
@@ -1039,6 +1041,20 @@ function MainAppContent({
   /** Whether any DM arrival card is currently up — see `effectiveCornerHint`. */
   const [dmToastActive, setDmToastActive] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
+  /**
+   * Which step Create community opens on. `paste` only when the session
+   * arrived from `pqp.gg/vem` asking to copy a Discord layout; back to `name`
+   * the moment the dialog closes, so the ordinary button is ordinary again.
+   */
+  const [createServerStart, setCreateServerStart] = useState<"name" | "paste">(
+    "name",
+  );
+  /**
+   * The session arrived to copy a Discord layout. Read by the onboarding the
+   * same way `arrivedOnInviteLink` is: its last step asks "create or join?",
+   * and this person already answered, with the dialog waiting underneath.
+   */
+  const [arrivedToImport, setArrivedToImport] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -6433,17 +6449,25 @@ function MainAppContent({
     const stashedClaim = takeHandleClaim(storage);
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
+    const stashedCreate = takeCreateIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
+    const create = createIntentFromSearch(location.search) ?? stashedCreate;
 
-    if (params.has("claim") || params.has("add") || params.has("join")) {
+    if (
+      params.has("claim") ||
+      params.has("add") ||
+      params.has("join") ||
+      params.has("create")
+    ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
+      params.delete("create");
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
@@ -6459,6 +6483,23 @@ function MainAppContent({
      * account that has none and is less than a day old, so a returning member
      * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
      */
+    /**
+     * Create community, opened for somebody who came from `pqp.gg/vem`.
+     *
+     * `discord` goes straight to the template box and tells the onboarding to
+     * skip its "create or join?" step, which this person already answered.
+     * `new` opens the name field only when there is no onboarding to run:
+     * that step IS a name field, and a second one behind it would ask twice.
+     */
+    if (create === "discord") {
+      setArrivedToImport(true);
+      setCreateServerStart("paste");
+      setShowCreateServer(true);
+    } else if (create === "new" && !needsOnboarding) {
+      setCreateServerStart("name");
+      setShowCreateServer(true);
+    }
+
     if (acquisition) {
       void updateMe({ acquisition }).catch(() => {
         // A lost attribution. Not worth a banner.
@@ -6895,7 +6936,7 @@ function MainAppContent({
     return (
       <OnboardingFlow
         user={user}
-        pendingInvite={arrivedOnInviteLink}
+        pendingInvite={arrivedOnInviteLink || arrivedToImport}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
@@ -9460,7 +9501,11 @@ function MainAppContent({
 
       <CreateServerDialog
         open={showCreateServer}
-        onClose={() => setShowCreateServer(false)}
+        initialStep={createServerStart}
+        onClose={() => {
+          setShowCreateServer(false);
+          setCreateServerStart("name");
+        }}
         onCreated={async ({ server, channels: newChannels }) => {
           setServers((prev) => [...prev, server]);
           setSelection({ kind: "server", serverId: server.id });
