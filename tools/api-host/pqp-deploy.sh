@@ -34,6 +34,7 @@ DEST=/opt/pqp
 STAGING=/home/pqp-deploy/incoming
 VERIFIED=""
 tmp_bin=""
+env_tmp=""
 
 # Unconditional, on every exit path (success, a rejected/tampered config,
 # a failed pull, a healthcheck timeout -- anything). pqp-deploy owns
@@ -47,7 +48,7 @@ tmp_bin=""
 # pqp-deploy's, but the same "never leave residue for the next run" logic
 # applies -- quoted with defaults so this fires safely even before either
 # variable is ever assigned (a run that exits before reaching that point).
-trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}"' EXIT
+trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}" "${env_tmp:-}"' EXIT
 
 cd "$DEST"
 
@@ -390,5 +391,34 @@ docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
 # this tag, is this the box's new known-good release.
 echo "$TAG" >"$DEST/.deployed-tag"
 chmod 0644 "$DEST/.deployed-tag"
+
+# Also keep .env's own APP_IMAGE_TAG/APP_VERSION (see the export above --
+# always the same value) equal to this now-verified release. The
+# 2026-09-21 incident (PR #762, compose.yaml's header comment) pinned a
+# fallback tag into .env by hand so a bare manual `docker compose up` with
+# no tag in scope can no longer float to a stale local `:latest`, but this
+# script never wrote that pin itself, so it drifted behind every
+# pipeline-driven deploy and a later manual recreate could still resurrect
+# whatever sha was last hand-written there. Written only here, after every
+# replica and the worker have already passed wait_healthy/verify_version
+# above -- a failed or rolled-back run exits before this line and never
+# touches the fallback pin. Same install-a-fresh-inode-then-rename
+# mechanism as compose.yaml/Caddyfile above, so this is atomic and
+# preserves .env's 0600 pqp:pqp (never loosened, never left root-owned);
+# skips rather than creates one from scratch if .env is somehow missing,
+# since a fresh file here would land with the wrong owner/mode instead.
+if [[ -f "$DEST/.env" ]]; then
+  env_tmp="$(mktemp "$DEST/.env.pin.XXXXXX")"
+  grep -v -E '^(APP_IMAGE_TAG|APP_VERSION)=' "$DEST/.env" >"$env_tmp" || true
+  {
+    echo "APP_IMAGE_TAG=${TAG}"
+    echo "APP_VERSION=${TAG}"
+  } >>"$env_tmp"
+  install -m 0600 -o pqp -g pqp "$env_tmp" "$DEST/.env"
+  rm -f "$env_tmp"
+  env_tmp=""
+else
+  echo "warning: $DEST/.env not found; skipping the APP_IMAGE_TAG/APP_VERSION fallback pin" >&2
+fi
 
 docker compose ps

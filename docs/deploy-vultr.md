@@ -400,7 +400,10 @@ parse without it, so this is enforced, not just a rule to remember). If you
 must recreate a container by hand, do one replica at a time (`up -d
 api-a`, confirm healthy, then `api-b`), and never during a live watch
 party. See the 2026-09-21 incident in `tools/api-host/compose.yaml`'s
-header comment.
+header comment. `pqp-deploy.sh` now rewrites `.env`'s `APP_IMAGE_TAG`/
+`APP_VERSION` fallback pin to match every deploy it verifies healthy, so a
+manual recreate with no tag in scope lands on the last deployed build
+instead of whatever sha was last hand-written there.
 
 **Check what is running.**
 ```bash
