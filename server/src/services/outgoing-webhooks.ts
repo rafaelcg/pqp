@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import type {
   CreateOutgoingWebhookBody,
   OutgoingMessageCreatedPayload,
@@ -194,6 +195,47 @@ export async function mapOutgoingWebhook(
   return mapped;
 }
 
+export type OutgoingWebhookChannelProblem = {
+  id: string;
+  name: string;
+  type: string;
+  /** `type` is a voice room, thread, or category. `server` is text somewhere else. */
+  reason: "type" | "server";
+};
+
+/**
+ * One bad id used to reject the whole selection with a sentence that named
+ * nobody. A deleted channel has no FK out of `channel_ids`, so it stays
+ * selected with no chip, and ticking `#debug` looks like `#debug` failed.
+ */
+export class OutgoingWebhookChannelsError extends HttpError {
+  readonly code = "outgoing_webhook_channels";
+
+  constructor(readonly channels: OutgoingWebhookChannelProblem[]) {
+    super(400, channels.map(describeChannelProblem).join(" "));
+    this.name = "OutgoingWebhookChannelsError";
+  }
+}
+
+function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string {
+  const name = problem.name.replace(/^#/, "");
+  if (problem.reason === "server") {
+    return `#${name} is not a text channel in this server.`;
+  }
+  switch (problem.type) {
+    case "voice":
+      return `#${name} is a voice channel, not a text channel.`;
+    case "thread":
+      return `#${name} is a thread, not a text channel.`;
+    case "category":
+      return `#${name} is a category, not a text channel.`;
+    case "watch_party":
+      return `#${name} is a watch party channel, not a text channel.`;
+    default:
+      return `#${name} is not a text channel.`;
+  }
+}
+
 async function validateTextChannelIds(
   serverId: string,
   channelIds: string[],
@@ -202,21 +244,96 @@ async function validateTextChannelIds(
   if (unique.length === 0) {
     throw new HttpError(400, "Select at least one text channel");
   }
-  const result = await getPool().query<{ id: string }>(
-    `SELECT id FROM channels
-      WHERE server_id = $1
-        AND kind = 'server'
-        AND type = 'text'
-        AND id = ANY($2::uuid[])`,
-    [serverId, unique],
+  const result = await getPool().query<{
+    id: string;
+    name: string;
+    type: string;
+    kind: string;
+    server_id: string | null;
+  }>(
+    `SELECT id, name, type, kind, server_id
+       FROM channels
+      WHERE id = ANY($1::uuid[])`,
+    [unique],
   );
-  if (result.rows.length !== unique.length) {
-    throw new HttpError(
-      400,
-      "Every channel must be a text channel in this server",
-    );
+  const byId = new Map(
+    result.rows.map((row) => [row.id.toLowerCase(), row]),
+  );
+  const serverKey = serverId.toLowerCase();
+  const kept: string[] = [];
+  const problems: OutgoingWebhookChannelProblem[] = [];
+  for (const id of unique) {
+    const row = byId.get(id.toLowerCase());
+    if (!row) {
+      // Gone. Drop it so the channels that are still there can save.
+      continue;
+    }
+    const textHere =
+      row.server_id?.toLowerCase() === serverKey &&
+      row.kind === "server" &&
+      row.type === "text";
+    if (textHere) {
+      kept.push(id);
+      continue;
+    }
+    problems.push({
+      id,
+      name: row.name,
+      type: row.type,
+      reason: row.type === "text" ? "server" : "type",
+    });
   }
-  return unique;
+  if (problems.length > 0) {
+    throw new OutgoingWebhookChannelsError(problems);
+  }
+  if (kept.length === 0) {
+    throw new HttpError(400, "Select at least one text channel");
+  }
+  return kept;
+}
+
+/**
+ * A deleted channel id is not a foreign key, so it would sit in
+ * `channel_ids` and fail the next save. Pull it out when another text
+ * channel is still on the hook. When it was the only one, leave the id
+ * (the column cannot be empty) and disable the hook.
+ */
+export async function detachDeletedChannelsFromOutgoingWebhooks(
+  client: Pick<PoolClient, "query">,
+  channelIds: string[],
+): Promise<void> {
+  if (channelIds.length === 0) {
+    return;
+  }
+  await client.query(
+    `UPDATE outgoing_webhooks
+        SET channel_ids = ARRAY(
+              SELECT cid
+                FROM unnest(channel_ids) WITH ORDINALITY AS u(cid, ord)
+               WHERE NOT (cid = ANY($1::uuid[]))
+               ORDER BY ord
+            ),
+            updated_at = NOW()
+      WHERE channel_ids && $1::uuid[]
+        AND EXISTS (
+          SELECT 1
+            FROM unnest(channel_ids) AS cid
+           WHERE NOT (cid = ANY($1::uuid[]))
+        )`,
+    [channelIds],
+  );
+  await client.query(
+    `UPDATE outgoing_webhooks
+        SET status = 'disabled',
+            disabled_reason = COALESCE(
+              disabled_reason,
+              'The last text channel was deleted'
+            ),
+            updated_at = NOW()
+      WHERE channel_ids && $1::uuid[]
+        AND status <> 'disabled'`,
+    [channelIds],
+  );
 }
 
 async function validateSkipUserIds(

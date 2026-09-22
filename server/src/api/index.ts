@@ -418,6 +418,7 @@ import {
   deleteOutgoingWebhook,
   getOutgoingWebhookRow,
   listOutgoingWebhooks,
+  OutgoingWebhookChannelsError,
   rotateOutgoingWebhookSecret,
   serverHasActiveOutgoingWebhook,
   statusWithCharacterHook,
@@ -9954,6 +9955,15 @@ export async function handleApi(
     // fields would be silently dropped by the more general match.
     if (error instanceof HttpErrorWithDetail) {
       sendJson(res, error.status, { error: error.message, ...error.detail }, req);
+      return;
+    }
+    if (error instanceof OutgoingWebhookChannelsError) {
+      sendJson(
+        res,
+        error.status,
+        { error: error.message, code: error.code, channels: error.channels },
+        req,
+      );
       return;
     }
     if (error instanceof HttpError) {
