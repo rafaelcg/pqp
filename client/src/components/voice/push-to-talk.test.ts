@@ -201,8 +201,13 @@ describe("bindings that cannot type work from the composer", () => {
     expect(bindingTypesText(binding({ code: "KeyV", alt: true }))).toBe(true);
     expect(bindingTypesText(binding({ code: "Numpad0" }))).toBe(true);
 
+    // Right Alt is AltGr on most non-US layouts, and Windows makes AltGr out
+    // of Ctrl+Alt: both are held to type "@" or "€".
+    expect(bindingTypesText(binding({ code: "AltRight" }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "KeyQ", ctrl: true, alt: true }))).toBe(true);
+
     expect(bindingTypesText(binding({ code: "ControlLeft" }))).toBe(false);
-    expect(bindingTypesText(binding({ code: "AltRight" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "AltLeft" }))).toBe(false);
     expect(bindingTypesText(binding({ code: "KeyV", ctrl: true }))).toBe(false);
     expect(bindingTypesText(binding({ code: "KeyV", meta: true }))).toBe(false);
     expect(bindingTypesText(binding({ code: "F13" }))).toBe(false);
@@ -215,12 +220,23 @@ describe("bindings that cannot type work from the composer", () => {
     // THE BUG: focus sits in the composer while you read a text channel, and
     // this used to refuse every binding there, so push-to-talk looked like it
     // only worked on the voice channel's own view.
+    const ctrlRight = binding({ code: "ControlRight" });
+    expect(
+      shouldEngage(keyEvent({ code: "ControlRight", ctrlKey: true, target: composer }), ctrlRight),
+    ).toBe(true);
+    expect(
+      shouldEngage(keyEvent({ code: "ControlRight", ctrlKey: true, target: richTextSpan }), ctrlRight),
+    ).toBe(true);
+  });
+
+  it("Right Alt (AltGr) does not engage in the composer, where it types @ and €", () => {
     const altRight = binding({ code: "AltRight" });
     expect(
       shouldEngage(keyEvent({ code: "AltRight", altKey: true, target: composer }), altRight),
-    ).toBe(true);
+    ).toBe(false);
+    // Over the ordinary page it is still a perfectly good binding.
     expect(
-      shouldEngage(keyEvent({ code: "AltRight", altKey: true, target: richTextSpan }), altRight),
+      shouldEngage(keyEvent({ code: "AltRight", altKey: true, target: plainDiv }), altRight),
     ).toBe(true);
   });
 

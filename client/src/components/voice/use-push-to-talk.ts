@@ -6,6 +6,22 @@ import { getDesktop, type DesktopPttBinding } from "@/lib/desktop";
 import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
 
+/**
+ * Hand a binding back to the shell and never leave the rejection unhandled.
+ *
+ * Nothing better is available on failure: the IPC call is the only door to
+ * the main process, and it is the main process that holds the hook. What
+ * keeps a failed unbind from leaving the mic open is on the main side, not
+ * here: the hook only runs while the window is unfocused and is stopped (and
+ * force-released) the moment it regains focus, and every renderer press path
+ * still goes through `set`, whose releases are unconditional.
+ */
+function unbindQuietly(pending: Promise<unknown>): void {
+  pending.catch((err: unknown) => {
+    console.warn("[pqp] push-to-talk: shell refused to release the binding", err);
+  });
+}
+
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
   enabled: boolean;
@@ -165,7 +181,7 @@ export function usePushToTalk({
     const wanted = enabled && globalEnabled;
     if (bindNative && subscribeNative) {
       if (!wanted) {
-        void bindNative(null, releaseDelayMs);
+        unbindQuietly(bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         return;
       }
@@ -180,15 +196,22 @@ export function usePushToTalk({
       };
       let cancelled = false;
       const off = subscribeNative((down) => set(down));
-      void bindNative(descriptor, releaseDelayMs).then((result) => {
-        if (!cancelled) {
-          setGlobalHotkey(result.registered === true);
-        }
-      });
+      bindNative(descriptor, releaseDelayMs).then(
+        (result) => {
+          if (!cancelled) {
+            setGlobalHotkey(result.registered === true);
+          }
+        },
+        () => {
+          if (!cancelled) {
+            setGlobalHotkey(false);
+          }
+        },
+      );
       return () => {
         cancelled = true;
         off();
-        void bindNative(null, releaseDelayMs);
+        unbindQuietly(bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         set(false);
       };
@@ -206,21 +229,28 @@ export function usePushToTalk({
     }
     const accelerator = wanted ? bindingToAccelerator(stableBinding) : null;
     if (!accelerator) {
-      void bind(null);
+      unbindQuietly(bind(null));
       setGlobalHotkey(false);
       return;
     }
     let cancelled = false;
     const off = subscribe((down) => set(down));
-    void bind(accelerator).then((registered) => {
-      if (!cancelled) {
-        setGlobalHotkey(registered === true);
-      }
-    });
+    bind(accelerator).then(
+      (registered) => {
+        if (!cancelled) {
+          setGlobalHotkey(registered === true);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setGlobalHotkey(false);
+        }
+      },
+    );
     return () => {
       cancelled = true;
       off();
-      void bind(null);
+      unbindQuietly(bind(null));
       setGlobalHotkey(false);
       set(false);
     };

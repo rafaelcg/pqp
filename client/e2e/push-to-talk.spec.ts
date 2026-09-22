@@ -171,8 +171,8 @@ test.describe("push-to-talk", () => {
     // every binding used to be refused there. A key that cannot type has
     // nothing to steal from the composer, so it must work from it.
     await usePushToTalk(page, {
-      code: "AltRight",
-      label: "Right Alt",
+      code: "ControlRight",
+      label: "Right Ctrl",
       ctrl: false,
       alt: false,
       shift: false,
@@ -184,9 +184,9 @@ test.describe("push-to-talk", () => {
     await composer.click();
     await expect(composer).toBeFocused();
 
-    await page.keyboard.down("AltRight");
+    await page.keyboard.down("ControlRight");
     await expect(holdButton(page)).toHaveAttribute("aria-pressed", "true");
-    await page.keyboard.up("AltRight");
+    await page.keyboard.up("ControlRight");
     await expect(holdButton(page)).toHaveAttribute("aria-pressed", "false");
     // Nothing typed, nothing lost.
     await expect(composer).toHaveValue("");

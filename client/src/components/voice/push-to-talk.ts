@@ -240,10 +240,20 @@ function isFunctionKeyCode(code: string): boolean {
  * system keys in `NON_TYPING_CODES`. Yes for everything else, and that
  * includes Alt and AltGr chords: on macOS and on many European layouts,
  * Option/AltGr plus a letter types a character.
+ *
+ * AltGr is the trap in the modifier rule. Right Alt IS AltGr on most
+ * non-US layouts, held to type "@" or "€", and Windows also produces AltGr
+ * from Ctrl+Alt, so a bare Right Alt and any Ctrl+Alt chord count as typing.
  */
 export function bindingTypesText(binding: KeyBinding): boolean {
+  if (binding.code === "AltRight") {
+    return true;
+  }
   if (isModifierCode(binding.code)) {
     return false;
+  }
+  if (binding.ctrl && binding.alt) {
+    return true;
   }
   if (binding.ctrl || binding.meta) {
     return false;
