@@ -18,6 +18,7 @@ import {
   setMusicMessageSchema,
   type MusicResolved,
   type MusicState,
+  type MusicStateWrite,
   type MusicTrack,
 } from "./music.js";
 
@@ -1103,6 +1104,113 @@ describe("the server's own door", () => {
         seatedUserIds: [],
       }),
     ).toBe(server);
+  });
+});
+
+describe("filling in a duration nobody asked you to", () => {
+  /*
+   * THE FILL RULE GUARDED `current` AND LEFT THE QUEUE OPEN.
+   *
+   * A duration may go from null to a value so the room's own writer can
+   * fill in what oEmbed did not carry, and that is restricted to the
+   * manager or the person who added the track — for `current`. The
+   * queue went through `sameTracks`, which allows exactly that transition
+   * for anybody. So a listen-only seat could give a queued track a length
+   * of 1 ms, wait for it to become current, and a millisecond later the
+   * end-of-track gate is satisfied: the track is taken away from the room
+   * with no votes and no rights, by somebody who cannot even speak.
+   */
+  const mine = track("q1");
+  const theirs: MusicTrack = { ...track("q2"), addedByUserId: "u2" };
+  const held = state({ queue: [mine, theirs] });
+  const seat = {
+    userId: "nobody",
+    canManage: false,
+    canAdd: false,
+    roomSize: 4,
+  };
+
+  const fill = (index: number, durationMs: number): MusicStateWrite => {
+    const queue = [...held.queue];
+    queue[index] = { ...(queue[index] as MusicTrack), durationMs };
+    return { ...held, queue, rev: 2, actorId: "p9" };
+  };
+
+  it("refuses a queued fill from somebody with no claim on the track", () => {
+    expect(musicWriteAllowed(held, fill(0, 200_000), seat)).toBe(false);
+  });
+
+  it("lets the person who added it fill it", () => {
+    expect(
+      musicWriteAllowed(held, fill(1, 200_000), { ...seat, userId: "u2" }),
+    ).toBe(true);
+  });
+
+  it("lets a manager fill any of them", () => {
+    expect(
+      musicWriteAllowed(held, fill(0, 200_000), { ...seat, canManage: true }),
+    ).toBe(true);
+  });
+
+  it("still takes an ordinary sample that changes no duration", () => {
+    expect(
+      musicWriteAllowed(held, { ...held, positionMs: 9_000, rev: 2, actorId: "p9" }, seat),
+    ).toBe(true);
+  });
+});
+
+describe("a vote that carries, with the infinity on", () => {
+  /*
+   * The room voted the track out and the queue is empty. With "Continuar
+   * com parecidas" on, the answer is a related track, not the end of the
+   * music — but the server only accepted an autoplayed advance when the
+   * track had RUN OUT, so the one write that would have kept the room
+   * going was refused and the only thing a client could do was end it.
+   */
+  const current = { ...(state().current as MusicTrack), durationMs: 200_000 };
+  const held = state({ current, queue: [], autoplay: true, skipVotes: ["u2"] });
+  const pick: MusicTrack = {
+    ...track("related"),
+    addedByUserId: "u1",
+    autoplayed: true,
+  };
+  const advanced: MusicStateWrite = {
+    ...musicAdvance(held),
+    current: pick,
+    queue: [],
+    status: "playing",
+    positionMs: 0,
+    atMs: 0,
+    rev: 2,
+    actorId: "p1",
+  };
+
+  it("takes the related pick the votes asked for", () => {
+    expect(
+      musicWriteAllowed(held, advanced, {
+        userId: "u1",
+        canManage: false,
+        canAdd: true,
+        roomSize: 3,
+        peerId: "p1",
+        expectedPositionMs: 1_000,
+        seatedUserIds: ["u1", "u2", "u3"],
+      }),
+    ).toBe(true);
+  });
+
+  it("still refuses it when the votes are not there", () => {
+    expect(
+      musicWriteAllowed(state({ current, queue: [], autoplay: true }), advanced, {
+        userId: "u1",
+        canManage: false,
+        canAdd: true,
+        roomSize: 9,
+        peerId: "p1",
+        expectedPositionMs: 1_000,
+        seatedUserIds: ["u1"],
+      }),
+    ).toBe(false);
   });
 });
 

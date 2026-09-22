@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
 import { musicSkipVotesNeeded } from "@pqp/shared";
+import { musicRelatedTracks } from "@/lib/music-related";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -539,14 +540,20 @@ export function MusicVoteSkipButton({
   skipVotes,
   userId,
   roomSize,
+  seatedUserIds,
 }: {
   skipVotes: string[];
   userId: string | null;
   roomSize: number;
+  /** The people the server will count the votes of. */
+  seatedUserIds: string[];
 }) {
   const { t } = useTranslation();
   const needed = musicSkipVotesNeeded(roomSize);
-  const count = skipVotes.length;
+  // Only the votes of people still here, which is what the server counts:
+  // a badge reading 3/3 that does not skip is worse than no badge.
+  const seated = new Set(seatedUserIds);
+  const count = skipVotes.filter((id) => seated.has(id)).length;
   const voted = userId !== null && skipVotes.includes(userId);
   const label = `${t("music.voteSkip")} ${t("music.voteSkip.count", { count, needed })}`;
 
@@ -562,7 +569,7 @@ export function MusicVoteSkipButton({
           disabled={voted || !userId}
           aria-label={label}
           aria-pressed={voted}
-          onClick={() => voteSkip(roomSize)}
+          onClick={() => voteSkip(roomSize, seatedUserIds, musicRelatedTracks)}
         >
           <SkipForward className="h-4 w-4" aria-hidden="true" />
         </Button>

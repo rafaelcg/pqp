@@ -651,6 +651,39 @@ describe("the server's own clock for the room", () => {
     expect(musicExpectedPositionMs(ROOM, Date.now())).toBeNull();
   });
 
+  /*
+   * A ROOM CAN BE REWOUND AS EASILY AS IT CAN BE PUSHED FORWARD.
+   *
+   * The clamp bounded a sample that ran AHEAD, because the bypass it was
+   * written for needed the position near the end. Backward was left alone
+   * on the reasoning that a buffering player lags and cannot reach the
+   * gate. True of the gate, and beside the point for everyone else: every
+   * client seeks to within 2.5 s of the room's clock, so a listen-only
+   * seat writing zero at the ninety-minute mark drags the whole room back
+   * to the start. The sample is still the actor's, so nobody can tell it
+   * from a seek.
+   */
+  it("does not let a seat drag the room backwards", () => {
+    applyMusicWrite(ROOM, playing(), MANAGER);
+    const held = getMusicState(ROOM) as MusicState;
+    applyMusicWrite(
+      ROOM,
+      { ...held, positionMs: 150_000, rev: held.rev + 1, actorId: "p1" },
+      MANAGER,
+    );
+    const seeked = getMusicState(ROOM) as MusicState;
+    const write = applyMusicWrite(
+      ROOM,
+      { ...seeked, positionMs: 0, rev: seeked.rev + 1, actorId: "p9" },
+      LISTENER,
+    );
+    expect(write.kind).toBe("accepted");
+    // Clamped to the room's own clock, not to the zero they asked for.
+    expect(
+      (getMusicState(ROOM) as MusicState).positionMs,
+    ).toBeGreaterThanOrEqual(150_000);
+  });
+
   it("accepts a sample that is behind, because a slow player never runs ahead", () => {
     applyMusicWrite(ROOM, playing(), MANAGER);
     const held = getMusicState(ROOM) as MusicState;
@@ -660,11 +693,13 @@ describe("the server's own clock for the room", () => {
       MANAGER,
     );
     const seeked = getMusicState(ROOM) as MusicState;
+    // Inside the tolerance: a buffering player really is a little behind,
+    // and that is kept as it is.
     applyMusicWrite(
       ROOM,
-      { ...seeked, positionMs: 90_000, rev: seeked.rev + 1, actorId: "p9" },
+      { ...seeked, positionMs: 94_000, rev: seeked.rev + 1, actorId: "p9" },
       LISTENER,
     );
-    expect((getMusicState(ROOM) as MusicState).positionMs).toBe(90_000);
+    expect((getMusicState(ROOM) as MusicState).positionMs).toBe(94_000);
   });
 });

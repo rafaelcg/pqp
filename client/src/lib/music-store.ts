@@ -594,7 +594,20 @@ export function advance(endedTrackId?: string): void {
   write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
 }
 
-export function voteSkip(roomSize: number): void {
+/**
+ * `seatedUserIds` is not optional in spirit: the server counts only the
+ * votes of people still in the room, because the threshold is half the
+ * LIVE room and a vote whose owner left was carrying it. Counting every
+ * held vote here meant the client reached the threshold first, wrote the
+ * advance, and had it refused — the vote never recorded, the forced frame
+ * putting the old state back, and the button doing the same thing for
+ * ever. The two counts have to agree.
+ */
+export function voteSkip(
+  roomSize: number,
+  seatedUserIds: string[],
+  fetchRelated?: (videoId: string) => Promise<MusicResolved[]>,
+): void {
   if (!session) {
     return;
   }
@@ -606,8 +619,17 @@ export function voteSkip(roomSize: number): void {
   if (votes.includes(session.userId)) {
     return;
   }
+  const seated = new Set(seatedUserIds);
   const nextVotes = [...votes, session.userId];
-  if (new Set(nextVotes).size >= musicSkipVotesNeeded(roomSize)) {
+  const live = nextVotes.filter((id) => seated.has(id));
+  if (new Set(live).size >= musicSkipVotesNeeded(roomSize)) {
+    if (fetchRelated && shouldAutoplayOnEnd(held)) {
+      // The votes carried and the queue is empty with the mode on: the
+      // room asked for the next song, not for the music to stop. Same
+      // path the skip button takes.
+      void skipToNext(fetchRelated);
+      return;
+    }
     write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
     return;
   }

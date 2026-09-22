@@ -392,6 +392,7 @@ export function MusicNowPlaying({
       skipVotes={music.state?.skipVotes ?? []}
       userId={voiceState.self?.userId ?? null}
       roomSize={musicRoomPeople(voiceState).length}
+      seatedUserIds={musicRoomPeople(voiceState).map((person) => person.userId)}
     />
   );
 

@@ -610,6 +610,45 @@ export function musicServerWriteAllowed(
   });
 }
 
+/**
+ * Whoever may fill in a missing length, for every track in the write.
+ *
+ * `null` to a value is the only change `sameTrack` allows to an existing
+ * track, so it is the only one this has to police. A manager may fill any
+ * of them; anybody else may fill only a track they added themselves.
+ */
+function fillsAllowed(
+  held: MusicState,
+  incoming: MusicStateWrite,
+  rights: MusicRights,
+): boolean {
+  if (rights.canManage) {
+    return true;
+  }
+  const before = new Map<string, MusicTrack>();
+  if (held.current) {
+    before.set(held.current.id, held.current);
+  }
+  for (const queued of held.queue) {
+    before.set(queued.id, queued);
+  }
+  const mayFill = (next: MusicTrack): boolean => {
+    const previous = before.get(next.id);
+    if (
+      previous === undefined ||
+      previous.durationMs !== null ||
+      next.durationMs === null
+    ) {
+      return true;
+    }
+    return previous.addedByUserId === rights.userId;
+  };
+  if (incoming.current && !mayFill(incoming.current)) {
+    return false;
+  }
+  return (incoming.queue ?? []).every(mayFill);
+}
+
 export function musicWriteAllowed(
   held: MusicState | null,
   incoming: MusicStateWrite | null,
@@ -685,15 +724,17 @@ export function musicWriteAllowed(
      * floor still lets the filler cut the track a grace later. So the fill
      * belongs to the manager, or to whoever put the track on.
      */
-    const fillsDuration =
-      held.current !== null &&
-      incoming.current !== null &&
-      held.current.durationMs === null &&
-      incoming.current.durationMs !== null;
-    if (
-      fillsDuration &&
-      !(rights.canManage || held.current?.addedByUserId === rights.userId)
-    ) {
+    /*
+     * A duration may go from null to a value so the room's own writer can
+     * fill in what oEmbed did not carry, and that belongs to the manager
+     * or to whoever put the track on. This used to guard `current` only.
+     * The queue went through `sameTracks`, which allows exactly the same
+     * transition for ANYBODY, so a listen-only seat could give a queued
+     * track a length of 1 ms, wait for it to become current, and a
+     * millisecond later the end-of-track gate was satisfied: the room's
+     * track taken away with no votes, by somebody who cannot speak.
+     */
+    if (!fillsAllowed(held, incoming, rights)) {
       return false;
     }
     // Position sample, duration fill, and/or this person's skip vote.
@@ -778,7 +819,11 @@ export function musicWriteAllowed(
   if (matchesAdvance(held, incoming)) {
     return ranOut || votedOut;
   }
-  return ranOut && matchesAutoplayAdvance(held, incoming, rights);
+  // The same two doors as an ordinary advance. A room that voted the track
+  // out with "Continuar com parecidas" on wants the next related track,
+  // not the end of the music, and refusing this left ending it as the only
+  // thing a client could write.
+  return (ranOut || votedOut) && matchesAutoplayAdvance(held, incoming, rights);
 }
 
 // ------------------------------------------------------------- link parsing

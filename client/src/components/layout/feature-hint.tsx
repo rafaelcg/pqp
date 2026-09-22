@@ -1,5 +1,6 @@
 import {
   createContext,
+  useMemo,
   useContext,
   useEffect,
   useRef,
@@ -20,24 +21,45 @@ import {
 import { isAutomatedBrowser } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 
-const FeatureHintContext = createContext<AttachedFeatureHintId | null>(null);
+interface FeatureHintSlot {
+  winner: AttachedFeatureHintId | null;
+  /**
+   * The winner is standing aside for a corner card (a DM toast, the update
+   * prompt) rather than because its own gate turned off. The difference
+   * matters: a gate turning off means the moment has passed and the card
+   * is spent, while yielding is temporary and must cost it nothing.
+   */
+  yielding: boolean;
+}
+
+const FeatureHintContext = createContext<FeatureHintSlot>({
+  winner: null,
+  yielding: false,
+});
 
 export function FeatureHintProvider({
   winner,
+  yielding = false,
   children,
 }: {
   winner: AttachedFeatureHintId | null;
+  yielding?: boolean;
   children: ReactNode;
 }) {
+  const slot = useMemo(
+    () => ({ winner, yielding }),
+    [winner, yielding],
+  );
   return (
-    <FeatureHintContext.Provider value={winner}>
+    <FeatureHintContext.Provider value={slot}>
       {children}
     </FeatureHintContext.Provider>
   );
 }
 
 export function useFeatureHintEnabled(id: AttachedFeatureHintId): boolean {
-  return useContext(FeatureHintContext) === id;
+  const slot = useContext(FeatureHintContext);
+  return slot.winner === id && !slot.yielding;
 }
 
 /**
@@ -121,13 +143,16 @@ export function FeatureHint({
   };
 
   const shown = useRef(false);
+  // Standing aside for a corner card is not the gate turning off, and a
+  // DM toast arriving while this card is up must not spend it.
+  const yielding = useContext(FeatureHintContext).yielding;
   useEffect(() => {
     if (eligible && enabled) {
       rememberFeatureHint(id);
       shown.current = true;
       return;
     }
-    if (shown.current) {
+    if (shown.current && !yielding) {
       /*
        * The gate that justified this card turned off after it was shown.
        * The moment has passed, so handing the card back when the gate
@@ -137,7 +162,7 @@ export function FeatureHint({
        */
       markDismissed(id);
     }
-  }, [eligible, enabled, id]);
+  }, [eligible, enabled, id, yielding]);
 
   const show = eligible && enabled && open;
 

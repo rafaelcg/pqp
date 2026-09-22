@@ -507,9 +507,11 @@ describe("music store writes", () => {
   });
 
   it("votes to skip and advances when the room has enough votes", () => {
+    // Both voters are seated, which is what the server will count.
+    const seated = ["u1", "u2"];
     addTrack(resolved("a"));
     addTrack(resolved("b"));
-    voteSkip(2);
+    voteSkip(2, seated);
     expect(getMusicSnapshot().state?.skipVotes).toEqual(["u1"]);
     expect(getMusicSnapshot().state?.current?.videoId).toBe("a");
     receiveMusic(CHANNEL, {
@@ -518,7 +520,7 @@ describe("music store writes", () => {
       rev: getMusicSnapshot().state!.rev + 1,
       actorId: "peer-b",
     });
-    voteSkip(2);
+    voteSkip(2, seated);
     expect(getMusicSnapshot().state?.current?.videoId).toBe("b");
     expect(getMusicSnapshot().state?.skipVotes).toEqual([]);
   });
@@ -826,3 +828,60 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual(["zzzzzzzzzzz"]);
   });
 });
+
+describe("voting to skip, counted the way the server counts", () => {
+  /*
+   * THE CLIENT COUNTED GHOSTS AND THE SERVER DID NOT.
+   *
+   * The server was taught to count only the votes of people still seated,
+   * because the threshold is half the LIVE room and a vote whose owner
+   * left was carrying it. The client kept counting every held vote, so it
+   * would reach the threshold first, write the advance, and have it
+   * refused: the vote was never recorded, the forced frame put the old
+   * state back, and pressing again did the same thing for ever.
+   *
+   * Six seats, threshold three. Two held votes, one of them from somebody
+   * who has left. A third person voting must ADD a vote, not advance.
+   */
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "u5",
+      displayName: "Eu",
+      send: () => {},
+    });
+  });
+
+  const seated = ["u1", "u2", "u4", "u5", "u6", "u7"];
+
+  it("adds a vote rather than advancing when one voter has gone", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      skipVotes: ["u3", "u4"],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    const before = getMusicSnapshot().state!.current!.videoId;
+    voteSkip(6, seated);
+    const after = getMusicSnapshot().state!;
+    expect(after.current?.videoId).toBe(before);
+    expect(after.skipVotes).toContain("u5");
+  });
+
+  it("advances once the live votes really do reach the threshold", () => {
+    addTrack({ ...resolved("nowwwwwwwww"), durationMs: 180_000 });
+    addTracks([resolved("nextttttttt")]);
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      skipVotes: ["u1", "u4"],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    voteSkip(6, seated);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("nextttttttt");
+  });
+});
+

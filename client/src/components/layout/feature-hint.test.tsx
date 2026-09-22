@@ -4,9 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FeatureHint,
+  FeatureHintProvider,
   resetFeatureHintsForTests,
+  useFeatureHintEnabled,
 } from "@/components/layout/feature-hint";
 import { HINTS_PERSIST_OVERRIDE_KEY } from "@/lib/hints";
+import { isFeatureHintSpentForLoad } from "@/lib/feature-hints";
 
 /*
  * A DISMISSAL HAS TO SURVIVE A REMOUNT, BECAUSE ELIGIBILITY DOES.
@@ -39,6 +42,12 @@ function mount(enabled = true) {
   root = createRoot(host);
   render(enabled);
   return host;
+}
+
+/** The card as the call stage mounts it: enabled from the slot it holds. */
+function Card() {
+  const enabled = useFeatureHintEnabled("music");
+  return <FeatureHint id="music" enabled={enabled} body="A fila fica aqui." />;
 }
 
 function render(enabled: boolean) {
@@ -114,5 +123,42 @@ describe("a dismissed feature hint", () => {
     unmount();
     mount();
     expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+  });
+
+  /*
+   * A corner card taking the corner is not the gate turning off. A DM
+   * toast arriving while the music card is up used to spend it for the
+   * rest of the page load, and the impression is already in storage by
+   * then, so for good.
+   */
+  it("is not spent by standing aside for a corner card", () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const draw = (yielding: boolean) => {
+      act(() => {
+        root.render(
+          <FeatureHintProvider winner="music" yielding={yielding}>
+            <Card />
+          </FeatureHintProvider>,
+        );
+      });
+    };
+    draw(false);
+    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+
+    // A toast arrives: the card hides, and that must cost it nothing.
+    draw(true);
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(host.querySelector("[data-corner-card='music']")).toBeNull();
+    expect(isFeatureHintSpentForLoad("music")).toBe(false);
+
+    // And comes back when the toast goes, rather than being gone for good,
+    // including for a mount that happens after it.
+    draw(false);
+    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+    expect(isFeatureHintSpentForLoad("music")).toBe(false);
   });
 });

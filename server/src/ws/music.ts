@@ -299,14 +299,23 @@ export function applyMusicWrite(
   if (musicWriteIsStale(held, next)) {
     return { kind: "stale", held: held as MusicState };
   }
-  // Clamped, not refused: the append on the same write has to land. A
-  // sample that is BEHIND is left alone, because a buffering player lags
-  // and a backward sample cannot reach the end-of-track gate anyway.
+  /*
+   * Clamped, not refused: the append on the same write has to land.
+   *
+   * Both ways, and the backward half was missing. It was left open on the
+   * reasoning that a buffering player lags and a backward sample cannot
+   * reach the end-of-track gate. True of the gate, and beside the point
+   * for everyone else: every client seeks to within 2.5 s of the room's
+   * clock, so a seat writing zero at the ninety-minute mark dragged the
+   * whole room back to the start, and the sample was theirs, so it read
+   * as an ordinary seek. The tolerance is what a genuinely slow player
+   * needs; past it, the room's own clock is the truth.
+   */
   if (
     next !== null &&
     expected !== null &&
     !runsTheMusic(held, rights) &&
-    next.positionMs > expected + MUSIC_POSITION_TOLERANCE_MS
+    Math.abs(next.positionMs - expected) > MUSIC_POSITION_TOLERANCE_MS
   ) {
     logEvent("voice.musicClamped", {
       voiceChannelId,

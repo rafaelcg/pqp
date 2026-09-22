@@ -8441,7 +8441,12 @@ function MainAppContent({
       serverId={voiceServerId}
       canCreateInvite={canCreateInviteForVoice}
     >
-    <FeatureHintProvider winner={liveAttachedHint}>
+    <FeatureHintProvider
+      winner={attachedFeatureHint}
+      /* Standing aside for a corner card, not a gate turning off: the
+         attached card hides and spends nothing. */
+      yielding={liveAttachedHint === null && attachedFeatureHint !== null}
+    >
     {/* One provider for the whole app: the profile card is opened from the
         transcript, the members panel and the conversation list, and every one of
         them wants the same block list, the same "open this DM" navigation and
