@@ -356,7 +356,7 @@ function FakeCursor({ delay }: { delay: number }) {
     <svg
       aria-hidden
       viewBox="0 0 16 20"
-      className="vem-cursor pointer-events-none absolute left-[62%] top-[58%] z-10 h-5 w-4 drop-shadow-[0_1px_1px_rgb(0_0_0/0.35)]"
+      className="vem-cursor pointer-events-none absolute left-[62%] top-[58%] z-10 h-5 w-4"
       style={at(delay)}
     >
       <path

@@ -34,6 +34,34 @@ export function shouldRunReveals(env: {
   return !CRAWLER.test(env.userAgent);
 }
 
+const LATE_RATIO = 0.3;
+
+export interface RevealSample {
+  isIntersecting: boolean;
+  intersectionRatio: number;
+  /** The block's bottom edge relative to the viewport. */
+  bottom: number;
+  visibleHeight: number;
+  /** The observer's root box, after its margin. */
+  rootHeight: number;
+}
+
+/**
+ * Whether a block has been seen enough to play. Above the viewport always
+ * counts: a jump to `#importar` should not leave the hero waiting to replay
+ * when the reader scrolls back. With a ratio to meet, a block too tall to ever
+ * show that share of itself counts once it fills half the screen.
+ */
+export function isSeen(sample: RevealSample, minRatio: number): boolean {
+  if (sample.bottom < 0) return true;
+  if (!sample.isIntersecting) return false;
+  if (minRatio <= 0) return true;
+  return (
+    sample.intersectionRatio >= minRatio ||
+    sample.visibleHeight >= sample.rootHeight * 0.5
+  );
+}
+
 function prefersReducedMotion(): boolean {
   try {
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -61,30 +89,43 @@ export function useScrollReveal(rootRef: RefObject<HTMLElement | null>): void {
       root.setAttribute("data-reveal-off", "");
       return () => root.removeAttribute("data-reveal-off");
     }
-    const reveal = (
-      entries: IntersectionObserverEntry[],
-      observer: IntersectionObserver,
-    ) => {
-      for (const entry of entries) {
-        // Above the viewport counts as seen: a jump to `#importar` should
-        // not leave the hero waiting to replay when the reader scrolls back.
-        if (entry.isIntersecting || entry.boundingClientRect.bottom < 0) {
-          entry.target.setAttribute("data-shown", "");
-          observer.unobserve(entry.target);
+    const reveal =
+      (minRatio: number) =>
+      (
+        entries: IntersectionObserverEntry[],
+        observer: IntersectionObserver,
+      ) => {
+        for (const entry of entries) {
+          if (
+            isSeen(
+              {
+                isIntersecting: entry.isIntersecting,
+                intersectionRatio: entry.intersectionRatio,
+                bottom: entry.boundingClientRect.bottom,
+                visibleHeight: entry.intersectionRect.height,
+                rootHeight: entry.rootBounds?.height ?? window.innerHeight,
+              },
+              minRatio,
+            )
+          ) {
+            entry.target.setAttribute("data-shown", "");
+            observer.unobserve(entry.target);
+          }
         }
-      }
-    };
+      };
     // Two triggers. Most blocks start as their top edge clears the bottom of
     // the screen. `data-reveal="late"` is for a block with something to watch
     // (a pointer that clicks a second in): it waits until a third of it is
-    // well inside the viewport, so the click lands where the eye is.
-    const early = new IntersectionObserver(reveal, {
+    // well inside the viewport, so the click lands where the eye is. Several
+    // thresholds, because the observer only calls back when one is crossed and
+    // `isSeen` makes the decision.
+    const early = new IntersectionObserver(reveal(0), {
       rootMargin: "0px 0px -10% 0px",
       threshold: 0,
     });
-    const late = new IntersectionObserver(reveal, {
+    const late = new IntersectionObserver(reveal(LATE_RATIO), {
       rootMargin: "0px 0px -20% 0px",
-      threshold: 0.3,
+      threshold: [0, 0.1, 0.2, LATE_RATIO, 0.5],
     });
     root.setAttribute("data-reveal-root", "");
     root

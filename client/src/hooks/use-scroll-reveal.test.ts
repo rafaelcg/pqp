@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldRunReveals } from "./use-scroll-reveal";
+import { isSeen, shouldRunReveals } from "./use-scroll-reveal";
 
 const CHROME =
   "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
@@ -45,5 +45,37 @@ describe("shouldRunReveals", () => {
     expect(
       shouldRunReveals({ userAgent, reducedMotion: false, hasObserver: true }),
     ).toBe(false);
+  });
+});
+
+describe("isSeen", () => {
+  const base = {
+    isIntersecting: true,
+    intersectionRatio: 0.05,
+    bottom: 900,
+    visibleHeight: 20,
+    rootHeight: 720,
+  };
+
+  it("an early block plays on its first visible pixel", () => {
+    expect(isSeen(base, 0)).toBe(true);
+  });
+
+  it("a late block waits for its share, even though it is intersecting", () => {
+    expect(isSeen(base, 0.3)).toBe(false);
+    expect(isSeen({ ...base, intersectionRatio: 0.31 }, 0.3)).toBe(true);
+  });
+
+  it("a block too tall for its share plays once it fills half the screen", () => {
+    expect(
+      isSeen({ ...base, intersectionRatio: 0.2, visibleHeight: 400 }, 0.3),
+    ).toBe(true);
+  });
+
+  it("a block scrolled past counts as seen; one below does not", () => {
+    expect(isSeen({ ...base, isIntersecting: false, bottom: -10 }, 0.3)).toBe(
+      true,
+    );
+    expect(isSeen({ ...base, isIntersecting: false }, 0)).toBe(false);
   });
 });
