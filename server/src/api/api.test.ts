@@ -548,6 +548,56 @@ describeDb("API authorization", () => {
       expect(exhausted.status).toBe(400);
     });
 
+    it("records the link's ?ref= tag on a fresh join, and only a clean tag", async () => {
+      const { serverId } = await makeServer();
+      const created = await call<{ invite: { code: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/invites`,
+        {},
+      );
+      const code = created.body.invite.code;
+      const refOf = async (userId: string) =>
+        (
+          await getPool().query<{ join_ref: string | null }>(
+            `SELECT join_ref FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [serverId, userId],
+          )
+        ).rows[0]?.join_ref;
+
+      // A tagged link: the tag lands on the membership, lower-cased.
+      expect(
+        (await call(outsider, "POST", `/api/invites/${code}/join`, { ref: "Discord" }))
+          .status,
+      ).toBe(200);
+      expect(await refOf(outsider.id)).toBe("discord");
+
+      // Re-opening a link with another tag does not re-attribute the join.
+      await call(outsider, "POST", `/api/invites/${code}/join`, { ref: "convite" });
+      expect(await refOf(outsider.id)).toBe("discord");
+
+      // Junk is dropped, never refused: the join still goes through.
+      const junk = await upsertUser({
+        clerkId: "clerk_junk_ref",
+        displayName: "Junk",
+        avatarUrl: null,
+      });
+      expect(
+        (await call(junk, "POST", `/api/invites/${code}/join`, { ref: "a@b.com" }))
+          .status,
+      ).toBe(200);
+      expect(await refOf(junk.id)).toBeNull();
+
+      // A bare POST (what the native apps send) joins with no tag.
+      const bare = await upsertUser({
+        clerkId: "clerk_bare_ref",
+        displayName: "Bare",
+        avatarUrl: null,
+      });
+      expect((await call(bare, "POST", `/api/invites/${code}/join`)).status).toBe(200);
+      expect(await refOf(bare.id)).toBeNull();
+    });
+
     it("lets members create invites but not list them", async () => {
       const { serverId } = await makeServer();
       expect(

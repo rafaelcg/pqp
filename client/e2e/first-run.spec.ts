@@ -296,6 +296,58 @@ test("making a server ticks the server row and leaves the other two", async ({
   ).toHaveCount(0);
 });
 
+// ------------------------------------------ journey 1b: moving from Discord
+
+test("the wizard's last step has a door for a group moving from Discord", async ({
+  page,
+}) => {
+  const account = await freshAccount("vemd");
+  await openAs(page, "/app", account.suffix);
+  await page.getByRole("button", { name: "Looks right" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText("Nobody's here yet")).toBeVisible();
+
+  await page.getByRole("button", { name: /I already have a Discord server/ }).click();
+
+  // The wizard is answered, and the create dialog opens on the paste step,
+  // not on "name a community".
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByPlaceholder("discord.new/… or a template code")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(dialog.getByPlaceholder("Community name")).toBeHidden();
+  await expect
+    .poll(async () => (await storedPreferences(account.suffix)).onboardedAt, {
+      timeout: 15_000,
+    })
+    .toBeTruthy();
+});
+
+test("a ?import=discord link skips the landing step and opens the paste, pre-filled when it names a template", async ({
+  page,
+}) => {
+  const account = await freshAccount("vemi");
+  await openAs(page, "/app?import=hgM48av5Q69A", account.suffix);
+  await page.getByRole("button", { name: "Looks right" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // Two steps, like an invite arrival: the question step 3 asks is answered.
+  await expect(page.getByText("Nobody's here yet")).toBeHidden();
+  const paste = page
+    .getByRole("dialog")
+    .getByPlaceholder("discord.new/… or a template code");
+  await expect(paste).toBeVisible({ timeout: 20_000 });
+  await expect(paste).toHaveValue("https://discord.new/hgM48av5Q69A");
+  // Read once: the parameter is gone from the address bar.
+  await expect(page).not.toHaveURL(/import=/);
+
+  // Closing it and opening "Make a community" is ordinary again.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Make a community" }).click();
+  await expect(page.getByRole("dialog").getByPlaceholder("Community name")).toBeVisible();
+});
+
 // -------------------------------------------------- journey 2: invite arrival
 
 test("an invite link carries a brand-new account into the server, not into a form", async ({

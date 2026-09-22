@@ -15,6 +15,31 @@ server, and not a transfer of members or messages.
 
 Discord itself is not changed.
 
+Two ways in besides the create dialog's own row, both opening that dialog on
+the paste step:
+
+- The onboarding's last step has a third door, **Já tenho um servidor no
+  Discord**.
+- `?import=discord` on any URL (a campaign link) is stashed at boot, survives
+  the sign-up, and opens the dialog once the account is ready and onboarding
+  is out of the way. `?import=<code>` or `?import=discord.new/<code>` also
+  pre-fills the paste box. See `ImportIntent` in
+  `client/src/lib/handle-intent.ts`.
+
+## Counting it
+
+- The invite on the done step is tagged `?ref=discord` (every other shared
+  invite says `?ref=convite`). The tag rides on `POST /api/invites/:code/join`
+  as `{ ref }` and lands on `server_members.join_ref` for a fresh membership
+  only. A tag is `[a-z0-9_-]{1,32}` or it is dropped (`normalizeJoinRef`); a
+  join never fails over it. Signed out, the tag is stashed at boot with its
+  code, since the sign-in redirect drops the query.
+- `GET /api/admin/metrics` carries `imports.discord`: `total`, `last24h`,
+  `last7d` (from the `server.discord_import` audit rows), `membersJoined7d`
+  (people, never the owner, who joined an imported server in 7 days, by any
+  door) and `joinedViaImportInvite7d` (of those, `join_ref = 'discord'`).
+  `product.invites.joinsByRef7d` is the same tag counted across all servers.
+
 ## What is copied
 
 - Server name

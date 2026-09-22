@@ -835,7 +835,17 @@ export interface AdminMetrics {
     friendships: number;
     pendingFriendRequests: number;
     attachments: { total: number; last24h: number };
-    invites: { created24h: number; uses: number };
+    invites: {
+      created24h: number;
+      uses: number;
+      /**
+       * Joins through an invite link in the last 7 days, by the `?ref=` tag the
+       * link carried (`server_members.join_ref`): `convite` for a shared
+       * invite, `discord` for the one a Discord import hands out. Joins with no
+       * tag are not listed. At most ten tags, largest first.
+       */
+      joinsByRef7d: Record<string, number>;
+    };
     push: { web: number; apns: number; fcm: number };
     /**
      * PUSH SEND OUTCOMES per platform since boot (cumulative, per instance),
@@ -846,6 +856,27 @@ export interface AdminMetrics {
      * — the one an alert watches). See `services/push-metrics.ts`.
      */
     pushDelivery: PushDelivery;
+  };
+
+  /**
+   * Discord layout imports (`server.discord_import` audit rows), and whether
+   * the servers they made ever filled up. The campaign that moves groups from
+   * Discord is judged on the second half: an import nobody joins is a copy of
+   * a sidebar, not a group that moved.
+   */
+  imports: {
+    discord: {
+      total: number;
+      last24h: number;
+      last7d: number;
+      /**
+       * People (never the owner) who joined, in the last 7 days, a server that
+       * began as a Discord import, by any door.
+       */
+      membersJoined7d: number;
+      /** Of those, the ones whose invite link carried `?ref=discord`. */
+      joinedViaImportInvite7d: number;
+    };
   };
 
   /** Backs the "moderação" tab. */
@@ -1096,6 +1127,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     voiceRoomNames,
     productCounts,
     statusHistory,
+    importCounts,
+    joinRefs,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ private_text: string; dm: string; grp: string }>(
@@ -1310,6 +1343,45 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     // A history that failed to read must not cost the dashboard its counts:
     // the sparklines vanish, every number stays.
     () => readStatusHistory().catch(() => null),
+    () => pool.query<{
+      total: string;
+      last24h: string;
+      last7d: string;
+      members_7d: string;
+      via_ref_7d: string;
+    }>(
+      `WITH imported AS (
+         SELECT server_id, created_at
+           FROM audit_log
+          WHERE action = 'server.discord_import'
+       ),
+       joined AS (
+         SELECT sm.join_ref
+           FROM server_members sm
+           JOIN users u ON u.id = sm.user_id
+          WHERE sm.server_id IN (SELECT server_id FROM imported)
+            AND sm.role <> 'owner'
+            AND sm.joined_at >= now() - interval '7 days'
+            AND NOT u.is_webhook AND NOT u.is_character
+       )
+       SELECT (SELECT COUNT(*) FROM imported)::text AS total,
+              (SELECT COUNT(*) FROM imported
+                WHERE created_at >= now() - interval '24 hours')::text AS last24h,
+              (SELECT COUNT(*) FROM imported
+                WHERE created_at >= now() - interval '7 days')::text AS last7d,
+              (SELECT COUNT(*) FROM joined)::text AS members_7d,
+              (SELECT COUNT(*) FROM joined
+                WHERE join_ref = 'discord')::text AS via_ref_7d`,
+    ),
+    () => pool.query<{ ref: string; n: string }>(
+      `SELECT join_ref AS ref, COUNT(*)::text AS n
+         FROM server_members
+        WHERE join_ref IS NOT NULL
+          AND joined_at >= now() - interval '7 days'
+        GROUP BY join_ref
+        ORDER BY COUNT(*) DESC, join_ref
+        LIMIT 10`,
+    ),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1505,6 +1577,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       invites: {
         created24h: Number(productCounts.rows[0]?.invites_24h ?? 0),
         uses: Number(productCounts.rows[0]?.invite_uses ?? 0),
+        joinsByRef7d: Object.fromEntries(
+          joinRefs.rows.map((row) => [row.ref, Number(row.n)]),
+        ),
       },
       push: {
         web: Number(productCounts.rows[0]?.push_web ?? 0),
@@ -1512,6 +1587,16 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         fcm: Number(productCounts.rows[0]?.push_fcm ?? 0),
       },
       pushDelivery: pushDeliverySnapshot(),
+    },
+
+    imports: {
+      discord: {
+        total: Number(importCounts.rows[0]?.total ?? 0),
+        last24h: Number(importCounts.rows[0]?.last24h ?? 0),
+        last7d: Number(importCounts.rows[0]?.last7d ?? 0),
+        membersJoined7d: Number(importCounts.rows[0]?.members_7d ?? 0),
+        joinedViaImportInvite7d: Number(importCounts.rows[0]?.via_ref_7d ?? 0),
+      },
     },
 
     moderation: {

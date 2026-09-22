@@ -347,11 +347,14 @@ import {
 } from "@/lib/connection-callback";
 import {
   addIntentFromSearch,
-  createIntentFromSearch,
+  importIntentFromSearch,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
+  takeImportIntent,
+  takeInviteRef,
   takeJoinIntent,
+  type ImportIntent,
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
@@ -1042,19 +1045,22 @@ function MainAppContent({
   const [dmToastActive, setDmToastActive] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   /**
-   * Which step Create community opens on. `paste` only when the session
-   * arrived from `pqp.gg/vem` asking to copy a Discord layout; back to `name`
-   * the moment the dialog closes, so the ordinary button is ordinary again.
+   * Which step the create-server dialog opens on. `name` for every ordinary
+   * opener; `import` (the Discord layout paste) when the person asked for it,
+   * from the onboarding's third door or a `?import=discord` campaign link.
+   * Reset on close so the next ordinary open is ordinary again.
    */
-  const [createServerStart, setCreateServerStart] = useState<"name" | "paste">(
-    "name",
-  );
+  const [createServerStart, setCreateServerStart] = useState<{
+    mode: "name" | "import";
+    source: string | null;
+  }>({ mode: "name", source: null });
   /**
-   * The session arrived to copy a Discord layout. Read by the onboarding the
-   * same way `arrivedOnInviteLink` is: its last step asks "create or join?",
-   * and this person already answered, with the dialog waiting underneath.
+   * A Discord import somebody asked for that has not been shown yet. Held
+   * rather than acted on because onboarding may still be on screen: the
+   * dialog opens the moment it is not (see the effect beside the arrival
+   * intents).
    */
-  const [arrivedToImport, setArrivedToImport] = useState(false);
+  const [pendingImport, setPendingImport] = useState<ImportIntent | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -6310,8 +6316,11 @@ function MainAppContent({
     async (code: string) => {
       setInviteErrorFromUrl(null);
       try {
-        const result = await joinInvite(code);
         const storage = browserStorage();
+        // The link's `?ref=` tag, or the one stashed at boot before a sign-in
+        // redirect dropped the query. Attribution only.
+        const ref = takeInviteRef(storage, code, window.location.search);
+        const result = await joinInvite(code, ref);
         // Only welcome them somewhere this device has not welcomed them before.
         // Invite links get re-clicked weeks later, and the join succeeds again.
         if (!hasArrived(storage, result.serverId)) {
@@ -6412,6 +6421,21 @@ function MainAppContent({
   }, [bootstrapReady, clerkAccount]);
 
   /**
+   * "I already have a Discord server": open the create dialog on the paste
+   * step, once the app is ready and onboarding is not in front of it. Fed by
+   * a `?import=` campaign link (the arrival intents below) and by the
+   * onboarding's third door; both only set `pendingImport`.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || needsOnboarding || !pendingImport) {
+      return;
+    }
+    setCreateServerStart({ mode: "import", source: pendingImport.source });
+    setShowCreateServer(true);
+    setPendingImport(null);
+  }, [bootstrapReady, needsOnboarding, pendingImport]);
+
+  /**
    * The three intentions somebody arrived with, acted on exactly once.
    *
    * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
@@ -6449,25 +6473,28 @@ function MainAppContent({
     const stashedClaim = takeHandleClaim(storage);
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
-    const stashedCreate = takeCreateIntent(storage);
+    const stashedImport = takeImportIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
-    const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    const importIntent = importIntentFromSearch(location.search) ?? stashedImport;
+    if (importIntent) {
+      setPendingImport(importIntent);
+    }
 
     if (
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
-      params.has("create")
+      params.has("import")
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
-      params.delete("create");
+      params.delete("import");
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
@@ -6936,7 +6963,9 @@ function MainAppContent({
     return (
       <OnboardingFlow
         user={user}
-        pendingInvite={arrivedOnInviteLink || arrivedToImport}
+        pendingInvite={arrivedOnInviteLink}
+        pendingImport={pendingImport !== null}
+        onImportDiscord={() => setPendingImport({ source: null })}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
@@ -9501,10 +9530,11 @@ function MainAppContent({
 
       <CreateServerDialog
         open={showCreateServer}
-        initialStep={createServerStart}
+        startMode={createServerStart.mode}
+        startSource={createServerStart.source}
         onClose={() => {
           setShowCreateServer(false);
-          setCreateServerStart("name");
+          setCreateServerStart({ mode: "name", source: null });
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           setServers((prev) => [...prev, server]);

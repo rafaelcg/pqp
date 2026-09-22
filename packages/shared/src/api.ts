@@ -1068,6 +1068,26 @@ export const createInviteSchema = z.object({
 });
 
 /**
+ * The `?ref=` an invite link carried, as `POST /api/invites/:code/join` stores it.
+ *
+ * A short channel tag that pqp itself puts on the links it hands out
+ * (`convite` on a shared invite, `discord` on the invite a Discord import
+ * makes). It lands on the membership row so the operator can count which
+ * links bring people in. It is a tag and nothing else: lower case, letters,
+ * digits, `-` and `_`, at most 32 characters. Anything else is dropped rather
+ * than refused, because a join must never fail over its own attribution.
+ */
+export const JOIN_REF_PATTERN = /^[a-z0-9_-]{1,32}$/;
+
+export function normalizeJoinRef(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const ref = raw.trim().toLowerCase();
+  return JOIN_REF_PATTERN.test(ref) ? ref : null;
+}
+
+/**
  * Where a signup came from, as the landing page saw it.
  *
  * The five values are the ones a campaign link can carry (`utm_source`,

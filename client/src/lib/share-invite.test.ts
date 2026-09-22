@@ -32,6 +32,12 @@ describe("shareInviteUrl", () => {
       "https://pqp.gg/app/invite/a%2Fb?ref=convite",
     );
   });
+
+  it("tags the invite a Discord import hands out as discord", () => {
+    expect(shareInviteUrl(ORIGIN, CODE, "discord")).toBe(
+      "https://pqp.gg/app/invite/abc123?ref=discord",
+    );
+  });
 });
 
 describe("shareInviteText", () => {

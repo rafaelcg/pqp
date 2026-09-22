@@ -1,3 +1,4 @@
+import { ChevronRight, LayoutList } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -63,6 +64,17 @@ interface OnboardingFlowProps {
    * dialog waiting underneath.
    */
   pendingInvite?: boolean;
+  /**
+   * The account arrived asking for the Discord layout copy (`?import=discord`),
+   * and the app will open that dialog the moment this one closes. Skips step 3
+   * for the same reason `pendingInvite` does: the question it asks is answered.
+   */
+  pendingImport?: boolean;
+  /**
+   * The third door on step 3, "I already have a Discord server". The flow is
+   * finished first, then the parent opens the create dialog on the paste step.
+   */
+  onImportDiscord: () => void;
   /** Reflect a saved profile back into the app (sidebar, message authorship). */
   onUserUpdated: (user: User) => void;
   /**
@@ -90,11 +102,14 @@ const STEPS: readonly OnboardingStep[] = ["handle", "profile", "landing"];
 export function OnboardingFlow({
   user,
   pendingInvite = false,
+  pendingImport = false,
+  onImportDiscord,
   onUserUpdated,
   onServerReady,
   onDone,
 }: OnboardingFlowProps) {
   const [step, setStep] = useState<OnboardingStep>("handle");
+  const skipLanding = pendingInvite || pendingImport;
 
   /**
    * Record that the flow is answered, then get out of the way.
@@ -137,7 +152,7 @@ export function OnboardingFlow({
     // With an invite in hand this is the last screen, so Continue means
     // "done" rather than "next" — and finishing here is what uncovers the
     // channel they were invited to.
-    onNext: pendingInvite ? finish : () => setStep("landing"),
+    onNext: skipLanding ? finish : () => setStep("landing"),
     onSkip: finish,
   });
   const landing = useLandingStep({
@@ -146,11 +161,15 @@ export function OnboardingFlow({
       finish();
     },
     onSkip: finish,
+    onImportDiscord: () => {
+      finish();
+      onImportDiscord();
+    },
   });
 
   const view: StepView =
     step === "handle" ? handle : step === "profile" ? profile : landing;
-  const total = pendingInvite ? 2 : STEPS.length;
+  const total = skipLanding ? 2 : STEPS.length;
   const index = STEPS.indexOf(step);
 
   return (
@@ -456,9 +475,11 @@ function useProfileStep({
 function useLandingStep({
   onServerReady,
   onSkip,
+  onImportDiscord,
 }: {
   onServerReady: (serverId: string) => Promise<void> | void;
   onSkip: () => void;
+  onImportDiscord: () => void;
 }): StepView {
   const { t } = useTranslation();
   const [name, setName] = useState("");
@@ -573,6 +594,36 @@ function useLandingStep({
               {t("onboarding.landing.joinAction")}
             </Button>
           </div>
+        </div>
+
+        {/* The third door, for the group that is moving rather than starting.
+            It does not import from here: the paste, the preview and the
+            confirm already live in the create dialog, so this only closes the
+            flow and opens that dialog on its paste step. Same card as the
+            dialog's own "Copy a Discord layout" row, so it reads as the same
+            thing when they get there. */}
+        <div className="border-t border-ink-4 pt-4">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("onboarding.landing.importLabel")}
+          </span>
+          <button
+            type="button"
+            data-onboarding-import-discord=""
+            disabled={busy !== null}
+            className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+            onClick={onImportDiscord}
+          >
+            <LayoutList className="mt-0.5 h-5 w-5 shrink-0 text-signal" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold text-paper">
+                {t("onboarding.landing.importAction")}
+              </span>
+              <span className="mt-0.5 block text-sm text-paper-muted">
+                {t("onboarding.landing.importHint")}
+              </span>
+            </span>
+            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-paper-muted" />
+          </button>
         </div>
 
         {errorKey && (

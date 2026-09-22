@@ -6,6 +6,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
 import { InvitePaste } from "@/components/layout/invite-paste";
+import { shareInviteUrl } from "@/lib/share-invite";
 import { useTranslation } from "@/lib/i18n";
 import {
   applyDiscordImport,
@@ -23,6 +24,14 @@ export interface CreatedServerPayload {
 
 interface CreateServerDialogProps {
   open: boolean;
+  /**
+   * Where the dialog opens. `import` goes straight to the Discord layout
+   * paste, for somebody who already said "I have a Discord server" (the
+   * onboarding's third door, a `?import=discord` link). Read on each open.
+   */
+  startMode?: "name" | "import";
+  /** Pre-fills the paste box when the link named a template. */
+  startSource?: string | null;
   onClose: () => void;
   onCreated: (created: CreatedServerPayload) => Promise<void> | void;
   /**
@@ -33,20 +42,41 @@ interface CreateServerDialogProps {
   initialStep?: "name" | "paste";
 }
 
-function inviteLink(code: string): string {
-  return `${window.location.origin}/app/invite/${encodeURIComponent(code)}`;
+/**
+ * The invite link on the last screen. Tagged `?ref=discord` after an import:
+ * that link is what a group leader pastes back into their old Discord, and the
+ * tag is how the joins it brings get counted (`server_members.join_ref`).
+ */
+function inviteLink(code: string, fromImport: boolean): string {
+  return shareInviteUrl(
+    window.location.origin,
+    code,
+    fromImport ? "discord" : "convite",
+  );
 }
 
 export function CreateServerDialog({
   open,
+  startMode = "name",
+  startSource = null,
   onClose,
   onCreated,
   initialStep = "name",
 }: CreateServerDialogProps) {
   const { t, locale } = useTranslation();
-  const [step, setStep] = useState<Step>("name");
+  const [step, setStep] = useState<Step>(startMode === "import" ? "paste" : "name");
   const [name, setName] = useState("");
-  const [source, setSource] = useState("");
+  const [source, setSource] = useState(startSource ?? "");
+  // Pick the first step while rendering the open, not in an effect after it:
+  // an effect would paint the name step for one frame and then swap it.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setStep(startMode === "import" ? "paste" : "name");
+      setSource(startSource ?? "");
+    }
+  }
   const [plan, setPlan] = useState<DiscordImportPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -237,7 +267,7 @@ export function CreateServerDialog({
     (step === "done" && done?.fromImport)
       ? t("importDiscord.eyebrow")
       : undefined;
-  const link = done?.invite ? inviteLink(done.invite.code) : "";
+  const link = done?.invite ? inviteLink(done.invite.code, done.fromImport) : "";
   const pasteMessage =
     done?.invite
       ? t("importDiscord.done.pasteMessage", {
@@ -420,6 +450,7 @@ export function CreateServerDialog({
                 </label>
                 <InvitePaste
                   code={done.invite.code}
+                  inviteRef={done.fromImport ? "discord" : "convite"}
                   onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
                 />
               </>

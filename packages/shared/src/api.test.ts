@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReplyExcerpt,
+  normalizeJoinRef,
   createChannelSchema,
   extractMentions,
   extractMentionUsernames,
@@ -623,5 +624,24 @@ describe("parseSearchSnippet", () => {
       expect(segment.text).not.toContain(open);
       expect(segment.text).not.toContain(close);
     }
+  });
+});
+
+describe("normalizeJoinRef", () => {
+  it("keeps the short tags pqp puts on its own links", () => {
+    expect(normalizeJoinRef("discord")).toBe("discord");
+    expect(normalizeJoinRef("convite")).toBe("convite");
+    expect(normalizeJoinRef(" Discord ")).toBe("discord");
+    expect(normalizeJoinRef("vem-pra_pqp2")).toBe("vem-pra_pqp2");
+  });
+
+  it("drops anything that is not a short tag", () => {
+    expect(normalizeJoinRef(undefined)).toBeNull();
+    expect(normalizeJoinRef(null)).toBeNull();
+    expect(normalizeJoinRef(42)).toBeNull();
+    expect(normalizeJoinRef("")).toBeNull();
+    expect(normalizeJoinRef("a b")).toBeNull();
+    expect(normalizeJoinRef("rafa@example.com")).toBeNull();
+    expect(normalizeJoinRef("x".repeat(33))).toBeNull();
   });
 });

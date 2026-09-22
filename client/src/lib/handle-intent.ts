@@ -1,5 +1,10 @@
+import { normalizeJoinRef, parseDiscordTemplateCode } from "@pqp/shared";
+import { parseAppRoute } from "./app-route";
+
 /**
- * Three intentions that have to survive a sign-up.
+ * Intentions that have to survive a sign-up. Three are described here; the
+ * Discord import and the invite link's `?ref=` tag, further down, are the same
+ * shape with their own reasons.
  *
  * THIS IS THE INVITE BUG AGAIN, in two new shapes. `signedOutRedirectPath`
  * already fixed the version where somebody clicks an invite link, signs up, and
@@ -239,4 +244,128 @@ export function takeCreateIntent(
 /** `?create=discord` or `?create=new` on any `/app` URL. */
 export function createIntentFromSearch(search: string): CreateIntent | null {
   return asCreateIntent(new URLSearchParams(search).get("create"));
+// ------------------------------------------------------------ Discord import
+
+const IMPORT_KEY = "pqp:pending-discord-import";
+
+/** The stored value when the intent names no template, only the door. */
+const IMPORT_ANY = "discord";
+
+/**
+ * IMPORT. Somebody on a "Vem pra pqp" page clicks "trazer meu servidor do
+ * Discord". What they came for is the Discord layout copy, which lives inside
+ * the create-server dialog after sign-up and after onboarding: three screens
+ * that never mention it. `?import=discord` on any URL (or `?import=<code>` /
+ * `?import=discord.new/<code>`, which also pre-fills the paste box) is
+ * stashed at boot, and the app opens that dialog on the paste step the moment
+ * the account is ready and onboarding is out of the way.
+ *
+ * `source` is null when the intent is the door alone. When it is set it is a
+ * `discord.new` link built from a code `parseDiscordTemplateCode` accepted, so
+ * nothing the visitor typed into the URL reaches the paste box verbatim.
+ */
+export interface ImportIntent {
+  source: string | null;
+}
+
+function importIntentFromValue(raw: string | null): ImportIntent | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") {
+    return null;
+  }
+  if (["discord", "1", "true"].includes(value.toLowerCase())) {
+    return { source: null };
+  }
+  const code = parseDiscordTemplateCode(value);
+  return code ? { source: `https://discord.new/${code}` } : null;
+}
+
+/** `?import=...` on a URL, or null when it carries none that makes sense. */
+export function importIntentFromSearch(search: string): ImportIntent | null {
+  return importIntentFromValue(new URLSearchParams(search).get("import"));
+}
+
+export function stashImportIntent(
+  storage: WritableStorage | null,
+  intent: ImportIntent,
+  now: number = Date.now(),
+): void {
+  write(storage, IMPORT_KEY, intent.source ?? IMPORT_ANY, now);
+}
+
+export function takeImportIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): ImportIntent | null {
+  const stored = take(storage, IMPORT_KEY, now);
+  if (!stored) {
+    return null;
+  }
+  return stored === IMPORT_ANY ? { source: null } : importIntentFromValue(stored);
+}
+
+/**
+ * Stash the page's `?import=` at boot, whatever the page. Runs before routing
+ * so a campaign link to `/app?import=discord` survives the sign-in redirect,
+ * which keeps the path and drops the query (`signedOutRedirectPath`).
+ */
+export function rememberImportIntentFromLocation(
+  storage: WritableStorage | null,
+  location: Pick<Location, "search">,
+  now: number = Date.now(),
+): void {
+  const intent = importIntentFromSearch(location.search);
+  if (intent) {
+    stashImportIntent(storage, intent, now);
+  }
+}
+
+// ------------------------------------------------------- invite link ?ref=
+
+const INVITE_REF_KEY = "pqp:pending-invite-ref";
+
+/**
+ * REF. `/app/invite/<code>?ref=discord` tells the server which link brought a
+ * join (see `shareInviteUrl`). Signed out, the sign-in redirect keeps the
+ * invite path and drops the query, so the tag is stashed at boot together
+ * with the code it came on, and read back only for that same code.
+ * Consumed on read like every other intent here.
+ */
+export function rememberInviteRefFromLocation(
+  storage: WritableStorage | null,
+  location: Pick<Location, "search" | "pathname">,
+  now: number = Date.now(),
+): void {
+  const target = parseAppRoute(location.pathname);
+  if (target?.kind !== "invite") {
+    return;
+  }
+  const ref = normalizeJoinRef(new URLSearchParams(location.search).get("ref"));
+  if (ref) {
+    // A code is base64url and a ref is `[a-z0-9_-]`, so a space cannot
+    // appear in either and splits them unambiguously.
+    write(storage, INVITE_REF_KEY, `${target.code} ${ref}`, now);
+  }
+}
+
+/**
+ * The tag to send with a join through `code`: the URL's own `?ref=` first,
+ * otherwise one stashed for this exact code. The stash is consumed either way.
+ */
+export function takeInviteRef(
+  storage: WritableStorage | null,
+  code: string,
+  search: string,
+  now: number = Date.now(),
+): string | null {
+  const stashed = take(storage, INVITE_REF_KEY, now);
+  const fromUrl = normalizeJoinRef(new URLSearchParams(search).get("ref"));
+  if (fromUrl) {
+    return fromUrl;
+  }
+  if (!stashed) {
+    return null;
+  }
+  const [stashedCode, stashedRef] = stashed.split(" ");
+  return stashedCode === code ? normalizeJoinRef(stashedRef) : null;
 }

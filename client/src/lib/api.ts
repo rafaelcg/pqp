@@ -1674,9 +1674,15 @@ export const listInvites = (serverId: string) =>
 export const deleteInvite = (serverId: string, inviteId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/invites/${inviteId}`);
 
-export const joinInvite = (code: string) =>
+/**
+ * `ref` is the `?ref=` tag the invite link carried, when there was one. It is
+ * attribution only (stored on the new membership, counted on the operator
+ * dashboard); the join behaves the same with or without it.
+ */
+export const joinInvite = (code: string, ref?: string | null) =>
   post<{ serverId: string; serverName: string }>(
     `/api/invites/${encodeURIComponent(code)}/join`,
+    ref ? { ref } : undefined,
   );
 
 export const previewInvite = (code: string) =>

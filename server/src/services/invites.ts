@@ -74,9 +74,18 @@ export async function getInviteByCode(code: string): Promise<DbInvite | null> {
   return result.rows[0] ?? null;
 }
 
+/**
+ * Join a server through an invite code.
+ *
+ * `options.ref` is the `?ref=` tag the invite link carried, already normalised
+ * (`normalizeJoinRef`). It is written onto the membership only when this call
+ * creates it: re-opening a link you already used neither counts a use nor
+ * re-attributes the join.
+ */
 export async function redeemInvite(
   code: string,
   userId: string,
+  options: { ref?: string | null } = {},
 ): Promise<{ serverId: string; serverName: string }> {
   const client = await getPool().connect();
   try {
@@ -108,10 +117,10 @@ export async function redeemInvite(
     }
 
     const inserted = await client.query(
-      `INSERT INTO server_members (server_id, user_id, role)
-       VALUES ($1, $2, 'member')
+      `INSERT INTO server_members (server_id, user_id, role, join_ref)
+       VALUES ($1, $2, 'member', $3)
        ON CONFLICT DO NOTHING`,
-      [invite.server_id, userId],
+      [invite.server_id, userId, options.ref ?? null],
     );
 
     const joinedNow = (inserted.rowCount ?? 0) > 0;

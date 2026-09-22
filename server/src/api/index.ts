@@ -36,6 +36,7 @@ import {
   createDmSchema,
   createGifAttachmentSchema,
   createInviteSchema,
+  normalizeJoinRef,
   createServerSchema,
   createWebhookSchema,
   deleteAccountSchema,
@@ -9127,9 +9128,19 @@ router.delete(
   },
 );
 
-router.post("/api/invites/:code/join", async ({ user }, { code }) => {
+router.post("/api/invites/:code/join", async ({ req, user }, { code }) => {
+  // The optional `{ ref }` body is attribution only. An unreadable body, or a
+  // ref that is not a short tag, joins exactly as a bare POST always has: the
+  // native apps send none, and a join must never fail over how it is counted.
+  let ref: string | null = null;
   try {
-    return await redeemInvite(code!, user.id);
+    const body = await readJsonBody<{ ref?: unknown }>(req);
+    ref = normalizeJoinRef(body?.ref);
+  } catch {
+    ref = null;
+  }
+  try {
+    return await redeemInvite(code!, user.id, { ref });
   } catch (error) {
     throw new HttpError(
       400,

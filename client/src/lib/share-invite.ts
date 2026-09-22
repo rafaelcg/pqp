@@ -22,10 +22,23 @@ import {
 
 export type InvitePasteKind = "short" | "long";
 
+/**
+ * The `?ref=` a link carries, by where pqp handed it out. `discord` is the
+ * invite a Discord import shows on its last screen, the paste a group leader
+ * drops back into their old Discord; `convite` is every other shared invite.
+ * The server stores the tag on the membership it creates (`join_ref`), which
+ * is how "joined through an imported server's invite" gets counted.
+ */
+export type InviteRef = "convite" | "discord";
+
 /** Where a shared invite points, tagged so an arrival can be counted. */
-export function shareInviteUrl(origin: string, code: string): string {
+export function shareInviteUrl(
+  origin: string,
+  code: string,
+  ref: InviteRef = "convite",
+): string {
   const base = origin.replace(/\/$/, "");
-  return `${base}/app/invite/${encodeURIComponent(code)}?ref=convite`;
+  return `${base}/app/invite/${encodeURIComponent(code)}?ref=${ref}`;
 }
 
 /**

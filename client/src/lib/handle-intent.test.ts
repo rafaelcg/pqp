@@ -4,12 +4,17 @@ import {
   createIntentFromSearch,
   HANDLE_INTENT_TTL_MS,
   stashCreateIntent,
+  importIntentFromSearch,
+  rememberImportIntentFromLocation,
+  rememberInviteRefFromLocation,
   stashAddIntent,
   stashHandleClaim,
   stashJoinIntent,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
+  takeImportIntent,
+  takeInviteRef,
   takeJoinIntent,
 } from "./handle-intent";
 
@@ -202,5 +207,88 @@ describe("the create-community intent", () => {
     expect(createIntentFromSearch("?create=DISCORD")).toBeNull();
     expect(createIntentFromSearch("?create=")).toBeNull();
     expect(createIntentFromSearch("")).toBeNull();
+describe("the Discord import intent", () => {
+  it("reads the door alone, or a template it can pre-fill", () => {
+    expect(importIntentFromSearch("?import=discord")).toEqual({ source: null });
+    expect(importIntentFromSearch("?import=1")).toEqual({ source: null });
+    expect(importIntentFromSearch("?import=hgM48av5Q69A")).toEqual({
+      source: "https://discord.new/hgM48av5Q69A",
+    });
+    expect(
+      importIntentFromSearch(
+        `?import=${encodeURIComponent("https://discord.new/hgM48av5Q69A")}`,
+      ),
+    ).toEqual({ source: "https://discord.new/hgM48av5Q69A" });
+  });
+
+  it("ignores anything that is not a template or the door", () => {
+    expect(importIntentFromSearch("")).toBeNull();
+    expect(importIntentFromSearch("?import=")).toBeNull();
+    expect(importIntentFromSearch("?import=https://evil.example/x")).toBeNull();
+    expect(importIntentFromSearch("?import=a b")).toBeNull();
+  });
+
+  it("survives a sign-up once, and only once", () => {
+    const storage = memoryStorage();
+    rememberImportIntentFromLocation(storage, { search: "?import=discord" });
+    expect(takeImportIntent(storage)).toEqual({ source: null });
+    expect(takeImportIntent(storage)).toBeNull();
+
+    rememberImportIntentFromLocation(storage, { search: "?import=hgM48av5Q69A" });
+    expect(takeImportIntent(storage)).toEqual({
+      source: "https://discord.new/hgM48av5Q69A",
+    });
+  });
+
+  it("stashes nothing for a page without the parameter, and expires", () => {
+    const storage = memoryStorage();
+    rememberImportIntentFromLocation(storage, { search: "?ref=perfil" });
+    expect(storage.map.size).toBe(0);
+    rememberImportIntentFromLocation(storage, { search: "?import=discord" }, 0);
+    expect(takeImportIntent(storage, HANDLE_INTENT_TTL_MS + 1)).toBeNull();
+  });
+
+  it("does nothing when storage is denied", () => {
+    expect(() =>
+      rememberImportIntentFromLocation(hostileStorage, { search: "?import=discord" }),
+    ).not.toThrow();
+    expect(takeImportIntent(hostileStorage)).toBeNull();
+  });
+});
+
+describe("the invite link's ref", () => {
+  it("prefers the URL's own tag", () => {
+    expect(takeInviteRef(memoryStorage(), "abc123", "?ref=discord")).toBe("discord");
+    expect(takeInviteRef(memoryStorage(), "abc123", "?ref=a@b")).toBeNull();
+    expect(takeInviteRef(memoryStorage(), "abc123", "")).toBeNull();
+  });
+
+  it("carries the tag through sign-in for the same code only", () => {
+    const storage = memoryStorage();
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=discord",
+    });
+    // The redirect back drops the query.
+    expect(takeInviteRef(storage, "abc123", "")).toBe("discord");
+    expect(takeInviteRef(storage, "abc123", "")).toBeNull();
+
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=discord",
+    });
+    expect(takeInviteRef(storage, "other1", "")).toBeNull();
+    // Consumed even when it did not match.
+    expect(takeInviteRef(storage, "abc123", "")).toBeNull();
+  });
+
+  it("stashes nothing off an invite path or without a clean tag", () => {
+    const storage = memoryStorage();
+    rememberInviteRefFromLocation(storage, { pathname: "/", search: "?ref=discord" });
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=not ok",
+    });
+    expect(storage.map.size).toBe(0);
   });
 });

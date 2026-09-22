@@ -8,6 +8,7 @@ import {
   shareInviteText,
   shareInviteUrl,
   type InvitePasteKind,
+  type InviteRef,
 } from "@/lib/share-invite";
 import { cn } from "@/lib/utils";
 
@@ -20,10 +21,13 @@ const COPY_MS = 1600;
  */
 export function InvitePaste({
   code,
+  inviteRef = "convite",
   className,
   onCopyFailed,
 }: {
   code: string;
+  /** The `?ref=` tag on the link; `discord` right after an import. */
+  inviteRef?: InviteRef;
   className?: string;
   onCopyFailed?: () => void;
 }) {
@@ -32,7 +36,7 @@ export function InvitePaste({
   const copyTimer = useRef<number | null>(null);
   const origin =
     typeof window === "undefined" ? "https://pqp.gg" : window.location.origin;
-  const url = shareInviteUrl(origin, code);
+  const url = shareInviteUrl(origin, code, inviteRef);
   const canShare =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
 
