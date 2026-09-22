@@ -128,6 +128,24 @@ export const remuxStartSessionRequestSchema = z.object({
   room: z.string().min(1),
   /** Carried through for the box's own logs; not interpreted by the contract. */
   channelId: z.string().uuid(),
+  /**
+   * THE API'S OWN `started_at`, AND THEREFORE THE R2 KEY PREFIX BOTH SIDES
+   * MUST AGREE ON.
+   *
+   * Until this field existed the box stamped its own `time.Now()` at the
+   * moment it built the session, and `hls_sessions.object_prefix` carried
+   * `Date.now()` from the moment the API inserted the row. The two are always
+   * close (24 ms apart on the 2026-09-21 broadcast that exposed this) and
+   * never equal, so nothing that reads the row could find the objects: the
+   * retention sweep listed an empty prefix and marked the session cleaned
+   * while every byte stayed in the bucket, `keep_replay` protected a prefix
+   * with nothing under it, and a replay lookup found no playlist at all.
+   *
+   * Optional so an older box (one that predates this field) still validates
+   * the request and falls back to its own clock, which is exactly what it
+   * does today.
+   */
+  startedAtMs: z.number().int().nonnegative().optional(),
   /** CMAF part target, ms. `PART_MS` on the box, default `500`. */
   partMs: z.number().int().positive(),
   /** CMAF segment target, ms. `SEGMENT_MS` on the box, default `4000`. */

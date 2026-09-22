@@ -46,16 +46,14 @@ actually explains the thing.
       `tools/monitoring/README.md`) — a stale or missing copy there makes
       three of the four event alert rules read "no data" all night without
       anybody noticing until it matters.
-- [ ] **Retention.** Check the deployed `LIVE_HLS_RETENTION_MINUTES` on
-      `pqp-api` against the default in `server/src/voice/hls-egress.ts`
-      (10 minutes when a session is not marked `keep_replay`). Ten minutes is
-      not long enough to notice a good clip and mark it after the fact during
-      a live event — see "After" below, `keep_replay` has no product surface
-      at all, only a direct SQL update, and there is nobody watching for it
-      to happen unless someone is deliberately looking within that window.
-      Consider raising `LIVE_HLS_RETENTION_MINUTES` for the event window (a
-      plain env var change, `restarts-api`) so "After" has time to act, and
-      drop it back afterward — do not leave it raised, it grows the R2 bill
+- [ ] **Retention.** Since 2026-09-22 every new watch-party row is written
+      with `keep_replay = TRUE` and `LIVE_HLS_REPLAY_HOURS` defaults to 720,
+      so a show is kept for thirty days unless a moderator switches "Manter
+      gravação" off in "Transmissões anteriores". Check that the deployed
+      `pqp-api` does not override `LIVE_HLS_REPLAY_HOURS` downward, which
+      would shorten that for everything. The older advice below, to raise
+      `LIVE_HLS_RETENTION_MINUTES` for the event window, only matters for a
+      broadcast somebody switched off; do not leave it raised, it grows the R2 bill
       for replay storage nobody asked for.
 - [ ] **Monitoring imported.** Import (or confirm still imported from a
       previous event)
@@ -187,8 +185,10 @@ later with no warning.
 
 ## After
 
-- [ ] **`keep_replay`.** For any session worth keeping, before the retention
-      window from the T-24h check passes:
+- [ ] **`keep_replay`.** Already on for every row written since 2026-09-22
+      (see the T-24h retention check), and toggled per broadcast from
+      "Transmissões anteriores". For an older session, before its retention
+      window passes:
       ```sql
       -- fly mpg connect <production-cluster-id> --database fly-db
       update hls_sessions set keep_replay = true
@@ -198,7 +198,7 @@ later with no warning.
       sweep is the only consumer of the column) — it is a direct SQL update
       against production, the same pattern as the community-suspension flip
       CLAUDE.md documents elsewhere. `keep_replay = true` extends the window
-      to `LIVE_HLS_REPLAY_HOURS` (default 24h); `false` (the default) is gone
+      to `LIVE_HLS_REPLAY_HOURS` (default 720h); `false` is gone
       in `LIVE_HLS_RETENTION_MINUTES`, and once the sweep runs there is no
       undo.
 - [ ] **Mirror / stitch a recording**, if the egress box kept one (see the

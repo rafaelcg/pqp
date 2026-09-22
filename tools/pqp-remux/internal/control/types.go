@@ -86,7 +86,22 @@ type StartSessionRequest struct {
 	// ChannelID is carried through for this box's own logs and for the R2
 	// key layout (internal/r2.ObjectPrefix); not otherwise interpreted by
 	// the control contract itself.
-	ChannelID      string         `json:"channelId"`
+	ChannelID string `json:"channelId"`
+	// StartedAtMs is pqp-api's own `hls_sessions.started_at`, in Unix
+	// milliseconds, and therefore the timestamp the R2 key prefix has to
+	// carry (internal/r2.ObjectPrefix). Zero or absent means "an older API
+	// that does not send it", and the registry falls back to this box's own
+	// clock, which is exactly what it always did.
+	//
+	// It exists because those two clocks were never the same number. The API
+	// built `live/<channel>/<Date.now()>-ll` when it inserted the row; this
+	// box built `live/<channel>/<time.Now()>-ll` when it built the session,
+	// 24 ms later on the 2026-09-21 broadcast that exposed it. Everything
+	// that reads the row to find the objects -- the retention sweep,
+	// keep_replay, the replay lookup -- was therefore looking at a prefix
+	// with nothing under it, while the real objects sat in the bucket with
+	// nothing pointing at them.
+	StartedAtMs    int64          `json:"startedAtMs,omitempty"`
 	PartMs         int            `json:"partMs"`
 	SegmentMs      int            `json:"segmentMs"`
 	RingSegments   int            `json:"ringSegments"`
@@ -110,6 +125,12 @@ func (r StartSessionRequest) Validate() error {
 	}
 	if !uuidPattern.MatchString(r.ChannelID) {
 		return fmt.Errorf("channelId must be a uuid")
+	}
+	// Zero is "not sent" (an older pqp-api); negative is a caller that sent
+	// something and got it wrong, which must not silently become an R2 key
+	// prefix nothing on the API side can ever match.
+	if r.StartedAtMs < 0 {
+		return fmt.Errorf("startedAtMs must not be negative")
 	}
 	if r.PartMs <= 0 {
 		return fmt.Errorf("partMs must be a positive integer")

@@ -117,6 +117,11 @@ func runServer(cfg config.Config) error {
 
 	if r2Writer != nil {
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, cfg.Rung)
+		// The replay playlists beside the segments. One per process here,
+		// unlike the supervisor (internal/control), which keeps one per
+		// SESSION so a watchdog restart does not truncate the recording --
+		// this binary has no restart to survive.
+		sess.EnableVodIndex(r2.NewVodIndex())
 	}
 
 	// L1.3: audio. Non-fatal if the encoder subprocess cannot start (e.g.

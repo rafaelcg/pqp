@@ -94,7 +94,18 @@ func (reg *Registry) StartOrGet(req StartSessionRequest) (info SessionInfo, isNe
 	reg.starting[req.SessionID] = se
 	reg.mu.Unlock()
 
-	startedAtMs := reg.now().UnixMilli()
+	// THE CALLER'S CLOCK WINS WHEN IT SENT ONE. `startedAtMs` is what
+	// internal/r2.ObjectPrefix embeds in every key this session writes, and
+	// pqp-api has already written that same number into
+	// `hls_sessions.object_prefix`. Stamping our own here (which is all this
+	// did until 2026-09-22) guaranteed the two strings differed -- see
+	// StartSessionRequest.StartedAtMs for what that cost. Falling back to
+	// reg.now() keeps an older API, and every test that builds a request
+	// without the field, behaving exactly as before.
+	startedAtMs := req.StartedAtMs
+	if startedAtMs <= 0 {
+		startedAtMs = reg.now().UnixMilli()
+	}
 	ms, buildErr := newManagedSession(reg.ctx, req, startedAtMs, reg.global, reg.watchdogCfg, reg.factory)
 
 	reg.mu.Lock()

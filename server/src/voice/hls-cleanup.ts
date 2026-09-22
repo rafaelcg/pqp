@@ -6,10 +6,11 @@
  * A session is due when `cleaned_at IS NULL` and `ended_at` is set, and
  * either:
  *   - `keep_replay = false` and `ended_at` is more than
- *     `LIVE_HLS_RETENTION_MINUTES` ago (the default: ephemeral, gone in
- *     ~10 minutes), or
+ *     `LIVE_HLS_RETENTION_MINUTES` ago (~10 minutes: a moderator switched
+ *     the recording off), or
  *   - `keep_replay = true` and `ended_at` is more than `LIVE_HLS_REPLAY_HOURS`
- *     ago (an explicit "keep this one" gets a day instead of ten minutes).
+ *     ago (thirty days, and since 2026-09-22 what every new watch-party row
+ *     is written with).
  *
  * Safety property this file exists to hold: the sweep deletes only objects
  * whose key starts with *that session's own* `object_prefix` -- the same
@@ -30,7 +31,9 @@ import {
   liveHlsStorageConfig,
   adoptLiveHlsMicArchive,
   adoptLiveHlsSession,
+  hasLadderRoomFor,
   listActiveEgresses,
+  parkLlCompanion,
   // `hls-egress.ts` builds `object_prefix`, so it is also where it is read
   // back: two copies of that parser would be a filter that drifts from the
   // thing it filters for.
@@ -361,7 +364,46 @@ export async function reconcileStaleHlsSessions(): Promise<{
     adopted += 1;
   }
 
+  // AN LL BROADCAST'S CAMERA AND ARCHIVE HAVE NO LADDER TO ATTACH TO, and
+  // stopping them here would cut the recording of a party that is still on
+  // air: `adoptLlHlsSessions` takes the LL session itself back right after
+  // this pass. So a camera or archive whose session has an open LL row is
+  // given an LL companion to be adopted onto (`llCompanions` in
+  // hls-egress.ts), which the monitor stops if that session does not return.
+  //
+  // COULD NOT ASK IS NOT "NO LL SESSION". When that lookup fails, a camera or
+  // archive with no ladder room is neither stopped nor ended on this pass: it
+  // is left as skipped, which is what makes `reconcileSkippedHlsSessions`
+  // run the pass again a minute later and decide it then.
+  const deferredIds = new Set<string>();
+  if (cameras.length > 0 || micArchives.length > 0) {
+    const openLl = await openLlSessions();
+    for (const { row } of [...cameras, ...micArchives]) {
+      const session = sessionFromPrefix(row.object_prefix)!;
+      if (openLl === null) {
+        if (!hasLadderRoomFor(row.channel_id, session.startedAt)) {
+          deferredIds.add(row.id);
+        }
+        continue;
+      }
+      if (openLl.has(`${row.channel_id}:${session.startedAt}`)) {
+        parkLlCompanion({
+          channelId: row.channel_id,
+          startedAt: session.startedAt,
+          presenterPeerId: row.presenter_peer_id!,
+          videoTrackId: row.video_track_id ?? "",
+        });
+      }
+    }
+    for (const id of deferredIds) {
+      skippedIds.add(id);
+    }
+  }
+
   for (const { info, row } of cameras) {
+    if (deferredIds.has(row.id)) {
+      continue;
+    }
     const session = sessionFromPrefix(row.object_prefix)!;
     const stream = adoptLiveHlsSession({
       channelId: row.channel_id,
@@ -387,6 +429,9 @@ export async function reconcileStaleHlsSessions(): Promise<{
   }
 
   for (const { info, row } of micArchives) {
+    if (deferredIds.has(row.id)) {
+      continue;
+    }
     const session = sessionFromPrefix(row.object_prefix)!;
     const attached = adoptLiveHlsMicArchive({
       channelId: row.channel_id,
@@ -423,7 +468,9 @@ export async function reconcileStaleHlsSessions(): Promise<{
   }
   const skippedEnds: StaleSession[] = [];
   const toEnd = rows.rows
-    .filter((row) => row.still_open && !adoptedIds.has(row.id))
+    .filter(
+      (row) => row.still_open && !adoptedIds.has(row.id) && !deferredIds.has(row.id),
+    )
     .filter((row) => {
       if (ownedElsewhere(row)) {
         skippedEnds.push(row);
@@ -477,6 +524,26 @@ export async function reconcileStaleHlsSessions(): Promise<{
     skippedOwnedElsewhere: skippedIds.size,
   });
   return { adopted, ended, stopped };
+}
+
+/** `<channelId>:<startedAt ms>` of every LL session whose row is still open,
+ * or null when the read failed. */
+async function openLlSessions(): Promise<Set<string> | null> {
+  try {
+    const result = await getPool().query<{ channel_id: string; started_at_ms: string }>(
+      `SELECT channel_id, (EXTRACT(EPOCH FROM started_at) * 1000)::bigint AS started_at_ms
+       FROM hls_sessions
+       WHERE mode = 'll' AND ended_at IS NULL AND cleaned_at IS NULL`,
+    );
+    return new Set(
+      result.rows.map((row) => `${row.channel_id}:${Number(row.started_at_ms)}`),
+    );
+  } catch (error) {
+    logEvent("voice.hlsBootLlLookupFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /** Whether the last pass left rows to somebody else, and when we last re-ran. */
