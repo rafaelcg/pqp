@@ -501,30 +501,6 @@ describe("musicOverflowItems", () => {
     expect(items.find((item) => item.id === "repeat")?.checked).toBe(true);
   });
 
-  it("drops shuffle and repeat when the bar already shows them", () => {
-    const items = musicOverflowItems({
-      t,
-      canManage: true,
-      canSetSwitches: true,
-      listening: true,
-      ducking: true,
-      openControls: false,
-      autoplay: false,
-      repeat: "off",
-      modes: "none",
-      onStopAll: () => {},
-    });
-    expect(items.map((item) => item.id)).toEqual([
-      "scope-you",
-      "duck",
-      "stop-listening",
-      "sep-scope",
-      "scope-room",
-      "open-controls",
-      "sep-stop",
-      "stop-all",
-    ]);
-  });
 
   /* The one stop a member has. No heading: a label over a single row is
      noise, and there is no second group to tell it apart from. */

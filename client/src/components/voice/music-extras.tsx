@@ -383,9 +383,15 @@ export function musicRoomOverflowItems(input: {
 
 /**
  * Overflow rows for the bar `…` and the drawer `…`.
- * `all` is the drawer: room policy, then shuffle/repeat.
- * `menu` is the bar when the icons hide: shuffle/repeat first, then room.
- * `none` is room policy only.
+ * `all` is the drawer: room policy, then the modes and shuffle.
+ * `menu` is the bar: shuffle and the modes first, then room policy.
+ *
+ * There used to be a third, `none`, for "the bar already shows the modes,
+ * so leave them out here". Nothing ever passed it: the bar hides those
+ * icons with a container query, which is CSS, and this runs in JavaScript
+ * with no idea how wide the bar is. A control appearing both on a bar and
+ * in that bar's overflow is ordinary; a branch that only its own test
+ * reaches is not, so it is gone.
  */
 export function musicOverflowItems(input: {
   t: (key: MessageKey) => string;
@@ -400,7 +406,7 @@ export function musicOverflowItems(input: {
   /** Shuffle is dimmed under two tracks, as its button is. */
   queueLength?: number;
   onStopAll?: () => void;
-  modes?: "all" | "menu" | "none";
+  modes?: "all" | "menu";
 }): ContextMenuItemDef[] {
   const personal = musicPersonalItems({
     t: input.t,
@@ -424,9 +430,6 @@ export function musicOverflowItems(input: {
     { id: "sep-scope", label: "", separator: true },
     { id: "scope-room", label: input.t("music.scope.room"), heading: true },
   ];
-  if (modes === "none") {
-    return [...personal, ...scopedRoom, ...room];
-  }
   const modeItems = musicModeOverflowItems({
     t: input.t,
     repeat: input.repeat,
@@ -469,7 +472,7 @@ export function MusicOverflowMenu({
   autoplay: boolean;
   repeat: MusicRepeat;
   queueLength?: number;
-  modes?: "all" | "menu" | "none";
+  modes?: "all" | "menu";
   side: "top" | "bottom";
   triggerClassName: string;
 }) {
