@@ -224,9 +224,19 @@ export function MusicNowPlaying({
   const identity = (
     <>
       <button
+        /*
+         * Keyed on the track, so a change REMOUNTS this and the fade plays
+         * again; swapping the image in place reads as a flicker on an
+         * automatic advance rather than as the room moving on. Prefixed
+         * because these two are siblings in one fragment, which React
+         * reconciles as an array: the same key on both is a duplicate, and
+         * a duplicate key is matched once and reused rather than replaced.
+         */
+        key={`art-${current.id}`}
+        data-music-art=""
         type="button"
         className={cn(
-          "relative shrink-0 overflow-hidden rounded-md",
+          "relative shrink-0 overflow-hidden rounded-md animate-fade-in",
           composer ? "h-14 w-14 bg-surface-3" : "h-8 w-8 bg-ink-3",
           music.open && "ring-2 ring-accent",
         )}
@@ -249,8 +259,12 @@ export function MusicNowPlaying({
         )}
       </button>
       <button
+        // Keyed with the art, and for the same reason: the title is the
+        // other half of "the room moved on". Its own prefix, see above.
+        key={`title-${current.id}`}
+        data-music-title=""
         type="button"
-        className="min-w-0 flex-1 text-left"
+        className="min-w-0 flex-1 animate-fade-in text-left"
         aria-expanded={music.open}
         aria-label={expandLabel}
         onClick={onOpenFila}
@@ -329,11 +343,19 @@ export function MusicNowPlaying({
           type="button"
           variant={composer ? "default" : "ghost"}
           size="icon"
-          className={
+          data-music-play=""
+          className={cn(
             composer
               ? "h-10 w-10 shrink-0 rounded-full"
-              : "h-8 w-8 shrink-0"
-          }
+              : "h-8 w-8 shrink-0",
+            /*
+             * The one control everybody aims at, and the only one that gave
+             * no sign it could be pressed until it was. Spotify's answer:
+             * a small scale under the pointer, a smaller one on the press.
+             */
+            "transition-transform duration-150 ease-out hover:scale-[1.06] active:scale-95",
+            "motion-reduce:transition-none motion-reduce:transform-none",
+          )}
           aria-pressed={playing}
           // Its own name, not the tooltip's: `Tooltip` merges `aria-label`
           // onto its immediate child, and that is the span this button

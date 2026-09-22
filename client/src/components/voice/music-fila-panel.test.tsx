@@ -21,6 +21,7 @@ import {
   resetMusicPipForTests,
 } from "@/lib/music-pip";
 import { MusicFila } from "@/components/voice/music-fila";
+import { MusicComposer } from "@/components/voice/music-composer";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -88,6 +89,20 @@ const voiceState = (): VoiceState =>
 
 let host: HTMLDivElement;
 let root: Root;
+
+function mountComposer() {
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  act(() => {
+    root.render(
+      <TooltipProvider>
+        <MusicComposer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+  });
+  return host;
+}
 
 function mount(variant: "sheet" | "drawer" = "sheet") {
   host = document.createElement("div");
@@ -300,5 +315,48 @@ describe("the Fila panel is one column", () => {
     mount();
     expect(musicPipSpent()).toBe(true);
     expect(window.localStorage.getItem(MUSIC_PIP_KEY)).toBe("1");
+  });
+
+  /*
+   * THE TWO BITS OF MOTION ON THE BAR.
+   *
+   * The play button is the one control everybody aims at and the only one
+   * that gave no sign it could be pressed, so it takes Spotify's answer: a
+   * small scale under the pointer. And a track changing used to replace
+   * the art and the title in place, which on an automatic advance reads as
+   * a flicker rather than "it moved on" — keying both on the track id
+   * remounts them, so `animate-fade-in` plays again. Both are already off
+   * under `prefers-reduced-motion`, the button through `motion-reduce` and
+   * the fade through the rule in `index.css`.
+   */
+  it("gives the play button something under the pointer", () => {
+    mountComposer();
+    const play = host.querySelector(
+      "[data-music-play]",
+    ) as HTMLButtonElement | null;
+    expect(play).not.toBeNull();
+    expect(play?.className).toContain("hover:scale-");
+    expect(play?.className).toContain("motion-reduce:");
+  });
+
+  it("remounts the art and the title when the track changes, so the fade replays", () => {
+    mountComposer();
+    const artBefore = host.querySelector("[data-music-art]");
+    const titleBefore = host.querySelector("[data-music-title]");
+    expect(artBefore).not.toBeNull();
+    expect(artBefore?.className).toContain("animate-fade-in");
+
+    act(() => {
+      receiveMusic(CHANNEL, state({
+        current: track("next", "A próxima"),
+        rev: getMusicSnapshot().state!.rev + 1,
+        actorId: "peer-b",
+      }));
+    });
+    expect(host.querySelector("[data-music-title]")?.textContent).toContain(
+      "A próxima",
+    );
+    expect(host.querySelector("[data-music-art]")).not.toBe(artBefore);
+    expect(host.querySelector("[data-music-title]")).not.toBe(titleBefore);
   });
 });
