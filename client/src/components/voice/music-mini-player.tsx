@@ -125,8 +125,15 @@ export function MusicMiniPlayer({
   ]);
 
   useLayoutEffect(() => {
+    if (!embed) {
+      // Only the mount that OWNS the iframe may put the shared player
+      // down. A footer copy going away — Novidades opening, a switch to
+      // the server home — used to clear the live player's reference and
+      // leave "Toque para tocar" with nothing to press.
+      return;
+    }
     return () => setMusicLocalPlayer(null);
-  }, []);
+  }, [embed]);
 
   if (!inCall) {
     return null;

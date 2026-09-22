@@ -22,6 +22,14 @@ import {
 } from "@/lib/music-pip";
 import { MusicFila } from "@/components/voice/music-fila";
 import { MusicComposer } from "@/components/voice/music-composer";
+import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
+import {
+  getMusicLocalPlayback,
+  setMusicLocalNeedsTap,
+  setMusicLocalPlayer,
+  tapMusicLocalToPlay,
+} from "@/components/voice/music-local-playback";
+import type { YTPlayer } from "@/lib/youtube-iframe";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -477,5 +485,46 @@ describe("the Fila panel is one column", () => {
   it("draws nothing when another hint holds the slot", () => {
     mountWithHint("music");
     expect(host.querySelector("[data-corner-card='musicField']")).toBeNull();
+  });
+
+  /*
+   * ONLY THE CARRIER MAY PUT THE SHARED PLAYER DOWN.
+   *
+   * Every MusicMiniPlayer cleared it on unmount, but only the one that
+   * owns the iframe ever sets it, and since the single-embed fix that is
+   * one mount in App. So a footer copy going away — opening Novidades,
+   * switching to the server home — took the live player's reference with
+   * it, and the next "Toque para tocar" found nothing to play.
+   */
+  it("leaves the shared player alone when a footer copy unmounts", () => {
+    const played: string[] = [];
+    setMusicLocalPlayer({
+      playVideo: () => played.push("play"),
+      unMute: () => {},
+    } as unknown as YTPlayer);
+
+    const footer = document.createElement("div");
+    document.body.appendChild(footer);
+    const footerRoot = createRoot(footer);
+    act(() => {
+      footerRoot.render(
+        <TooltipProvider>
+          <MusicMiniPlayer voiceState={voiceState()} embed={false} />
+        </TooltipProvider>,
+      );
+    });
+    act(() => footerRoot.unmount());
+    footer.remove();
+
+    tapMusicLocalToPlay();
+    expect(played).toEqual(["play"]);
+  });
+
+  /* And the button does not clear itself when there was nothing to play. */
+  it("keeps Toque para tocar up when no player answered", () => {
+    setMusicLocalPlayer(null);
+    setMusicLocalNeedsTap(true);
+    tapMusicLocalToPlay();
+    expect(getMusicLocalPlayback().needsTap).toBe(true);
   });
 });

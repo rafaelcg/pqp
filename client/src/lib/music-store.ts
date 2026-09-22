@@ -836,12 +836,19 @@ export async function skipToNext(
       autoplayAdvance(trackId, pick);
       return;
     }
-  } catch {
+  } catch (error) {
     // Offline, rate limited, upstream down: an ordinary end is better than
     // a skip that does nothing at all.
+    console.warn("[music] related lookup failed on skip:", error);
   }
-  if (snapshot.state?.current?.id === trackId) {
-    advance(trackId);
+  try {
+    if (snapshot.state?.current?.id === trackId) {
+      advance(trackId);
+    }
+  } catch (error) {
+    // A button handler calls this with `void`, so a rejection escaping
+    // here is nobody's to catch and lands as an unhandled rejection.
+    console.warn("[music] skip could not advance:", error);
   }
 }
 
