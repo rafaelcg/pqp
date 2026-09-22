@@ -165,7 +165,14 @@ describeDb("the room's clock in the registry row", () => {
     const write = applyMusicWrite(
       channelId,
       { ...held, positionMs: 151_000, rev: held.rev + 1, actorId: "peer-z" },
-      { userId: "u9", canManage: false, canAdd: false, roomSize: 3 },
+      {
+        userId: "u9",
+        canManage: false,
+        canAdd: false,
+        roomSize: 3,
+        peerId: "peer-z",
+        seatedUserIds: ["u9"],
+      },
     );
     expect(write.kind).toBe("accepted");
     const after = getMusicState(channelId) as MusicState;

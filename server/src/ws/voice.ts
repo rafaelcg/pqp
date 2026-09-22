@@ -201,9 +201,10 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
-import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
+import { completeMusicState, musicServerWriteAllowed } from "@pqp/shared";
 import {
   adoptMusicWithAnchor,
+  musicExpectedPositionMs,
   type MusicAnchor,
   applyMusicWrite,
   channelMusicTrack,
@@ -7187,11 +7188,16 @@ export async function handleVoiceMessage(
     // from the held state inside `musicWriteAllowed`, not computed here.
     if (
       peer.canManageMusic &&
-      !musicWriteAllowed(held, incoming, {
+      !musicServerWriteAllowed(held, incoming, {
         userId: user.id,
         canManage: false,
         canAdd: peer.canSpeak,
         roomSize,
+        peerId: peer.id,
+        // The same clock the real check below will use. This one used to
+        // pass neither it nor a peer id, which quietly gave this call the
+        // CLIENT's lenient reading of the end-of-track gate.
+        expectedPositionMs: musicExpectedPositionMs(peer.voiceChannelId),
         seatedUserIds,
       })
     ) {

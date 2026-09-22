@@ -10,6 +10,7 @@ import {
   musicAutoplayCandidates,
   musicSkipVotesNeeded,
   musicStateSchema,
+  musicServerWriteAllowed,
   musicWriteAllowed,
   musicWriteIsStale,
   musicWriteIsStructural,
@@ -1042,6 +1043,66 @@ describe("the gate with no trusted clock", () => {
         },
       ),
     ).toBe(false);
+  });
+});
+
+describe("the server's own door", () => {
+  /*
+   * The trusted context is not optional here, and that is the whole point.
+   * On `MusicRights` those three fields are optional so the client can ask
+   * the same question with none of them, which is right for drawing and
+   * wrong for deciding: a server caller that left one out still compiled
+   * and quietly got the lenient reading. One of them already had — the
+   * permission re-check in `voice.ts` passed neither a peer id nor a
+   * clock.
+   */
+  it("fails closed on a room with no clock, without being asked to", () => {
+    const held = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      positionMs: 190_000,
+      queue: [track("b")],
+    });
+    expect(
+      musicServerWriteAllowed(held, written(musicAdvance(held)), {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        peerId: "p2",
+        expectedPositionMs: null,
+        seatedUserIds: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("agrees with the rule it delegates to when the clock is there", () => {
+    const held = state({
+      current: { ...(state().current as MusicTrack), durationMs: 200_000 },
+      positionMs: 0,
+      queue: [track("b")],
+    });
+    const write = written(musicAdvance(held));
+    const server = musicServerWriteAllowed(held, write, {
+      userId: "nobody",
+      canManage: false,
+      canAdd: false,
+      roomSize: 10,
+      peerId: "p2",
+      expectedPositionMs: 190_000,
+      seatedUserIds: [],
+    });
+    expect(server).toBe(true);
+    expect(
+      musicWriteAllowed(held, write, {
+        userId: "nobody",
+        canManage: false,
+        canAdd: false,
+        roomSize: 10,
+        peerId: "p2",
+        expectedPositionMs: 190_000,
+        seatedUserIds: [],
+      }),
+    ).toBe(server);
   });
 });
 

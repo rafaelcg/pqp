@@ -1,7 +1,8 @@
 import {
   MUSIC_POSITION_TOLERANCE_MS,
   completeMusicState,
-  musicWriteAllowed,
+  musicServerWriteAllowed,
+  type MusicServerRights,
   musicWriteIsStale,
   musicWriteIsStructural,
   type ChannelMusicTrack,
@@ -265,10 +266,15 @@ export type MusicWrite =
   /** Outside the sender's rights. `held` goes back, forced, to undo their optimistic copy. */
   | { kind: "refused"; held: MusicState | null };
 
+/**
+ * `MusicServerRights`, not `MusicRights`: the three fields only the server
+ * can know are required there, so this entry point cannot be called with
+ * the client's lenient reading by forgetting one.
+ */
 export function applyMusicWrite(
   voiceChannelId: string,
   incoming: MusicStateWrite | null,
-  rights: MusicRights,
+  rights: Omit<MusicServerRights, "expectedPositionMs">,
 ): MusicWrite {
   const actorUserId = rights.userId;
   const held = getMusicState(voiceChannelId);
@@ -309,7 +315,13 @@ export function applyMusicWrite(
     });
     next = { ...next, positionMs: expected };
   }
-  if (!musicWriteAllowed(held, next, { ...rights, expectedPositionMs: expected ?? undefined })) {
+  if (
+    !musicServerWriteAllowed(held, next, {
+      ...rights,
+      // The room's own clock is this module's to supply, not the caller's.
+      expectedPositionMs: expected,
+    })
+  ) {
     logEvent("voice.musicRefused", {
       voiceChannelId,
       userId: actorUserId,

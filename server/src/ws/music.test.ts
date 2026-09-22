@@ -15,8 +15,28 @@ import {
 } from "./music.js";
 
 const ROOM = "11111111-1111-4111-8111-111111111111";
-const MANAGER = { userId: "u1", canManage: true, canAdd: true, roomSize: 4 };
-const MEMBER = { userId: "u2", canManage: false, canAdd: true, roomSize: 4 };
+/*
+ * `applyMusicWrite` takes the SERVER's rights, so `peerId` and
+ * `seatedUserIds` are required: a caller that leaves one out would
+ * otherwise get the client's lenient reading and still compile, which is
+ * the mistake the type now refuses. A test is a caller like any other.
+ */
+const MANAGER = {
+  userId: "u1",
+  canManage: true,
+  canAdd: true,
+  roomSize: 4,
+  peerId: "p1",
+  seatedUserIds: ["u1", "u2"],
+};
+const MEMBER = {
+  userId: "u2",
+  canManage: false,
+  canAdd: true,
+  roomSize: 4,
+  peerId: "p2",
+  seatedUserIds: ["u1", "u2"],
+};
 
 const state = (overrides: Partial<MusicState> = {}): MusicState => ({
   current: {
@@ -51,7 +71,11 @@ describe("applyMusicWrite", () => {
       kind: "accepted",
       state: state({ rev: 3 }),
     });
-    const lost = applyMusicWrite(ROOM, state({ rev: 2 }), {
+    // Signed as itself: an `actorId` that is not the sender's peer id is
+    // refused before staleness is even asked, which is a different test.
+    const lost = applyMusicWrite(ROOM, state({ rev: 2, actorId: "p2" }), {
+      peerId: "p2",
+      seatedUserIds: ["u1", "u2"],
       userId: "u2",
       canManage: true,
       canAdd: true,
@@ -161,9 +185,12 @@ describe("applyMusicWrite", () => {
     const held = state({ rev: 1, skipVotes: ["u3"] });
     applyMusicWrite(ROOM, held, MANAGER);
     const next = { ...state({ ...musicAdvance(held), rev: 2 }), actorId: "p2" };
-    const refused = applyMusicWrite(ROOM, next, { ...MEMBER, roomSize: 5 });
+    // u3 holds the other vote and is still seated; the server counts only
+    // the votes of people who are.
+    const voters = { ...MEMBER, seatedUserIds: ["u1", "u2", "u3"] };
+    const refused = applyMusicWrite(ROOM, next, { ...voters, roomSize: 5 });
     expect(refused.kind).toBe("refused");
-    const allowed = applyMusicWrite(ROOM, next, { ...MEMBER, roomSize: 4 });
+    const allowed = applyMusicWrite(ROOM, next, { ...voters, roomSize: 4 });
     expect(allowed.kind).toBe("accepted");
   });
 });
@@ -212,18 +239,6 @@ describe("the actor a write claims to be", () => {
     expect(write.kind).toBe("accepted");
   });
 
-  /* The client draws with this function too, and knows no peer id there. */
-  it("checks nothing when the caller does not say who is writing", () => {
-    applyMusicWrite(ROOM, state(), MANAGER);
-    const held = getMusicState(ROOM) as MusicState;
-    expect(
-      applyMusicWrite(
-        ROOM,
-        { ...held, positionMs: 1_000, rev: held.rev + 1, actorId: "anything" },
-        MEMBER,
-      ).kind,
-    ).toBe("accepted");
-  });
 });
 
 describe("a skip vote from somebody who left", () => {
@@ -262,6 +277,7 @@ describe("a skip vote from somebody who left", () => {
     const held = getMusicState(ROOM) as MusicState;
     const advance = { ...musicAdvance(held), rev: held.rev + 1, actorId: "p4", atMs: 0 };
     const refused = applyMusicWrite(ROOM, advance, {
+      peerId: "p4",
       userId: "u4",
       canManage: false,
       canAdd: true,
@@ -277,6 +293,7 @@ describe("a skip vote from somebody who left", () => {
     const held = getMusicState(ROOM) as MusicState;
     const advance = { ...musicAdvance(held), rev: held.rev + 1, actorId: "p4", atMs: 0 };
     const accepted = applyMusicWrite(ROOM, advance, {
+      peerId: "p4",
       userId: "u4",
       canManage: false,
       canAdd: true,
@@ -318,6 +335,8 @@ describe("the server's own clock for the room", () => {
     canManage: false,
     canAdd: false,
     roomSize: 3,
+    peerId: "p9",
+    seatedUserIds: ["u1", "u9"],
   };
 
   it("starts at zero when a track starts, and runs while it plays", () => {
@@ -363,7 +382,14 @@ describe("the server's own clock for the room", () => {
         rev: held.rev + 1,
         actorId: "p2",
       },
-      { userId: "u2", canManage: false, canAdd: true, roomSize: 3 },
+      {
+        userId: "u2",
+        canManage: false,
+        canAdd: true,
+        roomSize: 3,
+        peerId: "p2",
+        seatedUserIds: ["u1", "u2"],
+      },
     );
     expect(write.kind).toBe("accepted");
     const after = getMusicState(ROOM) as MusicState;

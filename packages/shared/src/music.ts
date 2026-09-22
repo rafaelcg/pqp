@@ -570,6 +570,46 @@ function durationsArePlausible(
   return (incoming.queue ?? []).every(introduced);
 }
 
+/**
+ * THE SERVER'S DOOR, WHERE THE TRUSTED CONTEXT IS NOT OPTIONAL.
+ *
+ * `MusicRights` carries the three things only the server knows — the
+ * socket's peer id, the room's own clock, and who is seated — as optional
+ * fields, because the client calls the same rule with none of them to
+ * decide what to draw. That is convenient and it is also how a server
+ * caller forgets one: it still compiles, and it silently gets the client's
+ * lenient reading, where the end-of-track gate falls back to the last
+ * position sample anybody wrote.
+ *
+ * So the server does not call `musicWriteAllowed` directly. It calls this,
+ * which demands all three. `expectedPositionMs` is `number | null` rather
+ * than optional on purpose: a room with no anchor is a real state, and the
+ * caller has to say so rather than leave it out.
+ */
+export interface MusicServerRights {
+  userId: string;
+  canManage: boolean;
+  canAdd: boolean;
+  roomSize: number;
+  /** The peer id of the socket the write arrived on. */
+  peerId: string;
+  /** The room's own clock, or null when this instance holds no anchor. */
+  expectedPositionMs: number | null;
+  /** Who is seated, from the cluster when the registry is on. */
+  seatedUserIds: string[];
+}
+
+export function musicServerWriteAllowed(
+  held: MusicState | null,
+  incoming: MusicStateWrite | null,
+  rights: MusicServerRights,
+): boolean {
+  return musicWriteAllowed(held, incoming, {
+    ...rights,
+    expectedPositionMs: rights.expectedPositionMs ?? undefined,
+  });
+}
+
 export function musicWriteAllowed(
   held: MusicState | null,
   incoming: MusicStateWrite | null,
