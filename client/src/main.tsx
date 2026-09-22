@@ -408,10 +408,14 @@ installShareAudioProbe();
 // hits the same failure and is NOT caught here still throws during render
 // and reaches `ErrorBoundary`, which runs this exact same guarded helper.
 //
-// `event.preventDefault()` is what stops Vite's helper from rethrowing.
-// Skip it and the failure surfaces normally (as an uncaught error, which for
-// a `React.lazy` chunk lands in `ErrorBoundary` too), which is exactly what
-// should happen once the 30s guard below has already tried a reload once.
+// `event.preventDefault()` is what stops Vite's helper from rethrowing, and
+// it is only called when this tab is actually taking over recovery by
+// reloading. Every other outcome, including "deferred" (an active call),
+// lets it rethrow on purpose: that is what turns the underlying rejection
+// into a real `React.lazy` failure so it reaches `ErrorBoundary`, which
+// calls this same helper again and renders the in-call fallback in the
+// broken chunk's place. Swallowing it here instead would leave `React.lazy`
+// resolving to nothing usable, with no error and no fallback to show for it.
 window.addEventListener("vite:preloadError", (event) => {
   const preloadEvent = event as CustomEvent & { payload?: unknown };
   const action = recoverFromChunkLoadError(
@@ -421,7 +425,7 @@ window.addEventListener("vite:preloadError", (event) => {
       onDeferred: () => setStaleChunkBannerVisible(true),
     },
   );
-  if (action !== "ignored") {
+  if (action === "reloaded") {
     event.preventDefault();
   }
 });

@@ -204,4 +204,55 @@ describe("recoverFromChunkLoadError", () => {
     // same failure again should still be free to reload right away.
     expect(storage.getItem("pqp:stale-chunk-reload-at")).toBeNull();
   });
+
+  it("never auto-reloads when storage is unavailable (fails safe against an unguardable loop)", () => {
+    // With no sessionStorage to persist the guard across the reload it
+    // exists to guard, a reload here would be indistinguishable from a
+    // fresh, never-reloaded failure the next time this fires - the classic
+    // shape of a loop. Refusing to reload at all, rather than reloading
+    // unguarded, is the safe choice.
+    const reload = vi.fn();
+    const action = recoverFromChunkLoadError(
+      new Error("Failed to fetch dynamically imported module"),
+      { now: () => 1_000, storage: null, isInCall: () => false, reload },
+    );
+    expect(action).toBe("ignored");
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("never auto-reloads when the guard cannot be persisted (storage.setItem throws)", () => {
+    const reload = vi.fn();
+    const storage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("QuotaExceededError");
+      },
+    };
+    const action = recoverFromChunkLoadError(
+      new Error("Failed to fetch dynamically imported module"),
+      { now: () => 1_000, storage, isInCall: () => false, reload },
+    );
+    expect(action).toBe("ignored");
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("still defers for an active call even when storage cannot persist the guard", () => {
+    // The in-call rule is not a function of whether the guard can be
+    // written - never reload out from under a call is unconditional.
+    const reload = vi.fn();
+    const onDeferred = vi.fn();
+    const storage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    const action = recoverFromChunkLoadError(
+      new Error("Failed to fetch dynamically imported module"),
+      { now: () => 1_000, storage, isInCall: () => true, reload, onDeferred },
+    );
+    expect(action).toBe("deferred");
+    expect(reload).not.toHaveBeenCalled();
+    expect(onDeferred).toHaveBeenCalledTimes(1);
+  });
 });

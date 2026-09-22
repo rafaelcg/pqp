@@ -20,7 +20,11 @@
  * reload fetches points at the CURRENT deploy's asset hashes. The 30-second
  * guard is what stops a genuinely broken deploy (or a flaky connection) from
  * reloading forever: after one attempt inside the window, the error is left
- * to surface normally instead of retrying blind.
+ * to surface normally instead of retrying blind. That guard only works
+ * because `sessionStorage` survives the reload it is guarding, so wherever
+ * it cannot be read or written (private mode, quota, disabled storage) this
+ * refuses to auto-reload at all rather than reload with no way to tell it
+ * has already tried.
  */
 
 const STORAGE_KEY = "pqp:stale-chunk-reload-at";
@@ -89,15 +93,17 @@ function readReloadedAt(storage: StorageLike | null): number | null {
   }
 }
 
-function writeReloadedAt(storage: StorageLike | null, value: number): void {
+/** Returns whether the guard was actually persisted. */
+function writeReloadedAt(storage: StorageLike | null, value: number): boolean {
   if (!storage) {
-    return;
+    return false;
   }
   try {
     storage.setItem(STORAGE_KEY, String(value));
+    return true;
   } catch {
-    // Storage full / disabled: worst case is one extra reload attempt on a
-    // future failure, never a loop within this same call.
+    // Quota exceeded, storage disabled after the initial read, etc.
+    return false;
   }
 }
 
@@ -123,7 +129,9 @@ export interface ChunkErrorRecoveryOptions {
   now?: () => number;
   /**
    * Test seam. Defaults to `sessionStorage`, guarded against throwing. Pass
-   * `null` to disable persistence entirely (the guard then never fires).
+   * `null` to simulate storage being unavailable: since the guard cannot be
+   * proven to survive the reload it exists to guard, this refuses to
+   * auto-reload at all (returns `"ignored"`) rather than reload unguarded.
    */
   storage?: StorageLike | null;
   /** Whether this tab is in an active voice call right now. Defaults to false. */
@@ -139,6 +147,12 @@ export interface ChunkErrorRecoveryOptions {
  *
  * - not a chunk-load error at all: does nothing and returns `"ignored"`,
  *   and the caller should let the error surface like any other bug;
+ * - no storage that can be relied on to persist the guard (private mode,
+ *   storage disabled): also `"ignored"`. The guard only works because
+ *   `sessionStorage` survives the reload it is guarding; in-memory state
+ *   does not, since the reload throws away this whole module's state. Unable
+ *   to prove a reload has not already happened, the safe choice is never to
+ *   take one automatically rather than risk looping;
  * - a reload for this reason already happened in the last 30s: also
  *   `"ignored"`, so a genuinely broken deploy surfaces its real error
  *   instead of reloading forever;
@@ -146,7 +160,9 @@ export interface ChunkErrorRecoveryOptions {
  *   `onDeferred` (a toast/banner asking the person to reload when they're
  *   done) and returns `"deferred"`;
  * - otherwise: marks the reload so the guard above can see it, reloads, and
- *   returns `"reloaded"`.
+ *   returns `"reloaded"`. If marking it fails (write throws, e.g. quota),
+ *   the reload is skipped too and this also returns `"ignored"`, because
+ *   reloading without a persisted guard is exactly the unguarded case above.
  */
 export function recoverFromChunkLoadError(
   error: unknown,
@@ -159,6 +175,11 @@ export function recoverFromChunkLoadError(
   const now = options.now ?? Date.now;
   const storage =
     options.storage !== undefined ? options.storage : defaultStorage();
+
+  if (!storage) {
+    return "ignored";
+  }
+
   const nowMs = now();
 
   if (reloadedRecently(nowMs, storage)) {
@@ -170,7 +191,10 @@ export function recoverFromChunkLoadError(
     return "deferred";
   }
 
-  writeReloadedAt(storage, nowMs);
+  if (!writeReloadedAt(storage, nowMs)) {
+    return "ignored";
+  }
+
   const reload = options.reload ?? (() => window.location.reload());
   reload();
   return "reloaded";
