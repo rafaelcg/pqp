@@ -1557,6 +1557,81 @@ h2,
 }
 
 /*
+ * First-run wizard (docs/ONBOARDING.md). The outgoing step leaves a touch to
+ * the left while the incoming one arrives from the right, 60 ms behind it, so
+ * the panel reads as one card turning rather than two swapping. Exits are
+ * shorter and smaller than entrances on purpose.
+ */
+@keyframes step-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+
+.animate-step-out {
+  animation: step-out 0.12s var(--ease-standard) both;
+}
+
+/* A field unfolding under the control that asked for it (a door, the @ chip). */
+@keyframes door-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-door-reveal {
+  animation: door-reveal 0.2s var(--ease-emphasized) both;
+}
+
+/*
+ * The invite link being copied: a ring of the accent swells off the box and
+ * fades, once. Opacity and transform on a pseudo-layer only, so the box itself
+ * never moves under the cursor that clicked it.
+ */
+@keyframes copy-flash {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.06, 1.25);
+  }
+}
+
+.animate-copy-flash {
+  animation: copy-flash 0.6s var(--ease-emphasized) both;
+}
+
+/* The check that replaces a copy icon: scale up from small, unblur. */
+@keyframes icon-swap {
+  from {
+    opacity: 0;
+    transform: scale(0.25);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+.animate-icon-swap {
+  animation: icon-swap 0.3s var(--ease-standard) both;
+}
+
+/*
  * Live reactions over a shared screen. One keyframe for every particle: the
  * per-particle variation (duration, delay, sideways drift, size) is handed in
  * as inline properties by `live-reactions-overlay.tsx`, so a hundred particles
@@ -1877,6 +1952,10 @@ h2,
   .animate-pop-in,
   .animate-pop-out,
   .animate-step-in,
+  .animate-step-out,
+  .animate-door-reveal,
+  .animate-copy-flash,
+  .animate-icon-swap,
   .animate-live-reaction-float,
   .animate-live-reaction-burst,
   .animate-rise,

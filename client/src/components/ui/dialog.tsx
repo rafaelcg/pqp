@@ -130,6 +130,20 @@ interface DialogProps {
    * keep clicking it.
    */
   dismissible?: boolean;
+  /**
+   * Rise into place on mount (the default). Set false when this panel takes
+   * over from another one that already rose in the same spot, so a two-part
+   * flow reads as one window: the first-run age gate hands over to the wizard
+   * this way, and a second entrance there is what made the two look like two
+   * dialogs.
+   */
+  entrance?: boolean;
+  /**
+   * For a multi-step dialog: changing this slides the eyebrow, title and
+   * description in with the step's body, instead of swapping the words while
+   * the body animates. Omitted, the header never animates.
+   */
+  headerKey?: string;
 }
 
 /**
@@ -149,6 +163,8 @@ export function Dialog({
   onClose,
   closeOnBackdrop = true,
   dismissible = true,
+  entrance = true,
+  headerKey,
 }: DialogProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -325,13 +341,17 @@ export function Dialog({
           className={cn(
             // Heights are a percentage of the layer, which is the visible
             // rectangle — never `vh`, which no browser shrinks for a keyboard.
-            "animate-rise elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-[var(--radius-panel)] outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
+            entrance && "animate-rise",
+            "elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-[var(--radius-panel)] outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
             width,
           )}
         >
           <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
-            <div className="min-w-0">
+            <div
+              key={headerKey}
+              className={cn("min-w-0", headerKey !== undefined && "animate-step-in")}
+            >
               {eyebrow && (
                 <p className="text-xs uppercase tracking-[0.18em] text-accent">
                   {eyebrow}
@@ -341,14 +361,19 @@ export function Dialog({
                 id={titleId}
                 className="min-w-0 font-display text-2xl font-bold"
               >
+                {/* Two lines and then an ellipsis, never one. A phone used to
+                    cut the age gate's own title mid-word, and a rule the
+                    reader cannot read is not a rule they agreed to. */}
                 {typeof title === "string" ? (
-                  <span className="block truncate">{title}</span>
+                  <span className="line-clamp-2 block text-balance [overflow-wrap:anywhere]">
+                    {title}
+                  </span>
                 ) : (
                   title
                 )}
               </h2>
               {description && (
-                <p id={descriptionId} className="mt-1 text-sm text-text-tertiary">
+                <p id={descriptionId} className="mt-1 text-pretty text-sm text-text-tertiary">
                   {description}
                 </p>
               )}

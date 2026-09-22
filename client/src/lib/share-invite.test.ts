@@ -38,6 +38,12 @@ describe("shareInviteUrl", () => {
       "https://pqp.gg/app/invite/abc123?ref=discord",
     );
   });
+
+  it("tags the invite the first-run wizard hands out as onboarding", () => {
+    expect(shareInviteUrl(ORIGIN, CODE, "onboarding")).toBe(
+      "https://pqp.gg/app/invite/abc123?ref=onboarding",
+    );
+  });
 });
 
 describe("shareInviteText", () => {
@@ -65,6 +71,17 @@ describe("shareInviteText", () => {
       for (const kind of ["short", "long"] as const) {
         const text = shareInviteText(kind, locale, URL).toLowerCase();
         expect(text).not.toMatch(/anpd|suspen|sem tela|screen share in brazil/);
+      }
+    }
+  });
+
+  it("never sells the move on another service being down", () => {
+    // The paste is the most-copied sentence in the funnel. It says where the
+    // group is, not what happened to the place they left.
+    for (const locale of ["pt-BR", "en"]) {
+      for (const kind of ["short", "long"] as const) {
+        const text = shareInviteText(kind, locale, URL);
+        expect(text).not.toMatch(/Discord|sem tela|screen share/i);
       }
     }
   });

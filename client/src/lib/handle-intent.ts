@@ -103,6 +103,30 @@ function take(
   } catch {
     return null;
   }
+  return parseStored(raw, now);
+}
+
+/**
+ * Read WITHOUT consuming. Only for questions that cause nothing: "will the
+ * app open the Discord paste after onboarding?" decides how many dots the age
+ * gate draws, and asking it must not spend the intent it asks about.
+ */
+function peek(
+  storage: Pick<Storage, "getItem"> | null,
+  key: string,
+  now: number,
+): string | null {
+  if (!storage) {
+    return null;
+  }
+  try {
+    return parseStored(storage.getItem(key), now);
+  } catch {
+    return null;
+  }
+}
+
+function parseStored(raw: string | null, now: number): string | null {
   if (!raw) {
     return null;
   }
@@ -300,6 +324,22 @@ export function stashCreateIntent(
     intent.mode === "name" ? CREATE_NAME : (intent.source ?? CREATE_IMPORT_ANY),
     now,
   );
+}
+
+/**
+ * The waiting intent, WITHOUT spending it. For questions that cause nothing:
+ * the age gate draws two dots or four depending on whether the Discord paste
+ * opens after onboarding, and asking must not use up the intent it asks about.
+ */
+export function peekCreateIntent(
+  storage: Pick<Storage, "getItem"> | null,
+  now: number = Date.now(),
+): CreateIntent | null {
+  const stored = peek(storage, CREATE_KEY, now);
+  if (!stored) {
+    return null;
+  }
+  return createFromValue(stored) ?? importFromValue(stored);
 }
 
 export function takeCreateIntent(

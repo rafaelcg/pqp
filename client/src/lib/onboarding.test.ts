@@ -8,6 +8,9 @@ import {
   normalizeInviteCode,
   normalizeUsername,
   onboardingCompletedPatch,
+  onboardingPath,
+  screenPosition,
+  screensFor,
   shouldRunOnboarding,
   tagWasReassigned,
 } from "./onboarding";
@@ -113,7 +116,7 @@ describe("a taken username", () => {
     const key = handleErrorMessage(
       new ApiError(409, "That username has no numbers left."),
     );
-    expect(key).toBe("onboarding.handle.error.taken");
+    expect(key).toBe("onboarding.you.error.taken");
     expect(en[key]).toMatch(/pick another|another one/i);
   });
 
@@ -136,10 +139,10 @@ describe("a taken username", () => {
 
   it("distinguishes a rejected name from a rejected request", () => {
     expect(handleErrorMessage(new ApiError(400, "bad"))).toBe(
-      "onboarding.handle.error.invalid",
+      "onboarding.you.error.invalid",
     );
     expect(handleErrorMessage(new ApiError(503, "down"))).toBe(
-      "onboarding.handle.error.generic",
+      "onboarding.you.error.generic",
     );
   });
 
@@ -168,5 +171,35 @@ describe("normalizeInviteCode", () => {
   it("survives an input with nothing usable in it", () => {
     expect(normalizeInviteCode("")).toBe("");
     expect(normalizeInviteCode("///")).toBe("");
+  });
+});
+
+describe("first-run screens", () => {
+  it("an invitee sees two screens, and both are counted from the gate", () => {
+    const path = onboardingPath({ invite: true, importing: false });
+    expect(path).toBe("invite");
+    expect(screensFor(path)).toEqual(["age", "you"]);
+    expect(screenPosition(path, "age")).toEqual({ index: 0, total: 2 });
+    expect(screenPosition(path, "you")).toEqual({ index: 1, total: 2 });
+  });
+
+  it("an import link is two screens too: the dialog takes it from there", () => {
+    const path = onboardingPath({ invite: false, importing: true });
+    expect(path).toBe("import");
+    expect(screensFor(path)).toEqual(["age", "you"]);
+  });
+
+  it("a cold organizer gets four, and the last one is the invite", () => {
+    const path = onboardingPath({ invite: false, importing: false });
+    expect(screensFor(path)).toEqual(["age", "you", "room", "ready"]);
+    expect(screenPosition(path, "ready")).toEqual({ index: 3, total: 4 });
+  });
+
+  it("an invite outranks an import intent", () => {
+    expect(onboardingPath({ invite: true, importing: true })).toBe("invite");
+  });
+
+  it("clamps a screen the path does not have to the last dot", () => {
+    expect(screenPosition("invite", "ready")).toEqual({ index: 1, total: 2 });
   });
 });

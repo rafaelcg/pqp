@@ -55,6 +55,7 @@ export interface FriendsFirstRun {
   serverCount: number;
   onCreateServer: () => void;
   onJoinServer: () => void;
+  onImportDiscord?: () => void;
   onPickAvatar: () => void;
   /**
    * The checklist is answered — put away by hand, or finished. One preference
@@ -350,6 +351,7 @@ export function FriendsView({
             friendCount={data.friends.length}
             onCreateServer={firstRun.onCreateServer}
             onJoinServer={firstRun.onJoinServer}
+            onImportDiscord={firstRun.onImportDiscord}
             onAddFriend={() => setAdding(true)}
             onPickAvatar={firstRun.onPickAvatar}
             onDismiss={firstRun.onSettled}
@@ -453,12 +455,11 @@ export function FriendsView({
   function NoFriendsYet({ onAdd }: { onAdd: () => void }) {
     // The checklist above is already asking for exactly this, with its own
     // button. Two "Add friend" buttons a screen apart is not twice the
-    // encouragement, it is a layout that looks unfinished — so while the card is
-    // up this shrinks to the one line the card does not say.
+    // encouragement, it is a layout that looks unfinished. And the one line
+    // that was left said the card's own sentence again in different words ("@"
+    // there, "identificador" here), so while the card is up this says nothing.
     if (showFirstRun) {
-      return (
-        <p className="text-sm text-paper-muted">{t("friends.empty.all.body")}</p>
-      );
+      return null;
     }
     return (
       <div className="max-w-sm">

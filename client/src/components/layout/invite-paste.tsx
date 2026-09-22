@@ -24,12 +24,15 @@ export function InvitePaste({
   inviteRef = "convite",
   className,
   onCopyFailed,
+  onCopied,
 }: {
   code: string;
   /** The `?ref=` tag on the link; `discord` right after an import. */
   inviteRef?: InviteRef;
   className?: string;
   onCopyFailed?: () => void;
+  /** A paste landed on the clipboard or in a share sheet (for the funnel). */
+  onCopied?: (kind: InvitePasteKind | "share") => void;
 }) {
   const { t, locale } = useTranslation();
   const [copied, setCopied] = useState<string | null>(null);
@@ -61,6 +64,7 @@ export function InvitePaste({
     try {
       await navigator.clipboard.writeText(shareInviteText(kind, locale, url));
       markCopied(kind);
+      onCopied?.(kind);
     } catch {
       onCopyFailed?.();
     }
@@ -73,6 +77,9 @@ export function InvitePaste({
       url,
       browserShareCapabilities(),
     );
+    if (outcome === "copied" || outcome === "shared") {
+      onCopied?.("share");
+    }
     if (outcome === "copied") {
       markCopied("share");
     } else if (outcome === "failed") {
@@ -115,7 +122,7 @@ export function InvitePaste({
           onClick={() => void handleShare()}
         >
           {copied === "share" ? (
-            <Check className="h-4 w-4 text-success" />
+            <Check className="animate-icon-swap h-4 w-4 text-success" />
           ) : (
             <Share2 className="h-4 w-4" />
           )}
@@ -150,7 +157,7 @@ function PasteRow({
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-text-secondary">{label}</p>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text">
+        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere]">
           {text}
         </p>
         <Button
@@ -160,7 +167,7 @@ function PasteRow({
           onClick={onCopy}
         >
           {copied ? (
-            <Check className="h-4 w-4 text-success" />
+            <Check className="animate-icon-swap h-4 w-4 text-success" />
           ) : (
             <Copy className="h-4 w-4" />
           )}

@@ -105,3 +105,101 @@ export function browserStorage(): Storage | null {
     return null;
   }
 }
+
+// ------------------------------------------------------------ which banner
+
+/**
+ * What the banner says, chosen from what is on screen.
+ *
+ * - `owner`: the account made this server in this session and nobody else is
+ *   in it yet. The one thing that changes that is the invite, so the banner
+ *   carries a copy button instead of advice about saying hi to nobody.
+ * - `text`: a text channel is open. Say something in it.
+ * - `voice`: a voice channel is open and they are not in the call. The strip
+ *   says to press the button that is right there; once they are in the call it
+ *   has nothing left to say and goes (`null`).
+ * - `home`: the community home (Baú) is open, which is where a server with it
+ *   on lands a new member. It names a text channel to start in.
+ * - `generic`: anything else (a watch party, a forum). The old copy.
+ */
+export type ArrivalVariant = "owner" | "text" | "voice" | "home" | "generic";
+
+export type ArrivalSurface = "text" | "voice" | "home" | "other";
+
+export function arrivalVariant({
+  createdHere,
+  memberCount,
+  surface,
+  inCall,
+}: {
+  /** This account created the server during this session. */
+  createdHere: boolean;
+  /** Members as the app knows them. Null while the list has not loaded. */
+  memberCount: number | null;
+  surface: ArrivalSurface;
+  /** Connected to the call of the voice channel that is open. */
+  inCall: boolean;
+}): ArrivalVariant | null {
+  // An unknown count is treated as alone: the owner just made the room, and
+  // the list loading a beat later must not flash the member copy first.
+  if (createdHere && (memberCount === null || memberCount <= 1)) {
+    return "owner";
+  }
+  if (createdHere) {
+    // They made it and somebody came. Nothing left to point at.
+    return null;
+  }
+  switch (surface) {
+    case "text":
+      return "text";
+    case "voice":
+      return inCall ? null : "voice";
+    case "home":
+      return "home";
+    default:
+      return "generic";
+  }
+}
+
+// ------------------------------------------------------------ one burst
+
+const CONFETTI_KEY = "pqp:confetti-spent";
+
+/**
+ * Confetti fires once per account per tab session, wherever the arrival
+ * happens. Session storage because the moment is this visit: a reload two
+ * seconds later must not re-run it, and next week's visit is not an arrival.
+ */
+export function confettiSpent(
+  storage: Pick<Storage, "getItem"> | null,
+  userId: string,
+): boolean {
+  if (!storage) {
+    return true;
+  }
+  try {
+    return storage.getItem(CONFETTI_KEY) === userId;
+  } catch {
+    return true;
+  }
+}
+
+export function spendConfetti(
+  storage: Pick<Storage, "setItem"> | null,
+  userId: string,
+): void {
+  try {
+    storage?.setItem(CONFETTI_KEY, userId);
+  } catch {
+    // Denied. At worst a second burst on a reload.
+  }
+}
+
+/** The tab's session store, or null where there is not one to use. */
+export function sessionStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}

@@ -38,6 +38,8 @@ interface FirstRunCardProps {
   friendCount: number;
   onCreateServer: () => void;
   onJoinServer: () => void;
+  /** The Discord door: the create dialog, opened on the layout paste. */
+  onImportDiscord?: () => void;
   onAddFriend: () => void;
   onPickAvatar: () => void;
   onDismiss: () => void;
@@ -48,7 +50,7 @@ interface RowSpec {
   icon: typeof ServerIcon;
   title: MessageKey;
   body: MessageKey;
-  /** One or two buttons. The server row is the only one that needs two. */
+  /** One to three buttons. The server row is the only one with more than one. */
   actions: { label: MessageKey; primary: boolean; onClick: () => void }[];
 }
 
@@ -58,6 +60,7 @@ export function FirstRunCard({
   friendCount,
   onCreateServer,
   onJoinServer,
+  onImportDiscord,
   onAddFriend,
   onPickAvatar,
   onDismiss,
@@ -73,6 +76,17 @@ export function FirstRunCard({
       body: "firstRun.server.body",
       actions: [
         { label: "firstRun.server.create", primary: true, onClick: onCreateServer },
+        // The organizer who skipped the wizard had no way back to the import
+        // from here except the + in the rail.
+        ...(onImportDiscord
+          ? [
+              {
+                label: "firstRun.server.import" as MessageKey,
+                primary: false,
+                onClick: onImportDiscord,
+              },
+            ]
+          : []),
         { label: "firstRun.server.join", primary: false, onClick: onJoinServer },
       ],
     },

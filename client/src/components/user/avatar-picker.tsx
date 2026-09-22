@@ -33,7 +33,7 @@ export const AVATAR_PRESETS = [
  */
 let configPromise: Promise<{ enabled: boolean }> | null = null;
 
-function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
+export function avatarUploadEnabled(): Promise<{ enabled: boolean }> {
   configPromise ??= fetchAvatarConfig().catch(() => ({ enabled: false }));
   return configPromise;
 }
