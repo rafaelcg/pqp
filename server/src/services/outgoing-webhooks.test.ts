@@ -518,6 +518,59 @@ describeDb("outgoing webhooks", () => {
     );
   });
 
+  it("does not treat a stale id as a channel that survived the delete", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, otherChannelId] }),
+    );
+    expect(created.status).toBe(201);
+    const stale = "00000000-0000-4000-8000-0000000000aa";
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET channel_ids = $2::uuid[] WHERE id = $1`,
+      [created.body.webhook.id, [stale, channelId, otherChannelId]],
+    );
+
+    expect(await deleteChannel(channelId)).toBe(true);
+    const kept = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(kept.body.webhooks[0]?.status).toBe("active");
+    expect(kept.body.webhooks[0]?.channelIds).toEqual([otherChannelId]);
+
+    expect(await deleteChannel(otherChannelId)).toBe(true);
+    const gone = await call<{ webhooks: OutgoingWebhook[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+    );
+    expect(gone.body.webhooks[0]?.status).toBe("disabled");
+  });
+
+  it("does not reveal a channel that belongs to another server", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+    const elsewhere = await createChatServer("Elsewhere", owner.id);
+    const secret = await createChannel(elsewhere.server.id, "secret-room", "voice");
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { channelIds: [channelId, secret.id] },
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.webhook.channelIds).toEqual([channelId]);
+    expect(JSON.stringify(saved.body)).not.toContain("secret-room");
+  });
+
   it("still broadcasts when the POST fails", async () => {
     vi.mocked(safePost).mockRejectedValue(new Error("endpoint down"));
     expect(

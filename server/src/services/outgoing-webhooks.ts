@@ -199,9 +199,11 @@ export type OutgoingWebhookChannelProblem = {
   id: string;
   name: string;
   type: string;
-  /** `type` is a voice room, thread, or category. `server` is text somewhere else. */
+  /** `type` is not text. `server` is on this server but not a server text channel. */
   reason: "type" | "server";
 };
+
+type Sql = Pick<PoolClient, "query">;
 
 /**
  * One bad id used to reject the whole selection with a sentence that named
@@ -239,40 +241,43 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
 async function validateTextChannelIds(
   serverId: string,
   channelIds: string[],
+  db: Sql = getPool(),
+  share = false,
 ): Promise<string[]> {
   const unique = [...new Set(channelIds)];
   if (unique.length === 0) {
     throw new HttpError(400, "Select at least one text channel");
   }
-  const result = await getPool().query<{
+  // Server id is in the WHERE, not applied after the read. A manager of
+  // this server must not learn the name of a channel on another server by
+  // submitting its id. Those ids are dropped, the same as a deleted one.
+  // FOR SHARE is only for create, which does not already hold the webhook
+  // row. Update locks that row first; taking the channel lock second would
+  // deadlock with delete, which deletes the channel and then updates the hook.
+  const result = await db.query<{
     id: string;
     name: string;
     type: string;
     kind: string;
-    server_id: string | null;
   }>(
-    `SELECT id, name, type, kind, server_id
+    `SELECT id, name, type, kind
        FROM channels
-      WHERE id = ANY($1::uuid[])`,
-    [unique],
+      WHERE server_id = $1
+        AND id = ANY($2::uuid[])
+      ${share ? "FOR SHARE" : ""}`,
+    [serverId, unique],
   );
   const byId = new Map(
     result.rows.map((row) => [row.id.toLowerCase(), row]),
   );
-  const serverKey = serverId.toLowerCase();
   const kept: string[] = [];
   const problems: OutgoingWebhookChannelProblem[] = [];
   for (const id of unique) {
     const row = byId.get(id.toLowerCase());
     if (!row) {
-      // Gone. Drop it so the channels that are still there can save.
       continue;
     }
-    const textHere =
-      row.server_id?.toLowerCase() === serverKey &&
-      row.kind === "server" &&
-      row.type === "text";
-    if (textHere) {
+    if (row.kind === "server" && row.type === "text") {
       kept.push(id);
       continue;
     }
@@ -294,44 +299,52 @@ async function validateTextChannelIds(
 
 /**
  * A deleted channel id is not a foreign key, so it would sit in
- * `channel_ids` and fail the next save. Pull it out when another text
- * channel is still on the hook. When it was the only one, leave the id
- * (the column cannot be empty) and disable the hook.
+ * `channel_ids` and fail the next save. One statement: keep only ids that
+ * are still server text channels on that hook's server. An id left behind
+ * by an earlier delete does not count as a survivor. When nothing real
+ * remains, leave the array alone (it cannot be empty) and disable the hook.
  */
 export async function detachDeletedChannelsFromOutgoingWebhooks(
-  client: Pick<PoolClient, "query">,
+  client: Sql,
   channelIds: string[],
 ): Promise<void> {
   if (channelIds.length === 0) {
     return;
   }
   await client.query(
-    `UPDATE outgoing_webhooks
-        SET channel_ids = ARRAY(
-              SELECT cid
-                FROM unnest(channel_ids) WITH ORDINALITY AS u(cid, ord)
-               WHERE NOT (cid = ANY($1::uuid[]))
-               ORDER BY ord
-            ),
+    `UPDATE outgoing_webhooks AS w
+        SET channel_ids = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN kept.ids
+              ELSE w.channel_ids
+            END,
+            status = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN w.status
+              ELSE 'disabled'
+            END,
+            disabled_reason = CASE
+              WHEN cardinality(kept.ids) >= 1 THEN w.disabled_reason
+              ELSE COALESCE(w.disabled_reason, 'The last text channel was deleted')
+            END,
             updated_at = NOW()
-      WHERE channel_ids && $1::uuid[]
-        AND EXISTS (
-          SELECT 1
-            FROM unnest(channel_ids) AS cid
-           WHERE NOT (cid = ANY($1::uuid[]))
-        )`,
-    [channelIds],
-  );
-  await client.query(
-    `UPDATE outgoing_webhooks
-        SET status = 'disabled',
-            disabled_reason = COALESCE(
-              disabled_reason,
-              'The last text channel was deleted'
-            ),
-            updated_at = NOW()
-      WHERE channel_ids && $1::uuid[]
-        AND status <> 'disabled'`,
+       FROM (
+         SELECT ow.id,
+                ARRAY(
+                  SELECT cid
+                    FROM unnest(ow.channel_ids) WITH ORDINALITY AS u(cid, ord)
+                   WHERE NOT (cid = ANY($1::uuid[]))
+                     AND EXISTS (
+                       SELECT 1 FROM channels c
+                        WHERE c.id = cid
+                          AND c.server_id = ow.server_id
+                          AND c.kind = 'server'
+                          AND c.type = 'text'
+                     )
+                   ORDER BY ord
+                ) AS ids
+           FROM outgoing_webhooks ow
+          WHERE ow.channel_ids && $1::uuid[]
+       ) AS kept
+      WHERE w.id = kept.id`,
     [channelIds],
   );
 }
@@ -439,107 +452,144 @@ export async function createOutgoingWebhook(
   body: CreateOutgoingWebhookBody,
 ): Promise<OutgoingWebhook> {
   await assertOutgoingWebhookUrl(body.url);
-  const channelIds = await validateTextChannelIds(serverId, body.channelIds);
   const skipUserIds = await validateSkipUserIds(serverId, body.skipUserIds);
   const auth = normalizeAuth(
     body.authHeaderName ?? null,
     body.authHeaderValue ?? null,
   );
   const signingSecret = generateSigningSecret();
-  const result = await getPool().query<OutgoingWebhookRow>(
-    `INSERT INTO outgoing_webhooks (
-       server_id, name, url, channel_ids, skip_user_ids, signing_secret,
-       auth_header_name, auth_header_value, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING ${HOOK_COLUMNS}`,
-    [
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Share-lock the channels so a delete cannot commit between this check
+    // and the insert, then fail to see the new row in its cleanup.
+    const channelIds = await validateTextChannelIds(
       serverId,
-      body.name.trim(),
-      body.url.trim(),
-      channelIds,
-      skipUserIds,
-      signingSecret,
-      auth.name,
-      auth.value,
-      createdBy,
-    ],
-  );
-  return mapOutgoingWebhook(result.rows[0]!, { includeSecret: true });
+      body.channelIds,
+      client,
+      true,
+    );
+    const result = await client.query<OutgoingWebhookRow>(
+      `INSERT INTO outgoing_webhooks (
+         server_id, name, url, channel_ids, skip_user_ids, signing_secret,
+         auth_header_name, auth_header_value, created_by
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING ${HOOK_COLUMNS}`,
+      [
+        serverId,
+        body.name.trim(),
+        body.url.trim(),
+        channelIds,
+        skipUserIds,
+        signingSecret,
+        auth.name,
+        auth.value,
+        createdBy,
+      ],
+    );
+    await client.query("COMMIT");
+    return mapOutgoingWebhook(result.rows[0]!, { includeSecret: true });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateOutgoingWebhook(
   id: string,
   body: UpdateOutgoingWebhookBody,
 ): Promise<OutgoingWebhook | null> {
-  const existing = await getOutgoingWebhookRow(id);
-  if (!existing) {
-    return null;
+  if (body.url !== undefined) {
+    await assertOutgoingWebhookUrl(body.url.trim());
   }
-  const name = body.name?.trim() ?? existing.name;
-  const url = body.url?.trim() ?? existing.url;
-  if (url !== existing.url) {
-    await assertOutgoingWebhookUrl(url);
-  }
-  const channelIds =
-    body.channelIds !== undefined
-      ? await validateTextChannelIds(existing.server_id, body.channelIds)
-      : existing.channel_ids;
-  const skipUserIds =
-    body.skipUserIds !== undefined
-      ? await validateSkipUserIds(existing.server_id, body.skipUserIds)
-      : (existing.skip_user_ids ?? []);
-
-  let authName = existing.auth_header_name;
-  let authValue = existing.auth_header_value;
-  if (body.authHeaderName !== undefined || body.authHeaderValue !== undefined) {
-    const auth = normalizeAuth(
-      body.authHeaderName !== undefined
-        ? body.authHeaderName
-        : existing.auth_header_name,
-      body.authHeaderValue !== undefined
-        ? body.authHeaderValue
-        : existing.auth_header_value,
+  // Lock the hook before re-reading its channels. A delete that commits
+  // first is visible here, so this write cannot put a removed id back.
+  // A delete that is still in flight waits on this row, then strips the id
+  // from whatever this write stored. Channel rows are not locked here:
+  // delete takes those first and this row second.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query<OutgoingWebhookRow>(
+      `SELECT ${HOOK_COLUMNS} FROM outgoing_webhooks WHERE id = $1 FOR UPDATE`,
+      [id],
     );
-    authName = auth.name;
-    authValue = auth.value;
-  }
+    const existing = locked.rows[0];
+    if (!existing) {
+      await client.query("COMMIT");
+      return null;
+    }
+    const name = body.name?.trim() ?? existing.name;
+    const url = body.url?.trim() ?? existing.url;
+    const channelIds =
+      body.channelIds !== undefined
+        ? await validateTextChannelIds(existing.server_id, body.channelIds, client)
+        : existing.channel_ids;
+    const skipUserIds =
+      body.skipUserIds !== undefined
+        ? await validateSkipUserIds(existing.server_id, body.skipUserIds)
+        : (existing.skip_user_ids ?? []);
 
-  let status = existing.status;
-  let disabledReason = existing.disabled_reason;
-  if (body.status === "disabled") {
-    status = "disabled";
-    disabledReason = disabledReason ?? "disabled by a manager";
-  } else if (body.status === "active") {
-    status = "active";
-    disabledReason = null;
-  }
+    let authName = existing.auth_header_name;
+    let authValue = existing.auth_header_value;
+    if (body.authHeaderName !== undefined || body.authHeaderValue !== undefined) {
+      const auth = normalizeAuth(
+        body.authHeaderName !== undefined
+          ? body.authHeaderName
+          : existing.auth_header_name,
+        body.authHeaderValue !== undefined
+          ? body.authHeaderValue
+          : existing.auth_header_value,
+      );
+      authName = auth.name;
+      authValue = auth.value;
+    }
 
-  const result = await getPool().query<OutgoingWebhookRow>(
-    `UPDATE outgoing_webhooks
-        SET name = $2,
-            url = $3,
-            channel_ids = $4,
-            skip_user_ids = $5,
-            auth_header_name = $6,
-            auth_header_value = $7,
-            status = $8,
-            disabled_reason = $9,
-            updated_at = NOW()
-      WHERE id = $1
-      RETURNING ${HOOK_COLUMNS}`,
-    [
-      id,
-      name,
-      url,
-      channelIds,
-      skipUserIds,
-      authName,
-      authValue,
-      status,
-      disabledReason,
-    ],
-  );
-  return result.rows[0] ? mapOutgoingWebhook(result.rows[0]) : null;
+    let status = existing.status;
+    let disabledReason = existing.disabled_reason;
+    if (body.status === "disabled") {
+      status = "disabled";
+      disabledReason = disabledReason ?? "disabled by a manager";
+    } else if (body.status === "active") {
+      status = "active";
+      disabledReason = null;
+    }
+
+    const result = await client.query<OutgoingWebhookRow>(
+      `UPDATE outgoing_webhooks
+          SET name = $2,
+              url = $3,
+              channel_ids = $4,
+              skip_user_ids = $5,
+              auth_header_name = $6,
+              auth_header_value = $7,
+              status = $8,
+              disabled_reason = $9,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING ${HOOK_COLUMNS}`,
+      [
+        id,
+        name,
+        url,
+        channelIds,
+        skipUserIds,
+        authName,
+        authValue,
+        status,
+        disabledReason,
+      ],
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ? mapOutgoingWebhook(result.rows[0]) : null;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteOutgoingWebhook(id: string): Promise<boolean> {

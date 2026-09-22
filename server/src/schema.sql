@@ -1198,6 +1198,10 @@ ALTER TABLE outgoing_webhooks
   ADD COLUMN IF NOT EXISTS skip_user_ids UUID[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_outgoing_webhooks_server
   ON outgoing_webhooks (server_id);
+-- Channel delete finds every hook that lists the channel with `&&`. A GIN
+-- index makes that an index lookup instead of a scan of the whole table.
+CREATE INDEX IF NOT EXISTS idx_outgoing_webhooks_channel_ids
+  ON outgoing_webhooks USING GIN (channel_ids);
 
 -- Outbox + DLQ. `id` is the Standard Webhooks `webhook-id` and stays stable
 -- across retries. UNIQUE (hook, message) so a double enqueue from a retrying
