@@ -63,6 +63,50 @@ export function isMusicPictureOnlyStage(input: {
   );
 }
 
+/**
+ * HOW MUCH OF THE WINDOW A SELF-SIZED STAGE TAKES.
+ *
+ * Only for the case where nothing has dragged the divider: once the pane
+ * owns the size, `clampSplit` does, and this is not consulted.
+ *
+ * Under the stage sit the music bar, the call dock and the message box,
+ * about 300px of furniture that cannot shrink, because the call lives in
+ * the composer. Two thirds of the window above that leaves no transcript at
+ * all on a laptop and cuts the composer off at the bottom edge. A camera or
+ * a screen share earns the room anyway. An album cover does not: it is a
+ * square, it says the same thing in 38svh, and a picture-only stage is by
+ * definition the case where nobody is publishing.
+ *
+ * Either way the height is capped so that `STAGE_COLUMN_RESERVE_PX` of the
+ * window is left for the header above and the composer below. Without it a
+ * short window (a laptop with the dock open, a resized Electron pane) put a
+ * two-thirds stage on top of furniture that cannot shrink, and the message
+ * box went off the bottom edge. The floors below the cap are deliberate: at
+ * some height the picture has to lose and be clipped rather than the stage
+ * disappearing to nothing.
+ */
+/**
+ * Written out rather than built, both of them, because Tailwind generates a
+ * utility only for a class string it can SEE in the source. A rule assembled
+ * from a template literal produces no CSS at all and the element falls back
+ * to whatever it inherits, which here would be no height rule whatsoever.
+ */
+const STAGE_HEIGHT_TALL = "h-[min(68svh,calc(100svh-300px))] min-h-[280px]";
+const STAGE_HEIGHT_SHORT =
+  "h-[min(38svh,calc(100svh-300px))] max-h-[420px] min-h-[220px]";
+
+/** What both rules keep clear for the header above and the composer below. */
+export const STAGE_COLUMN_RESERVE_PX = 300;
+
+export function stageHeightClass(input: {
+  anyVideo: boolean;
+  musicPictureOnly: boolean;
+}): string {
+  return input.anyVideo && !input.musicPictureOnly
+    ? STAGE_HEIGHT_TALL
+    : STAGE_HEIGHT_SHORT;
+}
+
 /** Prefix so a camera solo does not collide with that peer's screen share. */
 export function cameraSoloId(personKey: string): string {
   return `camera:${personKey}`;

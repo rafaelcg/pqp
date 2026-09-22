@@ -216,6 +216,7 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isMusicPictureOnlyStage,
+  stageHeightClass,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -1661,9 +1662,7 @@ function ActiveCall({
               // floor, because the floor is enforced in `clampSplit` against
               // the live pane: a second one here would fight it.
               "h-full min-h-0"
-            : anyVideo
-              ? "h-[68svh] min-h-[280px]"
-              : "h-[38svh] max-h-[420px] min-h-[220px]",
+            : stageHeightClass({ anyVideo, musicPictureOnly }),
       )}
       onPointerMove={(event) => {
         // Touch "moves" are scrolls and drags, answered on pointer up.
