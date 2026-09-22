@@ -310,11 +310,23 @@ export function applyMusicWrite(
    * whole room back to the start, and the sample was theirs, so it read
    * as an ordinary seek. The tolerance is what a genuinely slow player
    * needs; past it, the room's own clock is the truth.
+   *
+   * ONLY A SAMPLE IS CLAMPED. A write that moves the clock (a new track, a
+   * pause, a resume) carries the position the new state STARTS at, not a
+   * reading of the old one: an advance says zero because the next song
+   * begins at zero. Clamping that to the finished track's reading and then
+   * asking `matchesAdvance`, which requires the zero, refused every
+   * end-of-track advance, add-after-ended and carried skip vote from a
+   * member more than a tolerance into a track. The shared rule accepted
+   * the same write, and every test here wrote within milliseconds of
+   * setting the anchor, so nothing caught it (pitfall 12). Whether the
+   * member MAY move the room is the rights check's question, below.
    */
   if (
     next !== null &&
     expected !== null &&
     !runsTheMusic(held, rights) &&
+    !movesTheClock(held, next) &&
     Math.abs(next.positionMs - expected) > MUSIC_POSITION_TOLERANCE_MS
   ) {
     logEvent("voice.musicClamped", {

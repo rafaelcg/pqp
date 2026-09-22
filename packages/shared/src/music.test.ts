@@ -349,6 +349,70 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(null, state({ current: mine("m") }), { ...member, canAdd: false })).toBe(false);
   });
 
+  it("lets a member start the next song once the queue ran dry, keeping the room as it was", () => {
+    // What `musicAdvance` leaves behind after the last track: current null,
+    // the switches and Tocadas intact. This fell through to the advance
+    // gate and was refused, so a room that ran dry was stuck for members.
+    const dry = state({
+      current: null,
+      queue: [],
+      status: "paused",
+      positionMs: 0,
+      repeat: "all",
+      autoplay: true,
+      history: [track("done")],
+    });
+    const start = state({
+      ...dry,
+      current: mine("m"),
+      status: "playing",
+      positionMs: 0,
+    });
+    expect(musicWriteAllowed(dry, start, member)).toBe(true);
+    expect(musicWriteAllowed(dry, start, silent)).toBe(false);
+    // Only their own song, and nothing about the room rewritten with it.
+    expect(musicWriteAllowed(dry, { ...start, current: track("theirs") }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, repeat: "off" }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, autoplay: false }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, history: [] }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, queue: [mine("q")] }, member)).toBe(true);
+    expect(musicWriteAllowed(dry, { ...start, queue: [track("theirs")] }, member)).toBe(false);
+  });
+
+  it("makes a dry-room start a start: playing, from zero", () => {
+    // A change of `current` moves the server's clock without the sample
+    // clamp, so a start "at 3:19" would hand the end-of-track gate to
+    // whoever wrote it, and a start "paused" is a pause a member may not write.
+    const dry = state({ current: null, queue: [], status: "paused", positionMs: 0 });
+    const start = state({ ...dry, current: mine("m"), status: "playing", positionMs: 0 });
+    expect(musicWriteAllowed(dry, start, member)).toBe(true);
+    expect(musicWriteAllowed(dry, { ...start, positionMs: 199_000 }, member)).toBe(false);
+    expect(musicWriteAllowed(dry, { ...start, status: "paused" }, member)).toBe(false);
+    expect(musicWriteAllowed(null, { ...start, positionMs: 199_000 }, member)).toBe(false);
+    expect(musicWriteAllowed(null, { ...start, status: "paused" }, member)).toBe(false);
+  });
+
+  it("does not let a dry-room start fill somebody else's queued duration", () => {
+    // `sameTrack` lets a length go from null to a value, and a queued
+    // track survives the dry state. Filling 1 ms into somebody else's
+    // would end it a moment after it came on, with no vote and no permission.
+    const theirs = { ...track("theirs"), durationMs: null };
+    const dry = state({ current: null, queue: [theirs], status: "paused", positionMs: 0 });
+    const start = state({ ...dry, current: mine("m"), status: "playing", positionMs: 0 });
+    expect(musicWriteAllowed(dry, start, member)).toBe(true);
+    expect(
+      musicWriteAllowed(dry, { ...start, queue: [{ ...theirs, durationMs: 1 }] }, member),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(dry, { ...start, queue: [{ ...theirs, durationMs: 1 }] }, manager),
+    ).toBe(true);
+    const ownQueued = { ...mine("q"), durationMs: null };
+    const dryOwn = state({ ...dry, queue: [ownQueued] });
+    expect(
+      musicWriteAllowed(dryOwn, { ...start, queue: [{ ...ownQueued, durationMs: 180_000 }] }, member),
+    ).toBe(true);
+  });
+
   it("lets a member append and remove their own, and nothing else", () => {
     const held = state({ queue: [track("b"), mine("m")] });
     expect(musicWriteAllowed(held, state({ queue: [track("b"), mine("m"), mine("n")] }), member)).toBe(true);
