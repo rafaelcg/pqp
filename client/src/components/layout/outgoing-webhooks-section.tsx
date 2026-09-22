@@ -84,13 +84,42 @@ function channelRejectionMessage(
   return lines.length > 0 ? lines.join(" ") : null;
 }
 
+function skipRejectionMessage(
+  error: ApiError,
+  t: Translator["t"],
+): string | null {
+  const body = error.details;
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const code = "code" in body ? body.code : null;
+  const users = "users" in body ? body.users : null;
+  if (code !== "outgoing_webhook_skip_users" || !Array.isArray(users)) {
+    return null;
+  }
+  const lines = users.map((row) => {
+    const name =
+      row && typeof row === "object" && "name" in row && typeof row.name === "string"
+        ? row.name
+        : "";
+    return name
+      ? t("integrations.skipNotMember", { name })
+      : t("integrations.skipNotMemberUnknown");
+  });
+  return lines.length > 0 ? lines.join(" ") : null;
+}
+
 function messageOf(
   error: unknown,
   fallback: string,
   t: Translator["t"],
 ): string {
   if (error instanceof ApiError) {
-    return channelRejectionMessage(error, t) ?? error.message;
+    return (
+      channelRejectionMessage(error, t) ??
+      skipRejectionMessage(error, t) ??
+      error.message
+    );
   }
   return error instanceof Error ? error.message : fallback;
 }
@@ -265,7 +294,27 @@ function SkipPicker({
   const { t } = useTranslation();
   const memberIds = new Set(members.map((member) => member.id));
   const formerById = new Map(former.map((user) => [user.id, user]));
-  const unknown = selected.filter((id) => !memberIds.has(id));
+  // Everyone on the saved hook who has left, plus anything selected that is
+  // not a member. From the saved list and not only `selected`, so switching
+  // one off keeps its row and a misclick can be switched back on.
+  const leftovers = [
+    ...new Set([...former.map((user) => user.id), ...selected]),
+  ].flatMap((id) => {
+    if (memberIds.has(id)) {
+      return [];
+    }
+    const person = formerById.get(id);
+    const name = person
+      ? person.tag
+        ? `${person.displayName} (${person.tag})`
+        : person.displayName
+      : null;
+    const matches =
+      !query.trim() ||
+      selected.includes(id) ||
+      (name !== null && name.toLowerCase().includes(query.trim().toLowerCase()));
+    return matches ? [{ id, name }] : [];
+  });
   const visible = members.filter(
     (member) =>
       !query.trim() ||
@@ -283,19 +332,13 @@ function SkipPicker({
         onChange={(e) => onQuery(e.target.value)}
       />
       <ul className="max-h-48 overflow-y-auto rounded-2xl bg-ink-2">
-        {unknown.map((id) => {
-          const person = formerById.get(id);
-          const name = person
-            ? person.tag
-              ? `${person.displayName} (${person.tag})`
-              : person.displayName
-            : null;
+        {leftovers.map(({ id, name }) => {
           return (
             <li key={id}>
               <div className="flex items-center gap-2 px-1">
                 <Switch
                   className="min-w-0 flex-1"
-                  checked
+                  checked={selected.includes(id)}
                   disabled={disabled}
                   label={
                     name

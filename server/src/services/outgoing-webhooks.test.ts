@@ -449,12 +449,28 @@ describeDb("outgoing webhooks", () => {
     expect(renamed.status).toBe(200);
     expect(renamed.body.webhook.skipUserIds).toEqual([member.id]);
 
+    // Someone ADDED in this edit who is not a member is refused by name,
+    // not dropped: a quiet drop answered 200 for a save that ignored part
+    // of what was asked.
     const stranger = "00000000-0000-4000-8000-0000000000cc";
-    const saved = await call<{ webhook: OutgoingWebhook }>(
+    const refused = await call<{
+      code: string;
+      users: { id: string; name: string | null }[];
+    }>(
       owner,
       "PATCH",
       `/api/outgoing-webhooks/${created.body.webhook.id}`,
       { skipUserIds: [stranger, member.id.toUpperCase(), manager.id] },
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("outgoing_webhook_skip_users");
+    expect(refused.body.users).toEqual([{ id: stranger, name: null }]);
+
+    const saved = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      { skipUserIds: [member.id.toUpperCase(), manager.id] },
     );
     expect(saved.status).toBe(200);
     expect(saved.body.webhook.skipUserIds).toEqual([member.id, manager.id]);
@@ -468,6 +484,32 @@ describeDb("outgoing webhooks", () => {
     expect(await deliveryCount()).toBe(0);
     await say(owner, channelId, "a human asking");
     expect(await deliveryCount()).toBe(1);
+  });
+
+  it("refuses, by name, a skipped user who is not a member when the hook is created", async () => {
+    await getPool().query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+    const refused = await call<{
+      code: string;
+      users: { id: string; name: string | null }[];
+    }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ skipUserIds: [member.id, manager.id] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("outgoing_webhook_skip_users");
+    expect(refused.body.users).toEqual([
+      { id: member.id, name: "member" },
+    ]);
+    const count = await getPool().query(
+      `SELECT 1 FROM outgoing_webhooks WHERE server_id = $1`,
+      [serverId],
+    );
+    expect(count.rowCount).toBe(0);
   });
 
   it("names a channel that is not text and still saves the ones that are", async () => {

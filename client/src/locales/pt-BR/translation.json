@@ -2961,6 +2961,8 @@
   "integrations.skipSearch": "Buscar membros",
   "integrations.skipGone": "{name} não é mais membro",
   "integrations.skipGoneUnknown": "Alguém que saiu do servidor",
+  "integrations.skipNotMember": "{name} não é mais membro. Desliga pra salvar.",
+  "integrations.skipNotMemberUnknown": "Alguém que você escolheu não é mais membro. Desliga pra salvar.",
   "integrations.channelsSummary": "Canais: {names}",
   "integrations.channelsUnknown": "canais escolhidos",
   "integrations.channelUnlisted_one": "1 canal fora da lista",
