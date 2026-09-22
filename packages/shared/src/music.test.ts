@@ -746,3 +746,123 @@ describe("a duration no music track has", () => {
   });
 });
 
+describe("a duration the client made up", () => {
+  /*
+   * A TRACK'S DECLARED LENGTH IS THE OTHER OPERAND OF THE END-OF-TRACK
+   * GATE, AND IT ARRIVES FROM A CLIENT.
+   *
+   * The ceiling added for live streams looked only at `incoming.current`,
+   * and only while the held duration was still null, so a member could
+   * queue a track declaring any length at all and it sailed through the
+   * ordinary append path. The low end was never checked: a track declaring
+   * zero satisfies `gatePosition >= 0 - 20000` from the instant it starts,
+   * and `matchesAdvance` + `ranOut` never consult `canAdd`, so ANY seated
+   * person — a listen-only seat with no rights whatsoever — could then
+   * write the advance and take the room's track away with no votes, or
+   * end the room outright when the queue was empty.
+   */
+  const bogus = (durationMs: number | null): MusicState => ({
+    ...state(),
+    current: { ...(state().current as MusicTrack), durationMs },
+  });
+
+  const LISTENER = {
+    userId: "nobody",
+    canManage: false,
+    canAdd: false,
+    roomSize: 10,
+    expectedPositionMs: 0,
+  };
+
+  it("refuses a zero-length track, so nobody can skip on it with no votes", () => {
+    const held = bogus(0);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        LISTENER,
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses one shorter than the grace, for the same reason", () => {
+    const held = bogus(MUSIC_END_GRACE_MS - 1);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        LISTENER,
+      ),
+    ).toBe(false);
+  });
+
+  it("lets a short track end once its clock genuinely reaches the end", () => {
+    const held = bogus(10_000);
+    const advanced = musicAdvance(held);
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...advanced, atMs: 0, rev: 2, actorId: "pz" },
+        { ...LISTENER, expectedPositionMs: 9_000 },
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a queued track that declares an impossible length", () => {
+    const held = state();
+    const queued: MusicTrack = {
+      ...(state().current as MusicTrack),
+      id: "q1",
+      durationMs: MUSIC_MAX_DURATION_MS + 1,
+    };
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, queue: [queued], rev: 2, actorId: "p2" },
+        {
+          userId: "u1",
+          canManage: true,
+          canAdd: true,
+          roomSize: 3,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves an ordinary track and an unknown duration alone", () => {
+    const held = state();
+    const queued: MusicTrack = {
+      ...(state().current as MusicTrack),
+      id: "q1",
+      durationMs: 210_000,
+    };
+    const rights = {
+      userId: "u1",
+      canManage: true,
+      canAdd: true,
+      roomSize: 3,
+    };
+    expect(
+      musicWriteAllowed(
+        held,
+        { ...held, queue: [queued], rev: 2, actorId: "p2" },
+        rights,
+      ),
+    ).toBe(true);
+    expect(
+      musicWriteAllowed(
+        held,
+        {
+          ...held,
+          queue: [{ ...queued, durationMs: null }],
+          rev: 2,
+          actorId: "p2",
+        },
+        rights,
+      ),
+    ).toBe(true);
+  });
+});
+

@@ -500,20 +500,53 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * empty and the current track has run out, a member may also write the
  * next related track under their own name with `autoplayed: true`.
  */
+/**
+ * A length a song could actually have: unknown, or inside the bounds.
+ * `MUSIC_MAX_DURATION_MS` is the live-stream ceiling; the floor is simply
+ * that zero and negatives are not lengths, they are a way of saying the
+ * track is already over.
+ */
+function plausibleDuration(durationMs: number | null | undefined): boolean {
+  if (durationMs === null || durationMs === undefined) {
+    return true;
+  }
+  return (
+    Number.isFinite(durationMs) &&
+    durationMs > 0 &&
+    durationMs <= MUSIC_MAX_DURATION_MS
+  );
+}
+
+function durationsArePlausible(incoming: MusicStateWrite): boolean {
+  if (!plausibleDuration(incoming.current?.durationMs)) {
+    return false;
+  }
+  return (incoming.queue ?? []).every((track) =>
+    plausibleDuration(track.durationMs),
+  );
+}
+
 export function musicWriteAllowed(
   held: MusicState | null,
   incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): boolean {
   /*
-   * Before the rights, because this is not a rights question. A duration
-   * longer than `MUSIC_MAX_DURATION_MS` is a live stream answering with its
-   * own uptime, and a manager mis-reading one is as wrong as anybody else
-   * mis-reading one. Refusing sends the writer a `forced` correction and
-   * leaves the duration null, which is what an unknown duration IS.
+   * Before the rights, because this is not a rights question.
+   *
+   * A track's declared length is the other operand of the end-of-track
+   * gate and it arrives from a client, so every track in the write is
+   * bounded, both ends, wherever it sits. The first version of this looked
+   * only at `incoming.current` and only while the held duration was still
+   * null, which left the ordinary append path wide open: a member could
+   * queue a track declaring fifty days (defeating the live-stream ceiling
+   * the moment it became current) or declaring zero, which satisfies the
+   * gate from the instant it starts and hands an advance to anybody at all.
+   *
+   * Null stays legal: that is what an unknown duration IS, and the room
+   * falls back to votes for an early skip.
    */
-  const tooLong = (incoming?.current?.durationMs ?? 0) > MUSIC_MAX_DURATION_MS;
-  if (tooLong && (held?.current?.durationMs ?? null) === null) {
+  if (incoming !== null && !durationsArePlausible(incoming)) {
     return false;
   }
   if (rights.canManage) {
@@ -606,11 +639,23 @@ export function musicWriteAllowed(
   // not. The sample alone was the whole bypass: anybody seated could write
   // it to one grace short of the duration and then advance.
   const gatePosition = rights.expectedPositionMs ?? held.positionMs;
+  /*
+   * The grace never swallows the whole track. At a flat 20 s any track
+   * declaring less than that was "over" at position zero, so a short
+   * length — which nothing used to refuse — was an advance anybody could
+   * write. Half the track is the most the grace may take.
+   */
+  const declared = held.current?.durationMs ?? null;
+  const grace =
+    declared === null
+      ? MUSIC_END_GRACE_MS
+      : Math.min(MUSIC_END_GRACE_MS, Math.floor(declared / 2));
   const ranOut =
     held.status === "playing" &&
     held.current !== null &&
-    held.current.durationMs !== null &&
-    gatePosition >= held.current.durationMs - MUSIC_END_GRACE_MS;
+    declared !== null &&
+    declared > 0 &&
+    gatePosition >= declared - grace;
   // Only the votes of people still seated. `roomSize` shrinks when somebody
   // leaves and their vote does not, so the two moved out of step and a
   // ghost could carry the threshold.
