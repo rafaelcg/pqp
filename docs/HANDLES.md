@@ -47,6 +47,7 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 | Path | Auth | What |
 |---|---|---|
 | `GET /api/public/profiles/:handle` | **none** | the profile; 404 = free |
+| `GET /api/public/invites/:code` | **none** | invite preview: server name, icon, member count; 404 = unusable |
 | `GET /api/users/:userId/banner` | **none** | the banner bytes, as a redirect |
 | `GET /api/users/by-handle/:handle` | session | handle → `publicUserSchema`, for "add me" |
 | `PATCH /api/me` `{ handle }` | session | claim or rename |
@@ -140,11 +141,15 @@ nothing and names nothing**, and both are the design:
 - and therefore invite unfurls do not depend on `COMMUNITIES_ENABLED`, on the
   invite belonging to a community at all, or on the API being up.
 
-Naming the community would need `GET /api/public/invites/:code`: unauthenticated,
-answering at most a name and an icon, and only for a server already listed in the
-public directory, 404 for everything else so revoked/private/never-existed stay
-indistinguishable. That endpoint does not exist. `GET /api/invites/:code` needs a
-Bearer token the edge does not have.
+`GET /api/public/invites/:code` exists now, and the card still does not call it.
+The endpoint serves the **page**, not the card: the signed-out gate a person sees
+after opening the link says "{server} tá te esperando" with the name, icon URL
+and member count, because that person holds the code and could sign up and read
+the same name a minute later anyway. The card is different: it is drawn for every
+forward and crawler the link reaches, including the ones that never open it, so
+it stays anonymous. The endpoint answers one 404 for unknown, expired, exhausted
+and suspended codes from a single query, has its own address-keyed bucket under
+the anon backstop, and carries no member list, inviter or id.
 
 The invite card is the only one that says `noindex, nofollow` and carries no
 canonical: a search result holding an invite is that link escaping the group it

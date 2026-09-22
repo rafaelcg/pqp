@@ -972,6 +972,24 @@ export const inviteSchema = z.object({
   createdAt: z.string(),
 });
 
+/**
+ * `GET /api/public/invites/:code`, the one invite read that needs no account:
+ * what the signed-out gate shows somebody who opened an invite link. The body
+ * is `{ invite: PublicInvitePreview }` on 200 and the generic error shape on
+ * 404, which covers unknown, expired, exhausted and suspended alike.
+ *
+ * Deliberately narrower than `inviteSchema`: no invite id, no server id, no
+ * use counts, no expiry, no inviter. `memberCount` comes from the maintained
+ * counter column and is approximate; nothing is authorised by it.
+ */
+export const publicInvitePreviewSchema = z.object({
+  serverName: z.string(),
+  iconUrl: z.string().nullable(),
+  memberCount: z.number().int().nonnegative(),
+});
+
+export type PublicInvitePreview = z.infer<typeof publicInvitePreviewSchema>;
+
 export const createServerSchema = z.object({
   name: z.string().min(1).max(100),
 });

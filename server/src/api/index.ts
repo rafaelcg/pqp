@@ -435,6 +435,7 @@ import {
   createInvite,
   deleteInvite,
   getInviteByCode,
+  getPublicInvitePreview,
   listInvites,
   mapInvite,
   redeemInvite,
@@ -931,6 +932,19 @@ const publicCommunityLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * The public invite preview's read (`servePublicInvitePreview`). Its own bucket
+ * for the reason its two siblings have theirs, and tighter than both: a person
+ * opens one invite link, maybe reloads it, so thirty in a burst and one every
+ * two seconds after that is far above any human and far below what walking an
+ * eight-character base64url code space would need. It sits UNDER `anonLimiter`,
+ * which `handleApi` takes first for every request, so the address backstop
+ * still applies too.
+ */
+const publicInviteLimiter = createRateLimiter({
+  capacity: 30,
+  refillPerSecond: 0.5,
+});
+/**
  * Tab-close leave beacon. Unauthenticated on purpose: `pagehide` cannot wait
  * for Clerk, and the resume HMAC is the credential. Own bucket so a flood
  * here cannot spend the public-profile or webhook budgets.
@@ -996,6 +1010,7 @@ export function resetApiRateLimits(): void {
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
+  publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
   guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
@@ -9535,6 +9550,97 @@ async function servePublicCommunity(
   res.end(JSON.stringify({ community }));
 }
 
+const PUBLIC_INVITE_PATH = /^\/api\/public\/invites\/([^/]{1,64})$/;
+
+/**
+ * Same alphabet `invite-meta.ts` accepts at the edge: what the generator makes
+ * (base64url) and nothing else, bounded because it is a path segment from the
+ * open internet. Case-sensitive on purpose, since a code is a secret, not a name.
+ */
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * An invite's public preview, by code: the name, picture and head count the
+ * signed-out gate needs to say "{server} tá te esperando" instead of a generic
+ * sign-in wall.
+ *
+ * UNAUTHENTICATED because the person reading it has no account yet; that is the
+ * whole population this route exists for. Handled before the Bearer resolution
+ * like the public profile and community reads, so an `Authorization` header of
+ * any quality (none, garbage, an expired Clerk JWT) changes nothing.
+ *
+ * WHAT MAKES THAT SAFE IS THE SHAPE AND THE KEY. The caller must already hold
+ * the exact code, and whoever holds it can create an account and walk in, at
+ * which point the app shows the same name anyway; this moves that moment in
+ * front of the sign-up instead of behind it. The answer is
+ * `publicInvitePreviewSchema` and nothing wider: no member list, no inviter, no
+ * server or invite id, no use counts, no expiry.
+ *
+ * NOT AN ORACLE. Unknown, expired, exhausted and a suspended community's code
+ * all come back as the same 404 body from the same single query (see
+ * `getPublicInvitePreview`), and a code of the wrong shape gets that 404 before
+ * Postgres is asked. Enumeration is bounded by `publicInviteLimiter` under the
+ * `anonLimiter` backstop.
+ *
+ * THE EDGE CARD STAYS ANONYMOUS. `client/src/lib/invite-meta.ts` deliberately
+ * unfurls every invite without a name, because a card is shown to every forward
+ * and crawler the link reaches; this read is for the person who opened it.
+ */
+async function servePublicInvitePreview(
+  req: IncomingMessage,
+  res: ServerResponse,
+  code: string,
+): Promise<void> {
+  const address = clientAddress(req as never);
+  if (!publicInviteLimiter.take(`invite:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicInviteLimiter.retryAfter(`invite:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(code);
+  } catch {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!INVITE_CODE_PATTERN.test(decoded)) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  let invite;
+  try {
+    invite = await getPublicInvitePreview(decoded);
+  } catch (error) {
+    console.error("[invites] public preview failed:", error);
+    sendError(res, 503, "Invites temporarily unavailable", req);
+    return;
+  }
+
+  if (!invite) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  // Cacheable for the minute its two siblings get and for their reasons: the
+  // body is identical for every caller holding the code and needed no
+  // credential. A revoked invite may preview for up to a minute; the join
+  // itself re-checks everything. The 404 stays `no-store` so a fresh invite is
+  // never shadowed by a cached miss.
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(JSON.stringify({ invite }));
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -9705,6 +9811,13 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_COMMUNITY_PATH.exec(pathname) : null;
   if (publicCommunityMatch) {
     await servePublicCommunity(req, res, publicCommunityMatch[1]!);
+    return;
+  }
+
+  const publicInviteMatch =
+    req.method === "GET" ? PUBLIC_INVITE_PATH.exec(pathname) : null;
+  if (publicInviteMatch) {
+    await servePublicInvitePreview(req, res, publicInviteMatch[1]!);
     return;
   }
 
