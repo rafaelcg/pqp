@@ -4,6 +4,7 @@ import {
   LIVE_HLS_MODE_LL,
   LIVE_HLS_MODE_PARAM,
   remuxControlSignaturePayload,
+  remuxStartSessionRequestSchema,
 } from "@pqp/shared";
 
 const logEvent = vi.hoisted(() => vi.fn());
@@ -610,6 +611,31 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
       )
       .digest("hex");
     expect(signature).toBe(expected);
+  });
+
+  // The one field both sides must agree on: the box names every R2 object
+  // after `startedAtMs`, and the row's `object_prefix` embeds the same number.
+  // Before the field existed the box used its own clock and the two differed by
+  // a few milliseconds, so retention, keep_replay and replay all looked at an
+  // empty prefix (the 2026-09-21 broadcast).
+  it("sends the row's own started_at as startedAtMs, so the box writes under the row's prefix", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => 1_790_029_937_773 });
+
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    const call = server.calls.find((c) => c.method === "POST")!;
+    const body = JSON.parse(call.body) as { startedAtMs?: number };
+    const row = db.hlsRows[0]!;
+    expect(body.startedAtMs).toBe(row.started_at);
+    expect(row.object_prefix).toBe(`live/${CHANNEL}/${body.startedAtMs}-ll`);
+    // And the request still validates against the shared contract.
+    expect(remuxStartSessionRequestSchema.parse(body)).toMatchObject({
+      startedAtMs: row.started_at,
+    });
   });
 
   it("signs a DELETE with the id in the path and an empty body", async () => {

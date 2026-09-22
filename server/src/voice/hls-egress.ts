@@ -51,6 +51,7 @@ import {
 } from "../lib/s3.js";
 import {
   liveHlsLLAvailable,
+  llDelaySeconds,
   llHasRoom,
   llPlaylistFrontConfigured,
   llPlaylistUrl,
@@ -188,6 +189,13 @@ const PLAYLIST_WAIT_GAP_MS = 1000;
 export const HLS_HEALTH_CHECK_INTERVAL_MS = 10_000;
 /** A fresh egress gets this long before its status is held against it. */
 const HEALTH_GRACE_MS = 15_000;
+/**
+ * How long an LL companion (`llCompanions`) may wait for the LL session it
+ * belongs to before the monitor decides that session is not coming back. Past
+ * the boot sequence, which adopts the companion's egresses before it adopts
+ * the LL session (`server/src/index.ts`).
+ */
+const LL_COMPANION_BOOT_GRACE_MS = 60_000;
 /**
  * The live playlist not moving for this long is a dead egress, whatever
  * LiveKit's bookkeeping says. Verified on the local stack 2026-09-08: a
@@ -522,6 +530,38 @@ interface RoomHls {
 }
 
 const rooms = new Map<string, RoomHls>();
+/**
+ * THE CAMERA AND THE MIC ARCHIVE OF A LOW-LATENCY BROADCAST, which has no
+ * `rooms` entry of its own.
+ *
+ * An LL party's picture is pqp-remux's (`hls-remux.ts`), but the presenter's
+ * camera rung and the host's voice archive are still LiveKit egresses, and
+ * the recording is "webcam + mic + stream" whichever way the film was made.
+ * So an LL session gets a `RoomHls` here with NO rungs, carrying only the two
+ * slots, and every function that already runs those slots for the ladder
+ * (`reconcileCameraEgress`, `startMicArchive`, `tendMicArchive`, the camera's
+ * health check) runs them for this one too, found through `companionHost`.
+ * Same `startedAt` as the LL row, so `hls-history.ts` groups all three into
+ * one broadcast and offers the camera and the voice as downloads.
+ *
+ * Never in `rooms`, deliberately: everything that iterates `rooms` means "a
+ * ladder this process is transcoding" (the restart path, the reap, the
+ * session cap, the primary-rung health check), and an entry with no rungs
+ * would be torn down by all of them. A channel is in at most one of the two
+ * maps: the LL branch of `reconcileLiveHlsNow` stops a conventional room
+ * before it builds one of these, and the conventional branch stops this.
+ */
+const llCompanions = new Map<string, RoomHls>();
+
+/** The room whose camera and mic archive slots this channel is using. */
+function companionHost(channelId: string): RoomHls | undefined {
+  return rooms.get(channelId) ?? llCompanions.get(channelId);
+}
+
+/** Every room holding a camera or archive slot, ladder or LL. */
+function companionHosts(): RoomHls[] {
+  return [...rooms.values(), ...llCompanions.values()];
+}
 /** Restart timestamps per channel, pruned to `HLS_RESTART_WINDOW_MS`. */
 const restartHistory = new Map<string, number[]>();
 /** Channels that hit the cap: no egress until this instant, or the share stops. */
@@ -851,7 +891,15 @@ export function liveHlsLadder(): LadderRung[] {
 }
 
 const DEFAULT_RETENTION_MINUTES = 10;
-const DEFAULT_REPLAY_HOURS = 24;
+/**
+ * Thirty days, and the window every recording gets by default now: new rows
+ * are inserted with `keep_replay = TRUE` (`recordSessionStarted` here and
+ * `recordLlSessionStarted` in `hls-remux.ts`), so a show is in "Transmissões
+ * anteriores" the morning after without anybody having remembered to flip the
+ * toggle within ten minutes of the end. Switching it off is what sends a
+ * broadcast to the short `LIVE_HLS_RETENTION_MINUTES` window instead.
+ */
+const DEFAULT_REPLAY_HOURS = 720;
 const DEFAULT_URL_TTL_SECONDS = 900;
 
 function positiveIntFromEnv(name: string, fallback: number): number {
@@ -1159,10 +1207,15 @@ async function recordSessionStarted(
   const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
   try {
     const result = await getPool().query<{ id: string }>(
+      // `keep_replay = TRUE` on every new row: recordings are kept by default
+      // (see `DEFAULT_REPLAY_HOURS`). The camera's reopen below leaves the
+      // column alone, so a broadcast a moderator already chose to drop is
+      // not quietly kept again.
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, egress_id, rung,
-          presenter_peer_id, video_track_id, audio_track_id, instance_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7, $8, $9)
+          presenter_peer_id, video_track_id, audio_track_id, instance_id,
+          keep_replay)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7, $8, $9, TRUE)
        ${
          reopen
            ? `ON CONFLICT (object_prefix) DO UPDATE
@@ -1867,6 +1920,7 @@ export function setLiveHlsTestHooks(hooks: {
 
 export function resetLiveHlsForTests(): void {
   rooms.clear();
+  llCompanions.clear();
   restartHistory.clear();
   failedUntil.clear();
   for (const timer of pendingRestarts.values()) {
@@ -2087,7 +2141,7 @@ export function runningRungCount(options: BoxCountOptions = {}): number {
 /** Camera transcodes running across every channel. */
 export function runningCameraCount(): number {
   let total = 0;
-  for (const room of rooms.values()) {
+  for (const room of companionHosts()) {
     if (room.camera) {
       total += 1;
     }
@@ -2112,7 +2166,7 @@ export function runningCameraCount(): number {
  */
 export function runningCameraMbps(): number {
   let total = 0;
-  for (const room of rooms.values()) {
+  for (const room of companionHosts()) {
     if (!room.camera) {
       continue;
     }
@@ -2461,6 +2515,12 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     if (room.stream.hasAudio === false) {
       silentSessions += 1;
     }
+    if (room.micArchive) {
+      micArchives += 1;
+    }
+  }
+  // An LL broadcast's archive is an egress on the same box all the same.
+  for (const room of llCompanions.values()) {
     if (room.micArchive) {
       micArchives += 1;
     }
@@ -3012,6 +3072,70 @@ export function deferredHlsStopCount(): number {
   return deferredStops.size;
 }
 
+/**
+ * The camera slot's health, for a ladder room and an LL companion alike (see
+ * `llCompanions`), and moved here out of `checkLiveHlsHealth` so both run the
+ * same rule.
+ */
+async function tendCameraHealth(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+  now: number,
+): Promise<void> {
+  // The camera, on exactly the terms a secondary rung gets: if it dies the
+  // film does not, and it is stopped before it is forgotten so a stalled but
+  // still-running transcode cannot become an orphan (the 2026-09-09 lesson,
+  // above). Checked before the primary so a room the primary is about to
+  // tear down does not pay for a probe.
+  const camera = room.camera;
+  // Its OWN grace, not the room's. A camera started ten minutes into a party
+  // is brand new on a session that is not, and the room-level grace above
+  // has long since expired for it.
+  if (camera && now - camera.startedAtMs >= HEALTH_GRACE_MS) {
+    const cameraHealth = await rungHealth(
+      egress,
+      channelId,
+      startedAt,
+      camera,
+      now,
+    );
+    // `room.camera === camera`, NOT JUST the room's identity. `rungHealth`
+    // is an await, and a camera replaced during it (a device switch, or the
+    // presenter re-declaring) is a NEW egress on the same `room` object:
+    // `room.camera` was mutated in place by `reconcileCameraEgress`, so the
+    // room-identity check alone still passes and this stale health result
+    // would null out the replacement's `room.camera`, strip its
+    // `cameraHlsUrl`, start its cooldown, and stop the OLD egress ID,
+    // leaving the NEW one running and unowned, forever, since nothing else
+    // ever looks for it again.
+    if (
+      cameraHealth.health === "ended" &&
+      companionHost(channelId) === room &&
+      room.camera === camera
+    ) {
+      room.camera = null;
+      if (cameraHealth.stillRunning) {
+        await stopRungs(channelId, [camera]);
+      }
+      await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
+      room.stream = withoutCameraUrl(room.stream);
+      cameraCooldownUntil.set(channelId, now + CAMERA_COOLDOWN_MS);
+      logEvent("voice.hlsCameraDied", {
+        channelId,
+        egressId: camera.egressId,
+        sessionId: camera.sessionId,
+        error: cameraHealth.detail ?? null,
+        cooldownMs: CAMERA_COOLDOWN_MS,
+      });
+      // The viewers are holding a `cameraHlsUrl` that will now 404. Tell
+      // them so the PiP disappears instead of spinning.
+      notifyChanged(channelId, "camera-ended");
+    }
+  }
+}
+
 export async function checkLiveHlsHealth(
   now = Date.now(),
 ): Promise<
@@ -3103,56 +3227,7 @@ export async function checkLiveHlsHealth(
     if (rooms.get(channelId) !== room) {
       continue;
     }
-    // The camera, on exactly the terms a secondary rung gets: if it dies the
-    // film does not, and it is stopped before it is forgotten so a stalled but
-    // still-running transcode cannot become an orphan (the 2026-09-09 lesson,
-    // above). Checked before the primary so a room the primary is about to
-    // tear down does not pay for a probe.
-    const camera = room.camera;
-    // Its OWN grace, not the room's. A camera started ten minutes into a party
-    // is brand new on a session that is not, and the room-level grace above
-    // has long since expired for it.
-    if (camera && now - camera.startedAtMs >= HEALTH_GRACE_MS) {
-      const cameraHealth = await rungHealth(
-        egress,
-        channelId,
-        startedAt,
-        camera,
-        now,
-      );
-      // `room.camera === camera`, NOT JUST the room's identity. `rungHealth`
-      // is an await, and a camera replaced during it (a device switch, or the
-      // presenter re-declaring) is a NEW egress on the same `room` object:
-      // `room.camera` was mutated in place by `reconcileCameraEgress`, so the
-      // room-identity check alone still passes and this stale health result
-      // would null out the replacement's `room.camera`, strip its
-      // `cameraHlsUrl`, start its cooldown, and stop the OLD egress ID —
-      // leaving the NEW one running and unowned, forever, since nothing else
-      // ever looks for it again.
-      if (
-        cameraHealth.health === "ended" &&
-        rooms.get(channelId) === room &&
-        room.camera === camera
-      ) {
-        room.camera = null;
-        if (cameraHealth.stillRunning) {
-          await stopRungs(channelId, [camera]);
-        }
-        await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
-        room.stream = withoutCameraUrl(room.stream);
-        cameraCooldownUntil.set(channelId, now + CAMERA_COOLDOWN_MS);
-        logEvent("voice.hlsCameraDied", {
-          channelId,
-          egressId: camera.egressId,
-          sessionId: camera.sessionId,
-          error: cameraHealth.detail ?? null,
-          cooldownMs: CAMERA_COOLDOWN_MS,
-        });
-        // The viewers are holding a `cameraHlsUrl` that will now 404. Tell
-        // them so the PiP disappears instead of spinning.
-        notifyChanged(channelId, "camera-ended");
-      }
-    }
+    await tendCameraHealth(egress, channelId, room, startedAt, now);
     if (rooms.get(channelId) !== room) {
       continue;
     }
@@ -3215,7 +3290,166 @@ export async function checkLiveHlsHealth(
       ),
     });
   }
+  // THE LL BROADCASTS' CAMERA AND ARCHIVE, on the ladder's own terms minus
+  // the ladder. A companion outlives nothing: the moment this process no
+  // longer holds the LL session it was started beside (a demotion, a stop, a
+  // replacement with a new `startedAt`), it is stopped here, since none of
+  // those paths lives in this file.
+  for (const [channelId, room] of [...llCompanions.entries()]) {
+    const ll = llStreamFor(channelId);
+    if (!ll || ll.startedAt !== room.stream.startedAt) {
+      // Not inside the boot window: a companion the boot reconcile parked
+      // (`parkLlCompanion`) is waiting for `adoptLlHlsSessions`, which runs
+      // after it, to take the LL session itself back.
+      if (now - room.startedAtMs >= LL_COMPANION_BOOT_GRACE_MS) {
+        await stopLlCompanions(channelId, "ll-session-gone");
+      }
+      continue;
+    }
+    if (now - room.startedAtMs < HEALTH_GRACE_MS) {
+      continue;
+    }
+    await tendMicArchive(egress, channelId, room, now);
+    if (llCompanions.get(channelId) !== room) {
+      continue;
+    }
+    await tendCameraHealth(egress, channelId, room, room.stream.startedAt, now);
+  }
   return outcomes;
+}
+
+/**
+ * Build, refresh or retire this channel's LL companion (`llCompanions`) after
+ * the LL half of `reconcileLiveHlsNow` has decided what is on air, and hand the
+ * camera and voice sids back for `reconcileLiveHls` to reconcile the camera
+ * slot with, exactly as a ladder room's reconcile does.
+ *
+ * THE ARCHIVE STARTS ONLY INSIDE ITS OWN WINDOW, measured from the LL
+ * session's `startedAt` rather than from when this companion was built. A
+ * companion built late is one this process is inheriting (an API restart
+ * mid-party, whose boot reconcile stopped the old egresses because no ladder
+ * room claimed them), and a second archive would write the same
+ * `<startedAt>-mic.ogg` over the first: the rule a ladder room's adoption
+ * already follows (`RoomHls.micArchiveUntil`).
+ */
+async function reconcileLlCompanions(
+  channelId: string,
+  stream: LiveHlsStream | null,
+): Promise<LiveHlsReconcileResult> {
+  const existing = llCompanions.get(channelId);
+  if (!stream) {
+    if (existing) {
+      await stopLlCompanions(channelId, "ll-stopped");
+    }
+    return { stream };
+  }
+  if (existing && existing.stream.startedAt !== stream.startedAt) {
+    await stopLlCompanions(channelId, "ll-session-replaced");
+  }
+  const egress = getEgress();
+  if (!egress) {
+    return { stream };
+  }
+  const tracks = await probeScreenTracks(channelId, stream.presenterPeerId);
+  if (!tracks) {
+    // Could not ask. The film is fine; the camera and the archive are tried
+    // again on the next reconcile, and the monitor keeps the archive's window.
+    return { stream };
+  }
+  let room = llCompanions.get(channelId);
+  if (!room) {
+    room = {
+      rungs: [],
+      stream: { ...stream },
+      videoTrackId: tracks.videoTrackId,
+      audioTrackId: tracks.audioTrackId ?? null,
+      camera: null,
+      startedAtMs: Date.now(),
+      micArchive: null,
+      micArchiveUntil: stream.startedAt + MIC_ARCHIVE_WAIT_MS,
+      announced: true,
+    };
+    llCompanions.set(channelId, room);
+    if (
+      micArchiveEnabled() &&
+      tracks.micArchiveTrackId &&
+      Date.now() < room.micArchiveUntil
+    ) {
+      await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+    }
+  } else {
+    // A reconnect that kept the media keeps the session under a new peer id
+    // (`voice.hlsPresenterReattached`'s case); the slots follow it.
+    room.stream = { ...room.stream, presenterPeerId: stream.presenterPeerId };
+  }
+  return {
+    stream,
+    cameraTrackId: tracks.cameraTrackId ?? null,
+    voiceTrackId: tracks.voiceTrackId ?? null,
+  };
+}
+
+/**
+ * Give the boot reconcile somewhere to put an LL broadcast's camera and
+ * archive egresses, which outlive an API restart exactly as a ladder's do.
+ * `adoptCameraEgress` and `adoptLiveHlsMicArchive` find it through
+ * `companionHost`, so they adopt onto it the way they adopt onto a ladder
+ * room. Called only for a session whose LL row is still open; the monitor
+ * stops the companion if the LL session itself does not come back.
+ */
+export function parkLlCompanion(input: {
+  channelId: string;
+  startedAt: number;
+  presenterPeerId: string;
+  videoTrackId: string;
+}): void {
+  if (rooms.has(input.channelId)) {
+    return;
+  }
+  const existing = llCompanions.get(input.channelId);
+  if (existing && existing.stream.startedAt === input.startedAt) {
+    return;
+  }
+  llCompanions.set(input.channelId, {
+    rungs: [],
+    stream: {
+      hlsUrl: llPlaylistUrl(input.channelId, input.startedAt),
+      startedAt: input.startedAt,
+      presenterPeerId: input.presenterPeerId,
+      delaySeconds: llDelaySeconds(),
+      mode: "ll",
+    },
+    videoTrackId: input.videoTrackId,
+    audioTrackId: null,
+    camera: null,
+    startedAtMs: Date.now(),
+    micArchive: null,
+    // Never a second archive after a restart: see `RoomHls.micArchiveUntil`.
+    micArchiveUntil: 0,
+    announced: true,
+  });
+}
+
+/** Stop an LL broadcast's camera and archive and close their rows. */
+async function stopLlCompanions(channelId: string, reason: string): Promise<void> {
+  const room = llCompanions.get(channelId);
+  if (!room) {
+    return;
+  }
+  llCompanions.delete(channelId);
+  const camera = room.camera;
+  room.camera = null;
+  await stopMicArchive(channelId, room, reason);
+  if (camera) {
+    await stopRungs(channelId, [camera]);
+    await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
+  }
+  logEvent("voice.hlsLlCompanionsStopped", {
+    channelId,
+    startedAt: room.stream.startedAt,
+    reason,
+    cameraEgressId: camera?.egressId ?? null,
+  });
 }
 
 export function startLiveHlsMonitor(): void {
@@ -3552,7 +3786,7 @@ function adoptCameraEgress(input: {
     });
     return null;
   }
-  const room = rooms.get(input.channelId);
+  const room = companionHost(input.channelId);
   if (!room || room.stream.startedAt !== input.startedAt) {
     logEvent("voice.hlsCameraNotAdoptable", {
       channelId: input.channelId,
@@ -3639,7 +3873,7 @@ export function adoptLiveHlsMicArchive(input: {
   startedAt: number;
   trackId: string;
 }): boolean {
-  const room = rooms.get(input.channelId);
+  const room = companionHost(input.channelId);
   if (!room || room.stream.startedAt !== input.startedAt) {
     return false;
   }
@@ -4612,7 +4846,7 @@ async function startMicArchive(
   }
   // The room may have been replaced while LiveKit was answering. Stop what we
   // just started rather than filing it on a session nobody owns any more.
-  if (rooms.get(channelId) !== room) {
+  if (companionHost(channelId) !== room) {
     await stopEgressById(egressId, channelId);
     return;
   }
@@ -4741,7 +4975,7 @@ async function tendMicArchive(
     return;
   }
   const tracks = await probeScreenTracks(channelId, room.stream.presenterPeerId);
-  if (!tracks?.micArchiveTrackId || rooms.get(channelId) !== room) {
+  if (!tracks?.micArchiveTrackId || companionHost(channelId) !== room) {
     return;
   }
   await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
@@ -4995,7 +5229,7 @@ function cameraStillWanted(
   // the other way: a camera+voice attempt needs BOTH flags still on.
   shape: { hasVideo: boolean; hasAudio: boolean },
 ): boolean {
-  const current = rooms.get(channelId);
+  const current = companionHost(channelId);
   if (!current || current !== room || current.stream.startedAt !== startedAt) {
     return false;
   }
@@ -5016,7 +5250,7 @@ async function reconcileCameraEgress(
   cameraTrackId: string | null,
   voiceTrackId: string | null,
 ): Promise<void> {
-  const room = rooms.get(channelId);
+  const room = companionHost(channelId);
   if (!room) {
     return;
   }
@@ -5713,8 +5947,14 @@ async function reconcileLiveHlsNow(
     if (rooms.has(channelId)) {
       await stopRoom(channelId, "ll-mode-selected");
     }
-    return { stream: await reconcileLlHlsNow(channelId, presenterPeerId) };
+    // The camera and the archive ride along (`llCompanions`).
+    return reconcileLlCompanions(
+      channelId,
+      await reconcileLlHlsNow(channelId, presenterPeerId),
+    );
   }
+  // Before the LL session itself, so nothing is left filed under it.
+  await stopLlCompanions(channelId, "conventional-mode-selected");
   if (llHasRoom(channelId)) {
     await stopLlSession(channelId, "conventional-mode-selected");
   }

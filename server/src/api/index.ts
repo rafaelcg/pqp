@@ -6228,25 +6228,24 @@ async function hlsReplayResponse(
   if (!Number.isFinite(parsedStartedAt)) {
     throw new NotFound("No replay for this channel");
   }
-  if (!options.rung) {
-    const master = await buildReplayMasterPlaylist({
-      channelId,
-      startedAt: parsedStartedAt,
-      token: options.token,
-    });
-    if (master !== null) {
-      res.setHeader("Cache-Control", "private, max-age=30");
-      res.setHeader("Vary", "Authorization");
-      return new RawResponse(master, "application/vnd.apple.mpegurl");
-    }
-  }
   let body: string;
   try {
-    body = await buildReplaySignedPlaylist(
-      channelId,
-      parsedStartedAt,
-      options.rung,
-    );
+    // Inside the try since a low-latency broadcast's master is read from
+    // storage (`buildLlReplayMasterPlaylist`), so it can fail like a rung can.
+    const master = options.rung
+      ? null
+      : await buildReplayMasterPlaylist({
+          channelId,
+          startedAt: parsedStartedAt,
+          token: options.token,
+        });
+    body =
+      master ??
+      (await buildReplaySignedPlaylist(
+        channelId,
+        parsedStartedAt,
+        options.rung,
+      ));
   } catch (error) {
     if (error instanceof HlsPlaylistNotFound) {
       throw new NotFound("No replay for this channel");
