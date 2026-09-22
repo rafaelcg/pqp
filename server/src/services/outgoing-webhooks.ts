@@ -345,7 +345,13 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
     return;
   }
   await client.query(
-    `UPDATE outgoing_webhooks AS w
+    `WITH locked AS (
+       SELECT ow.id, ow.server_id, ow.channel_ids, ow.status
+         FROM outgoing_webhooks ow
+        WHERE ow.channel_ids && $1::uuid[]
+        FOR UPDATE
+     )
+     UPDATE outgoing_webhooks AS w
         SET channel_ids = CASE
               WHEN cardinality(kept.ids) >= 1 THEN kept.ids
               ELSE w.channel_ids
@@ -356,27 +362,27 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
             END,
             disabled_reason = CASE
               WHEN cardinality(kept.ids) >= 1 THEN w.disabled_reason
-              WHEN w.status = 'disabled' THEN w.disabled_reason
+              WHEN kept.status = 'disabled' THEN w.disabled_reason
               ELSE 'The last text channel was deleted'
             END,
             updated_at = NOW()
        FROM (
-         SELECT ow.id,
+         SELECT locked.id,
+                locked.status,
                 ARRAY(
                   SELECT cid
-                    FROM unnest(ow.channel_ids) WITH ORDINALITY AS u(cid, ord)
+                    FROM unnest(locked.channel_ids) WITH ORDINALITY AS u(cid, ord)
                    WHERE NOT (cid = ANY($1::uuid[]))
                      AND EXISTS (
                        SELECT 1 FROM channels c
                         WHERE c.id = cid
-                          AND c.server_id = ow.server_id
+                          AND c.server_id = locked.server_id
                           AND c.kind = 'server'
                           AND c.type = 'text'
                      )
                    ORDER BY ord
                 ) AS ids
-           FROM outgoing_webhooks ow
-          WHERE ow.channel_ids && $1::uuid[]
+           FROM locked
        ) AS kept
       WHERE w.id = kept.id`,
     [channelIds],
@@ -386,12 +392,13 @@ export async function detachDeletedChannelsFromOutgoingWebhooks(
 async function validateSkipUserIds(
   serverId: string,
   userIds: string[] | undefined,
+  db: Sql = getPool(),
 ): Promise<string[]> {
   const unique = [...new Set(userIds ?? [])];
   if (unique.length === 0) {
     return [];
   }
-  const result = await getPool().query<{ user_id: string }>(
+  const result = await db.query<{ user_id: string }>(
     `SELECT user_id FROM server_members
       WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
     [serverId, unique],
@@ -493,6 +500,7 @@ export async function createOutgoingWebhook(
   );
   const signingSecret = generateSigningSecret();
   const client = await getPool().connect();
+  let row: OutgoingWebhookRow | undefined;
   try {
     await client.query("BEGIN");
     // Share-lock the channels so a delete cannot commit between this check
@@ -522,13 +530,14 @@ export async function createOutgoingWebhook(
       ],
     );
     await client.query("COMMIT");
-    return mapOutgoingWebhook(result.rows[0]!, { includeSecret: true });
+    row = result.rows[0];
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
+  return mapOutgoingWebhook(row!, { includeSecret: true });
 }
 
 export async function updateOutgoingWebhook(
@@ -544,6 +553,7 @@ export async function updateOutgoingWebhook(
   // from whatever this write stored. Channel rows are not locked here:
   // delete takes those first and this row second.
   const client = await getPool().connect();
+  let saved: OutgoingWebhookRow | undefined;
   try {
     await client.query("BEGIN");
     const locked = await client.query<OutgoingWebhookRow>(
@@ -567,7 +577,7 @@ export async function updateOutgoingWebhook(
         : existing.channel_ids;
     const skipUserIds =
       body.skipUserIds !== undefined
-        ? await validateSkipUserIds(existing.server_id, body.skipUserIds)
+        ? await validateSkipUserIds(existing.server_id, body.skipUserIds, client)
         : (existing.skip_user_ids ?? []);
 
     let authName = existing.auth_header_name;
@@ -621,13 +631,14 @@ export async function updateOutgoingWebhook(
       ],
     );
     await client.query("COMMIT");
-    return result.rows[0] ? mapOutgoingWebhook(result.rows[0]) : null;
+    saved = result.rows[0];
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
+  return saved ? mapOutgoingWebhook(saved) : null;
 }
 
 export async function deleteOutgoingWebhook(id: string): Promise<boolean> {
