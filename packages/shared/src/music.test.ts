@@ -987,20 +987,21 @@ describe("the gate with no trusted clock", () => {
 
   it("refuses an advance a seat claimed its way to, with no anchor", () => {
     expect(
-      musicWriteAllowed(held, advanced, {
+      musicServerWriteAllowed(held, advanced, {
         userId: "nobody",
         canManage: false,
         canAdd: false,
         roomSize: 10,
         seatedUserIds: [],
         peerId: "pz",
+        expectedPositionMs: null,
       }),
     ).toBe(false);
   });
 
   it("takes it once the server's own clock says the track is over", () => {
     expect(
-      musicWriteAllowed(held, advanced, {
+      musicServerWriteAllowed(held, advanced, {
         userId: "nobody",
         canManage: false,
         canAdd: false,
@@ -1031,7 +1032,7 @@ describe("the gate with no trusted clock", () => {
       skipVotes: ["gone-1", "gone-2", "gone-3", "gone-4"],
     });
     expect(
-      musicWriteAllowed(
+      musicServerWriteAllowed(
         voted,
         { ...musicAdvance(voted), atMs: 0, rev: 2, actorId: "pz" },
         {
@@ -1041,6 +1042,9 @@ describe("the gate with no trusted clock", () => {
           roomSize: 10,
           peerId: "pz",
           expectedPositionMs: 0,
+          // The server always knows who is seated; saying nothing here is
+          // a bug, and no held vote may carry the threshold on it.
+          seatedUserIds: [],
         },
       ),
     ).toBe(false);

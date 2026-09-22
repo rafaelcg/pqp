@@ -301,6 +301,17 @@ export interface MusicRights {
    * this, because it only uses this function to decide what to draw.
    */
   peerId?: string;
+  /**
+   * Set only by `musicServerWriteAllowed`. It says "the fields above are
+   * the server's, and a missing one is a fact rather than an omission",
+   * which is what turns the lenient client reading off: no clock then
+   * means the gate falls back to votes rather than to `held.positionMs`.
+   *
+   * This used to be inferred from `peerId` being present. That worked and
+   * read as a coincidence, and two reviewers in a row stopped on it, so it
+   * says what it means now.
+   */
+  trustedContext?: boolean;
 }
 
 /** Votes needed to skip: half the room, at least two. */
@@ -606,6 +617,7 @@ export function musicServerWriteAllowed(
 ): boolean {
   return musicWriteAllowed(held, incoming, {
     ...rights,
+    trustedContext: true,
     expectedPositionMs: rights.expectedPositionMs ?? undefined,
   });
 }
@@ -763,8 +775,8 @@ export function musicWriteAllowed(
   /*
    * THE SERVER FAILS CLOSED HERE; THE CLIENT IS ONLY DRAWING.
    *
-   * `peerId` is set by the server and by nothing else, so it is how the
-   * two callers are told apart. The server's clock is the anchor, and
+   * `trustedContext` is set by `musicServerWriteAllowed` and by nothing
+   * else, so it is how the two callers are told apart. The server's clock is the anchor, and
    * when a room has none — the cold-row case counted as
    * `musicCluster.anchorMissing` — falling back to `held.positionMs`
    * handed the decision straight back to the last sample anybody seated
@@ -773,7 +785,7 @@ export function musicWriteAllowed(
    * lets it move on. The client has no anchor and never will; it asks
    * this only to decide what to show.
    */
-  const serverSide = rights.peerId !== undefined;
+  const serverSide = rights.trustedContext === true;
   const gatePosition =
     rights.expectedPositionMs ?? (serverSide ? null : held.positionMs);
   /*
