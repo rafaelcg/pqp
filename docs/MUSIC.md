@@ -35,6 +35,7 @@ costs nothing per listener.
 | `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
 | `skipVotes` | user ids that have voted to skip the current track. Any change of `current` clears it |
 | `history` | the last ten finished tracks, most recent first. A repeat of the same `videoId` moves that row to the front |
+| `actorId` | the writer's own peer id, and the tie-break between two writes at the same `rev` (higher string wins, in the cache and in the row alike). The server refuses a frame whose `actorId` is not the peer id of the socket it arrived on: it grants no permission, but an invented one wins every race it enters, including against a manager acting in the same instant |
 | `durationMs` (on every track, `current` and queued) | null, or a real length: greater than zero and at most `MUSIC_MAX_DURATION_MS` (12 h). Refused otherwise, from anybody, before the rights are looked at. It is client-supplied and it is the other operand of the end-of-track gate, so an unbounded one is a way to end a track: zero satisfies the gate from the instant the track starts, and `matchesAdvance` does not ask for `canAdd`, so ANY seated person could then take the room's track away with no votes. The grace is also capped at half the declared length, so a short track cannot be over before it has played |
 | `autoplay` | when true and the queue is empty, the room keeps going with a related track. Only a manager writes it. A write that omits it keeps what the room already holds. A track the room picked itself carries `autoplayed: true` |
 
@@ -167,6 +168,15 @@ shorter than 60 s or longer than 12 minutes when duration is known (a clip
 or a film, not a song). Unknown duration is kept. Those rows carry
 `autoplayed: true`. ENDED then uses the ordinary `advance()`. A fetch at
 ENDED is only the fallback when the buffer is empty.
+
+**Nothing sweeps for divergence, and nothing needs to.** The bus is
+fire-and-forget, so an instance that misses a `voice.music` frame holds a
+stale queue. What corrects it is the music itself: while a track plays the
+actor writes a position sample every ten seconds (`REPORT_MS`), and that
+sample is an absolute state at a higher `rev` which crosses the same bus.
+A stale instance is therefore at most about ten seconds behind, and when
+nothing is playing there is nothing to be stale about. A join reads the
+row directly, which covers the rest.
 
 **Skip takes the same fallback.** `musicAdvance` ends the room on an empty
 queue whatever `autoplay` says, so the skip button, which went straight to

@@ -36,10 +36,21 @@ const FETCH_TIMEOUT_MS = 8_000;
 /**
  * THE UPSTREAM BUDGET, across everybody on this process. Charged per call
  * to YouTube or Spotify, not per request: a cache hit costs nothing, a
- * pasted link costs one, a 25-track Spotify list costs twenty-six. Sized
- * from the load run of 2026-09-12 (`docs/MUSIC.md`), where InnerTube
+ * 25-track Spotify list costs twenty-six.
+ *
+ * A pasted YouTube link costs TWO, not one as this said until 2026-09-22:
+ * oEmbed for the title and thumbnail, then one InnerTube search for the
+ * duration, which oEmbed does not carry. It can reach four when the first
+ * InnerTube client fails and it falls through to the next and then to the
+ * results page. The capacity below was reasoned from the wrong number and
+ * is therefore more generous on paper than in practice.
+ *
+ * Sized from the load run of 2026-09-12 (`docs/MUSIC.md`), where InnerTube
  * answered ten concurrent searches at p95 446 ms with no refusals; the
- * ceiling here is ours, kept under whatever YouTube's is.
+ * ceiling here is ours, kept under whatever YouTube's is. Left as it is
+ * rather than raised on this correction alone: nothing has measured a
+ * refusal in production, and a budget moved without a measurement is how
+ * you find out in front of an audience.
  */
 const upstreamBudget = createRateLimiter({ capacity: 300, refillPerSecond: 10 });
 
