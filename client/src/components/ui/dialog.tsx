@@ -207,7 +207,17 @@ export function Dialog({
       if (!panel || panel.contains(document.activeElement)) {
         return;
       }
-      (focusables()[0] ?? panel).focus();
+      const first = focusables()[0];
+      // On a touch screen, focusing a text field opens the keyboard over the
+      // dialog the person has not read yet. Focus the panel instead (the trap
+      // still holds); a field that asked for it with `autoFocus` already has
+      // focus and never reaches here.
+      const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+      const typesText =
+        first instanceof HTMLTextAreaElement ||
+        (first instanceof HTMLInputElement &&
+          !["button", "checkbox", "radio", "submit", "reset", "file", "range", "color"].includes(first.type));
+      (coarse && typesText ? panel : (first ?? panel)).focus();
     }, 0);
 
     const previousOverflow = document.body.style.overflow;

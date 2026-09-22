@@ -7057,24 +7057,33 @@ function MainAppContent({
   const [celebrateArrivalFor, setCelebrateArrivalFor] = useState<string | null>(
     null,
   );
+  const userIdForConfetti = user?.id ?? null;
   useEffect(() => {
     if (
       !justOnboarded ||
-      !user ||
+      !userIdForConfetti ||
       !arrivalServerId ||
       createdServerIds.has(arrivalServerId)
     ) {
       return;
     }
     const store = sessionStore();
-    if (confettiSpent(store, user.id)) {
+    if (confettiSpent(store, userIdForConfetti)) {
       return;
     }
-    spendConfetti(store, user.id);
+    spendConfetti(store, userIdForConfetti);
     setCelebrateArrivalFor(arrivalServerId);
+  }, [justOnboarded, userIdForConfetti, arrivalServerId, createdServerIds]);
+  // Released on its own clock, so nothing re-running the arming effect (a
+  // profile echo replacing `user`) can cancel the reset and leave the burst
+  // armed for every later remount of the banner.
+  useEffect(() => {
+    if (!celebrateArrivalFor) {
+      return;
+    }
     const timer = window.setTimeout(() => setCelebrateArrivalFor(null), 3000);
     return () => window.clearTimeout(timer);
-  }, [justOnboarded, user, arrivalServerId, createdServerIds]);
+  }, [celebrateArrivalFor]);
 
   if (bootstrapError) {
     return (
@@ -7082,6 +7091,9 @@ function MainAppContent({
         message={bootstrapError}
         onRetry={() => {
           setBootstrapError(null);
+          // A retry is not a gate answer being saved: loading must look like
+          // loading, not a locked gate saying "Salvando…".
+          setGateHandoff(false);
           setBootstrapAttempt((n) => n + 1);
         }}
       />
@@ -7195,6 +7207,7 @@ function MainAppContent({
         onDone={() => {
           setNeedsOnboarding(false);
           setJustOnboarded(true);
+          setGateHandoff(false);
         }}
       />
     );

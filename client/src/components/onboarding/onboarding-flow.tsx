@@ -211,6 +211,16 @@ export function OnboardingFlow({
       window.clearTimeout(leaveTimer.current);
     }
     leaveTimer.current = window.setTimeout(() => setLeaving(null), STEP_OUT_MS);
+    // The control that was focused (a footer button, a door) just unmounted,
+    // and focus on <body> can Tab out of the modal. Put it on the new step's
+    // first control: the first door, or Copiar link.
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(
+          `[data-onboarding-step="${next}"] button, [data-onboarding-step="${next}"] input`,
+        )
+        ?.focus();
+    });
   }
 
   /**
@@ -264,12 +274,22 @@ export function OnboardingFlow({
   const room = useRoomStep({
     onCreated: async (serverId, invite) => {
       setCreated({ serverId, invite });
-      await onServerCreated(serverId, invite);
-      goTo("ready");
+      // The room exists from here on. A failure loading it behind the dialog
+      // must not read as "couldn't create" and invite a second Criar (that
+      // made a second server); the ready step goes on either way.
+      try {
+        await onServerCreated(serverId, invite);
+      } finally {
+        goTo("ready");
+      }
     },
     onJoined: async (serverId) => {
-      await onServerJoined(serverId);
-      finish();
+      // Joined already; a slow reload behind the dialog is not a dead invite.
+      try {
+        await onServerJoined(serverId);
+      } finally {
+        finish();
+      }
     },
     onImportDiscord: () => {
       finish();

@@ -8,6 +8,7 @@ import { DiscordImportPreview } from "@/components/layout/discord-import-preview
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl } from "@/lib/share-invite";
 import { useTranslation } from "@/lib/i18n";
+import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import {
   applyDiscordImport,
   createInvite,
@@ -136,6 +137,10 @@ export function CreateServerDialog({
           .then(() => onCreated(created))
           .catch(() => undefined),
       ]);
+      if (invite) {
+        // The owner banner's "Copiar convite" reuses this link.
+        rememberInviteCode(created.server.id, invite.code);
+      }
       setDone({
         serverName: created.server.name,
         serverId: created.server.id,
@@ -196,6 +201,9 @@ export function CreateServerDialog({
     setError(null);
     try {
       const created = await applyDiscordImport(source.trim());
+      if (created.invite) {
+        rememberInviteCode(created.server.id, created.invite.code);
+      }
       await onCreated({ server: created.server, channels: created.channels });
       setDone({
         serverName: created.server.name,
