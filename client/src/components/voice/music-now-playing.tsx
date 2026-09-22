@@ -442,6 +442,7 @@ export function MusicNowPlaying({
       openControls={music.state?.openControls === true}
       autoplay={music.state?.autoplay === true}
       repeat={music.state?.repeat ?? "off"}
+      queueLength={music.state?.queue.length ?? 0}
       modes="menu"
       side="top"
       triggerClassName={overflowTrigger}

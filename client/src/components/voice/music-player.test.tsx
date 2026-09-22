@@ -454,13 +454,15 @@ describe("musicOverflowItems", () => {
       "sep-scope",
       "scope-room",
       "open-controls",
-      "autoplay",
       "repeat",
+      "autoplay-mode",
       "shuffle",
       "sep-stop",
       "stop-all",
     ]);
-    expect(items.find((item) => item.id === "autoplay")?.checked).toBe(true);
+    expect(items.find((item) => item.id === "autoplay-mode")?.checked).toBe(
+      true,
+    );
     expect(items.find((item) => item.id === "stop-all")?.danger).toBe(true);
     /* Headings and separators carry no icon; every real row does. */
     expect(
@@ -491,8 +493,8 @@ describe("musicOverflowItems", () => {
       "scope-room",
       "shuffle",
       "repeat",
+      "autoplay-mode",
       "open-controls",
-      "autoplay",
       "sep-stop",
       "stop-all",
     ]);
@@ -519,7 +521,6 @@ describe("musicOverflowItems", () => {
       "sep-scope",
       "scope-room",
       "open-controls",
-      "autoplay",
       "sep-stop",
       "stop-all",
     ]);
@@ -600,9 +601,17 @@ describe("musicOverflowItems", () => {
     const ids = items.map((item) => item.id);
     expect(ids).toContain("shuffle");
     expect(ids).toContain("stop-all");
-    expect(ids).not.toContain("repeat");
+    // The room's own policy stays hidden: those are not theirs to set.
     expect(ids).not.toContain("open-controls");
-    expect(ids).not.toContain("autoplay");
+    /*
+     * The two MODES stay, locked. This menu is the only place they exist
+     * below 28rem, where the bar hides both icons, and "dimmed in place,
+     * never missing" is the rule everywhere else in this player.
+     */
+    for (const id of ["repeat", "autoplay-mode"]) {
+      expect(ids).toContain(id);
+      expect(items.find((item) => item.id === id)?.disabled).toBe(true);
+    }
   });
 
   it("keeps all of it for a real manager", () => {
@@ -618,7 +627,13 @@ describe("musicOverflowItems", () => {
       modes: "menu",
       onStopAll: () => {},
     }).map((item) => item.id);
-    for (const id of ["shuffle", "repeat", "open-controls", "autoplay", "stop-all"]) {
+    for (const id of [
+      "shuffle",
+      "repeat",
+      "autoplay-mode",
+      "open-controls",
+      "stop-all",
+    ]) {
       expect(ids).toContain(id);
     }
   });

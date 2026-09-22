@@ -7,7 +7,6 @@ import {
   Infinity as InfinityIcon,
   MoreHorizontal,
   Plus,
-  Radio,
   Repeat,
   Repeat1,
   Shuffle,
@@ -260,6 +259,8 @@ export function MusicSpeakerControl({
 function musicModeOverflowItems(input: {
   t: (key: MessageKey) => string;
   repeat: MusicRepeat;
+  autoplay: boolean;
+  queueLength: number;
   order: "menu" | "all";
   canSetSwitches: boolean;
 }): ContextMenuItemDef[] {
@@ -267,20 +268,40 @@ function musicModeOverflowItems(input: {
     id: "shuffle",
     label: input.t("music.shuffle"),
     icon: Shuffle,
+    // Matches the button in the Fila header: nothing to shuffle under two.
+    disabled: input.queueLength < 2,
     onSelect: () => shuffle(),
   };
-  if (!input.canSetSwitches) {
-    // Shuffle is a queue reorder and stays; repeat is a room switch.
-    return [shuffleItem];
-  }
+  /*
+   * DIMMED IN PLACE, NEVER MISSING — and this menu is the only place the
+   * rule could be kept below 28rem. The bar hides both mode icons at that
+   * width and the overflow used to drop them for anybody who may not set
+   * them, so a promoted speaker on a narrow bar had no way to see repeat
+   * or the infinity at all, rather than seeing them locked.
+   */
+  const locked = !input.canSetSwitches;
   const repeatItem: ContextMenuItemDef = {
     id: "repeat",
     label: repeatLabel(input.t, input.repeat),
     icon: input.repeat === "one" ? Repeat1 : Repeat,
     checked: input.repeat !== "off",
-    onSelect: () => setRepeat(nextMusicRepeat(input.repeat)),
+    disabled: locked,
+    onSelect: locked ? () => {} : () => setRepeat(nextMusicRepeat(input.repeat)),
   };
-  return input.order === "menu" ? [shuffleItem, repeatItem] : [repeatItem, shuffleItem];
+  const autoplayItem: ContextMenuItemDef = {
+    id: "autoplay-mode",
+    label: input.autoplay
+      ? input.t("music.autoplay.on")
+      : input.t("music.autoplay.off"),
+    icon: InfinityIcon,
+    checked: input.autoplay,
+    disabled: locked,
+    onSelect: locked ? () => {} : () => setAutoplay(!input.autoplay),
+  };
+  const modes = [repeatItem, autoplayItem];
+  return input.order === "menu"
+    ? [shuffleItem, ...modes]
+    : [...modes, shuffleItem];
 }
 
 /**
@@ -322,7 +343,13 @@ function musicPersonalItems(input: {
   ];
 }
 
-/** Room policy: Todo mundo controla, Continuar com parecidas, Parar pra todos. */
+/**
+ * Room policy: Todo mundo controla and Parar pra todos.
+ *
+ * "Continuar com parecidas" left this group when it got a button on the
+ * bar beside repeat: it is a mode now, and listing it here as well meant
+ * the same switch twice in one menu.
+ */
 export function musicRoomOverflowItems(input: {
   t: (key: MessageKey) => string;
   openControls: boolean;
@@ -337,13 +364,6 @@ export function musicRoomOverflowItems(input: {
       icon: Users,
       checked: input.openControls,
       onSelect: () => setOpenControls(!input.openControls),
-    },
-    {
-      id: "autoplay",
-      label: input.t("music.autoplay"),
-      icon: Radio,
-      checked: input.autoplay,
-      onSelect: () => setAutoplay(!input.autoplay),
     },
   ];
   if (input.onStopAll) {
@@ -377,6 +397,8 @@ export function musicOverflowItems(input: {
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
+  /** Shuffle is dimmed under two tracks, as its button is. */
+  queueLength?: number;
   onStopAll?: () => void;
   modes?: "all" | "menu" | "none";
 }): ContextMenuItemDef[] {
@@ -408,6 +430,8 @@ export function musicOverflowItems(input: {
   const modeItems = musicModeOverflowItems({
     t: input.t,
     repeat: input.repeat,
+    autoplay: input.autoplay,
+    queueLength: input.queueLength ?? 0,
     order: modes,
     canSetSwitches: input.canSetSwitches,
   });
@@ -431,6 +455,7 @@ export function MusicOverflowMenu({
   openControls,
   autoplay,
   repeat,
+  queueLength = 0,
   modes = "all",
   side,
   triggerClassName,
@@ -443,6 +468,7 @@ export function MusicOverflowMenu({
   openControls: boolean;
   autoplay: boolean;
   repeat: MusicRepeat;
+  queueLength?: number;
   modes?: "all" | "menu" | "none";
   side: "top" | "bottom";
   triggerClassName: string;
@@ -460,10 +486,22 @@ export function MusicOverflowMenu({
         openControls,
         autoplay,
         repeat,
+        queueLength,
         modes,
         onStopAll: canManage ? () => setConfirmStop(true) : undefined,
       }),
-    [t, canManage, canSetSwitches, listening, ducking, openControls, autoplay, repeat, modes],
+    [
+      t,
+      canManage,
+      canSetSwitches,
+      listening,
+      ducking,
+      openControls,
+      autoplay,
+      repeat,
+      queueLength,
+      modes,
+    ],
   );
 
   if (items.length === 0) {
