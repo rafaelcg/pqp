@@ -194,7 +194,11 @@ export function VoiceOccupantRow({
             size="sm"
           />
           <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
-          <VoiceOccupantBadges person={person} />
+          {/* The speaker slot sits BEFORE the badges, so the mute and deafen
+              icons end at the row's right edge for everybody. After them, a
+              hover-only slot that is invisible but still 18px wide pushed
+              other people's mic icon left of your own row's, which never has
+              the slot: nobody sets their own volume. */}
           {affordance !== "hidden" && (
             <span
               aria-hidden="true"
@@ -215,6 +219,7 @@ export function VoiceOccupantRow({
               )}
             </span>
           )}
+          <VoiceOccupantBadges person={person} />
         </div>
       </ContextMenu>
       <PeerAudioMenu
