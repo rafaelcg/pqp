@@ -177,12 +177,21 @@ interface MetricsBody {
     friendships: number;
     pendingFriendRequests: number;
     attachments: { total: number; last24h: number };
-    invites: { created24h: number; uses: number };
+    invites: { created24h: number; uses: number; joinsByRef7d: Record<string, number> };
     push: { web: number; apns: number; fcm: number };
     pushDelivery: Record<
       "web" | "apns" | "fcm",
       { sent: number; failed: number; pruned: number }
     >;
+  };
+  imports: {
+    discord: {
+      total: number;
+      last24h: number;
+      last7d: number;
+      membersJoined7d: number;
+      joinedViaImportInvite7d: number;
+    };
   };
 }
 
@@ -404,7 +413,7 @@ describeDb("GET /api/admin/metrics", () => {
       friendships: 0,
       pendingFriendRequests: 0,
       attachments: { total: 0, last24h: 0 },
-      invites: { created24h: 0, uses: 0 },
+      invites: { created24h: 0, uses: 0, joinsByRef7d: {} },
       push: { web: 0, apns: 0, fcm: 0 },
       pushDelivery: {
         web: { sent: 0, failed: 0, pruned: 0 },
@@ -444,6 +453,71 @@ describeDb("GET /api/admin/metrics", () => {
     for (const secret of [ana.id, operator.id, webhook.id, "clerk-", "Ana", "Operator", "Deploy bot"]) {
       expect(text).not.toContain(secret);
     }
+  });
+
+  it("counts Discord imports and who joined the servers they made", async () => {
+    const pool = getPool();
+    // Two imports: one today, one ten days ago. Only the first server fills up.
+    const imported = await pool.query<{ id: string }>(
+      `INSERT INTO servers (name, owner_id) VALUES ('Copia', $1), ('Velha', $1)
+       RETURNING id`,
+      [ana.id],
+    );
+    const [copia, velha] = imported.rows.map((row) => row.id) as [string, string];
+    await pool.query(
+      `INSERT INTO audit_log (server_id, actor_id, action, target_type, target_id, created_at)
+       VALUES ($1, $3, 'server.discord_import', 'server', $1, now()),
+              ($2, $3, 'server.discord_import', 'server', $2, now() - interval '10 days')`,
+      [copia, velha, ana.id],
+    );
+    const people = await Promise.all(
+      ["bia", "caio", "duda", "edu"].map((name) =>
+        upsertUser({ clerkId: `clerk-${name}`, displayName: name, avatarUrl: null }),
+      ),
+    );
+    const [bia, caio, duda, edu] = people.map((one) => one as Actor) as [
+      Actor,
+      Actor,
+      Actor,
+      Actor,
+    ];
+    // The owner row is not a join. Bia and Caio came through the import's
+    // invite (`?ref=discord`), Duda through a shared invite, Edu 8 days ago.
+    // The webhook is not a person. In the ordinary server, Bia's `convite`
+    // join counts toward the tag table and not toward the import.
+    await pool.query(
+      `INSERT INTO server_members (server_id, user_id, role, join_ref, joined_at) VALUES
+         ($1, $2, 'owner', NULL, now()),
+         ($1, $3, 'member', 'discord', now()),
+         ($1, $4, 'member', 'discord', now() - interval '2 days'),
+         ($1, $5, 'member', 'convite', now()),
+         ($1, $6, 'member', 'discord', now() - interval '8 days'),
+         ($1, $7, 'member', 'discord', now())`,
+      [copia, ana.id, bia.id, caio.id, duda.id, edu.id, webhook.id],
+    );
+    const clube = await pool.query<{ id: string }>(
+      `SELECT id FROM servers WHERE name = 'Clube'`,
+    );
+    await pool.query(
+      `INSERT INTO server_members (server_id, user_id, role, join_ref)
+       VALUES ($1, $2, 'member', 'convite')`,
+      [clube.rows[0]!.id, bia.id],
+    );
+
+    const { status, body } = await call<MetricsBody>(operator, "/api/admin/metrics");
+    expect(status).toBe(200);
+    expect(body.imports).toEqual({
+      discord: {
+        total: 2,
+        last24h: 1,
+        last7d: 1,
+        membersJoined7d: 3,
+        joinedViaImportInvite7d: 2,
+      },
+    });
+    // Every tagged join in 7 days, largest first; the webhook's row counts
+    // here because the tag table is about links, not people.
+    expect(body.product.invites.joinsByRef7d).toEqual({ discord: 3, convite: 2 });
   });
 
   it("names the room's transport and open time in the rooms table, from the registry pin", async () => {

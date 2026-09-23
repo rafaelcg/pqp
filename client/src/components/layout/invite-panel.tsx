@@ -7,6 +7,11 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { InviteChoiceRow } from "@/components/layout/invite-choice-row";
 import { InvitePaste } from "@/components/layout/invite-paste";
+import {
+  intentStorage,
+  stashInviteRef,
+  takeInviteRef,
+} from "@/lib/handle-intent";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import {
   createInvite,
@@ -290,11 +295,16 @@ export function InvitePanel({
     }
     setBusy(true);
     setError(null);
+    // A `?ref=` tag a failed link join left for this code (see App's
+    // `acceptInviteFromLink`), put back again if this attempt fails too.
+    const storage = intentStorage();
+    const ref = takeInviteRef(storage, trimmed, "");
     try {
-      const result = await joinInvite(trimmed);
+      const result = await joinInvite(trimmed, ref);
       onJoined(result.serverId);
       onClose();
     } catch (err) {
+      stashInviteRef(storage, trimmed, ref);
       setError(err instanceof Error ? err.message : t("invite.join.failed"));
     } finally {
       setBusy(false);

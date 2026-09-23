@@ -347,11 +347,16 @@ import {
 } from "@/lib/connection-callback";
 import {
   addIntentFromSearch,
+  CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  stashCreateIntent,
+  stashInviteRef,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
+  takeInviteRef,
   takeJoinIntent,
+  type CreateIntent,
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
@@ -1042,19 +1047,22 @@ function MainAppContent({
   const [dmToastActive, setDmToastActive] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   /**
-   * Which step Create community opens on. `paste` only when the session
-   * arrived from `pqp.gg/vem` asking to copy a Discord layout; back to `name`
-   * the moment the dialog closes, so the ordinary button is ordinary again.
+   * Which step the create-server dialog opens on. `name` for every ordinary
+   * opener; `import` (the Discord layout paste) when the person asked for it,
+   * from the onboarding's third door, a `/vem` CTA or a `?import=discord`
+   * campaign link. Reset on close so the next ordinary open is ordinary again.
    */
-  const [createServerStart, setCreateServerStart] = useState<"name" | "paste">(
-    "name",
-  );
+  const [createServerStart, setCreateServerStart] = useState<CreateIntent>({
+    mode: "name",
+    source: null,
+  });
   /**
-   * The session arrived to copy a Discord layout. Read by the onboarding the
-   * same way `arrivedOnInviteLink` is: its last step asks "create or join?",
-   * and this person already answered, with the dialog waiting underneath.
+   * A create intent somebody arrived with (or the onboarding's third door)
+   * that has not been shown yet. Held rather than acted on because onboarding
+   * may still be on screen: the dialog opens the moment it is not (see the
+   * effect beside the arrival intents).
    */
-  const [arrivedToImport, setArrivedToImport] = useState(false);
+  const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -6309,9 +6317,12 @@ function MainAppContent({
   const acceptInviteFromLink = useCallback(
     async (code: string) => {
       setInviteErrorFromUrl(null);
+      const storage = browserStorage();
+      // The link's `?ref=` tag, or the one stashed at boot before a sign-in
+      // redirect dropped the query. Attribution only.
+      const ref = takeInviteRef(storage, code, window.location.search);
       try {
-        const result = await joinInvite(code);
-        const storage = browserStorage();
+        const result = await joinInvite(code, ref);
         // Only welcome them somewhere this device has not welcomed them before.
         // Invite links get re-clicked weeks later, and the join succeeds again.
         if (!hasArrived(storage, result.serverId)) {
@@ -6323,6 +6334,9 @@ function MainAppContent({
         // Expired, revoked, used up, banned, or mistyped. Fall back to the panel
         // with the code and the reason, so there is somewhere to go from here —
         // ask for a fresh link, or paste a different one.
+        // Put the tag back for the panel's retry: it was taken before the
+        // server confirmed anything.
+        stashInviteRef(storage, code, ref);
         setInviteCodeFromUrl(code);
         setInviteErrorFromUrl(
           error instanceof ApiError
@@ -6412,6 +6426,25 @@ function MainAppContent({
   }, [bootstrapReady, clerkAccount]);
 
   /**
+   * Open Create community for somebody who asked for it, once the app is
+   * ready and onboarding is not in front of it: on the Discord paste step for
+   * "I already have a Discord server", on the name field for `?create=new`.
+   * Fed by the arrival intents below (a `/vem` CTA, a `?import=` campaign
+   * link) and by the onboarding's third door; all of them only set
+   * `pendingCreate`.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || needsOnboarding || !pendingCreate) {
+      return;
+    }
+    // Shown now, so spend the stash the arrival effect put back.
+    takeCreateIntent(browserStorage());
+    setCreateServerStart(pendingCreate);
+    setShowCreateServer(true);
+    setPendingCreate(null);
+  }, [bootstrapReady, needsOnboarding, pendingCreate]);
+
+  /**
    * The three intentions somebody arrived with, acted on exactly once.
    *
    * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
@@ -6457,17 +6490,32 @@ function MainAppContent({
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    /**
+     * Create community, for somebody who came to make one (a `/vem` CTA, a
+     * `?import=discord` link). The import also tells the onboarding to skip
+     * its "create or join?" step, which this person already answered. The
+     * name field waits for no onboarding at all: that step IS a name field,
+     * and a second one behind it would ask twice.
+     */
+    if (create && (create.mode === "import" || !needsOnboarding)) {
+      setPendingCreate(create);
+      // Kept in storage until the dialog actually opens, so a reload during
+      // onboarding (the param is already gone from the URL) still gets there.
+      stashCreateIntent(storage, create);
+    }
 
     if (
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
-      params.has("create")
+      CREATE_INTENT_PARAMS.some((name) => params.has(name))
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
-      params.delete("create");
+      for (const name of CREATE_INTENT_PARAMS) {
+        params.delete(name);
+      }
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
@@ -6483,23 +6531,6 @@ function MainAppContent({
      * account that has none and is less than a day old, so a returning member
      * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
      */
-    /**
-     * Create community, opened for somebody who came from `pqp.gg/vem`.
-     *
-     * `discord` goes straight to the template box and tells the onboarding to
-     * skip its "create or join?" step, which this person already answered.
-     * `new` opens the name field only when there is no onboarding to run:
-     * that step IS a name field, and a second one behind it would ask twice.
-     */
-    if (create === "discord") {
-      setArrivedToImport(true);
-      setCreateServerStart("paste");
-      setShowCreateServer(true);
-    } else if (create === "new" && !needsOnboarding) {
-      setCreateServerStart("name");
-      setShowCreateServer(true);
-    }
-
     if (acquisition) {
       void updateMe({ acquisition }).catch(() => {
         // A lost attribution. Not worth a banner.
@@ -6936,7 +6967,9 @@ function MainAppContent({
     return (
       <OnboardingFlow
         user={user}
-        pendingInvite={arrivedOnInviteLink || arrivedToImport}
+        pendingInvite={arrivedOnInviteLink}
+        pendingImport={pendingCreate?.mode === "import"}
+        onImportDiscord={() => setPendingCreate({ mode: "import", source: null })}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
@@ -9501,10 +9534,11 @@ function MainAppContent({
 
       <CreateServerDialog
         open={showCreateServer}
-        initialStep={createServerStart}
+        startMode={createServerStart.mode}
+        startSource={createServerStart.source}
         onClose={() => {
           setShowCreateServer(false);
-          setCreateServerStart("name");
+          setCreateServerStart({ mode: "name", source: null });
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           setServers((prev) => [...prev, server]);

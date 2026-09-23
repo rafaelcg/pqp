@@ -1,5 +1,10 @@
+import { normalizeJoinRef, parseDiscordTemplateCode } from "@pqp/shared";
+import { parseAppRoute } from "./app-route";
+
 /**
- * Three intentions that have to survive a sign-up.
+ * Intentions that have to survive a sign-up. Three are described here; the
+ * create intent (a `/vem` CTA, `?import=discord`) and the invite link's
+ * `?ref=` tag, further down, are the same shape with their own reasons.
  *
  * THIS IS THE INVITE BUG AGAIN, in two new shapes. `signedOutRedirectPath`
  * already fixed the version where somebody clicks an invite link, signs up, and
@@ -202,23 +207,86 @@ export function intentStorage(): WritableStorage | null {
   }
 }
 
+// ------------------------------------------------------- create / import
+
 /**
- * The community somebody came to CREATE, which is the fourth intention a
- * sign-up has to carry: `pqp.gg/vem` sells "paste your Discord template and the
- * room is born here", and its buttons are sign-up buttons. Without this the new
- * account lands on the onboarding's generic last step and the Discord import,
- * the one thing the page was about, is two menus away.
+ * CREATE. The community somebody came to make, which is the fourth intention a
+ * sign-up has to carry. `pqp.gg/vem` sells "paste your Discord template and the
+ * room is born here", its buttons are sign-up buttons, and a campaign link can
+ * say the same thing with `?import=discord`. What they came for lives inside
+ * the create-server dialog after sign-up and after onboarding, three screens
+ * that never mention it; without this the Discord import, the one thing the
+ * page was about, is two menus away.
  *
- * Two values and nothing else. `discord` opens Create community already on the
- * paste step; `new` opens it on the name field. Anything else is no intent,
- * because this string arrives from a URL anybody can type.
+ * ONE INTENT, TWO SPELLINGS IN THE URL, ONE STASH:
+ *
+ *  - `?import=discord` (also `1`, `true`) opens Create community on the
+ *    Discord paste step and skips the onboarding's "create or join?" step.
+ *    `?import=<code>` or `?import=discord.new/<code>` also pre-fills the paste
+ *    box. This is what every CTA writes (`createIntentHref`).
+ *  - `?create=discord` is the same intent, the spelling `/vem` shipped with
+ *    first; still read so a link already shared keeps working.
+ *  - `?create=new` opens it on the name field, and only when there is no
+ *    onboarding to run: that step IS a name field.
+ *
+ * `source` is null when the intent is the door alone. When it is set it is a
+ * `discord.new` link built from a code `parseDiscordTemplateCode` accepted, so
+ * nothing the visitor typed into the URL reaches the paste box verbatim.
+ * Anything else is no intent, because this string arrives from a URL anybody
+ * can type.
  */
-export type CreateIntent = "discord" | "new";
+export interface CreateIntent {
+  mode: "name" | "import";
+  source: string | null;
+}
 
 const CREATE_KEY = "pqp:pending-create-community";
 
-function asCreateIntent(value: string | null): CreateIntent | null {
-  return value === "discord" || value === "new" ? value : null;
+/** The stored value for `?create=new`. Too short to be a template code. */
+const CREATE_NAME = "new";
+/** The stored value for the import door with no template named. */
+const CREATE_IMPORT_ANY = "discord";
+
+/** The query parameters this intent is read from, for the URL clean-up. */
+export const CREATE_INTENT_PARAMS = ["import", "create"] as const;
+
+function importFromValue(raw: string | null): CreateIntent | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") {
+    return null;
+  }
+  if (["discord", "1", "true"].includes(value.toLowerCase())) {
+    return { mode: "import", source: null };
+  }
+  const code = parseDiscordTemplateCode(value);
+  return code
+    ? { mode: "import", source: `https://discord.new/${code}` }
+    : null;
+}
+
+function createFromValue(raw: string | null): CreateIntent | null {
+  if (raw === CREATE_NAME) {
+    return { mode: "name", source: null };
+  }
+  return raw === CREATE_IMPORT_ANY ? { mode: "import", source: null } : null;
+}
+
+/**
+ * The intent on a URL: `?import=` first, then `?create=`. Null when neither
+ * carries one that makes sense.
+ */
+export function createIntentFromSearch(search: string): CreateIntent | null {
+  const params = new URLSearchParams(search);
+  return importFromValue(params.get("import")) ?? createFromValue(params.get("create"));
+}
+
+/** The `/app` URL that carries `intent` through a sign-up. */
+export function createIntentHref(intent: CreateIntent): string {
+  if (intent.mode === "name") {
+    return `/app?create=${CREATE_NAME}`;
+  }
+  const code = intent.source ? parseDiscordTemplateCode(intent.source) : null;
+  return `/app?import=${code ?? CREATE_IMPORT_ANY}`;
 }
 
 export function stashCreateIntent(
@@ -226,17 +294,106 @@ export function stashCreateIntent(
   intent: CreateIntent,
   now: number = Date.now(),
 ): void {
-  write(storage, CREATE_KEY, intent, now);
+  write(
+    storage,
+    CREATE_KEY,
+    intent.mode === "name" ? CREATE_NAME : (intent.source ?? CREATE_IMPORT_ANY),
+    now,
+  );
 }
 
 export function takeCreateIntent(
   storage: WritableStorage | null,
   now: number = Date.now(),
 ): CreateIntent | null {
-  return asCreateIntent(take(storage, CREATE_KEY, now));
+  const stored = take(storage, CREATE_KEY, now);
+  if (!stored) {
+    return null;
+  }
+  return createFromValue(stored) ?? importFromValue(stored);
 }
 
-/** `?create=discord` or `?create=new` on any `/app` URL. */
-export function createIntentFromSearch(search: string): CreateIntent | null {
-  return asCreateIntent(new URLSearchParams(search).get("create"));
+/**
+ * Stash the page's intent at boot, whatever the page. Runs before routing so
+ * a campaign link to `/app?import=discord` survives the sign-in redirect,
+ * which keeps the path and drops the query (`signedOutRedirectPath`).
+ */
+export function rememberCreateIntentFromLocation(
+  storage: WritableStorage | null,
+  location: Pick<Location, "search">,
+  now: number = Date.now(),
+): void {
+  const intent = createIntentFromSearch(location.search);
+  if (intent) {
+    stashCreateIntent(storage, intent, now);
+  }
+}
+
+// ------------------------------------------------------- invite link ?ref=
+
+const INVITE_REF_KEY = "pqp:pending-invite-ref";
+
+/**
+ * REF. `/app/invite/<code>?ref=discord` tells the server which link brought a
+ * join (see `shareInviteUrl`). Signed out, the sign-in redirect keeps the
+ * invite path and drops the query, so the tag is stashed at boot together
+ * with the code it came on, and read back only for that same code.
+ * Consumed on read like every other intent here.
+ */
+export function rememberInviteRefFromLocation(
+  storage: WritableStorage | null,
+  location: Pick<Location, "search" | "pathname">,
+  now: number = Date.now(),
+): void {
+  const target = parseAppRoute(location.pathname);
+  if (target?.kind !== "invite") {
+    return;
+  }
+  stashInviteRef(
+    storage,
+    target.code,
+    new URLSearchParams(location.search).get("ref"),
+    now,
+  );
+}
+
+/**
+ * Keep a tag for `code`. Also how a join that FAILED puts back the tag it
+ * took, so the retry (the join panel, which the failure opens with the code in
+ * it) still sends it.
+ */
+export function stashInviteRef(
+  storage: WritableStorage | null,
+  code: string,
+  rawRef: string | null,
+  now: number = Date.now(),
+): void {
+  const ref = normalizeJoinRef(rawRef);
+  if (ref && code && !code.includes(" ")) {
+    // A code is base64url and a ref is `[a-z0-9_-]`, so a space cannot
+    // appear in either and splits them unambiguously.
+    write(storage, INVITE_REF_KEY, `${code} ${ref}`, now);
+  }
+}
+
+/**
+ * The tag to send with a join through `code`: the URL's own `?ref=` first,
+ * otherwise one stashed for this exact code. The stash is consumed either way.
+ */
+export function takeInviteRef(
+  storage: WritableStorage | null,
+  code: string,
+  search: string,
+  now: number = Date.now(),
+): string | null {
+  const stashed = take(storage, INVITE_REF_KEY, now);
+  const fromUrl = normalizeJoinRef(new URLSearchParams(search).get("ref"));
+  if (fromUrl) {
+    return fromUrl;
+  }
+  if (!stashed) {
+    return null;
+  }
+  const [stashedCode, stashedRef] = stashed.split(" ");
+  return stashedCode === code ? normalizeJoinRef(stashedRef) : null;
 }

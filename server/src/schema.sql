@@ -3026,6 +3026,24 @@ ALTER TABLE servers ADD COLUMN IF NOT EXISTS permissions_version INTEGER NOT NUL
 
 ALTER TABLE server_members ADD COLUMN IF NOT EXISTS nickname TEXT;
 
+-- The `?ref=` tag the invite link carried when this membership was made
+-- (`convite`, `discord`, ...), normalised by `normalizeJoinRef` in
+-- @pqp/shared. NULL for every other door in (owner, SSO, directory, a code
+-- typed by hand, a link without a tag). A channel tag and nothing else: no
+-- identifier, never shown to anybody, read only as a COUNT by
+-- `GET /api/admin/metrics` (`imports`, `product.invites.joinsByRef7d`).
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_ref TEXT;
+-- The metrics read "tagged joins in the last 7 days" every 30 seconds. Partial,
+-- so it holds only tagged rows and never the membership history before them.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_ref
+  ON server_members (joined_at) WHERE join_ref IS NOT NULL;
+
+-- Servers that began as a Discord Guild Template copy. The audit row is the
+-- only record of that, and the operator dashboard counts it every 30 seconds,
+-- so it gets a partial index rather than a scan of the whole log.
+CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import
+  ON audit_log (created_at) WHERE action = 'server.discord_import';
+
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_everyone BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_here BOOLEAN NOT NULL DEFAULT FALSE;
 

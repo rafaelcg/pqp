@@ -1,16 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addIntentFromSearch,
+  CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  createIntentHref,
   HANDLE_INTENT_TTL_MS,
+  rememberCreateIntentFromLocation,
   stashCreateIntent,
+  rememberInviteRefFromLocation,
   stashAddIntent,
+  stashInviteRef,
   stashHandleClaim,
   stashJoinIntent,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
+  takeInviteRef,
   takeJoinIntent,
+  type CreateIntent,
 } from "./handle-intent";
 
 /**
@@ -159,31 +166,33 @@ describe("addIntentFromSearch", () => {
 
 describe("the create-community intent", () => {
   let storage: ReturnType<typeof memoryStorage>;
+  const DISCORD: CreateIntent = { mode: "import", source: null };
+  const NEW: CreateIntent = { mode: "name", source: null };
 
   beforeEach(() => {
     storage = memoryStorage();
   });
 
   it("survives the trip through sign-up and is consumed on arrival", () => {
-    stashCreateIntent(storage, "discord");
-    expect(takeCreateIntent(storage)).toBe("discord");
+    stashCreateIntent(storage, DISCORD);
+    expect(takeCreateIntent(storage)).toEqual(DISCORD);
     // Opening the dialog on every reload would be a nag, not an intent.
     expect(takeCreateIntent(storage)).toBeNull();
   });
 
   it("expires like the others", () => {
-    stashCreateIntent(storage, "new", 0);
+    stashCreateIntent(storage, NEW, 0);
     expect(takeCreateIntent(storage, HANDLE_INTENT_TTL_MS + 1)).toBeNull();
   });
 
   it("keeps its own key", () => {
     stashJoinIntent(storage, "valorant-brasil");
-    stashCreateIntent(storage, "discord");
+    stashCreateIntent(storage, DISCORD);
     expect(takeJoinIntent(storage)).toBe("valorant-brasil");
-    expect(takeCreateIntent(storage)).toBe("discord");
+    expect(takeCreateIntent(storage)).toEqual(DISCORD);
   });
 
-  it("refuses a stashed value that is not one of the two", () => {
+  it("refuses a stashed value that is not an intent", () => {
     storage.setItem(
       "pqp:pending-create-community",
       JSON.stringify({ handle: "rm -rf", at: Date.now() }),
@@ -192,15 +201,157 @@ describe("the create-community intent", () => {
   });
 
   it("does nothing at all when storage is denied", () => {
-    expect(() => stashCreateIntent(hostileStorage, "discord")).not.toThrow();
+    expect(() => stashCreateIntent(hostileStorage, DISCORD)).not.toThrow();
     expect(takeCreateIntent(hostileStorage)).toBeNull();
   });
 
-  it("reads only the two known values from the URL", () => {
-    expect(createIntentFromSearch("?create=discord")).toBe("discord");
-    expect(createIntentFromSearch("?x=1&create=new")).toBe("new");
+  it("reads only the two known values from ?create=", () => {
+    expect(createIntentFromSearch("?create=discord")).toEqual(DISCORD);
+    expect(createIntentFromSearch("?x=1&create=new")).toEqual(NEW);
     expect(createIntentFromSearch("?create=DISCORD")).toBeNull();
     expect(createIntentFromSearch("?create=")).toBeNull();
     expect(createIntentFromSearch("")).toBeNull();
+  });
+
+  it("is the same intent whether a link says ?create=discord or ?import=discord", () => {
+    expect(createIntentFromSearch("?create=discord")).toEqual(
+      createIntentFromSearch("?import=discord"),
+    );
+    // A template named in ?import= wins over a bare ?create=.
+    expect(createIntentFromSearch("?create=new&import=hgM48av5Q69A")).toEqual({
+      mode: "import",
+      source: "https://discord.new/hgM48av5Q69A",
+    });
+  });
+
+  it("writes the link a CTA carries, and reads it back as the same intent", () => {
+    const template: CreateIntent = {
+      mode: "import",
+      source: "https://discord.new/hgM48av5Q69A",
+    };
+    expect(createIntentHref(DISCORD)).toBe("/app?import=discord");
+    expect(createIntentHref(NEW)).toBe("/app?create=new");
+    expect(createIntentHref(template)).toBe("/app?import=hgM48av5Q69A");
+    for (const intent of [DISCORD, NEW, template]) {
+      const href = createIntentHref(intent);
+      expect(createIntentFromSearch(href.slice(href.indexOf("?")))).toEqual(intent);
+    }
+  });
+
+  it("names every parameter it reads, for the URL clean-up", () => {
+    expect([...CREATE_INTENT_PARAMS].sort()).toEqual(["create", "import"]);
+  });
+});
+
+describe("the Discord import spelling of it", () => {
+  it("reads the door alone, or a template it can pre-fill", () => {
+    expect(createIntentFromSearch("?import=discord")).toEqual({
+      mode: "import",
+      source: null,
+    });
+    expect(createIntentFromSearch("?import=1")).toEqual({
+      mode: "import",
+      source: null,
+    });
+    expect(createIntentFromSearch("?import=hgM48av5Q69A")).toEqual({
+      mode: "import",
+      source: "https://discord.new/hgM48av5Q69A",
+    });
+    expect(
+      createIntentFromSearch(
+        `?import=${encodeURIComponent("https://discord.new/hgM48av5Q69A")}`,
+      ),
+    ).toEqual({ mode: "import", source: "https://discord.new/hgM48av5Q69A" });
+  });
+
+  it("ignores anything that is not a template or the door", () => {
+    expect(createIntentFromSearch("")).toBeNull();
+    expect(createIntentFromSearch("?import=")).toBeNull();
+    expect(createIntentFromSearch("?import=https://evil.example/x")).toBeNull();
+    expect(createIntentFromSearch("?import=a b")).toBeNull();
+  });
+
+  it("survives a sign-up once, and only once", () => {
+    const storage = memoryStorage();
+    rememberCreateIntentFromLocation(storage, { search: "?import=discord" });
+    expect(takeCreateIntent(storage)).toEqual({ mode: "import", source: null });
+    expect(takeCreateIntent(storage)).toBeNull();
+
+    rememberCreateIntentFromLocation(storage, { search: "?import=hgM48av5Q69A" });
+    expect(takeCreateIntent(storage)).toEqual({
+      mode: "import",
+      source: "https://discord.new/hgM48av5Q69A",
+    });
+
+    // The /vem spelling rides the same stash.
+    rememberCreateIntentFromLocation(storage, { search: "?create=new" });
+    expect(takeCreateIntent(storage)).toEqual({ mode: "name", source: null });
+  });
+
+  it("stashes nothing for a page without the parameter, and expires", () => {
+    const storage = memoryStorage();
+    rememberCreateIntentFromLocation(storage, { search: "?ref=perfil" });
+    expect(storage.map.size).toBe(0);
+    rememberCreateIntentFromLocation(storage, { search: "?import=discord" }, 0);
+    expect(takeCreateIntent(storage, HANDLE_INTENT_TTL_MS + 1)).toBeNull();
+  });
+
+  it("does nothing when storage is denied", () => {
+    expect(() =>
+      rememberCreateIntentFromLocation(hostileStorage, { search: "?import=discord" }),
+    ).not.toThrow();
+    expect(takeCreateIntent(hostileStorage)).toBeNull();
+  });
+});
+
+describe("the invite link's ref", () => {
+  it("prefers the URL's own tag", () => {
+    expect(takeInviteRef(memoryStorage(), "abc123", "?ref=discord")).toBe("discord");
+    expect(takeInviteRef(memoryStorage(), "abc123", "?ref=a@b")).toBeNull();
+    expect(takeInviteRef(memoryStorage(), "abc123", "")).toBeNull();
+  });
+
+  it("carries the tag through sign-in for the same code only", () => {
+    const storage = memoryStorage();
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=discord",
+    });
+    // The redirect back drops the query.
+    expect(takeInviteRef(storage, "abc123", "")).toBe("discord");
+    expect(takeInviteRef(storage, "abc123", "")).toBeNull();
+
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=discord",
+    });
+    expect(takeInviteRef(storage, "other1", "")).toBeNull();
+    // Consumed even when it did not match.
+    expect(takeInviteRef(storage, "abc123", "")).toBeNull();
+  });
+
+  it("stashes nothing off an invite path or without a clean tag", () => {
+    const storage = memoryStorage();
+    rememberInviteRefFromLocation(storage, { pathname: "/", search: "?ref=discord" });
+    rememberInviteRefFromLocation(storage, {
+      pathname: "/app/invite/abc123",
+      search: "?ref=not ok",
+    });
+    expect(storage.map.size).toBe(0);
+  });
+});
+
+describe("putting an invite ref back", () => {
+  it("lets a retry after a failed join send the same tag", () => {
+    const storage = memoryStorage();
+    stashInviteRef(storage, "abc123", "discord");
+    const ref = takeInviteRef(storage, "abc123", "");
+    expect(ref).toBe("discord");
+    // The join failed: put it back, and the panel's retry reads it.
+    stashInviteRef(storage, "abc123", ref);
+    expect(takeInviteRef(storage, "abc123", "")).toBe("discord");
+    // Nothing to put back is a no-op.
+    stashInviteRef(storage, "abc123", null);
+    expect(storage.map.size).toBe(0);
   });
 });

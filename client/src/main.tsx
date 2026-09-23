@@ -26,6 +26,10 @@ import { ErrorBoundary } from "./components/error-boundary";
 import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
+import {
+  rememberCreateIntentFromLocation,
+  rememberInviteRefFromLocation,
+} from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
@@ -391,6 +395,11 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
 initFaro();
 rememberAcquisitionFromLocation(browserStorage(), window.location);
+// Same reasoning for the two intents a sign-in redirect would drop with the
+// query string: `?import=discord` and an invite link's `?ref=` tag
+// (lib/handle-intent.ts).
+rememberCreateIntentFromLocation(browserStorage(), window.location);
+rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
 

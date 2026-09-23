@@ -8,7 +8,7 @@ Adding one means adding a row here.
 | Surface | Component | Shape | Shows when | Goes away |
 |---|---|---|---|---|
 | Age gate | `components/user/age-gate-dialog.tsx` | Dialog, not dismissible | `me.ageGate` is not `passed` | The server records a birthdate |
-| Wizard | `components/onboarding/onboarding-flow.tsx` | **One** Dialog, three steps that slide in, progress dots in the footer | `preferences.onboardedAt` absent | `onboardedAt` (preference, cross-device) |
+| Wizard | `components/onboarding/onboarding-flow.tsx` | **One** Dialog, three steps that slide in, progress dots in the footer. Step 3 has three doors: create, join, and "Já tenho um servidor no Discord" (closes the wizard, opens the create dialog on the Discord paste). Two steps when the account arrived on an invite link or a `?import=discord` link | `preferences.onboardedAt` absent | `onboardedAt` (preference, cross-device) |
 | First-run checklist | `components/onboarding/first-run-card.tsx` | Inline card in the hub, rows land staggered | not dismissed and one of server / friend / avatar still open | `firstRunDismissedAt` (preference), or auto-stamped when all three are done |
 | Arrival banner | `components/onboarding/arrival-banner.tsx` | Strip under the channel header | first visit to a server just joined | Session; `pqp:arrived-servers` remembers the join |
 | Baú intro | `components/community-home/community-home-onboarding.tsx` (staging) | Inline card in the feed | member's first Baú | `communityHomeIntroDismissedAt` (preference) |
