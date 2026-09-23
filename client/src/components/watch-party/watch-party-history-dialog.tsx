@@ -553,30 +553,62 @@ export function WatchPartyHistoryDialog({
 
   // A file being made is asked about again until it exists, for as long as
   // the dialog is open (closing it clears `downloads`, which ends this).
+  //
+  // One timer per row, kept across renders and replaced only when THAT row's
+  // state changes: a row whose last poll failed asks again on its own
+  // backoff, and another row's answer arriving does not restart (and so
+  // postpone) this one's clock.
+  const pollTimers = useRef(
+    // `timer` is null once it has fired: the poll is in flight, and the entry
+    // stays so another row's change does not arm a second one for the same
+    // state. The answer replaces the state, which is what clears it.
+    new Map<
+      string,
+      { state: WatchPartyDownloadsState; timer: ReturnType<typeof setTimeout> | null }
+    >(),
+  );
   useEffect(() => {
-    if (!open) {
-      return;
+    const timers = pollTimers.current;
+    const wanted = open ? downloads : {};
+    for (const [sessionId, entry] of timers) {
+      if (wanted[sessionId] !== entry.state) {
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+        }
+        timers.delete(sessionId);
+      }
     }
-    // One timer per row: a row whose last poll failed asks again on its own
-    // backoff, without dragging the healthy rows onto it.
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    for (const [sessionId, state] of Object.entries(downloads)) {
-      if (state?.status !== "ready" || (state.preparing?.length ?? 0) === 0) {
+    for (const [sessionId, state] of Object.entries(wanted)) {
+      if (
+        !state ||
+        state.status !== "ready" ||
+        (state.preparing?.length ?? 0) === 0 ||
+        timers.has(sessionId)
+      ) {
         continue;
       }
-      timers.push(
-        setTimeout(
-          () => fetchDownloads(sessionId),
-          preparingPollDelayMs(state.failedPolls ?? 0),
-        ),
-      );
+      const entry: {
+        state: WatchPartyDownloadsState;
+        timer: ReturnType<typeof setTimeout> | null;
+      } = { state, timer: null };
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        fetchDownloads(sessionId);
+      }, preparingPollDelayMs(state.failedPolls ?? 0));
+      timers.set(sessionId, entry);
     }
-    return () => {
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
-    };
   }, [open, downloads, fetchDownloads]);
+  useEffect(
+    () => () => {
+      for (const { timer } of pollTimers.current.values()) {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+      pollTimers.current.clear();
+    },
+    [],
+  );
 
   const requestDownloads = useCallback(
     (entry: WatchPartyHistoryEntry) => {

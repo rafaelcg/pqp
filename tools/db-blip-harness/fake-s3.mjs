@@ -7,7 +7,7 @@
  */
 import http from "node:http";
 import { createReadStream, statSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { join, normalize, sep } from "node:path";
 
 const TYPES = {
   ".m3u8": "application/vnd.apple.mpegurl",
@@ -35,7 +35,7 @@ export function startFakeS3({ port, root, bucket }) {
       return;
     }
     const file = normalize(join(root, path.slice(prefix.length)));
-    if (!file.startsWith(root)) {
+    if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) {
       res.writeHead(403, headers);
       res.end();
       return;

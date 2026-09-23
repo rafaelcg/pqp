@@ -3954,10 +3954,10 @@ function diffSentRoster(
  *
  * What this process knows instead is what it last told its clients
  * (`sentRosters`, written from the rows), plus everything that happened
- * locally since (`events`, this window's queue, which also carries the
- * `left` hints the bus delivered from other machines). So: the last roster
- * sent, minus whoever left since, with this instance's own peers laid over
- * it by id. `diffSentRoster` keeps THIS as the memory for the next window,
+ * since (`events`, this window's queue: local changes, and the joins,
+ * updates and leaves the bus delivered from other machines). So: the last
+ * roster sent, with those events replayed in order, and this instance's own
+ * peers laid over it by id. `diffSentRoster` keeps THIS as the memory for the next window,
  * because it is what the receivers now hold, so a leave in one window stays
  * applied in the next. A remote
  * peer who left while the bus was also down stays listed until the rows can
@@ -3965,6 +3965,20 @@ function diffSentRoster(
  * people who were still there. With nothing sent before, this is the local
  * picture, as it always was.
  */
+/** Replay a window's room events, in order, onto a roster keyed by peer id. */
+function applyRoomEvents(
+  roster: Map<string, VoiceParticipant>,
+  events: readonly VoiceRoomEvent[],
+): void {
+  for (const event of events) {
+    if (event.kind === "left") {
+      roster.delete(event.peerId);
+    } else if (event.kind === "joined" || event.kind === "updated") {
+      roster.set(event.peer.peerId, event.peer);
+    }
+  }
+}
+
 function rosterWithoutRows(
   voiceChannelId: string,
   local: readonly VoiceParticipant[],
@@ -3975,11 +3989,7 @@ function rosterWithoutRows(
     return [...local];
   }
   const merged = new Map(lastSent);
-  for (const event of events) {
-    if (event.kind === "left") {
-      merged.delete(event.peerId);
-    }
-  }
+  applyRoomEvents(merged, events);
   for (const peer of local) {
     merged.set(peer.peerId, peer);
   }
@@ -4729,13 +4739,18 @@ export async function runVoiceReconcile(): Promise<{
   // window are rewritten as orphans (their own `orphanedAt`), so this changes
   // no seat's state, it only makes the rows say what the map already knows.
   if (consumeOwnHeartbeatRecovery()) {
-    let reasserted = 0;
+    const channels = new Set<string>();
     for (const peer of peers.values()) {
       writePeerRow(peer);
-      reasserted += 1;
+      channels.add(peer.voiceChannelId);
     }
-    seatsReassertedAfterOutage += reasserted;
-    logEvent("voice.registryReasserted", { seats: reasserted });
+    // Landed before anything below reads the table. The writes go through
+    // the same per-peer chain as every other (and through the batcher when
+    // `VOICE_REGISTRY_BATCH` is on, which is what keeps a large instance's
+    // re-assertion from being one round trip per seat).
+    await Promise.all([...channels].map((channelId) => settledRowWrites(channelId)));
+    seatsReassertedAfterOutage += peers.size;
+    logEvent("voice.registryReasserted", { seats: peers.size });
   }
   // See `otherLeasesTrustworthy`: a lease that went stale while this instance
   // could not reach the database either is not a dead instance, and treating
@@ -5627,7 +5642,11 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       // seats are empty.
       for (const [voiceChannelId, sent] of sentRosters) {
         const room = roomOf(voiceChannelId);
-        for (const participant of sent.values()) {
+        // With whatever this window has learned since that roster went out,
+        // not consumed: the coalesced run still owns the queue.
+        const current = new Map(sent);
+        applyRoomEvents(current, pendingRoomEvents.get(voiceChannelId) ?? []);
+        for (const participant of current.values()) {
           room.participants.set(participant.peerId, participant);
           room.orphaned.set(participant.peerId, false);
         }

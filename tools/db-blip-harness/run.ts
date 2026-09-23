@@ -10,8 +10,8 @@
  *     fatal hls.js error and no rebuild of the player, and
  *  2. a voice call already connected (two distinct dev users) is not hung
  *     up: both sockets stay open, nobody receives `peer-left` for the other,
- *     and after recovery both are still seated, in the roster and in the
- *     `voice_peers` registry.
+ *     and after recovery both seats are still in `voice_peers` (with the
+ *     registry on, the rows ARE what every roster is built from).
  *
  * Everything is local and free: the real API (`server/dist`), with
  * `VOICE_REGISTRY=postgres` and `CLUSTER_BUS=postgres` like production,

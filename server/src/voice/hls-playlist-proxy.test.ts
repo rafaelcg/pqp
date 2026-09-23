@@ -526,6 +526,52 @@ describe("playlist render cache", () => {
     ).rejects.toThrow(HlsPlaylistNotFound);
   });
 
+  it("one rendition ending does not take its siblings' outage fallback away", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30", now);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now);
+    // 360p's row is ended (a ladder trimmed mid-party)...
+    pool.query.mockImplementationOnce(async () => ({ rowCount: 0, rows: [] }));
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now + 2_000),
+    ).rejects.toThrow(HlsPlaylistNotFound);
+    // ...then the database goes away: 720p still rides it out, 360p does not.
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30", now + 4_000),
+    ).resolves.toContain("#EXTM3U");
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now + 4_000),
+    ).rejects.toThrow(MockDatabaseUnavailableError);
+  });
+
+  it("refreshes against a slow database share ONE outstanding liveness query per rendition", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      pool.query.mockImplementation(() => new Promise(() => {}) as never);
+      for (let i = 1; i <= 5; i += 1) {
+        const render = buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + i * 2_000);
+        await vi.advanceTimersByTimeAsync(HLS_LIVENESS_WAIT_MS);
+        await expect(render).resolves.toContain("#EXTM3U");
+      }
+      // Five refreshes, five fresh renders from storage, one query.
+      expect(pool.query).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+      pool.query.mockReset();
+      pool.query.mockImplementation(async () => ({ rowCount: pool.rowCount, rows: [] }));
+    }
+  });
+
   it("the cached body still carries segment URLs that work for the viewer who gets it", async () => {
     process.env.LIVE_HLS_URL_TTL_SECONDS = "120";
     const first = await buildSignedPlaylist(CHANNEL, STARTED_AT);

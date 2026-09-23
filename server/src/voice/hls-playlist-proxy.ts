@@ -250,6 +250,8 @@ export function resetHlsPlaylistCacheForTests(): void {
   rungCache.clear();
   windowHistory.clear();
   liveConfirmed.clear();
+  endedRungs.clear();
+  livenessInflight.clear();
   rungSessionIds.clear();
   rendersWithoutDb = 0;
   segmentUrlMemo.clear();
@@ -922,8 +924,27 @@ subscribeToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, (data) => {
  */
 export const HLS_LIVENESS_WAIT_MS = 1_500;
 
-/** Last time Postgres said this SESSION (channel + startedAt) is live. */
+/**
+ * Last time Postgres said this is live, keyed two ways: by RENDITION
+ * (`cacheKey`, from that rung's own check) and by SESSION
+ * (`keepWarmSessionKey`, from any rung's check or a non-empty rung list). A
+ * rendition may ride out an outage on either, unless it is itself known to
+ * have ended: one rung ending (a ladder trimmed mid-party) says nothing about
+ * its siblings, and must not take their fallback away.
+ */
 const liveConfirmed = new Map<string, number>();
+
+/** Renditions a check found ended. Never ridden out, whatever the session says. */
+const endedRungs = new Set<string>();
+
+/**
+ * The liveness check in flight per rendition, shared. A render that stops
+ * waiting for a slow check does not abandon it, and the next render (a
+ * second later) joins it instead of starting another: on a database that is
+ * slow rather than gone, one outstanding query per rendition, not one per
+ * refresh piling onto the pool the fallback exists to spare.
+ */
+const livenessInflight = new Map<string, Promise<string | null>>();
 
 /** The `hls_sessions.id` each rendition's last successful check returned. */
 const rungSessionIds = new Map<string, string | null>();
@@ -936,15 +957,14 @@ export function hlsPlaylistRendersWithoutDb(): number {
   return rendersWithoutDb;
 }
 
-function noteSessionLive(channelId: string, startedAt: number, now: number): void {
-  const key = keepWarmSessionKey(channelId, startedAt);
+function stampLive(key: string, now: number): void {
   const previous = liveConfirmed.get(key) ?? 0;
   if (now > previous) {
     liveConfirmed.set(key, now);
   }
   // Bounded without a timer: a stamp older than the bound can no longer
   // excuse anything, so it is only memory.
-  if (liveConfirmed.size > 256) {
+  if (liveConfirmed.size > 512) {
     for (const [other, at] of liveConfirmed) {
       if (now - at > STALE_ON_BREAKER_MAX_MS) {
         liveConfirmed.delete(other);
@@ -953,13 +973,28 @@ function noteSessionLive(channelId: string, startedAt: number, now: number): voi
   }
 }
 
+function noteSessionLive(channelId: string, startedAt: number, now: number): void {
+  stampLive(keepWarmSessionKey(channelId, startedAt), now);
+}
+
+function freshStamp(key: string, now: number): boolean {
+  const at = liveConfirmed.get(key);
+  return at !== undefined && now - at <= STALE_ON_BREAKER_MAX_MS;
+}
+
 function canRideOutDbFailure(
   channelId: string,
   startedAt: number,
+  rungKey: string,
   now: number,
 ): boolean {
-  const at = liveConfirmed.get(keepWarmSessionKey(channelId, startedAt));
-  return at !== undefined && now - at <= STALE_ON_BREAKER_MAX_MS;
+  if (endedRungs.has(rungKey)) {
+    return false;
+  }
+  return (
+    freshStamp(rungKey, now) ||
+    freshStamp(keepWarmSessionKey(channelId, startedAt), now)
+  );
 }
 
 type DbRead<T> =
@@ -986,9 +1021,68 @@ async function readWithin<T>(lookup: Promise<T>, waitMs: number): Promise<DbRead
 }
 
 /**
- * The `ended_at IS NULL` check for one rendition, with the outage rules in
- * the block above. Resolves to the rendition's `hls_sessions.id`, or throws
- * `HlsPlaylistNotFound` when the session is over.
+ * One rendition's `ended_at IS NULL` check, shared while in flight (see
+ * `livenessInflight`), recording its answer whoever is still waiting for
+ * it: a late "ended" still ends the rendition.
+ */
+function livenessCheck(
+  channelId: string,
+  startedAt: number,
+  objectPrefix: string,
+  rungKey: string,
+  now: number,
+): Promise<string | null> {
+  const existing = livenessInflight.get(rungKey);
+  if (existing) {
+    return existing;
+  }
+  const check = getPool()
+    .query<{ id: string }>(
+      `SELECT id FROM hls_sessions
+       WHERE channel_id = $1
+         AND object_prefix = $2
+         AND ended_at IS NULL
+         AND cleaned_at IS NULL`,
+      [channelId, objectPrefix],
+    )
+    .then((session) => {
+      if (!session.rowCount) {
+        // This rendition is over: forget its window and its segment-URL memo
+        // too, so neither map keeps one entry per session this process ever
+        // served, and make sure an outage cannot resurrect it. Its siblings'
+        // evidence is theirs and is left alone.
+        windowHistory.delete(rungKey);
+        segmentUrlMemo.delete(rungKey);
+        rungSessionIds.delete(rungKey);
+        liveConfirmed.delete(rungKey);
+        if (endedRungs.size > 1024) {
+          endedRungs.clear();
+        }
+        endedRungs.add(rungKey);
+        throw new HlsPlaylistNotFound(
+          `No live HLS session ${objectPrefix} for channel ${channelId}`,
+        );
+      }
+      const id = session.rows?.[0]?.id ?? null;
+      rungSessionIds.set(rungKey, id);
+      endedRungs.delete(rungKey);
+      stampLive(rungKey, now);
+      noteSessionLive(channelId, startedAt, now);
+      return id;
+    })
+    .finally(() => {
+      livenessInflight.delete(rungKey);
+    });
+  // Nobody may be waiting by the time it settles.
+  check.catch(() => {});
+  livenessInflight.set(rungKey, check);
+  return check;
+}
+
+/**
+ * The liveness check for one rendition, with the outage rules in the block
+ * above. Resolves to the rendition's `hls_sessions.id`, or throws
+ * `HlsPlaylistNotFound` when it is over.
  */
 async function confirmSessionLive(
   channelId: string,
@@ -997,43 +1091,16 @@ async function confirmSessionLive(
   rungKey: string,
   now: number,
 ): Promise<string | null> {
-  const lookup = getPool().query<{ id: string }>(
-    `SELECT id FROM hls_sessions
-     WHERE channel_id = $1
-       AND object_prefix = $2
-       AND ended_at IS NULL
-       AND cleaned_at IS NULL`,
-    [channelId, objectPrefix],
-  );
-  const settle = (session: { rowCount: number | null; rows?: { id: string }[] }) => {
-    if (!session.rowCount) {
-      // The session is over: forget its window and its segment-URL memo too,
-      // so neither map keeps one entry per session this process ever served,
-      // and forget that it was ever live so an outage cannot resurrect it.
-      windowHistory.delete(rungKey);
-      segmentUrlMemo.delete(rungKey);
-      rungSessionIds.delete(rungKey);
-      liveConfirmed.delete(keepWarmSessionKey(channelId, startedAt));
-      throw new HlsPlaylistNotFound(
-        `No live HLS session ${objectPrefix} for channel ${channelId}`,
-      );
-    }
-    const id = session.rows?.[0]?.id ?? null;
-    rungSessionIds.set(rungKey, id);
-    noteSessionLive(channelId, startedAt, now);
-    return id;
-  };
-
-  if (!canRideOutDbFailure(channelId, startedAt, now)) {
-    return settle(await lookup);
+  const check = livenessCheck(channelId, startedAt, objectPrefix, rungKey, now);
+  if (!canRideOutDbFailure(channelId, startedAt, rungKey, now)) {
+    return check;
   }
-  const read = await readWithin(lookup, HLS_LIVENESS_WAIT_MS);
+  const read = await readWithin(check, HLS_LIVENESS_WAIT_MS);
   if (read.kind === "ok") {
-    return settle(read.value);
+    return read.value;
   }
-  if (read.kind === "slow") {
-    // Still asked, only not waited for: a late "ended" still ends it.
-    void lookup.then(settle).catch(() => {});
+  if (read.kind === "failed" && read.error instanceof HlsPlaylistNotFound) {
+    throw read.error;
   }
   rendersWithoutDb += 1;
   return rungSessionIds.get(rungKey) ?? null;
