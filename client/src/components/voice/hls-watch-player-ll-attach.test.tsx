@@ -47,7 +47,9 @@ vi.mock("hls.js", async () => {
       if (refuseEverything.on) {
         throw new Error("Illegal hls.js config: everything");
       }
-      if (refuseLowLatency.on && config.lowLatencyMode === true) {
+      // The LL constructor config is the one carrying the governor's
+      // `liveSyncOnStallIncrease: 0`; the conventional one never does.
+      if (refuseLowLatency.on && "liveSyncOnStallIncrease" in config) {
         throw new Error('Illegal hls.js config: "liveMaxLatencyDuration"');
       }
       // The real merge, including the validation that threw. Destroyed

@@ -270,6 +270,7 @@ import {
   sendJson,
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
+import { summarizeHlsTelemetryBatch } from "../voice/hls-telemetry-summary.js";
 import { logEvent } from "../lib/log.js";
 import {
   clientAddress,
@@ -8984,6 +8985,11 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     startupMs,
     avgBufferSeconds:
       avgBufferSeconds !== undefined ? Math.round(avgBufferSeconds * 10) / 10 : undefined,
+    // Telemetry v2 (2026-09-23), empty for clients that predate it: steady
+    // playback split from startup, frozen time, per-window rebuilds, hole
+    // skips vs stalls, visibility, mode and fatal details. The headline is
+    // `stallSecondsPerMinute`. See `summarizeHlsTelemetryBatch`.
+    ...summarizeHlsTelemetryBatch(batch.samples),
   });
   return { ok: true };
 });

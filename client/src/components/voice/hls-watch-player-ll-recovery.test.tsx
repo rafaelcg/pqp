@@ -30,7 +30,7 @@ import { LL_HLS_EDGE_JUMP_MAX } from "@/lib/hls-live-edge";
  * nothing is how the last one of these got through.
  */
 
-/** Every loader call the player made, in order, e.g. `startLoad(1499.5)`. */
+/** Every loader call the player made, in order, e.g. `startLoad(1492)`. */
 const calls: string[] = [];
 /** What the fake reports as hls.js's own live sync point. */
 const engine = { liveSyncPosition: null as number | null };
@@ -215,10 +215,11 @@ describe("an LL player that falls behind the part ring", () => {
     await act(async () => {
       fire(missingPartError());
     });
-    // One live-edge restart: the loader is pointed at the edge (one part
-    // back, `liveSeekOffsetSeconds("ll", 500)`), not at `-1`, which is what
-    // sent it back to part 699.
-    expect(calls).toEqual(["stopLoad", "startLoad(1499.5)"]);
+    // One live-edge restart: the loader is pointed at the governor's target
+    // behind the edge (LL-lite's 8 s, `liveSeekOffsetSeconds("ll", 500, 8)`:
+    // on whole segments the newest part is not loadable yet), not at `-1`,
+    // which is what sent it back to part 699.
+    expect(calls).toEqual(["stopLoad", "startLoad(1492)"]);
   });
 
   it("does not hand that error to the stall ladder at all", async () => {
@@ -235,27 +236,49 @@ describe("an LL player that falls behind the part ring", () => {
     expect(container.textContent).not.toContain("voice.hls.dead");
   });
 
-  it("hands the SECOND part error to §4's pin, which rebuilds rather than jumping", async () => {
+  it("never rebuilds over a SECOND part error: §4's old pin is gone (2026-09-23)", async () => {
     await mount();
     await act(async () => {
       fire(missingPartError());
     });
-    expect(calls).toEqual(["stopLoad", "startLoad(1499.5)"]);
+    expect(calls).toEqual(["stopLoad", "startLoad(1492)"]);
     calls.length = 0;
-    // Two part-load errors inside 10 s is the pin rule
-    // (`shouldPinToConventionalRung`): this session stops asking hls.js to
-    // hold the LL edge at all, which re-attaches from the live edge anyway.
-    // Two responses to one error is how a ladder fights itself, so the jump
-    // stands down for it.
+    // Two part-load errors inside 10 s used to pin the session to
+    // conventional targeting by REBUILDING the player (a new `loadSource`).
+    // A viewer on whole segments has nothing left to switch, so the second
+    // error is simply the second jump of the bounded budget.
     await act(async () => {
       fire(missingPartError());
     });
-    expect(calls).not.toContain("startLoad(1499.5)");
+    expect(calls).toEqual(["stopLoad", "startLoad(1492)"]);
+    expect(calls).not.toContain("loadSource");
     expect(
       warn.mock.calls.some((args: unknown[]) =>
         String(args[0]).includes("pinning to conventional"),
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("moves an opted-in PARTS viewer to whole segments in place on the second part error", async () => {
+    window.localStorage.setItem("pqp:ll-parts", "1");
+    try {
+      await mount();
+      await act(async () => {
+        fire(missingPartError());
+      });
+      await act(async () => {
+        fire(missingPartError());
+      });
+      expect(
+        warn.mock.calls.some((args: unknown[]) =>
+          String(args[0]).includes("loading whole segments"),
+        ),
+      ).toBe(true);
+      // In place: the one instance, never a second `loadSource`.
+      expect(calls.filter((c) => c === "loadSource")).toHaveLength(0);
+    } finally {
+      window.localStorage.removeItem("pqp:ll-parts");
+    }
   });
 
   it("is bounded: past the budget the error escalates the way it always did", async () => {
@@ -269,7 +292,7 @@ describe("an LL player that falls behind the part ring", () => {
       await act(async () => {
         fire(missingPartError());
       });
-      expect(calls).toContain("startLoad(1499.5)");
+      expect(calls).toContain("startLoad(1492)");
       calls.length = 0;
       await tick(11);
       calls.length = 0;
@@ -387,7 +410,7 @@ describe("an LL player that falls behind the part ring", () => {
     calls.length = 0;
     // Step 2 is `start-load`, and it starts AT THE EDGE.
     await tick();
-    expect(calls).toContain("startLoad(1499.5)");
+    expect(calls).toContain("startLoad(1492)");
     expect(calls).not.toContain("startLoad(-1)");
   });
 
@@ -480,7 +503,7 @@ describe("an LL player that falls behind the part ring", () => {
     await tickUntilLoaderActs();
     // The same shape `stopLoad` + `startLoad(edge)` the missing-fragment
     // jump makes -- one live-edge restart, not a ladder walk.
-    expect(calls).toEqual(["stopLoad", "startLoad(1499.5)"]);
+    expect(calls).toEqual(["stopLoad", "startLoad(1492)"]);
   });
 
   it("never jumps once this attach has actually played -- that is the starved-presenter case", async () => {
@@ -496,7 +519,7 @@ describe("an LL player that falls behind the part ring", () => {
     await tickUntilLoaderActs();
     // The ordinary ladder's first rung -- `startLoad` alone, no `stopLoad`
     // -- not the jump's `stopLoad` + `startLoad` pair.
-    expect(calls).toEqual(["startLoad(1499.5)"]);
+    expect(calls).toEqual(["startLoad(1492)"]);
   });
 
   it("falls back to the ordinary ladder once the shared jump budget is already spent", async () => {
@@ -509,13 +532,13 @@ describe("an LL player that falls behind the part ring", () => {
     await act(async () => {
       fire(missingPartError());
     });
-    expect(calls).toContain("startLoad(1499.5)");
+    expect(calls).toContain("startLoad(1492)");
     calls.length = 0;
     await tick(11);
     await act(async () => {
       fire(missingPartError());
     });
-    expect(calls).toContain("startLoad(1499.5)");
+    expect(calls).toContain("startLoad(1492)");
     calls.length = 0;
     // Budget spent (two jumps inside the last 30 s): a stall discovered now,
     // on an attach that has still never played, falls back to the ordinary
@@ -527,6 +550,6 @@ describe("an LL player that falls behind the part ring", () => {
     await tickUntilLoaderActs();
     // The ordinary first rung runs instead, still seeking the edge (LL,
     // unchanged) but never the jump's own `stopLoad`.
-    expect(calls).toEqual(["startLoad(1499.5)"]);
+    expect(calls).toEqual(["startLoad(1492)"]);
   });
 });

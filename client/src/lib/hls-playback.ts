@@ -681,3 +681,116 @@ export function sendHlsTelemetryBatch(
     // Dropped. See the doc comment above.
   });
 }
+
+/**
+ * WHAT A STALL COSTS, PER TELEMETRY SAMPLE (2026-09-23).
+ *
+ * The first cut of this telemetry counted `waiting` AND `stalled` events and
+ * never sent a duration, so the 2026-09-21 party could only say "33% of
+ * 30-second windows had a stall": every attach's own startup buffering
+ * counted, a network `stalled` notice on a playing element counted, and a
+ * 40 ms blip weighed the same as a 20 s freeze. This meter counts EPISODES
+ * (a `waiting` that was not already inside one; the gap controller's
+ * seek-over-hole fires a second `waiting` inside the same freeze) and their
+ * frozen milliseconds, split at sample boundaries so a long freeze is
+ * reported as it happens rather than only when it ends.
+ *
+ * Pure: the caller passes `now`, so it is unit tested without a DOM.
+ */
+export interface HlsStallWindow {
+  /** Stall episodes that STARTED in this window. */
+  stalls: number;
+  /** Milliseconds frozen inside this window, including an episode still running. */
+  stalledMs: number;
+  /** hls.js seek-over-hole skips in this window (the other kind of "stall"). */
+  holeSkips: number;
+  /** Milliseconds this window covers (since the previous `take`). */
+  windowMs: number;
+  /** True while any part of this window was spent hidden (`visibilityState`). */
+  hidden: boolean;
+}
+
+export class HlsStallMeter {
+  private stalledSince: number | null = null;
+  private stalls = 0;
+  private stalledMs = 0;
+  private holeSkips = 0;
+  private windowStart: number;
+  private hiddenInWindow = false;
+  private hiddenNow = false;
+
+  constructor(now: number, hidden = false) {
+    this.windowStart = now;
+    this.hiddenNow = hidden;
+    this.hiddenInWindow = hidden;
+  }
+
+  /** A `waiting` on the element. Returns true when it opens a new episode. */
+  onWaiting(now: number): boolean {
+    if (this.stalledSince !== null) {
+      return false;
+    }
+    this.stalledSince = now;
+    this.stalls += 1;
+    return true;
+  }
+
+  /** `playing` (or anything else that proves frames are moving again). */
+  onPlaying(now: number): void {
+    if (this.stalledSince === null) {
+      return;
+    }
+    this.stalledMs += Math.max(0, now - this.stalledSince);
+    this.stalledSince = null;
+  }
+
+  onHoleSkip(): void {
+    this.holeSkips += 1;
+  }
+
+  onVisibility(hidden: boolean): void {
+    this.hiddenNow = hidden;
+    if (hidden) {
+      this.hiddenInWindow = true;
+    }
+  }
+
+  get isStalled(): boolean {
+    return this.stalledSince !== null;
+  }
+
+  /** Close the current window and start the next one at `now`. */
+  take(now: number): HlsStallWindow {
+    let stalledMs = this.stalledMs;
+    if (this.stalledSince !== null) {
+      stalledMs += Math.max(0, now - this.stalledSince);
+      // The episode goes on; only its elapsed part belongs to this window.
+      this.stalledSince = now;
+    }
+    const window: HlsStallWindow = {
+      stalls: this.stalls,
+      stalledMs: Math.round(stalledMs),
+      holeSkips: this.holeSkips,
+      windowMs: Math.max(0, Math.round(now - this.windowStart)),
+      hidden: this.hiddenInWindow,
+    };
+    this.stalls = 0;
+    this.stalledMs = 0;
+    this.holeSkips = 0;
+    this.windowStart = now;
+    this.hiddenInWindow = this.hiddenNow;
+    return window;
+  }
+}
+
+/**
+ * Whether a sample taken at `now` belongs to the attach's startup: before the
+ * first frame, or within `startupMs` of it. `firstFrameAt` null = no frame yet.
+ */
+export function isHlsStartupSample(
+  firstFrameAt: number | null,
+  now: number,
+  startupMs: number,
+): boolean {
+  return firstFrameAt === null || now - firstFrameAt < startupMs;
+}

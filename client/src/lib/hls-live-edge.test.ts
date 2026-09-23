@@ -714,7 +714,11 @@ describe("effectiveHlsMode", () => {
 describe("llHlsConfig", () => {
   it("sets the LL engine fields and nothing hls.js refuses at construction", () => {
     const config = llHlsConfig();
-    expect(config.lowLatencyMode).toBe(true);
+    // Whole segments by default (LL-lite, 2026-09-23); parts on request.
+    expect(config.lowLatencyMode).toBe(false);
+    expect(llHlsConfig("parts").lowLatencyMode).toBe(true);
+    // The governor owns target growth; hls.js's own +1 s per stall is off.
+    expect(config.liveSyncOnStallIncrease).toBe(0);
     expect(config.maxLiveSyncPlaybackRate).toBe(
       LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
     );
@@ -763,11 +767,12 @@ describe("llHlsConfig", () => {
 
   it("is a byte-identical snapshot of the constructor config", () => {
     expect(llHlsConfig()).toEqual({
-      lowLatencyMode: true,
-      maxLiveSyncPlaybackRate: 1.1,
-      maxBufferLength: 6,
-      maxMaxBufferLength: 10,
-      backBufferLength: 4,
+      lowLatencyMode: false,
+      maxLiveSyncPlaybackRate: 1.05,
+      liveSyncOnStallIncrease: 0,
+      maxBufferLength: 12,
+      maxMaxBufferLength: 20,
+      backBufferLength: 8,
       startLevel: -1,
       manifestLoadPolicy: {
         default: {
@@ -813,14 +818,17 @@ describe("llHlsConfig", () => {
     expect(retry.retryDelayMs).toBeLessThanOrEqual(500);
   });
 
-  it("cannot sit on one part for longer than the ring holds (Farol, this PR)", () => {
+  it("cannot sit on one fragment for longer than the ring holds (Farol, this PR)", () => {
     // hls.js's own timeout budget is four immediate retries against a 10 s
     // first-byte deadline: fifty seconds on ONE part that never answered,
     // four ring-widths, with the live-edge recovery waiting for a fatal that
     // is not coming.
     const policy = llHlsConfig().fragLoadPolicy.default;
     const attempts = policy.timeoutRetry.maxNumRetry + 1;
-    expect(attempts * policy.maxLoadTimeMs).toBeLessThanOrEqual(12_000);
+    // The remux ring is six segments, 24 s and up at ~4 s segments; the
+    // budget stays well inside it (2026-09-23: widened from 12 s when the
+    // 2.5 s load timeout proved fatal under ordinary Brazilian jitter).
+    expect(attempts * policy.maxLoadTimeMs).toBeLessThanOrEqual(20_000);
     expect(policy.maxTimeToFirstByteMs).toBeLessThanOrEqual(policy.maxLoadTimeMs);
     // THE BACKOFF COUNTS TOO (2026-09-16). The retries were paced 200/400/
     // 800 ms so a starved second does not go fatal; that patience is part of
@@ -828,9 +836,10 @@ describe("llHlsConfig", () => {
     const backoff =
       policy.timeoutRetry.retryDelayMs *
       (2 ** policy.timeoutRetry.maxNumRetry - 1);
-    expect(attempts * policy.maxLoadTimeMs + backoff).toBeLessThanOrEqual(12_000);
-    // And there are enough of them to ride one out at all.
-    expect(policy.timeoutRetry.maxNumRetry).toBeGreaterThanOrEqual(3);
+    expect(attempts * policy.maxLoadTimeMs + backoff).toBeLessThanOrEqual(20_000);
+    // And each attempt is patient enough to ride out a multi-second spike.
+    expect(policy.maxTimeToFirstByteMs).toBeGreaterThanOrEqual(5_000);
+    expect(policy.timeoutRetry.maxNumRetry).toBeGreaterThanOrEqual(1);
   });
 
   it("rides out a warming LL master: more than hls.js's stock one manifest retry", () => {
@@ -1167,5 +1176,47 @@ describe("describeHlsError", () => {
 
   it("says nothing when there is nothing to say", () => {
     expect(describeHlsError(null)).toBe("");
+  });
+});
+
+describe("the governor's target reaches the edge helpers (2026-09-23)", () => {
+  it("seeks an LL viewer to the target, not one part behind the edge", async () => {
+    const m = await import("./hls-live-edge");
+    expect(m.liveSeekOffsetSeconds("ll", 500, 8)).toBe(8);
+    expect(m.liveSeekOffsetSeconds("ll", 500, null)).toBe(0.5);
+    expect(m.liveSeekOffsetSeconds("conventional", 500, 8)).toBe(
+      m.HLS_LIVE_SEGMENT_SECONDS,
+    );
+  });
+
+  it("never calls an LL-lite viewer 'behind' for sitting where the player put them", async () => {
+    const m = await import("./hls-live-edge");
+    expect(m.behindLiveThresholdSeconds("ll", 500, 8)).toBe(
+      8 + m.LL_BEHIND_LIVE_MARGIN_SECONDS,
+    );
+    expect(m.behindLiveThresholdSeconds("ll", 500)).toBe(4);
+  });
+
+  it("never speeds a conventional viewer up on a thin buffer", async () => {
+    const m = await import("./hls-live-edge");
+    expect(m.catchUpPlaybackRate(10, 20)).toBe(m.HLS_CATCH_UP_MAX_PLAYBACK_RATE);
+    expect(m.catchUpPlaybackRate(10, m.HLS_CATCH_UP_MIN_BUFFER_SECONDS - 0.1)).toBe(1);
+    // Default (no buffer reading) keeps the old curve.
+    expect(m.catchUpPlaybackRate(10)).toBe(m.HLS_CATCH_UP_MAX_PLAYBACK_RATE);
+  });
+
+  it("measures forward buffer in the range that holds the playhead only", async () => {
+    const m = await import("./hls-live-edge");
+    const ranges = [
+      [0, 5],
+      [6, 20],
+    ];
+    const buffered = {
+      length: ranges.length,
+      start: (i: number) => ranges[i]![0]!,
+      end: (i: number) => ranges[i]![1]!,
+    };
+    expect(m.bufferAheadSeconds({ currentTime: 3, buffered })).toBe(2);
+    expect(m.bufferAheadSeconds({ currentTime: 5.5, buffered })).toBe(0);
   });
 });
