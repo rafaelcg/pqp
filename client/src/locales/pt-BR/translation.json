@@ -1641,6 +1641,7 @@
   "settings.voice.pttTypingNote": "{key} digita um caractere, então ele não abre o mic enquanto você escreve numa caixa de texto. Ctrl, Alt ou uma tecla F funcionam até no meio da digitação.",
   "settings.voice.pttGlobal": "Funcionar com o pqp em segundo plano",
   "settings.voice.pttGlobalHint": "A tecla abre o mic mesmo com outro app na frente, como um jogo. Desligue se ela já faz outra coisa no que você está usando.",
+  "settings.voice.pttGlobalReleaseFailed": "O app para desktop não soltou a tecla em segundo plano. Ela para enquanto esta janela estiver em foco, e o pqp tenta de novo toda vez que você volta pra cá. Se continuar, reinicie o app.",
   "settings.voice.pttHintDesktopOff": "{key} funciona em qualquer tela do pqp enquanto esta janela estiver em foco. Ligue a opção acima pra usar com outro app na frente.",
   "settings.voice.pttHintDesktopNative": "{key} funciona em qualquer lugar deste computador, mesmo com outro app na frente.",
   "settings.voice.pttHintDesktopFallback": "{key} funciona em qualquer lugar deste computador, mesmo com outro app na frente, mas nesta versão o app tem que adivinhar quando você soltou, então um toque rápido pode deixar o mic aberto por cerca de um segundo.",

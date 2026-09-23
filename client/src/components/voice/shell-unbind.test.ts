@@ -7,11 +7,16 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 function harness() {
   const timers: Array<() => void> = [];
   const gaveUp: unknown[] = [];
+  const events: string[] = [];
   const tracker = createShellUnbindTracker({
     setTimer: (fn) => {
       timers.push(fn);
     },
-    onGiveUp: (err) => gaveUp.push(err),
+    onGiveUp: (err) => {
+      gaveUp.push(err);
+      events.push("gave-up");
+    },
+    onRecovered: () => events.push("recovered"),
     delaysMs: [10, 20],
   });
   const runTimers = async () => {
@@ -20,7 +25,7 @@ function harness() {
       await settle();
     }
   };
-  return { tracker, gaveUp, runTimers };
+  return { tracker, gaveUp, events, runTimers };
 }
 
 describe("shell unbind", () => {
@@ -91,5 +96,44 @@ describe("shell unbind", () => {
     await settle();
     await runTimers();
     expect(calls).toBe(2);
+  });
+
+  it("keeps a failed unbind and sends it again when asked (window refocused)", async () => {
+    const { tracker, events, runTimers } = harness();
+    let shellWorks = false;
+    let calls = 0;
+    tracker.unbind(() => {
+      calls += 1;
+      return shellWorks ? Promise.resolve() : Promise.reject(new Error("ipc"));
+    });
+    await settle();
+    await runTimers();
+    expect(tracker.stuck).toBe(true);
+    expect(events).toEqual(["gave-up"]);
+
+    shellWorks = true;
+    tracker.retryStuck();
+    await settle();
+    expect(calls).toBe(4);
+    expect(tracker.stuck).toBe(false);
+    expect(events).toEqual(["gave-up", "recovered"]);
+  });
+
+  it("a newer bind clears the stuck state, since it replaces the binding in the shell", async () => {
+    const { tracker, events, runTimers } = harness();
+    tracker.unbind(() => Promise.reject(new Error("ipc")));
+    await settle();
+    await runTimers();
+    expect(tracker.stuck).toBe(true);
+    tracker.nextRequest();
+    expect(tracker.stuck).toBe(false);
+    expect(events).toEqual(["gave-up", "recovered"]);
+  });
+
+  it("retryStuck does nothing when nothing is stuck", async () => {
+    const { tracker, events } = harness();
+    tracker.retryStuck();
+    await settle();
+    expect(events).toEqual([]);
   });
 });

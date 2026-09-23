@@ -45,6 +45,16 @@ export function isAltGraph(event: {
   }
 }
 
+/** Bindings AltGr produces a keydown for: Ctrl (Windows' synthetic one), Right Alt, or any Ctrl chord. */
+function altGraphCanFake(binding: PttBinding): boolean {
+  return (
+    binding.code === "ControlLeft" ||
+    binding.code === "ControlRight" ||
+    binding.code === "AltRight" ||
+    binding.ctrl
+  );
+}
+
 /**
  * Wire the push-to-talk key (or mouse button) to `set`, and every way of
  * leaving with it still down to `set(false)`. Returns the teardown, which
@@ -112,7 +122,12 @@ export function attachPushToTalkListeners(
         // already be held by the time AltGr is recognised: let go then, and
         // never engage while AltGr is down.
         if (isAltGraph(key) && isTextEntryTarget(key.target)) {
-          set(false);
+          // Only a binding AltGr can be mistaken for lets go: a Ctrl one
+          // (the synthetic keydown) or Right Alt itself. An F13 held while
+          // somebody types "/" is still meant.
+          if (altGraphCanFake(binding)) {
+            set(false);
+          }
           return;
         }
         if (!shouldEngage(key, binding)) {

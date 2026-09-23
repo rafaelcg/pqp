@@ -157,6 +157,67 @@ describe("push-to-talk listeners: AltGr is typing", () => {
     expect(isHeld()).toBe(false);
   });
 
+  it("AltGr typed in the composer does not cut an unrelated binding already held", () => {
+    const f13: PttBinding = {
+      device: "keyboard",
+      code: "F13",
+      label: "F13",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    };
+    const { win, isHeld } = setup(f13);
+    win.dispatchEvent(key("keydown", { code: "F13", target: composer }));
+    win.dispatchEvent(
+      key("keydown", {
+        code: "AltRight",
+        key: "AltGraph",
+        altGraph: true,
+        target: composer,
+      }),
+    );
+    expect(isHeld()).toBe(true);
+  });
+
+  it("a Right Alt binding never engages from the composer, even reported as plain Alt", () => {
+    const altRight: PttBinding = {
+      device: "keyboard",
+      code: "AltRight",
+      label: "Right Alt",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    };
+    const { win, isHeld } = setup(altRight);
+    // macOS and US layouts report Right Alt as "Alt", not "AltGraph".
+    win.dispatchEvent(
+      key("keydown", {
+        code: "AltRight",
+        key: "Alt",
+        altKey: true,
+        target: composer,
+      }),
+    );
+    expect(isHeld()).toBe(false);
+    // And as AltGr on ABNT / European layouts.
+    win.dispatchEvent(
+      key("keydown", {
+        code: "AltRight",
+        key: "AltGraph",
+        altGraph: true,
+        target: composer,
+      }),
+    );
+    expect(isHeld()).toBe(false);
+    // Over the page it is a fine binding.
+    win.dispatchEvent(
+      key("keydown", { code: "AltRight", key: "Alt", altKey: true }),
+    );
+    expect(isHeld()).toBe(true);
+  });
+
   it("AltGr outside a text field does not interfere", () => {
     const { win, isHeld } = setup(leftCtrl);
     win.dispatchEvent(key("keydown", { code: "ControlLeft", ctrlKey: true }));

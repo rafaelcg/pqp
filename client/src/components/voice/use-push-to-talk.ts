@@ -5,16 +5,9 @@ import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerato
 import { getDesktop, type DesktopPttBinding } from "@/lib/desktop";
 import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
-import { createShellUnbindTracker } from "@/components/voice/shell-unbind";
+import { pttShellUnbind } from "@/components/voice/shell-unbind";
 
-const shellUnbind = createShellUnbindTracker({
-  onGiveUp: (err) => {
-    console.error(
-      "[pqp] push-to-talk: the desktop app would not release the background key; it stops the next time this window is focused",
-      err,
-    );
-  },
-});
+const shellUnbind = pttShellUnbind;
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
@@ -129,7 +122,13 @@ export function usePushToTalk({
     // true in some browsers, so re-reading it there would leave the UI claiming
     // the key still works at the exact moment it stopped working.
     setWindowFocused(document.hasFocus());
-    const onFocus = () => setWindowFocused(true);
+    const onFocus = () => {
+      setWindowFocused(true);
+      // An unbind the shell refused earlier gets another go. The shell has
+      // just stopped the hook for focus anyway; this makes it stay stopped
+      // on the next blur.
+      shellUnbind.retryStuck();
+    };
     const onBlur = () => setWindowFocused(false);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);

@@ -1641,6 +1641,7 @@
   "settings.voice.pttTypingNote": "{key} types a character, so it does not open your mic while you are writing in a text box. Ctrl, Alt or an F key work even mid-sentence.",
   "settings.voice.pttGlobal": "Work with pqp in the background",
   "settings.voice.pttGlobalHint": "The key opens your mic even with another app in front, like a game. Turn this off if the key already does something there.",
+  "settings.voice.pttGlobalReleaseFailed": "The desktop app did not release the background key. It stays off while this window is focused, and pqp tries again every time you come back here. If this keeps showing, restart the app.",
   "settings.voice.pttHintDesktopOff": "{key} works on every screen of pqp while this window is focused. Turn on the option above to use it with another app in front.",
   "settings.voice.pttHintDesktopNative": "{key} works everywhere on this computer, even while another app is in front.",
   "settings.voice.pttHintDesktopFallback": "{key} works everywhere on this computer, even while another app is in front, but this build has to guess when you let go, so a quick tap can hold the mic open for about a second.",

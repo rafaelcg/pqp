@@ -89,6 +89,10 @@ import {
   MAX_RELEASE_DELAY_MS,
 } from "@/lib/ptt-release-delay";
 import { PttBindingField } from "@/components/voice/key-binding-field";
+import {
+  getPttReleaseStuck,
+  subscribePttReleaseStuck,
+} from "@/components/voice/shell-unbind";
 import { pttHintMessageKey, usePttNativeSupport } from "@/lib/ptt-native-support";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import {
@@ -1039,6 +1043,11 @@ function PttControls({
   const { t } = useTranslation();
   const isDesktop = isDesktopApp();
   const native = usePttNativeSupport();
+  const releaseStuck = useSyncExternalStore(
+    subscribePttReleaseStuck,
+    getPttReleaseStuck,
+    () => false,
+  );
   const hintKey = pttHintMessageKey({
     isDesktop,
     platformSupported: native.platformSupported,
@@ -1121,6 +1130,15 @@ function PttControls({
           patchLocal({ pttBeep });
         }}
       />
+
+      {isDesktop && releaseStuck && (
+        <p
+          role="alert"
+          className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs"
+        >
+          {t("settings.voice.pttGlobalReleaseFailed")}
+        </p>
+      )}
 
       {isDesktop && draftLocal.pttGlobal && native.permission === "denied" && (
         <PttPermissionNudge onOpenSettings={native.openSettings} />
