@@ -143,6 +143,30 @@ describe("edgeSegmentUrl", () => {
     expect(edgeSegmentUrl(input)).toBe(edgeSegmentUrl({ ...input }));
   });
 
+  it("names a later camera run as its own rendition, and holds the token to that run", () => {
+    const runName = `${STARTED_AT}-cam360p30-r1790190732000_00003.ts`;
+    const url = edgeSegmentUrl({
+      ...input,
+      rung: "cam360p30",
+      key: `live/${CHANNEL}/${runName}`,
+    });
+    expect(url).not.toBeNull();
+    const token = new URL(url!).searchParams.get(HLS_SEGMENT_TOKEN_PARAM);
+    const expected = { channelId: CHANNEL, startedAt: STARTED_AT, name: runName };
+    expect(describeHlsSegmentToken(token, expected, NOW)).toBeNull();
+    // Not the first run's files, and not another run's.
+    expect(
+      describeHlsSegmentToken(token, { ...expected, name: `${STARTED_AT}-cam360p30_00003.ts` }, NOW),
+    ).toBe("wrong-rendition");
+    expect(
+      describeHlsSegmentToken(
+        token,
+        { ...expected, name: `${STARTED_AT}-cam360p30-r1790190799000_00003.ts` },
+        NOW,
+      ),
+    ).toBe("wrong-rendition");
+  });
+
   it("refuses a line the edge route could not name, so the caller presigns instead", () => {
     expect(edgeSegmentUrl({ ...input, key: `live/other/${NAME}` })).toBeNull();
     expect(edgeSegmentUrl({ ...input, key: `live/${CHANNEL}/sub/${NAME}` })).toBeNull();

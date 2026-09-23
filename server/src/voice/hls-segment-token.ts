@@ -228,9 +228,17 @@ export function edgeSegmentUrl(input: {
     return null;
   }
   const name = input.key.slice(dir.length);
+  // A camera run after the first writes `<startedAt>-<rung>-r<ms>_NNNNN.ts`
+  // (`cameraRunNames` in hls-egress.ts). The token names that run as its
+  // rendition, so the Worker's unchanged `startsWith` check holds it to that
+  // run's files and no other.
+  const run = input.rung
+    ? new RegExp(`^${input.startedAt}-${escapeRegExp(input.rung)}(-r\\d{1,16})_`).exec(name)
+    : null;
+  const rung = run ? `${input.rung}${run[1]}` : input.rung;
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/.test(name) ||
-    !name.startsWith(segmentNamePrefix(input.startedAt, input.rung ?? "")) ||
+    !name.startsWith(segmentNamePrefix(input.startedAt, rung ?? "")) ||
     name.endsWith(".m3u8")
   ) {
     return null;
@@ -238,7 +246,7 @@ export function edgeSegmentUrl(input: {
   const token = mintHlsSegmentToken({
     channelId: input.channelId,
     startedAt: input.startedAt,
-    rung: input.rung,
+    rung,
     expiresAt: input.signedAtMs + input.ttlSeconds * 1_000,
   });
   if (!token) {
@@ -248,4 +256,8 @@ export function edgeSegmentUrl(input: {
     `${input.base}${HLS_SEGMENT_ROUTE_PREFIX}/${encodeURIComponent(input.channelId)}` +
     `/${input.startedAt}/${name}?${HLS_SEGMENT_TOKEN_PARAM}=${token}`
   );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

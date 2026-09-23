@@ -52,7 +52,7 @@
  * in that gap would keep being served after the history API already reports
  * the broadcast gone.
  */
-import { Readable, Transform, type Writable } from "node:stream";
+import { PassThrough, Readable, Transform, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { getPool } from "../db.js";
@@ -74,6 +74,7 @@ import {
 } from "./hls-ladder.js";
 import { HlsPlaylistNotFound, HlsPlaylistUnavailable } from "./hls-playlist-proxy.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { firstPts, TsTimestampShift } from "./ts-timestamp-shift.js";
 
 const LADDER_RUNG_NAMES = Object.keys(LADDER_RUNGS);
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -921,6 +922,10 @@ export interface WatchPartyDownloadPlan {
   /** Appended to the caller's filename stem. */
   extension: "ts" | "ogg" | "mp4";
   keys: string[];
+  /** Per key, 90 kHz ticks to move that object's MPEG-TS timestamps by
+   * (`ts-timestamp-shift.ts`). Absent, or 0, means byte for byte. Set for a
+   * camera with more than one run, so the runs play one after another. */
+  ptsOffsets?: number[];
   /** Exact: every object the download concatenates was priced by the same
    * listing that proved it is there, so this is a `Content-Length` the
    * browser can hold us to. */
@@ -1326,6 +1331,9 @@ export async function buildWatchPartyDownloadPlan(
   // The same listing the panel already paid for, memoised: opening the panel
   // and then downloading from it must not scan the prefix twice.
   const sizes = await objectSizes(prefix, config);
+  if (kind === "camera") {
+    return buildCameraDownloadPlan(prefix, sizes, config);
+  }
   if (kind === "voice") {
     const size = sizes.get(prefix);
     if (size === undefined) {
@@ -1361,6 +1369,179 @@ export async function buildWatchPartyDownloadPlan(
     contentType: DOWNLOAD_CONTENT_TYPE[kind],
     extension: "ts",
     keys,
+    bytes: total,
+  };
+}
+
+// --------------------------------------------------------------------------
+// The presenter's camera, every run of it.
+//
+// The camera stops and starts inside a broadcast (turned off and on, a device
+// switch, a dead egress coming back), and every run is its own egress writing
+// under its own names (`cameraRunNames` in hls-egress.ts): the first run as
+// `<prefix>_NNNNN.ts` with `<prefix>-index.m3u8`, every later one as
+// `<prefix>-r<its start, ms>_NNNNN.ts` with `<prefix>-r<ms>-index.m3u8`. All
+// of them sit under the one row's prefix, so the listing that prices the
+// download finds them all.
+//
+// ONE FILE, IN ORDER, ON ONE CLOCK. Each egress starts its MPEG-TS clock in
+// the same place, so the runs are placed by the wall clock their own playlists
+// carry (`#EXT-X-PROGRAM-DATE-TIME`, which LiveKit writes): run k is moved so
+// its first frame lands `(its PDT - the first run's PDT)` after the first
+// run's first frame. The camera being off is then a gap the player holds the
+// last picture across, which is what happened. Without a PDT, a run follows
+// the previous one's summed EXTINF instead. Never earlier than the previous
+// run ended, whatever the clocks say.
+// --------------------------------------------------------------------------
+
+const CAMERA_RUN_INDEX = /-r(\d{1,16})-index\.m3u8$/;
+/** How much of a segment's head is read to find its first PTS. */
+const CAMERA_PTS_PROBE_BYTES = 64 * 1024;
+
+/** The camera's run playlists under `prefix`, first run first. */
+export function cameraRunPlaylistKeys(
+  prefix: string,
+  keys: Iterable<string>,
+): string[] {
+  const first = `${prefix}-index.m3u8`;
+  const later: { key: string; at: number }[] = [];
+  let hasFirst = false;
+  for (const key of keys) {
+    if (key === first) {
+      hasFirst = true;
+      continue;
+    }
+    if (!key.startsWith(`${prefix}-r`)) {
+      continue;
+    }
+    const run = CAMERA_RUN_INDEX.exec(key);
+    if (run && key === `${prefix}-r${run[1]}-index.m3u8`) {
+      later.push({ key, at: Number(run[1]) });
+    }
+  }
+  later.sort((a, b) => a.at - b.at);
+  return [...(hasFirst ? [first] : []), ...later.map((entry) => entry.key)];
+}
+
+function playlistProgramDateTime(body: string): number | null {
+  const match = /^#EXT-X-PROGRAM-DATE-TIME:(.+)$/m.exec(body);
+  if (!match) {
+    return null;
+  }
+  const at = Date.parse(match[1]!.trim());
+  return Number.isFinite(at) ? at : null;
+}
+
+function playlistSeconds(body: string): number {
+  let total = 0;
+  for (const match of body.matchAll(/^#EXTINF:([0-9.]+)/gm)) {
+    total += Number(match[1]);
+  }
+  return total;
+}
+
+async function segmentFirstPts(
+  config: ReplayStorageConfig,
+  key: string,
+): Promise<number | null> {
+  const url = signRequest({
+    method: "GET",
+    key,
+    ttlSeconds: 60,
+    forRead: true,
+    config,
+  }).url;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      headers: { range: `bytes=0-${CAMERA_PTS_PROBE_BYTES - 1}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new HlsPlaylistUnavailable(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  if (!response.ok) {
+    throw new HlsPlaylistUnavailable(
+      `Storage returned HTTP ${response.status} for ${key}`,
+    );
+  }
+  return firstPts(new Uint8Array(await response.arrayBuffer()));
+}
+
+async function buildCameraDownloadPlan(
+  prefix: string,
+  sizes: Map<string, number>,
+  config: ReplayStorageConfig,
+): Promise<WatchPartyDownloadPlan | null> {
+  const runs: { keys: string[]; pdt: number | null; seconds: number }[] = [];
+  for (const playlistKey of cameraRunPlaylistKeys(prefix, sizes.keys())) {
+    const response = await fetchPlaylistObject(config, playlistKey);
+    if (!response.ok) {
+      throw new HlsPlaylistUnavailable(
+        `Storage returned HTTP ${response.status} for ${playlistKey}`,
+      );
+    }
+    const body = await response.text();
+    const keys = playlistKeys(body, prefix);
+    if (keys.length > 0) {
+      runs.push({
+        keys,
+        pdt: playlistProgramDateTime(body),
+        seconds: playlistSeconds(body),
+      });
+    }
+  }
+  if (runs.length === 0) {
+    return null;
+  }
+  const keys: string[] = [];
+  const ptsOffsets: number[] = [];
+  let total = 0;
+  // The first run's first PTS and wall clock, and where the previous run
+  // ended on the film's clock: the reference every later run is placed by.
+  let origin: { pts: number; pdt: number | null } | null = null;
+  let previousEnd = 0;
+  for (const [index, run] of runs.entries()) {
+    let offset = 0;
+    if (runs.length > 1) {
+      const pts = await segmentFirstPts(config, run.keys[0]!);
+      if (pts !== null) {
+        if (!origin) {
+          origin = { pts, pdt: run.pdt };
+          previousEnd = pts;
+        }
+        let target =
+          index === 0
+            ? pts
+            : origin.pdt !== null && run.pdt !== null
+              ? origin.pts + (run.pdt - origin.pdt) * 90
+              : previousEnd;
+        target = Math.max(target, previousEnd);
+        offset = Math.round(target - pts);
+        previousEnd = target + run.seconds * 90_000;
+      }
+    }
+    for (const key of run.keys) {
+      const size = sizes.get(key);
+      if (size === undefined) {
+        throw new HlsPlaylistNotFound(
+          `Replay ${prefix} is missing ${key}, which its playlist names`,
+        );
+      }
+      total += size;
+      keys.push(key);
+      ptsOffsets.push(offset);
+    }
+  }
+  return {
+    kind: "camera",
+    contentType: DOWNLOAD_CONTENT_TYPE.camera,
+    extension: "ts",
+    keys,
+    ...(ptsOffsets.some((offset) => offset !== 0) ? { ptsOffsets } : {}),
     bytes: total,
   };
 }
@@ -1407,7 +1588,8 @@ export async function streamWatchPartyDownload(
   // half. Nothing else counts as progress.
   target.on("drain", noteProgress);
   try {
-    for (const key of plan.keys) {
+    for (const [index, key] of plan.keys.entries()) {
+      const shift = plan.ptsOffsets?.[index] ?? 0;
       // Checked between objects as well as on the tick below: a download of
       // many small segments can finish each one inside a single tick and
       // never be examined at all.
@@ -1465,6 +1647,7 @@ export async function streamWatchPartyDownload(
               done(null, chunk);
             },
           }),
+          shift === 0 ? new PassThrough() : new TsTimestampShift(shift),
           target,
           { end: false, signal: controller.signal },
         );
