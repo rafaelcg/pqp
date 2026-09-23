@@ -934,8 +934,13 @@ export const HLS_LIVENESS_WAIT_MS = 1_500;
  */
 const liveConfirmed = new Map<string, number>();
 
-/** Renditions a check found ended. Never ridden out, whatever the session says. */
-const endedRungs = new Set<string>();
+/**
+ * Renditions a check found ended, with the session each belongs to. Never
+ * ridden out, whatever the session says. Pruned only once the session has no
+ * fresh confirmation left, because until then a forgotten marker would let
+ * the ended rung ride on its live siblings' stamp.
+ */
+const endedRungs = new Map<string, string>();
 
 /**
  * The liveness check in flight per rendition, shared. A render that stops
@@ -1056,9 +1061,13 @@ function livenessCheck(
         rungSessionIds.delete(rungKey);
         liveConfirmed.delete(rungKey);
         if (endedRungs.size > 1024) {
-          endedRungs.clear();
+          for (const [ended, session] of endedRungs) {
+            if (!freshStamp(session, now)) {
+              endedRungs.delete(ended);
+            }
+          }
         }
-        endedRungs.add(rungKey);
+        endedRungs.set(rungKey, keepWarmSessionKey(channelId, startedAt));
         throw new HlsPlaylistNotFound(
           `No live HLS session ${objectPrefix} for channel ${channelId}`,
         );

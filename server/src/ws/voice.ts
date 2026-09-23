@@ -4740,6 +4740,7 @@ export async function runVoiceReconcile(): Promise<{
   // no seat's state, it only makes the rows say what the map already knows.
   if (consumeOwnHeartbeatRecovery()) {
     const channels = new Set<string>();
+    const reasserted = peers.size;
     for (const peer of peers.values()) {
       writePeerRow(peer);
       channels.add(peer.voiceChannelId);
@@ -4749,8 +4750,8 @@ export async function runVoiceReconcile(): Promise<{
     // `VOICE_REGISTRY_BATCH` is on, which is what keeps a large instance's
     // re-assertion from being one round trip per seat).
     await Promise.all([...channels].map((channelId) => settledRowWrites(channelId)));
-    seatsReassertedAfterOutage += peers.size;
-    logEvent("voice.registryReasserted", { seats: peers.size });
+    seatsReassertedAfterOutage += reasserted;
+    logEvent("voice.registryReasserted", { seats: reasserted });
   }
   // See `otherLeasesTrustworthy`: a lease that went stale while this instance
   // could not reach the database either is not a dead instance, and treating
