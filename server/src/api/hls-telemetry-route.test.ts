@@ -193,6 +193,42 @@ describeDb("POST /api/live-hls/telemetry", () => {
     );
   });
 
+  it("logs telemetry v2's steady-playback fields, and still takes a v1 batch unchanged", async () => {
+    await post(
+      {
+        sessionId: "session-v2",
+        samples: [
+          { rung: "ll", latencyMs: 9_000, startup: true, stalls: 1, rebufferMs: 1_500, windowMs: 5_000, playerMode: "ll-segments" },
+          { rung: "ll", latencyMs: 9_000, startup: false, stalls: 1, rebufferMs: 250, windowMs: 5_000, rebuilds: 0, holeSkips: 1, hidden: false, muted: true, playerMode: "ll-segments" },
+        ],
+      },
+      viewer,
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsTelemetryBatch",
+      expect.objectContaining({
+        steadySamples: 1,
+        startupSamples: 1,
+        steadyStalls: 1,
+        steadyRebufferMs: 250,
+        stallSecondsPerMinute: 3,
+        holeSkips: 1,
+        playerModes: ["ll-segments"],
+        mutedSamples: 1,
+      }),
+    );
+    logEvent.mockClear();
+    const v1 = await post(
+      { sessionId: "session-v1", samples: [{ rung: "720p30", latencyMs: 20_000, stalls: 2, playerRebuildCount: 3 }] },
+      viewer,
+    );
+    expect(v1.status).toBe(200);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsTelemetryBatch",
+      expect.objectContaining({ totalStalls: 2, maxPlayerRebuildCount: 3, rebuilds: 0, stallSecondsPerMinute: undefined }),
+    );
+  });
+
   it("refuses a batch failing schema validation and counts it separately from acceptance", async () => {
     const result = await post(
       { sessionId: "session-abc", samples: [{ rung: "720p30", latencyMs: -5 }] },

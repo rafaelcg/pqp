@@ -19,6 +19,12 @@ export const LIVE_HLS_TELEMETRY_FLUSH_MS = 30_000;
 /** One in this many viewers is sampled at all. */
 export const LIVE_HLS_TELEMETRY_SAMPLE_RATE = 0.1;
 
+/**
+ * How long after the first frame a sample still counts as startup
+ * (`liveHlsTelemetrySampleSchema.startup`).
+ */
+export const LIVE_HLS_TELEMETRY_STARTUP_MS = 10_000;
+
 /** A batch larger than this is a bug, not a viewer: refused outright. */
 export const LIVE_HLS_TELEMETRY_MAX_BATCH = 40;
 
@@ -41,9 +47,18 @@ export const liveHlsTelemetrySampleSchema = z.object({
   latencyMs: z.number().finite().nonnegative().max(300_000),
   /** Player's own buffered-ahead distance, seconds. */
   bufferSeconds: z.number().finite().nonnegative().max(3_600).optional(),
-  /** Stalls (`Hls.Events.BUFFER_STALLED` or the `<video>` equivalent) this window. */
+  /**
+   * Stall EPISODES this window: a `waiting` on the element that was not
+   * already inside one. (Before 2026-09-23 the web client also counted the
+   * element's `stalled` event, which is a network notice, not a frozen
+   * picture.)
+   */
   stalls: z.number().int().nonnegative().max(10_000).optional(),
-  /** Total time spent rebuffering this window, milliseconds. */
+  /**
+   * Total time spent frozen this window, milliseconds, including the part of
+   * an episode still running when the sample was taken (the rest lands in
+   * the next sample). Web clients started sending it on 2026-09-23.
+   */
   rebufferMs: z.number().finite().nonnegative().max(3_600_000).optional(),
   /** Time to first frame for this viewing session, milliseconds. */
   startupMs: z.number().finite().nonnegative().max(300_000).optional(),
@@ -53,6 +68,53 @@ export const liveHlsTelemetrySampleSchema = z.object({
    * number that proves whether it worked).
    */
   playerRebuildCount: z.number().int().nonnegative().max(1_000).optional(),
+  /**
+   * Player rebuilds (a torn-down and recreated hls.js instance) that happened
+   * inside THIS sample's window, as opposed to `playerRebuildCount`, which is
+   * a lifetime counter and so says "rebuilt at some point" in every window
+   * after the first rebuild (the 2026-09-21 party read that lifetime number
+   * as a per-window rate). Absent from clients that predate it.
+   */
+  rebuilds: z.number().int().nonnegative().max(1_000).optional(),
+  /**
+   * True while this viewer is still starting: before the first frame and for
+   * `LIVE_HLS_TELEMETRY_STARTUP_MS` after it. The first window after an
+   * attach always holds the attach's own buffering, so a stall rate that
+   * counts it measures joins, not playback. Absent (old clients) means
+   * "unknown", not "steady".
+   */
+  startup: z.boolean().optional(),
+  /**
+   * How this viewer is playing right now: `ll` (LL parts), `ll-segments`
+   * (whole segments from the LL playlist, the web default since 2026-09-23),
+   * `conventional` (the egress ladder), or `pinned` (an LL session the
+   * player gave up on and plays with conventional settings). Absent on old
+   * clients.
+   */
+  playerMode: z.enum(["ll", "ll-segments", "conventional", "pinned"]).optional(),
+  /**
+   * Milliseconds this sample covers. With `rebufferMs` it is what turns a
+   * batch into the headline number, frozen seconds per viewer-minute.
+   */
+  windowMs: z.number().int().nonnegative().max(600_000).optional(),
+  /**
+   * hls.js seek-over-hole skips this window (`bufferSeekOverHole`): a
+   * `waiting` the gap controller resolved by jumping forward, which loses
+   * content rather than time. Told apart from `stalls` so a hole problem and
+   * a starvation problem do not read as one number.
+   */
+  holeSkips: z.number().int().nonnegative().max(10_000).optional(),
+  /** The tab was hidden at some point in this window (`visibilityState`). */
+  hidden: z.boolean().optional(),
+  /** The element was muted when the sample was taken. */
+  muted: z.boolean().optional(),
+  /**
+   * hls.js FATAL error details seen this window (`fragLoadTimeOut`, ...),
+   * at most four. The server keeps only plain identifiers.
+   */
+  fatal: z.array(z.string().min(1).max(48)).max(4).optional(),
+  /** The latency the player is aiming for right now, milliseconds (LL only). */
+  targetLatencyMs: z.number().finite().nonnegative().max(300_000).optional(),
 });
 
 export type LiveHlsTelemetrySample = z.infer<typeof liveHlsTelemetrySampleSchema>;

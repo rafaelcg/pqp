@@ -577,7 +577,7 @@ describe("HlsStallWatch", () => {
     });
 
     it("still speaks once the parts stop too -- it is a backstop, not a mute", () => {
-      const watch = new HlsStallWatch();
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
@@ -585,9 +585,11 @@ describe("HlsStallWatch", () => {
       watch.onMediaSequence(1, T0);
       // Past the LL startup grace, so the soft rules are allowed to speak.
       watch.onPartAdvance("part-a", T0 + 7_000);
-      // The part-stuck nudge fires once on the way (2s at a 0.5s target),
-      // and then the segment backstop takes over at three TARGETDURATIONs.
-      expect(watch.tick(T0 + 9_000)).toBe("start-load");
+      watch.onWaiting(T0 + 7_000);
+      // The part-stuck nudge fires once on the way (4s at a 0.5s target,
+      // while waiting), and then the segment backstop takes over at three
+      // TARGETDURATIONs.
+      expect(watch.tick(T0 + 11_000)).toBe("start-load");
       expect(watch.lastReason).toBe("part-stuck");
       expect(watch.tick(T0 + 20_999)).toBe("none");
       expect(watch.tick(T0 + 21_000)).toBe("start-load");
@@ -643,6 +645,33 @@ describe("HlsStallWatch", () => {
     });
   });
 
+  describe("onBufferProgress: a waiting player still receiving media (2026-09-23)", () => {
+    it("holds the stall rule while media keeps landing, up to twice the threshold", () => {
+      const watch = new HlsStallWatch({ stallMs: 8_000 });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onWaiting(T0);
+      // A fragment landed 2 s ago: recovering, not stuck.
+      watch.onBufferProgress(T0 + 6_000);
+      expect(watch.tick(T0 + 8_000)).toBe("none");
+      // Media stops landing: 5 s without progress releases the rule.
+      expect(watch.tick(T0 + 11_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("stall");
+    });
+
+    it("still catches a wedge that keeps receiving media, at twice the threshold", () => {
+      const watch = new HlsStallWatch({ stallMs: 8_000 });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onWaiting(T0);
+      for (let t = 1_000; t <= 16_000; t += 1_000) {
+        watch.onBufferProgress(T0 + t);
+        const decision = watch.tick(T0 + t);
+        expect(decision).toBe(t < 16_000 ? "none" : "start-load");
+      }
+    });
+  });
+
   describe("onPartAdvance / the part-stuck rule (Farol review, this PR)", () => {
     it("is disabled on conventional -- onPartAdvance alone never fires anything", () => {
       const watch = new HlsStallWatch();
@@ -653,41 +682,64 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(T0 + 60_000)).toBe("none");
     });
 
-    it("fires exactly one start-load after 4 parts of silence on ll, then gets out of the way", () => {
-      const watch = new HlsStallWatch();
+    it("fires exactly one start-load after 8 parts of silence while waiting on ll, then gets out of the way", () => {
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
       // Past the startup grace, which is where this rule has anything to
       // say at all -- see its own describe block below.
       watch.onPartAdvance("10.0", T0 + GRACE);
-      // 4 * 500ms = 2000ms.
-      expect(watch.tick(T0 + GRACE + 1_999)).toBe("none");
-      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
+      watch.onWaiting(T0 + GRACE);
+      // 8 * 500ms = 4000ms.
+      expect(watch.tick(T0 + GRACE + 3_999)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 4_000)).toBe("start-load");
       // One-shot: the SAME stall episode does not fire it again, and does
       // not escalate to a ladder of its own -- it stays "none" until the
       // segment-based rule's own (much later) threshold takes over.
-      expect(watch.tick(T0 + GRACE + 2_500)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 4_500)).toBe("none");
       expect(watch.tick(T0 + GRACE + 11_000)).toBe("none");
     });
 
-    it("re-arms for a later stall episode once a part actually advances", () => {
-      const watch = new HlsStallWatch();
+    it("never nudges a player that is still playing from its buffer (2026-09-23)", () => {
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
       watch.onPartAdvance("10.0", T0 + GRACE);
-      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
+      // No `waiting`: a late part is being ridden out as designed.
+      expect(watch.tick(T0 + GRACE + 10_000)).toBe("none");
+    });
+
+    it("never nudges a viewer loading whole segments (LL-lite)", () => {
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onLlDelivery("segments");
+      watch.onPartAdvance("10.0", T0 + GRACE);
+      watch.onWaiting(T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + 10_000)).toBe("none");
+    });
+
+    it("re-arms for a later stall episode once a part actually advances", () => {
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onPartAdvance("10.0", T0 + GRACE);
+      watch.onWaiting(T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + 4_000)).toBe("start-load");
       // A genuinely new part arrives -- the stream recovered.
-      watch.onPartAdvance("10.1", T0 + GRACE + 2_100);
-      expect(watch.tick(T0 + GRACE + 2_200)).toBe("none");
+      watch.onPartAdvance("10.1", T0 + GRACE + 4_100);
+      expect(watch.tick(T0 + GRACE + 4_200)).toBe("none");
       // It stalls again from this new point: the one-shot fires again.
-      expect(watch.tick(T0 + GRACE + 4_099)).toBe("none");
-      expect(watch.tick(T0 + GRACE + 4_100)).toBe("start-load");
+      expect(watch.tick(T0 + GRACE + 8_099)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 8_100)).toBe("start-load");
     });
 
     it("never fires while a segment-based reason is already flagged -- it only gets a turn when nothing else is", () => {
-      const watch = new HlsStallWatch();
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
@@ -699,32 +751,34 @@ describe("HlsStallWatch", () => {
     });
 
     it("repeated calls with the SAME key are not progress", () => {
-      const watch = new HlsStallWatch();
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
       watch.onPartAdvance("10.0", T0 + GRACE);
       watch.onPartAdvance("10.0", T0 + GRACE + 1_000);
-      watch.onPartAdvance("10.0", T0 + GRACE + 1_900);
+      watch.onPartAdvance("10.0", T0 + GRACE + 3_900);
+      watch.onWaiting(T0 + GRACE);
       // Still counts from the FIRST time "10.0" was seen, not the repeated
       // calls -- a duplicate playlist fetch is not a new part.
-      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
+      expect(watch.tick(T0 + GRACE + 4_000)).toBe("start-load");
     });
 
     it("paces itself off the manifest's PART-TARGET, not the wire frame's", () => {
-      const watch = new HlsStallWatch();
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
       // The playlist says one-second parts; the frame said half a second.
-      // Four of the manifest's own is four seconds, not two.
+      // Eight of the manifest's own is eight seconds, not four.
       watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 1 });
       watch.onPartAdvance("10.0", T0 + GRACE);
-      expect(watch.tick(T0 + GRACE + 3_999)).toBe("none");
-      expect(watch.tick(T0 + GRACE + 4_000)).toBe("start-load");
+      watch.onWaiting(T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + 7_999)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 8_000)).toBe("start-load");
       expect(watch.lastReason).toBe("part-stuck");
       // Exactly once, then out of the way -- the backstop owns what follows.
-      expect(watch.tick(T0 + GRACE + 5_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 9_000)).toBe("none");
     });
   });
 
@@ -824,7 +878,7 @@ describe("HlsStallWatch", () => {
       expect(context).toContain("targetDuration=7s");
       expect(context).toContain("partTarget=0.500s");
       expect(context).toContain("seqStuckMs=21000");
-      expect(context).toContain("partStuckMs=2000");
+      expect(context).toContain("partStuckMs=4000");
     });
 
     it("says nothing extra on conventional, so those log lines do not move", () => {
@@ -857,12 +911,13 @@ describe("HlsStallWatch", () => {
     });
 
     it("holds the part-stuck nudge until the grace is over", () => {
-      const watch = new HlsStallWatch();
+      const watch = new HlsStallWatch({ stallMs: 60_000 });
       watch.onSourceChanged(T0);
       watch.configureForMode("ll", 500);
       // One part landed early and then nothing: the rule's own threshold
-      // (2 s) passes inside the grace and must still be quiet.
+      // (4 s) passes inside the grace and must still be quiet.
       watch.onPartAdvance("1.0", T0 + 500);
+      watch.onWaiting(T0 + 500);
       expect(watch.tick(T0 + 3_000)).toBe("none");
       expect(watch.tick(T0 + GRACE - 1)).toBe("none");
       // The grace ends and the rule gets its one nudge.

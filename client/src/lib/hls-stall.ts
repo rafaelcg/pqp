@@ -225,6 +225,14 @@ export function livePlaylistProgress(details: {
 
 export const HLS_WATCH_PLAYER_STALL_MS = 15_000;
 
+/**
+ * The stall rule waits for this long without any media appended before it
+ * calls a waiting player stuck, and for `STALL_WHILE_RECEIVING_FACTOR` times
+ * its own threshold when media IS still arriving. See `onBufferProgress`.
+ */
+export const STALL_NO_PROGRESS_MS = 5_000;
+export const STALL_WHILE_RECEIVING_FACTOR = 2;
+
 const FATAL_LADDER: readonly HlsStallDecision[] = [
   "recover-media-error",
   "start-load",
@@ -312,6 +320,16 @@ export class HlsStallWatch {
   private partSeenAt: number | null = null;
   /** This stall episode's one-shot part-stuck nudge has already fired. */
   private partStuckFired = false;
+  /**
+   * Whether the part-stuck NUDGE applies at all: only while an LL viewer is
+   * actually loading parts. A viewer on whole segments (LL-lite, the web
+   * default since 2026-09-23, `hls-ll-latency.ts`) sees a new part in the
+   * playlist once per segment reload, and "no new part for two seconds" is
+   * its ordinary state, not a stall.
+   */
+  private partStuckNudge = true;
+  /** Last time media was appended (`FRAG_BUFFERED`). */
+  private bufferProgressAt: number | null = null;
   /** Timestamps of past `"rebuild"` decisions, for the `"dead"` gate. */
   private rebuilds: number[] = [];
   /** How many `"reconnect"` checks this episode has already asked for. */
@@ -487,6 +505,23 @@ export class HlsStallWatch {
    * later stall episode (after a real recovery) can trigger the one-shot
    * nudge again.
    */
+  /** The LL governor's delivery changed (null off the LL path). */
+  onLlDelivery(delivery: "parts" | "segments" | null): void {
+    this.partStuckNudge = delivery !== "segments";
+  }
+
+  /**
+   * Media was appended (`FRAG_BUFFERED`). The stall rule below is for a
+   * player that is waiting AND getting nothing: one that is still receiving
+   * media is recovering on its own, and a `startLoad` in the middle of that
+   * cancels the very download that was about to end the stall (the
+   * 2026-09-21 lab traces). A wedge that keeps receiving media is still
+   * caught, at twice the threshold (`STALL_WHILE_RECEIVING_FACTOR`).
+   */
+  onBufferProgress(now: number): void {
+    this.bufferProgressAt = now;
+  }
+
   onPartAdvance(key: string, now: number): void {
     if (key !== this.lastPartKey) {
       this.lastPartKey = key;
@@ -651,6 +686,7 @@ export class HlsStallWatch {
 
   /** A new source was attached: forget the old playlist's timeline. */
   onSourceChanged(now: number): void {
+    this.bufferProgressAt = null;
     this.attachedAt = now;
     this.hasPlayed = false;
     this.jumpOffered = false;
@@ -706,7 +742,10 @@ export class HlsStallWatch {
     if (
       this.waitingSince !== null &&
       now - this.waitingSince >= this.stallMs &&
-      !this.inStartupGrace(now)
+      !this.inStartupGrace(now) &&
+      (this.bufferProgressAt === null ||
+        now - this.bufferProgressAt >= STALL_NO_PROGRESS_MS ||
+        now - this.waitingSince >= this.stallMs * STALL_WHILE_RECEIVING_FACTOR)
     ) {
       return "stall";
     }
@@ -742,6 +781,12 @@ export class HlsStallWatch {
       // signals have not caught yet, never a competitor to them.
       if (
         this.partStuckMs !== null &&
+        this.partStuckNudge &&
+        // ONLY WHILE THE PICTURE IS ACTUALLY STOPPED (2026-09-23). A player
+        // still playing from its buffer is riding out a late part exactly
+        // as designed; a `startLoad` there cancels the in-flight request for
+        // the very part it is waiting on and makes the next stall likelier.
+        this.waitingSince !== null &&
         !this.partStuckFired &&
         // A PART THAT NEVER ARRIVED IS NOT A PART THAT STOPPED.
         // `onSourceChanged` stamps `partSeenAt` at the attach so the clock

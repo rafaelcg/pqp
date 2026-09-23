@@ -1627,6 +1627,44 @@ viewer got a conventional master and then "A transmissão caiu". A demotion
 fresh frame with the conventional URL and mode, because `liveHlsFrameChanged`
 (`server/src/ws/voice.ts`) counts `mode` as a change.
 
+### How the web player plays an LL session: whole segments by default (2026-09-23)
+
+The web player no longer loads LL parts by default. It loads **whole
+segments from the same LL playlist** (`lowLatencyMode: false`, "LL-lite")
+and sits about 8 s behind the edge, governed by `LlLatencyGovernor`
+(`client/src/lib/hls-ll-latency.ts`): each stall after startup raises the
+target by a second (up to 14 s), a minute without one gives half a second
+back, and on segments the player itself plays at 0.95x or 1.05x to move
+toward that target, because hls.js runs no rate control of its own with
+`lowLatencyMode` off. Parts stay available behind
+`localStorage["pqp:ll-parts"] = "1"`, and a parts viewer with three stalls in
+a minute or two part-load errors in ten seconds switches to segments in
+place (no rebuild; this replaced §4's old "pin", which rebuilt the player at
+the conventional ~25 s cushion).
+
+Why, measured on the lab rig (`tools/ll-loss-harness`, the real remux, the
+real Worker playlist, the real player in headless Chrome behind jittery
+links): part loading froze a mobile viewer 11 to 33 times a minute, while
+segments held every profile at under one short stall a minute and 8.5 to
+10 s of latency. Two causes, one of them not on the player: **the remux
+stamps each rendition's `#EXT-X-PROGRAM-DATE-TIME` from the wall clock the
+first part arrived at** (`tools/pqp-remux/internal/ring/ring.go`,
+`openedAt`), so the audio playlist's PDT sits ~1.5 s from the video
+playlist's for the same media time. hls.js aligns the audio timeline by
+PDT, as the spec says it may, and every time its audio part chain breaks it
+resumes a part or two too far ahead; the gap controller then seeks over the
+hole. Rewriting the PDTs from the media's own `tfdt` on one shared anchor
+removed the holes in the lab (mobile, parts: 33 stalls a minute to 0.3).
+Until the remux derives PDT from media time, parts on the web stay opt-in.
+
+The fragment timeouts grew with it: 5 s to the first byte and 8 s to
+finish, one timeout retry (they were 2 s and 2.5 s, which made a 2.5 s
+latency spike fatal). The watchdog's part-stuck nudge now needs eight parts
+of silence AND a waiting element, and never applies on segments; the stall
+rule holds off while media is still being appended (up to twice its
+threshold). The element's `stalled` event no longer counts as a stall unless
+the element really cannot play on.
+
 ## What the stream carries, and what it does not
 
 **The two audiences are not watching the same event, and the host cannot tell.**

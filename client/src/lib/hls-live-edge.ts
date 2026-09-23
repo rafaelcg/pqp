@@ -367,10 +367,13 @@ export function llSequenceStuckMs(
  * the ladder's FIRST in-place recovery step exactly once per stall episode
  * and never escalates further on its own; a problem that persists past that
  * one nudge is left for the segment-based ceiling's own full ladder to
- * eventually catch. Four parts, not six: at a 500 ms target that is 2 s,
- * comfortably inside the segment ceiling's 6 s floor.
+ * eventually catch. Eight parts, 4 s at a 500 ms target, and only while the
+ * element is actually waiting (`HlsStallWatch.tick`): it was four parts with
+ * no such condition until 2026-09-23, and on a jittery link a part that is
+ * two seconds late is ordinary, so the nudge fired on playing viewers and
+ * its `startLoad` cancelled the part they were about to receive.
  */
-export const LL_HLS_PART_STUCK_PARTS = 4;
+export const LL_HLS_PART_STUCK_PARTS = 8;
 
 /**
  * The part-stuck threshold, from the manifest's own `EXT-X-PART-INF`
@@ -615,12 +618,18 @@ export function applyLlLatencyCeiling(
  * hold-back. `HlsWatchPlayer` skips its own manual `video.playbackRate`
  * loop on the LL path for exactly this reason -- see its comment.
  */
-export const LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE = 1.1;
+export const LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE = 1.05;
 
-/** A handful of parts, not a segment: no 20 s cushion to protect here. */
-export const LL_HLS_BACK_BUFFER_SECONDS = 4;
-export const LL_HLS_MAX_BUFFER_LENGTH_SECONDS = 6;
-export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
+/**
+ * Buffer sizing for an LL session, parts or segments (2026-09-23). The old
+ * 6 s / 10 s was sized for a 3 s hold-back and was one late part away from
+ * empty; the forward buffer can never exceed the latency anyway, so these
+ * are ceilings the governor's target (`hls-ll-latency.ts`) stays under, not
+ * a promise of that much buffer.
+ */
+export const LL_HLS_BACK_BUFFER_SECONDS = 8;
+export const LL_HLS_MAX_BUFFER_LENGTH_SECONDS = 12;
+export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 20;
 
 /**
  * WHAT THIS CONFIG DELIBERATELY DOES NOT CONTAIN, AND WHY THAT IS THE WHOLE
@@ -637,8 +646,20 @@ export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
  * `applyLlLatencyCeiling` -- see that function for the outage.
  */
 export interface HlsLLPlayerConfig {
-  lowLatencyMode: true;
+  /**
+   * Parts (`true`) or whole segments from the same LL playlist (`false`,
+   * "LL-lite", the web default since 2026-09-23). Only the constructor's
+   * starting value: the governor flips it at runtime with
+   * `hls.lowLatencyMode = false` when a parts viewer cannot hold them.
+   */
+  lowLatencyMode: boolean;
   maxLiveSyncPlaybackRate: number;
+  /**
+   * hls.js adds a second of target latency per `bufferStalledError` on its
+   * own; the governor owns that decision (`LlLatencyGovernor.onStall`), and
+   * two controllers moving one target is how nobody can say where it is.
+   */
+  liveSyncOnStallIncrease: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
   backBufferLength: number;
@@ -738,39 +759,39 @@ export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 1_000;
 export const LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS = 2_000;
 
 /**
- * The part-paced fragment retry budget (`HlsLLPlayerConfig.fragLoadPolicy`).
- * Three tries at 200 ms, 400 ms, 800 ms is ~1.4 s of patience, under three
- * parts of the window -- enough to ride out a Worker blip, short enough that
- * what the player asks for next is still in the ring.
+ * The fragment retry budget (`HlsLLPlayerConfig.fragLoadPolicy`), parts and
+ * segments alike. Error half: three tries paced 200 ms, 400 ms, 800 ms, ~1.4 s
+ * of patience, enough to ride out a Worker blip and short enough that what
+ * the player asks for next is still in the ring.
  */
 export const LL_HLS_FRAG_RETRY_COUNT = 3;
 export const LL_HLS_FRAG_RETRY_DELAY_MS = 200;
 export const LL_HLS_FRAG_MAX_RETRY_DELAY_MS = 1_000;
 
 /**
- * The timeout half of the same budget. Two seconds to the first byte and
- * five to finish, against the fifty hls.js's own defaults allow. A slow link
- * that cannot make that is a viewer who should be on the conventional
- * ladder, which is where §4's pin rule sends them.
+ * The timeout half: five seconds to the first byte, eight to finish, one
+ * retry.
  *
- * THREE RETRIES INSIDE THE SAME CEILING, NOT ONE (production, 2026-09-16).
- * One retry meant a presenter whose upload went quiet -- which the same
- * capture showed, tiny parts and a shrinking buffer -- produced a fatal
- * `fragLoadTimeOut` after two tries, and a fatal network error is what the
- * recovery ladder reads as "this source is gone". Four attempts paced
- * 200/400/800 ms ride out a starved second instead of tearing the player
- * down over it.
+ * WHY IT GREW (2026-09-23, the lab rig behind the investigation's "bad
+ * Wi-Fi" and "mobile" profiles). Two seconds to the first byte and 2.5 to
+ * finish was written for 500 ms parts on a clean link. A 2.5 s latency spike,
+ * which a residential or mobile viewer in Brazil gets several times a
+ * minute, turned into `fragLoadTimeOut` and then a FATAL within minutes, and
+ * the player only survived by rebuilding itself. A request that is merely
+ * late is still the best request the player can make: the part or segment
+ * it is waiting for is the one the buffer needs next, and re-asking for it
+ * is slower than letting it land. Whole segments (the LL-lite default) are
+ * also bigger than parts, a couple of megabytes at the top rung, and need
+ * the room.
  *
- * AND THE WHOLE BUDGET STILL FITS THE RING, which is the invariant this
- * cannot break (`hls-live-edge.test.ts`, "cannot sit on one part for longer
- * than the ring holds"): four attempts at 2.5 s plus 1.4 s of backoff is
- * under the ~12 s of parts the remux keeps, where the old two attempts at
- * 5 s were 10 s. More chances, same ceiling -- what changed is the shape of
- * the patience, not its size.
+ * AND THE WHOLE BUDGET STILL FITS THE RING (`hls-live-edge.test.ts`, "cannot
+ * sit on one fragment for longer than the ring holds"): two attempts at 8 s
+ * plus 200 ms of backoff is ~16 s, inside the remux's six-segment ring (24 s
+ * and up at ~4 s segments).
  */
-export const LL_HLS_FRAG_TTFB_MS = 2_000;
-export const LL_HLS_FRAG_MAX_LOAD_MS = 2_500;
-export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 3;
+export const LL_HLS_FRAG_TTFB_MS = 5_000;
+export const LL_HLS_FRAG_MAX_LOAD_MS = 8_000;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 1;
 export const LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS = 200;
 export const LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS = 1_000;
 
@@ -784,11 +805,20 @@ export const LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS = 1_000;
  * caller that still has a part target hands it to `applyLlLatencyCeiling`
  * right after `new Hls(...)`; §2's "do not hardcode 20 s anywhere on this
  * path" is unchanged, the number just lands one line later.
+ *
+ * `delivery` picks the starting mode: whole segments ("LL-lite", the
+ * default) or parts. Neither sets `liveSyncDuration` here; the player sets
+ * the target with `hls.targetLatency` after construction, from
+ * `LlLatencyGovernor` (`hls-ll-latency.ts`), for the same `mergeConfig`
+ * reason the ceiling is applied late.
  */
-export function llHlsConfig(): HlsLLPlayerConfig {
+export function llHlsConfig(
+  delivery: "parts" | "segments" = "segments",
+): HlsLLPlayerConfig {
   return {
-    lowLatencyMode: true,
+    lowLatencyMode: delivery === "parts",
     maxLiveSyncPlaybackRate: LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
+    liveSyncOnStallIncrease: 0,
     maxBufferLength: LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
     backBufferLength: LL_HLS_BACK_BUFFER_SECONDS,
@@ -833,8 +863,21 @@ export function llHlsConfig(): HlsLLPlayerConfig {
 export function liveSeekOffsetSeconds(
   mode: HlsMode,
   partTargetMs: number = LL_HLS_DEFAULT_PART_TARGET_MS,
+  llTargetSeconds?: number | null,
 ): number {
   if (mode === "ll") {
+    // THE GOVERNOR'S TARGET WHEN THERE IS ONE (2026-09-23). An LL viewer now
+    // sits several seconds behind the edge on purpose (`hls-ll-latency.ts`),
+    // and on whole segments the newest part is not even loadable yet: a
+    // "jump to live" one part behind the edge lands on media nobody can
+    // fetch and turns a recovery into the next stall.
+    if (
+      typeof llTargetSeconds === "number" &&
+      Number.isFinite(llTargetSeconds) &&
+      llTargetSeconds > 0
+    ) {
+      return llTargetSeconds;
+    }
     return Math.max(0.05, partTargetMs) / 1000;
   }
   return HLS_LIVE_SEGMENT_SECONDS;
@@ -851,11 +894,43 @@ export function liveSeekOffsetSeconds(
 export function behindLiveThresholdSeconds(
   mode: HlsMode,
   partTargetMs: number = LL_HLS_DEFAULT_PART_TARGET_MS,
+  llTargetSeconds?: number | null,
 ): number {
   if (mode === "ll") {
-    return (LL_HLS_MAX_LATENCY_PARTS * partTargetMs) / 1000;
+    const parts = (LL_HLS_MAX_LATENCY_PARTS * partTargetMs) / 1000;
+    // Above where the governor MEANT to put the viewer, never under it: a
+    // badge measured from the edge would otherwise call every LL-lite viewer
+    // "behind" for sitting exactly where the player put them.
+    if (
+      typeof llTargetSeconds === "number" &&
+      Number.isFinite(llTargetSeconds) &&
+      llTargetSeconds > 0
+    ) {
+      return Math.max(parts, llTargetSeconds + LL_BEHIND_LIVE_MARGIN_SECONDS);
+    }
+    return parts;
   }
   return BEHIND_LIVE_THRESHOLD_SECONDS;
+}
+
+/** How far past the LL target the "behind live" badge waits before it says so. */
+export const LL_BEHIND_LIVE_MARGIN_SECONDS = 6;
+
+/**
+ * Seconds of media buffered ahead of the playhead, in the range that holds
+ * it (0 when the playhead sits in a hole or before anything is buffered).
+ */
+export function bufferAheadSeconds(video: {
+  currentTime: number;
+  buffered: { length: number; start: (i: number) => number; end: (i: number) => number };
+}): number {
+  const { buffered, currentTime } = video;
+  for (let i = 0; i < buffered.length; i++) {
+    if (buffered.start(i) <= currentTime + 0.05 && buffered.end(i) >= currentTime) {
+      return Math.max(0, buffered.end(i) - currentTime);
+    }
+  }
+  return 0;
 }
 
 /**
@@ -1229,6 +1304,8 @@ export function isBehindLive(
  * it currently sits. Never faster than this (`BROADCAST_PIPELINE.md` B1.1).
  */
 export const HLS_CATCH_UP_MAX_PLAYBACK_RATE = 1.2;
+/** Two conventional segments: below this forward buffer, no catch-up at all. */
+export const HLS_CATCH_UP_MIN_BUFFER_SECONDS = 8;
 
 /**
  * How far behind the player's INTENDED sync point the playhead sits, for
@@ -1280,9 +1357,19 @@ export function secondsBehindCatchUpTarget(
  * below): a viewer who drifts gets nudged back over several seconds, never
  * a jump-cut seek.
  */
-export function catchUpPlaybackRate(secondsBehindTarget: number): number {
+export function catchUpPlaybackRate(
+  secondsBehindTarget: number,
+  bufferAheadSeconds: number = Infinity,
+): number {
   if (!Number.isFinite(secondsBehindTarget) || secondsBehindTarget <= 1) {
     // Comfortably covers "back to 1.0x within 0.5 s of target" too.
+    return 1;
+  }
+  // NEVER SPEED UP ON A THIN BUFFER (2026-09-23). Faster than real time
+  // drains the buffer faster than the network refills it; on a viewer whose
+  // segments already arrive late, the catch-up is what turns "a bit behind"
+  // into a `waiting`. A late viewer stays late until there is media to spare.
+  if (!(bufferAheadSeconds >= HLS_CATCH_UP_MIN_BUFFER_SECONDS)) {
     return 1;
   }
   if (secondsBehindTarget <= 3) {

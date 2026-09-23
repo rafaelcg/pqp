@@ -33,9 +33,28 @@ import {
 
 describe("our hls.js configs are configs hls.js accepts", () => {
   it("constructs an LL player from the constructor config", () => {
-    const player = new Hls(llHlsConfig() as never);
+    for (const delivery of ["segments", "parts"] as const) {
+      const player = new Hls(llHlsConfig(delivery) as never);
+      try {
+        expect(player.config.lowLatencyMode).toBe(delivery === "parts");
+      } finally {
+        player.destroy();
+      }
+    }
+  });
+
+  it("takes the governor's live setters after construction (hls-ll-latency.ts)", () => {
+    // The governor never rebuilds: it moves the target, the ceiling and the
+    // delivery on the running instance. Each of these is a setter hls.js
+    // reads live; if a future hls.js renamed one, this is where it shows.
+    const player = new Hls(llHlsConfig("parts") as never);
     try {
-      expect(player.config.lowLatencyMode).toBe(true);
+      player.config.liveMaxLatencyDuration = 14;
+      player.targetLatency = 8;
+      expect(player.config.liveSyncDuration).toBe(8);
+      expect(player.config.liveMaxLatencyDuration).toBe(14);
+      player.lowLatencyMode = false;
+      expect(player.config.lowLatencyMode).toBe(false);
     } finally {
       player.destroy();
     }

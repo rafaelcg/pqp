@@ -829,3 +829,49 @@ describe("sendHlsTelemetryBatch", () => {
     expect((init as RequestInit).headers).not.toHaveProperty("Authorization");
   });
 });
+
+describe("HlsStallMeter (telemetry v2, 2026-09-23)", () => {
+  it("counts episodes, not waiting events, and their frozen milliseconds", async () => {
+    const { HlsStallMeter } = await import("./hls-playback");
+    const m = new HlsStallMeter(0);
+    expect(m.onWaiting(1_000)).toBe(true);
+    // The gap controller's seek-over-hole fires a second `waiting` inside the
+    // same freeze: one episode.
+    expect(m.onWaiting(1_010)).toBe(false);
+    m.onHoleSkip();
+    m.onPlaying(1_500);
+    expect(m.take(5_000)).toEqual({
+      stalls: 1,
+      stalledMs: 500,
+      holeSkips: 1,
+      windowMs: 5_000,
+      hidden: false,
+    });
+  });
+
+  it("splits a long freeze across windows so it is reported while it happens", async () => {
+    const { HlsStallMeter } = await import("./hls-playback");
+    const m = new HlsStallMeter(0);
+    m.onWaiting(3_000);
+    expect(m.take(5_000)).toMatchObject({ stalls: 1, stalledMs: 2_000 });
+    m.onPlaying(8_000);
+    // Same episode: counted once, its remaining time lands here.
+    expect(m.take(10_000)).toMatchObject({ stalls: 0, stalledMs: 3_000, windowMs: 5_000 });
+  });
+
+  it("remembers the tab was hidden at any point in the window", async () => {
+    const { HlsStallMeter } = await import("./hls-playback");
+    const m = new HlsStallMeter(0);
+    m.onVisibility(true);
+    m.onVisibility(false);
+    expect(m.take(5_000).hidden).toBe(true);
+    expect(m.take(10_000).hidden).toBe(false);
+  });
+
+  it("tags startup samples: before the first frame and for a while after", async () => {
+    const { isHlsStartupSample } = await import("./hls-playback");
+    expect(isHlsStartupSample(null, 50_000, 10_000)).toBe(true);
+    expect(isHlsStartupSample(1_000, 10_999, 10_000)).toBe(true);
+    expect(isHlsStartupSample(1_000, 11_000, 10_000)).toBe(false);
+  });
+});

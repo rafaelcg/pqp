@@ -40,7 +40,9 @@ import {
   hlsTelemetryIdentityFromToken,
   hlsTelemetrySessionKey,
   hlsViewerTokenFromUrl,
+  HlsStallMeter,
   isAutoplayRefusal,
+  isHlsStartupSample,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
   recordHlsRebuild,
@@ -52,11 +54,21 @@ import {
   type HlsTelemetryQueue,
   withFreshHlsToken,
 } from "@/lib/hls-playback";
-import { isSampledForHlsTelemetry } from "@pqp/shared";
+import {
+  isSampledForHlsTelemetry,
+  LIVE_HLS_TELEMETRY_STARTUP_MS,
+  type LiveHlsTelemetrySample,
+} from "@pqp/shared";
+import {
+  LlLatencyGovernor,
+  llPartsOptedIn,
+  llSegmentsCatchUpRate,
+  type LlDelivery,
+} from "@/lib/hls-ll-latency";
 import {
   applyHlsRecoveryStep,
-  applyLlLatencyCeiling,
   behindLiveThresholdSeconds,
+  bufferAheadSeconds,
   canJumpToLiveEdge,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
@@ -76,10 +88,10 @@ import {
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
+  LL_HLS_STARTUP_GRACE_MS,
   mediaSeekableEnd,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
-  shouldPinToConventionalRung,
   validPartTargetMs,
   type HlsLLPlayerConfig,
   type HlsMode,
@@ -142,6 +154,8 @@ import { cn } from "@/lib/utils";
 import { STAGE_LAYER } from "@/lib/stage-layers";
 
 const STALL_TICK_MS = 1_000;
+/** `HTMLMediaElement.HAVE_FUTURE_DATA`: enough to play on from here. */
+const HAVE_FUTURE_DATA = 3;
 
 /**
  * The ladder's console line. THE CONTEXT IS THE POINT: the 2026-09-16
@@ -521,12 +535,12 @@ export function HlsWatchPlayer({
   const watchRef = useRef<HlsStallWatch>(
     new HlsStallWatch({ stallMs: HLS_WATCH_PLAYER_STALL_MS }),
   );
-  // L2.4: two part-load errors inside 10 s pin this viewing session to
-  // conventional-style targeting for the rest of it (`docs/plans/LL_HLS.md`
-  // §4, `shouldPinToConventionalRung`). The master playlist itself has no
-  // separate "conventional rung" for this client to switch onto yet
-  // (`L2.1`/`L2.2`), so pinning means "stop asking hls.js to hold the LL
-  // edge", not "pick another level".
+  // A PIN puts this viewing session on conventional-style targeting for the
+  // rest of it: today only when the LL hls.js config itself is refused at
+  // construction (see `buildPlayer`'s catch). It used to be §4's answer to
+  // two part-load errors inside 10 s too, by rebuilding the player; that is
+  // now `LlLatencyGovernor`'s in-place switch to whole segments
+  // (`hls-ll-latency.ts`), which keeps the buffer and costs no rebuild.
   //
   // A REF, mirrored by `pinnedToConventional` STATE below (same shape as
   // `stallReason`/`watchRef.current.lastReason`): the ref is what the
@@ -538,9 +552,20 @@ export function HlsWatchPlayer({
   // session had already been pinned, because it read the raw `mode` prop
   // (which the server never updates for a client-only pin) with nothing to
   // re-render on.
-  const llPartErrorTimestampsRef = useRef<number[]>([]);
   const pinnedToConventionalRef = useRef(false);
   const [pinnedToConventional, setPinnedToConventional] = useState(false);
+  // What the LL governor (`LlLatencyGovernor`, created per attach) is doing
+  // right now, for the effects OUTSIDE the attach effect that need it: the
+  // behind-live badge and LL-lite's catch-up read the target, "jump to live"
+  // seeks to it rather than to the raw edge. Null off the LL path.
+  const llTargetSecondsRef = useRef<number | null>(null);
+  const llDeliveryRef = useRef<LlDelivery | null>(null);
+  // Rebuilds (a torn-down and recreated hls.js instance, `setAttempt` from
+  // the watchdog or a pin) this mount has made, and how many of them the
+  // telemetry has already reported: the difference is the per-window
+  // `rebuilds` field. `rebuildCountRef` above stays the lifetime count.
+  const rebuildEventsRef = useRef(0);
+  const rebuildsReportedRef = useRef(0);
   // Which `activeSrc` the pin/error state above belongs to -- reset on a
   // genuine new session, kept across a same-URL `attempt` rebuild (the pin
   // itself causes one; forgetting the pin on the very rebuild that applies
@@ -972,7 +997,11 @@ export function HlsWatchPlayer({
       currentTime: video.currentTime,
       liveSyncPosition: hlsRef.current?.liveSyncPosition ?? null,
       seekableEnd: mediaSeekableEnd(video),
-      segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+      segmentSeconds: liveSeekOffsetSeconds(
+        effectiveMode,
+        partTargetMs,
+        llTargetSecondsRef.current,
+      ),
     });
     if (target !== null) {
       video.currentTime = target;
@@ -1057,15 +1086,33 @@ export function HlsWatchPlayer({
         isBehindLive(
           video.currentTime,
           liveEdge,
-          behindLiveThresholdSeconds(effectiveMode, partTargetMs),
+          behindLiveThresholdSeconds(
+            effectiveMode,
+            partTargetMs,
+            llTargetSecondsRef.current,
+          ),
         ),
       );
       if (effectiveMode === "ll") {
-        // hls.js's own low-latency catch-up owns `video.playbackRate` on
-        // this path (`maxLiveSyncPlaybackRate`, set where the player is
+        // Parts: hls.js's own low-latency catch-up owns `video.playbackRate`
+        // on this path (`maxLiveSyncPlaybackRate`, set where the player is
         // constructed) -- writing it here too would be two controllers
         // fighting over the same property, the exact bug this effect's
         // comment already warns about for the conventional path.
+        //
+        // Segments (LL-lite): hls.js runs NO catch-up with `lowLatencyMode`
+        // off, so without this a stall's latency would never be given back.
+        // `llSegmentsCatchUpRate` is 1.05x at most, and only with buffer to
+        // spare, so the catch-up can never be what empties it.
+        if (llDeliveryRef.current === "segments") {
+          video.playbackRate = video.paused
+            ? 1
+            : llSegmentsCatchUpRate({
+                latencySeconds: hlsRef.current?.latency ?? null,
+                targetSeconds: llTargetSecondsRef.current,
+                bufferAheadSeconds: bufferAheadSeconds(video),
+              });
+        }
         return;
       }
       if (video.paused) {
@@ -1090,7 +1137,10 @@ export function HlsWatchPlayer({
       // (Farol review, PR 570) -- `secondsBehindLive`/`isBehindLive` above
       // stay edge-relative on purpose, for the "jump to live" badge only.
       const distance = secondsBehindCatchUpTarget(video.currentTime, liveEdge);
-      video.playbackRate = catchUpPlaybackRate(distance);
+      video.playbackRate = catchUpPlaybackRate(
+        distance,
+        bufferAheadSeconds(video),
+      );
     };
     video.addEventListener("timeupdate", check);
     check();
@@ -1315,7 +1365,15 @@ export function HlsWatchPlayer({
     let currentRung: string | null = null;
     /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
     let lastPartHoldBack: number | null = null;
-    let stallsSinceLastSample = 0;
+    // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
+    // milliseconds, hole skips and visibility, per sample window
+    // (`HlsStallMeter`); fatal hls.js details seen since the last sample.
+    const stallMeter = new HlsStallMeter(
+      Date.now(),
+      typeof document !== "undefined" && document.visibilityState === "hidden",
+    );
+    let fatalSinceLastSample: string[] = [];
+    let firstFrameAt: number | null = null;
     let startupMsPending: number | null = null;
     // Distinct from `startupMsPending` being null, which also means "already
     // reported": this stops a LATER `playing` event (after a stall recovers,
@@ -1334,6 +1392,7 @@ export function HlsWatchPlayer({
     // tracks the one outstanding handle so at most one is ever pending, and
     // is cancelled on cleanup so a torn-down player cannot fire into it.
     let pendingRvfcHandle: number | null = null;
+    let pendingRvfcSince = 0;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -1413,16 +1472,49 @@ export function HlsWatchPlayer({
               video.buffered.end(video.buffered.length - 1) - video.currentTime,
             )
           : undefined;
-      telemetryQueue.push({
+      const now = Date.now();
+      const win = stallMeter.take(now);
+      const rebuilds = rebuildEventsRef.current - rebuildsReportedRef.current;
+      rebuildsReportedRef.current = rebuildEventsRef.current;
+      const llState = governor?.state() ?? null;
+      const sample: LiveHlsTelemetrySample = {
         rung: currentRung,
         latencyMs: Math.round(latencyMs),
         bufferSeconds,
-        stalls: stallsSinceLastSample,
+        stalls: win.stalls,
+        rebufferMs: win.stalledMs,
+        holeSkips: win.holeSkips,
+        windowMs: Math.min(win.windowMs, 600_000),
         startupMs: startupMsPending ?? undefined,
+        startup: isHlsStartupSample(
+          firstFrameAt,
+          now,
+          LIVE_HLS_TELEMETRY_STARTUP_MS,
+        ),
         playerRebuildCount: rebuildCountAtAttach - 1,
-      });
-      stallsSinceLastSample = 0;
+        rebuilds,
+        playerMode: telemetryPlayerMode(),
+        hidden: win.hidden,
+        muted: video.muted,
+        ...(llState
+          ? { targetLatencyMs: Math.round(llState.targetSeconds * 1_000) }
+          : {}),
+        ...(fatalSinceLastSample.length > 0
+          ? { fatal: fatalSinceLastSample }
+          : {}),
+      };
+      telemetryQueue.push(sample);
+      fatalSinceLastSample = [];
       startupMsPending = null;
+    }
+    function telemetryPlayerMode(): LiveHlsTelemetrySample["playerMode"] {
+      if (governor) {
+        return governor.state().delivery === "parts" ? "ll" : "ll-segments";
+      }
+      if (hlsMode === "ll" && pinnedToConventionalRef.current) {
+        return "pinned";
+      }
+      return "conventional";
     }
     function sampleTelemetryOnce(): void {
       ensureTelemetryQueue();
@@ -1451,9 +1543,23 @@ export function HlsWatchPlayer({
       // never paints a new frame would otherwise accumulate one callback per
       // tick, all firing together (for the same frame) the moment playback
       // recovers.
+      //
+      // BUT A FRAME THAT NEVER COMES STILL DESERVES A SAMPLE (2026-09-23).
+      // A hidden tab never runs the callback, and neither does a long
+      // freeze, so those windows used to vanish from telemetry entirely: the
+      // viewers having the worst time were the ones it could not see. A
+      // request still pending a whole interval later is cancelled and the
+      // window reported off `currentTime` instead.
       if (pendingRvfcHandle !== null) {
+        if (Date.now() - pendingRvfcSince < TELEMETRY_SAMPLE_INTERVAL_MS) {
+          return;
+        }
+        videoWithRvfc.cancelVideoFrameCallback?.(pendingRvfcHandle);
+        pendingRvfcHandle = null;
+        pushTelemetrySample(video.currentTime);
         return;
       }
+      pendingRvfcSince = Date.now();
       pendingRvfcHandle = videoWithRvfc.requestVideoFrameCallback((_now, metadata) => {
         pendingRvfcHandle = null;
         if (!cancelled) {
@@ -1485,7 +1591,6 @@ export function HlsWatchPlayer({
     // it.
     if (pinSessionSrcRef.current !== activeSrc) {
       pinSessionSrcRef.current = activeSrc;
-      llPartErrorTimestampsRef.current = [];
       pinnedToConventionalRef.current = false;
       setPinnedToConventional(false);
     }
@@ -1500,6 +1605,61 @@ export function HlsWatchPlayer({
       pinnedToConventionalRef.current,
     );
     watch.configureForMode(effectiveMode, partTargetMs);
+    // THE LL GOVERNOR (`hls-ll-latency.ts`): whole segments by default
+    // ("LL-lite"), parts only for a browser that opted in, a target a few
+    // seconds behind the edge that grows with every stall and shrinks slowly,
+    // and an in-place switch to segments for a parts viewer that cannot hold
+    // them. LL only, never a replay.
+    const governor =
+      effectiveMode === "ll" && !isVod
+        ? new LlLatencyGovernor({
+            delivery: llPartsOptedIn() ? "parts" : "segments",
+            now: Date.now(),
+          })
+        : null;
+    let appliedTarget: number | null = null;
+    let appliedDelivery: LlDelivery | null = null;
+    const publishGovernor = () => {
+      const state = governor?.state() ?? null;
+      llTargetSecondsRef.current = state?.targetSeconds ?? null;
+      llDeliveryRef.current = state?.delivery ?? null;
+      watch.onLlDelivery(state?.delivery ?? null);
+    };
+    publishGovernor();
+    // Pushes the governor's state onto the live hls.js instance. Every
+    // setter here is one hls.js reads live (verified against 1.7.3:
+    // `LatencyController.targetLatency`'s setter writes
+    // `config.liveSyncDuration`, `maxLatency` reads
+    // `config.liveMaxLatencyDuration`, and the playlist/stream controllers
+    // read `config.lowLatencyMode` per decision), so nothing is rebuilt.
+    const applyGovernor = () => {
+      if (!governor || !hls || cancelled) {
+        return;
+      }
+      const state = governor.state();
+      const live = hls as unknown as {
+        targetLatency: number | null;
+        lowLatencyMode: boolean;
+        config: { liveMaxLatencyDuration?: number };
+      };
+      if (state.delivery !== appliedDelivery) {
+        if (appliedDelivery === "parts" && state.delivery === "segments") {
+          console.warn(
+            "[hls] LL link cannot hold parts, loading whole segments from here on",
+          );
+        }
+        live.lowLatencyMode = state.delivery === "parts";
+        appliedDelivery = state.delivery;
+      }
+      if (state.targetSeconds !== appliedTarget) {
+        // Ceiling first: hls.js must never see a target above its own
+        // force-seek line, even for one tick.
+        live.config.liveMaxLatencyDuration = state.ceilingSeconds;
+        live.targetLatency = state.targetSeconds;
+        appliedTarget = state.targetSeconds;
+      }
+      publishGovernor();
+    };
     // FELL BEHIND THE WINDOW: JUMP TO LIVE, DO NOT ANNOUNCE A DEATH.
     //
     // The recovery this attach may perform at most `LL_HLS_EDGE_JUMP_MAX`
@@ -1539,7 +1699,11 @@ export function HlsWatchPlayer({
         currentTime: video.currentTime,
         liveSyncPosition: hls?.liveSyncPosition ?? null,
         seekableEnd: mediaSeekableEnd(video),
-        segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+        segmentSeconds: liveSeekOffsetSeconds(
+          effectiveMode,
+          partTargetMs,
+          governor?.state().targetSeconds,
+        ),
       });
       if (target === null) {
         console.warn(`[hls] ${what}, no live edge to jump to, escalating`);
@@ -1579,18 +1743,48 @@ export function HlsWatchPlayer({
           clearPendingReconnect();
         }
         reportSize();
+        stallMeter.onPlaying(Date.now());
         // First real frame of this attach: report it on the NEXT telemetry
         // sample and then forget it, rather than on every sample.
         if (!startupMsComputed) {
           startupMsComputed = true;
-          startupMsPending = Date.now() - attachStartedAt;
+          firstFrameAt = Date.now();
+          startupMsPending = firstFrameAt - attachStartedAt;
         }
       }
     };
     const onWaiting = () => {
-      watch.onWaiting(Date.now());
-      stallsSinceLastSample += 1;
+      const now = Date.now();
+      watch.onWaiting(now);
+      const opened = stallMeter.onWaiting(now);
+      // A NEW episode after startup is the governor's signal: more room,
+      // and for a parts viewer, a step toward loading segments instead. The
+      // attach's own first buffering, and the second `waiting` the gap
+      // controller's seek-over-hole fires inside the same freeze, are not.
+      if (
+        opened &&
+        governor &&
+        firstFrameAt !== null &&
+        now - firstFrameAt >= LL_HLS_STARTUP_GRACE_MS
+      ) {
+        governor.onStall(now);
+        applyGovernor();
+      }
     };
+    // `stalled` is the element saying the NETWORK went quiet, not that the
+    // picture stopped: on a playing element with media to spare it is
+    // noise, and it used to count as a stall in telemetry and open the
+    // watchdog's stall clock with no `playing` ever coming to close it.
+    // Only an element that genuinely cannot play on is waiting.
+    const onStalledEvent = () => {
+      if (!video.paused && video.readyState < HAVE_FUTURE_DATA) {
+        onWaiting();
+      }
+    };
+    const onVisibility = () => {
+      stallMeter.onVisibility(document.visibilityState === "hidden");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     const onMediaError = () => {
       // The native player (no hls.js), or an MSE decode failure that
       // bubbled past hls.js to the element itself. `MEDIA_ERR_DECODE` is
@@ -1603,7 +1797,7 @@ export function HlsWatchPlayer({
     };
     video.addEventListener("playing", onPlaying);
     video.addEventListener("waiting", onWaiting);
-    video.addEventListener("stalled", onWaiting);
+    video.addEventListener("stalled", onStalledEvent);
     video.addEventListener("error", onMediaError);
     video.addEventListener("loadedmetadata", reportSize);
     const stallTimer = window.setInterval(() => {
@@ -1631,6 +1825,10 @@ export function HlsWatchPlayer({
       // clears this and re-arms the ladder with it.
       if (sessionOverRef.current !== null) {
         return;
+      }
+      if (governor) {
+        governor.tick(Date.now());
+        applyGovernor();
       }
       let decision = watch.tick(Date.now());
       if (decision === "jump-live") {
@@ -1724,7 +1922,11 @@ export function HlsWatchPlayer({
               currentTime: video.currentTime,
               liveSyncPosition: hls?.liveSyncPosition ?? null,
               seekableEnd: mediaSeekableEnd(video),
-              segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+              segmentSeconds: liveSeekOffsetSeconds(
+                effectiveMode,
+                partTargetMs,
+                governor?.state().targetSeconds,
+              ),
             });
         // AND ON LL THE LOADER RESTARTS THERE TOO, not at the frozen
         // playhead. `startLoad(-1)` means "resume where you were" in hls.js,
@@ -1784,6 +1986,7 @@ export function HlsWatchPlayer({
         }
         if (decision === "rebuild") {
           recordHlsRebuild();
+          rebuildEventsRef.current += 1;
           setAttempt((n) => n + 1);
         } else {
           void reconnectRef.current();
@@ -1848,7 +2051,10 @@ export function HlsWatchPlayer({
       // deliberately leaves `liveSyncDurationCount`/`liveSyncDuration` OUT
       // so hls.js defers to the manifest's own `PART-HOLD-BACK`
       // (`docs/plans/LL_HLS.md` §4; see that function's own comment).
-      const llConfig = effectiveMode === "ll" ? llHlsConfig() : null;
+      const llConfig =
+        effectiveMode === "ll"
+          ? llHlsConfig(governor?.state().delivery ?? "segments")
+          : null;
       // A FUNCTION ONLY SO THE REFUSAL PATH BELOW HAS A NAME FOR IT. hls.js
       // validates the constructor config and refuses a bad combination by
       // THROWING (`mergeConfig`). Inside this async `attach()` that is a
@@ -1984,25 +2190,19 @@ export function HlsWatchPlayer({
         // so this can happen at most once and the branch above is the floor.
         pinnedToConventionalRef.current = true;
         setPinnedToConventional(true);
+        rebuildEventsRef.current += 1;
         setAttempt((n) => n + 1);
         return;
       }
-      if (llConfig) {
-        // AFTER the constructor, never inside it: hls.js `mergeConfig`
-        // throws on `liveMaxLatencyDuration` in a config that does not also
-        // set `liveSyncDuration`, and setting that is exactly what would
-        // stop LL deferring to the manifest's own `PART-HOLD-BACK`. Passing
-        // it to `new Hls(...)` threw for every LL viewer in production and,
-        // because this is an async function invoked as `void attach()`, the
-        // rejection was silent and `loadSource` below was never reached.
-        // See `applyLlLatencyCeiling`.
-        applyLlLatencyCeiling(
-          player as unknown as { config: { liveMaxLatencyDuration?: number } },
-          partTargetMs,
-        );
-      }
       hls = player as unknown as HlsHandle;
       hlsRef.current = hls;
+      // AFTER the constructor, never inside it: hls.js `mergeConfig` throws
+      // on `liveMaxLatencyDuration` in a config that does not also set
+      // `liveSyncDuration` (production, 2026-09-15: it threw for EVERY LL
+      // viewer and, because `attach()` was a bare `void`, silently). The
+      // governor sets the target and the ceiling through the live setters
+      // instead, here and on every change after.
+      applyGovernor();
       // Enter the conventional restart dead window: stop the in-flight
       // playlist storm, keep the restarting overlay up, and let the next
       // ticks' bounded `"reconnect"` polls (`gateReconnect`) ask the server
@@ -2019,6 +2219,22 @@ export function HlsWatchPlayer({
         // Fatal network/media errors: hls.js has given up on this source;
         // non-fatal ones it retries on its own and the watchdog only notes.
         const fatal = Boolean(data.fatal);
+        // Telemetry v2: a seek over a buffer hole is the other kind of
+        // `waiting`, and a fatal's own detail is the first thing anybody
+        // reading a bad window asks for. Counted before any branch below
+        // returns.
+        if (!fatal && data.details === "bufferSeekOverHole") {
+          stallMeter.onHoleSkip();
+        }
+        if (
+          fatal &&
+          typeof data.details === "string" &&
+          /^[A-Za-z0-9_-]{1,48}$/.test(data.details) &&
+          fatalSinceLastSample.length < 4 &&
+          !fatalSinceLastSample.includes(data.details)
+        ) {
+          fatalSinceLastSample.push(data.details);
+        }
         // WHETHER THIS ATTACH HAS A LIVE-EDGE JUMP AT ALL. LL only, and
         // never a replay. On every other path -- which is every watch party
         // anybody has actually run -- the watchdog is told FIRST and the
@@ -2112,38 +2328,17 @@ export function HlsWatchPlayer({
         if (!cancelled && data.response?.code === 401) {
           triggerAuthGraceRef.current();
         }
-        // §4's pin rule: on LL only, two part-load errors inside 10 s stop
-        // this viewing session asking hls.js to hold the LL edge at all —
-        // "a viewer who cannot hold the edge should stop trying, not
-        // oscillate". `effectiveMode` (not the raw `mode` prop) so a
-        // session already pinned does not re-arm itself on its own errors.
-        let pinned = false;
+        // §4's old pin rule, now in place: on LL, two part-load errors inside
+        // 10 s move a parts viewer to whole segments (`LlLatencyGovernor`),
+        // keeping the buffer and the instance. It used to rebuild the player
+        // at the conventional path's ~25 s cushion to get the same effect.
         if (
           !cancelled &&
-          effectiveMode === "ll" &&
-          isLlPartLoadErrorDetail(data.details)
+          governor &&
+          isLlPartLoadErrorDetail(data.details) &&
+          governor.onPartLoadError(Date.now())
         ) {
-          const timestamps = llPartErrorTimestampsRef.current;
-          timestamps.push(Date.now());
-          if (timestamps.length > 2) {
-            timestamps.splice(0, timestamps.length - 2);
-          }
-          if (
-            !pinnedToConventionalRef.current &&
-            shouldPinToConventionalRung(timestamps)
-          ) {
-            pinned = true;
-            pinnedToConventionalRef.current = true;
-            // The render-visible mirror (Farol review, this PR): without
-            // this the live badge kept showing an LL latency reading after
-            // the session had already been pinned, since it read the raw
-            // `mode` prop, which a client-only pin never changes.
-            setPinnedToConventional(true);
-            console.warn(
-              "[hls] two LL part-load errors inside 10s, pinning to conventional for the rest of this session",
-            );
-            setAttempt((n) => n + 1);
-          }
+          applyGovernor();
         }
         if (!canJumpOnThisAttach) {
           // Conventional and VOD are finished: the watchdog already has the
@@ -2168,7 +2363,6 @@ export function HlsWatchPlayer({
         // forward over a hole.
         if (
           !cancelled &&
-          !pinned &&
           isMissingFragmentError({
             fatal,
             details: data.details,
@@ -2240,28 +2434,16 @@ export function HlsWatchPlayer({
               Date.now(),
             );
           }
-          // THE CEILING FOLLOWS THE MANIFEST, once the manifest exists.
-          // `applyLlLatencyCeiling` at the attach only has the part target
-          // to go on -- 4 s at a 500 ms part -- and the server is free to
-          // advertise a `PART-HOLD-BACK` anywhere under that. Raise the
-          // hold-back to 3 s (which the edge is doing, for its own half of
-          // the same evening's rebuffering) and the player is asked to hold
-          // a 3 s target under a 4 s force-seek line: one stumble and
-          // `synchronizeToLiveEdge` seeks, which empties a 6 s buffer,
-          // which is the next stumble. `llLatencyCeilingSeconds` keeps six
-          // parts of room above whatever the manifest says. Re-applied only
-          // when the value actually changes -- this event fires once per
-          // PART under the blocking reload.
+          // THE GOVERNOR HEARS WHAT THE MANIFEST ASKS FOR: a parts viewer
+          // never sits closer than the manifest's own `PART-HOLD-BACK`, and
+          // never closer than its own floor either. Re-applied only when the
+          // value changes -- this event fires once per PART under the
+          // blocking reload.
           const holdBack = data.details.partHoldBack;
-          if (holdBack !== lastPartHoldBack) {
+          if (governor && holdBack !== lastPartHoldBack) {
             lastPartHoldBack = holdBack;
-            applyLlLatencyCeiling(
-              player as unknown as {
-                config: { liveMaxLatencyDuration?: number };
-              },
-              partTargetMs,
-              holdBack,
-            );
+            governor.onManifest({ partHoldBackSeconds: holdBack });
+            applyGovernor();
           }
         }
         // Conventional only. This is exactly the override §4 warns against
@@ -2281,6 +2463,11 @@ export function HlsWatchPlayer({
             data.details.fragments.length,
           );
         }
+      });
+      // Media is still landing: the watchdog's stall rule is for a player
+      // that is waiting AND getting nothing, never for one mid-recovery.
+      player.on(Hls.Events.FRAG_BUFFERED, () => {
+        watch.onBufferProgress(Date.now());
       });
       player.on(Hls.Events.FRAG_LOADED, () => {
         hlsFragmentLoaded = true;
@@ -2398,7 +2585,10 @@ export function HlsWatchPlayer({
       telemetryQueue?.stop();
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("waiting", onWaiting);
-      video.removeEventListener("stalled", onWaiting);
+      video.removeEventListener("stalled", onStalledEvent);
+      document.removeEventListener("visibilitychange", onVisibility);
+      llTargetSecondsRef.current = null;
+      llDeliveryRef.current = null;
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("loadedmetadata", reportSize);
       if (

@@ -800,6 +800,21 @@ last row does, legend `{{rung}}` is not available (the rung is not a Loki
 label, it is inside the log line), so name each series by hand per rung
 instead.
 
+**Telemetry v2 (web clients from 2026-09-23).** Each sample now says whether
+it belongs to startup (before the first frame and for 10 s after it), how
+many stall EPISODES and frozen milliseconds its window held, the window
+length, rebuilds in THAT window (the old `playerRebuildCount` is lifetime),
+seek-over-hole skips, whether the tab was hidden, whether it was muted, the
+player mode (`ll`, `ll-segments`, `conventional`, `pinned`) and any fatal
+hls.js details. The log line folds them into `steadySamples`,
+`startupSamples`, `steadyStalls`, `steadyRebufferMs`, `steadyWindowMs`,
+`stallSecondsPerMinute`, `totalRebufferMs`, `holeSkips`, `rebuilds`,
+`playerModes`, `hiddenSamples`, `mutedSamples` and `fatal`
+(`server/src/voice/hls-telemetry-summary.ts`); older clients leave them at
+zero or empty. The headline is frozen seconds per viewer-minute of steady
+playback: `sum(steadyRebufferMs) / sum(steadyWindowMs) * 60`, e.g.
+`sum(sum_over_time({fly_app_name="pqp-api"} |= "voice.hlsTelemetryBatch" | logfmt | unwrap steadyRebufferMs [5m])) / sum(sum_over_time({fly_app_name="pqp-api"} |= "voice.hlsTelemetryBatch" | logfmt | unwrap steadyWindowMs [5m])) * 60`.
+
 **Acceptance criterion for B0:** during one live party, `GET
 /api/admin/metrics`'s `liveHls.latency.byRung` shows p50 and p95
 encode-to-paint for every rung a viewer is actually watching, and the count on
