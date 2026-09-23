@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import { getPool, type DbInvite } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
+import type { PublicInvitePreview } from "@pqp/shared";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -158,5 +159,52 @@ export function mapInvite(invite: DbInvite) {
     uses: invite.uses,
     expiresAt: invite.expires_at?.toISOString() ?? null,
     createdAt: invite.created_at.toISOString(),
+  };
+}
+
+/**
+ * What a signed-out person holding an invite link may see before they sign up:
+ * the room's name, its picture and an approximate head count. Nothing else.
+ *
+ * Every reason the invite would not let a new person in is folded into the
+ * WHERE clause, so an unknown code, an expired one, an exhausted one and one
+ * pointing at a suspended community all answer null from the same single
+ * statement. The caller turns that into one 404; nothing here can sort dead
+ * codes into kinds, and the query plan does not change with the reason.
+ *
+ * "Exhausted" uses the rule a NEW account meets in `redeemInvite`: an existing
+ * member may re-open a spent invite, but nobody reading this endpoint is a
+ * member yet.
+ *
+ * No server id, no invite id, no inviter, no member names. The icon URL is the
+ * stored one, which for an uploaded picture is `/api/servers/<id>/icon`, the
+ * same concession `publicCommunitySchema` documents: every route that would take
+ * that id stays behind auth.
+ */
+export async function getPublicInvitePreview(
+  code: string,
+): Promise<PublicInvitePreview | null> {
+  const result = await getPool().query<{
+    name: string;
+    icon_url: string | null;
+    member_count: number;
+  }>(
+    `SELECT s.name, s.icon_url, s.member_count
+       FROM server_invites i
+       JOIN servers s ON s.id = i.server_id
+      WHERE i.code = $1
+        AND (i.expires_at IS NULL OR i.expires_at > now())
+        AND (i.max_uses IS NULL OR i.uses < i.max_uses)
+        AND NOT s.is_community_suspended`,
+    [code],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    serverName: row.name,
+    iconUrl: row.icon_url,
+    memberCount: Math.max(0, row.member_count),
   };
 }

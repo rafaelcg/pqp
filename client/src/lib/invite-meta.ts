@@ -40,13 +40,11 @@
  * marketing and blog builders and unlike the profile and community ones, so
  * the middleware branch runs before the API origin is even resolved.
  *
- * WHAT A NAMED CARD WOULD COST. It needs `GET /api/public/invites/:code`,
- * unauthenticated, answering at most a name and an icon and ONLY for a server
- * that already opted into the public directory, 404 for everything else so
- * revoked, private and never-existed stay indistinguishable. That endpoint does
- * not exist today (`GET /api/invites/:code` requires a Bearer token, which the
- * edge does not have), and adding one is an API deploy. This module is the half
- * that does not need one.
+ * THE PREVIEW ENDPOINT DOES NOT CHANGE THIS. `GET /api/public/invites/:code`
+ * now answers the name, icon and member count without a login, for the
+ * signed-out gate: that reader opened the link and holds the code. A card is
+ * drawn for every forward and crawler that never did, so it still names
+ * nothing and still fetches nothing.
  *
  * DELIBERATELY DEPENDENCY-FREE, like its four siblings: wrangler's esbuild
  * bundles it outside the pnpm workspace, so it cannot import `@pqp/shared` or
