@@ -170,6 +170,7 @@ func (s *Session) RunMonitor(ctx context.Context, label string) {
 			// reorder buffer may complete the access unit idleTick would
 			// otherwise decide the source is too quiet to have sent.
 			s.reorderTick(now)
+			s.deadlineTick(now)
 			s.idleTick(now)
 			if now.Before(nextStats) {
 				continue
@@ -179,11 +180,62 @@ func (s *Session) RunMonitor(ctx context.Context, label string) {
 			// reads it every tick); the windowed reorder max is taken
 			// here, once per printed line, and nowhere else.
 			cur.ReorderMaxDelayMs = s.takeReorderMaxDelayMs()
+			cur.PartLateMaxMs = s.partLateMaxMs.Swap(0)
 			log.Print(formatStatsLine(label, prev, cur, now.Sub(prevAt)))
 			prev, prevAt = cur, now
 			nextStats = now.Add(statsInterval)
 		}
 	}
+}
+
+// deadlineTick is the part cadence for a quiet or bursty source, with
+// clock-cut parts on: every part whose END the wall clock passed more than
+// partDeadlineGrace ago is cut now, filled with repeat frames, instead of
+// waiting for the frame that ends the gap (up to a second on a static tab)
+// or for idleTick's whole idle allowance. It returns true when it
+// published a part.
+//
+// It declines, leaving the part to the arriving frame or to idleTick
+// exactly as before, in three cases, each of them a frame that is already
+// on its way and would land behind a repeat frame published now:
+//
+//   - the reorder buffer is holding packets behind a hole. The missing
+//     packet can belong to a frame older than any of them, so no
+//     timestamp bounds the fill; waiting costs at most REORDER_HOLD_MS.
+//   - an access unit is being reassembled: the fill stops one tick short
+//     of its timestamp (pipeline.Fragmenter.DeadlineCut's openPTS), so a
+//     large keyframe paced out over half a second still lands where the
+//     publisher stamped it.
+//   - the stream has no repeater (CLOCK_CUT_PARTS off, or a stream
+//     internal/skipframe refused). There is no honest short part without
+//     one, and those sessions keep the pre-deadline behaviour exactly.
+//
+// Run it BEFORE idleTick: with the default grace this is the one that
+// fires, and idleTick's allowance stays the backstop for everything this
+// declines.
+func (s *Session) deadlineTick(now time.Time) bool {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	if s.videoStopped || s.fragAnchorAtNs == 0 || !s.frag.ClockCutting() || s.reorder.holding() {
+		return false
+	}
+	held := now.Sub(time.Unix(0, s.fragAnchorAtNs)) - s.partDeadlineGrace
+	if held <= 0 {
+		return false
+	}
+	openPTS, open := s.dep.OpenAccessUnitPTS()
+	frags := s.frag.DeadlineCut(durationToTicks(held), openPTS, open)
+	for _, frag := range frags {
+		s.publish(frag)
+		s.notePartLateness(frag, now)
+	}
+	s.mirrorRepeatCounters()
+	if len(frags) == 0 {
+		return false
+	}
+	s.keepAlivePartsWritten.Add(uint64(len(frags)))
+	s.deadlineParts.Add(uint64(len(frags)))
+	return true
 }
 
 // idleTick is the static-source fix. When no access unit has completed for
@@ -250,6 +302,7 @@ func (s *Session) idleTick(now time.Time) bool {
 	}
 	for _, frag := range frags {
 		s.publish(frag)
+		s.notePartLateness(frag, now)
 	}
 	s.mirrorRepeatCounters()
 	s.videoMu.Unlock()
@@ -351,7 +404,19 @@ type Stats struct {
 	// to "is CLOCK_CUT_PARTS doing anything on this stream".
 	RepeatFrames uint64
 	ClockCuts    uint64
-	VideoIdle    bool
+	// DeadlineParts counts parts the part deadline cut (deadlineTick), a
+	// subset of KeepAlivePartsWrites. PartsLate250/PartsLate500 count
+	// parts published more than 250/500 ms after the wall instant their
+	// end maps to, and PartLateMaxMs is the worst in the window (filled in
+	// by RunMonitor only, like ReorderMaxDelayMs, because taking it resets
+	// it). PTSShiftMs is a LEVEL, not a counter: how far the video
+	// timeline has been shifted later than the publisher's clock.
+	DeadlineParts uint64
+	PartsLate250  uint64
+	PartsLate500  uint64
+	PartLateMaxMs int64
+	PTSShiftMs    int64
+	VideoIdle     bool
 	// VideoMediaMs/AudioMediaMs and the anchors below are what
 	// `timelineRatio` is computed from: how much MEDIA each track has
 	// published against how much WALL clock has passed since that
@@ -419,6 +484,10 @@ func (s *Session) Stats() Stats {
 		KeepAlivePartsWrites:    s.keepAlivePartsWritten.Load(),
 		RepeatFrames:            s.repeatFrames.Load(),
 		ClockCuts:               s.clockCuts.Load(),
+		DeadlineParts:           s.deadlineParts.Load(),
+		PartsLate250:            s.partsLate250.Load(),
+		PartsLate500:            s.partsLate500.Load(),
+		PTSShiftMs:              s.ptsShiftMs.Load(),
 		VideoIdle:               s.videoIdle.Load(),
 		VideoMediaMs:            s.videoMediaMs.Load(),
 		AudioPacketsSeen:        s.audioPacketsSeen.Load(),
@@ -532,6 +601,11 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 		cur.RepeatFrames-prev.RepeatFrames,
 		cur.ClockCuts-prev.ClockCuts,
 		cur.VideoIdle)
+	fmt.Fprintf(&b, " deadline=+%d late250=+%d late500=+%d lateMaxMs=%d ptsShiftMs=%d",
+		cur.DeadlineParts-prev.DeadlineParts,
+		cur.PartsLate250-prev.PartsLate250,
+		cur.PartsLate500-prev.PartsLate500,
+		cur.PartLateMaxMs, cur.PTSShiftMs)
 	fmt.Fprintf(&b, " lastPkt=%s lastFrame=%s lastIdr=%s lastPart=%s",
 		ago(cur.Now, cur.LastVideoPacket), ago(cur.Now, cur.LastVideoFrame),
 		ago(cur.Now, cur.LastIdr), ago(cur.Now, cur.LastPart))

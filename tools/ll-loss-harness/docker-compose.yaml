@@ -27,7 +27,7 @@ services:
     ports:
       # Loopback-only publish: nothing here is reachable from outside this
       # Mac, let alone the internet.
-      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:${LL_HARNESS_LIVEKIT_PORT:-7880}:7880"
     networks: [harness]
 
   remuxd:
@@ -43,9 +43,14 @@ services:
       # MEDIA_ORIGIN_KEY, which harness.env already sets.
       CONTROL_LISTEN: ":8090"
       LIVEKIT_URL: "${LIVEKIT_URL:-ws://livekit:7880}"
+      # Production's clock-cut switch and the part deadline's grace, set by
+      # run.sh for SOURCE=idle runs. Empty CLOCK_CUT_PARTS is "false", the
+      # binary's own default, so the loss runs are unchanged.
+      CLOCK_CUT_PARTS: "${CLOCK_CUT_PARTS:-}"
+      PART_DEADLINE_GRACE_MS: "${PART_DEADLINE_GRACE_MS:-150}"
     depends_on: [livekit]
     ports:
-      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:${LL_HARNESS_REMUXD_PORT:-8090}:8090"
     networks: [harness]
 
   publisher:
@@ -55,8 +60,10 @@ services:
     environment:
       LIVEKIT_URL: "${LIVEKIT_URL:-ws://livekit:7880}"
       ROOM: "${ROOM:-ll-loss-harness}"
-      FILE: "/media/ramp.h264"
+      FILE: "/media/${SOURCE_FILE:-ramp.h264}"
       LOSS_PCT: "${LOSS_PCT:-0}"
+      PACE: "${PACE:-}"
+      PACE_SECONDS: "${PACE_SECONDS:-90}"
     volumes:
       - ./.data:/media:ro
     cap_add:

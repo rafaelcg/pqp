@@ -102,6 +102,7 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	segmentTicks := uint32(msToTicks(cfg.SegmentMs))
 	sess := session.New(partTicks, segmentTicks, r, nil)
 	sess.SetReorderHold(time.Duration(global.ReorderHoldMs) * time.Millisecond)
+	sess.SetPartDeadlineGrace(time.Duration(global.PartDeadlineGraceMs) * time.Millisecond)
 	if global.ClockCutParts {
 		sess.EnableClockCutParts()
 	}

@@ -107,3 +107,6 @@ export function resolveLlPlaylistModule() {
 export function resolveLlStateModule() {
   return path.join(REPO_ROOT, "tools", "hls-edge", "src", "ll-state.js");
 }
+export function resolveBlockingReloadModule() {
+  return path.join(REPO_ROOT, "tools", "hls-edge", "src", "hls-blocking-reload.js");
+}

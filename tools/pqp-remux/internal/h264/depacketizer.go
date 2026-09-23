@@ -362,6 +362,26 @@ func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, 
 	return d.Push(payload, rtpTimestamp, marker)
 }
 
+// OpenAccessUnitPTS reports the presentation timestamp of the access unit
+// currently being reassembled, if one has started: at least one packet of
+// it has been accepted and neither a marker nor a timestamp change has
+// closed it yet. A large keyframe paced out over a few hundred
+// milliseconds sits here for that whole time, and so does every FU-A
+// fragment before the one carrying the End bit (pion returns nothing for
+// those, so the buffer can be empty while an AU is very much under way).
+//
+// internal/session reads it before cutting a part on the wall clock: the
+// frame being reassembled is coming, and its timestamp is exactly how far
+// the timeline may be filled with repeat frames without landing on media
+// the publisher is still sending. A damaged AU (dropUntilMarker) is not
+// open in this sense: it is discarded when it closes, so it bounds nothing.
+func (d *Depacketizer) OpenAccessUnitPTS() (int64, bool) {
+	if !d.auStarted {
+		return 0, false
+	}
+	return d.auExtended, true
+}
+
 // LostPackets is how many RTP sequence numbers PushRTP has skipped over.
 func (d *Depacketizer) LostPackets() uint64 { return d.lostPackets }
 

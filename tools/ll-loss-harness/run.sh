@@ -35,6 +35,13 @@
 # (skip teardown, for debugging), CFG=default|client (page.html's hls.js
 # config presets).
 #
+# SOURCE=idle swaps the ramp for a PACED source (README.md "Idle and bursty
+# sources"): frames on a wall-clock schedule that goes quiet and bursts the
+# way a Chrome tab share of a mostly static page does, with production's
+# CLOCK_CUT_PARTS=true, and measures when each part is published
+# (harness/lateness.mjs) beside the viewer's stalls. PART_DEADLINE_GRACE_MS
+# passes through to pqp-remuxd (1000 is the pre-deadline timing).
+#
 # Nothing here can reach production -- see README.md "What this cannot
 # reach" and env.mjs's assertLocalHost/assertLocalUrl, which every Node
 # script in this harness runs its own LiveKit/origin URLs through.
@@ -45,6 +52,26 @@ HARNESS_DIR="$(pwd)"
 
 LOSS_PCT="${1:-0}"
 WATCH_SECONDS="${WATCH_SECONDS:-60}"
+SOURCE="${SOURCE:-ramp}"
+case "$SOURCE" in
+  ramp) export SOURCE_FILE=ramp.h264 PACE="" CLOCK_CUT_PARTS="${CLOCK_CUT_PARTS:-}" ;;
+  idle) export SOURCE_FILE=idle.h264 PACE=idle-bursty CLOCK_CUT_PARTS=true POLL_MODE="${POLL_MODE:-edge}" ;;
+  *) echo "run.sh: SOURCE must be ramp or idle, got '$SOURCE'" >&2; exit 1 ;;
+esac
+export PART_DEADLINE_GRACE_MS="${PART_DEADLINE_GRACE_MS:-150}"
+
+# Host ports, overridable so two runs (two worktrees, two agents) can share
+# one Docker host: give each its own COMPOSE_PROJECT_NAME and ports, or the
+# second run's opening `down` tears the first one's containers away.
+export LL_HARNESS_LIVEKIT_PORT="${LL_HARNESS_LIVEKIT_PORT:-7880}"
+export LL_HARNESS_REMUXD_PORT="${LL_HARNESS_REMUXD_PORT:-8090}"
+export LL_HARNESS_PORT="${LL_HARNESS_PORT:-18080}"
+export PORT="${PORT:-18081}"
+export LL_HARNESS_ORIGIN="http://127.0.0.1:${LL_HARNESS_REMUXD_PORT}"
+export LL_HARNESS_CONTROL_URL="http://127.0.0.1:${LL_HARNESS_REMUXD_PORT}"
+# The paced publisher stops on its own schedule, so it has to outlast the
+# viewer's window.
+export PACE_SECONDS="$((WATCH_SECONDS + 40))"
 CFG="${CFG:-default}"
 KEEP_UP="${KEEP_UP:-0}"
 RUN_ID="$(date +%s)-$$"
@@ -112,6 +139,7 @@ docker compose --profile publish down --timeout 5 >/dev/null 2>&1 || true
 echo "run.sh: generating ephemeral keys and ramp.h264"
 bash scripts/gen-keys.sh
 bash scripts/gen-ramp.sh
+[ "$SOURCE" = "idle" ] && bash scripts/gen-idle.sh
 
 echo "run.sh: building images"
 docker compose build remuxd publisher >"$LOG_DIR/build.log" 2>&1 || { echo "run.sh: build failed, see $LOG_DIR/build.log" >&2; tail -60 "$LOG_DIR/build.log" >&2; exit 1; }
@@ -119,17 +147,17 @@ docker compose build remuxd publisher >"$LOG_DIR/build.log" 2>&1 || { echo "run.
 echo "run.sh: starting livekit + remuxd"
 docker compose up -d livekit remuxd >"$LOG_DIR/up.log" 2>&1
 
-echo "run.sh: waiting for livekit :7880"
+echo "run.sh: waiting for livekit :${LL_HARNESS_LIVEKIT_PORT}"
 for i in $(seq 1 30); do
   # LiveKit answers a non-2xx on "/" (no route) -- any HTTP response at
   # all means the port is up, which is all this loop needs to know.
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:7880/" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${LL_HARNESS_LIVEKIT_PORT}/" || true)"
   [ -n "$code" ] && [ "$code" != "000" ] && break
-  if [ "$i" = 30 ]; then echo "run.sh: livekit never answered on :7880, see 'docker compose logs livekit'" >&2; exit 1; fi
+  if [ "$i" = 30 ]; then echo "run.sh: livekit never answered on :${LL_HARNESS_LIVEKIT_PORT}, see 'docker compose logs livekit'" >&2; exit 1; fi
   sleep 1
 done
 
-echo "run.sh: waiting for remuxd control API :8090"
+echo "run.sh: waiting for remuxd control API :${LL_HARNESS_REMUXD_PORT}"
 for i in $(seq 1 30); do
   if node harness/remux-ctl.mjs list >/dev/null 2>"$LOG_DIR/remuxd-wait.log"; then break; fi
   if [ "$i" = 30 ]; then echo "run.sh: remuxd never answered, see $LOG_DIR/remuxd-wait.log and 'docker compose logs remuxd'" >&2; exit 1; fi
@@ -142,7 +170,7 @@ SID="$(grep -oE '^SESSION [^ ]+' "$LOG_DIR/session-start.log" | awk '{print $2}'
 if [ -z "$SID" ]; then echo "run.sh: could not parse session id, see $LOG_DIR/session-start.log" >&2; exit 1; fi
 echo "run.sh: session=${SID}"
 
-echo "run.sh: starting playlist server on :18080"
+echo "run.sh: starting playlist server on :${LL_HARNESS_PORT}"
 SID="$SID" node harness/server.mjs > "$LOG_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 1
@@ -150,10 +178,34 @@ sleep 1
 echo "run.sh: starting publisher (LOSS_PCT=${LOSS_PCT}%)"
 ROOM="$ROOM" LOSS_PCT="$LOSS_PCT" docker compose --profile publish run --rm -d --name "ll-loss-publisher-${RUN_ID}" publisher > "$LOG_DIR/publisher-start.log" 2>&1
 
-echo "run.sh: watching for ${WATCH_SECONDS}s (cfg=${CFG})"
+if [ "$SOURCE" = "idle" ]; then
+  # Start the viewer on a stream that already has a few segments, the way a
+  # real audience joins a party in progress. Started cold, hls.js retries a
+  # 503 master until the first part exists and then lands wherever the
+  # retry happened to catch the playlist, anywhere from the live edge to
+  # tens of seconds behind it, and a viewer that far back never stalls on
+  # part timing: two runs of the same build are then not comparable.
+  echo "run.sh: waiting for 12s of published media before the viewer joins"
+  for i in $(seq 1 60); do
+    parts="$(SID="$SID" node -e '
+      const { loadHarnessEnv } = await import("./harness/env.mjs");
+      const key = process.env.MEDIA_ORIGIN_KEY || loadHarnessEnv().MEDIA_ORIGIN_KEY;
+      const r = await fetch(`${process.env.LL_HARNESS_ORIGIN}/s/${process.env.SID}/state.json`, { headers: { "X-Pqp-Origin-Key": key } });
+      const st = r.ok ? await r.json() : { video: { segments: [] } };
+      console.log(st.video.segments.reduce((n, s) => n + s.parts.length, 0));
+    ' --input-type=module 2>/dev/null || echo 0)"
+    [ "${parts:-0}" -ge 24 ] && break
+    sleep 1
+  done
+fi
+
+echo "run.sh: watching for ${WATCH_SECONDS}s (cfg=${CFG} source=${SOURCE} grace=${PART_DEADLINE_GRACE_MS}ms)"
+SID="$SID" PARTS_DIR="$LOG_DIR/parts" node harness/lateness.mjs "$WATCH_SECONDS" > "$LOG_DIR/lateness.log" 2>&1 &
+LATENESS_PID=$!
 set +e
 node harness/run.mjs "$CFG" "$WATCH_SECONDS" | tee "$LOG_DIR/hlsjs.log"
 VERDICT_STATUS=${PIPESTATUS[0]}
+wait "$LATENESS_PID"
 set -e
 
 kill "$SERVER_PID" >/dev/null 2>&1 || true
@@ -204,6 +256,19 @@ echo "   remux loss defense:     ${LOSS_DEFENSE_NOTE}"
 echo "   remux discard mentions: ${DISCARD_COUNT} (full log: ${LOG_DIR}/remuxd-full.log)"
 echo "   remux relevant lines:   ${LOG_DIR}/remuxd-relevant.log"
 echo "   hls.js error summary:   see ${LOG_DIR}/hlsjs.log (ERROR SUMMARY line)"
+echo "   viewer:                 $(grep -E '^WAITING: ' "$LOG_DIR/hlsjs.log" || echo 'WAITING: n/a')"
+echo "   viewer:                 $(grep -E '^LIVE LATENCY: ' "$LOG_DIR/hlsjs.log" || echo 'LIVE LATENCY: n/a')"
+grep -E '^LATENESS (video|audio) ' "$LOG_DIR/lateness.log" | sed 's/^/   part publication:       /' || true
+# The remux's own view of the same thing, summed over the run.
+awk '/stats session/ {
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^deadline=\+/) { split($i, a, "+"); d += a[2] }
+      if ($i ~ /^late250=\+/) { split($i, a, "+"); l2 += a[2] }
+      if ($i ~ /^late500=\+/) { split($i, a, "+"); l5 += a[2] }
+      if ($i ~ /^lateMaxMs=/) { split($i, a, "="); if (a[2] + 0 > m) m = a[2] + 0 }
+      if ($i ~ /^ptsShiftMs=/) { split($i, a, "="); s = a[2] }
+    }
+  } END { printf "   remux counters:         deadline=%d late250=%d late500=%d lateMaxMs=%d ptsShiftMs=%s\n", d, l2, l5, m, s }' "$LOG_DIR/remuxd-full.log" || true
 if [ "$FINAL_STATUS" != "$VERDICT_STATUS" ]; then
   echo "   overall:                 FAIL (hls.js passed but the loss defense did not fire -- see WARNING above)"
 fi

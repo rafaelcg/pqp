@@ -225,6 +225,35 @@ type Session struct {
 	depacketizeLogAtNs       atomic.Int64
 	depacketizeLogSuppressed atomic.Uint64
 
+	// fragAnchorAtNs is the wall-clock instant (UnixNano) the fragmenter
+	// accepted the real access unit it is anchored on
+	// (pipeline.Fragmenter.AnchorPTS). It is NOT lastVideoFrameAtNs: a
+	// frame dropped while a damaged GOP is skipped counts as a frame there
+	// and never reaches the fragmenter, so only this one pairs with the
+	// fragmenter's own anchor to map media time to wall time. Touched only
+	// under videoMu.
+	fragAnchorAtNs int64
+	// partDeadlineGrace is PART_DEADLINE_GRACE_MS: how long past the wall
+	// instant a part's end maps to the part deadline waits before cutting
+	// it with repeat frames. See deadlineTick. Set before receiving.
+	partDeadlineGrace time.Duration
+	// deadlineParts counts parts closed by the part deadline, a subset of
+	// keepAlivePartsWritten.
+	deadlineParts atomic.Uint64
+	// partsLate250/partsLate500 count video parts published more than
+	// 250/500 ms after the wall instant their end maps to, and
+	// partLateMaxMs is the worst lateness in the current stats window
+	// (taken, and reset, by RunMonitor). See notePartLateness.
+	partsLate250  atomic.Uint64
+	partsLate500  atomic.Uint64
+	partLateMaxMs atomic.Int64
+	// ptsShiftMs mirrors the fragmenter's ptsOffset, in milliseconds:
+	// how far the video timeline has been pushed later than the
+	// publisher's own clock over the session. It is the A/V cost of
+	// every repeat frame that turned out to cover an instant the
+	// publisher had really sent a frame for, and it belongs near zero.
+	ptsShiftMs atomic.Int64
+
 	// now is time.Now in production. It is a field only so a test can
 	// drive the video path and the keep-alive tick off ONE clock
 	// (idleTick already takes its instant as a parameter, and a test
@@ -379,11 +408,12 @@ func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requeste
 			PartDuration:    partTicks,
 			SegmentDuration: segmentTicks,
 		}),
-		ring:      r,
-		partTicks: partTicks,
-		now:       time.Now,
-		started:   time.Now(),
-		epoch:     time.Now(),
+		ring:              r,
+		partTicks:         partTicks,
+		partDeadlineGrace: DefaultPartDeadlineGrace,
+		now:               time.Now,
+		started:           time.Now(),
+		epoch:             time.Now(),
 	}
 	if keyReq != nil {
 		s.keyReq.Store(keyReq)
@@ -804,12 +834,16 @@ func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
 	if err != nil && err != pipeline.ErrWaitingForIDR {
 		log.Printf("pqp-remux: fragmenter: %v", err)
 	}
+	if err == nil {
+		s.fragAnchorAtNs = now.UnixNano()
+	}
 	// One access unit closes at most one part in the ordinary case, and
 	// several when clock cutting fills a long frame gap with repeat
 	// frames (pipeline.Fragmenter.SetRepeater). Publish them in order: the
 	// ring's own sequence numbering depends on it.
 	for _, frag := range frags {
 		s.publish(frag)
+		s.notePartLateness(frag, now)
 	}
 	s.mirrorRepeatCounters()
 	return true
@@ -821,6 +855,75 @@ func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
 func (s *Session) mirrorRepeatCounters() {
 	s.repeatFrames.Store(s.frag.RepeatFrames())
 	s.clockCuts.Store(s.frag.ClockCuts())
+	s.ptsShiftMs.Store(s.frag.PTSOffset() * 1000 / h264.ClockRate)
+}
+
+// notePartLateness measures how late one video part was published: the
+// wall time that passed between the instant its END maps to and now. The
+// mapping is the fragmenter's anchor, the last real access unit it
+// accepted, paired with when that access unit arrived. For a part closed
+// by an arriving frame that is simply "how far past the part's end that
+// frame's timestamp is"; for one closed by the part deadline or the idle
+// keep-alive it is how long the tick waited.
+//
+// WHY THIS IS ON THE STATS LINE. The edge answers a blocking playlist
+// reload the moment the part it waits for exists, so a late part is a
+// player waiting, and on 2026-09-21 the parts that were late lined up with
+// viewers' stall bursts. Nothing on the line could show it: parts=+10 in a
+// window reads the same whether they appeared on the beat or in pairs a
+// second apart. Called with videoMu held.
+func (s *Session) notePartLateness(frag *pipeline.Fragment, now time.Time) {
+	if s.fragAnchorAtNs == 0 {
+		return
+	}
+	endTicks := frag.StartTicks + int64(frag.DurationTicks)
+	lateNs := now.UnixNano() - s.fragAnchorAtNs - (endTicks-s.frag.AnchorPTS())*int64(time.Second)/h264.ClockRate
+	if lateNs < 0 {
+		lateNs = 0
+	}
+	ms := lateNs / int64(time.Millisecond)
+	if ms > 250 {
+		s.partsLate250.Add(1)
+	}
+	if ms > 500 {
+		s.partsLate500.Add(1)
+	}
+	for {
+		cur := s.partLateMaxMs.Load()
+		if ms <= cur || s.partLateMaxMs.CompareAndSwap(cur, ms) {
+			return
+		}
+	}
+}
+
+// DefaultPartDeadlineGrace is PART_DEADLINE_GRACE_MS's default. See
+// SetPartDeadlineGrace.
+const DefaultPartDeadlineGrace = 150 * time.Millisecond
+
+// SetPartDeadlineGrace sets PART_DEADLINE_GRACE_MS: how long past the wall
+// instant a part's end maps to the monitor waits before cutting that part
+// with repeat frames, when no frame has arrived to cut it. Only meaningful
+// with clock-cut parts on (EnableClockCutParts) on a stream the
+// synthesizer accepts; otherwise nothing reads it.
+//
+// It is the one knob between "a part appears on the beat" and "a repeat
+// frame occasionally covers an instant the publisher really sent a frame
+// for, and video is shifted that much later against audio for the rest of
+// the session" (see pipeline.Fragmenter.DeadlineCut). 150 ms is several
+// times the frame-to-frame delivery jitter of a working uplink, and it
+// never waits for a frame whose first packet has already arrived, however
+// long that frame takes to finish. A grace at or above the idle allowance
+// (a second at the default part target) can never fire before IdleFlush
+// does, so 1000 is the exact pre-deadline behaviour and the rollback.
+//
+// Call it immediately after New, before the session receives anything.
+func (s *Session) SetPartDeadlineGrace(d time.Duration) {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	if d < 0 {
+		d = 0
+	}
+	s.partDeadlineGrace = d
 }
 
 // EnableClockCutParts turns on clock-cut parts for this session: every

@@ -125,6 +125,12 @@ func newReorderBuffer(holdMax time.Duration) *reorderBuffer {
 	return &reorderBuffer{pending: make(map[uint16]pendingPacket), holdMax: holdMax, maxPending: reorderMaxPending}
 }
 
+// holding reports whether any packet is waiting behind a hole. While one
+// is, the frame the hole belongs to is unknown and could be older than
+// every packet held, which is why the part deadline (deadlineTick) does
+// not fill the timeline past it.
+func (r *reorderBuffer) holding() bool { return len(r.pending) > 0 }
+
 // reorderDelayBound is the worst-case delay this buffer can add to the
 // pipeline, in one expression: the hold itself, plus the longest a packet
 // that has already gone overdue can sit before anything looks at the

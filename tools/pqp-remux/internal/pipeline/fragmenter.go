@@ -48,7 +48,12 @@ type Fragment struct {
 	// new seg-<n>.m4s.
 	Independent   bool
 	DurationTicks uint32
-	Bytes         []byte
+	// StartTicks is the fragment's tfdt: where it begins on this
+	// fragmenter's timeline. StartTicks+DurationTicks is where it ends,
+	// which is what internal/session measures a part's publication
+	// lateness against.
+	StartTicks int64
+	Bytes      []byte
 }
 
 // maxFragmentTicks is the largest tick count a Fragment's own duration
@@ -359,6 +364,23 @@ func (f *Fragmenter) adoptNextRepeater() {
 func (f *Fragmenter) clockCutting() bool {
 	return f.repeat != nil && f.cfg.PartDuration > 0
 }
+
+// ClockCutting reports whether a repeater is armed right now, i.e. whether
+// DeadlineCut can do anything. It is false with CLOCK_CUT_PARTS off, and
+// false on a stream internal/skipframe refused, which is the precise
+// question internal/session asks before it bothers with the part deadline.
+func (f *Fragmenter) ClockCutting() bool { return f.clockCutting() }
+
+// PTSOffset is how far this fragmenter has shifted the publisher's clock
+// later to keep the timeline from rewinding (see ptsOffset), in ticks.
+func (f *Fragmenter) PTSOffset() int64 { return f.ptsOffset }
+
+// AnchorPTS is where the last REAL access unit this fragmenter accepted
+// sits on its timeline (ptsOffset included). Together with the wall-clock
+// instant that access unit arrived, it is the mapping from media time to
+// wall time that both DeadlineCut's caller and the lateness measurement
+// use. Meaningful only once the session's first IDR has been accepted.
+func (f *Fragmenter) AnchorPTS() int64 { return f.anchorPTS }
 
 // RepeatFrames and ClockCuts are the two counters a stats line wants:
 // frames synthesized to fill a gap, and parts closed on the clock rather
@@ -740,6 +762,68 @@ func (f *Fragmenter) IdleFlush(heldTicks int64) []*Fragment {
 	return []*Fragment{frag}
 }
 
+// DeadlineCut closes every part whose END the wall clock has already
+// passed, filling the rest of the frame gap with repeat frames, without
+// waiting for the idle allowance IdleFlush waits for. It is the part
+// cadence for a quiet or bursty source, and exists only with a repeater
+// set: without one there is no honest way to end a part before the frame
+// that ends the gap arrives.
+//
+// WHY THE IDLE ALLOWANCE WAS NOT ENOUGH. IdleFlush fires only once no
+// frame has arrived for a whole allowance (a second at the default part
+// target), and a Chrome tab share of a nearly static page sends a frame
+// every 0.3 to 1 s. So its gaps almost never reach the allowance, and a
+// part whose end had passed on the wall clock sat unpublished until the
+// NEXT frame arrived: up to a second late. The 2026-09-21 party measured
+// it, and the late parts lined up with viewer stall bursts (r=0.70),
+// because the edge's blocking playlist reload waits for exactly that part
+// and hls.js's buffer runs to the edge of what is published. Resolution
+// changes did not correlate at all.
+//
+// heldTicks is how far past the anchor frame the caller is willing to
+// publish, in this fragmenter's timescale: wall time since that frame
+// ARRIVED, minus a grace for the next frame's delivery jitter. openPTS,
+// when haveOpen is true, is the raw (publisher clock) PTS of an access
+// unit already being reassembled: the timeline is never filled up to or
+// past it, because that frame is on its way and its own arrival will close
+// the part it belongs in. Both bounds exist for the same reason: a repeat
+// frame published at an instant the publisher really sent a frame for
+// makes that frame land behind media already published, and the synthAhead
+// rule then raises ptsOffset, which shifts video later against audio for
+// the rest of the session. The grace keeps that rare; openPTS rules it out
+// for every frame whose first packet has arrived.
+//
+// Every part it closes is exactly Config.PartDuration long and opens on a
+// synthesized frame, the same shape IdleFlush's clock-cut branch produces,
+// so PART-TARGET, the 85% floor and the timeline are all untouched. It
+// never falls back to the long single-part flush: a stream the repeater
+// refuses returns nil here and is left to IdleFlush, exactly as before.
+func (f *Fragmenter) DeadlineCut(heldTicks int64, openPTS int64, haveOpen bool) []*Fragment {
+	if !f.haveFirstIDR || f.pending == nil || heldTicks <= 0 || !f.clockCutting() {
+		return nil
+	}
+	nowPTS := f.anchorPTS + heldTicks
+	if haveOpen {
+		// One tick short of the open frame: a boundary landing exactly
+		// on it is that frame's own to close (Push's cutOnThisAU), and
+		// filling up to it would push the frame one tick late.
+		if limit := openPTS + f.ptsOffset - minSampleTicks; limit < nowPTS {
+			nowPTS = limit
+		}
+	}
+	if nowPTS-f.partStart < int64(f.cfg.PartDuration) {
+		return nil
+	}
+	if nowPTS-f.pendingPTS > maxFragmentTicks {
+		return nil
+	}
+	out, _ := f.cutToBoundaries(nowPTS, true)
+	if len(out) > 0 {
+		f.synthAhead = true
+	}
+	return out
+}
+
 // Flush closes whatever part is still open, using the previous sample's
 // duration for the final (still-pending) sample since there is no next AU
 // to derive it from. It is a no-op (returns nil, nil) if nothing is
@@ -813,6 +897,7 @@ func (f *Fragmenter) closePart(durationTicks uint32) *Fragment {
 		IsSegmentStart: isStart,
 		Independent:    independent,
 		DurationTicks:  durationTicks,
+		StartTicks:     f.partStart,
 		Bytes:          fragBytes,
 	}
 }
