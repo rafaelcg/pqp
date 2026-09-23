@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -58,7 +59,13 @@ func main() {
 		log.Fatalf("pqp-film: %v", err)
 	}
 	if job.AudioPlaylist, err = readObject(ctx, store, p+"/audio.m3u8"); err != nil {
-		log.Printf("pqp-film: no audio playlist (%v); the film will be silent", err)
+		// Only a playlist that is not there means a silent session. Any other
+		// failure is storage misbehaving, and a film built past it would be a
+		// silent copy of a show that had sound.
+		if !errors.Is(err, r2.ErrNotFound) {
+			log.Fatalf("pqp-film: %v", err)
+		}
+		log.Printf("pqp-film: no audio playlist; the film will be silent")
 	}
 
 	fc := film.Config{FFmpegPath: os.Getenv("FFMPEG_PATH"), Threads: *threads, Nice: *nice, WorkDir: os.Getenv("FILM_WORK_DIR")}

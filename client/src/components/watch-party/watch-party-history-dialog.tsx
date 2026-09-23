@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -440,6 +440,10 @@ export function WatchPartyHistoryDialog({
   const [downloads, setDownloads] = useState<
     Record<string, WatchPartyDownloadsState | undefined>
   >({});
+  // Bumped every time the dialog closes, so an answer that arrives after it
+  // (a poll already in flight) is dropped instead of re-populating
+  // `downloads` and restarting the poll behind a closed dialog.
+  const downloadsGeneration = useRef(0);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -456,6 +460,7 @@ export function WatchPartyHistoryDialog({
     if (!open) {
       setPlayer(null);
       setPlayerError(null);
+      downloadsGeneration.current += 1;
       setDownloads({});
       return;
     }
@@ -464,8 +469,13 @@ export function WatchPartyHistoryDialog({
 
   const fetchDownloads = useCallback(
     (sessionId: string) => {
+      const generation = downloadsGeneration.current;
+      const current = () => generation === downloadsGeneration.current;
       void fetchWatchPartyHistoryDownloads(channelId, sessionId)
-        .then((result) =>
+        .then((result) => {
+          if (!current()) {
+            return;
+          }
           setDownloads((next) => ({
             ...next,
             [sessionId]: {
@@ -473,9 +483,12 @@ export function WatchPartyHistoryDialog({
               downloads: result.downloads,
               preparing: result.preparing,
             },
-          })),
-        )
-        .catch((err: unknown) =>
+          }));
+        })
+        .catch((err: unknown) => {
+          if (!current()) {
+            return;
+          }
           setDownloads((next) => ({
             ...next,
             [sessionId]: {
@@ -485,8 +498,8 @@ export function WatchPartyHistoryDialog({
                   ? t("watchParty.history.replayGone")
                   : messageOf(err, t("watchParty.history.download.failed")),
             },
-          })),
-        );
+          }));
+        });
     },
     [channelId, t],
   );
@@ -494,6 +507,9 @@ export function WatchPartyHistoryDialog({
   // A file being made is asked about again until it exists, for as long as
   // the dialog is open (closing it clears `downloads`, which ends this).
   useEffect(() => {
+    if (!open) {
+      return;
+    }
     const waiting = Object.entries(downloads).filter(
       ([, state]) =>
         state?.status === "ready" && (state.preparing?.length ?? 0) > 0,
@@ -507,7 +523,7 @@ export function WatchPartyHistoryDialog({
       }
     }, DOWNLOAD_PREPARING_POLL_MS);
     return () => clearTimeout(timer);
-  }, [downloads, fetchDownloads]);
+  }, [open, downloads, fetchDownloads]);
 
   const requestDownloads = useCallback(
     (entry: WatchPartyHistoryEntry) => {
