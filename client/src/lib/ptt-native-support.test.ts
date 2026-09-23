@@ -83,4 +83,23 @@ describe("pttHintMessageKey", () => {
       }),
     ).toBe("settings.voice.pttHintDesktopNative");
   });
+  it("desktop with background push-to-talk switched off says it is in-window, ahead of everything", () => {
+    expect(
+      pttHintMessageKey({
+        isDesktop: true,
+        platformSupported: true,
+        permission: "denied",
+        global: false,
+      }),
+    ).toBe("settings.voice.pttHintDesktopOff");
+    // The switch means nothing on the web.
+    expect(
+      pttHintMessageKey({
+        isDesktop: false,
+        platformSupported: true,
+        permission: "not-required",
+        global: false,
+      }),
+    ).toBe("settings.voice.pttHint");
+  });
 });

@@ -9,6 +9,12 @@
  *    open your mic mid-sentence, which is precisely the failure that makes
  *    people distrust push-to-talk and never turn it on. `isTextEntryTarget`
  *    is the trap, and `shouldEngage` is the only place allowed to say yes.
+ *    The trap only applies to a binding that TYPES something
+ *    (`bindingTypesText`): a bare modifier, a Ctrl/Cmd chord or a function
+ *    key produces no character, so it engages from the composer too. Focus
+ *    sits in the composer for as long as somebody is reading a text channel,
+ *    so without that exception push-to-talk looked like it only worked on
+ *    the voice channel's own view, which has no composer to hold focus.
  *
  * 2. **The key never un-fires.** A mic that is stuck open is strictly worse
  *    than one that never opened. So the asymmetry below is deliberate and load
@@ -110,13 +116,31 @@ interface ElementLike {
 const TEXTUAL_ROLES = new Set(["textbox", "searchbox", "combobox"]);
 
 /**
+ * `<input type>` values that take no typed characters. A focused slider or
+ * checkbox (the settings dialog is full of them) is not somewhere a person is
+ * typing, so the PTT key must still work there. Every other type, including
+ * an unknown future one, is treated as text: the safe default.
+ */
+const NON_TEXT_INPUT_TYPES = new Set([
+  "checkbox",
+  "radio",
+  "range",
+  "button",
+  "submit",
+  "reset",
+  "color",
+  "file",
+  "image",
+]);
+
+/**
  * Is this event aimed at somewhere a person types?
  *
- * Deliberately generous. `<input>` is blocked whatever its `type` is, including
- * checkboxes and ranges where the letter would not have produced a character:
- * the cost of a false positive is "push-to-talk did not engage while you were
- * fiddling with a slider", and the cost of a false negative is a hot mic in the
- * middle of a sentence. Those are not the same size of mistake.
+ * Deliberately generous: the cost of a false positive is "push-to-talk did not
+ * engage", the cost of a false negative is a hot mic in the middle of a
+ * sentence. The one narrowing is `<input>` types that take no characters at all
+ * (`NON_TEXT_INPUT_TYPES`), so a focused slider in settings does not swallow
+ * the key.
  */
 export function isTextEntryTarget(target: unknown): boolean {
   if (!target || typeof target !== "object") {
@@ -132,7 +156,11 @@ export function isTextEntryTarget(target: unknown): boolean {
 
   const tag =
     typeof element.tagName === "string" ? element.tagName.toUpperCase() : "";
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+  if (tag === "INPUT") {
+    const type = typeof element.type === "string" ? element.type.toLowerCase() : "";
+    return !NON_TEXT_INPUT_TYPES.has(type);
+  }
+  if (tag === "TEXTAREA" || tag === "SELECT") {
     return true;
   }
 
@@ -189,17 +217,68 @@ export function matchesBinding(
   );
 }
 
+/** Keys that produce no character in a text field, whatever the layout. */
+const NON_TYPING_CODES = new Set([
+  "Pause",
+  "ScrollLock",
+  "PrintScreen",
+  "Insert",
+  "ContextMenu",
+  "CapsLock",
+  "NumLock",
+]);
+
+function isFunctionKeyCode(code: string): boolean {
+  return /^F([1-9]|1[0-9]|2[0-4])$/.test(code);
+}
+
+/**
+ * Would holding this binding type a character into a text field?
+ *
+ * No for a modifier on its own, a chord with Ctrl or Cmd (those are commands,
+ * not text, on every platform), a function key and the handful of lock and
+ * system keys in `NON_TYPING_CODES`. Yes for everything else, and that
+ * includes Alt and AltGr chords: on macOS and on many European layouts,
+ * Option/AltGr plus a letter types a character.
+ *
+ * AltGr is the trap in the modifier rule. Right Alt IS AltGr on most
+ * non-US layouts, held to type "@" or "€", and Windows also produces AltGr
+ * from Ctrl+Alt, so a bare Right Alt and any Ctrl+Alt chord count as typing.
+ */
+export function bindingTypesText(binding: KeyBinding): boolean {
+  if (binding.code === "AltRight") {
+    return true;
+  }
+  if (isModifierCode(binding.code)) {
+    return false;
+  }
+  // Checked before the chord: a key that types nothing on its own types
+  // nothing under AltGr either.
+  if (isFunctionKeyCode(binding.code) || NON_TYPING_CODES.has(binding.code)) {
+    return false;
+  }
+  if (binding.ctrl && binding.alt) {
+    return true;
+  }
+  if (binding.ctrl || binding.meta) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Does this keydown match the binding *and* land somewhere it is allowed to?
  *
- * Every clause is a reason someone would otherwise have been transmitting
- * without meaning to.
+ * The text-field trap applies only to a binding that types (see
+ * `bindingTypesText`). A binding that cannot type anything has nothing to
+ * steal from the composer, so it works from anywhere in the app, which is the
+ * whole promise of push-to-talk.
  */
 export function shouldEngage(
   event: KeyEventLike,
   binding: KeyBinding,
 ): boolean {
-  if (isTextEntryTarget(event.target)) {
+  if (bindingTypesText(binding) && isTextEntryTarget(event.target)) {
     return false;
   }
   return matchesBinding(event, binding);

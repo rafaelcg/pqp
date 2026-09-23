@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  matchesMouseBinding,
-  shouldEngage,
-  shouldRelease,
-  shouldReleaseMouse,
-  type PttBinding,
-} from "@/components/voice/push-to-talk";
+import type { PttBinding } from "@/components/voice/push-to-talk";
+import { attachPushToTalkListeners } from "@/components/voice/push-to-talk-listeners";
 import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerator";
 import { getDesktop, type DesktopPttBinding } from "@/lib/desktop";
 import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
+import { pttShellUnbind } from "@/components/voice/shell-unbind";
+
+const shellUnbind = pttShellUnbind;
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
@@ -20,6 +18,12 @@ interface PushToTalkOptions {
    * `LocalSettings.pttReleaseDelayMs` in `settings-modal.tsx`.
    */
   releaseDelayMs?: number;
+  /**
+   * Desktop-only: whether the shell may hold the binding while the window is
+   * in the background (`LocalSettings.pttGlobal`). Off keeps push-to-talk
+   * in-window, exactly like the web. Defaults to on.
+   */
+  global?: boolean;
   /** Idempotent — this hook calls it with `false` more often than with `true`. */
   onHeldChange: (held: boolean) => void;
 }
@@ -79,6 +83,7 @@ export function usePushToTalk({
   enabled,
   binding,
   releaseDelayMs = DEFAULT_RELEASE_DELAY_MS,
+  global: globalEnabled = true,
   onHeldChange,
 }: PushToTalkOptions): { held: boolean; windowFocused: boolean } {
   const [held, setHeld] = useState(false);
@@ -117,7 +122,13 @@ export function usePushToTalk({
     // true in some browsers, so re-reading it there would leave the UI claiming
     // the key still works at the exact moment it stopped working.
     setWindowFocused(document.hasFocus());
-    const onFocus = () => setWindowFocused(true);
+    const onFocus = () => {
+      setWindowFocused(true);
+      // An unbind the shell refused earlier gets another go. The shell has
+      // just stopped the hook for focus anyway; this makes it stay stopped
+      // on the next blur.
+      shellUnbind.retryStuck();
+    };
     const onBlur = () => setWindowFocused(false);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
@@ -146,84 +157,14 @@ export function usePushToTalk({
       resetPttHeld();
       return;
     }
-
-    const releaseNow = () => set(false);
-
-    function onVisibility() {
-      if (document.visibilityState === "hidden") {
-        releaseNow();
-      }
-    }
-
-    // Same release paths either way (blur, tab hidden, page hidden), only the
-    // press/release detection itself differs by device.
-    window.addEventListener("blur", releaseNow);
-    window.addEventListener("pagehide", releaseNow);
-    document.addEventListener("visibilitychange", onVisibility);
-
-    if (stableBinding.device === "mouse") {
-      function onMouseDown(event: MouseEvent) {
-        if (!matchesMouseBinding(event, stableBinding)) {
-          return;
-        }
-        // Stops a middle-click auto-scroll or a back/forward navigation from
-        // riding along with the bind.
-        event.preventDefault();
-        set(true);
-      }
-      function onMouseUp(event: MouseEvent) {
-        if (shouldReleaseMouse(event, stableBinding)) {
-          set(false);
-        }
-      }
-      window.addEventListener("mousedown", onMouseDown, true);
-      window.addEventListener("mouseup", onMouseUp, true);
-      return () => {
-        window.removeEventListener("mousedown", onMouseDown, true);
-        window.removeEventListener("mouseup", onMouseUp, true);
-        window.removeEventListener("blur", releaseNow);
-        window.removeEventListener("pagehide", releaseNow);
-        document.removeEventListener("visibilitychange", onVisibility);
-        releaseNow();
-        resetPttHeld();
-      };
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (!shouldEngage(event, stableBinding)) {
-        return;
-      }
-      // Only once we know it is ours and not aimed at a text field. Stops the
-      // page scrolling on Space and stops "/" opening Firefox quick-find.
-      event.preventDefault();
-      set(true);
-    }
-
-    function onKeyUp(event: KeyboardEvent) {
-      // No target check, no focus check, no chord check beyond the binding
-      // itself. Releasing is never conditional on anything that could be
-      // wrong — see `shouldRelease`.
-      if (shouldRelease(event, stableBinding)) {
-        set(false);
-      }
-    }
-
-    // Capture phase: a keyup must reach us even if something downstream stops
-    // propagation, and it must reach us before any handler that could move
-    // focus and change what the event looks like.
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
-
+    const detach = attachPushToTalkListeners(
+      window,
+      document,
+      stableBinding,
+      set,
+    );
     return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
-      window.removeEventListener("blur", releaseNow);
-      window.removeEventListener("pagehide", releaseNow);
-      document.removeEventListener("visibilitychange", onVisibility);
-      // Turning the feature off, changing the binding, or leaving the call
-      // while the key is down all end the transmission. Never inherit a held
-      // key across a change to what "held" means.
-      releaseNow();
+      detach();
       resetPttHeld();
     };
   }, [enabled, stableBinding, set]);
@@ -235,9 +176,10 @@ export function usePushToTalk({
     const desktop = getDesktop();
     const bindNative = desktop?.bindPushToTalkNative?.bind(desktop);
     const subscribeNative = desktop?.onPushToTalkNative?.bind(desktop);
+    const wanted = enabled && globalEnabled;
     if (bindNative && subscribeNative) {
-      if (!enabled) {
-        void bindNative(null, releaseDelayMs);
+      if (!wanted) {
+        shellUnbind.unbind(() => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         return;
       }
@@ -252,15 +194,23 @@ export function usePushToTalk({
       };
       let cancelled = false;
       const off = subscribeNative((down) => set(down));
-      void bindNative(descriptor, releaseDelayMs).then((result) => {
-        if (!cancelled) {
-          setGlobalHotkey(result.registered === true);
-        }
-      });
+      shellUnbind.nextRequest();
+      bindNative(descriptor, releaseDelayMs).then(
+        (result) => {
+          if (!cancelled) {
+            setGlobalHotkey(result.registered === true);
+          }
+        },
+        () => {
+          if (!cancelled) {
+            setGlobalHotkey(false);
+          }
+        },
+      );
       return () => {
         cancelled = true;
         off();
-        void bindNative(null, releaseDelayMs);
+        shellUnbind.unbind(() => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         set(false);
       };
@@ -276,27 +226,35 @@ export function usePushToTalk({
     if (!bind || !subscribe) {
       return;
     }
-    const accelerator = enabled ? bindingToAccelerator(stableBinding) : null;
+    const accelerator = wanted ? bindingToAccelerator(stableBinding) : null;
     if (!accelerator) {
-      void bind(null);
+      shellUnbind.unbind(() => bind(null));
       setGlobalHotkey(false);
       return;
     }
     let cancelled = false;
     const off = subscribe((down) => set(down));
-    void bind(accelerator).then((registered) => {
-      if (!cancelled) {
-        setGlobalHotkey(registered === true);
-      }
-    });
+    shellUnbind.nextRequest();
+    bind(accelerator).then(
+      (registered) => {
+        if (!cancelled) {
+          setGlobalHotkey(registered === true);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setGlobalHotkey(false);
+        }
+      },
+    );
     return () => {
       cancelled = true;
       off();
-      void bind(null);
+      shellUnbind.unbind(() => bind(null));
       setGlobalHotkey(false);
       set(false);
     };
-  }, [enabled, stableBinding, releaseDelayMs, set]);
+  }, [enabled, globalEnabled, stableBinding, releaseDelayMs, set]);
 
   return { held, windowFocused: windowFocused || globalHotkey };
 }

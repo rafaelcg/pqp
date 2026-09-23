@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BINDABLE_MOUSE_CODES,
+  bindingTypesText,
   captureBinding,
   captureModifier,
   captureMouseBinding,
@@ -68,11 +69,18 @@ describe("the focus trap", () => {
     ).toBe(true);
   });
 
-  it("blocks inputs that do not take text either", () => {
-    // Deliberate over-blocking: the cost of a false positive is push-to-talk
-    // not engaging over a checkbox. The cost of a false negative is a hot mic.
-    expect(isTextEntryTarget({ tagName: "INPUT", type: "checkbox" })).toBe(true);
-    expect(isTextEntryTarget({ tagName: "INPUT", type: "range" })).toBe(true);
+  it("lets through inputs that take no characters", () => {
+    // The settings dialog is full of sliders and switches. Focus left on one
+    // is not somebody typing, and the key must still work there.
+    expect(isTextEntryTarget({ tagName: "INPUT", type: "checkbox" })).toBe(false);
+    expect(isTextEntryTarget({ tagName: "INPUT", type: "range" })).toBe(false);
+    expect(isTextEntryTarget({ tagName: "INPUT", type: "radio" })).toBe(false);
+  });
+
+  it("treats an input with no or an unknown type as text", () => {
+    expect(isTextEntryTarget({ tagName: "INPUT" })).toBe(true);
+    expect(isTextEntryTarget({ tagName: "INPUT", type: "number" })).toBe(true);
+    expect(isTextEntryTarget({ tagName: "INPUT", type: "something-new" })).toBe(true);
   });
 
   it("allows the ordinary page", () => {
@@ -169,6 +177,97 @@ describe("engaging", () => {
       shouldEngage(
         keyEvent({ code: "ControlLeft", ctrlKey: true, target: plainDiv }),
         ctrl,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("bindings that cannot type work from the composer", () => {
+  const binding = (partial: Partial<KeyBinding> & { code: string }): KeyBinding => ({
+    label: partial.code,
+    ctrl: false,
+    alt: false,
+    shift: false,
+    meta: false,
+    ...partial,
+  });
+
+  it("knows which bindings type a character", () => {
+    expect(bindingTypesText(defaultPushToTalkBinding)).toBe(true);
+    expect(bindingTypesText(T_KEY)).toBe(true);
+    expect(bindingTypesText(binding({ code: "Space" }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "KeyV", shift: true }))).toBe(true);
+    // Option/AltGr plus a letter types on macOS and European layouts.
+    expect(bindingTypesText(binding({ code: "KeyV", alt: true }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "Numpad0" }))).toBe(true);
+
+    // Right Alt is AltGr on most non-US layouts, and Windows makes AltGr out
+    // of Ctrl+Alt: both are held to type "@" or "€".
+    expect(bindingTypesText(binding({ code: "AltRight" }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "KeyQ", ctrl: true, alt: true }))).toBe(true);
+    expect(bindingTypesText(binding({ code: "F9", ctrl: true, alt: true }))).toBe(false);
+
+    expect(bindingTypesText(binding({ code: "ControlLeft" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "AltLeft" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "KeyV", ctrl: true }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "KeyV", meta: true }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "F13" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "F1" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "Pause" }))).toBe(false);
+    expect(bindingTypesText(binding({ code: "F25" }))).toBe(true);
+  });
+
+  it("a bare modifier engages while the composer has focus", () => {
+    // THE BUG: focus sits in the composer while you read a text channel, and
+    // this used to refuse every binding there, so push-to-talk looked like it
+    // only worked on the voice channel's own view.
+    const ctrlRight = binding({ code: "ControlRight" });
+    expect(
+      shouldEngage(keyEvent({ code: "ControlRight", ctrlKey: true, target: composer }), ctrlRight),
+    ).toBe(true);
+    expect(
+      shouldEngage(keyEvent({ code: "ControlRight", ctrlKey: true, target: richTextSpan }), ctrlRight),
+    ).toBe(true);
+  });
+
+  it("Right Alt (AltGr) does not engage in the composer, where it types @ and €", () => {
+    const altRight = binding({ code: "AltRight" });
+    expect(
+      shouldEngage(keyEvent({ code: "AltRight", altKey: true, target: composer }), altRight),
+    ).toBe(false);
+    // Over the ordinary page it is still a perfectly good binding.
+    expect(
+      shouldEngage(keyEvent({ code: "AltRight", altKey: true, target: plainDiv }), altRight),
+    ).toBe(true);
+  });
+
+  it("a Ctrl chord and a function key engage while the composer has focus", () => {
+    const chord = binding({ code: "KeyT", ctrl: true });
+    expect(
+      shouldEngage(keyEvent({ code: "KeyT", ctrlKey: true, target: composer }), chord),
+    ).toBe(true);
+    const f13 = binding({ code: "F13" });
+    expect(shouldEngage(keyEvent({ code: "F13", target: searchBox }), f13)).toBe(true);
+  });
+
+  it("a printable key still bows out of the composer", () => {
+    expect(
+      shouldEngage(
+        keyEvent({ code: "Backquote", target: composer }),
+        defaultPushToTalkBinding,
+      ),
+    ).toBe(false);
+    const shifted = binding({ code: "KeyV", shift: true });
+    expect(
+      shouldEngage(keyEvent({ code: "KeyV", shiftKey: true, target: composer }), shifted),
+    ).toBe(false);
+  });
+
+  it("a printable key engages over a focused slider or checkbox", () => {
+    expect(
+      shouldEngage(
+        keyEvent({ code: "Backquote", target: { tagName: "INPUT", type: "range" } }),
+        defaultPushToTalkBinding,
       ),
     ).toBe(true);
   });

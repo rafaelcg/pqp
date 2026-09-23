@@ -2214,6 +2214,7 @@ function MainAppContent({
     enabled: inPushToTalk,
     binding: localSettings.pushToTalkKey,
     releaseDelayMs: localSettings.pttReleaseDelayMs,
+    global: localSettings.pttGlobal,
     onHeldChange: handlePushToTalk,
   });
 
