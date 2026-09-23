@@ -4302,6 +4302,31 @@ export function createVoiceController(transport: RealtimeTransport) {
           );
           applyPreservedSelfVoice();
           state.self = overlayLocalSelfVoice(message.self);
+          // `occupancy` is a second, independent picture of the room (the
+          // sidebar's "in voice" rows, the member list, anywhere else that is
+          // not this call's own stage), and nothing else in `keepSession`
+          // touches it. Left alone, it stays exactly what it was the instant
+          // this socket dropped: correct for `remotePeers` (rebuilt below by
+          // `attachMeshPeers`, or already intact on the SFU), but stale for
+          // occupancy the moment anyone joined or left while this client had
+          // no socket to hear it on. A resume exists precisely because
+          // something interrupted the connection, so that gap is the common
+          // case, not the exception. A later `voice-roster-delta` cannot be
+          // trusted to repair it either: this client's `rosterSeq` is still
+          // whatever it held before the drop, `welcome` carries no sequence
+          // number to realign it with, and the very next delta is therefore
+          // as likely to fail the convergence check as not. With nobody else
+          // changing the room afterward, no keyframe ever comes to replace
+          // it, so occupancy freezes at the wrong roster for the rest of the
+          // call. `welcome.peers` is the room exactly as the server sees it
+          // right now, so treat it as the authoritative snapshot it is, the
+          // same way a real `voice-roster` frame would be applied.
+          state.occupancy = {
+            ...state.occupancy,
+            [channelId]: [message.self, ...welcomePeers].map(
+              overlayLocalSelfVoice,
+            ),
+          };
           for (const peer of welcomePeers) {
             knownPeerIds.add(peer.peerId);
             identities.set(peer.peerId, toIdentity(peer));
