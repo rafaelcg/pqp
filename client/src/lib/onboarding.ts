@@ -191,3 +191,56 @@ export function normalizeInviteCode(input: string): string {
     return last;
   }
 }
+
+/**
+ * What the room step's invite door ended in.
+ *
+ * - `opened`: joined, and the room is open behind the wizard. Finish.
+ * - `invalid`: nothing usable was pasted, or the API refused the code.
+ * - `notOpened`: the join WORKED but opening the room did not. The wizard
+ *   must stay, say so, and retry only the opening (`serverId`), never finish
+ *   onto a room that is not there.
+ */
+export type RoomJoinResult =
+  | { kind: "opened"; serverId: string }
+  | { kind: "invalid" }
+  | { kind: "notOpened"; serverId: string };
+
+/**
+ * The invite door, with no React attached so it can be tested.
+ *
+ * Whatever was pasted (a bare code, `https://pqp.gg/app/invite/<code>?ref=…`,
+ * the same without a scheme, `/i/<code>`, `pqp://invite/<code>`) goes through
+ * `normalizeInviteCode` before it reaches the API. `joinedId` is set on a
+ * retry after `notOpened`, and skips the join. Never rejects.
+ */
+export async function joinFromRoomStep({
+  input,
+  joinedId,
+  joinInvite,
+  openJoined,
+}: {
+  input: string;
+  joinedId: string | null;
+  joinInvite: (code: string) => Promise<{ serverId: string }>;
+  openJoined: (serverId: string) => Promise<void>;
+}): Promise<RoomJoinResult> {
+  let serverId = joinedId;
+  if (!serverId) {
+    const code = normalizeInviteCode(input);
+    if (!code) {
+      return { kind: "invalid" };
+    }
+    try {
+      serverId = (await joinInvite(code)).serverId;
+    } catch {
+      return { kind: "invalid" };
+    }
+  }
+  try {
+    await openJoined(serverId);
+  } catch {
+    return { kind: "notOpened", serverId };
+  }
+  return { kind: "opened", serverId };
+}

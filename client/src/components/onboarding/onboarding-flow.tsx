@@ -42,6 +42,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   handleErrorMessage,
   isValidUsername,
+  joinFromRoomStep,
   normalizeInviteCode,
   normalizeUsername,
   onboardingCompletedPatch,
@@ -1072,38 +1073,31 @@ function useRoomStep({
   }
 
   async function join() {
-    if (busy) {
+    if (busy || (!joinedId && !normalizeInviteCode(code))) {
       return;
     }
-    let serverId = joinedId;
-    if (!serverId) {
-      const trimmed = normalizeInviteCode(code);
-      if (!trimmed) {
-        return;
-      }
-      setBusy("invite");
-      setErrorKey(null);
-      try {
-        serverId = (await joinInvite(trimmed)).serverId;
-      } catch {
-        // Expired, revoked, used up, or mistyped: one sentence, same recovery.
-        setErrorKey("onboarding.room.invite.error");
-        setBusy(null);
-        return;
-      }
-    } else {
-      setBusy("invite");
-      setErrorKey(null);
+    setBusy("invite");
+    setErrorKey(null);
+    const result = await joinFromRoomStep({
+      input: code,
+      joinedId,
+      joinInvite,
+      openJoined,
+    });
+    if (result.kind === "opened") {
+      onJoined();
+      return;
     }
-    try {
-      await openJoined(serverId);
-    } catch {
-      setJoinedId(serverId);
+    if (result.kind === "notOpened") {
+      // Joined, but the room did not open: stay, say so, and make the
+      // button retry only the opening.
+      setJoinedId(result.serverId);
       setErrorKey("onboarding.room.invite.openError");
-      setBusy(null);
-      return;
+    } else {
+      // Expired, revoked, used up, or mistyped: one sentence, same recovery.
+      setErrorKey("onboarding.room.invite.error");
     }
-    onJoined();
+    setBusy(null);
   }
 
   const doors: { id: Door; icon: LucideIcon; title: MessageKey; body: MessageKey }[] = [
