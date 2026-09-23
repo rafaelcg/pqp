@@ -115,3 +115,58 @@ describe("streamWatchPartyDownload watchdog", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("streamWatchPartyDownload with shifted objects", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.LIVE_HLS_S3_BUCKET;
+    delete process.env.LIVE_HLS_S3_ACCESS_KEY_ID;
+    delete process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY;
+    delete process.env.LIVE_HLS_S3_ENDPOINT;
+  });
+
+  it("moves only the objects its plan says to, and keeps every length", async () => {
+    process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
+    process.env.LIVE_HLS_S3_ACCESS_KEY_ID = "ak";
+    process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY = "sk";
+    process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
+    const { firstPts } = await import("./ts-timestamp-shift.js");
+    const packet = (pts: number) => {
+      const pkt = new Uint8Array(188).fill(0xff);
+      pkt.set([0x47, 0x41, 0x00, 0x10, 0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x80, 0x80, 5]);
+      pkt[13] = 0x21 | ((Math.floor(pts / 2 ** 30) & 7) << 1);
+      pkt[14] = Math.floor(pts / 2 ** 22) & 0xff;
+      pkt[15] = ((Math.floor(pts / 2 ** 15) & 0x7f) << 1) | 1;
+      pkt[16] = Math.floor(pts / 2 ** 7) & 0xff;
+      pkt[17] = ((pts & 0x7f) << 1) | 1;
+      return pkt;
+    };
+    const body = Buffer.concat([packet(900_000), packet(903_000)]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(Uint8Array.from(body), { status: 200 })),
+    );
+    const out: Buffer[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        out.push(chunk);
+        done();
+      },
+    });
+    await streamWatchPartyDownload(
+      {
+        kind: "camera",
+        contentType: "video/mp2t",
+        extension: "ts",
+        keys: ["live/c/1-cam360p30_00000.ts", "live/c/1-cam360p30-r2_00000.ts"],
+        ptsOffsets: [0, 9_000_000],
+        bytes: body.length * 2,
+      },
+      sink,
+    );
+    const all = Buffer.concat(out);
+    expect(all.length).toBe(body.length * 2);
+    expect(firstPts(all.subarray(0, body.length))).toBe(900_000);
+    expect(firstPts(all.subarray(body.length))).toBe(9_900_000);
+  });
+});

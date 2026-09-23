@@ -105,6 +105,7 @@ function disableHls() {
     "LIVE_HLS_CAMERA",
     "LIVE_HLS_VOICE_TRACK",
     "LIVE_HLS_REAP_ORPHANS",
+    "LIVE_HLS_MIC_ARCHIVE",
     "VOICE_PROMOTION_MAX_SFU_MBPS",
     "LIVE_HLS_SIGNED_URLS",
     "LIVE_HLS_PUBLIC_BASE_URL",
@@ -128,6 +129,14 @@ function fakeLiveKit() {
   const stop = vi.fn(async (egressId: string) => {
     statuses.set(egressId, EgressStatus.EGRESS_COMPLETE);
   });
+  // The voice archive's Track Egress: listed by LiveKit like any other.
+  const startTrack = vi.fn<NonNullable<LiveHlsEgressApi["startTrackEgress"]>>(
+    async () => {
+      const egressId = `EG_${(n += 1)}`;
+      statuses.set(egressId, EgressStatus.EGRESS_ACTIVE);
+      return { egressId };
+    },
+  );
   const list = vi.fn(
     async (opts: { egressId?: string; roomName?: string; active?: boolean }) =>
       [...statuses.entries()]
@@ -141,10 +150,12 @@ function fakeLiveKit() {
   return {
     api: {
       startTrackCompositeEgress: start,
+      startTrackEgress: startTrack,
       stopEgress: stop,
       listEgress: list,
     } satisfies LiveHlsEgressApi,
     start,
+    startTrack,
     stop,
     list,
     kill(egressId: string) {
@@ -157,6 +168,8 @@ function fakeLiveKit() {
 let cameraTrackId: string | null = null;
 /** The sharer's ordinary microphone, optional (`LIVE_HLS_VOICE_TRACK`). */
 let voiceTrackId: string | null = null;
+/** The voice archive's publication, optional (`LIVE_HLS_MIC_ARCHIVE`). */
+let micArchiveTrackId: string | null = null;
 
 function install(lk: ReturnType<typeof fakeLiveKit>) {
   setLiveHlsTestHooks({
@@ -165,6 +178,7 @@ function install(lk: ReturnType<typeof fakeLiveKit>) {
       videoTrackId: "TR_SCREEN",
       ...(cameraTrackId ? { cameraTrackId } : {}),
       ...(voiceTrackId ? { voiceTrackId } : {}),
+      ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
     }),
   });
 }
@@ -204,6 +218,7 @@ beforeEach(() => {
   disableHls();
   cameraTrackId = null;
   voiceTrackId = null;
+  micArchiveTrackId = null;
   liveSessionChannelIds.ids = null;
   logEvent.mockClear();
   query.mockClear();
@@ -734,6 +749,100 @@ describe("the camera and the machinery that stops things", () => {
     expect(liveHlsActivity().cameraSessions).toBe(1);
   });
 
+  it("writes every camera run under its own names, so turning it off and on twice keeps all three", async () => {
+    // 2026-09-23 production rehearsal: off and on again, and the second egress
+    // numbered its segments from _00000 and rebuilt the -index.m3u8 under the
+    // same names, overwriting the first run.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await advance(0);
+    for (const track of [null, "TR_CAM_2", null, "TR_CAM_3"]) {
+      await advance(30_000);
+      cameraTrackId = track;
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await advance(0);
+    }
+    const startedAt = stream!.startedAt;
+    const cameraOutputs = lk.start.mock.calls
+      .map((call) => call[1] as { filenamePrefix: string; playlistName: string; livePlaylistName: string })
+      .filter((output) => output.filenamePrefix.includes(CAMERA_RUNG_NAME));
+    expect(cameraOutputs).toHaveLength(3);
+    const prefixes = cameraOutputs.map((output) => output.filenamePrefix);
+    const indexes = cameraOutputs.map((output) => output.playlistName);
+    expect(new Set(prefixes).size).toBe(3);
+    expect(new Set(indexes).size).toBe(3);
+    // The first run keeps the names the camera always had.
+    expect(prefixes[0]).toBe(`live/${CHANNEL}/${startedAt}-${CAMERA_RUNG_NAME}`);
+    expect(indexes[0]).toBe(`${startedAt}-${CAMERA_RUNG_NAME}-index.m3u8`);
+    // Later runs sit UNDER the row's prefix (retention and keep_replay reach
+    // them) with their own start time after it.
+    for (const [i, prefix] of prefixes.slice(1).entries()) {
+      expect(prefix).toMatch(
+        new RegExp(`^live/${CHANNEL}/${startedAt}-${CAMERA_RUNG_NAME}-r\\d+$`),
+      );
+      expect(indexes[i + 1]).toBe(`${prefix.split("/").pop()}-index.m3u8`);
+    }
+    // One live playlist for every run: viewers follow one URL.
+    expect(new Set(cameraOutputs.map((output) => output.livePlaylistName))).toEqual(
+      new Set([`${startedAt}-${CAMERA_RUNG_NAME}.m3u8`]),
+    );
+  });
+
+  it("retries a refused camera on its own when the cooldown runs out", async () => {
+    // A presenter alone on stage makes no roster events, so a camera refused
+    // for the box budget used to stay unrecorded for the rest of the show.
+    enableHls();
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "0";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    const heard: string[] = [];
+    setLiveHlsChangeListener((channelId, reason) => {
+      heard.push(reason);
+      void reconcileLiveHls(channelId, "peer-1", SERVER);
+    });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await advance(0);
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+
+    // The box frees up; nothing else happens in the room.
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    await advance(2 * 60_000 + 1_000);
+    await advance(0);
+
+    expect(heard).toContain("camera-cooldown-over");
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("retries a dead camera on its own when the cooldown runs out", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    const heard: string[] = [];
+    setLiveHlsChangeListener((channelId, reason) => {
+      heard.push(reason);
+      void reconcileLiveHls(channelId, "peer-1", SERVER);
+    });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await advance(0);
+    lk.kill("EG_2");
+    await advance(20_000);
+    await checkLiveHlsHealth();
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+    const startsBefore = lk.start.mock.calls.length;
+
+    await advance(2 * 60_000 + 1_000);
+    await advance(0);
+
+    expect(heard).toContain("camera-cooldown-over");
+    expect(lk.start.mock.calls.length).toBe(startsBefore + 1);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
   it("lets the host bring it straight back by closing the camera first", async () => {
     // Turning it off and on again is the first thing anybody does when
     // something looks broken. Holding them out for two minutes after they did
@@ -1104,6 +1213,42 @@ describe("box budget: a camera must never be priced twice", () => {
 
     expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
     expect(liveHlsActivity().cameraSessions).toBe(2);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+  });
+});
+
+describe("box budget: the voice archive is not a video rendition", () => {
+  it("starts the camera beside a ladder rung and a running -mic.ogg archive", async () => {
+    // The 2026-09-23 production rehearsal: two rungs plus the archive plus
+    // the camera priced at 629 against 600, with nothing else on the box,
+    // because the archive's Track Egress was counted as a third 150 Mbit/s
+    // rendition. Here: one rung and the archive, and a budget with room for
+    // the rung and the camera but not for a phantom second rung.
+    enableHls();
+    process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+    const lk = fakeLiveKit();
+    micArchiveTrackId = "TR_MIC_ARCHIVE";
+    install(lk);
+    const correctBoxMbps = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const archiveAsRungMbps = 2 * HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(
+      Math.round((correctBoxMbps + archiveAsRungMbps) / 2),
+    );
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    expect(liveHlsActivity()).toMatchObject({ rungs: 1, cameraSessions: 0 });
+
+    // The presenter turns the webcam on.
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
     expect(logEvent).not.toHaveBeenCalledWith(
       "voice.hlsCameraRefused",
       expect.anything(),

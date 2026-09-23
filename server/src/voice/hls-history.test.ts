@@ -172,7 +172,7 @@ describeDb("LL replay", () => {
   let boxPrefix: string;
   const realFetch = globalThis.fetch;
   const fetched: string[] = [];
-  let objects: Record<string, string>;
+  let objects: Record<string, string | Uint8Array>;
 
   beforeAll(async () => {
     await initDb();
@@ -283,7 +283,7 @@ describeDb("LL replay", () => {
         const body = objects[key];
         return body === undefined
           ? new Response("NoSuchKey", { status: 404 })
-          : new Response(body, { status: 200 });
+          : new Response(body as BodyInit, { status: 200 });
       }),
     );
   });
@@ -478,6 +478,66 @@ describeDb("LL replay", () => {
     expect((await watchPartyDownloadSizes(channelId, LL_STARTED_AT)).film).toBe(10);
   });
 
+  it("stitches every camera run into one download, placed by each run's wall clock", async () => {
+    await getPool().query(
+      `INSERT INTO hls_sessions
+         (channel_id, object_prefix, started_at, ended_at, keep_replay, rung)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW() - interval '1 hour', TRUE, 'cam360p30')`,
+      [channelId, `live/${channelId}/${LL_STARTED_AT}-cam360p30`, LL_STARTED_AT],
+    );
+    const prefix = `live/${channelId}/${LL_STARTED_AT}-cam360p30`;
+    const t0 = Date.parse("2026-09-23T19:10:30.000Z");
+    // Three runs, each egress starting its clock at the same 3600 s, the way
+    // LiveKit does: on at t0, again 100 s later, again 160 s later.
+    const runs = [
+      { name: `${LL_STARTED_AT}-cam360p30`, at: t0 },
+      { name: `${LL_STARTED_AT}-cam360p30-r${t0 + 100_000}`, at: t0 + 100_000 },
+      { name: `${LL_STARTED_AT}-cam360p30-r${t0 + 160_000}`, at: t0 + 160_000 },
+    ];
+    for (const run of runs) {
+      objects[`live/${channelId}/${run.name}-index.m3u8`] = [
+        "#EXTM3U",
+        "#EXT-X-TARGETDURATION:4",
+        `#EXT-X-PROGRAM-DATE-TIME:${new Date(run.at).toISOString()}`,
+        "#EXTINF:4.000,",
+        `${run.name}_00000.ts`,
+        "#EXTINF:4.000,",
+        `${run.name}_00001.ts`,
+        "",
+      ].join("\n");
+      objects[`live/${channelId}/${run.name}_00000.ts`] = tsWithPts(3600 * 90_000);
+      objects[`live/${channelId}/${run.name}_00001.ts`] = tsWithPts(3604 * 90_000);
+    }
+    // The first run's live playlist is not a run.
+    objects[`${prefix}.m3u8`] = "#EXTM3U\n";
+
+    const plan = await buildWatchPartyDownloadPlan(channelId, LL_STARTED_AT, "camera");
+    expect(plan?.keys).toEqual(
+      runs.flatMap((run) => [
+        `live/${channelId}/${run.name}_00000.ts`,
+        `live/${channelId}/${run.name}_00001.ts`,
+      ]),
+    );
+    // Run 1 as it is; runs 2 and 3 moved to 100 s and 160 s after it.
+    expect(plan?.ptsOffsets).toEqual([0, 0, 9_000_000, 9_000_000, 14_400_000, 14_400_000]);
+    expect(plan?.bytes).toBe(6 * 188);
+  });
+
+  it("leaves a single camera run byte for byte", async () => {
+    await getPool().query(
+      `INSERT INTO hls_sessions
+         (channel_id, object_prefix, started_at, ended_at, keep_replay, rung)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW() - interval '1 hour', TRUE, 'cam360p30')`,
+      [channelId, `live/${channelId}/${LL_STARTED_AT}-cam360p30`, LL_STARTED_AT],
+    );
+    const name = `${LL_STARTED_AT}-cam360p30`;
+    objects[`live/${channelId}/${name}-index.m3u8`] = `#EXTM3U\n#EXTINF:4.0,\n${name}_00000.ts\n`;
+    objects[`live/${channelId}/${name}_00000.ts`] = tsWithPts(3600 * 90_000);
+    const plan = await buildWatchPartyDownloadPlan(channelId, LL_STARTED_AT, "camera");
+    expect(plan?.keys).toEqual([`live/${channelId}/${name}_00000.ts`]);
+    expect(plan?.ptsOffsets).toBeUndefined();
+  });
+
   it("leaves a conventional rung's playlist as it always was", async () => {
     const prefix = `live/${channelId}/${LL_STARTED_AT + 1}-720p30`;
     await getPool().query(
@@ -500,3 +560,15 @@ describeDb("LL replay", () => {
     expect(body).toContain(`https://s3.example.test/pqp-live-test/live/${channelId}/${LL_STARTED_AT + 1}-720p30_00000.ts?X-Amz-`);
   });
 });
+
+/** One MPEG-TS packet starting a video PES with this PTS. */
+function tsWithPts(pts: number): Uint8Array {
+  const pkt = new Uint8Array(188).fill(0xff);
+  pkt.set([0x47, 0x41, 0x00, 0x10, 0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x80, 0x80, 5]);
+  pkt[13] = 0x21 | ((Math.floor(pts / 2 ** 30) & 7) << 1);
+  pkt[14] = Math.floor(pts / 2 ** 22) & 0xff;
+  pkt[15] = ((Math.floor(pts / 2 ** 15) & 0x7f) << 1) | 1;
+  pkt[16] = Math.floor(pts / 2 ** 7) & 0xff;
+  pkt[17] = ((pts & 0x7f) << 1) | 1;
+  return pkt;
+}

@@ -2717,7 +2717,7 @@ was missing from rather than reading as an error:
 | Entry | What it is | Absent when |
 |---|---|---|
 | Vídeo (stream) | The top available ladder rung's segments, concatenated; for a low-latency broadcast, the `film.mp4` the box made after the show (below) | an LL show from before 2026-09-24, or whose film job failed |
-| Câmera do apresentador | The `cam360p30` pip rung, the same way | the presenter kept the camera off |
+| Câmera do apresentador | Every run of the `cam360p30` pip, in order, as one `.ts` (below) | the presenter kept the camera off |
 | Voz do apresentador | The `<startedAt>-mic.ogg` Track Egress wrote | `LIVE_HLS_MIC_ARCHIVE` was off (see above) |
 
 **Nothing is transcoded, and nothing is buffered.** The API hands back the
@@ -2763,6 +2763,33 @@ set -a; . /etc/pqp-remux.env; set +a
 `LL_FILM=off` in the box's environment turns the job off without a rebuild;
 `FILM_WORK_DIR` (default the service's private `/tmp`) needs a few gigabytes
 free per hour of show while a job runs.
+
+**The camera can stop and start inside a broadcast, and every run is kept.**
+Each time the presenter's camera starts (turned on, off and on again, a dead
+egress coming back after its cooldown) it is a new egress, and a new egress
+numbers its segments from `_00000` and rebuilds its `-index.m3u8` from empty.
+Under one fixed name that overwrote the earlier run (2026-09-23 production
+rehearsal), so every run after a session's first writes under
+`<startedAt>-cam360p30-r<its start, ms>` (`cameraRunNames` in `hls-egress.ts`).
+All of them start with the row's `object_prefix`, so the retention sweep and
+`keep_replay` cover every run through the one row; the live playlist name is
+the same for all of them, so viewers follow one URL. The edge Worker's segment
+token names the run as its rendition (`edgeSegmentUrl`), so no Worker change
+was needed. The download reads every run's `-index.m3u8` in start order and
+moves each later run's MPEG-TS timestamps (`ts-timestamp-shift.ts`: PTS, DTS
+and PCR, byte positions unchanged, so `Content-Length` stays exact) so it lands
+where its own `#EXT-X-PROGRAM-DATE-TIME` says it started. The result is one
+file whose length is the whole stretch from the first camera start to the last
+camera stop, holding the last picture while the camera was off.
+
+**A refused or dead camera is retried on a timer.** The two-minute cooldown
+after `voice.hlsCameraRefused` (box budget) or `voice.hlsCameraDied` used to
+end only at the next roster event, and a presenter alone on stage produces
+none. Now the cooldown's end reconciles the channel itself
+(`camera-cooldown-over` on `voice.hlsChangeHeard`); still refused means one more
+line and one more retry two minutes later. Separately, `set-camera` is followed
+by reconciles at 1.5, 5 and 15 s (`voice.ts`), because every client announces
+the camera before it publishes it.
 
 **The conventional video comes out as `.ts`, and that is a real file.** A rung's segments
 are MPEG-TS, which is a stream format: 188-byte packets carrying their own

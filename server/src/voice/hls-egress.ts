@@ -662,6 +662,48 @@ const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
 
 /**
+ * THE COOLDOWN ENDS ON A TIMER, NOT ON THE NEXT ROOM EVENT. A refused or
+ * dead camera used to be asked about again only when something else made
+ * the channel reconcile, and a presenter alone on stage produces nothing
+ * else: on 2026-09-23 a refused camera sat unrecorded for the rest of the
+ * show. When the cooldown runs out the channel is reconciled once more,
+ * which retries the camera (and, when the box is still full, refuses it
+ * again and starts the next cooldown: one line and one retry every two
+ * minutes for as long as it does not fit).
+ */
+const cameraCooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let cameraCooldownMs = CAMERA_COOLDOWN_MS;
+
+/** Tests only: a shorter cooldown, or the default back with no argument. */
+export function setCameraCooldownMsForTests(ms?: number): void {
+  cameraCooldownMs = ms ?? CAMERA_COOLDOWN_MS;
+}
+
+function startCameraCooldown(channelId: string, now = Date.now()): number {
+  cameraCooldownUntil.set(channelId, now + cameraCooldownMs);
+  const previous = cameraCooldownTimers.get(channelId);
+  if (previous) {
+    clearTimeout(previous);
+  }
+  const timer = setTimeout(() => {
+    cameraCooldownTimers.delete(channelId);
+    notifyChanged(channelId, "camera-cooldown-over");
+  }, cameraCooldownMs + 50);
+  timer.unref?.();
+  cameraCooldownTimers.set(channelId, timer);
+  return cameraCooldownMs;
+}
+
+function clearCameraCooldown(channelId: string): void {
+  cameraCooldownUntil.delete(channelId);
+  const timer = cameraCooldownTimers.get(channelId);
+  if (timer) {
+    clearTimeout(timer);
+    cameraCooldownTimers.delete(channelId);
+  }
+}
+
+/**
  * Per channel: has the CURRENT presenter declared "separada"
  * (`set-voice-track-mode`, `server/src/ws/voice.ts`)?
  *
@@ -1940,6 +1982,12 @@ export function resetLiveHlsForTests(): void {
   llUnservableLoggedAt.clear();
   llUnservableLastSweptAt = 0;
   cameraCooldownUntil.clear();
+  for (const timer of cameraCooldownTimers.values()) {
+    clearTimeout(timer);
+  }
+  cameraCooldownTimers.clear();
+  cameraCooldownMs = CAMERA_COOLDOWN_MS;
+  cameraRunSuffix.clear();
   voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
     clearTimeout(timer);
@@ -2143,6 +2191,17 @@ export function runningCameraCount(): number {
   let total = 0;
   for (const room of companionHosts()) {
     if (room.camera) {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+/** Voice archives (`-mic.ogg` Track Egress) running across every channel. */
+export function runningMicArchiveCount(): number {
+  let total = 0;
+  for (const room of companionHosts()) {
+    if (room.micArchive) {
       total += 1;
     }
   }
@@ -2390,9 +2449,21 @@ export async function activeBoxEgressCount(
 async function activeLadderEgressCount(
   options: BoxCountOptions = {},
 ): Promise<number> {
+  // AND MINUS ITS VOICE ARCHIVES, for the same reason and a bigger one: a
+  // `-mic.ogg` is a Track Egress writing one Opus stream to a file, no
+  // decode and no encode, and it was being priced as a full 150 Mbit/s video
+  // rendition. With the archive on (the default for a watch party) a
+  // two-rung conventional show was 3 x 150 before the camera's own 45, and
+  // the camera was refused `box-budget` on an otherwise idle box: the
+  // 2026-09-23 production rehearsal logged boxMbps=629 and then 637 against
+  // 600 with nothing else live, so no conventional show could ever record
+  // the presenter's camera. It is not added back at any weight: it costs the
+  // box nothing the budget measures.
   return Math.max(
     0,
-    (await activeBoxEgressCount(Date.now(), options)) - runningCameraCount(),
+    (await activeBoxEgressCount(Date.now(), options)) -
+      runningCameraCount() -
+      runningMicArchiveCount(),
   );
 }
 
@@ -3119,13 +3190,13 @@ async function tendCameraHealth(
       }
       await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
       room.stream = withoutCameraUrl(room.stream);
-      cameraCooldownUntil.set(channelId, now + CAMERA_COOLDOWN_MS);
+      startCameraCooldown(channelId, now);
       logEvent("voice.hlsCameraDied", {
         channelId,
         egressId: camera.egressId,
         sessionId: camera.sessionId,
         error: cameraHealth.detail ?? null,
-        cooldownMs: CAMERA_COOLDOWN_MS,
+        cooldownMs: cameraCooldownMs,
       });
       // The viewers are holding a `cameraHlsUrl` that will now 404. Tell
       // them so the PiP disappears instead of spinning.
@@ -4763,6 +4834,83 @@ function segmentOutput(
 }
 
 /**
+ * One camera run's names. The first run of a session keeps the names the
+ * camera always had (`<startedAt>-cam360p30_NNNNN.ts`,
+ * `<startedAt>-cam360p30-index.m3u8`), so everything written before runs had
+ * names still reads the same way. Every later run adds `-r<its own start,
+ * epoch ms>` after the rung: `<startedAt>-cam360p30-r1790190732000_00000.ts`
+ * and its own `-index.m3u8`. Epoch ms rather than a counter so a run started
+ * by a process that restarted mid-show (and remembers nothing) can never pick
+ * a name an earlier run used.
+ *
+ * All of them still start with the session row's `object_prefix`
+ * (`live/<channel>/<startedAt>-cam360p30`), which is what the retention sweep
+ * lists and deletes and what `keep_replay` keeps: every run is covered by the
+ * one row, as before. The LIVE playlist name is the same for every run on
+ * purpose: viewers follow one URL, and it should always be the current run.
+ */
+export function cameraRunNames(
+  channelId: string,
+  startedAt: number,
+  runSuffix: string,
+): { filenamePrefix: string; playlistName: string; livePlaylistName: string } {
+  const rung = `${CAMERA_RUNG_NAME}${runSuffix}`;
+  return {
+    filenamePrefix: hlsObjectPrefix(channelId, startedAt, rung),
+    playlistName: `${startedAt}-${rung}-index.m3u8`,
+    livePlaylistName: `${startedAt}-${CAMERA_RUNG_NAME}.m3u8`,
+  };
+}
+
+/** Per channel, the session whose first camera run this process started. */
+const cameraRunSuffix = new Map<string, number>();
+
+/**
+ * "" for the first run this process starts for a session it opened itself,
+ * "-r<now>" for every other. A process that inherited a running session (an
+ * API restart mid-show) cannot know whether a first run already happened, so
+ * it always suffixes: a first run with a suffix reads back exactly as well,
+ * and the alternative is overwriting.
+ */
+function nextCameraRunSuffix(channelId: string, startedAt: number): string {
+  const seen = cameraRunSuffix.get(channelId);
+  cameraRunSuffix.set(channelId, startedAt);
+  const room = companionHost(channelId);
+  const openedHere =
+    room !== undefined && Math.abs(room.startedAtMs - startedAt) < 60_000;
+  if (seen !== startedAt && openedHere) {
+    return "";
+  }
+  return `-r${Date.now()}`;
+}
+
+function cameraSegmentOutput(
+  channelId: string,
+  startedAt: number,
+  runSuffix: string,
+): SegmentedFileOutput {
+  const names = cameraRunNames(channelId, startedAt, runSuffix);
+  const storage = liveHlsStorage()!;
+  return new SegmentedFileOutput({
+    filenamePrefix: names.filenamePrefix,
+    playlistName: names.playlistName,
+    livePlaylistName: names.livePlaylistName,
+    segmentDuration: hlsSegmentSeconds(),
+    output: {
+      case: "s3",
+      value: new S3Upload({
+        accessKey: storage.accessKey,
+        secret: storage.secret,
+        bucket: storage.bucket,
+        region: storage.region,
+        endpoint: storage.endpoint,
+        forcePathStyle: storage.forcePathStyle,
+      }),
+    },
+  });
+}
+
+/**
  * The rung name the archive's retention row carries.
  *
  * It is a rung in the `hls_sessions` sense (one row, one `object_prefix`, one
@@ -5110,7 +5258,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
     return;
   }
   rooms.delete(channelId);
-  cameraCooldownUntil.delete(channelId);
+  clearCameraCooldown(channelId);
   voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
   hlsStopsTotal += 1;
@@ -5299,7 +5447,7 @@ async function reconcileCameraEgress(
     // the first thing anybody does when something looks broken, and holding
     // them out for two minutes after they did exactly the right thing would
     // read as the feature being dead.
-    cameraCooldownUntil.delete(channelId);
+    clearCameraCooldown(channelId);
     return;
   }
   const cooldown = cameraCooldownUntil.get(channelId);
@@ -5307,7 +5455,7 @@ async function reconcileCameraEgress(
     if (cooldown > Date.now()) {
       return;
     }
-    cameraCooldownUntil.delete(channelId);
+    clearCameraCooldown(channelId);
   }
   const egress = getEgress();
   if (!egress) {
@@ -5335,13 +5483,13 @@ async function reconcileCameraEgress(
     // or left the room, for the whole party. One line, then two minutes of
     // quiet, then it asks again — which is also the right retry cadence for a
     // box that may have freed up.
-    cameraCooldownUntil.set(channelId, Date.now() + CAMERA_COOLDOWN_MS);
+    const retryInMs = startCameraCooldown(channelId);
     logEvent("voice.hlsCameraRefused", {
       channelId,
       refusal: decision.refusal,
       boxMbps: Math.round(decision.boxMbps),
       boxBudgetMbps: promotionBudgetMbps(),
-      retryInMs: CAMERA_COOLDOWN_MS,
+      retryInMs,
     });
     return;
   }
@@ -5355,14 +5503,17 @@ async function reconcileCameraEgress(
       : CAMERA_RUNG
     : VOICE_RUNG;
   let egressId: string | null = null;
+  // EVERY CAMERA RUN WRITES UNDER ITS OWN NAMES. The camera is the one slot
+  // that stops and starts inside a session, and a fresh egress numbers its
+  // segments from `_00000` again and rewrites its `-index.m3u8` from empty:
+  // under one fixed prefix the second run overwrote the first (2026-09-23
+  // production rehearsal: camera off and on again, and the download held only
+  // the part after). See `cameraRunNames`.
+  const runSuffix = nextCameraRunSuffix(channelId, startedAt);
   try {
     const started = await egress.startTrackCompositeEgress(
       channelId,
-      segmentOutput(
-        hlsObjectPrefix(channelId, startedAt, CAMERA_RUNG_NAME),
-        startedAt,
-        CAMERA_RUNG_NAME,
-      ),
+      cameraSegmentOutput(channelId, startedAt, runSuffix),
       {
         videoTrackId: wantedVideo ?? undefined,
         // ABSENT UNLESS `LIVE_HLS_VOICE_TRACK` FOUND ONE. The pre-2026-09-13
