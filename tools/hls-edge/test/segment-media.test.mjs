@@ -279,7 +279,8 @@ test("warm before reveal: the newest listed segments are in the colo cache befor
   );
   assert.deepEqual(result, { attempted: 2, timedOut: false });
   // Only the two newest: the older ones were revealed by earlier playlists.
-  assert.deepEqual(bucket.gets, [`live/${CHANNEL}/${seg(3)}`, `live/${CHANNEL}/${seg(4)}`]);
+  // Read in parallel, so in either order.
+  assert.deepEqual([...bucket.gets].sort(), [`live/${CHANNEL}/${seg(3)}`, `live/${CHANNEL}/${seg(4)}`]);
   await ctx.drain();
   assert.equal(cache.size, 2);
 

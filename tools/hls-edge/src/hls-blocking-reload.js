@@ -690,6 +690,7 @@ export function isMsnTooFarAhead(edge, requested) {
  *   lastFetchedAt: number,
  *   polling: boolean,
  *   pollLoopStartedAt: number,
+ *   wakeFromBackoff: (() => void) | null,
  *   loopResumeBy: number,
  *   loopGeneration: number,
  * }} RenditionPollState
@@ -768,9 +769,24 @@ function currentPollIntervalMs(edge) {
  *
  * @param {PlaylistLiveEdge | null} edge
  * @param {boolean} isVideoRung
- * @param {number} loopElapsedMs - `now() - state.pollLoopStartedAt`: how long THIS run of the poll loop has been going, not any one waiter's own hold time.
+ * @param {number} loopElapsedMs - how long the YOUNGEST current waiter has been held (`now() - youngestWaiterAt(state)`). Per waiter, not per loop (2026-09-23): the loop lives as long as anybody waits, so timing the backoff from the loop's start left a busy isolate polling at 1 s for every viewer, adding up to a second before a landed part was noticed. A viewer who has just joined gets the fast cadence for its own first window, like a viewer who started the loop.
  * @returns {number}
  */
+/**
+ * The newest `registeredAt` among the current waiters (the loop's own start
+ * when there are none, which only happens between a settle and the exit).
+ * @param {{ waiters: Set<{ registeredAt: number }>, pollLoopStartedAt: number }} state
+ */
+function youngestWaiterAt(state) {
+  let youngest = state.pollLoopStartedAt;
+  for (const waiter of state.waiters) {
+    if (waiter.registeredAt > youngest) {
+      youngest = waiter.registeredAt;
+    }
+  }
+  return youngest;
+}
+
 function pollIntervalForLoop(edge, isVideoRung, loopElapsedMs) {
   const baseMs = currentPollIntervalMs(edge);
   if (isVideoRung && loopElapsedMs >= VIDEO_RUNG_FAST_POLL_WINDOW_MS) {
@@ -930,6 +946,7 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
       lastFetchedAt: 0,
       polling: false,
       pollLoopStartedAt: 0,
+      wakeFromBackoff: null,
       loopResumeBy: 0,
       loopGeneration: 0,
     };
@@ -1086,6 +1103,15 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
     }
 
     state.waiters.add(waiter);
+    // A loop sleeping out a BACKOFF interval is woken for a new waiter, so
+    // the new viewer's first poll happens now rather than after the rest of
+    // somebody else's 1 s sleep. The fast-cadence sleep is left alone: it is
+    // already as short as polling is allowed to be.
+    if (typeof state.wakeFromBackoff === "function") {
+      const wake = state.wakeFromBackoff;
+      state.wakeFromBackoff = null;
+      wake();
+    }
 
     // THE BELT (see the block comment above `LOOP_RESUME_SLACK_MS`, item 3).
     // Armed in THIS request's own context, so the Workers runtime always
@@ -1416,11 +1442,27 @@ async function runPollLoop(renditionKey, state, deps, now, sleep, generation) {
         break;
       }
 
-      const intervalMs = pollIntervalForLoop(state.lastEdge, isVideoRung, now() - state.pollLoopStartedAt);
+      const intervalMs = pollIntervalForLoop(state.lastEdge, isVideoRung, now() - youngestWaiterAt(state));
       const soonestDeadline = soonestDeadlineOf(state);
       const waitMs = Math.max(0, Math.min(intervalMs, soonestDeadline - now()));
       state.loopResumeBy = now() + waitMs + LOOP_RESUME_SLACK_MS;
-      await sleep(waitMs);
+      if (intervalMs > currentPollIntervalMs(state.lastEdge)) {
+        // Backing off: let a newly joined waiter cut this sleep short (see
+        // the add site in `awaitBlockingReload`). The pending sleep's timer
+        // simply resolves later into nothing.
+        /** @type {() => void} */
+        let wake = () => {};
+        const woken = new Promise((resolve) => {
+          wake = () => resolve(undefined);
+        });
+        state.wakeFromBackoff = wake;
+        await Promise.race([sleep(waitMs), woken]);
+        if (state.wakeFromBackoff === wake) {
+          state.wakeFromBackoff = null;
+        }
+      } else {
+        await sleep(waitMs);
+      }
       if (state.loopGeneration !== generation) {
         return;
       }

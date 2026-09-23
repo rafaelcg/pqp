@@ -468,6 +468,53 @@ test("awaitBlockingReload: the video rung's poll loop backs off from the plain c
   }
 });
 
+test("awaitBlockingReload: a viewer joining a backed-off video loop gets the fast cadence for ITS first window, not the loop's age", async () => {
+  resetBlockingReloadStateForTests();
+  // The remux agent's finding (2026-09-23): the backoff was timed from when
+  // the LOOP started, and the loop lives as long as anybody waits, so on a
+  // busy isolate it sat at 1 s polling for everyone and a part that landed
+  // could wait up to a second to be noticed. Real timers, as above.
+  const fetchTimestamps = [];
+  const deps = {
+    fetchRendition: async () => {
+      fetchTimestamps.push(Date.now());
+      return toFetched(PLAYLIST_A);
+    },
+    rung: LL_VIDEO_RUNG,
+  };
+  const key = "rendition-video-backoff-per-waiter";
+  const start = Date.now();
+  const first = awaitBlockingReload(key, { msn: 103 }, deps);
+  await new Promise((resolve) => setTimeout(resolve, 2_500));
+  const joinedAt = Date.now() - start;
+  const second = awaitBlockingReload(key, { msn: 103 }, deps);
+  await first;
+  const secondOutcome = await second;
+  assert.equal(secondOutcome.kind, "timeout");
+
+  const gaps = [];
+  for (let i = 1; i < fetchTimestamps.length; i += 1) {
+    gaps.push({ atMs: fetchTimestamps[i - 1] - start, gapMs: fetchTimestamps[i] - fetchTimestamps[i - 1] });
+  }
+  // Gaps that START inside the new viewer's own fast window.
+  const joinerWindow = gaps.filter(
+    (g) => g.atMs >= joinedAt && g.atMs < joinedAt + VIDEO_RUNG_FAST_POLL_WINDOW_MS - 150,
+  );
+  assert.ok(joinerWindow.length >= 1, "expected polls inside the joiner's fast window");
+  for (const g of joinerWindow) {
+    assert.ok(
+      g.gapMs < (VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS + 500) / 2,
+      `joiner waited on the loop's backoff: ${g.gapMs}ms gap at ${g.atMs}ms (joined at ${joinedAt}ms)`,
+    );
+  }
+  // And the join itself is noticed promptly, not after the rest of a 1 s sleep.
+  const firstPollAfterJoin = fetchTimestamps.find((t) => t - start >= joinedAt);
+  assert.ok(
+    firstPollAfterJoin !== undefined && firstPollAfterJoin - start - joinedAt < 300,
+    `first poll after the join came ${firstPollAfterJoin - start - joinedAt}ms later`,
+  );
+});
+
 test("awaitBlockingReload: the audio rung (LL_AUDIO_RUNG) keeps the plain 3x-part-target formula, unlike the video rung", async () => {
   resetBlockingReloadStateForTests();
   let fetchCalls = 0;
