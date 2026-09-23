@@ -207,7 +207,7 @@ export class LlLatencyGovernor {
    * whether the picture is frozen right now: a freeze still in progress is
    * the opposite of healthy, so it restarts the clean-minute clock instead
    * of letting the target shrink under a viewer who has not recovered (a
-   * Farol finding on #785).
+   * Farol finding on PR 785).
    */
   tick(now: number, stalled = false): void {
     if (stalled) {

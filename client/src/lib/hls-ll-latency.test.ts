@@ -66,7 +66,7 @@ describe("LlLatencyGovernor", () => {
     expect(g.state().targetSeconds).toBe(LL_SEGMENTS_TARGET_SECONDS);
   });
 
-  it("never gives room back during a freeze that is still going (Farol, #785)", () => {
+  it("never gives room back during a freeze that is still going (Farol, PR 785)", () => {
     const g = new LlLatencyGovernor({ delivery: "segments", now: T0 });
     g.onStall(T0);
     // A long freeze: every tick reports it, and the target holds.
