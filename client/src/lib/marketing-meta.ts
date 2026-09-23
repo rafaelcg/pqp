@@ -328,7 +328,7 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
+        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie, relatório de erros e a tag do Google Ads; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
@@ -360,7 +360,7 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
+        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics, error reporting and the Google Ads tag; all of it is at pqp.gg/privacy.",
     },
   ],
 };
@@ -463,7 +463,7 @@ export const TELA_FAQ: Record<
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
     {
       question:
@@ -501,7 +501,7 @@ export const TELA_FAQ: Record<
     {
       question: "What do you keep about me?",
       answer:
-        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
     },
     {
       question: "Why is Discord screen share suspended in Brazil?",
@@ -620,26 +620,32 @@ export function escapeHtml(value: string): string {
  *
  * Every page carries the WebSite node, and now an Organization node beside
  * it: one stable identity for the publisher, independent of which page a
- * crawler landed on first, with `sameAs` pointing at the two other places the
- * same product answers for itself — the source repository and the Play Store
- * listing. Both are checked-in facts, not guesses: the repo is the one this
- * codebase lives in, and the Play listing is the one `docs/ANDROID_RELEASE.md`
- * records production access as open for. The App Store is deliberately absent
- * — TestFlight is a beta enrollment, not a public listing, and `sameAs` is for
- * pages anyone can already land on.
+ * crawler landed on first, with `sameAs` pointing at the other place the same
+ * product answers for itself: the source repository this codebase lives in.
+ * `sameAs` is for pages anyone can already land on, so both stores are
+ * absent. TestFlight is a beta enrollment, not a public listing. The Play
+ * listing (`gg.pqp.app`) has production access open (`docs/ANDROID_RELEASE.md`)
+ * but answered 404 to the public on 2026-09-23, and `/android` itself only
+ * shows a Play button once `VITE_PLAY_STORE_URL` is set (`lib/play-store.ts`).
+ * Add it back here in the same change that sets that variable.
  *
  * The landing adds SoftwareApplication — the page is the product — mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer) and, since the redesign, its own FAQPage, plus the same Play Store
- * link on `sameAs` for the one app-store URL that is public today. `/vs-discord`
+ * Offer) and, since the redesign, its own FAQPage, with the same `sameAs`. `/vs-discord`
  * adds FAQPage too, whose questions are the FAQ section actually rendered on
  * the page — schema for copy a visitor can read, never schema alone. `/tela`
  * does the same with its own seven.
  */
-const ORGANIZATION_SAME_AS = [
-  "https://github.com/rafaelcg/pqp",
-  "https://play.google.com/store/apps/details?id=gg.pqp.app",
-];
+const ORGANIZATION_SAME_AS = ["https://github.com/rafaelcg/pqp"];
+
+/**
+ * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
+ * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
+ * the Electron builds for all three systems, iPhone the TestFlight beta, and
+ * Android the APK. `client/index.html` carries the same string for every page
+ * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
+ */
+export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";
 
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -662,7 +668,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       "@type": "SoftwareApplication",
       name: "pqp",
       applicationCategory: "CommunicationApplication",
-      operatingSystem: "Web, Windows, macOS, Linux, Android",
+      operatingSystem: SOFTWARE_OPERATING_SYSTEMS,
       url: `${CANONICAL_ORIGIN}/`,
       description: PAGE_COPY["/"].description[locale],
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
