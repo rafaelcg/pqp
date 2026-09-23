@@ -59,7 +59,10 @@ page.on("pageerror", (e) => console.log("PAGEERROR", String(e).slice(0, 300)));
 await page.goto(`http://127.0.0.1:${proxyPort}/page?cfg=${cfg}`);
 await page.waitForTimeout(secs * 1000);
 const L = await page.evaluate(() => window.__L || []);
-const F = await page.evaluate(() => window.__F || null);
+const F = await page.evaluate(() => {
+  if (window.__closeFreeze) window.__closeFreeze();
+  return window.__F || null;
+});
 await browser.close();
 proxy.close();
 

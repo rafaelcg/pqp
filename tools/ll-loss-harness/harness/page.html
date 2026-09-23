@@ -54,6 +54,18 @@ setInterval(() => {
 window.__F = { episodes: 0, frozenMs: 0, longestMs: 0 };
 {
   let lastCt = -1, frozenSince = 0, played = false;
+  const record = (d) => {
+    if (d < 200) return;
+    window.__F.episodes++;
+    window.__F.frozenMs += d;
+    window.__F.longestMs = Math.max(window.__F.longestMs, d);
+  };
+  // run.mjs calls this before reading __F, so a freeze still going at the
+  // end of the watch is counted rather than silently dropped.
+  window.__closeFreeze = () => {
+    if (frozenSince) record(Date.now() - frozenSince);
+    frozenSince = 0;
+  };
   V.addEventListener("playing", () => { played = true; });
   setInterval(() => {
     if (!played || V.paused) return;
@@ -61,12 +73,7 @@ window.__F = { episodes: 0, frozenMs: 0, longestMs: 0 };
     if (V.currentTime === lastCt) {
       if (!frozenSince) frozenSince = now - 100;
     } else if (frozenSince) {
-      const d = now - frozenSince;
-      if (d >= 200) {
-        window.__F.episodes++;
-        window.__F.frozenMs += d;
-        window.__F.longestMs = Math.max(window.__F.longestMs, d);
-      }
+      record(now - frozenSince);
       frozenSince = 0;
     }
     lastCt = V.currentTime;

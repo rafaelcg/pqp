@@ -44,6 +44,25 @@ function tfdt(buf) {
 }
 
 const seen = { video: new Map(), audio: new Map() }; // uri -> {at, durationSecs}
+
+// A part whose bytes could not be read has no tfdt and so no lateness; it
+// is retried a few times and then COUNTED as unmeasured, never dropped
+// silently from the percentiles.
+async function fetchPart(uri, rec) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await get(uri);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const b = Buffer.from(await res.arrayBuffer());
+      rec.tfdt = tfdt(b);
+      if (PARTS_DIR) writeFileSync(path.join(PARTS_DIR, uri), b);
+      return;
+    } catch (e) {
+      rec.error = String(e);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+}
 const pending = [];
 const deadline = Date.now() + secs * 1000;
 while (Date.now() < deadline) {
@@ -59,14 +78,7 @@ while (Date.now() < deadline) {
             if (seen[track].has(p.uri)) continue;
             const rec = { at, durationSecs: p.durationSecs };
             seen[track].set(p.uri, rec);
-            pending.push(
-              get(p.uri)
-                .then((res) => res.arrayBuffer())
-                .then((b) => {
-                  rec.tfdt = tfdt(Buffer.from(b));
-                  if (PARTS_DIR) writeFileSync(path.join(PARTS_DIR, p.uri), Buffer.from(b));
-                }),
-            );
+            pending.push(fetchPart(p.uri, rec));
           }
         }
       }
@@ -82,13 +94,15 @@ await Promise.allSettled(pending);
 const pct = (a, p) => a[Math.min(a.length - 1, Math.floor((a.length - 1) * p))];
 const out = {};
 for (const track of ["video", "audio"]) {
-  const recs = [...seen[track].values()].filter((r) => r.tfdt != null);
+  const all = [...seen[track].values()];
+  const recs = all.filter((r) => r.tfdt != null);
+  const unmeasured = all.length - recs.length;
   // The first poll finds whatever was already published before it started;
   // those parts' "first seen" says nothing about when they were published.
   const firstAt = Math.min(...recs.map((r) => r.at));
   const lags = recs.filter((r) => r.at > firstAt).map((r) => r.at - 1000 * (r.tfdt / TIMESCALE[track] + r.durationSecs));
   if (!lags.length) {
-    console.log(`LATENESS ${track} n=0`);
+    console.log(`LATENESS ${track} n=0 unmeasured=${unmeasured}`);
     continue;
   }
   const floor = Math.min(...lags);
@@ -101,6 +115,7 @@ for (const track of ["video", "audio"]) {
     max: late.at(-1),
     over250: late.filter((l) => l > 250).length,
     over500: late.filter((l) => l > 500).length,
+    unmeasured,
   };
   // Inter-arrival: the gap between consecutive parts first appearing, the
   // origin-side cadence a blocking reload sees. Parts that land in the same
@@ -112,7 +127,7 @@ for (const track of ["video", "audio"]) {
   s.interMax = gaps.length ? gaps.at(-1) : null;
   out[track] = s;
   console.log(
-    `LATENESS ${track} n=${s.n} p50=${s.p50}ms p90=${s.p90}ms p99=${s.p99}ms max=${s.max}ms over250=${s.over250} over500=${s.over500} interArrival p50=${s.interP50}ms p99=${s.interP99}ms max=${s.interMax}ms`,
+    `LATENESS ${track} n=${s.n} p50=${s.p50}ms p90=${s.p90}ms p99=${s.p99}ms max=${s.max}ms over250=${s.over250} over500=${s.over500} unmeasured=${s.unmeasured} interArrival p50=${s.interP50}ms p99=${s.interP99}ms max=${s.interMax}ms`,
   );
 }
 console.log("LATENESS_JSON", JSON.stringify(out));

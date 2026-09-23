@@ -120,8 +120,13 @@ cleanup() {
   local status=$?
   if [ "$KEEP_UP" != "1" ]; then
     echo "run.sh: tearing down (KEEP_UP=1 to skip this)"
+    [ -n "${LATENESS_PID:-}" ] && { kill "$LATENESS_PID" 2>/dev/null; wait "$LATENESS_PID" 2>/dev/null; } || true
     [ -n "${SID:-}" ] && node harness/remux-ctl.mjs stop "$SID" >/dev/null 2>&1 || true
+    # Twice: the publisher runs with --rm and can finish removing itself
+    # while the first pass is removing it, which makes compose abort before
+    # LiveKit and leaves it running with its port held.
     docker compose --profile publish down --timeout 5 >"$LOG_DIR/compose-down.log" 2>&1 || true
+    docker compose --profile publish down --timeout 5 >>"$LOG_DIR/compose-down.log" 2>&1 || true
   fi
   exit $status
 }
@@ -190,13 +195,13 @@ if [ "$SOURCE" != "ramp" ]; then
   # part timing: two runs of the same build are then not comparable.
   echo "run.sh: waiting for 12s of published media before the viewer joins"
   for i in $(seq 1 60); do
-    parts="$(SID="$SID" node -e '
+    parts="$(SID="$SID" node --input-type=module -e '
       const { loadHarnessEnv } = await import("./harness/env.mjs");
       const key = process.env.MEDIA_ORIGIN_KEY || loadHarnessEnv().MEDIA_ORIGIN_KEY;
       const r = await fetch(`${process.env.LL_HARNESS_ORIGIN}/s/${process.env.SID}/state.json`, { headers: { "X-Pqp-Origin-Key": key } });
       const st = r.ok ? await r.json() : { video: { segments: [] } };
       console.log(st.video.segments.reduce((n, s) => n + s.parts.length, 0));
-    ' --input-type=module 2>/dev/null || echo 0)"
+    ' 2>/dev/null || echo 0)"
     [ "${parts:-0}" -ge 24 ] && break
     sleep 1
   done
