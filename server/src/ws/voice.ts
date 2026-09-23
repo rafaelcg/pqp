@@ -493,6 +493,9 @@ let idleAloneDisconnected = 0;
 let staleRowWritesRefused = 0;
 let ghostSeatsSwept = 0;
 let meshHoldsRefused = 0;
+/** How many seats one step of the post-outage re-assertion writes at once. */
+const REASSERT_CHUNK = 50;
+
 /** Seats re-written to their rows on the first beat after a DB outage. */
 let seatsReassertedAfterOutage = 0;
 /** Reconcile passes skipped because this instance's own lease had just lapsed. */
@@ -4739,17 +4742,21 @@ export async function runVoiceReconcile(): Promise<{
   // window are rewritten as orphans (their own `orphanedAt`), so this changes
   // no seat's state, it only makes the rows say what the map already knows.
   if (consumeOwnHeartbeatRecovery()) {
-    const channels = new Set<string>();
     const reasserted = peers.size;
-    for (const peer of peers.values()) {
-      writePeerRow(peer);
-      channels.add(peer.voiceChannelId);
+    // In chunks, each landed before the next starts and all of them before
+    // anything below reads the table: a database that has just come back is
+    // not handed one statement per seat at once. The writes go through the
+    // same per-peer chain as every other (and through the batcher when
+    // `VOICE_REGISTRY_BATCH` is on, which folds a chunk into a few statements).
+    const seats = [...peers.values()];
+    for (let i = 0; i < seats.length; i += REASSERT_CHUNK) {
+      const channels = new Set<string>();
+      for (const peer of seats.slice(i, i + REASSERT_CHUNK)) {
+        writePeerRow(peer);
+        channels.add(peer.voiceChannelId);
+      }
+      await Promise.all([...channels].map((channelId) => settledRowWrites(channelId)));
     }
-    // Landed before anything below reads the table. The writes go through
-    // the same per-peer chain as every other (and through the batcher when
-    // `VOICE_REGISTRY_BATCH` is on, which is what keeps a large instance's
-    // re-assertion from being one round trip per seat).
-    await Promise.all([...channels].map((channelId) => settledRowWrites(channelId)));
     seatsReassertedAfterOutage += reasserted;
     logEvent("voice.registryReasserted", { seats: reasserted });
   }
@@ -5599,6 +5606,30 @@ export function voiceChannelAccessCacheStats(): {
  * Send current voice occupancy to a newly authenticated socket — but only for
  * the rooms this user is allowed to see.
  */
+/**
+ * Every room's roster from this process's memory (`sentRosters`, with the
+ * events queued since replayed, not consumed: the coalesced run still owns
+ * the queue), for a socket that connects while the rows cannot be read.
+ * Built once a second at most and shared: a reconnect burst during an outage
+ * must not rebuild every room once per socket.
+ */
+let memoryRosters: { at: number; rooms: Map<string, VoiceParticipant[]> } | null = null;
+const MEMORY_ROSTERS_TTL_MS = 1_000;
+
+function rostersFromMemory(now = Date.now()): Map<string, VoiceParticipant[]> {
+  if (memoryRosters && now - memoryRosters.at < MEMORY_ROSTERS_TTL_MS) {
+    return memoryRosters.rooms;
+  }
+  const rooms = new Map<string, VoiceParticipant[]>();
+  for (const [voiceChannelId, sent] of sentRosters) {
+    const current = new Map(sent);
+    applyRoomEvents(current, pendingRoomEvents.get(voiceChannelId) ?? []);
+    rooms.set(voiceChannelId, [...current.values()]);
+  }
+  memoryRosters = { at: now, rooms };
+  return rooms;
+}
+
 export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   const rooms = new Map<
     string,
@@ -5641,13 +5672,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       // empty cluster (see `rosterWithoutRows`). A socket that reconnected
       // during a database outage must not be told the other machine's
       // seats are empty.
-      for (const [voiceChannelId, sent] of sentRosters) {
+      for (const [voiceChannelId, participants] of rostersFromMemory()) {
         const room = roomOf(voiceChannelId);
-        // With whatever this window has learned since that roster went out,
-        // not consumed: the coalesced run still owns the queue.
-        const current = new Map(sent);
-        applyRoomEvents(current, pendingRoomEvents.get(voiceChannelId) ?? []);
-        for (const participant of current.values()) {
+        for (const participant of participants) {
           room.participants.set(participant.peerId, participant);
           room.orphaned.set(participant.peerId, false);
         }
