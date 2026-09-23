@@ -4,6 +4,7 @@ import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
+import { createFrameBudget } from "./frame-budget.js";
 import {
   deleteAuthenticatedSocket,
   getAuthenticatedSocket,
@@ -68,7 +69,7 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const CHAT_MESSAGE_TYPES = new Set<string>(CHAT_CLIENT_MESSAGE_TYPES);
 
-const VOICE_MESSAGE_TYPES = new Set([
+const VOICE_MESSAGE_TYPES = new Set<string>([
   "join-voice-room",
   "leave-voice-room",
   "set-sharing-screen",
@@ -111,6 +112,14 @@ const VOICE_MESSAGE_TYPES = new Set([
   // The presenter's own word for "separada", read alongside their
   // `voice-track` publication by `reconcileCameraEgress`.
   "set-voice-track-mode",
+]);
+
+/** Every frame type this router acts on, for the flood log's summary. */
+const ROUTED_FRAME_TYPES: ReadonlySet<string> = new Set<string>([
+  "auth",
+  "ping",
+  ...CHAT_MESSAGE_TYPES,
+  ...VOICE_MESSAGE_TYPES,
 ]);
 
 /**
@@ -186,10 +195,14 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 
   // Per-connection budget. The address bucket above cannot distinguish clients
   // behind a shared proxy, so the real limit has to live on the socket itself.
-  const connectionLimiter = createRateLimiter({
-    capacity: 60,
-    refillPerSecond: 20,
-  });
+  // Two buckets, general and WebRTC relay: see `frame-budget.ts` for why one
+  // was hanging up mesh calls.
+  const frameBudget = createFrameBudget(ROUTED_FRAME_TYPES);
+  // Set once this socket has been closed for flooding. Frames already in
+  // flight keep arriving until the close handshake completes (91 of them on
+  // one socket in production), and each used to be parsed, refused again and
+  // logged again. The verdict is already in; drop them.
+  let floodClosed = false;
 
   trackSocketLiveness(socket);
 
@@ -201,6 +214,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   }, AUTH_TIMEOUT_MS);
 
   async function onMessage(data: unknown) {
+    if (floodClosed) {
+      return;
+    }
     if (!socketLimiter.take(remoteKey)) {
       // Say so rather than dropping the frame on the floor. A silently
       // discarded message leaves the client waiting on a reply that is never
@@ -219,17 +235,40 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       socket.close(4429, "Too many messages");
       return;
     }
-    if (!connectionLimiter.take("self")) {
-      // Sustained flooding from one socket is not a client we want to keep.
-      logEvent("ws.flood", { connId });
-      socket.close(4429, "Too many messages");
-      return;
-    }
-
+    // Parsed BEFORE the per-connection budget, because the budget depends on
+    // what the frame is. The address bucket above still runs first, and a
+    // socket that overdraws either bucket below is closed, so the parse work a
+    // flooder can buy is bounded by one bucket's burst.
     let parsed: unknown;
+    let parsedOk = true;
     try {
       parsed = JSON.parse(String(data));
     } catch {
+      parsedOk = false;
+    }
+    const frameType =
+      parsedOk && typeof parsed === "object" && parsed !== null
+        ? (parsed as { type?: unknown }).type
+        : undefined;
+    const exhausted = frameBudget.take(
+      typeof frameType === "string" ? frameType : undefined,
+    );
+    if (exhausted) {
+      // Sustained flooding from one socket is not a client we want to keep.
+      // Say which bucket and what filled it: the old line said neither, and
+      // a week of them could not tell a flood from a mesh call joining.
+      floodClosed = true;
+      logEvent("ws.flood", {
+        connId,
+        userId: getSocketUser(socket)?.id,
+        bucket: exhausted,
+        inVoice: isSocketInVoice(socket),
+        recent: frameBudget.recentSummary(),
+      });
+      socket.close(4429, "Too many messages");
+      return;
+    }
+    if (!parsedOk) {
       return;
     }
 

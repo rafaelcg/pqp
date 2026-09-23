@@ -110,7 +110,8 @@ export function reconnectDelayMs(attempt: number, closeCode?: number): number {
 const MAX_CHAT_QUEUE = 200;
 const MAX_VOICE_QUEUE = 100;
 // The server admits a burst of 60 messages per connection, refilled at 20/s
-// (server/src/ws/index.ts). The queues above can hold 300 between them, so a
+// (server/src/ws/frame-budget.ts; WebRTC offer/answer/ICE frames draw from a
+// separate, larger relay bucket and do not count here). The queues above can hold 300 between them, so a
 // reconnect flush that dumps everything in one loop trips that limiter and the
 // fresh socket is closed with 4429 — a reconnect-kill loop for exactly the
 // flaky networks the queues exist to survive. Drain in paced chunks that leave
