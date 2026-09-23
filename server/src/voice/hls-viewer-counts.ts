@@ -25,29 +25,52 @@ import { logEvent } from "../lib/log.js";
  * server: every reader of these tables counts rows.
  *
  * NO WRITE PER POLL. A heartbeat is a `Map.set`. Each process flushes what it
- * saw at most once per `FLUSH_INTERVAL_MS` per broadcast, in two statements:
- * an upsert of the people it saw (`hls_session_viewers`) and one statement
- * that counts the union and stores the minute and the running peak/unique.
+ * saw at most once per `HLS_VIEWER_FLUSH_INTERVAL_MS` per broadcast, in ONE
+ * statement: upsert the people it saw (`hls_session_viewers`), count who was
+ * present at the evaluated instant, file that under its minute and fold it
+ * into the running peak, and add the accounts that were new to this
+ * broadcast to the unique total.
  *
  * TWO MACHINES. HTTP is balanced per request, so the same viewer's
  * heartbeats land on both API processes. Adding the two processes' counts
- * would double them; instead each flush writes WHO it saw, and the count is
- * read from the shared table after the write. Both machines then compute the
- * same union and the higher reading of a minute wins (`GREATEST`), so the
- * order they flush in does not matter.
+ * would double them; instead each flush writes WHO it saw. Unique grows only
+ * by rows a flush actually INSERTED, which happens once per account however
+ * many machines saw it, so it never rescans the audience (a Farol finding on
+ * #799). Concurrency is read from the shared rows, and the higher reading of
+ * a minute wins (`GREATEST`), so the order machines flush in does not
+ * matter.
  *
- * WHAT "WATCHING NOW" MEANS. Seen within `LIVE_WINDOW_MS`. The window has to
- * cover a viewer whose heartbeats all landed on the other machine since its
- * last flush: heartbeat 30 s plus flush 60 s plus slack. So a person who
- * closes the tab still counts for up to two minutes, which is the honest
- * price of not writing per poll, and it is the same for every broadcast.
+ * CONCURRENT MEANS PRESENT AT THE SAME INSTANT, not "seen in the last two
+ * minutes". A rolling window would count somebody who left and somebody who
+ * arrived a minute later as simultaneous, and inflate the peak (a Farol
+ * finding on #799). So each flush evaluates one instant in the PAST,
+ * `HLS_VIEWER_EVAL_LAG_MS` ago, by when both machines have written what they
+ * saw around it, and counts the viewers whose [first seen, last seen] span
+ * covers it within `HLS_VIEWER_PRESENT_TOLERANCE_MS` (one heartbeat and its
+ * timer jitter). That reading is filed under the minute of the instant.
+ *
+ * `HLS_VIEWER_LIVE_WINDOW_MS` is only for the operator's "watching now" and
+ * this process's own memory: seen within two minutes, knowingly loose.
  */
 
 /** Each process writes a broadcast's viewers at most this often. */
 export const HLS_VIEWER_FLUSH_INTERVAL_MS = 60_000;
 
-/** Seen within this long counts as watching now. */
+/** Seen within this long counts as "watching now" on the operator's view. */
 export const HLS_VIEWER_LIVE_WINDOW_MS = 120_000;
+
+/**
+ * How far back a flush evaluates concurrency: one flush interval plus the
+ * tick that runs it plus slack, so the other machine's sightings of that
+ * instant are already in the table.
+ */
+export const HLS_VIEWER_EVAL_LAG_MS = 90_000;
+
+/**
+ * A viewer counts as present at an instant when last seen no more than this
+ * before it: the 30 s heartbeat plus the 10 s timer that sends it, plus slack.
+ */
+export const HLS_VIEWER_PRESENT_TOLERANCE_MS = 45_000;
 
 /** A viewer row (which holds a user id) outlives its last sighting by this. */
 export const HLS_VIEWER_ROW_RETENTION_HOURS = 24;
@@ -70,8 +93,15 @@ export type HlsViewerSource = "presence" | "playlist" | "telemetry";
 interface TrackedSession {
   channelId: string;
   startedAt: number;
-  /** userId -> last seen, epoch ms. */
-  viewers: Map<string, number>;
+  /** userId -> first and last seen by this process, epoch ms. */
+  viewers: Map<string, { first: number; last: number }>;
+  /**
+   * The newest sighting a successful flush has stored. A viewer seen after
+   * this is not forgotten, however old, until a flush stores it: a database
+   * that is down longer than the live window must not lose sightings (a
+   * Farol finding on #799).
+   */
+  persistedThrough: number;
   /** Anything noted since the last successful flush. */
   dirty: boolean;
   lastFlushAt: number;
@@ -122,12 +152,17 @@ export function createHlsViewerCounter(
     pool?: () => Pick<Pool, "query">;
     flushIntervalMs?: number;
     liveWindowMs?: number;
+    evalLagMs?: number;
+    presentToleranceMs?: number;
   } = {},
 ): HlsViewerCounter {
   const now = options.now ?? Date.now;
   const pool = options.pool ?? getPool;
   const flushIntervalMs = options.flushIntervalMs ?? HLS_VIEWER_FLUSH_INTERVAL_MS;
   const liveWindowMs = options.liveWindowMs ?? HLS_VIEWER_LIVE_WINDOW_MS;
+  const evalLagMs = options.evalLagMs ?? HLS_VIEWER_EVAL_LAG_MS;
+  const presentToleranceMs =
+    options.presentToleranceMs ?? HLS_VIEWER_PRESENT_TOLERANCE_MS;
   const sessions = new Map<string, TrackedSession>();
   const noted: Record<HlsViewerSource, number> = {
     presence: 0,
@@ -165,6 +200,7 @@ export function createHlsViewerCounter(
         channelId,
         startedAt,
         viewers: new Map(),
+        persistedThrough: 0,
         dirty: false,
         // Zero, so the very first flush after a broadcast is first seen is
         // not held back a whole interval.
@@ -173,14 +209,17 @@ export function createHlsViewerCounter(
       };
       sessions.set(key, session);
     }
-    if (
-      !session.viewers.has(userId) &&
-      session.viewers.size >= MAX_VIEWERS_PER_SESSION
-    ) {
-      dropped += 1;
-      return;
+    const at = now();
+    const seen = session.viewers.get(userId);
+    if (seen) {
+      seen.last = at;
+    } else {
+      if (session.viewers.size >= MAX_VIEWERS_PER_SESSION) {
+        dropped += 1;
+        return;
+      }
+      session.viewers.set(userId, { first: at, last: at });
     }
-    session.viewers.set(userId, now());
     session.dirty = true;
     noted[source] += 1;
   }
@@ -190,64 +229,96 @@ export function createHlsViewerCounter(
     at: number,
   ): Promise<HlsViewerFlushResult | null> {
     const userIds: string[] = [];
-    const seenMs: number[] = [];
+    const firstMs: number[] = [];
+    const lastMs: number[] = [];
+    let newest = 0;
     for (const [userId, seen] of session.viewers) {
       userIds.push(userId);
-      seenMs.push(seen);
+      firstMs.push(seen.first);
+      lastMs.push(seen.last);
+      newest = Math.max(newest, seen.last);
     }
     session.flushing = true;
     session.dirty = false;
     try {
-      const db = pool();
-      // Who this process saw. `last_seen_at` only moves forward, so a late
-      // flush from the other machine never pulls a viewer back in time.
-      await db.query(
-        `INSERT INTO hls_session_viewers
-           (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at)
-         SELECT $1, $2, u.user_id,
-                to_timestamp(u.seen_ms / 1000.0), to_timestamp(u.seen_ms / 1000.0)
-           FROM unnest($3::uuid[], $4::float8[]) AS u(user_id, seen_ms)
-         ON CONFLICT (channel_id, started_at_ms, user_id) DO UPDATE
-           SET last_seen_at = GREATEST(hls_session_viewers.last_seen_at, EXCLUDED.last_seen_at),
-               first_seen_at = LEAST(hls_session_viewers.first_seen_at, EXCLUDED.first_seen_at)`,
-        [session.channelId, session.startedAt, userIds, seenMs],
-      );
-      // The union both machines wrote, counted once, in a SEPARATE statement:
-      // a data-modifying CTE's rows are not visible to its own statement.
-      const counted = await db.query<{
+      // ONE statement, so the viewer upsert and the counts built on it land
+      // together or not at all. A data-modifying CTE's rows are invisible to
+      // the rest of its own statement, so "who is present" is the snapshot's
+      // rows for everybody NOT in this batch plus this batch merged with its
+      // own stored span (`merged`).
+      const counted = await pool().query<{
         live: number;
         peak_viewers: number;
         unique_viewers: number;
       }>(
-        `WITH c AS (
-           SELECT
-             COUNT(*) FILTER (
-               WHERE last_seen_at >= to_timestamp(($3::float8 - $4::float8) / 1000.0)
-             )::int AS live,
-             COUNT(*)::int AS uniq
-           FROM hls_session_viewers
-           WHERE channel_id = $1 AND started_at_ms = $2
+        `WITH batch AS (
+           SELECT u.user_id,
+                  to_timestamp(u.first_ms / 1000.0) AS first_seen,
+                  to_timestamp(u.last_ms / 1000.0) AS last_seen
+             FROM unnest($3::uuid[], $4::float8[], $5::float8[])
+                  AS u(user_id, first_ms, last_ms)
+         ), merged AS (
+           SELECT b.user_id,
+                  LEAST(b.first_seen, v.first_seen_at) AS first_seen,
+                  GREATEST(b.last_seen, v.last_seen_at) AS last_seen
+             FROM batch b
+             LEFT JOIN hls_session_viewers v
+               ON v.channel_id = $1 AND v.started_at_ms = $2 AND v.user_id = b.user_id
+         ), ins AS (
+           INSERT INTO hls_session_viewers
+             (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at)
+           SELECT $1, $2, user_id, first_seen, last_seen FROM batch
+           ON CONFLICT (channel_id, started_at_ms, user_id) DO UPDATE
+             SET last_seen_at = GREATEST(hls_session_viewers.last_seen_at, EXCLUDED.last_seen_at),
+                 first_seen_at = LEAST(hls_session_viewers.first_seen_at, EXCLUDED.first_seen_at)
+           RETURNING (xmax = 0) AS inserted
+         ), eval AS (
+           SELECT to_timestamp($6::float8 / 1000.0) AS at,
+                  to_timestamp(($6::float8 - $7::float8) / 1000.0) AS since
+         ), present AS (
+           SELECT (
+             (SELECT COUNT(*) FROM hls_session_viewers v, eval
+               WHERE v.channel_id = $1 AND v.started_at_ms = $2
+                 AND v.last_seen_at >= eval.since
+                 AND v.first_seen_at <= eval.at
+                 AND NOT (v.user_id = ANY($3::uuid[])))
+             +
+             (SELECT COUNT(*) FROM merged, eval
+               WHERE merged.last_seen >= eval.since
+                 AND merged.first_seen <= eval.at)
+           )::int AS n
+         ), added AS (
+           SELECT COUNT(*) FILTER (WHERE inserted)::int AS n FROM ins
          ), minute AS (
            INSERT INTO hls_session_viewer_minutes
              (channel_id, started_at_ms, minute, viewers)
-           SELECT $1, $2, date_trunc('minute', to_timestamp($3::float8 / 1000.0)), live
-             FROM c
+           SELECT $1, $2, date_trunc('minute', eval.at), present.n
+             FROM present, eval
            ON CONFLICT (channel_id, started_at_ms, minute) DO UPDATE
              SET viewers = GREATEST(hls_session_viewer_minutes.viewers, EXCLUDED.viewers)
          )
          INSERT INTO hls_session_viewer_stats AS s
            (channel_id, started_at_ms, peak_viewers, peak_at, unique_viewers, updated_at)
-         SELECT $1, $2, live, to_timestamp($3::float8 / 1000.0), uniq, NOW() FROM c
+         SELECT $1, $2, present.n, eval.at, added.n, NOW() FROM present, added, eval
          ON CONFLICT (channel_id, started_at_ms) DO UPDATE
            SET peak_at = CASE WHEN EXCLUDED.peak_viewers > s.peak_viewers
                               THEN EXCLUDED.peak_at ELSE s.peak_at END,
                peak_viewers = GREATEST(s.peak_viewers, EXCLUDED.peak_viewers),
-               unique_viewers = GREATEST(s.unique_viewers, EXCLUDED.unique_viewers),
+               unique_viewers = s.unique_viewers + EXCLUDED.unique_viewers,
                updated_at = NOW()
-         RETURNING (SELECT live FROM c) AS live, peak_viewers, unique_viewers`,
-        [session.channelId, session.startedAt, at, liveWindowMs],
+         RETURNING (SELECT n FROM present) AS live, peak_viewers, unique_viewers`,
+        [
+          session.channelId,
+          session.startedAt,
+          userIds,
+          firstMs,
+          lastMs,
+          at - evalLagMs,
+          presentToleranceMs,
+        ],
       );
       session.lastFlushAt = at;
+      session.persistedThrough = Math.max(session.persistedThrough, newest);
       flushes += 1;
       const row = counted.rows[0];
       return {
@@ -258,10 +329,10 @@ export function createHlsViewerCounter(
         uniqueViewers: row?.unique_viewers ?? 0,
       };
     } catch (error) {
-      // A measurement: dropped, not retried in a loop. Marked dirty again so
-      // the next tick carries these sightings, and `lastFlushAt` is still
-      // stamped so a struggling database is asked once a minute, not once a
-      // tick.
+      // A measurement: not retried in a loop. Marked dirty again so the next
+      // tick carries these sightings (`expire` keeps anything newer than
+      // `persistedThrough`), and `lastFlushAt` is still stamped so a
+      // struggling database is asked once a minute, not once a tick.
       session.dirty = true;
       session.lastFlushAt = at;
       flushFailures += 1;
@@ -276,14 +347,21 @@ export function createHlsViewerCounter(
     }
   }
 
+  /**
+   * Forget viewers this process has both stored and not seen for the live
+   * window, and broadcasts with nobody left. A sighting no flush has stored
+   * yet is kept however old it is, so a long outage delays the count rather
+   * than losing it, and a session is never left holding a slot with nothing
+   * in it.
+   */
   function expire(at: number): void {
     for (const [key, session] of sessions) {
       for (const [userId, seen] of session.viewers) {
-        if (at - seen > liveWindowMs) {
+        if (at - seen.last > liveWindowMs && seen.last <= session.persistedThrough) {
           session.viewers.delete(userId);
         }
       }
-      if (session.viewers.size === 0 && !session.dirty) {
+      if (session.viewers.size === 0 && !session.flushing) {
         sessions.delete(key);
       }
     }
@@ -335,7 +413,7 @@ export function createHlsViewerCounter(
     let viewersHere = 0;
     for (const session of sessions.values()) {
       for (const seen of session.viewers.values()) {
-        if (at - seen <= liveWindowMs) {
+        if (at - seen.last <= liveWindowMs) {
           viewersHere += 1;
         }
       }

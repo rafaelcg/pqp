@@ -2873,13 +2873,21 @@ accounts that watched, and a **per-minute series** of concurrent viewers
   account can only count itself.
 - **No write per poll.** A sighting is a map write in
   `server/src/voice/hls-viewer-counts.ts`. Each API process flushes at most
-  once a minute per broadcast: who it saw into `hls_session_viewers`, then one
-  statement that counts the union and stores the minute and the running
-  peak/unique in `hls_session_viewer_stats`.
-- **Two API processes** write who they saw, not how many, so the count is
-  the union of both. The higher reading of a minute wins.
-- **"Watching now"** is seen in the last 120 s (heartbeat plus flush plus
-  slack), so somebody who closed the tab counts for up to two minutes.
+  once a minute per broadcast, in one statement: who it saw into
+  `hls_session_viewers`, the concurrent reading into its minute and the
+  running peak, and the accounts new to this broadcast added to the unique
+  total in `hls_session_viewer_stats`.
+- **Two API processes** write who they saw, not how many. Unique grows only
+  by rows actually inserted (once per account), and the higher reading of a
+  minute wins.
+- **Concurrent means present at the same instant.** Each flush evaluates an
+  instant 90 s in the past (by then both processes have written it) and
+  counts viewers whose first-to-last-seen span covers it within 45 s (one
+  heartbeat plus its timer). Fifty people who leave and fifty who arrive a
+  minute later read as a peak of 50, not 100. The operator's "watching now"
+  is looser on purpose: seen in the last 120 s.
+- **An outage delays the count, it does not lose it.** A sighting no flush
+  has stored is kept in memory until one does.
 - **Privacy.** User ids stay in `hls_session_viewers`, are pruned 24 h after
   last seen, and nothing reads them back out: every reader counts rows.
 - **Where it shows.** The past-broadcasts dialog ("pico de 12 pessoas · 31

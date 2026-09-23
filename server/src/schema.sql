@@ -4590,6 +4590,11 @@ CREATE TABLE IF NOT EXISTS hls_session_viewers (
 CREATE INDEX IF NOT EXISTS idx_hls_session_viewers_last_seen
   ON hls_session_viewers (last_seen_at);
 
+-- The flush's "who was present at this instant" reads a range of
+-- `last_seen_at` inside one broadcast, never the whole audience.
+CREATE INDEX IF NOT EXISTS idx_hls_session_viewers_recent
+  ON hls_session_viewers (channel_id, started_at_ms, last_seen_at);
+
 -- Concurrent viewers per wall-clock minute. Each machine's flush writes the
 -- count it read and the higher reading wins, so two machines never add up.
 CREATE TABLE IF NOT EXISTS hls_session_viewer_minutes (

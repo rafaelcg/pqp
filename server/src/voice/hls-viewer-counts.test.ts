@@ -19,6 +19,7 @@ const {
   createHlsViewerCounter,
   hlsViewerMinutes,
   liveHlsViewerSessions,
+  HLS_VIEWER_EVAL_LAG_MS,
   HLS_VIEWER_FLUSH_INTERVAL_MS,
 } = await import("./hls-viewer-counts.js");
 const { listWatchPartyHistory } = await import("./hls-history.js");
@@ -100,16 +101,25 @@ describeDb("watch party viewer counts", () => {
       // The timer ticks every 15 s; ticking every poll is strictly worse.
       await counter.flushDue();
     }
-    // Two writes for the first flush (people, then counts). Nothing else for
-    // the rest of the minute. (The hourly prune is a DELETE and not counted.)
-    expect(calls.filter(isFlushWrite)).toHaveLength(2);
+    // One write for the whole minute. (The hourly prune is a DELETE and not
+    // counted.)
+    expect(calls.filter(isFlushWrite)).toHaveLength(1);
 
     now = T0 + HLS_VIEWER_FLUSH_INTERVAL_MS;
     counter.note(channelId, STARTED_AT, userId(1), "presence");
+    await counter.flushDue();
+    expect(calls.filter(isFlushWrite)).toHaveLength(2);
+
+    // Still watching a minute later. Concurrency is read at an instant
+    // HLS_VIEWER_EVAL_LAG_MS in the past, which all 300 now cover.
+    now = T0 + 2 * HLS_VIEWER_FLUSH_INTERVAL_MS;
+    for (let n = 1; n <= 300; n += 1) {
+      counter.note(channelId, STARTED_AT, userId(n), "presence");
+    }
     const [flushed] = await counter.flushDue();
-    expect(calls.filter(isFlushWrite)).toHaveLength(4);
+    expect(calls.filter(isFlushWrite)).toHaveLength(3);
     expect(flushed).toMatchObject({ liveViewers: 300, peakViewers: 300, uniqueViewers: 300 });
-    expect(counter.stats().flushes).toBe(2);
+    expect(counter.stats().flushes).toBe(3);
   });
 
   it("does not write at all for a minute with no sightings", async () => {
@@ -130,28 +140,30 @@ describeDb("watch party viewer counts", () => {
     const a = createHlsViewerCounter({ now: () => now });
     const b = createHlsViewerCounter({ now: () => now });
 
-    // HTTP is balanced per request, so viewers 1-50 land on A, 51-100 on B,
-    // and 41-60 hit both inside the same minute.
+    // HTTP is balanced per request, so viewers 1-60 land on A, 41-100 on B:
+    // 41-60 hit both.
     for (let n = 1; n <= 60; n += 1) {
       a.note(channelId, STARTED_AT, userId(n), "presence");
     }
     for (let n = 41; n <= 100; n += 1) {
       b.note(channelId, STARTED_AT, userId(n), "presence");
     }
-    await a.flushDue();
-    now = T0 + 20_000;
+    now = T0 + HLS_VIEWER_EVAL_LAG_MS + 10_000;
+    const [fromA] = await a.flushDue();
+    expect(fromA).toMatchObject({ liveViewers: 60, uniqueViewers: 60 });
+    now += 10_000;
     const [fromB] = await b.flushDue();
     expect(fromB).toMatchObject({ liveViewers: 100, peakViewers: 100, uniqueViewers: 100 });
 
-    // Next minute: half the room left. A flushes last this time, with only
-    // what it saw; B's earlier rows still inside the live window count too.
-    now = T0 + 2 * HLS_VIEWER_FLUSH_INTERVAL_MS + 30_000;
+    // Later: 51-100 left, 1-50 are still watching and all land on A.
+    now = T0 + 150_000;
     for (let n = 1; n <= 50; n += 1) {
       a.note(channelId, STARTED_AT, userId(n), "presence");
     }
-    await b.flushDue(); // nothing new on B: no write
-    const [fromA] = await a.flushDue();
-    expect(fromA).toMatchObject({ liveViewers: 50, peakViewers: 100, uniqueViewers: 100 });
+    now = T0 + 150_000 + HLS_VIEWER_EVAL_LAG_MS;
+    expect(await b.flushDue()).toEqual([]); // nothing new on B: no write
+    const [later] = await a.flushDue();
+    expect(later).toMatchObject({ liveViewers: 50, peakViewers: 100, uniqueViewers: 100 });
 
     const stats = await getPool().query<{ peak_viewers: number; unique_viewers: number }>(
       `SELECT peak_viewers, unique_viewers FROM hls_session_viewer_stats
@@ -164,23 +176,53 @@ describeDb("watch party viewer counts", () => {
     expect(minutes.map((row) => row.viewers)).toEqual([100, 50]);
   });
 
+  it("does not count people who watched one after the other as simultaneous", async () => {
+    // Farol on #799: a rolling "seen in the last two minutes" window would
+    // report a peak of 100 here. Fifty people watch for a minute and leave;
+    // a minute later fifty others arrive and watch for two.
+    let now = T0;
+    const counter = createHlsViewerCounter({ now: () => now });
+    for (let t = 0; t <= 400_000; t += 15_000) {
+      now = T0 + t;
+      if (t % 30_000 === 0) {
+        if (t <= 60_000) {
+          for (let n = 1; n <= 50; n += 1) {
+            counter.note(channelId, STARTED_AT, userId(n), "presence");
+          }
+        }
+        if (t >= 120_000 && t <= 240_000) {
+          for (let n = 51; n <= 100; n += 1) {
+            counter.note(channelId, STARTED_AT, userId(n), "presence");
+          }
+        }
+      }
+      await counter.flushDue();
+    }
+    const stats = await getPool().query<{ peak_viewers: number; unique_viewers: number }>(
+      `SELECT peak_viewers, unique_viewers FROM hls_session_viewer_stats
+        WHERE channel_id = $1 AND started_at_ms = $2`,
+      [channelId, STARTED_AT],
+    );
+    expect(stats.rows).toEqual([{ peak_viewers: 50, unique_viewers: 100 }]);
+  });
+
   it("keeps the higher reading of a minute when the other process flushes a lower one", async () => {
-    let now = T0 + 10_000;
+    let now = T0;
     const a = createHlsViewerCounter({ now: () => now });
     const b = createHlsViewerCounter({ now: () => now });
     for (let n = 1; n <= 30; n += 1) {
       a.note(channelId, STARTED_AT, userId(n), "presence");
     }
+    now = T0 + HLS_VIEWER_EVAL_LAG_MS + 10_000;
     await a.flushDue();
-    // B flushes later in the same minute, after most of A's viewers aged out
-    // of the live window.
-    now = T0 + 10_000 + 2_000;
+    // B flushes later in the same evaluated minute with a lower reading.
     b.note(channelId, STARTED_AT, userId(99), "presence");
     await getPool().query(
       `UPDATE hls_session_viewers SET last_seen_at = last_seen_at - interval '10 minutes'
         WHERE user_id <> $1`,
       [userId(99)],
     );
+    now += 5_000;
     await b.flushDue();
     const minutes = await hlsViewerMinutes(channelId, STARTED_AT);
     expect(minutes).toHaveLength(1);
@@ -193,10 +235,13 @@ describeDb("watch party viewer counts", () => {
        VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW(), '720p30')`,
       [channelId, `live/${channelId}/${STARTED_AT}-720p30`, STARTED_AT],
     );
-    const counter = createHlsViewerCounter();
+    // Real wall clock: the admin read compares against the database's NOW().
+    let now = Date.now() - HLS_VIEWER_EVAL_LAG_MS - 10_000;
+    const counter = createHlsViewerCounter({ now: () => now });
     for (let n = 1; n <= 7; n += 1) {
       counter.note(channelId, STARTED_AT, userId(n), "presence");
     }
+    now += HLS_VIEWER_EVAL_LAG_MS + 10_000;
     await counter.flushDue();
 
     const history = await listWatchPartyHistory(channelId, 10);
@@ -227,7 +272,7 @@ describeDb("watch party viewer counts", () => {
     expect(history[0]!.viewers).toBeNull();
   });
 
-  it("keeps a failed flush's sightings for the next minute and asks the database once a minute", async () => {
+  it("keeps a failed flush's sightings through a long outage and asks the database once a minute", async () => {
     let now = T0;
     let fail = true;
     const query = vi.fn((text: string, values?: unknown[]) =>
@@ -246,10 +291,22 @@ describeDb("watch party viewer counts", () => {
     expect(flushWrites()).toBe(1);
     expect(counter.stats().flushFailures).toBe(1);
 
+    // A ten-minute outage, well past the live window: the sighting is kept
+    // and the broadcast keeps its slot, not stranded or forgotten.
+    for (let minute = 1; minute <= 10; minute += 1) {
+      now = T0 + minute * HLS_VIEWER_FLUSH_INTERVAL_MS;
+      await counter.flushDue();
+    }
+    expect(counter.stats()).toMatchObject({ trackedSessions: 1, flushFailures: 11 });
+
     fail = false;
-    now = T0 + HLS_VIEWER_FLUSH_INTERVAL_MS;
+    now = T0 + 11 * HLS_VIEWER_FLUSH_INTERVAL_MS;
     const [flushed] = await counter.flushDue();
     expect(flushed).toMatchObject({ uniqueViewers: 1 });
+    // Stored now, so it can be let go once it ages out.
+    now += HLS_VIEWER_FLUSH_INTERVAL_MS;
+    await counter.flushDue();
+    expect(counter.stats().trackedSessions).toBe(0);
   });
 
   it("refuses sightings that are not a real (channel, broadcast, account)", async () => {
