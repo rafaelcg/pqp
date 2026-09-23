@@ -1387,19 +1387,30 @@ async function endSupersededSessions(
   if (!active) {
     return;
   }
-  for (const info of active) {
-    if (info.roomName !== channelId || keepEgressIds.has(info.egressId)) {
-      continue;
-    }
-    const stopped = await stopEgressById(info.egressId, channelId);
-    if (stopped) {
-      logEvent("voice.hlsSupersededEgressStopped", {
-        channelId,
-        egressId: info.egressId,
-        keepStartedAt,
-      });
-    }
-  }
+  // PARALLEL, NOT A FOR-AWAIT LOOP. Each `stopEgressById` is its own bounded
+  // RPC (see `EGRESS_REQUEST_TIMEOUT_SECONDS` in `getEgress`); a channel can
+  // be superseding more than one leftover rung, and stopping them one at a
+  // time meant N leftovers cost N sequential waits on the SFU before this
+  // resolved. `startRoom` runs this alongside `waitForLivePlaylist`, so the
+  // wall time this function takes rides directly on top of the new
+  // session's time-to-first-playlist -- the "conventional ladder start took
+  // 7.6-10.9s" measurement (2026-09-23) this exists to shrink.
+  await Promise.all(
+    active
+      .filter(
+        (info) => info.roomName === channelId && !keepEgressIds.has(info.egressId),
+      )
+      .map(async (info) => {
+        const stopped = await stopEgressById(info.egressId, channelId);
+        if (stopped) {
+          logEvent("voice.hlsSupersededEgressStopped", {
+            channelId,
+            egressId: info.egressId,
+            keepStartedAt,
+          });
+        }
+      }),
+  );
 }
 
 function liveHlsStorage(): {
@@ -3553,6 +3564,21 @@ function liveKitHttpUrl(): string {
   return url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
 }
 
+/**
+ * Bound on every Egress RPC (`startTrackCompositeEgress`, `startTrackEgress`,
+ * `stopEgress`, `listEgress`).
+ *
+ * `livekit-server-sdk`'s Twirp client defaults `requestTimeout` to 10 SECONDS
+ * and, since `sfu.pqp.gg` is not LiveKit Cloud, never fails over -- so with
+ * no override a single stuck call rode the SDK's full 10s window. Egress
+ * RPCs route over Redis (psrpc) to the egress worker rather than being
+ * answered in-process by the LiveKit server, which is the extra hop
+ * `stopEgress` timeouts (2026-09-23, 18:28:22, 20:13:14-27, 21:24:06-11) sat
+ * in. See `REQUEST_TIMEOUT_SECONDS` in `admin.ts` for the matching bound on
+ * RoomService calls and why 5s.
+ */
+const EGRESS_REQUEST_TIMEOUT_SECONDS = 5;
+
 function getEgress(): LiveHlsEgressApi | null {
   if (injectedEgress) {
     return injectedEgress;
@@ -3564,6 +3590,7 @@ function getEgress(): LiveHlsEgressApi | null {
     liveKitHttpUrl(),
     process.env.LIVEKIT_API_KEY,
     process.env.LIVEKIT_API_SECRET,
+    { requestTimeout: EGRESS_REQUEST_TIMEOUT_SECONDS },
   );
   return {
     startTrackCompositeEgress: async (roomName, output, opts) => {
@@ -5164,89 +5191,100 @@ async function stopRungs(
   // moments ago still carries `reopen`, and replaying it after this teardown
   // would clear the `ended_at` that retention needs.
   forgetPendingHlsSessionClaims(entries.map((entry) => entry.sessionId));
-  for (const entry of entries) {
-    if (ownedElsewhere === null && entry.sessionId) {
-      // COULD NOT ASK IS NOT PERMISSION, HERE EITHER. Stopping on a failed
-      // lookup is how one machine hangs up the other machine's stream during
-      // an ordinary database blip. But a handler we never stop is pitfall 15's
-      // leak, and this room is about to leave `rooms`, so nothing else would
-      // ever look at it again: the id is parked and the monitor tick retries
-      // it until ownership is knowable.
-      deferredStops.set(entry.egressId, {
-        channelId,
-        sessionId: entry.sessionId,
-        rung: entry.rung.name,
-        queuedAt: Date.now(),
-        attempts: 0,
-      });
-      // COALESCED PER EGRESS ID ALREADY: the queue is a Map keyed by it, so a
-      // room torn down twice is one entry, not two. Past the cap the oldest
-      // entry is given up on -- memory has to be bounded somewhere -- but it
-      // is given up on LOUDLY, under its own event, because what is being
-      // dropped is a transcode that may still be running on the media box and
-      // now has nothing tracking it. `voice.hlsStopAbandoned` is the line to
-      // alert on: unlike the attempt cap, nothing here has even been tried.
-      while (deferredStops.size > DEFERRED_STOP_MAX_ENTRIES) {
-        const [oldest] = deferredStops.keys();
-        if (!oldest) {
-          break;
-        }
-        const dropped = deferredStops.get(oldest);
-        deferredStops.delete(oldest);
-        logEvent("voice.hlsStopAbandoned", {
-          channelId: dropped?.channelId ?? null,
-          egressId: oldest,
-          sessionId: dropped?.sessionId ?? null,
-          rung: dropped?.rung ?? null,
-          attempts: dropped?.attempts ?? 0,
-          reason: "queue-full",
-          queued: deferredStops.size,
+  // PARALLEL, NOT A FOR-AWAIT LOOP. Each `stopEgress` is its own bounded RPC
+  // (`EGRESS_REQUEST_TIMEOUT_SECONDS`), and a ladder is 1-3 rungs: stopping
+  // them one at a time meant a 3-rung stop cost up to 3x one call's worst
+  // case, entirely inside a channel's serialised `reconcileQueue`, so the
+  // NEXT reconcile for that channel (a restart, a presenter switching) queued
+  // behind all of it. `stopped` / `deferredStops` are mutated from async
+  // callbacks that never themselves await concurrently with each other
+  // mid-mutation (JS has no preemption between awaits), so this is safe with
+  // no lock.
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (ownedElsewhere === null && entry.sessionId) {
+        // COULD NOT ASK IS NOT PERMISSION, HERE EITHER. Stopping on a failed
+        // lookup is how one machine hangs up the other machine's stream during
+        // an ordinary database blip. But a handler we never stop is pitfall 15's
+        // leak, and this room is about to leave `rooms`, so nothing else would
+        // ever look at it again: the id is parked and the monitor tick retries
+        // it until ownership is knowable.
+        deferredStops.set(entry.egressId, {
+          channelId,
+          sessionId: entry.sessionId,
+          rung: entry.rung.name,
+          queuedAt: Date.now(),
+          attempts: 0,
         });
-      }
-      logEvent("voice.hlsStopDeferred", {
-        channelId,
-        egressId: entry.egressId,
-        sessionId: entry.sessionId,
-        rung: entry.rung.name,
-        reason: "owner-lookup-failed",
-        pending: deferredStops.size,
-      });
-      continue;
-    }
-    if (entry.sessionId && ownedElsewhere?.has(entry.sessionId)) {
-      noteHlsSkippedOwnedElsewhere({
-        site: "stop-rungs",
-        channelId,
-        egressId: entry.egressId,
-        sessionId: entry.sessionId,
-      });
-      continue;
-    }
-    deferredStops.delete(entry.egressId);
-    try {
-      await egress.stopEgress(entry.egressId);
-      stopped.add(entry.egressId);
-    } catch (error) {
-      if (egressAlreadyStopped(error)) {
-        stopped.add(entry.egressId);
-      }
-      // An egress LiveKit says has already finished is not a failed stop: see
-      // `egressAlreadyStopped`. Three of these on one ordinary teardown is
-      // what 2026-09-17's log opened with, and every one of them was fine.
-      logEvent(
-        egressAlreadyStopped(error)
-          ? "voice.hlsStopNoop"
-          : "voice.hlsStopFailed",
-        {
+        // COALESCED PER EGRESS ID ALREADY: the queue is a Map keyed by it, so a
+        // room torn down twice is one entry, not two. Past the cap the oldest
+        // entry is given up on -- memory has to be bounded somewhere -- but it
+        // is given up on LOUDLY, under its own event, because what is being
+        // dropped is a transcode that may still be running on the media box and
+        // now has nothing tracking it. `voice.hlsStopAbandoned` is the line to
+        // alert on: unlike the attempt cap, nothing here has even been tried.
+        while (deferredStops.size > DEFERRED_STOP_MAX_ENTRIES) {
+          const [oldest] = deferredStops.keys();
+          if (!oldest) {
+            break;
+          }
+          const dropped = deferredStops.get(oldest);
+          deferredStops.delete(oldest);
+          logEvent("voice.hlsStopAbandoned", {
+            channelId: dropped?.channelId ?? null,
+            egressId: oldest,
+            sessionId: dropped?.sessionId ?? null,
+            rung: dropped?.rung ?? null,
+            attempts: dropped?.attempts ?? 0,
+            reason: "queue-full",
+            queued: deferredStops.size,
+          });
+        }
+        logEvent("voice.hlsStopDeferred", {
           channelId,
           egressId: entry.egressId,
           sessionId: entry.sessionId,
           rung: entry.rung.name,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
-  }
+          reason: "owner-lookup-failed",
+          pending: deferredStops.size,
+        });
+        return;
+      }
+      if (entry.sessionId && ownedElsewhere?.has(entry.sessionId)) {
+        noteHlsSkippedOwnedElsewhere({
+          site: "stop-rungs",
+          channelId,
+          egressId: entry.egressId,
+          sessionId: entry.sessionId,
+        });
+        return;
+      }
+      deferredStops.delete(entry.egressId);
+      try {
+        await egress.stopEgress(entry.egressId);
+        stopped.add(entry.egressId);
+      } catch (error) {
+        if (egressAlreadyStopped(error)) {
+          stopped.add(entry.egressId);
+        }
+        // An egress LiveKit says has already finished is not a failed stop: see
+        // `egressAlreadyStopped`. Three of these on one ordinary teardown is
+        // what 2026-09-17's log opened with, and every one of them was fine.
+        logEvent(
+          egressAlreadyStopped(error)
+            ? "voice.hlsStopNoop"
+            : "voice.hlsStopFailed",
+          {
+            channelId,
+            egressId: entry.egressId,
+            sessionId: entry.sessionId,
+            rung: entry.rung.name,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+    }),
+  );
   return stopped;
 }
 
@@ -5931,27 +5969,43 @@ async function startRoom(
   running.forEach((entry, i) => {
     entry.sessionId = recordedSessions[i]?.sessionId ?? null;
   });
-  await endSupersededSessions(
-    channelId,
-    startedAt,
-    new Set(running.map((entry) => entry.egressId)),
-  );
-  // AFTER `endSupersededSessions`, or the sweep of "every active egress on
-  // this room that is not one of the ids I just started" would stop the
-  // archive one line after starting it. Usually a no-op on this pass: the
-  // browser publishes the archive track only once the mix is up, which is
-  // after the share, which is what got us here. The monitor picks it up.
-  if (micArchiveEnabled() && tracks.micArchiveTrackId) {
-    await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
-  }
   // The readiness probe reads the bucket itself (presigned, endpoint form),
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the
   // PRIMARY rung, because that is the one a viewer is guaranteed to land on.
+  //
+  // RUN ALONGSIDE THE READINESS PROBE, NOT BEFORE IT. Neither superseded-
+  // session cleanup nor the mic archive proves the film is ready -- same
+  // reasoning as the comment on the returned camera track below: a LiveKit
+  // control-plane call that is slow must never be the reason a presenter
+  // waits longer to go live. Production evidence, 2026-09-23: `stopEgress`
+  // timed out at 18:28:22, 20:13:14-27 and 21:24:06-11, and conventional
+  // ladder start measured 7.6-10.9s from share to first playlist -- with
+  // this awaited serially beforehand, one slow superseded stop landed
+  // entirely in front of the readiness timer instead of overlapping it.
+  // `startMicArchive` still runs strictly AFTER `endSupersededSessions`
+  // resolves (nested here, not parallel with it): the sweep of "every
+  // active egress on this room that is not one of the ids I just started"
+  // would otherwise stop the archive one line after starting it. Usually a
+  // no-op on this pass: the browser publishes the archive track only once
+  // the mix is up, which is after the share, which is what got us here. The
+  // monitor picks it up.
   const waitStartedAt = Date.now();
-  const ready = await waitForLivePlaylist(
-    internalPlaylistUrl(channelId, startedAt, primary.rung.name),
-  );
+  const [ready] = await Promise.all([
+    waitForLivePlaylist(
+      internalPlaylistUrl(channelId, startedAt, primary.rung.name),
+    ),
+    (async () => {
+      await endSupersededSessions(
+        channelId,
+        startedAt,
+        new Set(running.map((entry) => entry.egressId)),
+      );
+      if (micArchiveEnabled() && tracks.micArchiveTrackId) {
+        await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+      }
+    })(),
+  ]);
   hlsStartsTotal += 1;
   logEvent("voice.hlsStarted", {
     channelId,

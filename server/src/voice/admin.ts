@@ -66,6 +66,27 @@ interface LiveKitConfig {
   apiSecret: string;
 }
 
+/**
+ * Bound on every RoomService RPC (`listRooms`, `listParticipants`,
+ * `removeParticipant`, `mutePublishedTrack`, `updateParticipant`).
+ *
+ * WHY 5s AND NOT THE SDK DEFAULT. `livekit-server-sdk`'s Twirp client
+ * (`TwirpRpc`, `dist/TwirpRPC.js`) defaults `requestTimeout` to 10 SECONDS per
+ * call, and — because `sfu.pqp.gg` is not a `*.livekit.cloud` host —
+ * `failoverAttempts` is 1, so that single attempt really does get the full
+ * 10s before the SDK itself gives up. Production evidence from 2026-09-23: a
+ * `listRooms` from the API to the SFU took ~2.5s at 18:32-18:41 while the SFU
+ * box measured 7-9% CPU, i.e. genuinely slow, not merely un-awaited — and
+ * every caller of `getRoomService()` up to that point had NO client-side
+ * bound at all beyond the SDK's own 10s, so a slow RPC could sit on the
+ * connection for the SDK's full window before this process moved on. 5s
+ * keeps a real recovery window (measured healthy round trips are 350-450ms)
+ * while capping the worst case at half the SDK default, and matches the
+ * 3s-order-of-magnitude timeouts `ready.ts` and `sfu-stats.ts` already use
+ * for the same box.
+ */
+const REQUEST_TIMEOUT_SECONDS = 5;
+
 function liveKitConfig(): LiveKitConfig | null {
   if (!isLiveKitConfigured()) {
     return null;
@@ -96,7 +117,9 @@ function getRoomService(): RoomServiceClient | null {
     // between the URL the client dials and the one we administer.
     cached = {
       key,
-      client: new RoomServiceClient(config.url, config.apiKey, config.apiSecret),
+      client: new RoomServiceClient(config.url, config.apiKey, config.apiSecret, {
+        requestTimeout: REQUEST_TIMEOUT_SECONDS,
+      }),
     };
   }
   return cached.client;

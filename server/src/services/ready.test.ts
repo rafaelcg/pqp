@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PoolStats } from "../lib/runtime.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
@@ -353,5 +353,81 @@ describeDb("checkReady against a real pool", () => {
     } finally {
       await closePool();
     }
+  });
+});
+
+/**
+ * Before this, `/ready`'s own `probeLivekit` called `pingSfu()` -- its own
+ * `listRooms`, on its own 30s cache -- entirely separately from the reader
+ * `sfu-stats.ts` already keeps for the admin dashboard and `/status.json`
+ * (10s cache, shared in-flight probe). Two independent probes meant two
+ * `listRooms` calls against the SFU could be in flight at once for no
+ * reason, exactly the redundant control-plane load the 2026-09-23 latency
+ * review flagged. `checkReady()` now goes through `readSfuStats()`, so this
+ * proves it shares that one cache rather than driving its own.
+ */
+describe("checkReady's livekit probe reuses sfu-stats' reader", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    vi.doUnmock("../voice/admin.js");
+    vi.resetModules();
+  });
+
+  it("shares sfu-stats' cache instead of calling listRooms on its own schedule", async () => {
+    vi.resetModules();
+    process.env.LIVEKIT_URL = "wss://fake.sfu.test";
+    process.env.LIVEKIT_API_KEY = "test-key";
+    process.env.LIVEKIT_API_SECRET = "test-secret";
+    delete process.env.DATABASE_URL;
+    delete process.env.S3_ENDPOINT;
+    let listRoomsCalls = 0;
+    vi.doMock("../voice/admin.js", () => ({
+      listSfuRooms: async () => {
+        listRoomsCalls += 1;
+        return [];
+      },
+      pingSfu: async () => {
+        listRoomsCalls += 1;
+      },
+    }));
+    const { checkReady } = await import("./ready.js");
+    const { resetSfuStats } = await import("../voice/sfu-stats.js");
+    resetSfuStats();
+
+    const first = await checkReady();
+    expect(first.checks.livekit.ok).toBe(true);
+    expect(listRoomsCalls).toBe(1);
+
+    // A second `/ready` check immediately after reads the same cache
+    // `sfu-stats.ts` keeps -- not a second `listRooms` call.
+    const second = await checkReady();
+    expect(second.checks.livekit.ok).toBe(true);
+    expect(listRoomsCalls).toBe(1);
+  });
+
+  it("reports not ok when the SFU is unreachable, without throwing", async () => {
+    vi.resetModules();
+    process.env.LIVEKIT_URL = "wss://fake.sfu.test";
+    process.env.LIVEKIT_API_KEY = "test-key";
+    process.env.LIVEKIT_API_SECRET = "test-secret";
+    delete process.env.DATABASE_URL;
+    delete process.env.S3_ENDPOINT;
+    vi.doMock("../voice/admin.js", () => ({
+      listSfuRooms: async () => {
+        throw new Error("connection refused");
+      },
+      pingSfu: async () => {
+        throw new Error("connection refused");
+      },
+    }));
+    const { checkReady } = await import("./ready.js");
+    const { resetSfuStats } = await import("../voice/sfu-stats.js");
+    resetSfuStats();
+
+    const report = await checkReady();
+    expect(report.checks.livekit.ok).toBe(false);
+    expect(report.ok).toBe(false);
   });
 });
