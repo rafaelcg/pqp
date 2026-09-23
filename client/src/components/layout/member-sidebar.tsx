@@ -726,7 +726,12 @@ export function MemberSidebar({
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
+        {/* `relative`: the scroller is the containing block for anything
+            absolutely positioned inside it. Without it the `sr-only` label
+            on every rank mark escaped this clip, sat below the window for a
+            long roster, and gave the app shell height to scroll into
+            (e2e/app-shell-scroll.spec.ts). */}
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
           {error && (
             <p role="alert" className="px-1 pb-2 text-xs text-danger">
               {error}

@@ -22,6 +22,7 @@ import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
+import { useAppShellDocument } from "@/lib/app-shell-document";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   WATCH_PARTY_MAX_GUESTS,
@@ -558,6 +559,7 @@ interface AppProps {
 
 export function App({ devBypass = false }: AppProps) {
   const { t } = useTranslation();
+  useAppShellDocument();
 
   // One tooltip group for the whole shell, so hovering the second icon in a
   // control bar answers instantly instead of waiting its own delay again.
@@ -8979,7 +8981,9 @@ function MainAppContent({
         })
       }
     >
-    <div className="animate-fade-in relative flex h-full overflow-hidden">
+    {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
+        still a scroll container that script can move, and it was moved. */}
+    <div className="app-shell animate-fade-in relative flex h-full">
       {/* Mounted at the root so remote audio keeps playing when you navigate
           away from the voice channel. */}
       <VoiceAudioSinks

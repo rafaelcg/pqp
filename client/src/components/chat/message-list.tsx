@@ -98,6 +98,7 @@ import {
 import { formatReactionWho } from "@/lib/reaction-who";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
+import { scrollWithin } from "@/lib/scroll-within";
 import {
   cn,
   formatDayLabel,
@@ -680,11 +681,13 @@ export function MessageList({
       }
       setActiveMessageId(nextId);
       const node = rowNodes.current.get(nextId);
-      node?.focus();
-      node?.scrollIntoView({
-        behavior: prefersReducedMotion ? "auto" : "smooth",
-        block: "nearest",
-      });
+      node?.focus({ preventScroll: true });
+      if (node && scrollRef.current) {
+        scrollWithin(scrollRef.current, node, {
+          behavior: prefersReducedMotion ? "auto" : "smooth",
+          block: "nearest",
+        });
+      }
     },
     [rowIds, prefersReducedMotion],
   );
@@ -732,10 +735,11 @@ export function MessageList({
    */
   const focusRow = useCallback((messageId: string): boolean => {
     const node = rowNodes.current.get(messageId);
-    if (!node) {
+    const container = scrollRef.current;
+    if (!node || !container) {
       return false;
     }
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollWithin(container, node, { behavior: "smooth", block: "center" });
     setFlashId(messageId);
     if (flashTimer.current) {
       window.clearTimeout(flashTimer.current);
@@ -977,13 +981,20 @@ export function MessageList({
           }
           unreadLandedRef.current = key;
           setIsPinned(false);
-          later.scrollIntoView({ block: "center", behavior: "auto" });
+          if (scrollRef.current) {
+            scrollWithin(scrollRef.current, later, { block: "center" });
+          }
         });
         return () => cancelAnimationFrame(frame);
       }
       unreadLandedRef.current = key;
       setIsPinned(false);
-      node.scrollIntoView({ block: "center", behavior: "auto" });
+      // The transcript, never `scrollIntoView`: a divider a few rows from the
+      // end cannot be centred, and `scrollIntoView` hands the shortfall to
+      // every scrollable ancestor, the app shell included (lib/scroll-within).
+      if (scrollRef.current) {
+        scrollWithin(scrollRef.current, node, { block: "center" });
+      }
       return;
     }
     unreadLandedRef.current = key;
@@ -1017,10 +1028,13 @@ export function MessageList({
     setEditingId(editMessageId);
     setActiveMessageId(editMessageId);
     requestAnimationFrame(() => {
-      rowNodes.current.get(editMessageId)?.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
+      const node = rowNodes.current.get(editMessageId);
+      if (node && scrollRef.current) {
+        scrollWithin(scrollRef.current, node, {
+          block: "center",
+          behavior: "smooth",
+        });
+      }
     });
     onEditMessageHandled?.();
   }, [editMessageId, messages, onEditMessageHandled]);

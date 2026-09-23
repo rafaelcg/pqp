@@ -47,7 +47,10 @@ export function RankMarks({
           <span
             key={mark}
             className={cn(
-              "inline-flex shrink-0 items-center",
+              // `relative` holds the `sr-only` label below: it is absolutely
+              // positioned, and with no positioned ancestor inside the list
+              // it sits in, it escapes that list's scroll clip.
+              "relative inline-flex shrink-0 items-center",
               card ? "text-signal" : "text-paper-muted",
               className,
             )}
