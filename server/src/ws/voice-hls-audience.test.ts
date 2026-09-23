@@ -162,6 +162,7 @@ const {
   getVoiceActivitySnapshot,
   handleVoiceMessage,
   HLS_VIEWER_TOKEN_REMINT_MS,
+  setCameraFollowUpDelaysForTests,
   removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
@@ -317,6 +318,43 @@ describe("HLS start reads the stage gate", () => {
     const starts = egress.calls.filter(([, presenter]) => presenter !== null);
     expect(starts).toEqual([[CINEMA, peerId, SERVER]]);
     expect(egress.streams.get(CINEMA)?.presenterPeerId).toBe(peerId);
+  });
+
+  it("a camera turned on after going live is reconciled again once it has had time to publish", async () => {
+    // Every client announces set-camera BEFORE publishing the track, so the
+    // reconcile that frame triggers finds no camera on the SFU. Without the
+    // follow-ups nothing asks again until an unrelated roster event, which a
+    // presenter alone on stage never produces.
+    setCameraFollowUpDelaysForTests([10, 20, 30]);
+    try {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      await handleVoiceMessage(
+        { socket: host.socket, user: asUser("host") },
+        { type: "set-camera", streamId: "cam-1" },
+      );
+      await settle();
+      const afterAnnounce = egress.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await settle();
+      expect(egress.calls.length - afterAnnounce).toBe(3);
+      expect(egress.calls.slice(afterAnnounce).every(([ch]) => ch === CINEMA)).toBe(true);
+
+      // Turning it off schedules nothing extra.
+      const beforeOff = egress.calls.length;
+      await handleVoiceMessage(
+        { socket: host.socket, user: asUser("host") },
+        { type: "set-camera", streamId: null },
+      );
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await settle();
+      expect(egress.calls.length - beforeOff).toBe(1);
+    } finally {
+      setCameraFollowUpDelaysForTests();
+    }
   });
 
   /**
