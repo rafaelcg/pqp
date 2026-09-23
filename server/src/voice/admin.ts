@@ -1,4 +1,11 @@
-import { RoomServiceClient, TrackSource, TrackType, type Room } from "livekit-server-sdk";
+import {
+  RoomServiceClient,
+  TrackSource,
+  TrackType,
+  type ParticipantInfo,
+  type Room,
+  type UpdateParticipantOptions,
+} from "livekit-server-sdk";
 import { z } from "zod";
 import { logEvent } from "../lib/log.js";
 import {
@@ -15,6 +22,7 @@ import {
   isVoiceRegistryEnabled,
   upsertVoiceResweep,
 } from "./registry.js";
+import { sfuRegions } from "./regions.js";
 
 /**
  * LiveKit room administration — the SFU half of voice eviction.
@@ -102,42 +110,191 @@ function liveKitConfig(): LiveKitConfig | null {
  * Cached per credential set rather than per process: env is read at call time
  * (not at import time) so a deployment that gains LiveKit config on restart —
  * and a test that sets it mid-run — both pick it up without a stale client.
+ * Keyed, because with SFU regions there is one client per box.
  */
-let cached: { key: string; client: RoomServiceClient } | null = null;
+const clients = new Map<string, RoomServiceClient>();
 
-function getRoomService(): RoomServiceClient | null {
-  const config = liveKitConfig();
-  if (!config) {
-    return null;
-  }
+function clientFor(config: LiveKitConfig): RoomServiceClient {
   const key = [config.url, config.apiKey, config.apiSecret].join("\u0000");
-  if (!cached || cached.key !== key) {
+  let client = clients.get(key);
+  if (!client) {
     // RoomServiceClient rewrites a ws(s):// host to http(s):// itself, so
     // LIVEKIT_URL is handed over unchanged — no second env var, no drift
     // between the URL the client dials and the one we administer.
-    cached = {
-      key,
-      client: new RoomServiceClient(config.url, config.apiKey, config.apiSecret, {
-        requestTimeout: REQUEST_TIMEOUT_SECONDS,
-      }),
-    };
+    client = new RoomServiceClient(config.url, config.apiKey, config.apiSecret, {
+      requestTimeout: REQUEST_TIMEOUT_SECONDS,
+    });
+    clients.set(key, client);
   }
-  return cached.client;
+  return client;
+}
+
+/** The subset of `RoomServiceClient` moderation uses. */
+type SfuRoomService = Pick<
+  RoomServiceClient,
+  "listRooms" | "listParticipants" | "removeParticipant" | "mutePublishedTrack"
+> & {
+  /** The options form only; the positional overload is not used here. */
+  updateParticipant(
+    room: string,
+    identity: string,
+    options: UpdateParticipantOptions,
+  ): Promise<ParticipantInfo>;
+};
+
+/**
+ * The HOME box's client: the one `LIVEKIT_URL` names. `pingSfu`,
+ * `listSfuRooms` and everything watch-party-shaped only ever mean this one.
+ */
+function getHomeRoomService(): RoomServiceClient | null {
+  const config = liveKitConfig();
+  return config ? clientFor(config) : null;
+}
+
+/**
+ * The client moderation talks through.
+ *
+ * Single-region mode: the home client itself, so every call is exactly the
+ * call it was before regions existed.
+ *
+ * With `LIVEKIT_REGIONS` set, a client that asks EVERY box. Moderation is the
+ * one place a region lookup is not good enough: a banned account's LiveKit
+ * connection outlives its WebSocket, and so the process's own region pin
+ * (dropped when the last WS peer leaves), so "which box is this room on" has
+ * no answer this process can trust at the moment it matters. The boxes
+ * themselves are the authority, as the room already was for "who is in it"
+ * (see WHY THE SWEEP IS UNCONDITIONAL above). A room lives on one box, so the
+ * others answer an empty list or not-found and cost one call each.
+ */
+function getRoomService(): SfuRoomService | null {
+  const regions = sfuRegions();
+  if (!regions) {
+    return getHomeRoomService();
+  }
+  return fanOutRoomService(
+    regions.map((region) => ({ id: region.id, client: clientFor(region) })),
+  );
+}
+
+/**
+ * Which box answered for a participant, so the write that follows a listing
+ * (remove, mute, update) goes to that box alone. Bounded: a write whose
+ * listing was forgotten simply asks every box.
+ */
+const participantBox = new Map<string, RoomServiceClient>();
+const PARTICIPANT_BOX_LIMIT = 10_000;
+
+function participantKey(room: string, identity: string): string {
+  return `${room}\u0000${identity}`;
+}
+
+async function firstThatAnswers<T>(
+  boxes: readonly { id: string; client: RoomServiceClient }[],
+  room: string,
+  identity: string,
+  call: (client: RoomServiceClient) => Promise<T>,
+): Promise<T> {
+  const known = participantBox.get(participantKey(room, identity));
+  if (known) {
+    return call(known);
+  }
+  const results = await Promise.allSettled(boxes.map((box) => call(box.client)));
+  const answered = results.find(
+    (result): result is PromiseFulfilledResult<Awaited<T>> =>
+      result.status === "fulfilled",
+  );
+  if (answered) {
+    return answered.value;
+  }
+  throw (results[0] as PromiseRejectedResult).reason;
+}
+
+function fanOutRoomService(
+  boxes: readonly { id: string; client: RoomServiceClient }[],
+): SfuRoomService {
+  return {
+    async listRooms(names?: string[]) {
+      const results = await Promise.allSettled(
+        boxes.map((box) => box.client.listRooms(names)),
+      );
+      const rooms: Room[] = [];
+      let failed: unknown = null;
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          rooms.push(...result.value);
+        } else {
+          failed ??= result.reason;
+          logEvent("voice.sfuRegionCallFailed", {
+            region: boxes[index]!.id,
+            stage: "listRooms",
+            error: describeError(result.reason),
+          });
+        }
+      });
+      if (failed !== null && results.every((result) => result.status === "rejected")) {
+        throw failed;
+      }
+      return rooms;
+    },
+    async listParticipants(room: string) {
+      const results = await Promise.allSettled(
+        boxes.map((box) => box.client.listParticipants(room)),
+      );
+      const participants: Awaited<ReturnType<RoomServiceClient["listParticipants"]>> = [];
+      results.forEach((result, index) => {
+        if (result.status !== "fulfilled") {
+          // Not-found on the boxes that do not hold the room is the ordinary
+          // case, so a rejection here is only an error when NO box answered.
+          return;
+        }
+        for (const participant of result.value) {
+          if (participantBox.size >= PARTICIPANT_BOX_LIMIT) {
+            participantBox.clear();
+          }
+          participantBox.set(
+            participantKey(room, participant.identity),
+            boxes[index]!.client,
+          );
+          participants.push(participant);
+        }
+      });
+      if (results.every((result) => result.status === "rejected")) {
+        throw (results[0] as PromiseRejectedResult).reason;
+      }
+      return participants;
+    },
+    removeParticipant(room, identity, options) {
+      return firstThatAnswers(boxes, room, identity, (client) =>
+        client.removeParticipant(room, identity, options),
+      );
+    },
+    mutePublishedTrack(room, identity, trackSid, muted) {
+      return firstThatAnswers(boxes, room, identity, (client) =>
+        client.mutePublishedTrack(room, identity, trackSid, muted),
+      );
+    },
+    updateParticipant(room, identity, options) {
+      return firstThatAnswers(boxes, room, identity, (client) =>
+        client.updateParticipant(room, identity, options),
+      );
+    },
+  };
 }
 
 /** Drop the cached admin client. Tests use this after changing LiveKit env. */
 export function resetSfuAdminClient(): void {
-  cached = null;
+  clients.clear();
+  participantBox.clear();
 }
 
 /**
  * The cheapest authenticated round-trip the SFU offers: `listRooms`. Resolves
  * when it answered, rejects when it did not or when LiveKit is not
  * configured. `services/ready.ts` owns the timeout and the cache; this is
- * deliberately just the call.
+ * deliberately just the call. The HOME box: see `pingSfuRegion` for the rest.
  */
 export async function pingSfu(): Promise<void> {
-  const client = getRoomService();
+  const client = getHomeRoomService();
   if (!client) {
     throw new Error("LiveKit is not configured");
   }
@@ -148,14 +305,28 @@ export async function pingSfu(): Promise<void> {
  * Every room the SFU currently holds, for the operator dashboard's counts
  * (`voice/sfu-stats.ts`). Same call as `pingSfu`, with the answer kept.
  * Rejects when LiveKit is not configured or the SFU did not answer; the
- * caller owns the timeout and the cache.
+ * caller owns the timeout and the cache. The HOME box only.
  */
 export async function listSfuRooms(): Promise<Room[]> {
-  const client = getRoomService();
+  const client = getHomeRoomService();
   if (!client) {
     throw new Error("LiveKit is not configured");
   }
   return client.listRooms();
+}
+
+/** `listSfuRooms` against one configured region. Rejects for an unknown id. */
+export async function listSfuRoomsInRegion(regionId: string): Promise<Room[]> {
+  const region = sfuRegions()?.find((candidate) => candidate.id === regionId);
+  if (!region) {
+    throw new Error(`SFU region ${regionId} is not configured`);
+  }
+  return clientFor(region).listRooms();
+}
+
+/** `pingSfu` against one configured region, for `/ready`. */
+export async function pingSfuRegion(regionId: string): Promise<void> {
+  await listSfuRoomsInRegion(regionId);
 }
 
 function describeError(error: unknown): string {
@@ -314,7 +485,7 @@ function specFrom(
 
 /** One pass of the sweep `spec` describes. See the three `evictSfu*` entry points for what each selects. */
 function runSweep(
-  client: RoomServiceClient,
+  client: SfuRoomService,
   spec: ResweepSpec,
   pass: SweepPass,
   evictedAt: number,
@@ -343,7 +514,7 @@ function runSweep(
 }
 
 async function sweepUserRooms(
-  client: RoomServiceClient,
+  client: SfuRoomService,
   spec: Extract<ResweepSpec, { kind: "user" }>,
   pass: SweepPass,
   evictedAt: number,
@@ -539,7 +710,7 @@ export function stopSfuResweeps(): void {
  * survive a rolling deploy. New tokens always carry the user id.
  */
 async function sweepRoom(
-  client: RoomServiceClient,
+  client: SfuRoomService,
   room: string,
   reason: string,
   knownIdentities: ReadonlyMap<string, string>,
@@ -623,7 +794,7 @@ async function sweepRoom(
 
 /** The first pass now, the repeats scheduled; one tracked promise for both. */
 function evict(
-  client: RoomServiceClient,
+  client: SfuRoomService,
   key: string,
   spec: ResweepSpec,
 ): Promise<void> {

@@ -6,7 +6,13 @@ import { currentPoolStats, type PoolStats } from "../lib/runtime.js";
 import { headObject, isStorageConfigured } from "../lib/s3.js";
 import { isLiveKitConfigured } from "../voice/backends.js";
 import { isLiveHlsEnabled, probeLiveHlsStorage } from "../voice/hls-egress.js";
-import { readSfuStats, sfuHost } from "../voice/sfu-stats.js";
+import { sfuRegions } from "../voice/regions.js";
+import {
+  readSfuStats,
+  readSfuStatsForRegion,
+  sfuHost,
+  sfuHostFromUrl,
+} from "../voice/sfu-stats.js";
 
 /**
  * `GET /ready` - the deep check, for external monitors.
@@ -111,6 +117,19 @@ export interface ReadyReport {
      * watch parties must not go 503 over a bucket it has no reason to own.
      */
     liveHls: RemoteCheck;
+    /**
+     * Every SFU region other than home, keyed by region id, each with the
+     * host it probed. Absent unless `LIVEKIT_REGIONS` is set, so a
+     * single-region report is the one it always was.
+     *
+     * DELIBERATELY NOT PART OF `ok`. The deploy gates on `/ready`
+     * (`deploy-api-vultr.yml`), and a Miami box being down must not block or
+     * roll back an API deploy in São Paulo, nor page as "the API is not
+     * ready" when the API is fine. Rooms already pinned to a dead region are
+     * the region's outage; the runbook (`docs/plans/SFU_REGIONS.md`) is to
+     * route its countries home. Monitors watch `livekitRegions.<id>.ok`.
+     */
+    livekitRegions?: Record<string, LivekitCheck>;
   };
   version: string;
 }
@@ -141,6 +160,13 @@ export interface ReadyCheckerOptions {
    * actually runs live HLS, so the flag being off is not a 503.
    */
   probeLiveHls: () => (() => Promise<unknown>) | null;
+  /**
+   * The non-home SFU regions, resolved per check; null (or empty) in
+   * single-region mode, when nothing is added to the report.
+   */
+  livekitRegions?: () =>
+    | { id: string; host: string | null; probe: () => Promise<unknown> }[]
+    | null;
   version?: () => string;
   now?: () => number;
   postgresTimeoutMs?: number;
@@ -282,9 +308,32 @@ export function createReadyChecker(options: ReadyCheckerOptions): ReadyChecker {
       const pool = poolCheck();
       const host = "skipped" in livekitProbe ? null : (options.livekitHost?.() ?? null);
       const livekit: LivekitCheck = host ? { ...livekitProbe, host } : livekitProbe;
+      const regions = options.livekitRegions?.() ?? null;
+      let livekitRegions: Record<string, LivekitCheck> | undefined;
+      if (regions && regions.length > 0) {
+        const results = await Promise.all(
+          regions.map((region) =>
+            remoteCheck(`livekit:${region.id}`, region.probe),
+          ),
+        );
+        livekitRegions = {};
+        regions.forEach((region, index) => {
+          const check = results[index]!;
+          livekitRegions![region.id] = region.host
+            ? { ...check, host: region.host }
+            : check;
+        });
+      }
       return {
         ok: postgres.ok && pool.ok && livekit.ok && storage.ok && liveHls.ok,
-        checks: { postgres, pool, livekit, storage, liveHls },
+        checks: {
+          postgres,
+          pool,
+          livekit,
+          storage,
+          liveHls,
+          ...(livekitRegions ? { livekitRegions } : {}),
+        },
         version: version(),
       };
     },
@@ -334,6 +383,21 @@ const checker = createReadyChecker({
         }
       : null,
   livekitHost: sfuHost,
+  livekitRegions: () =>
+    sfuRegions()
+      ?.filter((region) => !region.home)
+      .map((region) => ({
+        id: region.id,
+        host: sfuHostFromUrl(region.url),
+        // Same rule as the home probe above (#801): read the region's own
+        // sfu-stats reader and its cache, never a second listRooms.
+        probe: async () => {
+          const stats = await readSfuStatsForRegion(region.id);
+          if (!stats.reachable) {
+            throw new Error(stats.failure ?? "sfu unreachable");
+          }
+        },
+      })) ?? null,
   probeStorage: () =>
     isStorageConfigured() ? () => headObject(STORAGE_PROBE_KEY) : null,
   // Gated on the flag rather than on the bucket being configured: production

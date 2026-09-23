@@ -44,6 +44,9 @@ vi.mock("../voice/backends.js", () => ({
 vi.mock("../voice/sfu-stats.js", () => ({
   peekSfuStats: fakes.peekSfuStats,
   readSfuStats: fakes.readSfuStats,
+  // Single-region mode: no `LIVEKIT_REGIONS`, so no per-region components.
+  peekAllSfuRegionStats: () => null,
+  readAllSfuRegionStats: async () => null,
 }));
 
 const { probeComponents, refreshSlowProbes, resetSlowProbes, settleSlowProbes } =

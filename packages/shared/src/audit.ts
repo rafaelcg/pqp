@@ -158,6 +158,12 @@ export const AUDIT_ACTIONS = [
    * when a room opens, so this never moves a call that is already running.
    */
   "channel.voice_transport_update",
+  /**
+   * The instance operator pinned, or unpinned, a voice channel's SFU region
+   * (`channels.sfu_region`). Same actor rule as the row above, and the same
+   * safety: read once when a room opens, never moves a running call.
+   */
+  "channel.sfu_region_update",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

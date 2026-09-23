@@ -127,6 +127,10 @@ describe("createRealtimeTransport", () => {
         // mesh seat on. Phones tear theirs down, do not declare it, and stop
         // leaving a phantom in every DM call.
         "mesh-resume",
+        // This bundle dials the URL `POST /api/voice/token` names and no
+        // other (`livekit-session.ts`), so the server may pin a room it
+        // opens to a media box outside São Paulo.
+        "sfu-region",
       ],
     });
   });

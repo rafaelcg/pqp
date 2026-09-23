@@ -1,5 +1,6 @@
 import { AccessToken, TrackSource, type VideoGrant } from "livekit-server-sdk";
 import type { VoiceBackendType, VoiceSessionInfo } from "@pqp/shared";
+import type { SfuRegion } from "./regions.js";
 
 export interface LiveKitPublishOptions {
   canSpeak: boolean;
@@ -194,14 +195,26 @@ export async function createLiveKitSession(
   peerId: string,
   displayName: string,
   userId: string,
-  options: { canSpeak?: boolean; canStream?: boolean; canShowFace?: boolean } = {},
+  options: {
+    canSpeak?: boolean;
+    canStream?: boolean;
+    canShowFace?: boolean;
+    /**
+     * The room's pinned SFU region (`voice/regions.ts`). Omitted in
+     * single-region mode, which reads `LIVEKIT_*` exactly as before and adds
+     * no field to the answer. When given, the token is signed with THAT box's
+     * key pair and `url` names that box: a token for one LiveKit node is
+     * refused by every other.
+     */
+    region?: SfuRegion;
+  } = {},
 ): Promise<VoiceSessionInfo> {
   const canSpeak = options.canSpeak ?? true;
   const canStream = options.canStream ?? canSpeak;
   const canShowFace = options.canShowFace ?? false;
-  const url = process.env.LIVEKIT_URL;
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const url = options.region?.url ?? process.env.LIVEKIT_URL;
+  const apiKey = options.region?.apiKey ?? process.env.LIVEKIT_API_KEY;
+  const apiSecret = options.region?.apiSecret ?? process.env.LIVEKIT_API_SECRET;
 
   if (!url || !apiKey || !apiSecret) {
     throw new Error(
@@ -233,6 +246,7 @@ export async function createLiveKitSession(
     identity: peerId,
     speak: canSpeak,
     stream: canStream,
+    ...(options.region ? { region: options.region.id } : {}),
   };
 }
 

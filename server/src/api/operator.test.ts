@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -114,7 +115,7 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the six routes, and account deletion is not one of them", () => {
+  it("is exactly the seven routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
@@ -122,6 +123,7 @@ describe("matchAdminMachineRoute", () => {
       ["GET", "/api/admin/server-channels"],
       ["PUT", "/api/admin/server-live-hls"],
       ["PUT", "/api/admin/channel-voice-transport"],
+      ["PUT", "/api/admin/channel-sfu-region"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -519,6 +521,81 @@ describeDb("the operator's two levers", () => {
         [textChannelId],
       );
       expect(row.rows[0]!.voice_transport).toBeNull();
+    });
+  });
+
+  describe("a channel's SFU region", () => {
+    afterEach(() => {
+      delete process.env.LIVEKIT_REGIONS;
+      delete process.env.LIVEKIT_URL;
+      delete process.env.LIVEKIT_API_KEY;
+      delete process.env.LIVEKIT_API_SECRET;
+    });
+
+    function withRegions() {
+      process.env.LIVEKIT_URL = "wss://sfu.example.test";
+      process.env.LIVEKIT_API_KEY = "key";
+      process.env.LIVEKIT_API_SECRET = "secret";
+      process.env.LIVEKIT_REGIONS = "mia:wss://sfu-mia.example.test";
+    }
+
+    it("refuses any region while the deployment runs one region", async () => {
+      const { status } = await asMachine("PUT", "/api/admin/channel-sfu-region", {
+        channelId: voiceChannelId,
+        region: "mia",
+      });
+      expect(status).toBe(400);
+    });
+
+    it("sets, lists and clears the override, and audits it", async () => {
+      withRegions();
+      const put = await asMachine<{ sfuRegion: string | null }>(
+        "PUT",
+        "/api/admin/channel-sfu-region",
+        { channelId: voiceChannelId, region: "mia" },
+      );
+      expect(put.status).toBe(200);
+      expect(put.body.sfuRegion).toBe("mia");
+
+      const list = await asMachine<{
+        sfuRegions: string[] | null;
+        channels: { id: string; sfuRegion: string | null }[];
+      }>("GET", `/api/admin/server-channels?serverId=${serverId}`);
+      expect(list.body.sfuRegions).toEqual(["sao", "mia"]);
+      expect(list.body.channels.find((c) => c.id === voiceChannelId)!.sfuRegion).toBe("mia");
+
+      const audit = await getPool().query<{ action: string }>(
+        `SELECT action FROM audit_log WHERE target_id = $1 AND action = 'channel.sfu_region_update'`,
+        [voiceChannelId],
+      );
+      expect(audit.rows).toHaveLength(1);
+
+      const cleared = await asMachine<{ sfuRegion: string | null }>(
+        "PUT",
+        "/api/admin/channel-sfu-region",
+        { channelId: voiceChannelId, region: null },
+      );
+      expect(cleared.body.sfuRegion).toBeNull();
+    });
+
+    it("refuses an unknown region, and a watch party channel, which is always home", async () => {
+      withRegions();
+      const unknown = await asMachine("PUT", "/api/admin/channel-sfu-region", {
+        channelId: voiceChannelId,
+        region: "lon",
+      });
+      expect(unknown.status).toBe(400);
+
+      const party = await asMachine("PUT", "/api/admin/channel-sfu-region", {
+        channelId: partyChannelId,
+        region: "mia",
+      });
+      expect(party.status).toBe(404);
+      const row = await getPool().query<{ sfu_region: string | null }>(
+        `SELECT sfu_region FROM channels WHERE id = $1`,
+        [partyChannelId],
+      );
+      expect(row.rows[0]!.sfu_region).toBeNull();
     });
   });
 

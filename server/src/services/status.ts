@@ -2,7 +2,12 @@ import { getPool } from "../db.js";
 import { isStorageConfigured, headObject } from "../lib/s3.js";
 import { isGifSearchConfigured, trendingGifs } from "./gifs.js";
 import { getServerVoiceBackend, isLiveKitConfigured } from "../voice/backends.js";
-import { peekSfuStats, readSfuStats } from "../voice/sfu-stats.js";
+import {
+  peekAllSfuRegionStats,
+  peekSfuStats,
+  readAllSfuRegionStats,
+  readSfuStats,
+} from "../voice/sfu-stats.js";
 
 /**
  * The public status page.
@@ -170,6 +175,39 @@ const PROBES: Probe[] = [
 ];
 
 /**
+ * One "Voice (<region>)" component per SFU region other than home, only when
+ * `LIVEKIT_REGIONS` is set. Same rule as `voice` above: the last reading, never
+ * a new one, and a reading too old to trust says nothing rather than green.
+ * Region ids and hosts are not secret (every client is handed the host in its
+ * token), and the label names only the id.
+ */
+function regionProbes(): Probe[] {
+  const regions = peekAllSfuRegionStats();
+  if (!regions) {
+    return [];
+  }
+  return regions
+    .filter((region) => !region.home)
+    .map((region) => ({
+      key: `voice-${region.id}`,
+      label: `Voice (${region.id})`,
+      run: async () => {
+        const last = region.peek;
+        if (!last || last.ageMs > SFU_READING_MAX_AGE_MS || !last.stats.configured) {
+          return { ok: true };
+        }
+        if (last.stats.reachable !== true) {
+          return { ok: false };
+        }
+        return {
+          ok: true,
+          ...(last.stats.ms === null ? {} : { latencyMs: last.stats.ms }),
+        };
+      },
+    }));
+}
+
+/**
  * How long a reading taken elsewhere is still worth reporting.
  *
  * Both are several times their refresh interval, so an ordinary missed tick
@@ -277,6 +315,9 @@ async function probeGifs(): Promise<void> {
 export async function refreshSlowProbes(): Promise<void> {
   const started = Date.now();
   const sfu = readSfuStats().catch(() => undefined);
+  // Every other SFU region too, on the same schedule and the same cache. A
+  // no-op (null) without `LIVEKIT_REGIONS`.
+  const regions = readAllSfuRegionStats().catch(() => undefined);
 
   const due =
     gifReading === null || gifReading.ok === true
@@ -298,7 +339,7 @@ export async function refreshSlowProbes(): Promise<void> {
   // Only the SFU read is awaited. The GIF probe is bounded, but it is also
   // simply not this tick's business: the sample must be written on time
   // whatever the provider is doing, and the reading lands for the next tick.
-  await sfu;
+  await Promise.all([sfu, regions]);
 }
 
 /**
@@ -322,7 +363,7 @@ export async function probeComponents(): Promise<
   { key: string; label: string; ok: boolean | null | "unknown"; latencyMs?: number }[]
 > {
   return Promise.all(
-    PROBES.map(async (probe) => {
+    [...PROBES, ...regionProbes()].map(async (probe) => {
       // A probe that threw outside its own timing measured nothing, so it
       // reports no latency rather than a zero.
       const result: { ok: boolean | "unknown"; latencyMs?: number } | null =

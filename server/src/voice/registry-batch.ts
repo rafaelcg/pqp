@@ -590,6 +590,30 @@ const UPSERT_ROOMS_SQL = `INSERT INTO voice_rooms (channel_id, transport)
    SELECT * FROM UNNEST($1::uuid[], $2::text[])
    ON CONFLICT (channel_id) DO NOTHING`;
 
+/**
+ * The same statement carrying each room's SFU region (`voice/regions.ts`).
+ * Only used when some room in the batch has one, so a single-region
+ * deployment issues exactly the statement above.
+ */
+const UPSERT_ROOMS_WITH_REGION_SQL = `INSERT INTO voice_rooms (channel_id, transport, sfu_region)
+   SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[])
+   ON CONFLICT (channel_id) DO NOTHING`;
+
+function roomUpsert(
+  rooms: ReadonlyMap<string, { transport: string; region: string | null }>,
+): { sql: string; params: unknown[] } {
+  const entries = [...rooms.entries()];
+  const ids = entries.map(([id]) => id);
+  const transports = entries.map(([, room]) => room.transport);
+  if (entries.some(([, room]) => room.region !== null)) {
+    return {
+      sql: UPSERT_ROOMS_WITH_REGION_SQL,
+      params: [ids, transports, entries.map(([, room]) => room.region)],
+    };
+  }
+  return { sql: UPSERT_ROOMS_SQL, params: [ids, transports] };
+}
+
 const UPSERT_PEERS_SQL = `INSERT INTO voice_peers (
      peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
      muted, deafened, sharing_screen, listening_music, camera_stream_id,
@@ -724,16 +748,22 @@ async function runPlan(client: PoolClient, plan: Plan): Promise<void> {
   if (plan.upserts.length > 0) {
     // Distinct channels only: `ON CONFLICT DO NOTHING` tolerates a repeat,
     // but there is no reason to ship four hundred copies of one uuid.
-    const rooms = new Map<string, string>();
+    const rooms = new Map<string, { transport: string; region: string | null }>();
     for (const peer of plan.upserts) {
       if (!rooms.has(peer.channelId)) {
-        rooms.set(peer.channelId, peer.transport);
+        rooms.set(peer.channelId, {
+          transport: peer.transport,
+          region: peer.sfuRegion ?? null,
+        });
       }
     }
-    await countedQuery(client, "registry.batchUpsertRooms", UPSERT_ROOMS_SQL, [
-      [...rooms.keys()],
-      [...rooms.values()],
-    ]);
+    const roomSql = roomUpsert(rooms);
+    await countedQuery(
+      client,
+      "registry.batchUpsertRooms",
+      roomSql.sql,
+      roomSql.params,
+    );
     await countedQuery(
       client,
       "registry.batchUpsertPeers",
@@ -808,10 +838,12 @@ async function writePerRow(batch: Queue): Promise<void> {
     }
   };
   for (const peer of plan.upserts) {
-    await one("registry.batchFallbackUpsertRoom", UPSERT_ROOMS_SQL, [
-      [peer.channelId],
-      [peer.transport],
-    ]);
+    const roomSql = roomUpsert(
+      new Map([
+        [peer.channelId, { transport: peer.transport, region: peer.sfuRegion ?? null }],
+      ]),
+    );
+    await one("registry.batchFallbackUpsertRoom", roomSql.sql, roomSql.params);
     await one(
       "registry.batchFallbackUpsert",
       UPSERT_PEERS_SQL,

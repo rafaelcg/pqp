@@ -237,8 +237,15 @@ import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/ad
 import {
   getVoicePeerRow,
   isVoiceRegistryEnabled,
+  readVoiceRoomPin,
   readVoiceRoomTransport,
 } from "../voice/registry.js";
+import {
+  homeRegionId,
+  multiRegionEnabled,
+  pinnedRoomRegion,
+  resolveSfuRegion,
+} from "../voice/regions.js";
 import { resolveVoicePublish } from "../voice/speak.js";
 import {
   createDesktopSignInToken,
@@ -582,12 +589,16 @@ import {
 } from "../services/metrics.js";
 import {
   OPERATOR_CHANNELS_PATH,
+  OPERATOR_CHANNEL_SFU_REGION_PATH,
   OPERATOR_CHANNEL_TRANSPORT_PATH,
   OPERATOR_SERVERS_PATH,
   OPERATOR_SERVER_LIVE_HLS_PATH,
+  OperatorBadRequest,
   OperatorTargetMissing,
   listOperatorChannels,
   listOperatorServers,
+  setChannelSfuRegion,
+  setChannelSfuRegionSchema,
   setChannelVoiceTransport,
   setChannelVoiceTransportSchema,
   setServerLiveHls,
@@ -2054,6 +2065,14 @@ router.put(OPERATOR_CHANNEL_TRANSPORT_PATH, async ({ req, user }) => {
   return operatorSetChannelTransport(body.channelId, body.transport, user.id);
 });
 
+router.put(OPERATOR_CHANNEL_SFU_REGION_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setChannelSfuRegionSchema.parse(await readJsonBody(req));
+  return operatorSetChannelSfuRegion(body.channelId, body.region, user.id);
+});
+
 /**
  * EVERYTHING the operator dashboard's machine token can reach, and nothing
  * else, as a flat table of exact (method, pathname) pairs.
@@ -2112,6 +2131,14 @@ const ADMIN_MACHINE_ROUTES: {
     run: async (req) => {
       const body = setChannelVoiceTransportSchema.parse(await readJsonBody(req));
       return operatorSetChannelTransport(body.channelId, body.transport, null);
+    },
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_CHANNEL_SFU_REGION_PATH,
+    run: async (req) => {
+      const body = setChannelSfuRegionSchema.parse(await readJsonBody(req));
+      return operatorSetChannelSfuRegion(body.channelId, body.region, null);
     },
   },
 ];
@@ -2179,6 +2206,24 @@ async function operatorSetChannelTransport(
   } catch (error) {
     if (error instanceof OperatorTargetMissing) {
       throw new NotFound(error.message);
+    }
+    throw error;
+  }
+}
+
+async function operatorSetChannelSfuRegion(
+  channelId: string,
+  region: string | null,
+  actorId: string | null,
+) {
+  try {
+    return await setChannelSfuRegion(channelId, region, actorId);
+  } catch (error) {
+    if (error instanceof OperatorTargetMissing) {
+      throw new NotFound(error.message);
+    }
+    if (error instanceof OperatorBadRequest) {
+      throw new HttpError(400, error.message);
     }
     throw error;
   }
@@ -2739,12 +2784,12 @@ router.post("/api/voice/token", async ({ req, user }) => {
   //
   // The display name is resolved here rather than copied from the peer, so
   // every proof yields the same name the join would have.
-  const proven =
-    verifyVoiceResumeToken(body.resumeToken, {
-      userId: user.id,
-      peerId: body.peerId,
-      voiceChannelId: body.voiceChannelId,
-    }) !== null;
+  const verifiedResume = verifyVoiceResumeToken(body.resumeToken, {
+    userId: user.id,
+    peerId: body.peerId,
+    voiceChannelId: body.voiceChannelId,
+  });
+  const proven = verifiedResume !== null;
   if (!proven) {
     const local = getVoicePeer(body.peerId);
     const peer =
@@ -2800,13 +2845,34 @@ router.post("/api/voice/token", async ({ req, user }) => {
   // `welcome`; a client in a peer-to-peer room has no business minting an SFU
   // token, and every token minted starts LiveKit participant-minutes billing.
   // A room pinned on another instance is only visible through its row.
+  //
+  // With SFU regions on, the room's REGION comes from the same places in the
+  // same order: this process's pin, else the room row (another instance's
+  // pin, or this one's before a restart), else the region the caller's own
+  // resume token remembers, else home. Every token for a room is minted for
+  // the one box the room is pinned to, so nobody can land in a same-named
+  // empty room on another box.
+  const multiRegion = multiRegionEnabled();
   let transport = getRoomTransport(body.voiceChannelId);
+  let regionId: string | null = multiRegion
+    ? pinnedRoomRegion(body.voiceChannelId)
+    : null;
   if (isVoiceRegistryEnabled() && !isRoomPinnedLocally(body.voiceChannelId)) {
-    transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
+    if (multiRegion) {
+      const pin = await readVoiceRoomPin(body.voiceChannelId);
+      transport = pin?.transport ?? transport;
+      regionId = pin ? (pin.region ?? homeRegionId()) : null;
+    } else {
+      transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
+    }
   }
   if (transport !== "livekit") {
     throw new HttpError(409, "This room runs peer-to-peer");
   }
+  const region = multiRegion
+    ? (resolveSfuRegion(regionId ?? verifiedResume?.region ?? homeRegionId()) ??
+      undefined)
+    : undefined;
 
   try {
     return await createLiveKitSession(
@@ -2814,7 +2880,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak, canStream, canShowFace },
+      { canSpeak, canStream, canShowFace, ...(region ? { region } : {}) },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);

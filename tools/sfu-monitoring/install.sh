@@ -8,6 +8,12 @@
 # GC_PROM_USER / GC_PROM_TOKEN are only needed the first time (or to rotate);
 # without them an existing /etc/alloy/credentials.env is left alone.
 #
+# SFU_BOX_NAME is the `instance` / `box` label every series from this box
+# carries. Defaults to `sfu-pqp`, the São Paulo box, which keeps its rendered
+# config byte for byte. A second region's box MUST set its own
+# (`SFU_BOX_NAME=sfu-mia`), or its series land on top of São Paulo's in
+# Grafana. See docs/plans/SFU_REGIONS.md.
+#
 # Nothing here touches the livekit or caddy containers, so it never interrupts
 # a call.
 set -euo pipefail
@@ -38,7 +44,9 @@ systemctl enable --now pqp-box-metrics.timer
 systemctl start pqp-box-metrics.service
 
 echo "== alloy"
-install -m 0644 "$HERE/config.alloy" /etc/alloy/config.alloy
+SFU_BOX_NAME="${SFU_BOX_NAME:-sfu-pqp}"
+sed "s|\"sfu-pqp\"|\"${SFU_BOX_NAME}\"|g" "$HERE/config.alloy" >/etc/alloy/config.alloy
+chmod 0644 /etc/alloy/config.alloy
 
 if [[ -n "${GC_PROM_TOKEN:-}" ]]; then
   umask 077

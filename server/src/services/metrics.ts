@@ -13,7 +13,20 @@ import {
 } from "../voice/registry.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
-import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
+import {
+  readAllSfuRegionStats,
+  readSfuStats,
+  type SfuRegionStats,
+  type SfuStats,
+} from "../voice/sfu-stats.js";
+import {
+  countryHeaderStats,
+  defaultRegionId,
+  homeRegionId,
+  pinnedRoomRegionCounts,
+  regionCountryMap,
+  sfuRegions,
+} from "../voice/regions.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
 import {
   getVoiceActivitySnapshot,
@@ -246,6 +259,15 @@ export interface AdminMetrics {
    * are meant to be compared, not confused.
    */
   sfu: SfuStats;
+  /**
+   * SFU regions (`voice/regions.ts`). Present on every deployment, because
+   * `countryHeader` is the proof an operator reads BEFORE turning regions on:
+   * how many WebSocket upgrades carried a usable `CF-IPCountry` since this
+   * process started. `regions` is null without `LIVEKIT_REGIONS`; otherwise
+   * every region's own SFU reading, home first, on the same 10-second cache
+   * as `sfu`. `pinnedRooms` is this process's pins per region.
+   */
+  sfuRegions: SfuRegionsReport;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1006,7 +1028,13 @@ function hoursAgo(column: string): string {
  */
 type CachedMetrics = Omit<
   AdminMetrics,
-  "runtime" | "ready" | "sfu" | "instanceId" | "instanceCount" | "cluster"
+  | "runtime"
+  | "ready"
+  | "sfu"
+  | "sfuRegions"
+  | "instanceId"
+  | "instanceCount"
+  | "cluster"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1732,10 +1760,11 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu] = await Promise.all([
+  const [payload, ready, sfu, sfuRegions] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
     readSfuStats(),
+    sfuRegionsReport(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -1747,6 +1776,29 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     cluster,
     ready,
     sfu,
+    sfuRegions,
+  };
+}
+
+export interface SfuRegionsReport {
+  regions: SfuRegionStats[] | null;
+  home: string;
+  defaultRegion: string;
+  /** `LIVEKIT_REGION_COUNTRIES`, parsed: country to region. */
+  countries: Record<string, string>;
+  pinnedRooms: Record<string, number>;
+  countryHeader: { with: number; without: number };
+}
+
+async function sfuRegionsReport(): Promise<SfuRegionsReport> {
+  const configured = sfuRegions();
+  return {
+    regions: await readAllSfuRegionStats().catch(() => null),
+    home: homeRegionId(),
+    defaultRegion: defaultRegionId(configured),
+    countries: Object.fromEntries(regionCountryMap(configured)),
+    pinnedRooms: pinnedRoomRegionCounts(),
+    countryHeader: countryHeaderStats(),
   };
 }
 

@@ -54,7 +54,9 @@ const { resetVoicePeers, resetVoiceRoomTransports } = await import(
   "../ws/voice.js"
 );
 const { mintVoiceResumeToken } = await import("../ws/voice-resume-token.js");
-const { pinVoiceRoom } = await import("../voice/registry.js");
+const { claimVoiceRoomTransport, pinVoiceRoom } = await import(
+  "../voice/registry.js"
+);
 
 let server: Server;
 let baseUrl: string;
@@ -233,6 +235,103 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
       peerId,
     });
     expect(stolen.status).toBe(403);
+  });
+
+  describe("SFU regions", () => {
+    function jwtIssuer(token: string): string {
+      const payload = JSON.parse(
+        Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"),
+      ) as { iss: string };
+      return payload.iss;
+    }
+
+    beforeEach(() => {
+      process.env.LIVEKIT_REGIONS = "mia:wss://sfu-mia.example.test";
+      process.env.LIVEKIT_API_KEY_MIA = "mia-key";
+      process.env.LIVEKIT_API_SECRET_MIA = "mia-secret";
+    });
+
+    afterEach(() => {
+      delete process.env.LIVEKIT_REGIONS;
+      delete process.env.LIVEKIT_API_KEY_MIA;
+      delete process.env.LIVEKIT_API_SECRET_MIA;
+    });
+
+    async function seatElsewhere(region: string | null): Promise<string> {
+      process.env.VOICE_REGISTRY = "postgres";
+      const peerId = randomUUID();
+      await claimVoiceRoomTransport(voiceChannelId, "livekit", region);
+      await getPool().query(
+        `INSERT INTO voice_peers (peer_id, channel_id, user_id, instance_id, display_name)
+         VALUES ($1, $2, $3, $4, 'Member')`,
+        [peerId, voiceChannelId, member.id, randomUUID()],
+      );
+      return peerId;
+    }
+
+    it("mints for the box the room row names, with that box's key pair (the other replica)", async () => {
+      const peerId = await seatElsewhere("mia");
+      const minted = await call<{ url: string; token: string; region: string }>(
+        member,
+        "POST",
+        "/api/voice/token",
+        { voiceChannelId, peerId },
+      );
+      expect(minted.status).toBe(200);
+      expect(minted.body.url).toBe("wss://sfu-mia.example.test");
+      expect(minted.body.region).toBe("mia");
+      expect(jwtIssuer(minted.body.token)).toBe("mia-key");
+    });
+
+    it("a room row with no region is home", async () => {
+      const peerId = await seatElsewhere(null);
+      const minted = await call<{ url: string; token: string; region: string }>(
+        member,
+        "POST",
+        "/api/voice/token",
+        { voiceChannelId, peerId },
+      );
+      expect(minted.status).toBe(200);
+      expect(minted.body.url).toBe("wss://sfu.example.test");
+      expect(minted.body.region).toBe("sao");
+      expect(jwtIssuer(minted.body.token)).toBe("key");
+    });
+
+    it("falls back to the region the caller's resume token remembers, registry off", async () => {
+      const peerId = randomUUID();
+      const minted = await call<{ url: string; region: string }>(
+        member,
+        "POST",
+        "/api/voice/token",
+        {
+          voiceChannelId,
+          peerId,
+          resumeToken: mintVoiceResumeToken({
+            userId: member.id,
+            peerId,
+            voiceChannelId,
+            transport: "livekit",
+            region: "mia",
+          })!,
+        },
+      );
+      expect(minted.status).toBe(200);
+      expect(minted.body.url).toBe("wss://sfu-mia.example.test");
+      expect(minted.body.region).toBe("mia");
+    });
+  });
+
+  it("adds no region field without LIVEKIT_REGIONS, and names the one box", async () => {
+    const peerId = randomUUID();
+    const minted = await call<Record<string, unknown>>(
+      member,
+      "POST",
+      "/api/voice/token",
+      { voiceChannelId, peerId, resumeToken: tokenFor(member.id, peerId) },
+    );
+    expect(minted.status).toBe(200);
+    expect(minted.body.url).toBe("wss://sfu.example.test");
+    expect(minted.body).not.toHaveProperty("region");
   });
 
   it("answers 409 for a room another instance pinned to mesh", async () => {

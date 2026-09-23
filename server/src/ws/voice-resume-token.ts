@@ -30,6 +30,12 @@ interface ResumeClaims {
   c: string;
   t: VoiceRoomTransport;
   e: number;
+  /**
+   * The room's SFU region. Only written when the deployment runs regions, so
+   * a single-region token is byte for byte what it was. Absent reads as the
+   * home region, which is where every room lived before the field existed.
+   */
+  r?: string;
 }
 
 export interface VerifiedResume {
@@ -37,6 +43,8 @@ export interface VerifiedResume {
   peerId: string;
   voiceChannelId: string;
   transport: VoiceRoomTransport;
+  /** The SFU region the token remembers, or null when it names none. */
+  region: string | null;
 }
 
 function resumeSecret(): string | null {
@@ -71,6 +79,8 @@ export function mintVoiceResumeToken(input: {
   peerId: string;
   voiceChannelId: string;
   transport: VoiceRoomTransport;
+  /** The room's pinned SFU region; omit (or null) in single-region mode. */
+  region?: string | null;
   now?: number;
 }): string | null {
   const secret = resumeSecret();
@@ -85,6 +95,7 @@ export function mintVoiceResumeToken(input: {
     c: input.voiceChannelId,
     t: input.transport,
     e: now + VOICE_RESUME_TOKEN_TTL_MS,
+    ...(input.region ? { r: input.region } : {}),
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
     "base64url",
@@ -141,5 +152,6 @@ export function verifyVoiceResumeToken(
     peerId: claims.p,
     voiceChannelId: claims.c,
     transport: claims.t,
+    region: typeof claims.r === "string" && claims.r.length > 0 ? claims.r : null,
   };
 }

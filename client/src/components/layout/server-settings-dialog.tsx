@@ -108,6 +108,8 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
     "serverSettings.audit.action.server.live_hls_update",
   "channel.voice_transport_update":
     "serverSettings.audit.action.channel.voice_transport_update",
+  "channel.sfu_region_update":
+    "serverSettings.audit.action.channel.sfu_region_update",
 };
 
 /* ------------------------------------------------------------------ layout */

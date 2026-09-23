@@ -1,4 +1,5 @@
 import "./env.js";
+import { noteSocketCountry } from "./voice/regions.js";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -395,6 +396,11 @@ wss.on("connection", (socket, req) => {
   // concurrent sockets is always reached immediately after one opens, so
   // sampling on this event makes `peakSockets` exact rather than sampled.
   noteRuntimeSample();
+  // The upgrade's `CF-IPCountry`, kept for the socket's life: the voice
+  // join reads it to pick a room's SFU region (`voice/regions.ts`). Recorded
+  // on every deployment so the dashboard can prove the header arrives before
+  // any region is routed on it; nothing reads it without `LIVEKIT_REGIONS`.
+  noteSocketCountry(socket, req.headers);
   // Liveness bookkeeping lives in `handleWsConnection`
   // (`trackSocketLiveness`), which is the half `startHeartbeat` below reads.
   handleWsConnection(socket, clientAddress(req as never));

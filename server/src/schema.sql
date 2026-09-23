@@ -1476,6 +1476,11 @@ CREATE TABLE IF NOT EXISTS voice_rooms (
 -- deployment picks them up here rather than in a migration.
 ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music JSONB;
 ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_rev BIGINT NOT NULL DEFAULT 0;
+-- The room's SFU region (`server/src/voice/regions.ts`), pinned with the
+-- transport at first join and never changed while the room is occupied. NULL
+-- is the home region: every room pinned before regions existed, and every
+-- room on a deployment without `LIVEKIT_REGIONS`, which never writes it.
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS sfu_region TEXT;
 -- The room's own clock, which is NOT `music->>'positionMs'`: that is the
 -- last sample anybody seated sent, and the server clamps a non-manager's
 -- sample against this rather than trusting it. Both instances are on one
@@ -1975,6 +1980,11 @@ END $$;
 -- joins; a live call never changes transport.
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS voice_transport TEXT
   CHECK (voice_transport IN ('mesh', 'livekit'));
+-- The operator's SFU region override for this channel (`voice/regions.ts`),
+-- set from the dashboard. NULL is automatic (the first joiner's country). Not
+-- a CHECK against a list: the region list is configuration, and an id that
+-- is no longer configured simply reads as automatic.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS sfu_region TEXT;
 
 -- There is deliberately NO last_activity_at column and NO archival sweeper.
 -- "Archived" is computed at read time from the thread's newest message (an
