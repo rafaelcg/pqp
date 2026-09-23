@@ -1152,6 +1152,38 @@ body,
 }
 
 /*
+ * The /app shell is a fixed frame. Its panes scroll (the transcript, the
+ * channel list, the roster); the frame and the document under it never do.
+ *
+ * `overflow: hidden` is not enough for that: a hidden box is still a scroll
+ * container, and `scrollIntoView`, `focus()` and a fragment link all scroll
+ * every scroll container between the target and the viewport. On 2026-09-23
+ * a long roster gave the shell invisible height below the window, landing on
+ * the NEW divider scrolled the shell into it, and the whole app slid ~110px
+ * up over a black band. `clip` cuts the same box without making a scroll
+ * container, so there is nothing left for script to move. `hidden` stays
+ * first as the fallback for an engine without `clip` (Safari before 16).
+ *
+ * `data-app-shell` is set on <html> only while the app route is mounted
+ * (`lib/app-shell-document.ts`); the marketing pages keep scrolling.
+ * Pinned by e2e/app-shell-scroll.spec.ts.
+ */
+.app-shell {
+  overflow: hidden;
+  overflow: clip;
+}
+
+html[data-app-shell],
+html[data-app-shell] body {
+  overflow: hidden;
+}
+
+html[data-app-shell] #root {
+  overflow: hidden;
+  overflow: clip;
+}
+
+/*
  * Installed to the home screen with `apple-mobile-web-app-status-bar-style:
  * black-translucent`, the app draws under the status bar and the home
  * indicator — so the shell has to inset itself or the top row sits beneath the
