@@ -59,6 +59,11 @@ const (
 	// DefaultAACBitrateKbps above.
 	DefaultReorderHoldMS = 300
 	MaxReorderHoldMS     = 1000
+
+	// DefaultPartDeadlineGraceMS / MaxPartDeadlineGraceMS mirror
+	// internal/control's pair, for the same leaf-package reason.
+	DefaultPartDeadlineGraceMS = 150
+	MaxPartDeadlineGraceMS     = 10000
 )
 
 // Config is everything the binary needs, already validated.
@@ -149,6 +154,14 @@ type Config struct {
 	// Production runs that binary, so a knob only this package read would
 	// be inert on the box that matters (repo pitfall 12).
 	ReorderHoldMS int
+
+	// PartDeadlineGraceMS is PART_DEADLINE_GRACE_MS: with clock-cut parts
+	// on, how long past the wall instant a part's end maps to the monitor
+	// waits for a frame before cutting the part with repeat frames. See
+	// internal/session.Session.SetPartDeadlineGrace. 1000 (at or above
+	// the idle allowance) is the exact pre-deadline behaviour. Read by
+	// BOTH binaries, like REORDER_HOLD_MS.
+	PartDeadlineGraceMS int
 }
 
 // PartTicks/SegmentTicks convert PartMS/SegmentMS into the 90kHz RTP clock
@@ -237,6 +250,9 @@ func FromEnv() (Config, error) {
 	if c.ReorderHoldMS, err = envIntOr("REORDER_HOLD_MS", DefaultReorderHoldMS); err != nil {
 		return Config{}, err
 	}
+	if c.PartDeadlineGraceMS, err = envIntOr("PART_DEADLINE_GRACE_MS", DefaultPartDeadlineGraceMS); err != nil {
+		return Config{}, err
+	}
 
 	if c.AACBitrateKbps, err = envIntOr("AAC_BITRATE_KBPS", DefaultAACBitrateKbps); err != nil {
 		return Config{}, err
@@ -318,6 +334,9 @@ func (c Config) Validate() error {
 	// a jitter buffer wearing this knob's name.
 	if c.ReorderHoldMS < 0 || c.ReorderHoldMS > MaxReorderHoldMS {
 		return fmt.Errorf("config: REORDER_HOLD_MS must be between 0 and %d, got %d", MaxReorderHoldMS, c.ReorderHoldMS)
+	}
+	if c.PartDeadlineGraceMS < 0 || c.PartDeadlineGraceMS > MaxPartDeadlineGraceMS {
+		return fmt.Errorf("config: PART_DEADLINE_GRACE_MS must be between 0 and %d, got %d", MaxPartDeadlineGraceMS, c.PartDeadlineGraceMS)
 	}
 	return nil
 }

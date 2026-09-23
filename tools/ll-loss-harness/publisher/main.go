@@ -14,11 +14,13 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 // prodHostSuffix mirrors tools/watch-party-load's PROD_HOSTS guard
@@ -59,11 +61,40 @@ func main() {
 	if room == "" {
 		room = rm.Name()
 	}
+	pubOpts := &lksdk.TrackPublicationOptions{Name: "ramp", Source: livekit.TrackSource_SCREEN_SHARE, VideoWidth: 1280, VideoHeight: 720}
+	if pace := os.Getenv("PACE"); pace != "" {
+		// A paced publish: frames sent on a schedule of wall-clock gaps
+		// rather than a fixed 33ms, to reproduce what a Chrome tab share
+		// of a mostly static page sends. See pace.go.
+		schedule, ok := schedules[pace]
+		if !ok {
+			log.Fatalf("rampub: unknown PACE=%q", pace)
+		}
+		seconds := 90
+		if v := os.Getenv("PACE_SECONDS"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				seconds = n
+			}
+		}
+		track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if _, err := rm.LocalParticipant.PublishTrack(track, pubOpts); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("rampub: publishing %s as SCREEN_SHARE into %s, paced %q for %ds", file, room, pace, seconds)
+		if err := publishPaced(track, file, schedule, time.Duration(seconds)*time.Second); err != nil {
+			log.Fatal(err)
+		}
+		rm.Disconnect()
+		return
+	}
 	track, err := lksdk.NewLocalFileTrack(file, lksdk.ReaderTrackWithFrameDuration(33*time.Millisecond), lksdk.ReaderTrackWithOnWriteComplete(func() { close(done) }))
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := rm.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{Name: "ramp", Source: livekit.TrackSource_SCREEN_SHARE, VideoWidth: 1280, VideoHeight: 720}); err != nil {
+	if _, err := rm.LocalParticipant.PublishTrack(track, pubOpts); err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("rampub: publishing %s as SCREEN_SHARE into %s", file, room)

@@ -74,6 +74,19 @@ const (
 	// derived from it.
 	maxReorderHoldMs = 1000
 
+	// DefaultPartDeadlineGraceMs is PART_DEADLINE_GRACE_MS's default:
+	// with clock-cut parts on, how long past the wall instant a part's
+	// end maps to the monitor waits for a frame before cutting the part
+	// with repeat frames (internal/session.Session.SetPartDeadlineGrace).
+	// Read here as well as in internal/config for the same pitfall-12
+	// reason as REORDER_HOLD_MS. A value at or above the idle allowance
+	// (1000 at the default 500 ms part) is the exact pre-deadline
+	// behaviour, and the rollback.
+	DefaultPartDeadlineGraceMs = 150
+	// maxPartDeadlineGraceMs bounds it. Past ten seconds the knob is not
+	// a grace any more, and a value that large is a unit typo.
+	maxPartDeadlineGraceMs = 10000
+
 	// maxWatchdogMs bounds every watchdog timer this file reads. 24 hours
 	// is already absurd for a stall detector whose defaults are measured
 	// in seconds, and refusing past it catches the operator error that
@@ -130,6 +143,10 @@ type GlobalConfig struct {
 	// It is a watchdog input as much as a media one -- see
 	// WatchdogConfig.partStuckThreshold.
 	ReorderHoldMs int64
+
+	// PartDeadlineGraceMs is PART_DEADLINE_GRACE_MS. See
+	// DefaultPartDeadlineGraceMs.
+	PartDeadlineGraceMs int64
 
 	AACBitrateKbps int
 	FFmpegPath     string
@@ -231,6 +248,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	if c.ReorderHoldMs, err = envInt64Or("REORDER_HOLD_MS", DefaultReorderHoldMs); err != nil {
 		return GlobalConfig{}, err
 	}
+	if c.PartDeadlineGraceMs, err = envInt64Or("PART_DEADLINE_GRACE_MS", DefaultPartDeadlineGraceMs); err != nil {
+		return GlobalConfig{}, err
+	}
 	if v := os.Getenv("AAC_BITRATE_KBPS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -278,6 +298,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	// is a jitter buffer wearing this knob's name.
 	if c.ReorderHoldMs < 0 || c.ReorderHoldMs > maxReorderHoldMs {
 		return GlobalConfig{}, fmt.Errorf("control: REORDER_HOLD_MS must be between 0 and %d, got %d", maxReorderHoldMs, c.ReorderHoldMs)
+	}
+	if c.PartDeadlineGraceMs < 0 || c.PartDeadlineGraceMs > maxPartDeadlineGraceMs {
+		return GlobalConfig{}, fmt.Errorf("control: PART_DEADLINE_GRACE_MS must be between 0 and %d, got %d", maxPartDeadlineGraceMs, c.PartDeadlineGraceMs)
 	}
 	// And an upper bound on all four, for the reason maxWatchdogMs gives.
 	for _, t := range []struct {

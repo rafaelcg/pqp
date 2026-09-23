@@ -14,10 +14,11 @@
 //   LL_HARNESS_PORT     default 18080 (this server's own port)
 //   HOLD_PARTS          default 6 (matches LL_PART_HOLD_BACK_PARTS production default)
 import http from "node:http";
-import { loadHarnessEnv, assertLocalUrl, resolveLlPlaylistModule, resolveLlStateModule } from "./env.mjs";
+import { loadHarnessEnv, assertLocalUrl, resolveLlPlaylistModule, resolveLlStateModule, resolveBlockingReloadModule } from "./env.mjs";
 
 const { buildLlRenditionPlaylist, buildLlMultivariantPlaylist, applyLlRenditionToken } = await import(resolveLlPlaylistModule());
 const { parseLlState, trackForRung } = await import(resolveLlStateModule());
+const edgeHold = await import(resolveBlockingReloadModule());
 
 const SID = process.env.SID;
 if (!SID) {
@@ -58,18 +59,50 @@ async function state() {
 // object; this is the same contract on plain Node http.
 const BLOCKING_RELOAD_MAX_WAIT_MS = 4000;
 const BLOCKING_RELOAD_POLL_MS = 100;
+// POLL_MODE=edge holds the way tools/hls-edge's Worker does instead: the
+// origin is re-read once per PART-TARGET, backing off to once a second
+// after VIDEO_RUNG_FAST_POLL_WINDOW_MS on the video rung, for up to
+// VIDEO_RUNG_HOLD_BUDGET_MS (3 x PART-TARGET on audio). Those constants
+// are imported from the Worker's own module, not copied. The default
+// (100 ms, 4 s) is kinder than production, which hides part lateness a
+// real viewer pays for.
+const POLL_MODE = process.env.POLL_MODE || "fast";
+function holdPlan(rung, partTargetSecs) {
+  if (POLL_MODE !== "edge") return { budgetMs: BLOCKING_RELOAD_MAX_WAIT_MS, intervalMs: () => BLOCKING_RELOAD_POLL_MS };
+  const baseMs = Math.max(20, Math.round((partTargetSecs || edgeHold.DEFAULT_PART_TARGET_SECONDS) * 1000));
+  const video = rung === "ll";
+  return {
+    budgetMs: video ? edgeHold.VIDEO_RUNG_HOLD_BUDGET_MS : 3 * baseMs,
+    intervalMs: (elapsed) => (video && elapsed >= edgeHold.VIDEO_RUNG_FAST_POLL_WINDOW_MS ? Math.max(baseMs, edgeHold.VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS) : baseMs),
+  };
+}
+// Availability is decided by the Worker's OWN functions over the playlist
+// text it would serve (parseLiveEdge + isMsnPartAvailable), not a local
+// re-implementation. The local one this replaced treated a complete
+// segment with fewer parts than the index asked for as "not yet", forever:
+// hls.js asks for the next part of the open segment, the segment then
+// closes early on a keyframe (elastic segments do that all the time with a
+// slow source), and the hold ran to its budget while the player timed out
+// (levelLoadTimeOut) on media that was already published.
+function renderRendition(st, rung) {
+  const track = trackForRung(st, rung);
+  if (!track) return null;
+  const text = buildLlRenditionPlaylist(st, track, rung, { basePath: "", partHoldBackParts: HOLD_PARTS });
+  return applyLlRenditionToken(text, "x").replaceAll("?t=x", "");
+}
 function hasPart(st, rung, msn, part) {
-  const t = trackForRung(st, rung);
-  if (!t) return false;
-  const seg = t.segments.find((s) => s.msn === msn);
-  if (!seg) return t.segments.some((s) => s.msn > msn);
-  return seg.parts.length > part;
+  const text = renderRendition(st, rung);
+  if (text == null) return false;
+  return edgeHold.isMsnPartAvailable(edgeHold.parseLiveEdge(text), { msn, part });
 }
 async function awaitPart(rung, msn, part) {
-  const deadline = Date.now() + BLOCKING_RELOAD_MAX_WAIT_MS;
+  const started = Date.now();
   let st = await state();
+  const plan = holdPlan(rung, st.partTargetMs / 1000);
+  const deadline = started + plan.budgetMs;
   while (!hasPart(st, rung, msn, part) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, BLOCKING_RELOAD_POLL_MS));
+    const wait = Math.min(plan.intervalMs(Date.now() - started), deadline - Date.now());
+    await new Promise((r) => setTimeout(r, Math.max(0, wait)));
     st = await state();
   }
   return st;
@@ -97,14 +130,13 @@ const server = http.createServer(async (req, res) => {
       const rung = p.slice(1);
       const msn = url.searchParams.get("_HLS_msn");
       const part = url.searchParams.get("_HLS_part");
-      const st = msn != null ? await awaitPart(rung, Number(msn), part != null ? Number(part) : 0) : await state();
-      const track = trackForRung(st, rung);
-      if (!track) {
+      const st = msn != null ? await awaitPart(rung, Number(msn), part != null ? Number(part) : undefined) : await state();
+      const text = renderRendition(st, rung);
+      if (text == null) {
         res.writeHead(404);
         return res.end("no track");
       }
-      let text = buildLlRenditionPlaylist(st, track, rung, { basePath: "", partHoldBackParts: HOLD_PARTS });
-      text = applyLlRenditionToken(text, "x").replaceAll("?t=x", "");
+      const track = trackForRung(st, rung);
       log(`PLAYLIST ${rung} msn=${msn} part=${part} -> segs=${track.segments.length} lastMsn=${track.segments.at(-1)?.msn}`);
       res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "access-control-allow-origin": "*", "cache-control": "no-store" });
       return res.end(text);

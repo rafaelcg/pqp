@@ -46,6 +46,39 @@ setInterval(() => {
   const b = V.buffered;
   push("tick", { ct: V.currentTime.toFixed(2), bufEnd: b.length ? b.end(b.length - 1).toFixed(2) : null, latency: hls.latency && hls.latency.toFixed(2), target: hls.targetLatency && hls.targetLatency.toFixed(2), maxLat: hls.maxLatency && hls.maxLatency.toFixed(2), drift: hls.drift, ready: V.readyState });
 }, 2000);
+// Frozen playback, sampled every 100 ms once the element has played: the
+// playhead not moving while the page expects it to. "waiting" alone misses
+// a freeze the element never reports (readyState stuck below
+// HAVE_FUTURE_DATA with no event), which is exactly what a player sitting
+// on the edge of what has been published looks like.
+window.__F = { episodes: 0, frozenMs: 0, longestMs: 0 };
+{
+  let lastCt = -1, frozenSince = 0, played = false;
+  const record = (d) => {
+    if (d < 200) return;
+    window.__F.episodes++;
+    window.__F.frozenMs += d;
+    window.__F.longestMs = Math.max(window.__F.longestMs, d);
+  };
+  // run.mjs calls this before reading __F, so a freeze still going at the
+  // end of the watch is counted rather than silently dropped.
+  window.__closeFreeze = () => {
+    if (frozenSince) record(Date.now() - frozenSince);
+    frozenSince = 0;
+  };
+  V.addEventListener("playing", () => { played = true; });
+  setInterval(() => {
+    if (!played || V.paused) return;
+    const now = Date.now();
+    if (V.currentTime === lastCt) {
+      if (!frozenSince) frozenSince = now - 100;
+    } else if (frozenSince) {
+      record(now - frozenSince);
+      frozenSince = 0;
+    }
+    lastCt = V.currentTime;
+  }, 100);
+}
 let retries = 0;
 hls.on(Hls.Events.ERROR, (e, d) => {
   if (d.fatal && d.type === "networkError" && retries < 60) {

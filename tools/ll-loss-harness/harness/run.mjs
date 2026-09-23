@@ -59,6 +59,10 @@ page.on("pageerror", (e) => console.log("PAGEERROR", String(e).slice(0, 300)));
 await page.goto(`http://127.0.0.1:${proxyPort}/page?cfg=${cfg}`);
 await page.waitForTimeout(secs * 1000);
 const L = await page.evaluate(() => window.__L || []);
+const F = await page.evaluate(() => {
+  if (window.__closeFreeze) window.__closeFreeze();
+  return window.__F || null;
+});
 await browser.close();
 proxy.close();
 
@@ -82,6 +86,31 @@ const ticks = L.filter((x) => x.k === "tick");
 for (const t of ticks.filter((_, i) => i % 3 === 0).slice(0, 14)) console.log(((t.t - t0) / 1000).toFixed(0) + "s tick", JSON.stringify(t.o));
 const vids = L.filter((x) => x.k.startsWith("video:"));
 for (const v of vids.slice(0, 16)) console.log(((v.t - t0) / 1000).toFixed(1) + "s " + v.k, JSON.stringify(v.o));
+// Every time the element ran out of media: a "waiting" event, and how long
+// until the next "playing". This is what a viewer calls a stall.
+{
+  // Anything before the first "playing" is the startup buffer fill, not a
+  // stall, so only waits that begin after it count.
+  const firstPlay = L.find((x) => x.k === "video:playing")?.t ?? Infinity;
+  let stalls = 0;
+  let stalledMs = 0;
+  let open = null;
+  for (const x of L) {
+    if (x.t <= firstPlay) continue;
+    if (x.k === "video:waiting" && open == null) {
+      open = x.t;
+      stalls++;
+    } else if (x.k === "video:playing" && open != null) {
+      stalledMs += x.t - open;
+      open = null;
+    }
+  }
+  if (open != null) stalledMs += L.at(-1).t - open;
+  const fz = F ? ` freezes=${F.episodes} frozenMs=${F.frozenMs} longestFreezeMs=${F.longestMs}` : "";
+  console.log(`WAITING: stalls=${stalls} stalledMs=${stalledMs}${fz}`);
+  const lat = L.filter((x) => x.k === "tick" && x.o.latency && Number(x.o.ct) > 0).map((x) => Number(x.o.latency));
+  if (lat.length) console.log(`LIVE LATENCY: last=${lat.at(-1).toFixed(2)}s max=${Math.max(...lat).toFixed(2)}s`);
+}
 const fb = L.filter((x) => x.k === "FRAG_BUFFERED");
 console.log("frags buffered:", fb.length, "first", JSON.stringify(fb[0]?.o), "last", JSON.stringify(fb.at(-1)?.o));
 const ve = L.find((x) => x.k === "video:error");

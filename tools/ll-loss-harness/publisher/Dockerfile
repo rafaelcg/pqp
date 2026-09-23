@@ -6,7 +6,7 @@ FROM golang:1-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go ./
+COPY *.go ./
 RUN CGO_ENABLED=0 go build -o /out/rampub .
 
 FROM debian:bookworm-slim

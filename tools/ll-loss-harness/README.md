@@ -221,6 +221,56 @@ exists to measure against — see "What this now asserts" above for what
 for how to get the pre-#700 FAIL back on demand to confirm the loop still
 catches it.
 
+## Idle and bursty sources (`SOURCE=idle`)
+
+Loss is one way a presenter breaks LL playback; timing is the other. A
+Chrome tab share of a mostly static page sends a frame every 0.3 to 1 s,
+nothing at all while the page is still, and a burst when it repaints, and
+on 2026-09-21 that shape made `pqp-remux` publish parts up to a second
+late. `SOURCE=idle` reproduces it:
+
+```bash
+SOURCE=idle WATCH_SECONDS=120 ./run.sh                           # the part deadline on (default grace, 150 ms)
+SOURCE=idle WATCH_SECONDS=120 PART_DEADLINE_GRACE_MS=1000 ./run.sh # the pre-deadline timing
+```
+
+- `rampub` publishes `.data/idle.h264` (`scripts/gen-idle.sh`: 720p,
+  baseline, **one reference frame**, so `internal/skipframe` accepts it) on
+  a wall-clock schedule (`PACE=idle-bursty`, `publisher/pace.go`): 3 s at
+  30 fps, 7 s at 1.4 fps, a 4 s freeze, a 1 s burst, 5 s of irregular
+  gaps, repeated. RTP timestamps follow the schedule, and a keyframe goes
+  out every 2 s of wall time, standing in for the PLIs a real encoder
+  answers.
+- `SOURCE=static` and `SOURCE=mixed` use the cadence the 2026-09-21
+  investigation derived from that party (3 s at ~24 fps then static; or 45 s
+  active / 30 s static, repeated): static gaps are exponential with a 1 s
+  mean clamped to 0.3..3 s, and keyframes come only every 4.1 s, the remux's
+  PLI gate. Seeded, so every run sends the same frames.
+- `pqp-remuxd` runs with production's `CLOCK_CUT_PARTS=true`, and
+  `PART_DEADLINE_GRACE_MS` passes through.
+- The playlist server holds blocking reloads the way `tools/hls-edge` does
+  (`POLL_MODE=edge`: the origin re-read once per PART-TARGET, once a second
+  past 1.5 s, a 6 s budget on video), using the Worker's own constants and
+  its own `parseLiveEdge` / `isMsnPartAvailable`.
+- The viewer joins once 12 s of media exist, as an audience joins a party
+  in progress, so two runs start at comparable distances from the edge.
+- `harness/lateness.mjs` polls `state.json` every 10 ms beside the viewer
+  and prints `LATENESS video|audio` (p50/p90/p99/max and counts over 250
+  and 500 ms): when each part first appeared against where it ends on the
+  media timeline, read from its tfdt, plus the inter-arrival of parts at
+  the origin (p50/p99/max). Every part's bytes and a
+  `parts.json` index land in `.data/runs/<id>/parts/`.
+- The summary adds the viewer's `WAITING:` line (stalls after first play,
+  and freezes sampled every 100 ms), its live latency, and the remux's own
+  counters summed over the run (`deadline`, `late250`, `late500`,
+  `lateMaxMs`, `ptsShiftMs`).
+
+**Running two harnesses on one Docker host.** Every host port is
+overridable (`LL_HARNESS_LIVEKIT_PORT`, `LL_HARNESS_REMUXD_PORT`,
+`LL_HARNESS_PORT`, `PORT`), and `COMPOSE_PROJECT_NAME` separates the
+containers. Without both, a second run's opening `down` removes the first
+run's containers and its playlist server fails with `EADDRINUSE`.
+
 ## Loss injection: exactly what it models
 
 `publisher/entrypoint.sh` runs inside the `publisher` container (granted
