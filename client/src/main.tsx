@@ -40,8 +40,12 @@ import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { UpdatePrompt } from "./components/layout/update-prompt";
+import { StaleChunkBanner } from "./components/layout/stale-chunk-banner";
+import { recoverFromChunkLoadError } from "./lib/chunk-reload";
+import { isInCall } from "./lib/in-call-state";
 import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
 import { installShareAudioProbe } from "./lib/share-audio-probe";
+import { setStaleChunkBannerVisible } from "./lib/stale-chunk-state";
 import "./index.css";
 
 // The chat client, the emoji picker's data, and the legal pages are all dead
@@ -193,6 +197,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   return (
     <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
       <UpdatePrompt />
+      <StaleChunkBanner />
       <Routes>
         <Route element={<DarkRoutes />}>
           <Route path="/" element={<LandingPage />} />
@@ -402,6 +407,37 @@ rememberCreateIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
+
+// Cloudflare Pages deletes an old deploy's hashed assets once a new one
+// lands, so a tab left open across a deploy 404s the moment Vite's build
+// output tries to load a chunk: its own `import()`, or a dep it preloads
+// first via an injected `<link rel="modulepreload">`. Vite wraps that in a
+// `vite:preloadError` event on `window` before rethrowing, specifically so
+// something outside React can catch it here; a `React.lazy` component that
+// hits the same failure and is NOT caught here still throws during render
+// and reaches `ErrorBoundary`, which runs this exact same guarded helper.
+//
+// `event.preventDefault()` is what stops Vite's helper from rethrowing, and
+// it is only called when this tab is actually taking over recovery by
+// reloading. Every other outcome, including "deferred" (an active call),
+// lets it rethrow on purpose: that is what turns the underlying rejection
+// into a real `React.lazy` failure so it reaches `ErrorBoundary`, which
+// calls this same helper again and renders the in-call fallback in the
+// broken chunk's place. Swallowing it here instead would leave `React.lazy`
+// resolving to nothing usable, with no error and no fallback to show for it.
+window.addEventListener("vite:preloadError", (event) => {
+  const preloadEvent = event as CustomEvent & { payload?: unknown };
+  const action = recoverFromChunkLoadError(
+    preloadEvent.payload ?? preloadEvent,
+    {
+      isInCall,
+      onDeferred: () => setStaleChunkBannerVisible(true),
+    },
+  );
+  if (action === "reloaded") {
+    event.preventDefault();
+  }
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
