@@ -1256,6 +1256,29 @@ describe("box budget: a camera is not priced against the egress it replaces", ()
     );
   });
 
+  it("charges nothing for a replaced camera whose stop landed", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    // Room for the rung and exactly one camera.
+    const oneCamera = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const twoCameras = HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(Math.round((oneCamera + twoCameras) / 2));
+
+    cameraTrackId = "TR_CAM_2";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
   it("still charges the stuck camera at a camera's weight", async () => {
     // Excluded as a rendition is not the same as free: a stop that timed out
     // leaves it running. A box with room for one camera beside the rung but

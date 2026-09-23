@@ -5143,13 +5143,19 @@ async function tendMicArchive(
  * A lookup that fails falls back to stopping: an egress we believe is ours and
  * do not stop is pitfall 15's leaked handler, which is the worse of the two.
  */
+/**
+ * Resolves to the egress ids LiveKit confirmed are stopped (the stop landed,
+ * or it said they had already finished). Anything else passed in may still be
+ * running: deferred, owned elsewhere, or a stop that failed.
+ */
 async function stopRungs(
   channelId: string,
   entries: readonly RunningRung[],
-): Promise<void> {
+): Promise<Set<string>> {
+  const stopped = new Set<string>();
   const egress = getEgress();
   if (!egress) {
-    return;
+    return stopped;
   }
   const ownedElsewhere = await sessionIdsOwnedElsewhere(
     entries.map((entry) => entry.sessionId),
@@ -5219,7 +5225,11 @@ async function stopRungs(
     deferredStops.delete(entry.egressId);
     try {
       await egress.stopEgress(entry.egressId);
+      stopped.add(entry.egressId);
     } catch (error) {
+      if (egressAlreadyStopped(error)) {
+        stopped.add(entry.egressId);
+      }
       // An egress LiveKit says has already finished is not a failed stop: see
       // `egressAlreadyStopped`. Three of these on one ordinary teardown is
       // what 2026-09-17's log opened with, and every one of them was fine.
@@ -5237,6 +5247,7 @@ async function stopRungs(
       );
     }
   }
+  return stopped;
 }
 
 /**
@@ -5435,19 +5446,20 @@ async function reconcileCameraEgress(
   // 20:13:14Z), and priced as a full rendition it refused its own
   // replacement: boxMbps=651 against 600, the camera gone for the cooldown.
   //
-  // NOT FREE, THOUGH: a stop that timed out leaves it running, so it is
-  // charged at its own weight (a camera, or a voice-only slot), not as a
-  // rendition and not as nothing. When the stop did land that is a brief
-  // over-count of one camera, which errs toward the box.
+  // FREE ONLY WHEN THE STOP LANDED. A stop that failed or was deferred leaves
+  // it running, so then it is charged at its own weight (a camera, or a
+  // voice-only slot): not as a rendition, and not as nothing.
   const replaced = new Set<string>();
   let replacedMbps = 0;
   if (current) {
     replaced.add(current.egressId);
-    replacedMbps = current.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
     room.camera = null;
     room.stream = withoutCameraUrl(room.stream);
     await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
-    await stopRungs(channelId, [current]);
+    const confirmed = await stopRungs(channelId, [current]);
+    if (!confirmed.has(current.egressId)) {
+      replacedMbps = current.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
+    }
     logEvent("voice.hlsCameraStopped", {
       channelId,
       egressId: current.egressId,
