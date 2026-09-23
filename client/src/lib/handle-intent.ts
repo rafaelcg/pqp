@@ -3,8 +3,8 @@ import { parseAppRoute } from "./app-route";
 
 /**
  * Intentions that have to survive a sign-up. Three are described here; the
- * Discord import and the invite link's `?ref=` tag, further down, are the same
- * shape with their own reasons.
+ * create intent (a `/vem` CTA, `?import=discord`) and the invite link's
+ * `?ref=` tag, further down, are the same shape with their own reasons.
  *
  * THIS IS THE INVITE BUG AGAIN, in two new shapes. `signedOutRedirectPath`
  * already fixed the version where somebody clicks an invite link, signs up, and
@@ -207,23 +207,86 @@ export function intentStorage(): WritableStorage | null {
   }
 }
 
+// ------------------------------------------------------- create / import
+
 /**
- * The community somebody came to CREATE, which is the fourth intention a
- * sign-up has to carry: `pqp.gg/vem` sells "paste your Discord template and the
- * room is born here", and its buttons are sign-up buttons. Without this the new
- * account lands on the onboarding's generic last step and the Discord import,
- * the one thing the page was about, is two menus away.
+ * CREATE. The community somebody came to make, which is the fourth intention a
+ * sign-up has to carry. `pqp.gg/vem` sells "paste your Discord template and the
+ * room is born here", its buttons are sign-up buttons, and a campaign link can
+ * say the same thing with `?import=discord`. What they came for lives inside
+ * the create-server dialog after sign-up and after onboarding, three screens
+ * that never mention it; without this the Discord import, the one thing the
+ * page was about, is two menus away.
  *
- * Two values and nothing else. `discord` opens Create community already on the
- * paste step; `new` opens it on the name field. Anything else is no intent,
- * because this string arrives from a URL anybody can type.
+ * ONE INTENT, TWO SPELLINGS IN THE URL, ONE STASH:
+ *
+ *  - `?import=discord` (also `1`, `true`) opens Create community on the
+ *    Discord paste step and skips the onboarding's "create or join?" step.
+ *    `?import=<code>` or `?import=discord.new/<code>` also pre-fills the paste
+ *    box. This is what every CTA writes (`createIntentHref`).
+ *  - `?create=discord` is the same intent, the spelling `/vem` shipped with
+ *    first; still read so a link already shared keeps working.
+ *  - `?create=new` opens it on the name field, and only when there is no
+ *    onboarding to run: that step IS a name field.
+ *
+ * `source` is null when the intent is the door alone. When it is set it is a
+ * `discord.new` link built from a code `parseDiscordTemplateCode` accepted, so
+ * nothing the visitor typed into the URL reaches the paste box verbatim.
+ * Anything else is no intent, because this string arrives from a URL anybody
+ * can type.
  */
-export type CreateIntent = "discord" | "new";
+export interface CreateIntent {
+  mode: "name" | "import";
+  source: string | null;
+}
 
 const CREATE_KEY = "pqp:pending-create-community";
 
-function asCreateIntent(value: string | null): CreateIntent | null {
-  return value === "discord" || value === "new" ? value : null;
+/** The stored value for `?create=new`. Too short to be a template code. */
+const CREATE_NAME = "new";
+/** The stored value for the import door with no template named. */
+const CREATE_IMPORT_ANY = "discord";
+
+/** The query parameters this intent is read from, for the URL clean-up. */
+export const CREATE_INTENT_PARAMS = ["import", "create"] as const;
+
+function importFromValue(raw: string | null): CreateIntent | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") {
+    return null;
+  }
+  if (["discord", "1", "true"].includes(value.toLowerCase())) {
+    return { mode: "import", source: null };
+  }
+  const code = parseDiscordTemplateCode(value);
+  return code
+    ? { mode: "import", source: `https://discord.new/${code}` }
+    : null;
+}
+
+function createFromValue(raw: string | null): CreateIntent | null {
+  if (raw === CREATE_NAME) {
+    return { mode: "name", source: null };
+  }
+  return raw === CREATE_IMPORT_ANY ? { mode: "import", source: null } : null;
+}
+
+/**
+ * The intent on a URL: `?import=` first, then `?create=`. Null when neither
+ * carries one that makes sense.
+ */
+export function createIntentFromSearch(search: string): CreateIntent | null {
+  const params = new URLSearchParams(search);
+  return importFromValue(params.get("import")) ?? createFromValue(params.get("create"));
+}
+
+/** The `/app` URL that carries `intent` through a sign-up. */
+export function createIntentHref(intent: CreateIntent): string {
+  if (intent.mode === "name") {
+    return `/app?create=${CREATE_NAME}`;
+  }
+  const code = intent.source ? parseDiscordTemplateCode(intent.source) : null;
+  return `/app?import=${code ?? CREATE_IMPORT_ANY}`;
 }
 
 export function stashCreateIntent(
@@ -231,92 +294,38 @@ export function stashCreateIntent(
   intent: CreateIntent,
   now: number = Date.now(),
 ): void {
-  write(storage, CREATE_KEY, intent, now);
+  write(
+    storage,
+    CREATE_KEY,
+    intent.mode === "name" ? CREATE_NAME : (intent.source ?? CREATE_IMPORT_ANY),
+    now,
+  );
 }
 
 export function takeCreateIntent(
   storage: WritableStorage | null,
   now: number = Date.now(),
 ): CreateIntent | null {
-  return asCreateIntent(take(storage, CREATE_KEY, now));
-}
-
-/** `?create=discord` or `?create=new` on any `/app` URL. */
-export function createIntentFromSearch(search: string): CreateIntent | null {
-  return asCreateIntent(new URLSearchParams(search).get("create"));
-// ------------------------------------------------------------ Discord import
-
-const IMPORT_KEY = "pqp:pending-discord-import";
-
-/** The stored value when the intent names no template, only the door. */
-const IMPORT_ANY = "discord";
-
-/**
- * IMPORT. Somebody on a "Vem pra pqp" page clicks "trazer meu servidor do
- * Discord". What they came for is the Discord layout copy, which lives inside
- * the create-server dialog after sign-up and after onboarding: three screens
- * that never mention it. `?import=discord` on any URL (or `?import=<code>` /
- * `?import=discord.new/<code>`, which also pre-fills the paste box) is
- * stashed at boot, and the app opens that dialog on the paste step the moment
- * the account is ready and onboarding is out of the way.
- *
- * `source` is null when the intent is the door alone. When it is set it is a
- * `discord.new` link built from a code `parseDiscordTemplateCode` accepted, so
- * nothing the visitor typed into the URL reaches the paste box verbatim.
- */
-export interface ImportIntent {
-  source: string | null;
-}
-
-function importIntentFromValue(raw: string | null): ImportIntent | null {
-  const value = raw?.trim() ?? "";
-  if (value === "") {
-    return null;
-  }
-  if (["discord", "1", "true"].includes(value.toLowerCase())) {
-    return { source: null };
-  }
-  const code = parseDiscordTemplateCode(value);
-  return code ? { source: `https://discord.new/${code}` } : null;
-}
-
-/** `?import=...` on a URL, or null when it carries none that makes sense. */
-export function importIntentFromSearch(search: string): ImportIntent | null {
-  return importIntentFromValue(new URLSearchParams(search).get("import"));
-}
-
-export function stashImportIntent(
-  storage: WritableStorage | null,
-  intent: ImportIntent,
-  now: number = Date.now(),
-): void {
-  write(storage, IMPORT_KEY, intent.source ?? IMPORT_ANY, now);
-}
-
-export function takeImportIntent(
-  storage: WritableStorage | null,
-  now: number = Date.now(),
-): ImportIntent | null {
-  const stored = take(storage, IMPORT_KEY, now);
+  const stored = take(storage, CREATE_KEY, now);
   if (!stored) {
     return null;
   }
-  return stored === IMPORT_ANY ? { source: null } : importIntentFromValue(stored);
+  return createFromValue(stored) ?? importFromValue(stored);
 }
 
 /**
- * Stash the page's `?import=` at boot, whatever the page. Runs before routing
- * so a campaign link to `/app?import=discord` survives the sign-in redirect,
+ * Stash the page's intent at boot, whatever the page. Runs before routing so
+ * a campaign link to `/app?import=discord` survives the sign-in redirect,
  * which keeps the path and drops the query (`signedOutRedirectPath`).
  */
-export function rememberImportIntentFromLocation(
+export function rememberCreateIntentFromLocation(
   storage: WritableStorage | null,
   location: Pick<Location, "search">,
   now: number = Date.now(),
 ): void {
-  const intent = importIntentFromSearch(location.search);
+  const intent = createIntentFromSearch(location.search);
   if (intent) {
-    stashImportIntent(storage, intent, now);
+    stashCreateIntent(storage, intent, now);
   }
 }
 

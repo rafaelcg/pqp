@@ -348,6 +348,28 @@ test("a ?import=discord link skips the landing step and opens the paste, pre-fil
   await expect(page.getByRole("dialog").getByPlaceholder("Community name")).toBeVisible();
 });
 
+test("the /vem import CTA is the same intent as a ?import=discord link", async ({
+  page,
+}) => {
+  const account = await freshAccount("vemc");
+  await page.addInitScript((value) => {
+    localStorage.setItem("pqp:dev-user-suffix", value);
+  }, account.suffix);
+  await page.goto("/vem");
+  await page.getByRole("link", { name: "Copy my Discord layout" }).first().click();
+  await page.getByRole("button", { name: "Looks right" }).click({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // The same two-step onboarding and the same paste step, empty this time.
+  await expect(page.getByText("Nobody's here yet")).toBeHidden();
+  const paste = page
+    .getByRole("dialog")
+    .getByPlaceholder("discord.new/… or a template code");
+  await expect(paste).toBeVisible({ timeout: 20_000 });
+  await expect(paste).toHaveValue("");
+  await expect(page).not.toHaveURL(/import=|create=/);
+});
+
 // -------------------------------------------------- journey 2: invite arrival
 
 test("an invite link carries a brand-new account into the server, not into a form", async ({

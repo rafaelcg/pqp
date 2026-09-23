@@ -28,6 +28,7 @@ import { useScrollReveal } from "@/hooks/use-scroll-reveal";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import {
+  createIntentHref,
   intentStorage,
   stashCreateIntent,
   type CreateIntent,
@@ -142,8 +143,20 @@ const PANEL = "rounded-[var(--radius-panel)] border border-border bg-surface-1";
 // CTAs
 // ---------------------------------------------------------------------------
 
+/**
+ * The page's two buttons, by the name the Umami events already report. Each
+ * is the same `CreateIntent` a `?import=discord` campaign link carries, so a
+ * CTA and a link land in exactly the same place.
+ */
+const VEM_INTENTS = {
+  discord: { mode: "import", source: null },
+  new: { mode: "name", source: null },
+} as const satisfies Record<string, CreateIntent>;
+
+type VemIntent = keyof typeof VEM_INTENTS;
+
 interface VemCtaProps {
-  intent: CreateIntent;
+  intent: VemIntent;
   label: MessageKey;
   /** Where on the page, for the Umami event. */
   placement: string;
@@ -153,8 +166,8 @@ interface VemCtaProps {
 
 const CTA_CLASS = "cta-lift vem-cta h-12 px-6 text-base";
 
-function appHref(intent: CreateIntent): string {
-  return `/app?create=${intent}`;
+function appHref(intent: VemIntent): string {
+  return createIntentHref(VEM_INTENTS[intent]);
 }
 
 /**
@@ -241,7 +254,7 @@ function ClerkVemCta({
       onClick={() => {
         // Stashed BEFORE Clerk takes over: the modal can end in a navigation
         // this page does not survive. The URL carries it too, as the belt.
-        stashCreateIntent(intentStorage(), intent);
+        stashCreateIntent(intentStorage(), VEM_INTENTS[intent]);
         openAuth("signUp", appHref(intent));
       }}
     >

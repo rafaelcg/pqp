@@ -347,16 +347,16 @@ import {
 } from "@/lib/connection-callback";
 import {
   addIntentFromSearch,
-  importIntentFromSearch,
+  CREATE_INTENT_PARAMS,
+  createIntentFromSearch,
+  stashCreateIntent,
+  stashInviteRef,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
-  takeImportIntent,
-  stashImportIntent,
-  stashInviteRef,
   takeInviteRef,
   takeJoinIntent,
-  type ImportIntent,
+  type CreateIntent,
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
@@ -1049,20 +1049,20 @@ function MainAppContent({
   /**
    * Which step the create-server dialog opens on. `name` for every ordinary
    * opener; `import` (the Discord layout paste) when the person asked for it,
-   * from the onboarding's third door or a `?import=discord` campaign link.
-   * Reset on close so the next ordinary open is ordinary again.
+   * from the onboarding's third door, a `/vem` CTA or a `?import=discord`
+   * campaign link. Reset on close so the next ordinary open is ordinary again.
    */
-  const [createServerStart, setCreateServerStart] = useState<{
-    mode: "name" | "import";
-    source: string | null;
-  }>({ mode: "name", source: null });
+  const [createServerStart, setCreateServerStart] = useState<CreateIntent>({
+    mode: "name",
+    source: null,
+  });
   /**
-   * A Discord import somebody asked for that has not been shown yet. Held
-   * rather than acted on because onboarding may still be on screen: the
-   * dialog opens the moment it is not (see the effect beside the arrival
-   * intents).
+   * A create intent somebody arrived with (or the onboarding's third door)
+   * that has not been shown yet. Held rather than acted on because onboarding
+   * may still be on screen: the dialog opens the moment it is not (see the
+   * effect beside the arrival intents).
    */
-  const [pendingImport, setPendingImport] = useState<ImportIntent | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -6426,21 +6426,23 @@ function MainAppContent({
   }, [bootstrapReady, clerkAccount]);
 
   /**
-   * "I already have a Discord server": open the create dialog on the paste
-   * step, once the app is ready and onboarding is not in front of it. Fed by
-   * a `?import=` campaign link (the arrival intents below) and by the
-   * onboarding's third door; both only set `pendingImport`.
+   * Open Create community for somebody who asked for it, once the app is
+   * ready and onboarding is not in front of it: on the Discord paste step for
+   * "I already have a Discord server", on the name field for `?create=new`.
+   * Fed by the arrival intents below (a `/vem` CTA, a `?import=` campaign
+   * link) and by the onboarding's third door; all of them only set
+   * `pendingCreate`.
    */
   useEffect(() => {
-    if (!bootstrapReady || needsOnboarding || !pendingImport) {
+    if (!bootstrapReady || needsOnboarding || !pendingCreate) {
       return;
     }
     // Shown now, so spend the stash the arrival effect put back.
-    takeImportIntent(browserStorage());
-    setCreateServerStart({ mode: "import", source: pendingImport.source });
+    takeCreateIntent(browserStorage());
+    setCreateServerStart(pendingCreate);
     setShowCreateServer(true);
-    setPendingImport(null);
-  }, [bootstrapReady, needsOnboarding, pendingImport]);
+    setPendingCreate(null);
+  }, [bootstrapReady, needsOnboarding, pendingCreate]);
 
   /**
    * The three intentions somebody arrived with, acted on exactly once.
@@ -6480,31 +6482,40 @@ function MainAppContent({
     const stashedClaim = takeHandleClaim(storage);
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
-    const stashedImport = takeImportIntent(storage);
+    const stashedCreate = takeCreateIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
-    const importIntent = importIntentFromSearch(location.search) ?? stashedImport;
-    if (importIntent) {
-      setPendingImport(importIntent);
+    const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    /**
+     * Create community, for somebody who came to make one (a `/vem` CTA, a
+     * `?import=discord` link). The import also tells the onboarding to skip
+     * its "create or join?" step, which this person already answered. The
+     * name field waits for no onboarding at all: that step IS a name field,
+     * and a second one behind it would ask twice.
+     */
+    if (create && (create.mode === "import" || !needsOnboarding)) {
+      setPendingCreate(create);
       // Kept in storage until the dialog actually opens, so a reload during
       // onboarding (the param is already gone from the URL) still gets there.
-      stashImportIntent(storage, importIntent);
+      stashCreateIntent(storage, create);
     }
 
     if (
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
-      params.has("import")
+      CREATE_INTENT_PARAMS.some((name) => params.has(name))
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
-      params.delete("import");
+      for (const name of CREATE_INTENT_PARAMS) {
+        params.delete(name);
+      }
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
@@ -6520,23 +6531,6 @@ function MainAppContent({
      * account that has none and is less than a day old, so a returning member
      * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
      */
-    /**
-     * Create community, opened for somebody who came from `pqp.gg/vem`.
-     *
-     * `discord` goes straight to the template box and tells the onboarding to
-     * skip its "create or join?" step, which this person already answered.
-     * `new` opens the name field only when there is no onboarding to run:
-     * that step IS a name field, and a second one behind it would ask twice.
-     */
-    if (create === "discord") {
-      setArrivedToImport(true);
-      setCreateServerStart("paste");
-      setShowCreateServer(true);
-    } else if (create === "new" && !needsOnboarding) {
-      setCreateServerStart("name");
-      setShowCreateServer(true);
-    }
-
     if (acquisition) {
       void updateMe({ acquisition }).catch(() => {
         // A lost attribution. Not worth a banner.
@@ -6974,8 +6968,8 @@ function MainAppContent({
       <OnboardingFlow
         user={user}
         pendingInvite={arrivedOnInviteLink}
-        pendingImport={pendingImport !== null}
-        onImportDiscord={() => setPendingImport({ source: null })}
+        pendingImport={pendingCreate?.mode === "import"}
+        onImportDiscord={() => setPendingCreate({ mode: "import", source: null })}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);

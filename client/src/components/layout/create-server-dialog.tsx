@@ -27,19 +27,14 @@ interface CreateServerDialogProps {
   /**
    * Where the dialog opens. `import` goes straight to the Discord layout
    * paste, for somebody who already said "I have a Discord server" (the
-   * onboarding's third door, a `?import=discord` link). Read on each open.
+   * onboarding's third door, a `/vem` CTA or a `?import=discord` link, all one
+   * `CreateIntent`). Read on each open.
    */
   startMode?: "name" | "import";
   /** Pre-fills the paste box when the link named a template. */
   startSource?: string | null;
   onClose: () => void;
   onCreated: (created: CreatedServerPayload) => Promise<void> | void;
-  /**
-   * Where the dialog opens. `paste` skips the name field and lands on the
-   * Discord template box, for somebody who arrived from `pqp.gg/vem` having
-   * already said that is what they came to do (`CreateIntent`).
-   */
-  initialStep?: "name" | "paste";
 }
 
 /**
@@ -61,7 +56,6 @@ export function CreateServerDialog({
   startSource = null,
   onClose,
   onCreated,
-  initialStep = "name",
 }: CreateServerDialogProps) {
   const { t, locale } = useTranslation();
   const [step, setStep] = useState<Step>(startMode === "import" ? "paste" : "name");
@@ -102,12 +96,6 @@ export function CreateServerDialog({
     setDone(null);
     setCopied(null);
   }, [open]);
-
-  useEffect(() => {
-    if (open && initialStep === "paste") {
-      setStep("paste");
-    }
-  }, [open, initialStep]);
 
   useEffect(
     () => () => {

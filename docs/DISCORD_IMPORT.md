@@ -20,11 +20,13 @@ the paste step:
 
 - The onboarding's last step has a third door, **Já tenho um servidor no
   Discord**.
-- `?import=discord` on any URL (a campaign link) is stashed at boot, survives
-  the sign-up, and opens the dialog once the account is ready and onboarding
-  is out of the way. `?import=<code>` or `?import=discord.new/<code>` also
-  pre-fills the paste box. See `ImportIntent` in
-  `client/src/lib/handle-intent.ts`.
+- `?import=discord` on any URL (a campaign link, and what the `/vem` "Copiar
+  a estrutura do meu Discord" CTA writes) is stashed at boot, survives the
+  sign-up, and opens the dialog once the account is ready and onboarding is
+  out of the way. `?import=<code>` or `?import=discord.new/<code>` also
+  pre-fills the paste box. `?create=discord` (the spelling `/vem` shipped
+  with) is read as the same intent, and `?create=new` opens the name field.
+  One stash, one parser: `CreateIntent` in `client/src/lib/handle-intent.ts`.
 
 ## Counting it
 

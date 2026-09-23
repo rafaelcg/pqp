@@ -27,7 +27,7 @@ import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
 import {
-  rememberImportIntentFromLocation,
+  rememberCreateIntentFromLocation,
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
@@ -398,7 +398,7 @@ rememberAcquisitionFromLocation(browserStorage(), window.location);
 // Same reasoning for the two intents a sign-in redirect would drop with the
 // query string: `?import=discord` and an invite link's `?ref=` tag
 // (lib/handle-intent.ts).
-rememberImportIntentFromLocation(browserStorage(), window.location);
+rememberCreateIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
