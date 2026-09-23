@@ -130,15 +130,17 @@ export function logRejection(
   channelId: string,
   rung: string | undefined,
   reason: string,
+  /** `hlsEdge.segmentRejected` for the segment route; same limiter, own name. */
+  event = "hlsEdge.playlistRejected",
 ): void {
-  const key = `${channelId}:${rung ?? "-"}:${reason}`;
+  const key = `${event}:${channelId}:${rung ?? "-"}:${reason}`;
   const now = Date.now();
   const seen = rejectionLog.get(key);
   if (seen && now - seen.at < REJECTION_LOG_WINDOW_MS) {
     seen.suppressed += 1;
     return;
   }
-  logEvent("hlsEdge.playlistRejected", {
+  logEvent(event, {
     channelId,
     rung: rung ?? null,
     reason,

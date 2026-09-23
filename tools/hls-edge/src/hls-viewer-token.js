@@ -161,7 +161,7 @@ async function sign(payload, secret) {
  * @param {string} secret
  * @returns {Promise<boolean>}
  */
-async function macValid(payload, mac, secret) {
+export async function macValid(payload, mac, secret) {
   const expected = await sign(payload, secret);
   return constantTimeEqual(mac, expected);
 }
@@ -170,7 +170,7 @@ async function macValid(payload, mac, secret) {
  * @param {string} payload base64url
  * @returns {Record<string, unknown> | null}
  */
-function decodeClaims(payload) {
+export function decodeClaims(payload) {
   try {
     const json = new TextDecoder().decode(base64UrlToBytes(payload));
     const parsed = JSON.parse(json);
@@ -186,7 +186,7 @@ function decodeClaims(payload) {
  * @param {string} token
  * @returns {{ payload: string; mac: string } | null}
  */
-function splitToken(token) {
+export function splitToken(token) {
   const dot = token.lastIndexOf(".");
   if (dot <= 0) {
     return null;

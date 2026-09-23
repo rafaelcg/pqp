@@ -22,6 +22,7 @@ import {
 } from "./hls-ladder.js";
 import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
+import { edgeSegmentUrl, hlsSegmentBaseUrl } from "./hls-segment-token.js";
 import { hlsSessionOwnedElsewhere } from "./hls-ownership.js";
 import {
   isBusEnabled,
@@ -55,12 +56,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
  * two different viewers a shared cache entry -- their URLs differ by SigV4
  * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
  * endpoint (there isn't one today) would still see distinct URLs per viewer
- * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
- * to a stable, unsigned path, or the edge Worker serving segment bytes itself
- * off its own R2 credentials -- both out of scope for this change; see
- * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
- * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
- * `tools/hls-edge/`.
+ * per signing bucket. Cross-viewer sharing is what `LIVE_HLS_SEGMENT_BASE_URL`
+ * does instead: the edge Worker serves segment bytes itself, off an R2
+ * binding, from its colo cache (`hls-segment-token.ts`, and
+ * `docs/WATCH_PARTY.md` §"Segments at the edge").
  */
 const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
@@ -154,6 +153,11 @@ interface MemoisedSegmentUrl {
   url: string;
   /** The instant baked into the URL's `X-Amz-Date`, for the expiry guard. */
   signedAtMs: number;
+  /**
+   * `LIVE_HLS_SEGMENT_BASE_URL` as it read when this URL was minted (null:
+   * a presigned R2 URL). A memo entry is only reused under the same value.
+   */
+  segmentBase: string | null;
 }
 const segmentUrlMemo = new Map<string, Map<string, MemoisedSegmentUrl>>();
 
@@ -971,6 +975,7 @@ async function renderSignedPlaylist(
   const signedAt = segmentSigningTime(now, ttl);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
 
+  const segmentBase = hlsSegmentBaseUrl();
   const memoKey = cacheKey(channelId, startedAt, rung);
   const memo = segmentMemoFor(memoKey);
   const present = new Set<string>();
@@ -994,19 +999,45 @@ async function renderSignedPlaylist(
       const key = trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`;
       present.add(key);
       const existing = memo.get(key);
-      if (existing && now - existing.signedAtMs < ttlMs - reuseGuardMs) {
+      // A memoised URL from the OTHER delivery mode is not reused: flipping
+      // `LIVE_HLS_SEGMENT_BASE_URL` mid-party moves every listed segment on
+      // the next render (one refetch for AVPlayer, the same cost a bucket
+      // boundary has) rather than leaving the window split between two hosts
+      // for as long as the memo lives.
+      if (
+        existing &&
+        now - existing.signedAtMs < ttlMs - reuseGuardMs &&
+        existing.segmentBase === segmentBase
+      ) {
         return existing.url;
       }
-      const url = signRequest({
-        method: "GET",
-        key,
-        ttlSeconds: ttl,
-        forRead: true,
-        config,
-        now: signedAt,
-        query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
-      }).url;
-      memo.set(key, { url, signedAtMs: signedAt.getTime() });
+      // SEGMENTS AT THE EDGE (`LIVE_HLS_SEGMENT_BASE_URL`, see
+      // `hls-segment-token.ts`): the same quantised instant, so a segment
+      // keeps one URL for its whole life in the window whichever way it is
+      // served. Null (flag off, no key, a line the edge cannot name) falls
+      // through to the presigned R2 URL every deployment had before.
+      const url =
+        (segmentBase
+          ? edgeSegmentUrl({
+              base: segmentBase,
+              channelId,
+              startedAt,
+              rung,
+              key,
+              signedAtMs: signedAt.getTime(),
+              ttlSeconds: ttl,
+            })
+          : null) ??
+        signRequest({
+          method: "GET",
+          key,
+          ttlSeconds: ttl,
+          forRead: true,
+          config,
+          now: signedAt,
+          query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
+        }).url;
+      memo.set(key, { url, signedAtMs: signedAt.getTime(), segmentBase });
       return url;
     })
     .join("\n");

@@ -135,7 +135,7 @@ function parseMasterVariant(text: string, baseUrl: URL): URL | null {
   return lastUri ? new URL(lastUri, baseUrl) : null;
 }
 
-type MediaSegment = { seq: number; url: URL };
+type MediaSegment = { seq: number; url: URL; durationS: number };
 type MediaPlaylist = { mediaSequence: number; targetDuration: number | null; segments: MediaSegment[] };
 
 function parseMediaPlaylist(text: string, baseUrl: URL): MediaPlaylist {
@@ -143,8 +143,15 @@ function parseMediaPlaylist(text: string, baseUrl: URL): MediaPlaylist {
   let mediaSequence = 0;
   let targetDuration: number | null = null;
   const uris: string[] = [];
+  const durations: number[] = [];
+  let pendingDuration = 0;
   for (const line of lines) {
     if (line.length === 0) continue;
+    if (line.startsWith("#EXTINF:")) {
+      const value = Number.parseFloat(line.slice("#EXTINF:".length));
+      pendingDuration = Number.isFinite(value) && value > 0 ? value : 0;
+      continue;
+    }
     if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
       const value = Number(line.slice("#EXT-X-MEDIA-SEQUENCE:".length));
       if (Number.isFinite(value)) mediaSequence = value;
@@ -153,21 +160,71 @@ function parseMediaPlaylist(text: string, baseUrl: URL): MediaPlaylist {
       if (Number.isFinite(value) && value > 0) targetDuration = value;
     } else if (!line.startsWith("#")) {
       uris.push(line);
+      durations.push(pendingDuration);
+      pendingDuration = 0;
     }
   }
-  const segments = uris.map((uri, index) => ({ seq: mediaSequence + index, url: new URL(uri, baseUrl) }));
+  const segments = uris.map((uri, index) => ({
+    seq: mediaSequence + index,
+    url: new URL(uri, baseUrl),
+    durationS: durations[index] || targetDuration || 2,
+  }));
   return { mediaSequence, targetDuration, segments };
 }
 
 // ------------------------------------------------------------------ metrics
 
 type Kind = "master" | "media" | "segment";
+
+/**
+ * A viewer's playback, modelled from delivery alone: playback starts once the
+ * first segment has arrived, the playhead then advances in real time, every
+ * delivered segment adds its `#EXTINF` to the buffer, and a stall is the
+ * buffer running dry before the next segment lands (resumed as soon as it
+ * does). No decoder, no ABR: this isolates exactly what the delivery path
+ * does to a player, which is the question segments at the edge asks.
+ */
+class PlaybackModel {
+  started = false;
+  startupMs: number | null = null;
+  private bufferEndsAt = 0;
+  stalls = 0;
+  stallMs = 0;
+  constructor(private readonly joinedAt: number) {}
+
+  delivered(now: number, durationS: number): void {
+    if (!this.started) {
+      this.started = true;
+      this.startupMs = now - this.joinedAt;
+      this.bufferEndsAt = now + durationS * 1000;
+      return;
+    }
+    if (now > this.bufferEndsAt) {
+      this.stalls++;
+      this.stallMs += now - this.bufferEndsAt;
+      this.bufferEndsAt = now + durationS * 1000;
+      return;
+    }
+    this.bufferEndsAt += durationS * 1000;
+  }
+
+  /** A stall still in progress when the run ends counts too. */
+  finish(now: number): void {
+    if (this.started && now > this.bufferEndsAt + 500) {
+      this.stalls++;
+      this.stallMs += now - this.bufferEndsAt;
+      this.bufferEndsAt = now;
+    }
+  }
+}
 const KINDS: Kind[] = ["master", "media", "segment"];
 
 class Metrics {
   totalByKind: Record<Kind, number> = { master: 0, media: 0, segment: 0 };
   statusByKind: Record<Kind, Record<string, number>> = { master: {}, media: {}, segment: {} };
   latenciesByKind: Record<Kind, number[]> = { master: [], media: [], segment: [] };
+  /** Time to response headers, per kind: what the delivery path adds before the first byte. */
+  ttfbByKind: Record<Kind, number[]> = { master: [], media: [], segment: [] };
   bytesByKind: Record<Kind, number> = { master: 0, media: 0, segment: 0 };
   errorsByKind: Record<Kind, number> = { master: 0, media: 0, segment: 0 };
   sinceLastPrint: { countByKind: Record<Kind, number>; segmentBytes: number } = {
@@ -175,8 +232,9 @@ class Metrics {
     segmentBytes: 0,
   };
 
-  record(kind: Kind, status: number, ms: number, bytes: number): void {
+  record(kind: Kind, status: number, ms: number, bytes: number, ttfbMs?: number): void {
     this.totalByKind[kind]++;
+    if (ttfbMs !== undefined && status >= 200 && status < 300) this.ttfbByKind[kind].push(ttfbMs);
     const key = String(status);
     this.statusByKind[kind][key] = (this.statusByKind[kind][key] ?? 0) + 1;
     this.latenciesByKind[kind].push(ms);
@@ -201,25 +259,28 @@ function percentile(values: number[], p: number): number | null {
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-async function timedGet(url: string): Promise<{ status: number; ms: number; bytes: number; text: string }> {
+async function timedGet(url: string): Promise<{ status: number; ms: number; bytes: number; text: string; ttfbMs: number }> {
   const start = Date.now();
   try {
     const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const ttfbMs = Date.now() - start;
     const buf = await res.arrayBuffer();
-    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength, text: new TextDecoder().decode(buf) };
+    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength, text: new TextDecoder().decode(buf), ttfbMs };
   } catch {
-    return { status: 0, ms: Date.now() - start, bytes: 0, text: "" };
+    return { status: 0, ms: Date.now() - start, bytes: 0, text: "", ttfbMs: Date.now() - start };
   }
 }
 
-async function timedGetDrain(url: string): Promise<{ status: number; ms: number; bytes: number }> {
+async function timedGetDrain(url: string): Promise<{ status: number; ms: number; bytes: number; ttfbMs: number; host: string }> {
   const start = Date.now();
+  const host = new URL(url).host;
   try {
     const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const ttfbMs = Date.now() - start;
     const buf = await res.arrayBuffer();
-    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength };
+    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength, ttfbMs, host };
   } catch {
-    return { status: 0, ms: Date.now() - start, bytes: 0 };
+    return { status: 0, ms: Date.now() - start, bytes: 0, ttfbMs: Date.now() - start, host };
   }
 }
 
@@ -244,6 +305,9 @@ type ViewerResult = {
   segmentsFetched: number;
   segmentBytes: number;
   mediaPolls: number;
+  /** Which host served this viewer's segments (the bucket, or the edge). */
+  segmentHosts: string[];
+  playback: { startupMs: number | null; stalls: number; stallMs: number };
 };
 
 type RunnerCtx = {
@@ -269,6 +333,8 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
     segmentsFetched: 0,
     segmentBytes: 0,
     mediaPolls: 0,
+    segmentHosts: [],
+    playback: { startupMs: null, stalls: 0, stallMs: 0 },
   };
 
   await sleep(startDelayMs);
@@ -279,9 +345,12 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
   result.started = true;
 
   // 1. Master playlist, once, with this viewer's own token.
+  // The startup clock starts at join, before the master and first media
+  // playlist, which are part of what a viewer waits through.
+  const playback = new PlaybackModel(Date.now());
   const taggedMasterUrl = withToken(masterUrl, token);
   const masterRes = await timedGet(taggedMasterUrl.toString());
-  ctx.metrics.record("master", masterRes.status, masterRes.ms, masterRes.bytes);
+  ctx.metrics.record("master", masterRes.status, masterRes.ms, masterRes.bytes, masterRes.ttfbMs);
   if (masterRes.status !== 200) {
     result.playlistErrors++;
     result.fatal = `master playlist ${masterRes.status || "network error"}`;
@@ -349,8 +418,10 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
             const release = await ctx.acquireSegmentSlot();
             try {
               const segRes = await timedGetDrain(segment.url.toString());
-              ctx.metrics.record("segment", segRes.status, segRes.ms, segRes.bytes);
+              ctx.metrics.record("segment", segRes.status, segRes.ms, segRes.bytes, segRes.ttfbMs);
+              if (!result.segmentHosts.includes(segRes.host)) result.segmentHosts.push(segRes.host);
               if (segRes.status === 200) {
+                playback.delivered(Date.now(), segment.durationS);
                 result.segmentsFetched++;
                 result.segmentBytes += segRes.bytes;
               } else {
@@ -370,6 +441,8 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
     await sleep(wait);
   }
 
+  playback.finish(Date.now());
+  result.playback = { startupMs: playback.startupMs, stalls: playback.stalls, stallMs: playback.stallMs };
   result.finished = true;
   return result;
 }
@@ -457,6 +530,8 @@ async function run(): Promise<void> {
     missHistogram[key] = (missHistogram[key] ?? 0) + 1;
   }
   const endedAt = Date.now();
+  // Wall time each viewer spent watching (join to end of run), for the stall ratio.
+  const watchedMsFor = (r: ViewerResult): number => endedAt - (startedAt + startTimes[r.index]!);
 
   const summary = {
     config: {
@@ -486,6 +561,26 @@ async function run(): Promise<void> {
     statusCounts: metrics.statusByKind,
     windowMisses: { total: finalWindowMisses, byViewerHistogram: missHistogram },
     stuckEvents: { total: finalStuckEvents },
+    ttfbMs: {
+      master: fmtPercentiles(metrics.ttfbByKind.master),
+      segment: fmtPercentiles(metrics.ttfbByKind.segment),
+    },
+    playback: (() => {
+      const played = viewerResults.filter(
+        (r): r is ViewerResult => r !== undefined && r.playback.startupMs !== null,
+      );
+      const stallMs = played.reduce((sum, r) => sum + r.playback.stallMs, 0);
+      const watchedMs = played.reduce((sum, r) => sum + Math.max(0, watchedMsFor(r)), 0);
+      return {
+        viewersPlaying: played.length,
+        viewersWithAStall: played.filter((r) => r.playback.stalls > 0).length,
+        stalls: played.reduce((sum, r) => sum + r.playback.stalls, 0),
+        stallSeconds: Math.round(stallMs / 100) / 10,
+        stallRatio: watchedMs > 0 ? Math.round((stallMs / watchedMs) * 10_000) / 10_000 : null,
+        startupMs: fmtPercentiles(played.map((r) => r.playback.startupMs!)),
+      };
+    })(),
+    segmentHosts: [...new Set(viewerResults.flatMap((r) => r?.segmentHosts ?? []))],
     viewers: viewerResults,
   };
 

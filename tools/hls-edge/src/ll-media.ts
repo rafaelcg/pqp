@@ -192,6 +192,25 @@ export interface LlMediaRoute {
   rung: string;
   /** The media file name the playlist emitted: `init.mp4`, `seg-41.m4s`, `part-164.m4s`, or an `audio-` twin. */
   name: string;
+  /**
+   * Which route is being served. Absent means an LL part (everything this
+   * module did before `segment-media.ts` shared its serving path); a
+   * conventional segment's events are logged under `hlsEdge.segment*` so the
+   * two never blur into one counter.
+   */
+  kind?: "ll" | "segment";
+}
+
+/**
+ * The event name for `route`: the LL name as written, or its `hlsEdge.segment*`
+ * twin for a conventional segment (`hlsEdge.llPartCacheHit` ->
+ * `hlsEdge.segmentCacheHit`, `hlsEdge.llMediaHardTimeout` ->
+ * `hlsEdge.segmentHardTimeout`).
+ */
+function mediaEvent(route: LlMediaRoute, llName: string): string {
+  return route.kind === "segment"
+    ? llName.replace(/^hlsEdge\.ll(?:Part|Media)/, "hlsEdge.segment")
+    : llName;
 }
 
 /**
@@ -203,6 +222,12 @@ export interface LlMediaRoute {
  * `mediastreamvalidator` happy rather than changing what plays.
  */
 function contentTypeFor(name: string): string {
+  if (name.endsWith(".ts")) {
+    return "video/mp2t";
+  }
+  if (name.endsWith(".aac")) {
+    return "audio/aac";
+  }
   return name.endsWith(".m4s") ? "video/iso.segment" : "video/mp4";
 }
 
@@ -341,6 +366,10 @@ export interface LlMediaTimers {
   setTimer?: (ms: number, cb: () => void) => () => void;
   /** Passed straight to `coalesceFetch`; defaults to `DEFAULT_JOIN_BOUND_MS`. */
   joinBoundMs?: number;
+  /** How long a preload-hinted LL part is held before a 404; `DEFAULT_PRELOAD_HOLD_MS`. 0 turns the hold off. */
+  preloadHoldMs?: number;
+  /** How often a held request looks again; `PRELOAD_POLL_MS`. */
+  preloadPollMs?: number;
   writeJoinBoundMs?: number;
   hardTimeoutMs?: number;
 }
@@ -474,7 +503,7 @@ async function fetchMediaCoalesced(
     } catch (error) {
       // Logged HERE, once, however many callers share this fetch -- the
       // same rule `fetchRenditionCoalesced` documents.
-      logEvent("hlsEdge.llPartOriginError", {
+      logEvent(mediaEvent(route, "hlsEdge.llPartOriginError"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -483,7 +512,7 @@ async function fetchMediaCoalesced(
       throw new Error("ll media fetch failed");
     }
     if (fetched.ok) {
-      logEvent("hlsEdge.llPartOriginFetch", {
+      logEvent(mediaEvent(route, "hlsEdge.llPartOriginFetch"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -508,7 +537,7 @@ async function fetchMediaCoalesced(
     setTimer: timers.setTimer ?? defaultSetTimer,
     keepAlive: (promise) => ctx.waitUntil(promise),
     onDetach: ({ reason, attempt }) => {
-      logEvent("hlsEdge.llMediaJoinDetached", {
+      logEvent(mediaEvent(route, "hlsEdge.llMediaJoinDetached"), {
         channelId: route.channelId,
         rung: route.rung,
         name: route.name,
@@ -554,13 +583,15 @@ function json(status: number, body: unknown): Response {
  * box has not finished writing -- passed through as a 404 the player
  * retries and NEVER cached (this file's header, property 3).
  */
-function refusalFor(fetched: FetchedMedia, route: LlMediaRoute): Response | null {
+function refusalFor(fetched: FetchedMedia, route: LlMediaRoute, quiet404 = false): Response | null {
   if (fetched.status === 404) {
-    countEvent("hlsEdge.llPartMissing", route);
+    if (!quiet404) {
+      countEvent(mediaEvent(route, "hlsEdge.llPartMissing"), route);
+    }
     return text(404, "Not found", { "Cache-Control": "no-store" });
   }
   if (!fetched.ok) {
-    logEvent("hlsEdge.llPartOriginRejected", {
+    logEvent(mediaEvent(route, "hlsEdge.llPartOriginRejected"), {
       channelId: route.channelId,
       rung: route.rung,
       name: route.name,
@@ -597,7 +628,7 @@ async function serveFromPendingWrite(
       // NEXT arrival does not spend its own bound queueing behind the same
       // corpse, then read the cache anyway -- the write may still have
       // landed before its owner went away.
-      countEvent("hlsEdge.llMediaWriteJoinTimeout", route);
+      countEvent(mediaEvent(route, "hlsEdge.llMediaWriteJoinTimeout"), route);
       if (settledMediaWrites.get(key) === pending) {
         settledMediaWrites.delete(key);
       }
@@ -626,6 +657,7 @@ async function serveCoalesced(
   cache: Cache,
   ctx: ExecutionContext,
   timers: LlMediaTimers,
+  quiet404 = false,
 ): Promise<Response> {
   const key = cacheKey.url;
 
@@ -649,7 +681,7 @@ async function serveCoalesced(
     return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
   }
 
-  const refusal = refusalFor(coalesced.result, route);
+  const refusal = refusalFor(coalesced.result, route, quiet404);
   if (refusal) {
     return refusal;
   }
@@ -701,7 +733,7 @@ async function serveDirect(
   try {
     fetched = await origin.fetchMedia(route.channelId, route.startedAt, route.name);
   } catch (error) {
-    logEvent("hlsEdge.llPartOriginError", {
+    logEvent(mediaEvent(route, "hlsEdge.llPartOriginError"), {
       channelId: route.channelId,
       rung: route.rung,
       name: route.name,
@@ -727,6 +759,195 @@ async function serveDirect(
 
 /** The sentinel `Promise.race` returns when the guard timer wins. Never a `Response`, so the check cannot be accidentally truthy. */
 const HARD_TIMEOUT = Symbol("ll-media-hard-timeout");
+
+/**
+ * PRELOAD HINTS ARE HELD, NOT REFUSED (RFC 8216bis 6.2.6).
+ *
+ * Every LL rendition playlist ends with `#EXT-X-PRELOAD-HINT:TYPE=PART` naming
+ * the part the remux is still writing. hls.js never fetches a hint; AVPlayer,
+ * Safari and Media3 do, the moment they read the playlist, and the protocol's
+ * answer to "that part does not exist yet" is to hold the request open until
+ * it does. This route used to answer 404 straight away: 59,878 video and
+ * 70,421 audio 404s on the 2026-09-21 party, every one of them for part N+1,
+ * and every one a native player that then had to come back for the same part.
+ *
+ * So a 404 for an LL PART that is newer than any this isolate has served for
+ * that rendition is retried every `PRELOAD_POLL_MS` for up to
+ * `DEFAULT_PRELOAD_HOLD_MS`, through the same coalesced fetch every other
+ * viewer of the part shares, and answered the moment it lands. Bounded well
+ * inside the 5 s hard timeout. A part at or below the high-water mark is one
+ * that has left the remux's ring (a player recovering at a stale position),
+ * and still gets its 404 immediately: holding it would only delay the
+ * player's recovery. A part far past the mark is not a hint either. Segments,
+ * init segments and conventional `.ts` are never held. A COLD isolate has no
+ * mark yet, so its first request for a rendition may hold a stale part for
+ * the budget before the 404: bounded, once per rendition per isolate, and
+ * the first 200 it serves sets the mark.
+ */
+export const DEFAULT_PRELOAD_HOLD_MS = 2_500;
+export const PRELOAD_POLL_MS = 150;
+/** A hint is part N+1; a little slack for a reload that raced a part boundary. */
+const PRELOAD_MAX_AHEAD = 4;
+const PART_NAME = /^(audio-)?part-(\d{1,12})\.m4s$/;
+const HIGH_WATER_MAX = 256;
+const partHighWater = new Map<string, number>();
+
+function partOf(route: LlMediaRoute): { key: string; n: number } | null {
+  if (route.kind === "segment") {
+    return null;
+  }
+  const match = PART_NAME.exec(route.name);
+  if (!match) {
+    return null;
+  }
+  return {
+    key: `${route.channelId}/${route.startedAt}/${match[1] ? "a" : "v"}`,
+    n: Number(match[2]),
+  };
+}
+
+function notePartServed(route: LlMediaRoute): void {
+  const part = partOf(route);
+  if (!part) {
+    return;
+  }
+  const seen = partHighWater.get(part.key);
+  if (seen === undefined || part.n > seen) {
+    // Re-inserted so the Map's insertion order is recency, for the trim below.
+    partHighWater.delete(part.key);
+    partHighWater.set(part.key, part.n);
+    if (partHighWater.size > HIGH_WATER_MAX) {
+      const oldest = partHighWater.keys().next().value;
+      if (oldest !== undefined) {
+        partHighWater.delete(oldest);
+      }
+    }
+  }
+}
+
+function isPreloadHint(route: LlMediaRoute): boolean {
+  const part = partOf(route);
+  if (!part) {
+    return false;
+  }
+  const seen = partHighWater.get(part.key);
+  return seen === undefined || (part.n > seen && part.n <= seen + PRELOAD_MAX_AHEAD);
+}
+
+/** For tests. */
+export function resetPreloadHoldForTests(): void {
+  partHighWater.clear();
+  heldPartLoops.clear();
+}
+
+/**
+ * ONE POLL LOOP PER HELD PART, however many viewers are waiting on it (Farol,
+ * PR #784: 500 native viewers each running their own 150 ms loop is 8,500
+ * cache lookups and timer wakeups for one hint). The first waiter starts the
+ * loop, keeps it alive with `ctx.waitUntil`, and every later waiter joins the
+ * same promise. A joiner never bets its response on it, though: it races the
+ * loop against its OWN deadline timer (the rule `coalesced-fetch.js` spells
+ * out: a promise from another request's context may never resume), and on
+ * its deadline it answers the 404 it would have had anyway.
+ *
+ * Resolves true once the part answered something other than 404 (it landed,
+ * or the origin failed and the waiter should see that failure itself).
+ */
+const heldPartLoops = new Map<string, Promise<boolean>>();
+
+function sharedPartWait(
+  cacheKey: Request,
+  origin: LlMediaOrigin,
+  route: LlMediaRoute,
+  cache: Cache,
+  ctx: ExecutionContext,
+  timers: LlMediaTimers,
+  holdMs: number,
+): Promise<boolean> {
+  const key = cacheKey.url;
+  const existing = heldPartLoops.get(key);
+  if (existing) {
+    return existing;
+  }
+  const setTimer = timers.setTimer ?? defaultSetTimer;
+  const pollMs = timers.preloadPollMs ?? PRELOAD_POLL_MS;
+  const loop = (async (): Promise<boolean> => {
+    const deadline = Date.now() + holdMs;
+    while (Date.now() + pollMs <= deadline) {
+      await new Promise<void>((resolve) => {
+        setTimer(pollMs, resolve);
+      });
+      const response = await serveCoalesced(cacheKey, origin, route, cache, ctx, timers, true);
+      // Drained: the body is a cache read-back or the shared buffer, and the
+      // waiters fetch their own copy once this says the part exists.
+      await response.arrayBuffer().catch(() => undefined);
+      if (response.status !== 404) {
+        return true;
+      }
+    }
+    return false;
+  })()
+    .catch(() => false)
+    .finally(() => {
+      if (heldPartLoops.get(key) === loop) {
+        heldPartLoops.delete(key);
+      }
+    });
+  heldPartLoops.set(key, loop);
+  ctx.waitUntil(loop);
+  return loop;
+}
+
+async function serveHoldingPreloadHint(
+  cacheKey: Request,
+  origin: LlMediaOrigin,
+  route: LlMediaRoute,
+  cache: Cache,
+  ctx: ExecutionContext,
+  timers: LlMediaTimers,
+): Promise<Response> {
+  const holdMs = timers.preloadHoldMs ?? DEFAULT_PRELOAD_HOLD_MS;
+  const hold = holdMs > 0 && isPreloadHint(route);
+  let response = await serveCoalesced(cacheKey, origin, route, cache, ctx, timers, hold);
+  if (response.status === 200) {
+    notePartServed(route);
+    return response;
+  }
+  if (!hold || response.status !== 404) {
+    return response;
+  }
+  const setTimer = timers.setTimer ?? defaultSetTimer;
+  const pollMs = timers.preloadPollMs ?? PRELOAD_POLL_MS;
+  let cancel: () => void = () => {};
+  const ownDeadline = new Promise<boolean>((resolve) => {
+    cancel = setTimer(holdMs + pollMs, () => resolve(false));
+  });
+  let landed: boolean;
+  try {
+    landed = await Promise.race([
+      sharedPartWait(cacheKey, origin, route, cache, ctx, timers, holdMs),
+      ownDeadline,
+    ]);
+  } finally {
+    cancel();
+  }
+  if (landed) {
+    response = await serveCoalesced(cacheKey, origin, route, cache, ctx, timers, true);
+    if (response.status === 200) {
+      notePartServed(route);
+      countEvent(mediaEvent(route, "hlsEdge.llPartHeldServed"), route);
+      return response;
+    }
+    if (response.status !== 404) {
+      return response;
+    }
+  }
+  // The hold ran out: the 404 the player would have had straight away,
+  // counted once as the miss it is.
+  countEvent(mediaEvent(route, "hlsEdge.llPartHoldExpired"), route);
+  countEvent(mediaEvent(route, "hlsEdge.llPartMissing"), route);
+  return response;
+}
 
 /**
  * The LL media route. Exported for `index.ts` (which supplies
@@ -763,7 +984,7 @@ export async function handleLlMediaRequest(
   // the rung check above: this is "that file does not exist here", not
   // "you may not have it".
   if (!nameBelongsToRung(route.name, route.rung)) {
-    countEvent("hlsEdge.llPartNameRefused", route);
+    countEvent(mediaEvent(route, "hlsEdge.llPartNameRefused"), route);
     return json(404, { error: "Not found" });
   }
 
@@ -791,17 +1012,38 @@ export async function handleLlMediaRequest(
     // `LL_ORIGIN_BASE` unset: no LL playlist was ever rendered, so nothing
     // legitimately points at this URL. Same 404 as an unknown rung rather
     // than a new failure shape.
-    logEvent("hlsEdge.llMediaOriginNotConfigured", {
+    logEvent(mediaEvent(route, "hlsEdge.llMediaOriginNotConfigured"), {
       channelId: route.channelId,
       rung: route.rung,
     });
     return json(404, { error: "Not found" });
   }
 
+  return serveImmutableMedia(request, origin, cache, ctx, route, timers);
+}
+
+/**
+ * The part of this route that does not care what the bytes are: the colo
+ * cache, the one-fetch-per-key coalescing, the bounded joins and the hard
+ * timeout, for any object that is written once under a name that never
+ * changes. Shared with `segment-media.ts` (conventional segments out of R2),
+ * which runs its own credential check first and hands its route in with
+ * `kind: "segment"`. CALLERS MUST HAVE AUTHORIZED THE REQUEST ALREADY: this
+ * function serves whatever the cache or the origin has under the path.
+ */
+export async function serveImmutableMedia(
+  request: Request,
+  origin: LlMediaOrigin,
+  cache: Cache,
+  ctx: ExecutionContext,
+  route: LlMediaRoute,
+  timers: LlMediaTimers = {},
+): Promise<Response> {
   const cacheKey = cacheKeyRequest(request);
   const cached = await safeCacheMatch(cache, cacheKey);
   if (cached) {
-    countEvent("hlsEdge.llPartCacheHit", route);
+    notePartServed(route);
+    countEvent(mediaEvent(route, "hlsEdge.llPartCacheHit"), route);
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
     return new Response(cached.body, { status: cached.status, headers });
@@ -820,7 +1062,7 @@ export async function handleLlMediaRequest(
   let served: Response | typeof HARD_TIMEOUT;
   try {
     served = await Promise.race([
-      serveCoalesced(cacheKey, origin, route, cache, ctx, timers),
+      serveHoldingPreloadHint(cacheKey, origin, route, cache, ctx, timers),
       guard,
     ]);
   } finally {
@@ -830,7 +1072,7 @@ export async function handleLlMediaRequest(
   if (served !== HARD_TIMEOUT) {
     return served;
   }
-  logEvent("hlsEdge.llMediaHardTimeout", {
+  logEvent(mediaEvent(route, "hlsEdge.llMediaHardTimeout"), {
     channelId: route.channelId,
     rung: route.rung,
     name: route.name,

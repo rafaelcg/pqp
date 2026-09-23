@@ -104,3 +104,28 @@ export const LL_MODE_VALUE = "ll";
 export function requestsLlMode(url: URL): boolean {
   return url.searchParams.get(LL_MODE_PARAM) === LL_MODE_VALUE;
 }
+
+/**
+ * A conventional segment served by this Worker (`segment-media.ts`):
+ * `/api/voice/hls-segment/:channelId/:startedAt/:name`. Its own path, not a
+ * fifth shape of the playlist path, because the web client attaches a Bearer
+ * header to anything under `/api/voice/hls-playlist/`
+ * (`isOwnHlsPlaylistProxyUrl`), and a header would turn every segment fetch
+ * into a CORS preflight plus the fetch.
+ */
+export interface SegmentRouteMatch {
+  channelId: string;
+  startedAt: string;
+  name: string;
+}
+
+const SEGMENT_PATH =
+  /^\/api\/voice\/hls-segment\/([^/]{1,64})\/(\d{1,20})\/([A-Za-z0-9][A-Za-z0-9._-]{0,190})$/;
+
+export function parseSegmentPath(pathname: string): SegmentRouteMatch | null {
+  const match = SEGMENT_PATH.exec(pathname);
+  if (!match) {
+    return null;
+  }
+  return { channelId: match[1]!, startedAt: match[2]!, name: match[3]! };
+}
