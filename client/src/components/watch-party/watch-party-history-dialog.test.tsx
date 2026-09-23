@@ -1,9 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  DOWNLOAD_PREPARING_POLL_MS,
+  DOWNLOAD_POLL_RETRY_MAX_MS,
+  downloadsAfterPollFailure,
+  preparingPollDelayMs,
   WatchPartyDownloadPanel,
   WatchPartyHistoryList,
+  type WatchPartyDownloadsState,
 } from "./watch-party-history-dialog";
+import { ApiError } from "@/lib/api";
 import type { WatchPartyHistoryEntry } from "@/lib/watch-party-history-api";
 
 /**
@@ -218,5 +224,53 @@ describe("WatchPartyDownloadPanel", () => {
     expect(html).toContain("being prepared");
     expect(html).not.toContain("recording unavailable");
     expect(html).not.toContain('data-testid="watch-party-history-download-film-missing"');
+  });
+});
+
+/**
+ * The rehearsal bug: one failed poll of a film "sendo preparado" turned the
+ * row into an error, and only a ready-and-preparing row is polled, so the
+ * polling stopped for good.
+ */
+describe("polling a film that is being prepared", () => {
+  const preparing: WatchPartyDownloadsState = {
+    status: "ready",
+    downloads: { film: null, camera: null, voice: null },
+    preparing: ["film"],
+  };
+
+  it("keeps waiting, and counts the failure, when a poll fails with an outage", () => {
+    const next = downloadsAfterPollFailure(
+      preparing,
+      new ApiError(503, "database_unavailable"),
+      "failed",
+    );
+    expect(next).toEqual({ ...preparing, failedPolls: 1 });
+    const again = downloadsAfterPollFailure(next, new TypeError("Failed to fetch"), "failed");
+    expect(again).toEqual({ ...preparing, failedPolls: 2 });
+  });
+
+  it("stops on an answer rather than an outage: the replay is gone", () => {
+    expect(
+      downloadsAfterPollFailure(preparing, new ApiError(409, "gone"), "gone"),
+    ).toEqual({ status: "error", message: "gone" });
+  });
+
+  it("a first request that fails is still an error (nothing was being prepared)", () => {
+    expect(
+      downloadsAfterPollFailure(
+        { status: "loading" },
+        new ApiError(503, "database_unavailable"),
+        "failed",
+      ),
+    ).toEqual({ status: "error", message: "failed" });
+  });
+
+  it("backs off after failures, from 5 s up to a minute, and resets on success", () => {
+    expect(preparingPollDelayMs(0)).toBe(DOWNLOAD_PREPARING_POLL_MS);
+    expect(preparingPollDelayMs(1)).toBe(5_000);
+    expect(preparingPollDelayMs(2)).toBe(10_000);
+    expect(preparingPollDelayMs(4)).toBe(40_000);
+    expect(preparingPollDelayMs(10)).toBe(DOWNLOAD_POLL_RETRY_MAX_MS);
   });
 });

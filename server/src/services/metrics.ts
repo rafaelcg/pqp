@@ -30,6 +30,7 @@ import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
   hlsPlaylistRejectionsByReason,
+  hlsPlaylistRendersWithoutDb,
 } from "../voice/hls-playlist-proxy.js";
 import { callMetricsSnapshot, type CallMetrics } from "../voice/call-metrics.js";
 import {
@@ -464,6 +465,20 @@ export interface AdminMetrics {
        */
       meshHoldsRefused: number;
       /**
+       * After a database outage: seats re-written to their rows on the first
+       * good heartbeat, and reconcile passes held back while other
+       * instances' leases were stale for the same reason this one's was.
+       * Both zero outside an incident.
+       */
+      seatsReassertedAfterOutage: number;
+      reconcilesDeferredAfterOutage: number;
+      /**
+       * Rosters sent from this process's memory of the last one plus local
+       * changes, because the rows could not be read. Zero outside an
+       * incident.
+       */
+      rostersSentWithoutRows: number;
+      /**
        * Sockets declaring `mesh-resume`, against `voice.roster.sockets`. What
        * an operator reads before flipping `VOICE_MESH_RESUME_REQUIRES_CAP`:
        * phones never declare it, so this converges on the browser share, not
@@ -650,6 +665,13 @@ export interface AdminMetrics {
     keepWarmLoops: number;
     /** Warm (non-viewer) renders performed by those loops since boot. */
     keepWarmRenders: number;
+    /**
+     * Playlist renders served from storage on a recent "live" confirmation
+     * because Postgres failed or was slow to answer the liveness check
+     * (`confirmSessionLive`). Zero outside a database incident; during one,
+     * the number of polls that kept a party playing.
+     */
+    rendersWithoutDb: number;
     /**
      * BROADCAST_PIPELINE B0.5/B0.6: what sampled viewers report about their
      * own playback. `byRung[].p50Ms`/`p95Ms` are encode-to-paint, computed
@@ -1489,6 +1511,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       sweepsHere: runsColdJobs(processRole()),
       keepWarmLoops: hlsKeepWarmLoopsActive(),
       keepWarmRenders: hlsKeepWarmRenders(),
+      rendersWithoutDb: hlsPlaylistRendersWithoutDb(),
       latency: hlsTelemetryActivity(),
       llSessions: llActivity.sessions,
       llStartFailures: llActivity.startFailures,

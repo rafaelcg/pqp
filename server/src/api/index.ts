@@ -9928,6 +9928,17 @@ export async function handleApi(
       resolveAuthSession(req.headers.authorization),
     );
   } catch (error) {
+    // A HEADER THAT COULD NOT BE RESOLVED MUST NOT VETO A CAPABILITY EITHER.
+    // Same rule as the `!resolved` branch below (pitfall 16), for the other
+    // way a Bearer fails: resolving it reads the users table, so while
+    // Postgres is down every request that carries a header fails here, and a
+    // player that sends a header AND a `?t=` (an older web bundle, a native
+    // client) would lose a playlist the token alone can serve with no
+    // database at all. Tried for any failure, not only the breaker's, since
+    // the seconds before the breaker opens arrive as pool timeouts.
+    if (req.method === "GET" && (await tryHlsCapabilityDoor(req, res, pathname))) {
+      return;
+    }
     if (error instanceof DatabaseUnavailableError) {
       // The breaker is open: this rejected in milliseconds rather than
       // hanging on the pool, and the caller gets the same shape every other

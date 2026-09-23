@@ -28,6 +28,8 @@ if (DATABASE_URL) {
 }
 
 let actor: { id: string; clerk_id: string } | null = null;
+/** When set, resolving ANY Bearer throws this (the users table is unreachable). */
+let authFailure: Error | null = null;
 
 vi.mock("../auth/clerk.js", () => ({
   DEV_AUTH_TOKEN: "dev-local-token",
@@ -36,21 +38,34 @@ vi.mock("../auth/clerk.js", () => ({
   invalidateUserCache: () => {},
   clearAuthCaches: () => {},
   resolveAuthUser: async () => (actor ? { user: actor } : null),
-  resolveAuthSession: async (header: string | undefined) =>
-    header && actor ? { user: actor, ageGate: "passed" as const } : null,
+  resolveAuthSession: async (header: string | undefined) => {
+    if (header && authFailure) {
+      throw authFailure;
+    }
+    return header && actor ? { user: actor, ageGate: "passed" as const } : null;
+  },
   verifyAuthHeader: async () => null,
 }));
 
 const { handleApi, resetApiRateLimits } = await import("./index.js");
-const { getPool, initDb, closePool } = await import("../db.js");
+const {
+  getPool,
+  initDb,
+  closePool,
+  DatabaseUnavailableError,
+  forceDbBreakerStateForTests,
+  resetDbBreakerForTests,
+} = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
 const { revokeHlsAccess, resetHlsRevocationsForTests } = await import(
   "../voice/hls-revocation.js"
 );
-const { resetHlsPlaylistCacheForTests } = await import(
-  "../voice/hls-playlist-proxy.js"
-);
+const {
+  resetHlsPlaylistCacheForTests,
+  HLS_PLAYLIST_CACHE_TTL_MS,
+  hlsPlaylistRendersWithoutDb,
+} = await import("../voice/hls-playlist-proxy.js");
 
 const STARTED_AT = 1_700_000_000_000;
 /** The first segment line of a rendered playlist, wherever the header ends. */
@@ -279,6 +294,68 @@ describeDb("hls playlist route", () => {
    * session, and minted only after a real access check, is strictly stronger
    * evidence than the header that was overruling it.
    */
+  /**
+   * THE 2026-09-23 BLIP, THROUGH THE ROUTE. Postgres unreachable for 61 s;
+   * the breaker opened on both replicas. A viewer who is already watching
+   * holds a `?t=` minted after a real access check, and the playlist itself
+   * lives in storage, so nothing about the next poll needs the database.
+   */
+  describe("while the database is down", () => {
+    afterEach(() => {
+      authFailure = null;
+      resetDbBreakerForTests();
+    });
+
+    function token() {
+      return mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT,
+      });
+    }
+
+    async function pastRenderCache() {
+      await new Promise((done) => setTimeout(done, HLS_PLAYLIST_CACHE_TTL_MS + 50));
+    }
+
+    it("a viewer already watching keeps getting FRESH renders with the breaker open", async () => {
+      const t = token();
+      expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+      const before = hlsPlaylistRendersWithoutDb();
+      forceDbBreakerStateForTests("open");
+      await pastRenderCache();
+      const r = await get(`${path(channelId)}?t=${t}`, null);
+      expect(r.status).toBe(200);
+      expect(r.text).toContain("#EXTM3U");
+      // A fresh render, not a replayed body: it went to storage.
+      expect(hlsPlaylistRendersWithoutDb()).toBe(before + 1);
+    });
+
+    it("a header that cannot be resolved (users table unreachable) does not veto the token", async () => {
+      const t = token();
+      expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+      forceDbBreakerStateForTests("open");
+      authFailure = new DatabaseUnavailableError();
+      await pastRenderCache();
+      const r = await getWithDeadHeader(`${path(channelId)}?t=${t}`, "Bearer live.jwt");
+      expect(r.status).toBe(200);
+      expect(r.text).toContain("#EXTM3U");
+    });
+
+    it("the header-only form still answers database_unavailable, since it has nothing else", async () => {
+      forceDbBreakerStateForTests("open");
+      authFailure = new DatabaseUnavailableError();
+      const r = await getWithDeadHeader(path(channelId), "Bearer live.jwt");
+      expect(r.status).toBe(503);
+    });
+
+    it("a session this process never confirmed is not served on trust", async () => {
+      forceDbBreakerStateForTests("open");
+      const r = await get(`${path(channelId)}?t=${token()}`, null);
+      expect(r.status).toBe(503);
+    });
+  });
+
   describe("a failed Bearer beside a valid capability", () => {
     it("serves the playlist, because the token is the stronger evidence", async () => {
       const t = mintHlsViewerToken({

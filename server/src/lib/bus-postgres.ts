@@ -78,6 +78,9 @@ const SPILL_SWEEP_INTERVAL_MS = 60_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 
+/** How long one bus connection attempt may take before it counts as failed. */
+const BUS_CONNECT_TIMEOUT_MS = 10_000;
+
 /** The rolling window a burst is measured over, and batched into. */
 const NOTIFY_BATCH_WINDOW_MS = 50;
 /** Frames published within one window before batching kicks in. Below this,
@@ -206,7 +209,23 @@ export function createPostgresBusTransport(
       return;
     }
     connecting = true;
-    const next = new pg.Client({ connectionString, ...pgSslConfig() });
+    // A connection ATTEMPT is bounded, which it was not: with Postgres
+    // unreachable at the network level (no RST, the 2026-09-23 shape) an
+    // unbounded `connect()` waits out the kernel's SYN retries, a minute or
+    // two, before the backoff loop even gets its next turn.
+    //
+    // An ESTABLISHED connection is deliberately left without keepalive or a
+    // query timeout. The LISTEN socket goes quiet during a partition, and a
+    // quiet socket that resumes when the network does is the fastest way
+    // back: libuv's keepalive would kill it about twenty seconds into a
+    // blip, and the reconnect loop would then be up to 30 s into its backoff
+    // when the database returned, with cross-machine signaling dark for all
+    // of it.
+    const next = new pg.Client({
+      connectionString,
+      ...pgSslConfig(),
+      connectionTimeoutMillis: BUS_CONNECT_TIMEOUT_MS,
+    });
 
     // Both of these fire for an idle connection dropped by the network or by a
     // Postgres restart. Without listeners, `error` on a pg.Client is an

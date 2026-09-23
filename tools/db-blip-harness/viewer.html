@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>DB blip viewer</title>
+    <script src="/hls.min.js"></script>
+  </head>
+  <body>
+    <video id="v" muted playsinline autoplay style="width: 640px"></video>
+    <script>
+      // Stock hls.js with the conventional live config the web client uses
+      // (`hlsLivePlayerConfig` and the manifest retry settings in
+      // `hls-watch-player.tsx`). What the harness reads is `window.viewer`.
+      const src = decodeURIComponent(location.hash.slice(1));
+      const video = document.getElementById("v");
+      const viewer = {
+        playing: false,
+        instances: 0,
+        manifestLoads: 0,
+        levelLoaded: 0,
+        fatal: [],
+        nonFatal: {},
+        waitingEvents: 0,
+        samples: [],
+      };
+      window.viewer = viewer;
+      let waiting = false;
+      video.addEventListener("playing", () => {
+        viewer.playing = true;
+        waiting = false;
+      });
+      video.addEventListener("waiting", () => {
+        viewer.waitingEvents += 1;
+        waiting = true;
+      });
+
+      const hls = new Hls({
+        liveSyncDurationCount: 5,
+        liveMaxLatencyDurationCount: 12,
+        maxBufferLength: 24,
+        maxMaxBufferLength: 40,
+        backBufferLength: 12,
+        nudgeMaxRetry: 8,
+        startLevel: -1,
+        manifestLoadingMaxRetry: 12,
+        manifestLoadingRetryDelay: 1000,
+        manifestLoadingMaxRetryTimeout: 8000,
+        enableWorker: true,
+        maxLiveSyncPlaybackRate: 1,
+      });
+      viewer.instances += 1;
+      hls.on(Hls.Events.MANIFEST_LOADING, () => {
+        viewer.manifestLoads += 1;
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        viewer.levelLoaded += 1;
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        const key = `${data.details}${data.response?.code ? `:${data.response.code}` : ""}`;
+        if (data.fatal) {
+          viewer.fatal.push(key);
+          console.log(`[viewer] FATAL ${key}`);
+        } else {
+          viewer.nonFatal[key] = (viewer.nonFatal[key] ?? 0) + 1;
+        }
+      });
+      hls.loadSource(src);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        void video.play().catch(() => {});
+      });
+
+      setInterval(() => {
+        let ahead = 0;
+        for (let i = 0; i < video.buffered.length; i += 1) {
+          if (video.buffered.start(i) <= video.currentTime && video.currentTime <= video.buffered.end(i)) {
+            ahead = video.buffered.end(i) - video.currentTime;
+          }
+        }
+        viewer.samples.push({
+          t: Date.now(),
+          currentTime: video.currentTime,
+          buffered: ahead,
+          paused: video.paused,
+          waiting,
+        });
+        if (viewer.samples.length > 2000) viewer.samples.shift();
+      }, 1000);
+    </script>
+  </body>
+</html>

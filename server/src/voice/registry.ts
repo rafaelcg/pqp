@@ -1779,6 +1779,86 @@ export async function listLiveVoiceInstances(
 }
 
 /**
+ * A LEASE THAT WENT STALE WHILE *WE* COULD NOT SEE THE DATABASE PROVES NOTHING.
+ *
+ * `reconcileVoiceRegistry` reads "this instance's heartbeat is older than
+ * `INSTANCE_TTL_MS`" as "it is dead", and orphans, then deletes and retires,
+ * every seat it holds. That is right when one machine crashed. It is wrong
+ * after a database outage both machines sat through, which is what
+ * 2026-09-23 21:42:46Z to 21:43:47Z was: nobody could beat for 61 s, so on
+ * recovery every OTHER instance's lease is 60 to 100 s old, and whichever
+ * machine beats first would treat its live twin as a corpse. It would send
+ * `peer-left` for every seat over there to its own clients, which tears down
+ * the mesh legs that cross machines while the far side never hears of it,
+ * and delete the rows, so rosters built from them drop those people.
+ *
+ * So after this instance's own heartbeat has failed, the other leases are
+ * not evidence of anything until this instance has been beating again for a
+ * full `INSTANCE_TTL_MS`: every live instance beats every
+ * `INSTANCE_HEARTBEAT_MS`, so a twin that shared the outage has refreshed its
+ * lease well inside that window, and one that is genuinely gone is still
+ * reconciled, one TTL later than it would have been. The seats it held are
+ * no worse off: they were already waiting out the same outage.
+ */
+let ownBeatFailedAt: number | null = null;
+let ownBeatRecoveredAt: number | null = null;
+let ownBeatRecoveryPending = false;
+
+function noteOwnHeartbeat(ok: boolean, now = Date.now()): void {
+  if (!ok) {
+    ownBeatFailedAt = now;
+    ownBeatRecoveredAt = null;
+    return;
+  }
+  if (ownBeatFailedAt !== null && ownBeatRecoveredAt === null) {
+    ownBeatRecoveredAt = now;
+    ownBeatRecoveryPending = true;
+  }
+}
+
+/** Whether another instance's stale lease can be believed right now. */
+export function otherLeasesTrustworthy(
+  now = Date.now(),
+  ttlMs = INSTANCE_TTL_MS,
+): boolean {
+  if (ownBeatFailedAt === null) {
+    return true;
+  }
+  if (ownBeatRecoveredAt === null) {
+    // Still failing: whatever the rows say, we are the ones who cannot see.
+    return false;
+  }
+  return now - ownBeatRecoveredAt >= ttlMs;
+}
+
+/**
+ * True exactly once after this instance's heartbeat comes back from a
+ * failure: the moment to re-assert every seat it holds, because writes made
+ * during the outage were dropped (`track` logs and moves on, nothing
+ * replays them) and a stray `orphaned_at` from another instance's pass would
+ * otherwise sit on a live row until that seat next changes state.
+ */
+export function consumeOwnHeartbeatRecovery(): boolean {
+  if (!ownBeatRecoveryPending) {
+    return false;
+  }
+  ownBeatRecoveryPending = false;
+  return true;
+}
+
+/** Test hook. */
+export function resetOwnHeartbeatStateForTests(): void {
+  ownBeatFailedAt = null;
+  ownBeatRecoveredAt = null;
+  ownBeatRecoveryPending = false;
+}
+
+/** Test hook: drive the recovery state without a heartbeat loop. */
+export function noteOwnHeartbeatForTests(ok: boolean, now: number): void {
+  noteOwnHeartbeat(ok, now);
+}
+
+/**
  * Announce this instance every `INSTANCE_HEARTBEAT_MS`, then run `afterBeat`
  * (the reconcile in `ws/voice.ts`, which also sweeps expired retired ids).
  * The beat comes first so this instance is never dead by its own clock when
@@ -1796,6 +1876,15 @@ export function startVoiceInstanceHeartbeat(
       return running;
     }
     running = heartbeatVoiceInstance()
+      .then(
+        () => {
+          noteOwnHeartbeat(true);
+        },
+        (error: unknown) => {
+          noteOwnHeartbeat(false);
+          throw error;
+        },
+      )
       .then(() => afterBeat())
       .then(
         () => undefined,
