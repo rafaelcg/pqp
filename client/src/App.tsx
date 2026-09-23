@@ -7110,8 +7110,13 @@ function MainAppContent({
     invite:
       arrivedOnInviteLink ||
       parseAppRoute(location.pathname)?.kind === "invite",
+    // Three places, because each is the only one that knows at some moment:
+    // the URL (a `/vem` CTA is a client-side navigation, so the boot-time
+    // stash never saw it), the stash (a sign-in redirect dropped the query),
+    // and state (after the arrival effect has spent both).
     importing:
       pendingCreate?.mode === "import" ||
+      createIntentFromSearch(location.search)?.mode === "import" ||
       peekCreateIntent(browserStorage())?.mode === "import",
   });
 
