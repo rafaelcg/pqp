@@ -251,6 +251,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   windowHistory.clear();
   liveConfirmed.clear();
   endedRungs.clear();
+  endedRungsPruneAt = 1024;
   livenessInflight.clear();
   rungSessionIds.clear();
   rendersWithoutDb = 0;
@@ -941,6 +942,7 @@ const liveConfirmed = new Map<string, number>();
  * the ended rung ride on its live siblings' stamp.
  */
 const endedRungs = new Map<string, string>();
+let endedRungsPruneAt = 1024;
 
 /**
  * The liveness check in flight per rendition, shared. A render that stops
@@ -1060,12 +1062,15 @@ function livenessCheck(
         segmentUrlMemo.delete(rungKey);
         rungSessionIds.delete(rungKey);
         liveConfirmed.delete(rungKey);
-        if (endedRungs.size > 1024) {
+        // Amortised: a pass that could not shrink the map raises the
+        // threshold, so a large, still-live set is not rescanned per insert.
+        if (endedRungs.size > endedRungsPruneAt) {
           for (const [ended, session] of endedRungs) {
             if (!freshStamp(session, now)) {
               endedRungs.delete(ended);
             }
           }
+          endedRungsPruneAt = Math.max(1024, endedRungs.size * 2);
         }
         endedRungs.set(rungKey, keepWarmSessionKey(channelId, startedAt));
         throw new HlsPlaylistNotFound(
