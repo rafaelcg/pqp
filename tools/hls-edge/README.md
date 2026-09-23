@@ -98,8 +98,9 @@ path shape the API's own playlist route uses:
    back, the same fail-open default the API has for a self-host with nothing
    configured).
 
-A CONVENTIONAL rung's segment bytes are untouched by any of this: they were
-already presigned R2 URLs the browser fetches directly, and stay that way.
+A CONVENTIONAL rung's segment bytes are untouched by any of this unless the
+API sets `LIVE_HLS_SEGMENT_BASE_URL` (see "Segments at the edge" below): by
+default they are presigned R2 URLs the browser fetches directly.
 An LL session's are the exception, and the reason step 4 exists — the remux
 box is a private origin behind a shared key, with nothing to presign, so for
 LL this Worker is the CDN in front of it.
@@ -661,6 +662,30 @@ LL code ran — the video rung worked, which is exactly the shape that makes
 this kind of thing hard to see. Pinned now by
 `test/playlist-route.test.mjs`.
 
+### Preload hints are held, not refused (2026-09-23)
+
+Every LL rendition playlist ends with `#EXT-X-PRELOAD-HINT:TYPE=PART` naming
+the part the remux is still writing. hls.js never fetches a hint; AVPlayer,
+Safari and Media3 fetch it the moment they read the playlist, and RFC 8216bis
+6.2.6 expects the server to hold that request until the part exists. This
+route answered 404 at once instead: on the 2026-09-21 party the origin logged
+59,878 video and 70,421 audio part 404s, every one for part N+1, every one a
+native player that then had to ask again.
+
+Now a 404 for an LL PART newer than any this isolate has served for that
+rendition (the per-rendition high-water mark in `ll-media.ts`) is retried
+every 150 ms (`PRELOAD_POLL_MS`) for up to 2.5 s (`DEFAULT_PRELOAD_HOLD_MS`),
+through the same coalesced fetch every other viewer of that part shares, and
+answered the moment the part lands. The hold sits well inside the route's 5 s
+hard timeout. What is NOT held: a part at or below the high-water mark (it
+has left the remux's ring, and a player recovering at a stale position needs
+its 404 now, not later), a part more than 4 past it (not a hint), segments,
+init segments, and conventional `.ts`. Counters: `hlsEdge.llPartHeldServed`
+(a hint answered after a wait, the point of this), `hlsEdge.llPartHoldExpired`
+(the part never came inside the budget; a real 404 went out and
+`hlsEdge.llPartMissing` counts it too). Origin cost: one extra `part` fetch
+per poll per isolate while somebody is waiting, at ~1 ms each on the box.
+
 ### The joiner and the context it does not own (2026-09-15)
 
 The evening after PR #645 fixed this on the playlist path, five **media**
@@ -997,6 +1022,113 @@ construction. Leaving this unset is a supported configuration: `?pp=` then
 never verifies, and this Worker gates purely on `?t=`, same as before the
 party pass existed.
 
+## Segments at the edge
+
+Conventional segment BYTES, not just playlists, served from this Worker's
+colo cache. Off until the API sets `LIVE_HLS_SEGMENT_BASE_URL`; with it
+unset every segment line is a presigned R2 URL exactly as before.
+
+**Why.** The live bucket is `pqp-live-enam` (R2 location ENAM, the nearest
+R2 offers to Brazil; there is no South America location hint or
+jurisdiction). A presigned URL goes to R2's S3 endpoint, which is not a
+cacheable zone and speaks HTTP/1.1 only, so every viewer in São Paulo paid a
+trip to eastern North America for every segment. Measured 2026-09-23 from
+two Vultr São Paulo boxes (both enter Cloudflare at GRU), 1.2 MB segments,
+warm connections:
+
+| Path | TTFB p50 | TTFB p99 | Total p50 | Per connection |
+|---|---|---|---|---|
+| Presigned R2 (ENAM), today | 177 ms | 298 ms | 189 ms | ~40 Mbit/s, HTTP/1.1 |
+| Worker, R2 binding, cache miss | 189 ms | 407 ms | 201 ms | ~40 Mbit/s, HTTP/2 |
+| Worker, colo cache hit | 20 ms | 38 ms | 26 ms | 260 to 350 Mbit/s, HTTP/2 |
+
+A miss costs what today costs every request; a hit is 7 to 9 times faster to
+first byte. A live audience asks for the same segment within a second or two
+of itself, and a miss is coalesced (one R2 read per segment per isolate), so
+at party scale nearly every request is a hit.
+
+**The route.** `GET /api/voice/hls-segment/:channelId/:startedAt/:name?s=<capability>`
+(`src/segment-media.ts`). Its own path on purpose: the web client attaches a
+Bearer header to anything under `/api/voice/hls-playlist/`
+(`isOwnHlsPlaylistProxyUrl`), and a header would make every segment fetch a
+CORS preflight plus the fetch. This path keeps it a simple GET, like the R2
+URL it replaces. No client change and no app release: the URL arrives inside
+the playlist.
+
+**The credential, and why it is equivalent to today.** `?s=` is a session
+capability (`src/hls-segment-token.js`, a port of
+`server/src/voice/hls-segment-token.ts`): channel + session + rendition +
+expiry, HMAC-signed with `HLS_SEGMENT_TOKEN_SECRET`. It names no viewer,
+because the playlist it sits in is shared by every viewer of that rendition,
+and neither did the presigned URL (signed with the bucket's key). Its expiry
+is the presigned URL's (`LIVE_HLS_URL_TTL_SECONDS`, 900 s), quantised the
+same way so a listed segment never changes URL (AVPlayer keys on the URI).
+It is scoped tighter than a presigned URL in one way that matters: the
+object key is rebuilt from the path (`live/<channelId>/<name>`) and the
+token must match the channel, the session, and the rendition prefix of the
+name, so it cannot read another channel's, another session's or a sibling
+rung's objects. Per-user revocation stays where it is today, on the playlist
+route; a revoked viewer stops learning new segment names within the
+revocation gate's 30 s, and a URL already handed out lives out its TTL, as a
+presigned URL did.
+
+**What it shares with LL.** The bytes go through `serveImmutableMedia`
+(`src/ll-media.ts`): cache keyed on the path (never the token), one fetch per
+key per isolate however many viewers arrive, bounded joins, the 5 s hard
+timeout, `immutable` for a year, 404/502 never cached. Logs are the LL names
+with `segment` in place of `llPart`/`llMedia`: `hlsEdge.segmentOriginFetch`
+(one per R2 read, should track segments x colos, not viewers),
+`hlsEdge.segmentCacheHit` (periodic count, should track viewers),
+`hlsEdge.segmentMissing`, `hlsEdge.segmentOriginError`,
+`hlsEdge.segmentHardTimeout` (belongs at zero), `hlsEdge.segmentRejected`
+(rate-limited, with the reason word), `hlsEdge.segmentOriginNotConfigured`
+(API flag on, binding missing: loud 503). A `Range` request is answered as a
+206 from the same cached bytes.
+
+**Warm before reveal (`SEGMENT_PREWARM`, off by default).** With segments
+at the edge on, the slowest requests are the viewers who ask for a brand-new
+segment while the colo is still reading it from R2: a miss is buffered whole
+before anyone gets a first byte. With `SEGMENT_PREWARM=on` (a `vars` entry),
+the rendition-playlist fetch that is about to reveal new segments to a colo
+reads the newest two into the cache first (bounded by 1.5 s, then it carries
+on in the background and viewers join it), so the segment appears in the
+playlist a few hundred milliseconds later and nobody in the colo waits on R2.
+`hlsEdge.segmentPrewarm` logs each one with its duration and whether it ran
+out of budget. It sits on the playlist path, which is why it ships dark and
+is a separate switch from the segments themselves.
+
+**What it does not do.** The Cache API is per colo and does not use Tiered
+Cache, so a viewer alone in a far colo (a single viewer in London) still
+misses on every segment and pays what they pay today, plus nothing. Smart
+Placement would move the Worker toward R2 and away from the viewer's colo
+cache, which is the opposite of what this wants, so it stays off.
+
+**Turning it on** (Worker first, flag second; the other order serves 401s or
+503s):
+
+```sh
+cd tools/hls-edge
+# 1. The secret: HMAC-SHA256(CLERK_SECRET_KEY, "pqp-hls-segment"), base64url,
+#    derived where the Clerk key lives (the API box), never pasted anywhere.
+npx wrangler secret put HLS_SEGMENT_TOKEN_SECRET
+# 2. The binding (LIVE_SEGMENTS -> pqp-live-enam, already in wrangler.jsonc).
+npx wrangler deploy --env=""
+# 3. Prove it before any viewer is pointed at it: a request with no token is
+#    a 401 from the segment route, not a 404 from the playlist route.
+curl -s https://hls.pqp.gg/api/voice/hls-segment/x/1/1-720p30_00001.ts
+#    {"error":"Unauthorized","reason":"missing"}
+```
+
+Then set `LIVE_HLS_SEGMENT_BASE_URL=https://hls.pqp.gg` on the API. It is
+read per render, so a live party moves over on its next playlist refresh (one
+refetch of the listed window for AVPlayer, the same cost a signing-bucket
+boundary already has). Rollback is unsetting it: the next render hands out
+presigned URLs again. The Worker needs no rollback.
+
+**Staging.** `npx wrangler deploy --env staging` deploys
+`pqp-hls-edge-staging` on workers.dev in front of `pqp-api-staging`, bound
+to `pqp-live-staging`, with its own secrets derived from staging's Clerk key.
+
 ## Deploying
 
 ```bash
@@ -1006,7 +1138,8 @@ npx wrangler login          # once, if not already authenticated
 npx wrangler secret put HLS_VIEWER_TOKEN_SECRET   # value from above
 npx wrangler secret put HLS_PARTY_PASS_SECRET     # value from above; omit to leave the party pass off
 npx wrangler secret put LL_ORIGIN_KEY             # pqp-remuxd's MEDIA_ORIGIN_KEY; optional until LL_ORIGIN_BASE is set
-npx wrangler deploy
+npx wrangler secret put HLS_SEGMENT_TOKEN_SECRET  # "Segments at the edge" above; optional until LIVE_HLS_SEGMENT_BASE_URL is set
+npx wrangler deploy --env=""                      # the top-level (production) config; --env staging for staging
 ```
 
 Then in the Cloudflare dashboard, add a CNAME (or A/AAAA, per how the rest of

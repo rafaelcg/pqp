@@ -48,7 +48,7 @@ import {
 } from "./ll-media.js";
 import { describeHlsSegmentToken, HLS_SEGMENT_TOKEN_PARAM } from "./hls-segment-token.js";
 import { logRejection, statusForRejection } from "./viewer-access.js";
-import type { SegmentRouteMatch } from "./playlist-route.js";
+import { parseSegmentPath, type SegmentRouteMatch } from "./playlist-route.js";
 
 export interface SegmentEnv {
   /** The live-HLS bucket (`pqp-live-enam` in production). Unbound: 503. */
@@ -199,4 +199,116 @@ export async function handleSegmentRequest(
     kind: "segment",
   }, timers);
   return applyRange(request, served);
+}
+
+/**
+ * WARM BEFORE REVEAL.
+ *
+ * Measured on staging (120 viewers in GRU, 2026-09-23): with segments at the
+ * edge, the median segment request was 40 ms against 256 ms presigned, but
+ * the slowest 5% were no better than before, because they were the viewers
+ * who asked for a brand-new segment while the colo was still reading it from
+ * R2: every one of them waited for the whole object to arrive and be written
+ * to the cache before getting a first byte.
+ *
+ * The only way a viewer learns a segment exists is the rendition playlist,
+ * and this Worker already fetches that from the API once per rung per colo
+ * every two seconds. So the fetch that is about to REVEAL a new segment to
+ * the colo reads it into the cache first, and only then hands the playlist
+ * on. The segment appears in the playlist a few hundred milliseconds later
+ * than it would have, against a player that sits three segments behind the
+ * edge, and nobody in the colo ever waits on R2.
+ *
+ * Bounded (`SEGMENT_WARM_BUDGET_MS`): a slow read does not hold the playlist
+ * past the budget, it carries on in the background (the shared fetch is kept
+ * alive by `ctx.waitUntil`) and viewers who ask meanwhile join it, which is
+ * exactly the behaviour without warming. Only segments on THIS host (the
+ * cache is per hostname), only the newest `SEGMENT_WARM_NEWEST` lines, and
+ * only once per isolate per segment.
+ */
+export const SEGMENT_WARM_BUDGET_MS = 1_500;
+const SEGMENT_WARM_NEWEST = 2;
+const WARMED_MAX = 512;
+const warmed = new Set<string>();
+
+function rememberWarmed(key: string): void {
+  warmed.add(key);
+  if (warmed.size > WARMED_MAX) {
+    // Sets iterate in insertion order: drop the oldest.
+    const oldest = warmed.values().next().value;
+    if (oldest !== undefined) {
+      warmed.delete(oldest);
+    }
+  }
+}
+
+/** For tests. */
+export function resetSegmentWarmingForTests(): void {
+  warmed.clear();
+}
+
+export async function warmNewSegments(
+  playlistBody: string,
+  requestUrl: string,
+  env: SegmentEnv,
+  cache: Cache,
+  ctx: ExecutionContext,
+  budgetMs: number = SEGMENT_WARM_BUDGET_MS,
+): Promise<{ attempted: number; timedOut: boolean }> {
+  if (!env.LIVE_SEGMENTS || !env.HLS_SEGMENT_TOKEN_SECRET) {
+    return { attempted: 0, timedOut: false };
+  }
+  const host = new URL(requestUrl).host;
+  const candidates: { url: URL; route: SegmentRouteMatch }[] = [];
+  for (const raw of playlistBody.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("https://") && !line.startsWith("http://")) {
+      continue;
+    }
+    let url: URL;
+    try {
+      url = new URL(line);
+    } catch {
+      continue;
+    }
+    if (url.host !== host) {
+      continue;
+    }
+    const route = parseSegmentPath(url.pathname);
+    if (route) {
+      candidates.push({ url, route });
+    }
+  }
+  const fresh = candidates
+    .slice(-SEGMENT_WARM_NEWEST)
+    .filter(({ url }) => !warmed.has(url.pathname));
+  if (fresh.length === 0) {
+    return { attempted: 0, timedOut: false };
+  }
+  const work = Promise.all(
+    fresh.map(async ({ url, route }) => {
+      const response = await handleSegmentRequest(new Request(url.toString()), env, cache, ctx, route);
+      // Drained, not just dropped: the body is the cache read-back or the
+      // shared buffer, and an unread stream holds the fetch open.
+      await response.arrayBuffer().catch(() => undefined);
+      if (response.status === 200) {
+        rememberWarmed(url.pathname);
+      }
+    }),
+  ).then(
+    () => undefined,
+    () => undefined,
+  );
+  ctx.waitUntil(work);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    work.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), budgetMs);
+    }),
+  ]);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+  }
+  return { attempted: fresh.length, timedOut };
 }

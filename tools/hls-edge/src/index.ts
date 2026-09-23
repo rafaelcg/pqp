@@ -105,7 +105,7 @@ import { authorizeViewer, logRejection, statusForRejection } from "./viewer-acce
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { handleLlMediaRequest } from "./ll-media.js";
 import { parsePlaylistPath, parseSegmentPath, requestsLlMode } from "./playlist-route.js";
-import { handleSegmentRequest, type SegmentEnv } from "./segment-media.js";
+import { handleSegmentRequest, warmNewSegments, type SegmentEnv } from "./segment-media.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
 import { applyLlRenditionCredential } from "./ll-playlist.js";
@@ -199,6 +199,12 @@ export interface Env extends SegmentEnv {
    * live edge.
    */
   LL_PART_HOLD_BACK_PARTS?: string;
+  /**
+   * `"on"` warms a rendition's newest segments into the colo cache before the
+   * playlist that reveals them is handed on (`warmNewSegments` in
+   * `segment-media.ts`). Anything else, including unset: off.
+   */
+  SEGMENT_PREWARM?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
   // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
   // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
@@ -599,6 +605,7 @@ export async function handlePlaylistRequest(
           startedAt,
           rung,
           token: token!,
+          beforeReveal: segmentWarmer(request, env, ctx, channelId, rung),
         }).then((coalesced) => coalesced.result),
       logEvent,
       { channelId, rung },
@@ -672,6 +679,7 @@ export async function handlePlaylistRequest(
       startedAt,
       rung,
       token,
+      beforeReveal: segmentWarmer(request, env, ctx, channelId, rung),
     });
     fetched = coalesced.result;
     isProducer = coalesced.isProducer;
@@ -851,11 +859,65 @@ function parsePartHoldBackParts(raw: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/**
+ * The `beforeReveal` hook for a rendition playlist: warm the newest segments
+ * it lists into this colo's cache before any viewer can learn they exist.
+ * Inert unless `SEGMENT_PREWARM` is "on" (off by default: it sits on the
+ * playlist path, so it ships dark and is turned on only once segments at the
+ * edge are proven), this Worker serves segments (`LIVE_SEGMENTS` bound and
+ * `HLS_SEGMENT_TOKEN_SECRET` set), and the playlist points at this host.
+ */
+function segmentWarmer(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  channelId: string,
+  rung: string,
+): ((body: ArrayBuffer) => Promise<void>) | undefined {
+  if (env.SEGMENT_PREWARM !== "on" || !env.LIVE_SEGMENTS || !env.HLS_SEGMENT_TOKEN_SECRET) {
+    return undefined;
+  }
+  return async (body) => {
+    const started = Date.now();
+    const text = new TextDecoder().decode(body);
+    if (!text.includes("/api/voice/hls-segment/")) {
+      return;
+    }
+    const { attempted, timedOut } = await warmNewSegments(
+      text,
+      request.url,
+      env,
+      caches.default,
+      ctx,
+    );
+    if (attempted > 0) {
+      logEvent("hlsEdge.segmentPrewarm", {
+        channelId,
+        rung,
+        segments: attempted,
+        durationMs: Date.now() - started,
+        timedOut,
+      });
+    }
+  };
+}
+
 async function fetchRenditionCoalesced(
   cacheKeyUrl: string,
   origin: PlaylistOrigin,
   ctx: ExecutionContext,
-  req: { channelId: string; startedAt: string; rung: string; token: string },
+  req: {
+    channelId: string;
+    startedAt: string;
+    rung: string;
+    token: string;
+    /**
+     * Runs on a fresh 200 body BEFORE it is shared with anyone (see
+     * `warmNewSegments` in `segment-media.ts`, "WARM BEFORE REVEAL"). Bounded
+     * by the callee; a failure here never fails the playlist.
+     */
+    beforeReveal?: (body: ArrayBuffer) => Promise<void>;
+  },
 ): Promise<CoalescedFetch> {
   const startTime = Date.now();
   const produce = async (): Promise<FetchedPlaylist> => {
@@ -869,6 +931,13 @@ async function fetchRenditionCoalesced(
       // doc comment above.
       logEvent("hlsEdge.originError", { channelId: req.channelId, rung: req.rung });
       throw new Error("origin fetch failed");
+    }
+    if (response.ok && req.beforeReveal) {
+      try {
+        await req.beforeReveal(body);
+      } catch {
+        // Warming is an optimisation; the playlist is served regardless.
+      }
     }
     if (response.ok) {
       logEvent("hlsEdge.originFetch", {

@@ -3186,20 +3186,48 @@ party pass", point 2). Fires occasionally on an idle rung with few viewers;
 fires often on a busy rung, which is worth investigating rather than just
 watching, since a busy rung should almost never run its cache dry.
 
-## Segments at the edge (design, not built)
+## Segments at the edge
 
-**Not built. Everything in this section is a decision recorded ahead of the
-work, per `docs/plans/BROADCAST_PIPELINE.md` B1.4, not a change that shipped.**
-Playlists at the edge (above) fixes the polling cost; the segment BYTES
-still go straight from every viewer's browser to R2, on a URL signed for that
-one viewer alone (`hls-playlist-proxy.ts`, `signRequest` with `forRead:
-true`). Two viewers of the same segment never share a cache entry anywhere,
-because their URLs differ by SigV4 signature, and Cloudflare never sees the
-request at all -- there is no custom domain in front of the bucket
-(`LIVE_HLS_PUBLIC_BASE_URL` is deliberately unset, see "Attachments" env
-notes in `CLAUDE.md`). R2 has never been the bottleneck (under 200 ms
-measured live on 2026-09-12), which is why this is ranked low and left as a
-design rather than built now.
+**Built, behind `LIVE_HLS_SEGMENT_BASE_URL` (unset by default).** Playlists
+at the edge (above) fixed the polling cost; this moves the segment BYTES off
+R2's S3 endpoint and onto the same Worker. Unset, every segment line of a
+rendered playlist is a presigned R2 URL, as it always was. Set to the Worker's
+host (`https://hls.pqp.gg`), every segment line becomes
+`/api/voice/hls-segment/:channelId/:startedAt/:name?s=<capability>` on that
+host, and the Worker serves the object out of its colo cache, reading R2
+through a binding on a miss.
+
+**Why it was built after all.** This section used to say R2 had never been the
+bottleneck. That was measured from London. From São Paulo on 2026-09-23 a
+presigned GET of a 1.2 MB segment on `pqp-live-enam` took 177 ms to first byte
+at p50 and 298 ms at p99, over HTTP/1.1 at ~40 Mbit/s per connection, because
+the bucket is in eastern North America (R2 has no South America location) and
+the S3 endpoint cannot be cached. The same object out of the Worker's GRU
+cache: 20 ms at p50, 38 ms at p99, HTTP/2, 260 to 350 Mbit/s. On 2026-09-21
+the conventional ladder stalled in 62% of viewer windows while replaying the
+same archived segments locally gave zero stalls, which points at delivery.
+The full table and the staging load test are in
+`tools/hls-edge/README.md` §"Segments at the edge" and the PR that shipped it.
+
+**Security is the presigned URL's, scoped tighter.** The capability names a
+channel, a session, a rendition and an expiry equal to
+`LIVE_HLS_URL_TTL_SECONDS`, and no viewer, because the playlist it sits in is
+shared exactly as the presigned URLs were. The Worker rebuilds the object key
+from the path, so a capability cannot reach another channel, session or rung.
+It is signed with a fourth derived key (`HMAC(CLERK_SECRET_KEY,
+"pqp-hls-segment")`, `HLS_SEGMENT_TOKEN_SECRET` on the Worker), so no viewer
+token or party pass can pass as one. Revocation is unchanged: it lives on the
+playlist route, and a URL already handed out lives out its TTL, as before.
+
+**Turning it on, and off.** Worker first (secret, then `wrangler deploy` with
+the `LIVE_SEGMENTS` binding), prove the route answers 401 to a tokenless
+request, then set `LIVE_HLS_SEGMENT_BASE_URL` on the API. It is read per
+render, so a party that is already live moves on its next playlist refresh,
+and unsetting it moves it back the same way. Exact commands:
+`tools/hls-edge/README.md` §"Segments at the edge".
+
+What follows is the design record from before it was built, kept because it
+explains why the Worker and not a public bucket domain.
 
 **What the egress cannot do.** LiveKit egress 1.14's `S3Upload`
 (`livekit.S3Upload` in `@livekit/protocol`) has no `Cache-Control` field, and
@@ -3249,7 +3277,7 @@ section is about.
    per-viewer-URL problem that defeats caching today is back, just under a
    friendlier hostname.
 
-**Chosen: option 1, the Worker.** It is the only one of the two that keeps
+**Chosen, and now built: option 1, the Worker.** It is the only one of the two that keeps
 the bucket private AND gets cross-viewer sharing, because it puts a
 viewer-token check back in front of the cache instead of removing the check
 to get the cache. It costs more to build (the R2 binding, a route, tests) and

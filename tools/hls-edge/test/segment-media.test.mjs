@@ -12,7 +12,12 @@ import { strict as assert } from "node:assert";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 
-import { handleSegmentRequest, applyRange } from "../dist/segment-media.js";
+import {
+  handleSegmentRequest,
+  applyRange,
+  warmNewSegments,
+  resetSegmentWarmingForTests,
+} from "../dist/segment-media.js";
 import { parseSegmentPath, parsePlaylistPath } from "../dist/playlist-route.js";
 import { describeHlsSegmentToken, HLS_SEGMENT_TOKEN_PARAM } from "../src/hls-segment-token.js";
 
@@ -242,4 +247,102 @@ test("the port agrees with the origin's reason words", async () => {
     await describeHlsSegmentToken(mint({ r: "" }), { ...expected, name: `${STARTED_AT}_00001.ts` }, SECRET, NOW),
     null,
   );
+});
+
+function playlistListing(names, host = "hls.example.test") {
+  return [
+    "#EXTM3U",
+    "#EXT-X-TARGETDURATION:4",
+    ...names.flatMap((name) => [
+      "#EXTINF:4.000,",
+      `https://${host}/api/voice/hls-segment/${CHANNEL}/${STARTED_AT}/${name}?s=${mint()}`,
+    ]),
+  ].join("\n");
+}
+
+const seg = (n) => `${STARTED_AT}-720p30_${String(n).padStart(5, "0")}.ts`;
+const PLAYLIST_URL = `https://hls.example.test/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/720p30`;
+
+test("warm before reveal: the newest listed segments are in the colo cache before the playlist is handed on", async () => {
+  resetSegmentWarmingForTests();
+  const objects = {};
+  for (let n = 0; n < 5; n++) objects[`live/${CHANNEL}/${seg(n)}`] = [n];
+  const bucket = fakeBucket(objects);
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const result = await warmNewSegments(
+    playlistListing([0, 1, 2, 3, 4].map(seg)),
+    PLAYLIST_URL,
+    env(bucket),
+    cache,
+    ctx,
+  );
+  assert.deepEqual(result, { attempted: 2, timedOut: false });
+  // Only the two newest: the older ones were revealed by earlier playlists.
+  assert.deepEqual(bucket.gets, [`live/${CHANNEL}/${seg(3)}`, `live/${CHANNEL}/${seg(4)}`]);
+  await ctx.drain();
+  assert.equal(cache.size, 2);
+
+  // A viewer who now asks for the newest segment is a HIT, with no R2 read.
+  const viewer = await get(segmentUrl({ name: seg(4) }), { bucket, cache });
+  assert.equal(viewer.headers.get("X-HLS-Edge-Cache"), "HIT");
+  assert.equal(bucket.gets.length, 2);
+
+  // The next playlist (one new segment) warms only the new one.
+  objects[`live/${CHANNEL}/${seg(5)}`] = [5];
+  const next = await warmNewSegments(
+    playlistListing([1, 2, 3, 4, 5].map(seg)),
+    PLAYLIST_URL,
+    env(bucket),
+    cache,
+    ctx,
+  );
+  assert.deepEqual(next, { attempted: 1, timedOut: false });
+  assert.equal(bucket.gets.at(-1), `live/${CHANNEL}/${seg(5)}`);
+});
+
+test("warming is bounded: a slow read does not hold the playlist past the budget, and viewers join it", async () => {
+  resetSegmentWarmingForTests();
+  const bucket = fakeBucket({ [`live/${CHANNEL}/${seg(9)}`]: [9] }, { delayMs: 200 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const started = Date.now();
+  const result = await warmNewSegments(playlistListing([seg(9)]), PLAYLIST_URL, env(bucket), cache, ctx, 30);
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 150, "held the playlist past its budget");
+  // A viewer arriving mid-read joins the warm's fetch rather than starting a second one.
+  const viewer = await get(segmentUrl({ name: seg(9) }), { bucket, cache, ctx });
+  assert.equal(viewer.status, 200);
+  assert.equal(bucket.gets.length, 1);
+});
+
+test("warming leaves other hosts, presigned lines, and an unconfigured Worker alone", async () => {
+  resetSegmentWarmingForTests();
+  const bucket = fakeBucket({ [`live/${CHANNEL}/${seg(1)}`]: [1] });
+  const ctx = collectingCtx();
+  const otherHost = await warmNewSegments(
+    playlistListing([seg(1)], "elsewhere.example.test"),
+    PLAYLIST_URL,
+    env(bucket),
+    fakeCache(),
+    ctx,
+  );
+  assert.equal(otherHost.attempted, 0);
+  const presigned = await warmNewSegments(
+    "#EXTM3U\n#EXTINF:4.000,\nhttps://bucket.r2.cloudflarestorage.com/live/x.ts?X-Amz-Signature=abc",
+    PLAYLIST_URL,
+    env(bucket),
+    fakeCache(),
+    ctx,
+  );
+  assert.equal(presigned.attempted, 0);
+  const unbound = await warmNewSegments(
+    playlistListing([seg(1)]),
+    PLAYLIST_URL,
+    { HLS_SEGMENT_TOKEN_SECRET: SECRET },
+    fakeCache(),
+    ctx,
+  );
+  assert.equal(unbound.attempted, 0);
+  assert.deepEqual(bucket.gets, []);
 });

@@ -122,7 +122,8 @@
         "ORIGIN_BASE": "https://pqp-api-staging.fly.dev",
         "ENVIRONMENT": "staging",
         "LL_ORIGIN_BASE": "",
-        "LL_PART_HOLD_BACK_PARTS": "6"
+        "LL_PART_HOLD_BACK_PARTS": "6",
+        "SEGMENT_PREWARM": "on"
       },
       // No revocation KV on staging: ENVIRONMENT is not "production", so the
       // gate fails open exactly as it does for a local `wrangler dev`.

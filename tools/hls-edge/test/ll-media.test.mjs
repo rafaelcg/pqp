@@ -19,7 +19,7 @@ import { strict as assert } from "node:assert";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 
-import { handleLlMediaRequest } from "../dist/ll-media.js";
+import { handleLlMediaRequest, resetPreloadHoldForTests } from "../dist/ll-media.js";
 import { PartyPassRevocationGate } from "../src/party-pass-revocation.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "../src/hls-viewer-token.js";
 import { HLS_PARTY_PASS_PARAM } from "../src/hls-party-pass.js";
@@ -296,7 +296,10 @@ test("a part the box has not written yet passes 404 through, no-store, and is NE
   const request = () =>
     mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt));
 
-  const first = await callMedia(request(), origin, cache, ctx, env, route);
+  // The hold is off here: this test pins the 404 itself (see the preload
+  // hold tests below for what happens with it on).
+  const noHold = { preloadHoldMs: 0 };
+  const first = await callMedia(request(), origin, cache, ctx, env, route, noHold);
   assert.equal(first.status, 404);
   assert.equal(first.headers.get("Cache-Control"), "no-store");
   await ctx.drain();
@@ -304,10 +307,123 @@ test("a part the box has not written yet passes 404 through, no-store, and is NE
 
   // And the retry genuinely reaches the box again -- which is the whole
   // point of not caching it.
-  const second = await callMedia(request(), origin, cache, ctx, env, route);
+  const second = await callMedia(request(), origin, cache, ctx, env, route, noHold);
   assert.equal(second.status, 404);
   assert.equal(origin.calls, 2);
 });
+
+/** An origin whose parts appear when the test says so: 404 until `publish(name)`. */
+function appearingOrigin(bytes = [5, 5, 5]) {
+  const published = new Set();
+  const asked = [];
+  return {
+    ready: true,
+    asked,
+    publish(name) {
+      published.add(name);
+    },
+    async fetchMedia(_channelId, _startedAt, name) {
+      asked.push(name);
+      return published.has(name)
+        ? { status: 200, ok: true, body: new Uint8Array(bytes).buffer }
+        : { status: 404, ok: false, body: new ArrayBuffer(0) };
+    },
+  };
+}
+
+test("preload hint: a part that does not exist yet is HELD and answered the moment it lands", async () => {
+  resetPreloadHoldForTests();
+  const channelId = "chan-hint";
+  const startedAt = "1726000100010";
+  const origin = appearingOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const token = tokenFor("viewer-a", channelId, startedAt);
+  const ask = (name) =>
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, token),
+      origin,
+      cache,
+      ctx,
+      env,
+      { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+      { preloadHoldMs: 2_000, preloadPollMs: 10 },
+    );
+
+  origin.publish("part-40.m4s");
+  assert.equal((await ask("part-40.m4s")).status, 200);
+
+  // part-41 is the hint: asked before it exists, published 60 ms later.
+  const pending = ask("part-41.m4s");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  origin.publish("part-41.m4s");
+  const held = await pending;
+  assert.equal(held.status, 200);
+  assert.deepEqual([...new Uint8Array(await held.arrayBuffer())], [5, 5, 5]);
+  assert.ok(origin.asked.filter((n) => n === "part-41.m4s").length >= 2, "it looked again");
+});
+
+test("preload hint: the hold is bounded, then the 404 goes out uncached", async () => {
+  resetPreloadHoldForTests();
+  const channelId = "chan-hint-expire";
+  const startedAt = "1726000100011";
+  const origin = appearingOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const started = Date.now();
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, "part-9.m4s", tokenFor("v", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name: "part-9.m4s" },
+    { preloadHoldMs: 80, preloadPollMs: 20 },
+  );
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.ok(Date.now() - started >= 60, "it held");
+  assert.ok(Date.now() - started < 1_000, "and let go");
+  await ctx.drain();
+  assert.equal(cache.size, 0);
+});
+
+test("a part BEHIND the high-water mark (left the ring) is refused at once, and segments are never held", async () => {
+  resetPreloadHoldForTests();
+  const channelId = "chan-stale";
+  const startedAt = "1726000100012";
+  const origin = appearingOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const token = tokenFor("v", channelId, startedAt);
+  const ask = (name) =>
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, token),
+      origin,
+      cache,
+      ctx,
+      env,
+      { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+      { preloadHoldMs: 5_000, preloadPollMs: 10 },
+    );
+  origin.publish("part-700.m4s");
+  assert.equal((await ask("part-700.m4s")).status, 200);
+
+  let started = Date.now();
+  assert.equal((await ask("part-12.m4s")).status, 404);
+  assert.ok(Date.now() - started < 500, "a stale part must not be held");
+
+  started = Date.now();
+  assert.equal((await ask("part-900.m4s")).status, 404);
+  assert.ok(Date.now() - started < 500, "a part far past the edge is not a hint");
+
+  started = Date.now();
+  assert.equal((await ask("seg-3.m4s")).status, 404);
+  assert.ok(Date.now() - started < 500, "segments are never hinted");
+});
+
 
 test("a revoked viewer is refused BEFORE the origin or the cache is ever touched", async () => {
   const channelId = "chan-part-revoked";

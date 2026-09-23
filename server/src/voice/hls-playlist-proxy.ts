@@ -56,12 +56,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
  * two different viewers a shared cache entry -- their URLs differ by SigV4
  * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
  * endpoint (there isn't one today) would still see distinct URLs per viewer
- * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
- * to a stable, unsigned path, or the edge Worker serving segment bytes itself
- * off its own R2 credentials -- both out of scope for this change; see
- * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
- * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
- * `tools/hls-edge/`.
+ * per signing bucket. Cross-viewer sharing is what `LIVE_HLS_SEGMENT_BASE_URL`
+ * does instead: the edge Worker serves segment bytes itself, off an R2
+ * binding, from its colo cache (`hls-segment-token.ts`, and
+ * `docs/WATCH_PARTY.md` §"Segments at the edge").
  */
 const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
