@@ -23,6 +23,12 @@ export interface WatchPartyHistoryEntry {
   /** Whether the recording still exists to be watched. */
   replayAvailable: boolean;
   keepReplay: boolean;
+  /**
+   * How many people watched: the most at once and the distinct accounts.
+   * Null for a broadcast from before the count existed, or nobody watched.
+   * Optional because an API older than this bundle does not send it.
+   */
+  viewers?: { peak: number; unique: number } | null;
 }
 
 export function fetchWatchPartyHistory(

@@ -72,6 +72,7 @@ import {
   startLiveHlsMonitor,
   stopLiveHlsMonitor,
 } from "./voice/hls-egress.js";
+import { hlsViewerCounter } from "./voice/hls-viewer-counts.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
@@ -663,6 +664,7 @@ function startVoiceRegistry(): (() => Promise<void>) | null {
 }
 
 let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
+let stopHlsViewerCounter: (() => Promise<void>) | null = null;
 
 async function main() {
   // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
@@ -741,6 +743,11 @@ async function main() {
   // nothing races schema creation. `WORKER_MODE=api` is the only value that
   // skips this, and it is only correct once `pqp-worker` exists; unset keeps
   // the single-process behaviour every self-host and local dev has.
+  // Watch party viewer counts: this process's heartbeat map, flushed at most
+  // once a minute per broadcast. Wherever the HTTP routes run, since that is
+  // where the heartbeats land.
+  stopHlsViewerCounter = hlsViewerCounter.start();
+
   if (runsColdJobs(role)) {
     coldJobs = startColdJobs();
   } else {
@@ -834,6 +841,8 @@ async function shutdown(signal: string) {
   // hold the loop open on its own; closing it politely is still better than
   // having the process exit mid-stream on a push that was in flight.
   closeApnsSessions();
+  // The last minute of viewer sightings, before the pool goes.
+  await stopHlsViewerCounter?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.

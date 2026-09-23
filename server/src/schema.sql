@@ -4567,3 +4567,51 @@ CREATE TABLE IF NOT EXISTS user_activation (
 CREATE INDEX IF NOT EXISTS idx_user_activation_signup
   ON user_activation (signup_at)
   WHERE signup_at IS NOT NULL;
+
+-- WATCH PARTY VIEWER COUNTS (`voice/hls-viewer-counts.ts`). A broadcast is
+-- keyed the way the history dialog groups one: channel plus the session's
+-- `started_at` in epoch milliseconds (the ladder writes one `hls_sessions` row
+-- per rung, all sharing that instant). Written by each API process at most
+-- once a minute per broadcast, from an in-memory presence map fed by viewer
+-- heartbeats, never per playlist poll.
+--
+-- One row per person who watched, so two API machines can take the union of
+-- who they each saw. The user id never leaves the server: every reader counts
+-- rows. Pruned a day after the person was last seen.
+CREATE TABLE IF NOT EXISTS hls_session_viewers (
+  channel_id     UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  started_at_ms  BIGINT NOT NULL,
+  user_id        UUID NOT NULL,
+  first_seen_at  TIMESTAMPTZ NOT NULL,
+  last_seen_at   TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (channel_id, started_at_ms, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hls_session_viewers_last_seen
+  ON hls_session_viewers (last_seen_at);
+
+-- Concurrent viewers per wall-clock minute. Each machine's flush writes the
+-- count it read and the higher reading wins, so two machines never add up.
+CREATE TABLE IF NOT EXISTS hls_session_viewer_minutes (
+  channel_id     UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  started_at_ms  BIGINT NOT NULL,
+  minute         TIMESTAMPTZ NOT NULL,
+  viewers        INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, started_at_ms, minute)
+);
+
+-- The two numbers the history dialog shows. Kept here rather than as columns
+-- on `hls_sessions` because a broadcast is several of those rows. Both only
+-- ever go up (GREATEST), so a pruned viewer row never shrinks them.
+CREATE TABLE IF NOT EXISTS hls_session_viewer_stats (
+  channel_id     UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  started_at_ms  BIGINT NOT NULL,
+  peak_viewers   INTEGER NOT NULL DEFAULT 0,
+  peak_at        TIMESTAMPTZ,
+  unique_viewers INTEGER NOT NULL DEFAULT 0,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, started_at_ms)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hls_session_viewer_stats_updated
+  ON hls_session_viewer_stats (updated_at);

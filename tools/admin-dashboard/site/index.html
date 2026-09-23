@@ -5163,8 +5163,22 @@
     setText("ctlSessionsNote",
       hls.sessions > 0
         ? (hls.rungs + " rendição(ões) · limite " + hls.maxSessions +
-           (hls.oldestSessionMinutes != null ? " · mais antiga há " + hls.oldestSessionMinutes + " min" : ""))
+           (hls.oldestSessionMinutes != null ? " · mais antiga há " + hls.oldestSessionMinutes + " min" : "") +
+           viewersNote(hls.viewers))
         : "ninguém transmitindo agora");
+  }
+
+  // Quem está assistindo, somado entre as festas ao vivo. Um minuto atrás no
+  // máximo (a api grava uma vez por minuto). Nada quando a api é mais velha
+  // que esta página ou a leitura falhou: um zero ali seria inventado.
+  function viewersNote(viewers) {
+    if (!viewers || !Array.isArray(viewers.live)) return "";
+    var now = 0, peak = 0;
+    viewers.live.forEach(function (row) {
+      now += row.liveViewers || 0;
+      peak = Math.max(peak, row.peakViewers || 0);
+    });
+    return " · " + fmt(now) + " assistindo agora · pico " + fmt(peak);
   }
 
   function applyMetrics(d) {

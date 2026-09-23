@@ -2856,6 +2856,40 @@ makes it a download. The headerless door
 (`tryWatchPartyDownloadCapabilityDoor`) is therefore the one that answers the
 product's own link, with the Bearer route for everything else.
 
+## How many people watched
+
+Per broadcast (channel plus `startedAt`, the key the history dialog uses) the
+server keeps three numbers: the **peak** of concurrent viewers, the **unique**
+accounts that watched, and a **per-minute series** of concurrent viewers
+(`hls_session_viewer_minutes`). Same for LL and conventional.
+
+- **Where viewers are seen.** Every playing web viewer posts
+  `POST /api/live-hls/presence` every 30 s with the `?t=` viewer token it
+  already holds (`LIVE_HLS_PRESENCE_INTERVAL_MS`), so viewers the edge Worker
+  serves entirely are counted too. Playlist responses this API serves and
+  verified telemetry batches count as sightings as well, which covers tabs
+  that predate the heartbeat and the native apps on the API path. The viewer
+  is the authenticated account and must match the token's user, so an
+  account can only count itself.
+- **No write per poll.** A sighting is a map write in
+  `server/src/voice/hls-viewer-counts.ts`. Each API process flushes at most
+  once a minute per broadcast: who it saw into `hls_session_viewers`, then one
+  statement that counts the union and stores the minute and the running
+  peak/unique in `hls_session_viewer_stats`.
+- **Two API processes** write who they saw, not how many, so the count is
+  the union of both. The higher reading of a minute wins.
+- **"Watching now"** is seen in the last 120 s (heartbeat plus flush plus
+  slack), so somebody who closed the tab counts for up to two minutes.
+- **Privacy.** User ids stay in `hls_session_viewers`, are pruned 24 h after
+  last seen, and nothing reads them back out: every reader counts rows.
+- **Where it shows.** The past-broadcasts dialog ("pico de 12 pessoas · 31
+  únicas"), `liveHls.viewers` on `GET /api/admin/metrics` (per live broadcast:
+  now, peak, unique, plus this process's sightings and flush health), and a
+  line under "transmissões" on the operator dashboard.
+- **Not counted:** native apps playing an LL session straight from the edge
+  Worker (they do not send the heartbeat yet), and broadcasts from before
+  this shipped.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for

@@ -183,3 +183,20 @@ export function isSampledForHlsTelemetry(
   const fraction = fnv1a(`hls-telemetry:${userId}`) / 0xffffffff;
   return fraction < rate;
 }
+
+/**
+ * How often a playing watch-party viewer tells the server it is still
+ * watching (`POST /api/live-hls/presence`). Unlike telemetry this is EVERY
+ * viewer, not a sample: it is what the party's viewer counts are built from
+ * (`server/src/voice/hls-viewer-counts.ts`). It carries no measurement, only
+ * the `?t=` viewer token the player already holds, and the server turns it
+ * into a map write, never a database write.
+ */
+export const LIVE_HLS_PRESENCE_INTERVAL_MS = 30_000;
+
+export const liveHlsPresenceSchema = z.object({
+  /** The `?t=` viewer token from the playlist URL the player is attached to. */
+  sessionToken: z.string().min(1).max(512),
+});
+
+export type LiveHlsPresence = z.infer<typeof liveHlsPresenceSchema>;

@@ -1,3 +1,9 @@
+import {
+  hlsViewerCounter,
+  liveHlsViewerSessions,
+  type HlsViewerCounterStats,
+  type LiveHlsViewerSession,
+} from "../voice/hls-viewer-counts.js";
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
@@ -713,6 +719,18 @@ export interface AdminMetrics {
      * actually seen appear.
      */
     playlistRejectedByReason: Record<string, number>;
+    /**
+     * Who is watching (`voice/hls-viewer-counts.ts`). `live` is every
+     * broadcast with a viewer seen in the last few minutes, across both API
+     * machines, read from the shared tables and so up to a minute behind; each
+     * has the count now, the peak so far and the distinct accounts. Null when
+     * the query failed. `here` is this process only: its sightings by source
+     * since boot, and whether its once-a-minute flush is landing.
+     */
+    viewers: {
+      live: LiveHlsViewerSession[] | null;
+      here: HlsViewerCounterStats;
+    };
   };
   topServers24h: {
     name: string;
@@ -1104,6 +1122,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   const hlsActivity = liveHlsActivity();
   const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
+  const hlsViewers = await liveHlsViewerSessions().catch(() => null);
 
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same
@@ -1499,6 +1518,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       restartsScheduled: hlsActivity.restartsScheduledTotal,
       restartsExhausted: hlsActivity.restartsExhaustedTotal,
       playlistRejectedByReason: hlsPlaylistRejectionsByReason(),
+      viewers: { live: hlsViewers, here: hlsViewerCounter.stats() },
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

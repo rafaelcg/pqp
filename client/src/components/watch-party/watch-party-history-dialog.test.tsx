@@ -62,6 +62,19 @@ describe("WatchPartyHistoryList", () => {
     expect(html).not.toContain("Older recordings");
   });
 
+  it("says how many people watched: the peak at once and the distinct accounts", () => {
+    const html = render([{ ...ENDED, viewers: { peak: 12, unique: 31 } }]);
+    expect(html).toContain("peak of 12 viewers · 31 unique");
+    expect(render([{ ...ENDED, viewers: { peak: 1, unique: 1 } }])).toContain(
+      "peak of 1 viewer · 1 unique",
+    );
+  });
+
+  it("says nothing about viewers for a broadcast from before the count, or an older API", () => {
+    expect(render([{ ...ENDED, viewers: null }])).not.toContain("peak of");
+    expect(render([ENDED])).not.toContain("peak of");
+  });
+
   it("offers the download toggle on an available broadcast, and not on a folded one", () => {
     expect(render([ENDED])).toContain(
       'data-testid="watch-party-history-download-toggle"',

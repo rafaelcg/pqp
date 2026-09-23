@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/utils";
 import {
+  LIVE_HLS_PRESENCE_INTERVAL_MS,
   LIVE_HLS_TELEMETRY_FLUSH_MS,
   type LiveHlsTelemetryBatch,
   type LiveHlsTelemetrySample,
@@ -793,4 +794,68 @@ export function isHlsStartupSample(
   startupMs: number,
 ): boolean {
   return firstFrameAt === null || now - firstFrameAt < startupMs;
+}
+
+/**
+ * "Still watching", for the party's viewer counts
+ * (`server/src/voice/hls-viewer-counts.ts`). Unlike telemetry this goes out
+ * for EVERY viewer, not a sample, and carries nothing but the `?t=` viewer
+ * token the player already holds; the server verifies it and counts the
+ * signed-in account once per broadcast. Only while the picture is actually
+ * playing: a paused tab is not watching, and a replay (`mode: "vod"`) is not
+ * a live party at all, so its caller never starts one.
+ *
+ * `tick` runs more often than the interval so the first beat goes out soon
+ * after playback starts; `beat` itself enforces one per interval.
+ */
+export interface HlsPresenceBeat {
+  /** Call on a timer and on `playing`: sends when due and playing. */
+  beat(): void;
+  stop(): void;
+}
+
+export function createHlsPresenceBeat(input: {
+  sessionToken: string;
+  isPlaying: () => boolean;
+  send: (sessionToken: string) => void;
+  intervalMs?: number;
+  now?: () => number;
+}): HlsPresenceBeat {
+  const intervalMs = input.intervalMs ?? LIVE_HLS_PRESENCE_INTERVAL_MS;
+  const now = input.now ?? Date.now;
+  let lastSentAt: number | null = null;
+  let stopped = false;
+  return {
+    beat() {
+      if (stopped || !input.isPlaying()) {
+        return;
+      }
+      const at = now();
+      if (lastSentAt !== null && at - lastSentAt < intervalMs) {
+        return;
+      }
+      lastSentAt = at;
+      input.send(input.sessionToken);
+    },
+    stop() {
+      stopped = true;
+    },
+  };
+}
+
+/**
+ * Fire-and-forget, like telemetry: a missed beat is one fewer sighting, and
+ * the next one is 30 s away. `token` is the Bearer the caller already holds.
+ */
+export function sendHlsPresence(sessionToken: string, token: string | null): void {
+  fetch(`${getApiBaseUrl()}/api/live-hls/presence`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ sessionToken }),
+  }).catch(() => {
+    // Dropped. See the doc comment above.
+  });
 }

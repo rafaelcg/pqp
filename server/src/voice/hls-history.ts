@@ -118,6 +118,12 @@ export interface WatchPartyHistoryEntry {
   presenter: { userId: string; displayName: string } | null;
   replayAvailable: boolean;
   keepReplay: boolean;
+  /**
+   * How many people watched (`hls-viewer-counts.ts`): the most at once and
+   * the distinct accounts. Null for a broadcast from before the count
+   * existed, or one nobody watched. Up to a minute behind while live.
+   */
+  viewers: { peak: number; unique: number } | null;
 }
 
 interface HistoryRow {
@@ -129,6 +135,8 @@ interface HistoryRow {
   presenter_user_id: string | null;
   presenter_display_name: string | null;
   title: string;
+  peak_viewers: number | null;
+  unique_viewers: number | null;
 }
 
 /** Newest first, capped by `limit`. */
@@ -163,9 +171,14 @@ export async function listWatchPartyHistory(
        (s.all_ended AND s.fully_available) AS replay_available,
        presenter.user_id AS presenter_user_id,
        presenter.display_name AS presenter_display_name,
-       COALESCE(presenter.title, c.name) AS title
+       COALESCE(presenter.title, c.name) AS title,
+       vs.peak_viewers,
+       vs.unique_viewers
      FROM sessions s
      JOIN channels c ON c.id = s.channel_id
+     LEFT JOIN hls_session_viewer_stats vs
+       ON vs.channel_id = s.channel_id
+      AND vs.started_at_ms = (EXTRACT(EPOCH FROM s.started_at) * 1000)::bigint
      LEFT JOIN LATERAL (
        SELECT cs.host_user_id AS user_id, u.display_name, cs.title
        FROM channel_sessions cs
@@ -199,6 +212,10 @@ export async function listWatchPartyHistory(
       : null,
     replayAvailable: row.replay_available,
     keepReplay: row.keep_replay,
+    viewers:
+      row.unique_viewers !== null && row.unique_viewers > 0
+        ? { peak: row.peak_viewers ?? 0, unique: row.unique_viewers }
+        : null,
   }));
 }
 
