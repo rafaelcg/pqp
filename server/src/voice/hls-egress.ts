@@ -5430,7 +5430,13 @@ async function reconcileCameraEgress(
   ) {
     return;
   }
+  // The egress this call is replacing. LiveKit can go on listing it ACTIVE
+  // well after we asked it to stop (a stop that times out, 2026-09-23
+  // 20:13:14Z), and priced as a full rendition it refused its own
+  // replacement: boxMbps=651 against 600, the camera gone for the cooldown.
+  const replaced = new Set<string>();
   if (current) {
+    replaced.add(current.egressId);
     room.camera = null;
     room.stream = withoutCameraUrl(room.stream);
     await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
@@ -5440,6 +5446,11 @@ async function reconcileCameraEgress(
       egressId: current.egressId,
       sessionId: current.sessionId,
       reason: wantedVideo || wantedAudio ? "track-replaced" : "no-camera",
+      // What changed, so a replace nobody asked for can be explained.
+      fromVideo: current.cameraTrackId,
+      toVideo: wantedVideo,
+      fromAudio: current.audioTrackId,
+      toAudio: wantedAudio,
     });
   }
   if (!wantedVideo && !wantedAudio) {
@@ -5471,7 +5482,9 @@ async function reconcileCameraEgress(
   // `activeBoxEgressCount` cannot itself tell a camera egress from a ladder
   // rendition. Passing it directly would charge every existing camera twice.
   const decision = decideCameraEgress({
-    runningRungs: await activeLadderEgressCount(),
+    runningRungs: await activeLadderEgressCount({
+      supersededEgressIds: replaced,
+    }),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
     hasVideo: Boolean(wantedVideo),
