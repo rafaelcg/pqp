@@ -2190,6 +2190,53 @@ export function liveHlsFrameChanged(
   );
 }
 
+/**
+ * THE CAMERA IS ANNOUNCED BEFORE IT IS PUBLISHED. Every client sends
+ * `set-camera` first (so receivers can classify the video when it lands) and
+ * publishes to LiveKit after, so the reconcile that frame triggers asks the
+ * SFU a moment too early, finds no camera track, and has nothing else to
+ * wake it until an unrelated roster event. A presenter alone on stage in a
+ * watch party produces none, which is how a 2026-09-23 rehearsal turned the
+ * camera on right after going live and got no camera recording at all (and
+ * why production had three camera rows ever). A few delayed reconciles after
+ * the announcement close the gap for every client already out there,
+ * phones included, without waiting for them to change their order. Each is
+ * the same cheap, serialised, idempotent call: a no-op in a room that is not
+ * transcoding, and one `listParticipants` in one that is.
+ */
+const CAMERA_FOLLOW_UP_RECONCILE_MS: readonly number[] = [1_500, 5_000, 15_000];
+let cameraFollowUpDelays: readonly number[] = CAMERA_FOLLOW_UP_RECONCILE_MS;
+
+/** Tests only: shorter follow-ups, or the defaults back with no argument. */
+export function setCameraFollowUpDelaysForTests(delays?: readonly number[]): void {
+  cameraFollowUpDelays = delays ?? CAMERA_FOLLOW_UP_RECONCILE_MS;
+}
+const cameraFollowUpTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+
+function scheduleCameraFollowUpReconciles(voiceChannelId: string): void {
+  for (const timer of cameraFollowUpTimers.get(voiceChannelId) ?? []) {
+    clearTimeout(timer);
+  }
+  const delays = cameraFollowUpDelays;
+  const timers = delays.map((delay, i) => {
+    const timer = setTimeout(() => {
+      if (i === delays.length - 1) {
+        cameraFollowUpTimers.delete(voiceChannelId);
+      }
+      void pushLiveHls(voiceChannelId).catch((error: unknown) => {
+        console.error(
+          "[voice] pushLiveHls failed on a camera follow-up:",
+          voiceChannelId,
+          error,
+        );
+      });
+    }, delay);
+    timer.unref?.();
+    return timer;
+  });
+  cameraFollowUpTimers.set(voiceChannelId, timers);
+}
+
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
@@ -5128,6 +5175,12 @@ export function resetVoicePeers(): void {
   for (const timer of retiredPeerIds.values()) {
     clearTimeout(timer);
   }
+  for (const timers of cameraFollowUpTimers.values()) {
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+  }
+  cameraFollowUpTimers.clear();
   peers.clear();
   socketToPeerId.clear();
   retiredPeerIds.clear();
@@ -7483,6 +7536,9 @@ export async function handleVoiceMessage(
         error,
       );
     });
+    if (payload.streamId) {
+      scheduleCameraFollowUpReconciles(peer.voiceChannelId);
+    }
     return;
   }
 
