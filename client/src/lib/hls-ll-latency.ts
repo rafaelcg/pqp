@@ -202,8 +202,18 @@ export class LlLatencyGovernor {
     return false;
   }
 
-  /** The slow give-back while healthy. Call on the watchdog's tick. */
-  tick(now: number): void {
+  /**
+   * The slow give-back while healthy. Call on the watchdog's tick with
+   * whether the picture is frozen right now: a freeze still in progress is
+   * the opposite of healthy, so it restarts the clean-minute clock instead
+   * of letting the target shrink under a viewer who has not recovered (a
+   * Farol finding on #785).
+   */
+  tick(now: number, stalled = false): void {
+    if (stalled) {
+      this.lastEventAt = now;
+      return;
+    }
     if (now - this.lastEventAt < LL_TARGET_DECAY_AFTER_MS) {
       return;
     }

@@ -66,6 +66,23 @@ describe("LlLatencyGovernor", () => {
     expect(g.state().targetSeconds).toBe(LL_SEGMENTS_TARGET_SECONDS);
   });
 
+  it("never gives room back during a freeze that is still going (Farol, #785)", () => {
+    const g = new LlLatencyGovernor({ delivery: "segments", now: T0 });
+    g.onStall(T0);
+    // A long freeze: every tick reports it, and the target holds.
+    for (let t = 1_000; t <= 3 * LL_TARGET_DECAY_AFTER_MS; t += 1_000) {
+      g.tick(T0 + t, true);
+    }
+    const held = LL_SEGMENTS_TARGET_SECONDS + LL_TARGET_STEP_SECONDS;
+    expect(g.state().targetSeconds).toBe(held);
+    // The clean minute counts from the end of the freeze, not its start.
+    const end = T0 + 3 * LL_TARGET_DECAY_AFTER_MS;
+    g.tick(end + LL_TARGET_DECAY_AFTER_MS - 1);
+    expect(g.state().targetSeconds).toBe(held);
+    g.tick(end + LL_TARGET_DECAY_AFTER_MS);
+    expect(g.state().targetSeconds).toBe(held - LL_TARGET_DECAY_SECONDS);
+  });
+
   it("moves parts to segments on the third stall inside a minute, not the second", () => {
     const g = new LlLatencyGovernor({ delivery: "parts", now: T0 });
     expect(g.onStall(T0 + 1_000)).toBe(false);

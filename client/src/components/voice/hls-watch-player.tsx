@@ -1827,7 +1827,7 @@ export function HlsWatchPlayer({
         return;
       }
       if (governor) {
-        governor.tick(Date.now());
+        governor.tick(Date.now(), stallMeter.isStalled);
         applyGovernor();
       }
       let decision = watch.tick(Date.now());
