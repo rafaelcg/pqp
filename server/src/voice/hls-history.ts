@@ -1397,6 +1397,29 @@ export async function buildWatchPartyDownloadPlan(
 const CAMERA_RUN_INDEX = /-r(\d{1,16})-index\.m3u8$/;
 /** How much of a segment's head is read to find its first PTS. */
 const CAMERA_PTS_PROBE_BYTES = 64 * 1024;
+/** Storage requests in flight at once while planning a camera download. */
+const CAMERA_PLAN_CONCURRENCY = 4;
+
+/** `items.map(fn)`, at most `limit` at a time, results in input order. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index]!);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
 
 /** The camera's run playlists under `prefix`, first run first. */
 export function cameraRunPlaylistKeys(
@@ -1476,27 +1499,38 @@ async function buildCameraDownloadPlan(
   sizes: Map<string, number>,
   config: ReplayStorageConfig,
 ): Promise<WatchPartyDownloadPlan | null> {
-  const runs: { keys: string[]; pdt: number | null; seconds: number }[] = [];
-  for (const playlistKey of cameraRunPlaylistKeys(prefix, sizes.keys())) {
-    const response = await fetchPlaylistObject(config, playlistKey);
-    if (!response.ok) {
-      throw new HlsPlaylistUnavailable(
-        `Storage returned HTTP ${response.status} for ${playlistKey}`,
-      );
-    }
-    const body = await response.text();
-    const keys = playlistKeys(body, prefix);
-    if (keys.length > 0) {
-      runs.push({
-        keys,
+  // Every run's playlist, and (for more than one run) every run's first PTS,
+  // fetched CAMERA_PLAN_CONCURRENCY at a time: a camera toggled a dozen times
+  // must not be two dozen storage round trips in a row before the head goes
+  // out. Each request is bounded by REQUEST_TIMEOUT_MS on its own.
+  const fetched = await mapWithConcurrency(
+    cameraRunPlaylistKeys(prefix, sizes.keys()),
+    CAMERA_PLAN_CONCURRENCY,
+    async (playlistKey) => {
+      const response = await fetchPlaylistObject(config, playlistKey);
+      if (!response.ok) {
+        throw new HlsPlaylistUnavailable(
+          `Storage returned HTTP ${response.status} for ${playlistKey}`,
+        );
+      }
+      const body = await response.text();
+      return {
+        keys: playlistKeys(body, prefix),
         pdt: playlistProgramDateTime(body),
         seconds: playlistSeconds(body),
-      });
-    }
-  }
+      };
+    },
+  );
+  const runs = fetched.filter((run) => run.keys.length > 0);
   if (runs.length === 0) {
     return null;
   }
+  const firstPtsOfRun =
+    runs.length > 1
+      ? await mapWithConcurrency(runs, CAMERA_PLAN_CONCURRENCY, (run) =>
+          segmentFirstPts(config, run.keys[0]!),
+        )
+      : runs.map(() => null);
   const keys: string[] = [];
   const ptsOffsets: number[] = [];
   let total = 0;
@@ -1507,7 +1541,7 @@ async function buildCameraDownloadPlan(
   for (const [index, run] of runs.entries()) {
     let offset = 0;
     if (runs.length > 1) {
-      const pts = await segmentFirstPts(config, run.keys[0]!);
+      const pts = firstPtsOfRun[index] ?? null;
       if (pts !== null) {
         if (!origin) {
           origin = { pts, pdt: run.pdt };
