@@ -73,31 +73,44 @@ async function sendMessages(
   expectTotal: number,
 ): Promise<void> {
   const socket = new WebSocket(WS_URL);
-  await new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve());
-    socket.addEventListener("error", () => reject(new Error("ws error")));
-  });
-  const ready = new Promise<void>((resolve) => {
-    socket.addEventListener("message", (event) => {
-      if ((JSON.parse(String(event.data)) as { type: string }).type === "ready") {
-        resolve();
-      }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("ws error")));
     });
-  });
-  socket.send(JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }));
-  await ready;
-  for (const body of bodies) {
-    socket.send(JSON.stringify({ type: "message-create", channelId, body }));
+    const ready = new Promise<void>((resolve) => {
+      socket.addEventListener("message", (event) => {
+        if (
+          (JSON.parse(String(event.data)) as { type: string }).type === "ready"
+        ) {
+          resolve();
+        }
+      });
+    });
+    socket.send(
+      JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }),
+    );
+    await ready;
+    for (const body of bodies) {
+      socket.send(JSON.stringify({ type: "message-create", channelId, body }));
+    }
+    // Closing straight away can drop frames still queued behind the socket.
+    await expect.poll(() => messageCount(suffix, channelId)).toBe(expectTotal);
+  } finally {
+    socket.close();
   }
-  // Closing straight away can drop frames still queued behind the socket.
-  await expect.poll(() => messageCount(suffix, channelId)).toBe(expectTotal);
-  socket.close();
 }
 
-async function messageCount(suffix: string, channelId: string): Promise<number> {
-  const res = await fetch(`${API}/api/channels/${channelId}/messages?limit=100`, {
-    headers: headersFor(suffix),
-  });
+async function messageCount(
+  suffix: string,
+  channelId: string,
+): Promise<number> {
+  const res = await fetch(
+    `${API}/api/channels/${channelId}/messages?limit=100`,
+    {
+      headers: headersFor(suffix),
+    },
+  );
   const { messages } = (await res.json()) as { messages: unknown[] };
   return messages.length;
 }
@@ -148,18 +161,25 @@ async function seed(): Promise<Seeded> {
 
   // Thirty VIPs: the star (and its `sr-only` "VIP") on every row, the lower
   // rows well below a 900 px window.
-  const joiners = [guest, ...Array.from({ length: 30 }, (_, i) => `shell-vip${i}-${stamp}`)];
+  const joiners = [
+    guest,
+    ...Array.from({ length: 30 }, (_, i) => `shell-vip${i}-${stamp}`),
+  ];
   for (const suffix of joiners) {
     const { id } = await materialise(suffix);
-    await fetch(`${API}/api/invites/${invite.code}/join`, {
+    const joined = await fetch(`${API}/api/invites/${invite.code}/join`, {
       method: "POST",
       headers: headersFor(suffix),
     });
+    expect(joined.ok, `join ${suffix}`).toBe(true);
     if (suffix !== guest) {
-      await fetch(`${API}/api/servers/${server.id}/members/${id}/roles/${vip.id}`, {
-        method: "PUT",
-        headers: headersFor(owner),
-      });
+      // Without the star there is no sr-only label, and the test would pass
+      // without exercising anything.
+      const granted = await fetch(
+        `${API}/api/servers/${server.id}/members/${id}/roles/${vip.id}`,
+        { method: "PUT", headers: headersFor(owner) },
+      );
+      expect(granted.ok, `VIP for ${suffix}`).toBe(true);
     }
   }
 
@@ -168,14 +188,22 @@ async function seed(): Promise<Seeded> {
   await sendMessages(
     owner,
     channel.id,
-    Array.from({ length: 40 }, (_, i) => `earlier ${i} ${"lorem ipsum ".repeat(i % 6)}`),
+    Array.from(
+      { length: 40 },
+      (_, i) => `earlier ${i} ${"lorem ipsum ".repeat(i % 6)}`,
+    ),
     40,
   );
   await fetch(`${API}/api/channels/${channel.id}/read`, {
     method: "POST",
     headers: headersFor(owner),
   });
-  await sendMessages(guest, channel.id, ["new one", "new two", "new three"], 43);
+  await sendMessages(
+    guest,
+    channel.id,
+    ["new one", "new two", "new three"],
+    43,
+  );
 
   return { serverId: server.id, channelId: channel.id, owner };
 }
@@ -262,9 +290,15 @@ test("landing on the NEW divider scrolls the transcript, never the app", async (
     timeout: 20_000,
   });
   // The roster has to be down to its lower rows for the escape to matter.
-  await expect(page.locator("[data-member-sidebar]")).toContainText("shell-vip29", {
-    timeout: 20_000,
-  });
+  await expect(page.locator("[data-member-sidebar]")).toContainText(
+    "shell-vip29",
+    {
+      timeout: 20_000,
+    },
+  );
+  await expect(
+    page.locator("[data-member-sidebar] [data-rank-mark='vip']"),
+  ).toHaveCount(30);
   // Let the landing effect and its one extra frame run.
   await page.waitForTimeout(500);
 
@@ -321,10 +355,17 @@ test("a phone gets the same still frame", async ({ page }) => {
   expect(await geometry(page)).toEqual(STILL);
 });
 
-test("the marketing pages are ordinary scrolling documents", async ({ page }) => {
+test("the marketing pages are ordinary scrolling documents", async ({
+  page,
+}) => {
   // The app route switches the document to a still frame while it is
   // mounted; nothing outside it may inherit that.
-  for (const path of ["/", "/vem", "/c/nao-existe-aqui", "/@ninguem_aqui_mesmo"]) {
+  for (const path of [
+    "/",
+    "/vem",
+    "/c/nao-existe-aqui",
+    "/@ninguem_aqui_mesmo",
+  ]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
     const state = await page.evaluate(() => ({
@@ -332,7 +373,11 @@ test("the marketing pages are ordinary scrolling documents", async ({ page }) =>
       html: getComputedStyle(document.documentElement).overflowY,
       body: getComputedStyle(document.body).overflowY,
     }));
-    expect(state, path).toEqual({ flagged: false, html: "visible", body: "visible" });
+    expect(state, path).toEqual({
+      flagged: false,
+      html: "visible",
+      body: "visible",
+    });
   }
   for (const path of ["/", "/vem"]) {
     await page.goto(path);
