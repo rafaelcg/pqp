@@ -36,6 +36,7 @@ import {
   type ServerMember,
 } from "@/lib/api";
 import { confettiSpent, sessionStore, spendConfetti } from "@/lib/arrival";
+import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -124,10 +125,7 @@ interface OnboardingFlowProps {
    * A server was created here. The parent loads it behind the dialog and
    * remembers it as this session's own (the owner banner).
    */
-  onServerCreated: (
-    serverId: string,
-    invite: Invite | null,
-  ) => Promise<void> | void;
+  onServerCreated: (serverId: string) => Promise<void> | void;
   /** A typed invite on step 3 worked. The parent opens the server. */
   onServerJoined: (serverId: string) => Promise<void> | void;
   /** Finished or skipped. The parent stops rendering this. */
@@ -146,6 +144,14 @@ interface StepView {
 }
 
 const STEP_OUT_MS = 120;
+
+/** The room step 3 made, for step 4. */
+interface CreatedRoom {
+  serverId: string;
+  invite: Invite | null;
+  /** The parent opened it behind the dialog. False: "Entrar na sala" retries. */
+  loaded: boolean;
+}
 
 /** A fine pointer: the one place autofocus does not summon a keyboard. */
 function prefersAutofocus(): boolean {
@@ -172,10 +178,7 @@ export function OnboardingFlow({
   const [leaving, setLeaving] = useState<OnboardingStep | null>(null);
   const leaveTimer = useRef<number | null>(null);
   /** The room made on step 3 and its invite, for step 4. */
-  const [created, setCreated] = useState<{
-    serverId: string;
-    invite: Invite | null;
-  } | null>(null);
+  const [created, setCreated] = useState<CreatedRoom | null>(null);
   const finished = useRef(false);
 
   useEffect(() => {
@@ -272,25 +275,16 @@ export function OnboardingFlow({
     onSkip: () => finish("you"),
   });
   const room = useRoomStep({
-    onCreated: async (serverId, invite) => {
-      setCreated({ serverId, invite });
-      // The room exists from here on. A failure loading it behind the dialog
-      // must not read as "couldn't create" and invite a second Criar (that
-      // made a second server); the ready step goes on either way.
-      try {
-        await onServerCreated(serverId, invite);
-      } finally {
-        goTo("ready");
+    loadCreated: (serverId) => Promise.resolve(onServerCreated(serverId)),
+    onCreated: (room) => {
+      if (room.invite) {
+        rememberInviteCode(room.serverId, room.invite.code);
       }
+      setCreated(room);
+      goTo("ready");
     },
-    onJoined: async (serverId) => {
-      // Joined already; a slow reload behind the dialog is not a dead invite.
-      try {
-        await onServerJoined(serverId);
-      } finally {
-        finish();
-      }
-    },
+    openJoined: (serverId) => Promise.resolve(onServerJoined(serverId)),
+    onJoined: () => finish(),
     onImportDiscord: () => {
       finish();
       onImportDiscord();
@@ -300,8 +294,21 @@ export function OnboardingFlow({
   const ready = useReadyStep({
     user,
     created,
-    onInvite: (invite) =>
-      setCreated((current) => (current ? { ...current, invite } : current)),
+    onInvite: (invite) => {
+      if (created && invite) {
+        rememberInviteCode(created.serverId, invite.code);
+      }
+      setCreated((current) => (current ? { ...current, invite } : current));
+    },
+    // The room was made; if opening it behind the dialog failed, this is
+    // the retry, and the wizard only closes onto a room that is open.
+    openRoom: async () => {
+      if (!created || created.loaded) {
+        return;
+      }
+      await onServerCreated(created.serverId);
+      setCreated((current) => (current ? { ...current, loaded: true } : current));
+    },
     onEnter: () => finish(),
   });
 
@@ -985,13 +992,19 @@ function PhotoRow({
 type Door = "create" | "import" | "invite";
 
 function useRoomStep({
+  loadCreated,
   onCreated,
+  openJoined,
   onJoined,
   onImportDiscord,
   onSkip,
 }: {
-  onCreated: (serverId: string, invite: Invite | null) => Promise<void>;
-  onJoined: (serverId: string) => Promise<void>;
+  /** Open the new room behind the dialog. Rejects when that failed. */
+  loadCreated: (serverId: string) => Promise<void>;
+  onCreated: (room: CreatedRoom) => void;
+  /** Open a joined room behind the dialog. Rejects when that failed. */
+  openJoined: (serverId: string) => Promise<void>;
+  onJoined: () => void;
   onImportDiscord: () => void;
   onSkip: () => void;
 }): StepView {
@@ -1001,6 +1014,11 @@ function useRoomStep({
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState<"create" | "invite" | null>(null);
   const [errorKey, setErrorKey] = useState<MessageKey | null>(null);
+  /**
+   * The invite worked but the room would not open. Remembered so the retry
+   * only opens it again: re-joining is harmless, but it is not what failed.
+   */
+  const [joinedId, setJoinedId] = useState<string | null>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
 
   function openDoor(door: Door) {
@@ -1026,36 +1044,66 @@ function useRoomStep({
     }
     setBusy("create");
     setErrorKey(null);
+    let serverId: string;
     try {
-      const { server } = await createServer(trimmed);
-      track("onboarding_server_created");
-      // The invite is minted alongside the parent loading the room: the ready
-      // step needs both, and neither needs the other.
-      const invite = await createInvite(server.id, { expiresInHours: 168 })
-        .then((result) => result.invite)
-        .catch(() => null);
-      await onCreated(server.id, invite);
+      ({
+        server: { id: serverId },
+      } = await createServer(trimmed));
     } catch {
       setErrorKey("onboarding.room.create.error");
       setBusy(null);
+      return;
     }
+    track("onboarding_server_created");
+    // From here the room exists, so nothing below may send the person back
+    // to a Criar that would make a second one. The invite and the parent
+    // opening the room are independent: run them together, and let the
+    // ready step retry the opening if it failed.
+    const [invite, loaded] = await Promise.all([
+      createInvite(serverId, { expiresInHours: 168 })
+        .then((result) => result.invite)
+        .catch(() => null),
+      loadCreated(serverId).then(
+        () => true,
+        () => false,
+      ),
+    ]);
+    onCreated({ serverId, invite, loaded });
   }
 
   async function join() {
-    const trimmed = normalizeInviteCode(code);
-    if (!trimmed || busy) {
+    if (busy) {
       return;
     }
-    setBusy("invite");
-    setErrorKey(null);
-    try {
-      const result = await joinInvite(trimmed);
-      await onJoined(result.serverId);
-    } catch {
-      // Expired, revoked, used up, or mistyped: one sentence, same recovery.
-      setErrorKey("onboarding.room.invite.error");
-      setBusy(null);
+    let serverId = joinedId;
+    if (!serverId) {
+      const trimmed = normalizeInviteCode(code);
+      if (!trimmed) {
+        return;
+      }
+      setBusy("invite");
+      setErrorKey(null);
+      try {
+        serverId = (await joinInvite(trimmed)).serverId;
+      } catch {
+        // Expired, revoked, used up, or mistyped: one sentence, same recovery.
+        setErrorKey("onboarding.room.invite.error");
+        setBusy(null);
+        return;
+      }
+    } else {
+      setBusy("invite");
+      setErrorKey(null);
     }
+    try {
+      await openJoined(serverId);
+    } catch {
+      setJoinedId(serverId);
+      setErrorKey("onboarding.room.invite.openError");
+      setBusy(null);
+      return;
+    }
+    onJoined();
   }
 
   const doors: { id: Door; icon: LucideIcon; title: MessageKey; body: MessageKey }[] = [
@@ -1184,7 +1232,7 @@ function useRoomStep({
                   <Button
                     type="submit"
                     className="h-10 shrink-0"
-                    disabled={!code.trim() || busy !== null}
+                    disabled={(!code.trim() && !joinedId) || busy !== null}
                   >
                     {busy === "invite"
                       ? t("onboarding.room.invite.busy")
@@ -1212,17 +1260,37 @@ function useReadyStep({
   user,
   created,
   onInvite,
+  openRoom,
   onEnter,
 }: {
   user: User;
-  created: { serverId: string; invite: Invite | null } | null;
+  created: CreatedRoom | null;
   onInvite: (invite: Invite | null) => void;
+  openRoom: () => Promise<void>;
   onEnter: () => void;
 }): StepView {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
   const [copiedOnce, setCopiedOnce] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [entering, setEntering] = useState(false);
+  const [openFailed, setOpenFailed] = useState(false);
+
+  async function enter() {
+    if (entering) {
+      return;
+    }
+    setEntering(true);
+    setOpenFailed(false);
+    try {
+      await openRoom();
+    } catch {
+      setOpenFailed(true);
+      setEntering(false);
+      return;
+    }
+    onEnter();
+  }
 
   async function retry() {
     if (!created || retrying) {
@@ -1255,9 +1323,10 @@ function useReadyStep({
         // the copy button is the loud one and this steps back. After, the
         // next thing to do is go in, and the emphasis moves here.
         variant={copiedOnce ? "default" : "secondary"}
-        onClick={onEnter}
+        disabled={entering}
+        onClick={() => void enter()}
       >
-        {t("onboarding.ready.enter")}
+        {entering ? t("onboarding.you.entering") : t("onboarding.ready.enter")}
       </Button>
     ),
     body: (
@@ -1280,6 +1349,11 @@ function useReadyStep({
         {copyFailed && (
           <p role="alert" className="mt-3 text-sm text-danger">
             {t("importDiscord.error.copyFailed")}
+          </p>
+        )}
+        {openFailed && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {t("onboarding.ready.openError")}
           </p>
         )}
       </div>

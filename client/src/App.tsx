@@ -362,7 +362,7 @@ import {
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
-import { copyInvitePaste, rememberInviteCode } from "@/lib/invite-paste-copy";
+import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
@@ -3482,6 +3482,7 @@ function MainAppContent({
         }
         setUser(me);
         chat.setCurrentUser(me);
+        setInviteCacheAccount(me.id);
 
         // The gate, before anything else this function would do.
         //
@@ -7192,22 +7193,24 @@ function MainAppContent({
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onServerCreated={async (serverId, invite) => {
-          if (invite) {
-            rememberInviteCode(serverId, invite.code);
-          }
+        onServerCreated={async (serverId) => {
           setCreatedServerIds((prev) => new Set(prev).add(serverId));
-          rememberArrival(browserStorage(), serverId);
           setArrivalServerId(serverId);
           await refreshAfterJoin(serverId);
+          // Only once the room is open: a marker written before a failed load
+          // would suppress the banner on the reload that recovers it.
+          rememberArrival(browserStorage(), serverId);
         }}
         onServerJoined={async (serverId) => {
           const storage = browserStorage();
-          if (!hasArrived(storage, serverId)) {
-            rememberArrival(storage, serverId);
+          const firstVisit = !hasArrived(storage, serverId);
+          if (firstVisit) {
             setArrivalServerId(serverId);
           }
           await refreshAfterJoin(serverId);
+          if (firstVisit) {
+            rememberArrival(storage, serverId);
+          }
         }}
         onDone={() => {
           setNeedsOnboarding(false);
