@@ -305,6 +305,7 @@ import {
   fetchConversations,
   fetchIceServers,
   fetchMe,
+  fetchPublicInvitePreview,
   fetchMembers,
   fetchRoles,
   listTimeouts,
@@ -349,6 +350,7 @@ import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  peekCreateIntent,
   stashCreateIntent,
   stashInviteRef,
   takeAddIntent,
@@ -359,7 +361,9 @@ import {
   type CreateIntent,
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
-import { shouldRunOnboarding } from "@/lib/onboarding";
+import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
+import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
+import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
   favoritesForServer,
@@ -374,10 +378,21 @@ import {
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
+import {
+  arrivalVariant,
+  browserStorage,
+  confettiSpent,
+  hasArrived,
+  rememberArrival,
+  sessionStore,
+  spendConfetti,
+  type ArrivalSurface,
+} from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { ServerIcon } from "@/components/layout/server-identity";
+import type { PublicInvitePreview } from "@pqp/shared";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   conversationChannel,
@@ -572,6 +587,43 @@ export function App({ devBypass = false }: AppProps) {
   );
 }
 
+/**
+ * The server a signed-out invite link opens, when the API can say.
+ *
+ * Only on `/app/invite/<code>`, only while signed out. `null` until it
+ * answers and whenever it cannot (see `fetchPublicInvitePreview`: an API
+ * without the public route answers 401 or 404, and both read as "no preview",
+ * so this ships ahead of the server change and lights up when it lands).
+ * `invite_gate_view` records whether the preview was there.
+ */
+function useSignedOutInvitePreview(
+  pathname: string | null,
+): PublicInvitePreview | null {
+  const route = pathname ? parseAppRoute(pathname) : null;
+  const code = route?.kind === "invite" ? route.code : null;
+  const [preview, setPreview] = useState<{
+    code: string;
+    value: PublicInvitePreview | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!code) {
+      return;
+    }
+    let cancelled = false;
+    void fetchPublicInvitePreview(code).then((value) => {
+      if (cancelled) {
+        return;
+      }
+      setPreview({ code, value });
+      track("invite_gate_view", { preview: value !== null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [code]);
+  return preview && preview.code === code ? preview.value : null;
+}
+
 function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
@@ -589,6 +641,9 @@ function ClerkAppGate() {
    * not a route this build recognises.
    */
   const redirectUrl = signedOutRedirectPath(location.pathname);
+  const invitePreview = useSignedOutInvitePreview(
+    isLoaded && !isSignedIn ? location.pathname : null,
+  );
   const desktop = getDesktop();
   const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
   const [waiting, setWaiting] = useState(false);
@@ -887,10 +942,46 @@ function ClerkAppGate() {
             </>
           ) : (
             <>
-              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-                {t("signedOut.title")}
-              </h1>
-              <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
+              {invitePreview ? (
+                <>
+                  <p
+                    data-invite-gate-preview=""
+                    className="mb-4 inline-flex max-w-full items-center gap-3 rounded-full bg-surface-1/80 py-1.5 pl-1.5 pr-4 outline outline-1 -outline-offset-1 outline-border"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-surface-2 font-display text-xs font-bold text-text">
+                      <ServerIcon
+                        name={invitePreview.serverName}
+                        iconUrl={invitePreview.iconUrl}
+                      />
+                    </span>
+                    <span className="min-w-0 truncate text-xs uppercase tracking-[0.18em] text-accent">
+                      {t("signedOut.invite.eyebrow")}
+                    </span>
+                    {invitePreview.memberCount > 0 && (
+                      <span className="shrink-0 text-xs tabular-nums text-text-tertiary">
+                        {t("onboarding.you.members", {
+                          count: invitePreview.memberCount,
+                        })}
+                      </span>
+                    )}
+                  </p>
+                  <h1 className="text-balance font-display text-5xl font-extrabold leading-[0.95] [overflow-wrap:anywhere] sm:text-6xl">
+                    {t("signedOut.invite.title", {
+                      server: invitePreview.serverName,
+                    })}
+                  </h1>
+                  <p className="mt-4 max-w-sm text-pretty text-paper-muted">
+                    {t("signedOut.invite.body")}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                    {t("signedOut.title")}
+                  </h1>
+                  <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
+                </>
+              )}
               {handoffError ? (
                 <p className="mt-4 text-danger">{handoffError}</p>
               ) : null}
@@ -927,7 +1018,11 @@ function ClerkAppGate() {
                       <Button>{t("signedOut.createAccount")}</Button>
                     </SignUpButton>
                     <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
-                      <Button variant="secondary">{t("nav.signIn")}</Button>
+                      <Button variant="secondary">
+                        {invitePreview
+                          ? t("signedOut.invite.haveAccount")
+                          : t("nav.signIn")}
+                      </Button>
                     </SignInButton>
                   </>
                 )}
@@ -1009,7 +1104,7 @@ function MainAppContent({
   showUserButton = false,
   clerkAccount = null,
 }: MainAppContentProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   // Composer drafts are kept per account; a sign-out reads as no drafts.
   useEffect(() => {
@@ -1208,6 +1303,32 @@ function MainAppContent({
    * for months but is opening on a new machine.
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
+  /**
+   * Where the join behind the first-run wizard stands, for its "você" step:
+   * the step names the room that is waiting ("{server} tá te esperando") and
+   * its button says "Entrar em {server}". Unlike `arrivalServerId` this is
+   * set whether or not this device has welcomed the account there before.
+   */
+  const [inviteJoin, setInviteJoin] = useState<
+    "pending" | "failed" | { serverId: string } | null
+  >(null);
+  /**
+   * Servers this account made in this session. The arrival banner says "your
+   * room is ready, bring the crew" to their owner rather than "say oi", and
+   * the empty channel offers the invite, while nobody else has come.
+   */
+  const [createdServerIds, setCreatedServerIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  /**
+   * The age gate was just answered and the app is loading behind it. The gate
+   * stays on screen in its saving state until the wizard can take the same
+   * panel over (`entrance={false}`), so the two read as one window with no
+   * loading screen flashed between them.
+   */
+  const [gateHandoff, setGateHandoff] = useState(false);
+  /** The wizard finished in this tab: the invitee's confetti fires on arrival. */
+  const [justOnboarded, setJustOnboarded] = useState(false);
   const [qgHintReady, setQgHintReady] = useState(false);
   /** Whether the QG card WANTS the corner. `cornerHint` decides who gets it. */
   const [qgHintWanted, setQgHintWanted] = useState(false);
@@ -3362,6 +3483,7 @@ function MainAppContent({
         }
         setUser(me);
         chat.setCurrentUser(me);
+        setInviteCacheAccount(me.id);
 
         // The gate, before anything else this function would do.
         //
@@ -4796,6 +4918,9 @@ function MainAppContent({
   ) {
     voiceServerIdRef.current = selectedServerId;
     refreshIceServers();
+    // The funnel's "first thing a new account did": inert unless the wizard
+    // finished in this tab, and once.
+    trackFirstAction("arrival_first_voice");
 
     const current = voice.getState();
     const inCall = current.status !== "idle";
@@ -6322,8 +6447,10 @@ function MainAppContent({
       // The link's `?ref=` tag, or the one stashed at boot before a sign-in
       // redirect dropped the query. Attribution only.
       const ref = takeInviteRef(storage, code, window.location.search);
+      setInviteJoin("pending");
       try {
         const result = await joinInvite(code, ref);
+        setInviteJoin({ serverId: result.serverId });
         // Only welcome them somewhere this device has not welcomed them before.
         // Invite links get re-clicked weeks later, and the join succeeds again.
         if (!hasArrived(storage, result.serverId)) {
@@ -6338,6 +6465,7 @@ function MainAppContent({
         // Put the tag back for the panel's retry: it was taken before the
         // server confirmed anything.
         stashInviteRef(storage, code, ref);
+        setInviteJoin("failed");
         setInviteCodeFromUrl(code);
         setInviteErrorFromUrl(
           error instanceof ApiError
@@ -6921,25 +7049,93 @@ function MainAppContent({
     });
   }, [threadChat, perms.can, openThread?.thread.channelId, selectedChannelId]);
 
+  /**
+   * The invitee's one burst of confetti: on the arrival banner, the first time
+   * the room they were invited to is on screen after the wizard. Latched into
+   * state (and spent in session storage) so the banner re-rendering, or moving
+   * between the channel pane and the community home, does not fire it again.
+   * The organizer had theirs on the wizard's "Sala pronta" step.
+   */
+  const [celebrateArrivalFor, setCelebrateArrivalFor] = useState<string | null>(
+    null,
+  );
+  const userIdForConfetti = user?.id ?? null;
+  useEffect(() => {
+    if (
+      !justOnboarded ||
+      !userIdForConfetti ||
+      !arrivalServerId ||
+      createdServerIds.has(arrivalServerId)
+    ) {
+      return;
+    }
+    const store = sessionStore();
+    if (confettiSpent(store, userIdForConfetti)) {
+      return;
+    }
+    spendConfetti(store, userIdForConfetti);
+    setCelebrateArrivalFor(arrivalServerId);
+  }, [justOnboarded, userIdForConfetti, arrivalServerId, createdServerIds]);
+  // Released on its own clock, so nothing re-running the arming effect (a
+  // profile echo replacing `user`) can cancel the reset and leave the burst
+  // armed for every later remount of the banner.
+  useEffect(() => {
+    if (!celebrateArrivalFor) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCelebrateArrivalFor(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [celebrateArrivalFor]);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
         message={bootstrapError}
         onRetry={() => {
           setBootstrapError(null);
+          // A retry is not a gate answer being saved: loading must look like
+          // loading, not a locked gate saying "Salvando…".
+          setGateHandoff(false);
           setBootstrapAttempt((n) => n + 1);
         }}
       />
     );
   }
 
-  if (ageGate) {
+  /**
+   * Which first run this is, decided from what the person arrived with. Read
+   * from the address bar as well as from state because the gate paints before
+   * the bootstrap that would set `arrivedOnInviteLink`, and the dots on the
+   * gate have to agree with the dots on the wizard.
+   */
+  const firstRunPath = onboardingPath({
+    invite:
+      arrivedOnInviteLink ||
+      parseAppRoute(location.pathname)?.kind === "invite",
+    // Three places, because each is the only one that knows at some moment:
+    // the URL (a `/vem` CTA is a client-side navigation, so the boot-time
+    // stash never saw it), the stash (a sign-in redirect dropped the query),
+    // and state (after the arrival effect has spent both).
+    importing:
+      pendingCreate?.mode === "import" ||
+      createIntentFromSearch(location.search)?.mode === "import" ||
+      peekCreateIntent(browserStorage())?.mode === "import",
+  });
+
+  // The gate, and then the gate again in its saving state while the app loads
+  // behind it after a pass: same element in the same place, so the panel
+  // stays put until the wizard takes it over.
+  if (ageGate || (gateHandoff && !(bootstrapReady && user))) {
     return (
       <AgeGateDialog
-        status={ageGate}
+        status={ageGate ?? "pending"}
+        stepsTotal={firstRunPath === "cold" ? 4 : 2}
+        path={firstRunPath}
+        handingOff={gateHandoff}
         // Passing re-runs the whole bootstrap from the top, which is exactly
         // what is wanted: everything it would have loaded is still unloaded.
         onPassed={() => {
+          setGateHandoff(true);
           setAgeGate(null);
           setBootstrapAttempt((n) => n + 1);
         }}
@@ -6960,23 +7156,68 @@ function MainAppContent({
    * First run, after the gate and after the bootstrap.
    *
    * After the gate because onboarding a person who is about to be refused is
-   * cruel and pointless. After the bootstrap because the last step creates or
-   * joins a server, and `refreshAfterJoin` needs the same loaded state every
-   * other join path in the app needs.
+   * cruel and pointless. After the bootstrap because step 3 creates or joins a
+   * server, and `refreshAfterJoin` needs the same loaded state every other
+   * join path in the app needs.
    */
   if (needsOnboarding && user) {
+    const joinedServer =
+      inviteJoin && typeof inviteJoin === "object"
+        ? servers.find((server) => server.id === inviteJoin.serverId)
+        : undefined;
     return (
       <OnboardingFlow
         user={user}
-        pendingInvite={arrivedOnInviteLink}
-        pendingImport={pendingCreate?.mode === "import"}
-        onImportDiscord={() => setPendingCreate({ mode: "import", source: null })}
+        path={firstRunPath}
+        entrance={!gateHandoff}
+        arrival={
+          firstRunPath !== "invite"
+            ? null
+            : inviteJoin === "failed"
+              ? "failed"
+              : joinedServer
+                ? {
+                    serverId: joinedServer.id,
+                    name: joinedServer.name,
+                    iconUrl: joinedServer.iconUrl ?? null,
+                  }
+                : "pending"
+        }
+        // Keep an intent that is already waiting: a `?import=<code>` link
+        // carries the template to pre-fill, and the door must not wipe it.
+        onImportDiscord={() =>
+          setPendingCreate((current) =>
+            current?.mode === "import" ? current : { mode: "import", source: null },
+          )
+        }
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
-        onServerReady={(serverId) => refreshAfterJoin(serverId)}
-        onDone={() => setNeedsOnboarding(false)}
+        onServerCreated={async (serverId) => {
+          setCreatedServerIds((prev) => new Set(prev).add(serverId));
+          setArrivalServerId(serverId);
+          await refreshAfterJoin(serverId);
+          // Only once the room is open: a marker written before a failed load
+          // would suppress the banner on the reload that recovers it.
+          rememberArrival(browserStorage(), serverId);
+        }}
+        onServerJoined={async (serverId) => {
+          const storage = browserStorage();
+          const firstVisit = !hasArrived(storage, serverId);
+          if (firstVisit) {
+            setArrivalServerId(serverId);
+          }
+          await refreshAfterJoin(serverId);
+          if (firstVisit) {
+            rememberArrival(storage, serverId);
+          }
+        }}
+        onDone={() => {
+          setNeedsOnboarding(false);
+          setJustOnboarded(true);
+          setGateHandoff(false);
+        }}
       />
     );
   }
@@ -6997,6 +7238,64 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+
+  /** True while the open server is one this account made and is alone in. */
+  const ownerAloneHere =
+    selectedServerId !== null &&
+    createdServerIds.has(selectedServerId) &&
+    serverMembers.length <= 1;
+
+  function copyOwnerInvite(serverId: string): Promise<void> {
+    return copyInvitePaste({
+      serverId,
+      locale,
+      inviteRef: "onboarding",
+    }).then(() => undefined);
+  }
+
+  /**
+   * The arrival banner for whatever is on screen, or nothing. One builder for
+   * the two places it mounts (the channel pane and the community home), so
+   * the rule deciding what it says lives in `arrivalVariant` and nowhere else.
+   */
+  function renderArrivalBanner(
+    surface: ArrivalSurface,
+    channelName: string | null,
+    inCall: boolean,
+  ) {
+    if (
+      !arrivalServerId ||
+      arrivalServerId !== selectedServerId ||
+      !selectedServer
+    ) {
+      return null;
+    }
+    const createdHere = createdServerIds.has(arrivalServerId);
+    const variant = arrivalVariant({
+      createdHere,
+      // The list resets to empty on a server switch and the owner is always
+      // in it, so empty means "not loaded yet".
+      memberCount: serverMembers.length === 0 ? null : serverMembers.length,
+      surface,
+      inCall,
+    });
+    if (!variant) {
+      return null;
+    }
+    const serverId = arrivalServerId;
+    return (
+      <ArrivalBanner
+        variant={variant}
+        serverName={selectedServer.name}
+        channelName={channelName}
+        celebrate={celebrateArrivalFor === serverId}
+        onCopyInvite={
+          variant === "owner" ? () => copyOwnerInvite(serverId) : undefined
+        }
+        onDismiss={() => setArrivalServerId(null)}
+      />
+    );
+  }
   /**
    * A watch party room arranges its panes like a stream; a call does not.
    *
@@ -7770,20 +8069,19 @@ function MainAppContent({
             }
           />
         )}
-      {arrivalServerId &&
-        arrivalServerId === selectedServerId &&
-        selectedServer && (
-          <ArrivalBanner
-            serverName={selectedServer.name}
-            channelName={
-              selectedChannel.kind === "server" &&
-              selectedChannel.type === "text"
-                ? selectedChannel.name
-                : null
-            }
-            onDismiss={() => setArrivalServerId(null)}
-          />
-        )}
+      {renderArrivalBanner(
+        selectedChannel.kind === "server" && selectedChannel.type === "text"
+          ? "text"
+          : selectedChannel.kind === "server" && selectedChannel.type === "voice"
+            ? "voice"
+            : "other",
+        selectedChannel.kind === "server" && selectedChannel.type === "text"
+          ? selectedChannel.name
+          : null,
+        selectedChannel.kind === "server" &&
+          voiceState.voiceChannelId === selectedChannel.id &&
+          voiceState.status !== "idle",
+      )}
       {/* The call and the transcript, and the divider between them. The stage
           goes in `stage` and everything that used to follow it goes in the
           children, so the DOM order is the same three slots whichever way the
@@ -8434,6 +8732,11 @@ function MainAppContent({
         />
       ) : (
       <MessageList
+        onCopyOwnerInvite={
+          ownerAloneHere && selectedServerId && selectedChannel.kind === "server"
+            ? () => copyOwnerInvite(selectedServerId)
+            : undefined
+        }
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
@@ -8548,6 +8851,7 @@ function MainAppContent({
             clearUnread(selectedChannel.id);
           }
           chat.sendMessage(body, replyTarget, attachments);
+          trackFirstAction("arrival_first_message");
           setReplyTarget(null);
         }}
         onTyping={() => chat.notifyTyping()}
@@ -9151,6 +9455,8 @@ function MainAppContent({
                     serverCount: servers.length,
                     onCreateServer: () => setShowCreateServer(true),
                     onJoinServer: () => setInviteMode("join"),
+                    onImportDiscord: () =>
+                      setPendingCreate({ mode: "import", source: null }),
                     // The avatar picker's only home is the profile section of
                     // settings, three clicks in and behind a gear nothing points
                     // at. The card is the first thing in the product that does.
@@ -9224,6 +9530,11 @@ function MainAppContent({
 
         {communityHomeOpen && selectedServer && user && (
           <CommunityHomeFeed
+            banner={renderArrivalBanner(
+              "home",
+              channels.find((channel) => channel.type === "text")?.name ?? null,
+              false,
+            )}
             serverId={selectedServer.id}
             serverName={selectedServer.name}
             server={selectedServer}
@@ -9542,6 +9853,11 @@ function MainAppContent({
           setCreateServerStart({ mode: "name", source: null });
         }}
         onCreated={async ({ server, channels: newChannels }) => {
+          // Their own room, empty but for them: the owner banner and the
+          // owner's empty channel say "bring the crew" until somebody comes.
+          setCreatedServerIds((prev) => new Set(prev).add(server.id));
+          rememberArrival(browserStorage(), server.id);
+          setArrivalServerId(server.id);
           setServers((prev) => [...prev, server]);
           setSelection({ kind: "server", serverId: server.id });
           setChannels(newChannels);

@@ -7,10 +7,12 @@ Adding one means adding a row here.
 
 | Surface | Component | Shape | Shows when | Goes away |
 |---|---|---|---|---|
-| Age gate | `components/user/age-gate-dialog.tsx` | Dialog, not dismissible | `me.ageGate` is not `passed` | The server records a birthdate |
-| Wizard | `components/onboarding/onboarding-flow.tsx` | **One** Dialog, three steps that slide in, progress dots in the footer. Step 3 has three doors: create, join, and "Já tenho um servidor no Discord" (closes the wizard, opens the create dialog on the Discord paste). Two steps when the account arrived on an invite link or a `?import=discord` link | `preferences.onboardedAt` absent | `onboardedAt` (preference, cross-device) |
-| First-run checklist | `components/onboarding/first-run-card.tsx` | Inline card in the hub, rows land staggered | not dismissed and one of server / friend / avatar still open | `firstRunDismissedAt` (preference), or auto-stamped when all three are done |
-| Arrival banner | `components/onboarding/arrival-banner.tsx` | Strip under the channel header | first visit to a server just joined | Session; `pqp:arrived-servers` remembers the join |
+| Age gate | `components/user/age-gate-dialog.tsx` | Dialog, not dismissible. Screen **one** of the first run: it draws the same `StepDots` as the wizard (`components/onboarding/step-dots.tsx`), and once answered it stays on screen in its saving state until the wizard takes the same panel over with `Dialog entrance={false}`, so the two read as one window with no loading screen between them | `me.ageGate` is not `passed` | The server records a birthdate |
+| Wizard | `components/onboarding/onboarding-flow.tsx` | **One** Dialog, steps that crossfade (`animate-step-out` / `animate-step-in`, header included via `headerKey`), dots in the footer counted from the gate. **você**: name, photo (presets + upload, no URL field), and the `@` chip (tap copies, Trocar edits); on an invite link it shows the room that is waiting (icon, name, faces) and its button is "Entrar em {server}". **sala** (cold only): three doors, one open at a time: Criar do zero, Já tenho um servidor no Discord (closes the wizard, opens the create dialog on the paste), Me mandaram um convite. **pronto** (after Criar): `ServerReadyPanel`, the invite link and the pastes, organizer confetti. Screens per path (`screensFor` in `lib/onboarding.ts`): invite 2, `?import=` 2, cold 4 | `preferences.onboardedAt` absent | `onboardedAt` (preference, cross-device) |
+| Server ready | `components/onboarding/server-ready-panel.tsx` | The invite link (copies with a check, an accent ring and a "now paste it" line) plus `InvitePaste`. Shared by the wizard's last step and the create dialog's done step, so both ways of making a room end with the invite in hand | a room was just made | the step or dialog closing |
+| First-run checklist | `components/onboarding/first-run-card.tsx` | Inline card in the hub, rows land staggered. The server row has three doors: Criar, Trazer do Discord, Usar convite. While it shows, the friends empty state says nothing (it repeated the friend row) | not dismissed and one of server / friend / avatar still open | `firstRunDismissedAt` (preference), or auto-stamped when all three are done |
+| Arrival banner | `components/onboarding/arrival-banner.tsx` | Strip under the channel header, and under the community home's header (`CommunityHomeFeed banner`). Variant from `arrivalVariant` (`lib/arrival.ts`): `text` (say oi in #channel), `voice` (press Entre na call; gone once in the call), `home` (start in #channel or join the call), `owner` (a room this account made this session and is alone in: "Sua sala tá pronta", with **Copiar convite**). An invitee's first arrival after the wizard fires the confetti once (`pqp:confetti-spent`, session) | first visit to a server just joined or made | Session; `pqp:arrived-servers` remembers the join |
+| Owner empty channel | `components/chat/message-list.tsx` (`EmptyState`) | Centered empty state: "Só você aqui por enquanto" with a secondary Copiar convite (the banner above carries the loud one). Everybody else gets "Comece a conversa / Dá um oi", no markdown (the composer format hint teaches it) | the reader made this server this session and is its only member | somebody else joins |
 | Baú intro | `components/community-home/community-home-onboarding.tsx` (staging) | Inline card in the feed | member's first Baú | `communityHomeIntroDismissedAt` (preference) |
 | Baú post | `components/community-home/community-home-post-hint.tsx` | Corner card | a publish in the open server while looking at another channel (unread went up; not the author) | CTA opens Baú; X / Escape / 8 s. Not a campaign: no `lib/hints.ts` key |
 | Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
@@ -125,10 +127,30 @@ picker. The rail icon is what makes it a hush rather than a disappearance.
 follow the person to the next device. Campaign cards are per browser: seeing
 the QG invite twice on two machines is fine; re-running the wizard is not.
 
-**Motion.** Dialogs rise (`animate-rise`); steps inside the wizard slide
-(`animate-step-in`); corner cards pop (`animate-pop-in` / `-out`); list rows
-that arrive together stagger (`--stagger`). All of it is off under
-`prefers-reduced-motion`.
+**Motion.** Dialogs rise (`animate-rise`), once: a panel that takes over from
+another in the same spot passes `entrance={false}`. Steps inside the wizard
+crossfade (`animate-step-out` 120 ms left, `animate-step-in` from the right,
+together, header included); a field under the control that asked for it
+unfolds (`animate-door-reveal`); a copied invite swells a ring
+(`animate-copy-flash`) and swaps its icon (`animate-icon-swap`); corner cards
+pop (`animate-pop-in` / `-out`); list rows that arrive together stagger
+(`--stagger`). All of it is off under `prefers-reduced-motion`, and confetti
+becomes a still row.
+
+**The funnel.** `lib/track.ts` sends named events to the hosted site's Umami
+and is a no-op anywhere the tag was not injected (every self-host):
+`onboarding_start`, `onboarding_step_view`, `age_gate_pass` / `age_gate_block`,
+`onboarding_you_next`, `onboarding_room_door`, `onboarding_server_created`,
+`onboarding_invite_copied`, `onboarding_done`, `arrival_view`,
+`arrival_first_message`, `arrival_first_voice`, `invite_gate_view`. Links copied
+from first-run surfaces carry `?ref=onboarding`, so joins through them are
+counted apart from `convite` and `discord`.
+
+**Signed out on an invite link.** `ClerkAppGate` asks
+`GET /api/public/invites/:code` once per code, with no auth header, and says
+"Você foi convidado pra {server}" when it answers. Any other answer (404, 429,
+an API without the route) keeps the generic copy; the sign-in redirect carries
+the code either way.
 
 ## Adding a card
 

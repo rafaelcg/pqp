@@ -1,11 +1,13 @@
 import { MINIMUM_AGE_YEARS, type AgeGateStatus } from "@pqp/shared";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { StepDots } from "@/components/onboarding/step-dots";
 import { ApiError, submitAgeCheck } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { track, trackOnboardingStart } from "@/lib/track";
 
 /**
  * The 18+ gate, as the user meets it.
@@ -27,6 +29,14 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  * The strings now come from `lib/i18n`. That matters more here than on a
  * marketing page: this dialog asks for a declaration with an irreversible
  * consequence, and a rule the reader cannot read is not a rule they agreed to.
+ *
+ * FIRST SCREEN OF THE FIRST RUN, NOT A WINDOW OF ITS OWN. It draws the same
+ * progress dots as the wizard (`StepDots`, screen one of `stepsTotal`) and,
+ * once answered, stays on screen in its saving state until the app has loaded
+ * and the wizard can take the same panel over without rising in again
+ * (`handingOff`, then `Dialog entrance={false}` on the wizard). The copy is
+ * one sentence and one warning: rule 2 above is the warning, and it still sits
+ * above the button, before anything is submitted.
  */
 
 interface AgeGateDialogProps {
@@ -40,6 +50,20 @@ interface AgeGateDialogProps {
    * Re-reading `/api/me` is the whole recovery.
    */
   onStale: () => void;
+  /**
+   * How many screens the whole first run has, this one included (2 for an
+   * invite or an import link, 4 for a cold start). Omitted, no dots: an
+   * account that is past onboarding but somehow still gated sees no counter.
+   */
+  stepsTotal?: number;
+  /**
+   * The answer was accepted and the app is loading behind this panel. The
+   * fields lock and the button keeps saying "Saving…" until the wizard takes
+   * over, so there is no loading screen flashed between the two.
+   */
+  handingOff?: boolean;
+  /** For the funnel's `onboarding_start`: which path this run is on. */
+  path?: "cold" | "invite" | "import";
 }
 
 /**
@@ -100,14 +124,36 @@ export function AgeGateDialog({
   status,
   onPassed,
   onStale,
+  stepsTotal,
+  handingOff = false,
+  path,
 }: AgeGateDialogProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [parts, setParts] = useState<DateParts>(EMPTY);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState(status === "blocked");
+  const monthRef = useRef<HTMLSelectElement>(null);
+  const yearRef = useRef<HTMLInputElement>(null);
+  const busy = submitting || handingOff;
 
   const isoDate = toIsoDate(parts);
+
+  useEffect(() => {
+    if (status !== "pending" || !path) {
+      return;
+    }
+    trackOnboardingStart({
+      path,
+      device: window.matchMedia?.("(max-width: 639px)").matches
+        ? "phone"
+        : "desktop",
+      locale,
+    });
+    track("onboarding_step_view", { step: "age" });
+    // Once per mount; the path cannot change under an open gate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function submit() {
     if (!isoDate || submitting) {
@@ -118,9 +164,11 @@ export function AgeGateDialog({
     try {
       const result = await submitAgeCheck(isoDate);
       if (result.ageGate === "passed") {
+        track("age_gate_pass");
         onPassed();
         return;
       }
+      track("age_gate_block");
       setBlocked(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -151,52 +199,70 @@ export function AgeGateDialog({
       dismissible={false}
       onClose={() => {}}
       footer={
-        <Button disabled={!isoDate || submitting} onClick={() => void submit()}>
-          {submitting ? t("ageGate.submitting") : t("ageGate.submit")}
-        </Button>
+        <>
+          {stepsTotal ? <StepDots index={0} total={stepsTotal} /> : null}
+          <Button
+            data-age-gate-submit=""
+            disabled={!isoDate || busy}
+            onClick={() => void submit()}
+          >
+            {busy ? t("ageGate.submitting") : t("ageGate.submit")}
+          </Button>
+        </>
       }
     >
-      <div className="space-y-4 px-5 py-4">
-        <p className="text-sm text-paper-muted">{t("ageGate.intro")}</p>
-
-        <fieldset className="space-y-2">
-          <legend className="mb-2 font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            {t("ageGate.legend")}
-          </legend>
+      <form
+        className="space-y-4 px-5 py-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <fieldset className="min-w-0">
+          {/* The fields carry their own labels; the legend is for a screen
+              reader, which otherwise hears three boxes with no question. */}
+          <legend className="sr-only">{t("ageGate.legend")}</legend>
           <div className="flex gap-2">
-            <label className="w-20 shrink-0 text-xs text-paper-muted">
+            <label className="w-20 shrink-0 text-xs font-medium text-text-secondary">
               {t("ageGate.day")}
               <Input
-                className="mt-1"
+                className="mt-1.5 tabular-nums"
                 type="number"
                 inputMode="numeric"
                 min={1}
                 max={31}
                 placeholder={t("ageGate.day.placeholder")}
                 autoComplete="bday-day"
-                disabled={submitting}
+                autoFocus
+                disabled={busy}
                 value={parts.day}
-                onChange={(event) =>
-                  setParts((current) => ({
-                    ...current,
-                    day: event.target.value,
-                  }))
-                }
+                onChange={(event) => {
+                  const day = event.target.value.slice(0, 2);
+                  setParts((current) => ({ ...current, day }));
+                  // Two digits is a whole day (or "0" plus a digit): move on,
+                  // so a phone keyboard never has to be dismissed to reach
+                  // the month. One digit waits, because "3" could be "31".
+                  if (day.length === 2) {
+                    monthRef.current?.focus();
+                  }
+                }}
               />
             </label>
-            <label className="min-w-0 flex-1 text-xs text-paper-muted">
+            <label className="min-w-0 flex-1 text-xs font-medium text-text-secondary">
               {t("ageGate.month")}
               <select
-                className="mt-1 flex h-10 w-full rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
+                ref={monthRef}
+                className="mt-1.5 flex h-10 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                 autoComplete="bday-month"
-                disabled={submitting}
+                disabled={busy}
                 value={parts.month}
-                onChange={(event) =>
-                  setParts((current) => ({
-                    ...current,
-                    month: event.target.value,
-                  }))
-                }
+                onChange={(event) => {
+                  const month = event.target.value;
+                  setParts((current) => ({ ...current, month }));
+                  if (month) {
+                    yearRef.current?.focus();
+                  }
+                }}
               >
                 <option value="">{t("ageGate.month")}</option>
                 {MONTH_KEYS.map((key, index) => (
@@ -206,16 +272,17 @@ export function AgeGateDialog({
                 ))}
               </select>
             </label>
-            <label className="w-24 shrink-0 text-xs text-paper-muted">
+            <label className="w-24 shrink-0 text-xs font-medium text-text-secondary">
               {t("ageGate.year")}
               <Input
-                className="mt-1"
+                ref={yearRef}
+                className="mt-1.5 tabular-nums"
                 type="number"
                 inputMode="numeric"
                 min={1900}
                 placeholder={t("ageGate.year.placeholder")}
                 autoComplete="bday-year"
-                disabled={submitting}
+                disabled={busy}
                 value={parts.year}
                 onChange={(event) =>
                   setParts((current) => ({
@@ -228,7 +295,8 @@ export function AgeGateDialog({
           </div>
         </fieldset>
 
-        <p className="rounded-md border border-ink-4 bg-ink-3/40 px-3 py-2 text-xs text-paper-muted">
+        {/* Rule 2: the consequence, stated before the button, once. */}
+        <p className="text-pretty rounded-[var(--radius-card)] bg-warning-soft px-3 py-2.5 text-xs leading-relaxed text-on-warning-soft">
           {t("ageGate.warning", { age: MINIMUM_AGE_YEARS })}
         </p>
 
@@ -237,7 +305,9 @@ export function AgeGateDialog({
             {error}
           </p>
         )}
-      </div>
+        {/* Enter in any field submits; the visible button is in the footer. */}
+        <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+      </form>
     </Dialog>
   );
 }

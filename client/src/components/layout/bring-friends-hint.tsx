@@ -7,9 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import { FeatureHint } from "@/components/layout/feature-hint";
-import { createInvite } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { shareInviteText, shareInviteUrl } from "@/lib/share-invite";
+import { copyInvitePaste } from "@/lib/invite-paste-copy";
 
 type BringFriendsServerValue = {
   serverId: string | null;
@@ -41,7 +40,6 @@ export function useBringFriendsServer(): BringFriendsServerValue {
   return useContext(BringFriendsServerContext);
 }
 
-const DEFAULT_EXPIRY_HOURS = 168;
 const COPY_MS = 1200;
 
 /**
@@ -76,17 +74,13 @@ export function BringFriendsHint({
     [],
   );
 
-  async function copyInvitePaste() {
+  async function copyPaste() {
     if (!serverId || !canCreateInvite || busy) {
       throw new Error("unavailable");
     }
     setBusy(true);
     try {
-      const { invite } = await createInvite(serverId, {
-        expiresInHours: DEFAULT_EXPIRY_HOURS,
-      });
-      const url = shareInviteUrl(window.location.origin, invite.code);
-      await navigator.clipboard.writeText(shareInviteText("short", locale, url));
+      await copyInvitePaste({ serverId, locale });
       setFailed(false);
       setCopied(true);
       if (copyTimer.current !== null) {
@@ -124,7 +118,7 @@ export function BringFriendsHint({
           : t("invite.hint.bringFriends.cta")
       }
       actionBusy={busy}
-      onAction={copyInvitePaste}
+      onAction={copyPaste}
     />
   );
 }

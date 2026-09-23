@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
-import { InvitePaste } from "@/components/layout/invite-paste";
+import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl } from "@/lib/share-invite";
 import { useTranslation } from "@/lib/i18n";
+import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import {
   applyDiscordImport,
   createInvite,
@@ -136,6 +137,10 @@ export function CreateServerDialog({
           .then(() => onCreated(created))
           .catch(() => undefined),
       ]);
+      if (invite) {
+        // The owner banner's "Copiar convite" reuses this link.
+        rememberInviteCode(created.server.id, invite.code);
+      }
       setDone({
         serverName: created.server.name,
         serverId: created.server.id,
@@ -196,6 +201,9 @@ export function CreateServerDialog({
     setError(null);
     try {
       const created = await applyDiscordImport(source.trim());
+      if (created.invite) {
+        rememberInviteCode(created.server.id, created.invite.code);
+      }
       await onCreated({ server: created.server, channels: created.channels });
       setDone({
         serverName: created.server.name,
@@ -412,51 +420,14 @@ export function CreateServerDialog({
         )}
 
         {step === "done" && done && (
-          <div className="space-y-3">
-            {done.invite ? (
-              <>
-                <label className="block text-sm text-paper">
-                  {t("importDiscord.done.invite")}
-                  <div className="mt-1 flex gap-2">
-                    <Input readOnly value={link} />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="min-w-[6.5rem] shrink-0"
-                      onClick={() => void copyText("invite", link)}
-                    >
-                      {copied === "invite" ? (
-                        <Check className="h-4 w-4" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                      {copied === "invite"
-                        ? t("importDiscord.done.copied")
-                        : t("importDiscord.done.copyInvite")}
-                    </Button>
-                  </div>
-                </label>
-                <InvitePaste
-                  code={done.invite.code}
-                  inviteRef={done.fromImport ? "discord" : "convite"}
-                  onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
-                />
-              </>
-            ) : (
-              <div className="space-y-2 rounded-lg border border-border bg-surface-2/40 p-3">
-                <p className="text-sm text-text-secondary">
-                  {t("invite.done.inviteFailed")}
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() => void retryInvite()}
-                >
-                  {t("invite.done.retryInvite")}
-                </Button>
-              </div>
-            )}
+          <div className="space-y-4">
+            <ServerReadyPanel
+              invite={done.invite}
+              inviteRef={done.fromImport ? "discord" : "convite"}
+              retrying={busy}
+              onRetry={() => void retryInvite()}
+              onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
+            />
             {done.fromImport && (
             <label className="block text-sm text-paper">
               {t("importDiscord.done.pasteLabel")}

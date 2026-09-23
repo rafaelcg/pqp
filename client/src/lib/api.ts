@@ -90,7 +90,9 @@ import type {
   AutomodRule,
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
+  PublicInvitePreview,
 } from "@pqp/shared";
+import { publicInvitePreviewSchema } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 import { parseRetryAfterMs } from "./reconnect-jitter";
 
@@ -391,6 +393,57 @@ export async function fetchPublicCommunity(
     }
     throw error;
   }
+}
+
+/** One request per code per tab: the route is rate limited per IP. */
+const invitePreviewCache = new Map<string, Promise<PublicInvitePreview | null>>();
+
+/**
+ * The server an invite opens, for the signed-out gate ("Você foi convidado
+ * pra {server}"). `GET /api/public/invites/:code`, answered with
+ * `{ invite: PublicInvitePreview }` (`publicInvitePreviewSchema`).
+ *
+ * NO AUTH HEADER, on purpose: a bare `fetch`, not `apiFetch`. The route is
+ * public and sits before the Bearer resolution; a stale token must not be
+ * able to turn a preview into a 401 (pitfall 16 in CLAUDE.md is that exact
+ * shape).
+ *
+ * FEATURE-DETECTED, NOT ASSUMED. Every failure is "no preview", never an
+ * error: 404 (unknown, revoked, expired, or an API without the route yet), 429
+ * (the anon limiter), a network drop, or a body that is not the shape below.
+ * The gate then shows its generic copy, and the flow still works, because the
+ * sign-in redirect carries the code.
+ *
+ * Fetched once per code and remembered for the tab, so a remount (or React's
+ * dev double-invoke) never costs a second request against the limiter.
+ */
+export function fetchPublicInvitePreview(
+  code: string,
+): Promise<PublicInvitePreview | null> {
+  let pending = invitePreviewCache.get(code);
+  if (!pending) {
+    pending = fetch(
+      `${getApiBaseUrl()}/api/public/invites/${encodeURIComponent(code)}`,
+      { headers: { Accept: "application/json" } },
+    )
+      .then(async (response) =>
+        response.ok ? parsePublicInvitePreview(await response.json()) : null,
+      )
+      .catch(() => null);
+    invitePreviewCache.set(code, pending);
+  }
+  return pending;
+}
+
+/** `{ invite: PublicInvitePreview }`, validated; anything else is no preview. */
+export function parsePublicInvitePreview(body: unknown): PublicInvitePreview | null {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const parsed = publicInvitePreviewSchema.safeParse(
+    (body as { invite?: unknown }).invite,
+  );
+  return parsed.success && parsed.data.serverName.trim() ? parsed.data : null;
 }
 
 /**

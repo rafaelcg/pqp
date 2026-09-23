@@ -14,10 +14,69 @@ import type { MessageKey } from "@/lib/i18n";
  */
 
 /**
- * Where in the flow we are, in order: read your handle, then say who you are,
- * then get somewhere with people in it. Only the first is compulsory.
+ * Where in the wizard we are, in order: say who you are (name, photo, and the
+ * @ people type to find you), then pick where the group lives, then take the
+ * invite. None is compulsory; the wizard's footer closes it from any step.
  */
-export type OnboardingStep = "handle" | "profile" | "landing";
+export type OnboardingStep = "you" | "room" | "ready";
+
+/**
+ * Every screen a first run can show, the age gate included. The gate is its
+ * own component (the server gates it), but it draws the same dots, so it is
+ * counted as the first screen rather than the wizard starting at 1 of 3 after
+ * the person has already answered one.
+ */
+export type FirstRunScreen = "age" | OnboardingStep;
+
+/**
+ * Who is walking through, which decides how many screens there are.
+ *
+ * - `invite`: arrived on an invite link. The app joins behind the wizard, so
+ *   "where does the group live" is answered and there is no invite to hand
+ *   out. Age, then you, then the room.
+ * - `import`: arrived on `?import=discord`. The create dialog opens on the
+ *   paste the moment the wizard closes, and it has its own done screen.
+ * - `cold`: neither. Age, you, room, and the invite for the room they made.
+ */
+export type OnboardingPath = "cold" | "invite" | "import";
+
+export function onboardingPath({
+  invite,
+  importing,
+}: {
+  invite: boolean;
+  importing: boolean;
+}): OnboardingPath {
+  // An invite wins: the person clicked into a room, and the import can still
+  // be reached from the + in the rail once they are in it.
+  if (invite) {
+    return "invite";
+  }
+  return importing ? "import" : "cold";
+}
+
+/** The screens a path shows, in order, gate first. */
+export function screensFor(path: OnboardingPath): readonly FirstRunScreen[] {
+  return path === "cold" ? ["age", "you", "room", "ready"] : ["age", "you"];
+}
+
+/**
+ * Where a screen sits in the dots: zero-based index and total. A screen the
+ * path does not show (typed invite on step 3 of a two-screen path cannot
+ * happen, but `ready` after a cold create can) is clamped to the last dot, so
+ * the counter never reads past its own end.
+ */
+export function screenPosition(
+  path: OnboardingPath,
+  screen: FirstRunScreen,
+): { index: number; total: number } {
+  const screens = screensFor(path);
+  const found = screens.indexOf(screen);
+  return {
+    index: found === -1 ? screens.length - 1 : found,
+    total: screens.length,
+  };
+}
 
 /**
  * Should this account be shown the first-run flow?
@@ -84,13 +143,13 @@ export function isValidUsername(value: string): boolean {
 export function handleErrorMessage(error: unknown): MessageKey {
   if (error instanceof ApiError) {
     if (error.status === 409) {
-      return "onboarding.handle.error.taken";
+      return "onboarding.you.error.taken";
     }
     if (error.status === 400 || error.status === 422) {
-      return "onboarding.handle.error.invalid";
+      return "onboarding.you.error.invalid";
     }
   }
-  return "onboarding.handle.error.generic";
+  return "onboarding.you.error.generic";
 }
 
 /**
@@ -131,4 +190,57 @@ export function normalizeInviteCode(input: string): string {
   } catch {
     return last;
   }
+}
+
+/**
+ * What the room step's invite door ended in.
+ *
+ * - `opened`: joined, and the room is open behind the wizard. Finish.
+ * - `invalid`: nothing usable was pasted, or the API refused the code.
+ * - `notOpened`: the join WORKED but opening the room did not. The wizard
+ *   must stay, say so, and retry only the opening (`serverId`), never finish
+ *   onto a room that is not there.
+ */
+export type RoomJoinResult =
+  | { kind: "opened"; serverId: string }
+  | { kind: "invalid" }
+  | { kind: "notOpened"; serverId: string };
+
+/**
+ * The invite door, with no React attached so it can be tested.
+ *
+ * Whatever was pasted (a bare code, `https://pqp.gg/app/invite/<code>?ref=…`,
+ * the same without a scheme, `/i/<code>`, `pqp://invite/<code>`) goes through
+ * `normalizeInviteCode` before it reaches the API. `joinedId` is set on a
+ * retry after `notOpened`, and skips the join. Never rejects.
+ */
+export async function joinFromRoomStep({
+  input,
+  joinedId,
+  joinInvite,
+  openJoined,
+}: {
+  input: string;
+  joinedId: string | null;
+  joinInvite: (code: string) => Promise<{ serverId: string }>;
+  openJoined: (serverId: string) => Promise<void>;
+}): Promise<RoomJoinResult> {
+  let serverId = joinedId;
+  if (!serverId) {
+    const code = normalizeInviteCode(input);
+    if (!code) {
+      return { kind: "invalid" };
+    }
+    try {
+      serverId = (await joinInvite(code)).serverId;
+    } catch {
+      return { kind: "invalid" };
+    }
+  }
+  try {
+    await openJoined(serverId);
+  } catch {
+    return { kind: "notOpened", serverId };
+  }
+  return { kind: "opened", serverId };
 }

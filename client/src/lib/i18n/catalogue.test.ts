@@ -32,11 +32,11 @@ describe("translateMessage", () => {
 
   it("substitutes placeholders", async () => {
     expect(translateMessage("ageGate.description", { age: 18 })).toBe(
-      "pqp is for people aged 18 and over.",
+      "pqp is 18+. We ask once and take your word for it.",
     );
     await loadLocale("pt-BR");
     expect(translateMessage("ageGate.description", { age: 18 })).toBe(
-      "O pqp é para pessoas de 18 anos ou mais.",
+      "O pqp é pra maiores de 18. A gente pergunta uma vez e acredita em você.",
     );
   });
 

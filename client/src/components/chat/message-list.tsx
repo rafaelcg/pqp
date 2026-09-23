@@ -174,6 +174,12 @@ const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
 interface MessageListProps {
   messages: ChatMessage[];
+  /**
+   * The reader owns this server and is alone in it. The empty channel then
+   * says so and offers the invite, instead of telling nobody to say hi.
+   * Copies the short paste; rejects when it could not.
+   */
+  onCopyOwnerInvite?: () => Promise<void>;
   currentUserId: string | null;
   currentUsername?: string | null;
   serverId?: string | null;
@@ -345,6 +351,7 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
 
 export function MessageList({
   messages,
+  onCopyOwnerInvite,
   currentUserId,
   currentUsername = null,
   serverId = null,
@@ -1136,7 +1143,7 @@ export function MessageList({
         )}
 
         {messages.length === 0 ? (
-          <EmptyState />
+          <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
         ) : (
           rows.map((row, index) => {
             const { joinTop, joinBottom } = mentionJoins(
@@ -1498,14 +1505,90 @@ function FailedSendFooter({
   );
 }
 
-function EmptyState() {
+/**
+ * An empty channel, said two ways.
+ *
+ * The owner alone in a room they just made needs "bring the crew", with the
+ * invite one tap away. Everybody else needs "say oi". Neither needs markdown
+ * syntax: the composer's format hint teaches that at the composer, once
+ * (`feature-hint.tsx`, "composer format").
+ */
+function EmptyState({
+  onCopyOwnerInvite,
+}: {
+  onCopyOwnerInvite?: () => Promise<void>;
+}) {
   const { t } = useTranslation();
+  const [state, setState] = useState<"idle" | "busy" | "copied" | "failed">("idle");
+  const timer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current);
+      }
+    },
+    [],
+  );
+
+  if (onCopyOwnerInvite) {
+    const copy = async () => {
+      if (state === "busy") {
+        return;
+      }
+      setState("busy");
+      try {
+        await onCopyOwnerInvite();
+        setState("copied");
+      } catch {
+        setState("failed");
+      }
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current);
+      }
+      timer.current = window.setTimeout(() => setState("idle"), 1600);
+    };
+    return (
+      <div
+        data-empty-owner=""
+        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
+      >
+        <p className="text-balance font-display text-xl font-bold text-text">
+          {t("chat.empty.owner.title")}
+        </p>
+        <p className="max-w-xs text-pretty text-sm text-text-tertiary">
+          {state === "failed"
+            ? t("chat.empty.owner.failed")
+            : t("chat.empty.owner.body")}
+        </p>
+        <Button
+          // Secondary: the owner banner above carries the loud copy of this
+          // same action, and two accent buttons a screen apart compete.
+          variant="secondary"
+          className="mt-3"
+          data-empty-copy-invite=""
+          disabled={state === "busy"}
+          onClick={() => void copy()}
+        >
+          {state === "copied" ? (
+            <Check aria-hidden="true" className="animate-icon-swap h-4 w-4" />
+          ) : (
+            <Copy aria-hidden="true" className="h-4 w-4" />
+          )}
+          {state === "copied"
+            ? t("chat.empty.owner.copied")
+            : t("chat.empty.owner.copy")}
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="font-display text-xl font-bold text-paper">
+      <p className="text-balance font-display text-xl font-bold text-paper">
         {t("chat.empty.title")}
       </p>
-      <p className="max-w-xs text-sm text-paper-muted">
+      <p className="max-w-xs text-pretty text-sm text-paper-muted">
         {t("chat.empty.body")}
       </p>
     </div>

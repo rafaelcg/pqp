@@ -121,8 +121,18 @@ async function openAs(page: Page, path: string, suffix: string): Promise<void> {
   await expect(
     page
       .getByText("Dev auth bypass")
-      .or(page.getByRole("heading", { name: "Now the paperwork" })),
+      .or(page.getByRole("heading", { name: "How should people see you?" })),
   ).toBeVisible({ timeout: 20_000 });
+}
+
+/** The wizard's current step, by its data attribute. */
+const step = (name: string) => `[data-onboarding-step="${name}"]`;
+
+/** Past "você" with nothing edited, on the cold path. */
+async function skipToRoom(page: Page): Promise<void> {
+  await expect(page.locator(step("you"))).toBeVisible({ timeout: 20_000 });
+  await page.locator("[data-onboarding-primary]").click();
+  await expect(page.locator(step("room"))).toBeVisible();
 }
 
 /** Read one account's stored preferences straight from the API. */
@@ -145,73 +155,82 @@ test("a brand-new account is walked through the wizard and lands on three real a
   const account = await freshAccount("solo");
   await openAs(page, "/app", account.suffix);
 
-  // --- the wizard: read your handle -------------------------------------
-  // Step one exists to show somebody the tag they were allocated, which is the
-  // string anybody has to type to find them.
-  await expect(page.getByText("Now the paperwork")).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect(page.getByText(account.tag, { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Looks right" }).click();
+  // --- você: the tag is printed where the name is ------------------------
+  // The V1 handle screen existed to show somebody the tag they were
+  // allocated. That job survives as the @ chip on the identity step.
+  await expect(page.locator(step("you"))).toBeVisible({ timeout: 20_000 });
+  const [name, number] = account.tag.split("#");
+  const chip = page.locator("[data-onboarding-handle]");
+  await expect(chip).toContainText(`#${number}`);
+  await expect(chip).toHaveAttribute("aria-label", new RegExp(`${name}#${number}`));
+  // Screen 2 of 4: the age gate was screen 1.
+  await expect(page.locator("[data-onboarding-progress]")).toHaveAttribute(
+    "data-onboarding-progress",
+    "2",
+  );
+  await expect(page.locator("[data-onboarding-total]")).toHaveAttribute(
+    "data-onboarding-total",
+    "4",
+  );
 
-  // --- the wizard: skip the rest ----------------------------------------
-  await expect(page.getByText("Now the part people see")).toBeVisible();
-  await page.getByRole("button", { name: "I'll do this later" }).click();
+  // --- skip the rest ----------------------------------------------------
+  await page.getByRole("button", { name: "I'll sort it later" }).click();
 
-  // --- the hub, which is where the loss used to happen -------------------
+  // --- the hub ------------------------------------------------------------
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
   await expect(
     page.getByRole("heading", { name: "Three things and this place works" }),
   ).toBeVisible();
 
-  // All three outstanding, and each one an actual button rather than a hint.
   for (const id of ["server", "friend", "avatar"]) {
     await expect(page.locator(task(id))).toHaveAttribute("data-done", "false");
   }
-  await expect(page.getByRole("button", { name: "Make a community" })).toBeVisible();
+  // Three doors on the server row now: make one, bring it from Discord, or
+  // paste an invite.
+  await expect(page.getByRole("button", { name: "Make one" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Bring it from Discord" }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Use an invite" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add a friend" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Pick an avatar" })).toBeVisible();
 
-  // The handle is printed again here on purpose: "add someone by their handle"
-  // is useless advice until you know you have one, and the wizard showed it on a
-  // screen they will never see again.
   await expect(page.locator(card).getByText(account.tag)).toBeVisible();
+  // The friends empty state no longer repeats the checklist's friend row.
+  await expect(
+    page.getByText("they'll show up here", { exact: false }),
+  ).toHaveCount(0);
 });
 
 test("the checklist's buttons open the things they name", async ({ page }) => {
   const account = await freshAccount("acts");
   await openAs(page, "/app", account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "I'll do this later" }).click();
+  await page.getByRole("button", { name: "I'll sort it later" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
-  // "Make a community" — a dialog, same weight as "Use an invite". The old
-  // inline strip at the top of `<main>` sat above the Friends header and
-  // outside the scroll region that holds the checklist, so from the button
-  // it looked like nothing happened.
-  await page.getByRole("button", { name: "Make a community" }).click();
+  await page.getByRole("button", { name: "Make one" }).click();
   await expect(
     page.getByRole("dialog").getByPlaceholder("Community name"),
   ).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
-  // "Use an invite" — the join dialog, which the rail's unlabelled icon was the
-  // only previous route to.
+  // The Discord door opens the same dialog on the layout paste.
+  await page.getByRole("button", { name: "Bring it from Discord" }).click();
+  await expect(
+    page.getByRole("dialog").getByPlaceholder("discord.new/… or a template code"),
+  ).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Cancel" }).click();
+
   await page.getByRole("button", { name: "Use an invite" }).click();
   await expect(page.getByPlaceholder("Invite code or link")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
-  // "Add a friend" — this view's own handle search, opened in place.
   await page.getByRole("button", { name: "Add a friend" }).click();
   await expect(
     page.getByRole("combobox", { name: "Add a friend by handle" }),
   ).toBeVisible();
 
-  // "Pick an avatar" — settings, which nothing in the product pointed at.
-  // Asserted on the URL field rather than the upload button: upload only
-  // exists when object storage is configured, which CI's environment is not,
-  // and the row this button promises is the picker either way.
+  // Settings keeps the URL field the wizard dropped.
   await page.getByRole("button", { name: "Pick an avatar" }).click();
   await expect(page.getByPlaceholder("https://… image URL")).toBeVisible({
     timeout: 10_000,
@@ -223,15 +242,12 @@ test("dismissing the checklist is permanent, across a reload and on the server",
 }) => {
   const account = await freshAccount("dism");
   await openAs(page, "/app", account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "I'll do this later" }).click();
+  await page.getByRole("button", { name: "I'll sort it later" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
   await page.locator("[data-first-run-dismiss]").click();
   await expect(page.locator(card)).toBeHidden();
 
-  // Recorded as a preference, not in this tab's memory — a new browser must not
-  // re-offer a checklist somebody already answered.
   await expect
     .poll(async () => (await storedPreferences(account.suffix)).firstRunDismissedAt, {
       timeout: 15_000,
@@ -242,8 +258,6 @@ test("dismissing the checklist is permanent, across a reload and on the server",
   await expect(page.getByText("Dev auth bypass")).toBeVisible({
     timeout: 20_000,
   });
-  // The friends view is what the hub renders; wait for it rather than for a
-  // fixed delay, so "hidden" means "hidden on a fully painted hub".
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible({
     timeout: 20_000,
   });
@@ -255,22 +269,23 @@ test("making a server ticks the server row and leaves the other two", async ({
 }) => {
   const account = await freshAccount("mksv");
   await openAs(page, "/app", account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "I'll do this later" }).click();
+  await page.getByRole("button", { name: "I'll sort it later" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
-  await page.getByRole("button", { name: "Make a community" }).click();
+  await page.getByRole("button", { name: "Make one" }).click();
   await page
     .getByRole("dialog")
     .getByPlaceholder("Community name")
     .fill("Panelinha");
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
-  // Creating now stays on a done step with the invite paste, instead of
-  // closing. Dismiss it so the hub card is reachable again.
+  // The done step is the same panel the wizard's "Room's ready" shows.
+  await expect(page.getByText("Room's ready. Now bring everyone.")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator("[data-server-ready] [data-invite-link]")).toBeVisible();
   await page.getByRole("button", { name: "Done" }).click();
 
-  // Creating opens the new server, so come back to the hub to read the card.
   await expect(page.getByPlaceholder(/^Message /)).toBeVisible({
     timeout: 20_000,
   });
@@ -289,28 +304,76 @@ test("making a server ticks the server row and leaves the other two", async ({
     "data-done",
     "false",
   );
-  // A done row keeps its place and loses its buttons, rather than vanishing and
-  // re-laying the card out under the cursor that just clicked.
   await expect(
-    page.locator(task("server")).getByRole("button", { name: "Make a community" }),
+    page.locator(task("server")).getByRole("button", { name: "Make one" }),
   ).toHaveCount(0);
+});
+
+// --------------------------------------- journey 1a: the organizer's invite
+
+test("creating a room in the wizard ends on its invite, and the owner lands with the invite at hand", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const account = await freshAccount("orga");
+  await openAs(page, "/app", account.suffix);
+  await skipToRoom(page);
+
+  // --- sala: doors, not forms -------------------------------------------
+  await page.locator('[data-onboarding-door="create"] button').first().click();
+  await page.getByPlaceholder("Name it something stupid").fill("Panelinha");
+  await page.locator("[data-onboarding-create]").click();
+
+  // --- pronto: the link, copyable, tagged for the funnel ----------------
+  await expect(page.locator(step("ready"))).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "Now bring everyone" })).toBeVisible();
+  await expect(page.locator("[data-onboarding-progress]")).toHaveAttribute(
+    "data-onboarding-progress",
+    "4",
+  );
+  await page.locator("[data-copy-invite-link]").click();
+  await expect(page.locator("[data-copy-invite-link]")).toHaveText(/Copied/);
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toMatch(/\/app\/invite\/[^?]+\?ref=onboarding$/);
+  // The pastes come along, and neither sells the move on Discord being down.
+  const paste = page.locator("[data-invite-paste]");
+  await expect(paste).toContainText("Come hang out on pqp:");
+  await expect(paste).toContainText("We moved to pqp.");
+
+  // --- the room: owner banner and owner empty state ----------------------
+  await page.locator("[data-onboarding-enter]").click();
+  const banner = page.locator("[data-arrival-banner]");
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(banner).toHaveAttribute("data-arrival-variant", "owner");
+  await expect(banner.getByText("Your room is ready.")).toBeVisible();
+  await expect(page.locator("[data-empty-owner]")).toBeVisible();
+  await expect(page.getByText("Just you here for now")).toBeVisible();
+
+  await banner.locator("[data-arrival-copy-invite]").click();
+  await expect(banner.locator("[data-arrival-copy-invite]")).toHaveText(/Copied/);
+  // Reuses the code the wizard minted rather than making a second link.
+  const again = await page.evaluate(() => navigator.clipboard.readText());
+  expect(again).toContain(copied);
+
+  await expect
+    .poll(async () => (await storedPreferences(account.suffix)).onboardedAt, {
+      timeout: 15_000,
+    })
+    .toBeTruthy();
 });
 
 // ------------------------------------------ journey 1b: moving from Discord
 
-test("the wizard's last step has a door for a group moving from Discord", async ({
+test("the room step has a door for a group moving from Discord", async ({
   page,
 }) => {
   const account = await freshAccount("vemd");
   await openAs(page, "/app", account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText("Nobody's here yet")).toBeVisible();
+  await skipToRoom(page);
 
-  await page.getByRole("button", { name: /I already have a Discord server/ }).click();
+  await page.locator('[data-onboarding-door="import"] button').first().click();
 
-  // The wizard is answered, and the create dialog opens on the paste step,
-  // not on "name a community".
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByPlaceholder("discord.new/… or a template code")).toBeVisible({
     timeout: 20_000,
@@ -323,28 +386,34 @@ test("the wizard's last step has a door for a group moving from Discord", async 
     .toBeTruthy();
 });
 
-test("a ?import=discord link skips the landing step and opens the paste, pre-filled when it names a template", async ({
+test("a ?import=discord link is two screens and opens the paste, pre-filled when it names a template", async ({
   page,
 }) => {
   const account = await freshAccount("vemi");
   await openAs(page, "/app?import=hgM48av5Q69A", account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
 
-  // Two steps, like an invite arrival: the question step 3 asks is answered.
-  await expect(page.getByText("Nobody's here yet")).toBeHidden();
+  // Two screens, like an invite arrival: the question step 3 asks is answered.
+  await expect(page.locator(step("you"))).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("[data-onboarding-total]")).toHaveAttribute(
+    "data-onboarding-total",
+    "2",
+  );
+  await expect(page.locator("[data-onboarding-primary]")).toHaveText(
+    "Bring my server",
+  );
+  await page.locator("[data-onboarding-primary]").click();
+
+  await expect(page.locator(step("room"))).toHaveCount(0);
   const paste = page
     .getByRole("dialog")
     .getByPlaceholder("discord.new/… or a template code");
   await expect(paste).toBeVisible({ timeout: 20_000 });
   await expect(paste).toHaveValue("https://discord.new/hgM48av5Q69A");
-  // Read once: the parameter is gone from the address bar.
   await expect(page).not.toHaveURL(/import=/);
 
-  // Closing it and opening "Make a community" is ordinary again.
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Make a community" }).click();
+  await page.getByRole("button", { name: "Make one" }).click();
   await expect(page.getByRole("dialog").getByPlaceholder("Community name")).toBeVisible();
 });
 
@@ -357,17 +426,41 @@ test("the /vem import CTA is the same intent as a ?import=discord link", async (
   }, account.suffix);
   await page.goto("/vem");
   await page.getByRole("link", { name: "Copy my Discord layout" }).first().click();
-  await page.getByRole("button", { name: "Looks right" }).click({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Continue" }).click();
 
-  // The same two-step onboarding and the same paste step, empty this time.
-  await expect(page.getByText("Nobody's here yet")).toBeHidden();
+  // The same two-screen onboarding and the same paste step, empty this time.
+  await expect(page.locator(step("you"))).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("[data-onboarding-total]")).toHaveAttribute(
+    "data-onboarding-total",
+    "2",
+  );
+  await page.getByRole("button", { name: "Bring my server" }).click();
+  await expect(page.locator(step("room"))).toHaveCount(0);
   const paste = page
     .getByRole("dialog")
     .getByPlaceholder("discord.new/… or a template code");
   await expect(paste).toBeVisible({ timeout: 20_000 });
   await expect(paste).toHaveValue("");
   await expect(page).not.toHaveURL(/import=|create=/);
+});
+
+test("a typed invite on the room step joins and lands with the text banner", async ({
+  page,
+}) => {
+  const invite = await seedInvite("typd", "Panelinha");
+  const account = await freshAccount("typd");
+  await openAs(page, "/app", account.suffix);
+  await skipToRoom(page);
+
+  await page.locator('[data-onboarding-door="invite"] button').first().click();
+  await page.getByPlaceholder("Invite code or link").fill(
+    `http://localhost/app/invite/${invite.code}`,
+  );
+  await page.getByRole("button", { name: "Go in", exact: true }).click();
+
+  const banner = page.locator("[data-arrival-banner]");
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(banner).toHaveAttribute("data-arrival-variant", "text");
+  await expect(banner.getByText("You're in Panelinha")).toBeVisible();
 });
 
 // -------------------------------------------------- journey 2: invite arrival
@@ -380,18 +473,22 @@ test("an invite link carries a brand-new account into the server, not into a for
 
   await openAs(page, `/app/invite/${invite.code}`, account.suffix);
 
-  // The wizard still runs — the handle is worth reading whatever brought you
-  // here — but it must not ask about the invite.
-  await expect(page.getByText("Now the paperwork")).toBeVisible({
+  // The wizard still runs, and it names the room that is waiting.
+  await expect(page.locator(step("you"))).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Panelinha is waiting for you")).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await expect(page.getByText("Now the part people see")).toBeVisible();
-  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.locator("[data-onboarding-arrival]")).toContainText(
+    "Panelinha",
+  );
+  await expect(page.locator("[data-onboarding-total]")).toHaveAttribute(
+    "data-onboarding-total",
+    "2",
+  );
+  await page.getByRole("button", { name: "Go into Panelinha" }).click();
 
-  // No third step. It used to offer an empty "or use an invite" field while the
-  // app was holding the code, and there is nothing to ask.
-  await expect(page.getByText("Nobody's here yet")).toBeHidden();
+  // No room step, and no dialog asking to confirm the link they clicked.
+  await expect(page.locator(step("room"))).toHaveCount(0);
   // And no dialog asking them to confirm the link they clicked.
   await expect(page.getByPlaceholder("Invite code or link")).toBeHidden();
 
@@ -423,8 +520,7 @@ test("the arrival banner is dismissible and does not come back for that server",
   const account = await freshAccount("dsmb");
 
   await openAs(page, `/app/invite/${invite.code}`, account.suffix);
-  await page.getByRole("button", { name: "Looks right" }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Go into Panelinha" }).click();
 
   const banner = page.locator("[data-arrival-banner]");
   await expect(banner).toBeVisible({ timeout: 20_000 });
@@ -483,4 +579,21 @@ test("a dead invite link falls back to the panel with the reason, not a silent n
   await expect(field).toBeVisible({ timeout: 20_000 });
   await expect(field).toHaveValue("nosuchcode");
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("in a voice channel the arrival banner points at the call button", async ({
+  page,
+}) => {
+  const invite = await seedInvite("vcbn", "Panelinha");
+  const account = await freshAccount("vcbn");
+  await openAs(page, `/app/invite/${invite.code}`, account.suffix);
+  await page.getByRole("button", { name: "Go into Panelinha" }).click();
+
+  const banner = page.locator("[data-arrival-banner]");
+  await expect(banner).toHaveAttribute("data-arrival-variant", "text", {
+    timeout: 20_000,
+  });
+  await page.getByRole("button", { name: /lobby/i }).first().click();
+  await expect(banner).toHaveAttribute("data-arrival-variant", "voice");
+  await expect(banner.getByText("Hit Join the call. Just start talking.")).toBeVisible();
 });

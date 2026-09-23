@@ -33,6 +33,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import {
   CommunityIdentityHeader,
@@ -122,6 +123,12 @@ import { OverviewStartHere } from "./overview-start-here";
  */
 
 type Props = {
+  /**
+   * A strip drawn under the pane header, above the feed: the arrival banner
+   * for somebody who just joined (a server with Baú on lands a new member
+   * here, not in a channel).
+   */
+  banner?: ReactNode;
   serverId: string;
   serverName: string;
   server: Server;
@@ -1833,6 +1840,7 @@ function StaffHomeTools({
 // -------------------------------------------------------------------- feed
 
 export function CommunityHomeFeed({
+  banner,
   serverId,
   serverName,
   server,
@@ -2311,6 +2319,7 @@ export function CommunityHomeFeed({
           )}
         </header>
       )}
+      {banner}
       {identityEditing && identityError && (
         <p
           role="alert"

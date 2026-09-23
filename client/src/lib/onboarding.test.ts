@@ -5,9 +5,13 @@ import { en } from "@/lib/i18n";
 import {
   handleErrorMessage,
   isValidUsername,
+  joinFromRoomStep,
   normalizeInviteCode,
   normalizeUsername,
   onboardingCompletedPatch,
+  onboardingPath,
+  screenPosition,
+  screensFor,
   shouldRunOnboarding,
   tagWasReassigned,
 } from "./onboarding";
@@ -113,7 +117,7 @@ describe("a taken username", () => {
     const key = handleErrorMessage(
       new ApiError(409, "That username has no numbers left."),
     );
-    expect(key).toBe("onboarding.handle.error.taken");
+    expect(key).toBe("onboarding.you.error.taken");
     expect(en[key]).toMatch(/pick another|another one/i);
   });
 
@@ -136,10 +140,10 @@ describe("a taken username", () => {
 
   it("distinguishes a rejected name from a rejected request", () => {
     expect(handleErrorMessage(new ApiError(400, "bad"))).toBe(
-      "onboarding.handle.error.invalid",
+      "onboarding.you.error.invalid",
     );
     expect(handleErrorMessage(new ApiError(503, "down"))).toBe(
-      "onboarding.handle.error.generic",
+      "onboarding.you.error.generic",
     );
   });
 
@@ -163,10 +167,126 @@ describe("normalizeInviteCode", () => {
     expect(normalizeInviteCode("https://pqp.gg/app/invite/AB12CD")).toBe("AB12CD");
     expect(normalizeInviteCode("pqp://invite/AB12CD")).toBe("AB12CD");
     expect(normalizeInviteCode("/app/invite/AB12CD?from=whatsapp")).toBe("AB12CD");
+    expect(
+      normalizeInviteCode("https://pqp.gg/app/invite/AB12CD?ref=onboarding"),
+    ).toBe("AB12CD");
+    expect(normalizeInviteCode("pqp.gg/app/invite/AB12CD?ref=discord")).toBe("AB12CD");
+    expect(normalizeInviteCode("pqp.gg/i/AB12CD")).toBe("AB12CD");
+    expect(normalizeInviteCode("https://pqp.gg/i/AB12CD/")).toBe("AB12CD");
   });
 
   it("survives an input with nothing usable in it", () => {
     expect(normalizeInviteCode("")).toBe("");
     expect(normalizeInviteCode("///")).toBe("");
+  });
+});
+
+describe("first-run screens", () => {
+  it("an invitee sees two screens, and both are counted from the gate", () => {
+    const path = onboardingPath({ invite: true, importing: false });
+    expect(path).toBe("invite");
+    expect(screensFor(path)).toEqual(["age", "you"]);
+    expect(screenPosition(path, "age")).toEqual({ index: 0, total: 2 });
+    expect(screenPosition(path, "you")).toEqual({ index: 1, total: 2 });
+  });
+
+  it("an import link is two screens too: the dialog takes it from there", () => {
+    const path = onboardingPath({ invite: false, importing: true });
+    expect(path).toBe("import");
+    expect(screensFor(path)).toEqual(["age", "you"]);
+  });
+
+  it("a cold organizer gets four, and the last one is the invite", () => {
+    const path = onboardingPath({ invite: false, importing: false });
+    expect(screensFor(path)).toEqual(["age", "you", "room", "ready"]);
+    expect(screenPosition(path, "ready")).toEqual({ index: 3, total: 4 });
+  });
+
+  it("an invite outranks an import intent", () => {
+    expect(onboardingPath({ invite: true, importing: true })).toBe("invite");
+  });
+
+  it("clamps a screen the path does not have to the last dot", () => {
+    expect(screenPosition("invite", "ready")).toEqual({ index: 1, total: 2 });
+  });
+});
+
+describe("joinFromRoomStep", () => {
+  const opened = async () => {};
+
+  it("sends the API the code, not the pasted link", async () => {
+    for (const input of [
+      "https://pqp.gg/app/invite/AB12CD?ref=onboarding",
+      "pqp.gg/app/invite/AB12CD?ref=discord",
+      "pqp.gg/i/AB12CD",
+      "  AB12CD ",
+    ]) {
+      const sent: string[] = [];
+      const result = await joinFromRoomStep({
+        input,
+        joinedId: null,
+        joinInvite: async (code) => {
+          sent.push(code);
+          return { serverId: "s1" };
+        },
+        openJoined: opened,
+      });
+      expect(sent).toEqual(["AB12CD"]);
+      expect(result).toEqual({ kind: "opened", serverId: "s1" });
+    }
+  });
+
+  it("does not finish when the join worked and the room did not open", async () => {
+    const result = await joinFromRoomStep({
+      input: "AB12CD",
+      joinedId: null,
+      joinInvite: async () => ({ serverId: "s1" }),
+      openJoined: async () => {
+        throw new Error("refresh failed");
+      },
+    });
+    // Resolves (no unhandled rejection) with a retry state, not "opened".
+    expect(result).toEqual({ kind: "notOpened", serverId: "s1" });
+  });
+
+  it("retries only the opening once the join is known to have worked", async () => {
+    let joins = 0;
+    const result = await joinFromRoomStep({
+      input: "ignored",
+      joinedId: "s1",
+      joinInvite: async () => {
+        joins += 1;
+        return { serverId: "s2" };
+      },
+      openJoined: opened,
+    });
+    expect(joins).toBe(0);
+    expect(result).toEqual({ kind: "opened", serverId: "s1" });
+  });
+
+  it("reports a refused or empty code as invalid, without opening anything", async () => {
+    let opens = 0;
+    const open = async () => {
+      opens += 1;
+    };
+    expect(
+      await joinFromRoomStep({
+        input: "   ",
+        joinedId: null,
+        joinInvite: async () => ({ serverId: "x" }),
+        openJoined: open,
+      }),
+    ).toEqual({ kind: "invalid" });
+    expect(
+      await joinFromRoomStep({
+        input: "dead",
+        joinedId: null,
+        joinInvite: async () => {
+          throw new Error("404");
+        },
+        openJoined: open,
+      }),
+    ).toEqual({ kind: "invalid" });
+    expect(opens).toBe(0);
   });
 });

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { hasArrived, readArrivals, rememberArrival } from "./arrival";
+import {
+  arrivalVariant,
+  confettiSpent,
+  hasArrived,
+  readArrivals,
+  rememberArrival,
+  spendConfetti,
+} from "./arrival";
 
 /** A localStorage stand-in. The real one is not available under vitest. */
 function fakeStorage(initial: Record<string, string> = {}) {
@@ -109,5 +116,64 @@ describe("rememberArrival", () => {
 
   it("survives having no storage at all", () => {
     expect(rememberArrival(null, "s1")).toEqual(["s1"]);
+  });
+});
+
+describe("arrivalVariant", () => {
+  const base = { createdHere: false, memberCount: 5, inCall: false } as const;
+
+  it("names the channel when a text channel is open", () => {
+    expect(arrivalVariant({ ...base, surface: "text" })).toBe("text");
+  });
+
+  it("points at the call button in a voice channel, and goes once in the call", () => {
+    expect(arrivalVariant({ ...base, surface: "voice" })).toBe("voice");
+    expect(arrivalVariant({ ...base, surface: "voice", inCall: true })).toBeNull();
+  });
+
+  it("shows on the community home too", () => {
+    expect(arrivalVariant({ ...base, surface: "home" })).toBe("home");
+  });
+
+  it("falls back to the generic copy anywhere else", () => {
+    expect(arrivalVariant({ ...base, surface: "other" })).toBe("generic");
+  });
+
+  it("tells an owner alone in their new room to send the invite, wherever they are", () => {
+    for (const surface of ["text", "voice", "home", "other"] as const) {
+      expect(
+        arrivalVariant({ createdHere: true, memberCount: 1, inCall: false, surface }),
+      ).toBe("owner");
+    }
+  });
+
+  it("treats a member list that has not loaded as alone, not as a crowd", () => {
+    expect(
+      arrivalVariant({ createdHere: true, memberCount: null, inCall: false, surface: "text" }),
+    ).toBe("owner");
+  });
+
+  it("says nothing to an owner once somebody has come", () => {
+    expect(
+      arrivalVariant({ createdHere: true, memberCount: 2, inCall: false, surface: "text" }),
+    ).toBeNull();
+  });
+});
+
+describe("confetti", () => {
+  it("fires once per account per session", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    };
+    expect(confettiSpent(storage, "u1")).toBe(false);
+    spendConfetti(storage, "u1");
+    expect(confettiSpent(storage, "u1")).toBe(true);
+    expect(confettiSpent(storage, "u2")).toBe(false);
+  });
+
+  it("counts as spent when there is no storage, so a denied store never loops", () => {
+    expect(confettiSpent(null, "u1")).toBe(true);
   });
 });
