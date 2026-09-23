@@ -36,6 +36,13 @@ type signedRequest struct {
 // content type, rather than needing every header threaded through the
 // signature.
 func sigv4Sign(cfg Config, method, key string, body []byte, now time.Time) (signedRequest, string, error) {
+	return sigv4SignPayloadHash(cfg, method, key, sha256Hex(body), now)
+}
+
+// sigv4SignPayloadHash is sigv4Sign for a caller that already knows the
+// payload's SHA-256 (hex): a GET (the hash of the empty body) or a file too
+// big to hold in memory, hashed once from disk (ObjectClient.PutFile).
+func sigv4SignPayloadHash(cfg Config, method, key, payloadHash string, now time.Time) (signedRequest, string, error) {
 	u, err := url.Parse(cfg.Endpoint)
 	if err != nil {
 		return signedRequest{}, "", fmt.Errorf("r2: parsing endpoint %q: %w", cfg.Endpoint, err)
@@ -45,7 +52,6 @@ func sigv4Sign(cfg Config, method, key string, body []byte, now time.Time) (sign
 
 	amzDate := now.UTC().Format("20060102T150405Z")
 	dateStamp := now.UTC().Format("20060102")
-	payloadHash := sha256Hex(body)
 
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", host, payloadHash, amzDate)
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"

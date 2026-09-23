@@ -1001,6 +1001,39 @@ ffprobe http://localhost:8089/audio-init.mp4
 Never point this at `sfu.pqp.gg` (production). A live smoke test is
 optional — `make test` is what CI and the acceptance bar for this PR run.
 
+## The film: one playable file per session, made after the show
+
+`internal/film`. When the API stops a session (`DELETE /sessions/:id`, never
+the process-shutdown `StopAll`), the registry hands the session's prefix and
+its whole-session `video.m3u8` / `audio.m3u8` to a single-worker queue that
+turns them into `<prefix>/film.mp4`: the LL broadcast's "Vídeo (stream)"
+download. Download every segment (8 at a time), write each init group as
+init + segments, read each group's first `tfdt`, lay the groups on one
+timeline (an init change keeps the session clock; a watchdog restart starts it
+over and is moved to follow what came before, one shift for both tracks), remux
+each group to MPEG-TS at its place, join the tracks, re-encode to 1280x720
+30 fps H.264 (veryfast, CRF 22) + AAC 160k with faststart. `nice -n 19`, two
+x264 threads, one job at a time: the next show's live work needs the cores
+more than a replay does. Before uploading it checks `video.m3u8` is still
+there, so a session the retention sweep removed while the job ran does not get
+a film nobody would ever delete. `<prefix>/film.json` carries the state
+(`queued`/`processing`/`ready`/`failed`) with an `updatedAt` rewritten every
+30 s; `pqp-api` reads it to say "being prepared"
+(`server/src/voice/hls-history.ts`).
+
+Env: `LL_FILM=off` turns it off; `FILM_WORK_DIR` (default the service's
+private `/tmp`, a few GB per hour of show) and `FILM_THREADS` (default 2).
+`ffprobe` is expected beside `FFMPEG_PATH`.
+
+`cmd/pqp-film` is the same job by hand, for a show that ended before the box
+knew how or whose job failed:
+
+```
+set -a; . /etc/pqp-remux.env; set +a
+pqp-film -prefix live/<channel>/<startedAt>-ll            # build, upload, film.json
+pqp-film -prefix live/<channel>/<startedAt>-ll -out f.mp4  # build locally only
+```
+
 ## Deploying `pqp-remuxd`
 
 By hand, and only while no LL session is live: a restart kills every session
@@ -1009,8 +1042,12 @@ on the box and its viewers see 502/404 until the API demotes them.
 ```
 cd tools/pqp-remux
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/pqp-remuxd ./cmd/pqp-remuxd
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/pqp-film ./cmd/pqp-film
 # on the egress box: confirm nothing is live (0 means idle)
 journalctl -u pqp-remux --since "2 min ago" | grep -c "stats session"
+# and no film job is running (a restart kills it; its film.json goes stale and
+# the show needs `pqp-film` by hand afterwards)
+pgrep -f 'pqp-film-' || echo "no film job"
 # copy out/pqp-remuxd over, keep the old binary, swap, restart
 cp /usr/local/bin/pqp-remuxd /usr/local/bin/pqp-remuxd.prev
 install -m 0755 /tmp/pqp-remuxd /usr/local/bin/pqp-remuxd

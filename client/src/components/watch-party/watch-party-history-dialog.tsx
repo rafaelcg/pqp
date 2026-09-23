@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -59,7 +59,17 @@ function metaLine(
 export type WatchPartyDownloadsState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; downloads: WatchPartyDownloads };
+  | {
+      status: "ready";
+      downloads: WatchPartyDownloads;
+      /** Kinds being made right now (an LL film); the dialog asks again. */
+      preparing?: WatchPartyDownloadKind[];
+    };
+
+/** How often an open dialog asks again about a file that is being made. The
+ * box re-encodes a two-hour show in a quarter of an hour or so; a short show
+ * in well under a minute. */
+export const DOWNLOAD_PREPARING_POLL_MS = 20_000;
 
 /** Literal keys rather than a template, so a grep for a key still finds it. */
 const DOWNLOAD_LABEL_KEYS: Record<WatchPartyDownloadKind, MessageKey> = {
@@ -141,6 +151,21 @@ export function WatchPartyDownloadPanel({
         const item = state.downloads[kind];
         const label = t(DOWNLOAD_LABEL_KEYS[kind]);
         const size = item ? formatDownloadSize(item.bytes) : null;
+        if (!item && state.preparing?.includes(kind)) {
+          return (
+            <span
+              key={kind}
+              role="status"
+              data-testid={`watch-party-history-download-${kind}-preparing`}
+              className="flex items-center justify-between gap-3 px-2 py-1.5 text-sm text-text-secondary"
+            >
+              <span className="truncate">{label}</span>
+              <span className="shrink-0 text-xs">
+                {t("watchParty.history.download.preparing")}
+              </span>
+            </span>
+          );
+        }
         return item ? (
           <a
             key={kind}
@@ -415,6 +440,10 @@ export function WatchPartyHistoryDialog({
   const [downloads, setDownloads] = useState<
     Record<string, WatchPartyDownloadsState | undefined>
   >({});
+  // Bumped every time the dialog closes, so an answer that arrives after it
+  // (a poll already in flight) is dropped instead of re-populating
+  // `downloads` and restarting the poll behind a closed dialog.
+  const downloadsGeneration = useRef(0);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -431,11 +460,70 @@ export function WatchPartyHistoryDialog({
     if (!open) {
       setPlayer(null);
       setPlayerError(null);
+      downloadsGeneration.current += 1;
       setDownloads({});
       return;
     }
     load();
   }, [open, load]);
+
+  const fetchDownloads = useCallback(
+    (sessionId: string) => {
+      const generation = downloadsGeneration.current;
+      const current = () => generation === downloadsGeneration.current;
+      void fetchWatchPartyHistoryDownloads(channelId, sessionId)
+        .then((result) => {
+          if (!current()) {
+            return;
+          }
+          setDownloads((next) => ({
+            ...next,
+            [sessionId]: {
+              status: "ready",
+              downloads: result.downloads,
+              preparing: result.preparing,
+            },
+          }));
+        })
+        .catch((err: unknown) => {
+          if (!current()) {
+            return;
+          }
+          setDownloads((next) => ({
+            ...next,
+            [sessionId]: {
+              status: "error",
+              message:
+                err instanceof ApiError && err.status === 409
+                  ? t("watchParty.history.replayGone")
+                  : messageOf(err, t("watchParty.history.download.failed")),
+            },
+          }));
+        });
+    },
+    [channelId, t],
+  );
+
+  // A file being made is asked about again until it exists, for as long as
+  // the dialog is open (closing it clears `downloads`, which ends this).
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const waiting = Object.entries(downloads).filter(
+      ([, state]) =>
+        state?.status === "ready" && (state.preparing?.length ?? 0) > 0,
+    );
+    if (waiting.length === 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      for (const [sessionId] of waiting) {
+        fetchDownloads(sessionId);
+      }
+    }, DOWNLOAD_PREPARING_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [open, downloads, fetchDownloads]);
 
   const requestDownloads = useCallback(
     (entry: WatchPartyHistoryEntry) => {
@@ -450,29 +538,11 @@ export function WatchPartyHistoryDialog({
         if (asked && asked.status !== "error") {
           return current;
         }
-        void fetchWatchPartyHistoryDownloads(channelId, entry.sessionId)
-          .then((result) =>
-            setDownloads((next) => ({
-              ...next,
-              [entry.sessionId]: { status: "ready", downloads: result },
-            })),
-          )
-          .catch((err: unknown) =>
-            setDownloads((next) => ({
-              ...next,
-              [entry.sessionId]: {
-                status: "error",
-                message:
-                  err instanceof ApiError && err.status === 409
-                    ? t("watchParty.history.replayGone")
-                    : messageOf(err, t("watchParty.history.download.failed")),
-              },
-            })),
-          );
+        fetchDownloads(entry.sessionId);
         return { ...current, [entry.sessionId]: { status: "loading" } };
       });
     },
-    [channelId, t],
+    [fetchDownloads],
   );
 
   async function toggleKeepReplay(

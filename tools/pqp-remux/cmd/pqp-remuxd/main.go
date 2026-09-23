@@ -16,11 +16,50 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/control"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/film"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 )
+
+// startFilmWorker makes every LL session that ends into one downloadable
+// film (internal/film), one job at a time, niced, beside the live work.
+// On whenever the bucket is configured; LL_FILM=off turns it off without a
+// rebuild. FILM_WORK_DIR (default the service's private /tmp) needs a few
+// gigabytes free per hour of show while a job runs; FILM_THREADS caps x264.
+func startFilmWorker(ctx context.Context, cfg control.GlobalConfig, registry *control.Registry) {
+	if !cfg.LiveHlsS3Configured() {
+		return
+	}
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("LL_FILM"))); v == "off" || v == "false" || v == "0" {
+		log.Print("pqp-remuxd: LL film jobs are off (LL_FILM)")
+		return
+	}
+	threads, _ := strconv.Atoi(os.Getenv("FILM_THREADS"))
+	store := r2.NewObjectClient(r2.Config{
+		Endpoint:        cfg.LiveHlsS3Endpoint,
+		Bucket:          cfg.LiveHlsS3Bucket,
+		Region:          cfg.LiveHlsS3Region,
+		AccessKeyID:     cfg.LiveHlsS3AccessKeyID,
+		SecretAccessKey: cfg.LiveHlsS3SecretAccessKey,
+		ForcePathStyle:  cfg.LiveHlsS3ForcePathStyle,
+	})
+	worker := film.NewWorker(store, film.Config{
+		FFmpegPath: cfg.FFmpegPath,
+		WorkDir:    os.Getenv("FILM_WORK_DIR"),
+		Threads:    threads,
+		Nice:       true,
+	}, 32)
+	go worker.Run(ctx)
+	registry.SetSessionEndedHook(func(e control.SessionEnded) {
+		worker.Enqueue(ctx, film.Job{Prefix: e.Prefix, VideoPlaylist: e.VideoPlaylist, AudioPlaylist: e.AudioPlaylist})
+	})
+	log.Print("pqp-remuxd: LL film jobs on")
+}
 
 // shutdownTimeout bounds how long a graceful shutdown waits for in-flight
 // requests to finish on their own before this process forces the issue
@@ -75,6 +114,7 @@ func main() {
 	defer supervisorCancel()
 
 	registry := control.NewRegistry(supervisorCtx, control.NewRemuxPipeline, cfg, cfg.WatchdogConfig(), time.Now)
+	startFilmWorker(supervisorCtx, cfg, registry)
 	srv := control.NewServer(cfg.Secret, cfg.MediaOriginKey, registry)
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,

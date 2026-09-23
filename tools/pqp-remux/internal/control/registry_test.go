@@ -2,9 +2,12 @@ package control
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 )
 
 const (
@@ -357,5 +360,70 @@ func TestRegistry_StartOrGet_NoVodIndexWithoutStorage(t *testing.T) {
 	ms, _ := reg.Get(sessA)
 	if ms.cfg.VodIndex != nil {
 		t.Fatal("expected no VodIndex when the box has no S3 configuration")
+	}
+}
+
+// A session the API stops hands its prefix and whole-session playlists to
+// the film job; one stopped by process shutdown does not, and neither does a
+// session that never recorded a frame.
+func TestRegistry_Stop_AnnouncesTheEndedSessionForItsFilm(t *testing.T) {
+	spy := &pipelineSpy{}
+	reg := NewRegistry(
+		context.Background(),
+		spy.factory(),
+		GlobalConfig{
+			LiveHlsS3Endpoint:        "http://localhost:9000",
+			LiveHlsS3Bucket:          "pqp-live",
+			LiveHlsS3AccessKeyID:     "key",
+			LiveHlsS3SecretAccessKey: "secret",
+		},
+		fixedWatchdogCfg(),
+		nil,
+	)
+	var mu sync.Mutex
+	var ended []SessionEnded
+	reg.SetSessionEndedHook(func(e SessionEnded) {
+		mu.Lock()
+		ended = append(ended, e)
+		mu.Unlock()
+	})
+
+	reqA := testStartReq(sessA, chanA, chanA)
+	reqA.StartedAtMs = 1_790_029_937_773
+	if _, _, err := reg.StartOrGet(reqA); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reg.StartOrGet(testStartReq(sessB, chanB, chanB)); err != nil {
+		t.Fatal(err)
+	}
+	msA, _ := reg.Get(sessA)
+	msA.cfg.VodIndex.AddVideoSegment(r2.VodSegment{Name: "video-seg-0.m4s", Seconds: 2, InitURI: "video-init.mp4"}, 1000)
+
+	reg.Stop(sessB) // no video recorded: nothing to make a film of
+	reg.Stop(sessA)
+	mu.Lock()
+	got := append([]SessionEnded(nil), ended...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("announced %d sessions, want 1: %+v", len(got), got)
+	}
+	if got[0].Prefix != "live/"+chanA+"/1790029937773-ll" {
+		t.Fatalf("prefix %q", got[0].Prefix)
+	}
+	if !strings.Contains(got[0].VideoPlaylist, "video-seg-0.m4s") {
+		t.Fatalf("video playlist %q", got[0].VideoPlaylist)
+	}
+
+	// Shutdown ends sessions without announcing them.
+	if _, _, err := reg.StartOrGet(testStartReq(sessB, chanB, chanB)); err != nil {
+		t.Fatal(err)
+	}
+	msB, _ := reg.Get(sessB)
+	msB.cfg.VodIndex.AddVideoSegment(r2.VodSegment{Name: "video-seg-0.m4s", Seconds: 2, InitURI: "video-init.mp4"}, 1000)
+	reg.StopAll()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ended) != 1 {
+		t.Fatalf("StopAll announced a session: %+v", ended)
 	}
 }

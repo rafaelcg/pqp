@@ -199,4 +199,24 @@ describe("WatchPartyDownloadPanel", () => {
     expect(html).not.toContain('href="https://api.test/camera');
     expect(html).toContain('data-testid="watch-party-history-download-voice-missing"');
   });
+
+  it("says a film is being prepared instead of calling it unavailable", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyDownloadPanel
+        state={{
+          status: "ready",
+          downloads: {
+            film: null,
+            camera: { bytes: 38_000_000, url: "https://api.test/camera?t=abc" },
+            voice: null,
+          },
+          preparing: ["film"],
+        }}
+      />,
+    );
+    expect(html).toContain('data-testid="watch-party-history-download-film-preparing"');
+    expect(html).toContain("being prepared");
+    expect(html).not.toContain("recording unavailable");
+    expect(html).not.toContain('data-testid="watch-party-history-download-film-missing"');
+  });
 });

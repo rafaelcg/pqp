@@ -6108,7 +6108,10 @@ router.get(
           `/watch-party/history/${startedAtMs}/download/${kind}${query}`,
       };
     }
-    return { downloads };
+    // Kinds that do not exist yet but are being made (an LL film the box is
+    // still encoding): the dialog says so and asks again, rather than
+    // calling the recording unavailable. Older clients ignore the field.
+    return { downloads, preparing: sizes.preparing };
   },
 );
 
