@@ -118,9 +118,11 @@ echo "run.sh: loss=${LOSS_PCT}% room=${ROOM} logs=${LOG_DIR}"
 
 cleanup() {
   local status=$?
+  # The lateness poller is this script's own child, not part of the rig
+  # KEEP_UP preserves: stop it on every exit, cancelled or not.
+  [ -n "${LATENESS_PID:-}" ] && { kill "$LATENESS_PID" 2>/dev/null; wait "$LATENESS_PID" 2>/dev/null; } || true
   if [ "$KEEP_UP" != "1" ]; then
     echo "run.sh: tearing down (KEEP_UP=1 to skip this)"
-    [ -n "${LATENESS_PID:-}" ] && { kill "$LATENESS_PID" 2>/dev/null; wait "$LATENESS_PID" 2>/dev/null; } || true
     [ -n "${SID:-}" ] && node harness/remux-ctl.mjs stop "$SID" >/dev/null 2>&1 || true
     # Twice: the publisher runs with --rm and can finish removing itself
     # while the first pass is removing it, which makes compose abort before
