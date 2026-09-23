@@ -1220,6 +1220,93 @@ describe("box budget: a camera must never be priced twice", () => {
   });
 });
 
+describe("box budget: a camera is not priced against the egress it replaces", () => {
+  it("starts the replacement even while LiveKit still lists the old camera as active", async () => {
+    // 2026-09-23 20:13Z production rehearsal: a camera replaced 6 s after it
+    // started, LiveKit's stop timed out, the old egress was still ACTIVE and
+    // was priced as a full rung, and the replacement was refused at 651/600.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+    // Room for the rung and one camera, not for the stuck one as a rung too.
+    const fits = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const stuckAsRung = 2 * HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(Math.round((fits + stuckAsRung) / 2));
+    // The stop never lands: the old egress stays ACTIVE in the listing.
+    lk.stop.mockImplementation(async () => {
+      throw new Error("The operation was aborted due to timeout");
+    });
+
+    cameraTrackId = "TR_CAM_2";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraStopped",
+      expect.objectContaining({ fromVideo: "TR_CAM", toVideo: "TR_CAM_2" }),
+    );
+  });
+
+  it("charges nothing for a replaced camera whose stop landed", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    // Room for the rung and exactly one camera.
+    const oneCamera = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const twoCameras = HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(Math.round((oneCamera + twoCameras) / 2));
+
+    cameraTrackId = "TR_CAM_2";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("still charges the stuck camera at a camera's weight", async () => {
+    // Excluded as a rendition is not the same as free: a stop that timed out
+    // leaves it running. A box with room for one camera beside the rung but
+    // not two must refuse the replacement rather than run both unpriced.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const oneCamera = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const twoCameras = HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(Math.round((oneCamera + twoCameras) / 2));
+    lk.stop.mockImplementation(async () => {
+      throw new Error("The operation was aborted due to timeout");
+    });
+
+    cameraTrackId = "TR_CAM_2";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.objectContaining({ refusal: "box-budget" }),
+    );
+  });
+});
+
 describe("box budget: the voice archive is not a video rendition", () => {
   it("starts the camera beside a ladder rung and a running -mic.ogg archive", async () => {
     // The 2026-09-23 production rehearsal: two rungs plus the archive plus
