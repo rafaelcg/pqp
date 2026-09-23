@@ -364,6 +364,38 @@ test("preload hint: a part that does not exist yet is HELD and answered the mome
   assert.ok(origin.asked.filter((n) => n === "part-41.m4s").length >= 2, "it looked again");
 });
 
+test("preload hint: many waiters on one part share ONE poll loop", async () => {
+  resetPreloadHoldForTests();
+  const channelId = "chan-hint-shared";
+  const startedAt = "1726000100013";
+  const origin = appearingOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const ask = (name, viewer) =>
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor(viewer, channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+      { preloadHoldMs: 2_000, preloadPollMs: 20 },
+    );
+  origin.publish("part-10.m4s");
+  assert.equal((await ask("part-10.m4s", "v0")).status, 200);
+  const waiters = Array.from({ length: 30 }, (_, i) => ask("part-11.m4s", `v${i}`));
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  const polledBefore = origin.asked.filter((n) => n === "part-11.m4s").length;
+  origin.publish("part-11.m4s");
+  const responses = await Promise.all(waiters);
+  for (const response of responses) {
+    assert.equal(response.status, 200);
+  }
+  // 30 first tries (coalesced where they overlap) plus ONE loop's polls, not 30 loops'.
+  assert.ok(polledBefore <= 30 + 8, `expected one shared loop, saw ${polledBefore} origin asks`);
+});
+
 test("preload hint: the hold is bounded, then the 404 goes out uncached", async () => {
   resetPreloadHoldForTests();
   const channelId = "chan-hint-expire";

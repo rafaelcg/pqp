@@ -259,14 +259,15 @@ function percentile(values: number[], p: number): number | null {
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-async function timedGet(url: string): Promise<{ status: number; ms: number; bytes: number; text: string }> {
+async function timedGet(url: string): Promise<{ status: number; ms: number; bytes: number; text: string; ttfbMs: number }> {
   const start = Date.now();
   try {
     const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const ttfbMs = Date.now() - start;
     const buf = await res.arrayBuffer();
-    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength, text: new TextDecoder().decode(buf) };
+    return { status: res.status, ms: Date.now() - start, bytes: buf.byteLength, text: new TextDecoder().decode(buf), ttfbMs };
   } catch {
-    return { status: 0, ms: Date.now() - start, bytes: 0, text: "" };
+    return { status: 0, ms: Date.now() - start, bytes: 0, text: "", ttfbMs: Date.now() - start };
   }
 }
 
@@ -344,9 +345,12 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
   result.started = true;
 
   // 1. Master playlist, once, with this viewer's own token.
+  // The startup clock starts at join, before the master and first media
+  // playlist, which are part of what a viewer waits through.
+  const playback = new PlaybackModel(Date.now());
   const taggedMasterUrl = withToken(masterUrl, token);
   const masterRes = await timedGet(taggedMasterUrl.toString());
-  ctx.metrics.record("master", masterRes.status, masterRes.ms, masterRes.bytes);
+  ctx.metrics.record("master", masterRes.status, masterRes.ms, masterRes.bytes, masterRes.ttfbMs);
   if (masterRes.status !== 200) {
     result.playlistErrors++;
     result.fatal = `master playlist ${masterRes.status || "network error"}`;
@@ -369,7 +373,6 @@ async function runViewer(ctx: RunnerCtx, index: number, token: string, masterUrl
   let lastMediaSeq: number | null = null;
   let lastSeqChangeAt = Date.now();
   let currentlyStuck = false;
-  const playback = new PlaybackModel(Date.now());
 
   while (Date.now() < ctx.endAt) {
     const loadStart = Date.now();

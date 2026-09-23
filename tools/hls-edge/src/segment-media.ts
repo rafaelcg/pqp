@@ -290,8 +290,13 @@ export async function warmNewSegments(
       const response = await handleSegmentRequest(new Request(url.toString()), env, cache, ctx, route);
       // Drained, not just dropped: the body is the cache read-back or the
       // shared buffer, and an unread stream holds the fetch open.
-      await response.arrayBuffer().catch(() => undefined);
-      if (response.status === 200) {
+      const drained = await response.arrayBuffer().then(
+        () => true,
+        () => false,
+      );
+      // Only a fully read 200 counts as warm: a failed drain may mean the
+      // cache write never landed, and the next playlist should try again.
+      if (response.status === 200 && drained) {
         rememberWarmed(url.pathname);
       }
     }),

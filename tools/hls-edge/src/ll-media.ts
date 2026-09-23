@@ -779,7 +779,10 @@ const HARD_TIMEOUT = Symbol("ll-media-hard-timeout");
  * that has left the remux's ring (a player recovering at a stale position),
  * and still gets its 404 immediately: holding it would only delay the
  * player's recovery. A part far past the mark is not a hint either. Segments,
- * init segments and conventional `.ts` are never held.
+ * init segments and conventional `.ts` are never held. A COLD isolate has no
+ * mark yet, so its first request for a rendition may hold a stale part for
+ * the budget before the 404: bounded, once per rendition per isolate, and
+ * the first 200 it serves sets the mark.
  */
 export const DEFAULT_PRELOAD_HOLD_MS = 2_500;
 export const PRELOAD_POLL_MS = 150;
@@ -834,6 +837,65 @@ function isPreloadHint(route: LlMediaRoute): boolean {
 /** For tests. */
 export function resetPreloadHoldForTests(): void {
   partHighWater.clear();
+  heldPartLoops.clear();
+}
+
+/**
+ * ONE POLL LOOP PER HELD PART, however many viewers are waiting on it (Farol,
+ * PR #784: 500 native viewers each running their own 150 ms loop is 8,500
+ * cache lookups and timer wakeups for one hint). The first waiter starts the
+ * loop, keeps it alive with `ctx.waitUntil`, and every later waiter joins the
+ * same promise. A joiner never bets its response on it, though: it races the
+ * loop against its OWN deadline timer (the rule `coalesced-fetch.js` spells
+ * out: a promise from another request's context may never resume), and on
+ * its deadline it answers the 404 it would have had anyway.
+ *
+ * Resolves true once the part answered something other than 404 (it landed,
+ * or the origin failed and the waiter should see that failure itself).
+ */
+const heldPartLoops = new Map<string, Promise<boolean>>();
+
+function sharedPartWait(
+  cacheKey: Request,
+  origin: LlMediaOrigin,
+  route: LlMediaRoute,
+  cache: Cache,
+  ctx: ExecutionContext,
+  timers: LlMediaTimers,
+  holdMs: number,
+): Promise<boolean> {
+  const key = cacheKey.url;
+  const existing = heldPartLoops.get(key);
+  if (existing) {
+    return existing;
+  }
+  const setTimer = timers.setTimer ?? defaultSetTimer;
+  const pollMs = timers.preloadPollMs ?? PRELOAD_POLL_MS;
+  const loop = (async (): Promise<boolean> => {
+    const deadline = Date.now() + holdMs;
+    while (Date.now() + pollMs <= deadline) {
+      await new Promise<void>((resolve) => {
+        setTimer(pollMs, resolve);
+      });
+      const response = await serveCoalesced(cacheKey, origin, route, cache, ctx, timers, true);
+      // Drained: the body is a cache read-back or the shared buffer, and the
+      // waiters fetch their own copy once this says the part exists.
+      await response.arrayBuffer().catch(() => undefined);
+      if (response.status !== 404) {
+        return true;
+      }
+    }
+    return false;
+  })()
+    .catch(() => false)
+    .finally(() => {
+      if (heldPartLoops.get(key) === loop) {
+        heldPartLoops.delete(key);
+      }
+    });
+  heldPartLoops.set(key, loop);
+  ctx.waitUntil(loop);
+  return loop;
 }
 
 async function serveHoldingPreloadHint(
@@ -856,18 +918,27 @@ async function serveHoldingPreloadHint(
   }
   const setTimer = timers.setTimer ?? defaultSetTimer;
   const pollMs = timers.preloadPollMs ?? PRELOAD_POLL_MS;
-  const started = Date.now();
-  const deadline = started + holdMs;
-  while (Date.now() + pollMs <= deadline) {
-    await new Promise<void>((resolve) => {
-      setTimer(pollMs, resolve);
-    });
+  let cancel: () => void = () => {};
+  const ownDeadline = new Promise<boolean>((resolve) => {
+    cancel = setTimer(holdMs + pollMs, () => resolve(false));
+  });
+  let landed: boolean;
+  try {
+    landed = await Promise.race([
+      sharedPartWait(cacheKey, origin, route, cache, ctx, timers, holdMs),
+      ownDeadline,
+    ]);
+  } finally {
+    cancel();
+  }
+  if (landed) {
     response = await serveCoalesced(cacheKey, origin, route, cache, ctx, timers, true);
-    if (response.status !== 404) {
-      if (response.status === 200) {
-        notePartServed(route);
-      }
+    if (response.status === 200) {
+      notePartServed(route);
       countEvent(mediaEvent(route, "hlsEdge.llPartHeldServed"), route);
+      return response;
+    }
+    if (response.status !== 404) {
       return response;
     }
   }
