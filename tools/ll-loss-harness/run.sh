@@ -55,8 +55,11 @@ WATCH_SECONDS="${WATCH_SECONDS:-60}"
 SOURCE="${SOURCE:-ramp}"
 case "$SOURCE" in
   ramp) export SOURCE_FILE=ramp.h264 PACE="" CLOCK_CUT_PARTS="${CLOCK_CUT_PARTS:-}" ;;
-  idle) export SOURCE_FILE=idle.h264 PACE=idle-bursty CLOCK_CUT_PARTS=true POLL_MODE="${POLL_MODE:-edge}" ;;
-  *) echo "run.sh: SOURCE must be ramp or idle, got '$SOURCE'" >&2; exit 1 ;;
+  idle|static|mixed)
+    PACE=idle-bursty
+    [ "$SOURCE" != "idle" ] && PACE="$SOURCE"
+    export SOURCE_FILE=idle.h264 PACE CLOCK_CUT_PARTS=true POLL_MODE="${POLL_MODE:-edge}" ;;
+  *) echo "run.sh: SOURCE must be ramp, idle, static or mixed, got '$SOURCE'" >&2; exit 1 ;;
 esac
 export PART_DEADLINE_GRACE_MS="${PART_DEADLINE_GRACE_MS:-150}"
 
@@ -139,7 +142,7 @@ docker compose --profile publish down --timeout 5 >/dev/null 2>&1 || true
 echo "run.sh: generating ephemeral keys and ramp.h264"
 bash scripts/gen-keys.sh
 bash scripts/gen-ramp.sh
-[ "$SOURCE" = "idle" ] && bash scripts/gen-idle.sh
+[ "$SOURCE" != "ramp" ] && bash scripts/gen-idle.sh
 
 echo "run.sh: building images"
 docker compose build remuxd publisher >"$LOG_DIR/build.log" 2>&1 || { echo "run.sh: build failed, see $LOG_DIR/build.log" >&2; tail -60 "$LOG_DIR/build.log" >&2; exit 1; }
@@ -178,7 +181,7 @@ sleep 1
 echo "run.sh: starting publisher (LOSS_PCT=${LOSS_PCT}%)"
 ROOM="$ROOM" LOSS_PCT="$LOSS_PCT" docker compose --profile publish run --rm -d --name "ll-loss-publisher-${RUN_ID}" publisher > "$LOG_DIR/publisher-start.log" 2>&1
 
-if [ "$SOURCE" = "idle" ]; then
+if [ "$SOURCE" != "ramp" ]; then
   # Start the viewer on a stream that already has a few segments, the way a
   # real audience joins a party in progress. Started cold, hls.js retries a
   # 503 master until the first part exists and then lands wherever the
@@ -267,8 +270,10 @@ awk '/stats session/ {
       if ($i ~ /^late500=\+/) { split($i, a, "+"); l5 += a[2] }
       if ($i ~ /^lateMaxMs=/) { split($i, a, "="); if (a[2] + 0 > m) m = a[2] + 0 }
       if ($i ~ /^ptsShiftMs=/) { split($i, a, "="); s = a[2] }
+      if ($i ~ /^timelineRatio=/ && !seen) { split($i, a, "="); r = a[2]; seen = 1 }
     }
-  } END { printf "   remux counters:         deadline=%d late250=%d late500=%d lateMaxMs=%d ptsShiftMs=%s\n", d, l2, l5, m, s }' "$LOG_DIR/remuxd-full.log" || true
+    seen = 0
+  } END { printf "   remux counters:         deadline=%d late250=%d late500=%d lateMaxMs=%d ptsShiftMs=%s videoTimelineRatio=%s\n", d, l2, l5, m, s, r }' "$LOG_DIR/remuxd-full.log" || true
 if [ "$FINAL_STATUS" != "$VERDICT_STATUS" ]; then
   echo "   overall:                 FAIL (hls.js passed but the loss defense did not fire -- see WARNING above)"
 fi

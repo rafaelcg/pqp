@@ -102,8 +102,18 @@ for (const track of ["video", "audio"]) {
     over250: late.filter((l) => l > 250).length,
     over500: late.filter((l) => l > 500).length,
   };
+  // Inter-arrival: the gap between consecutive parts first appearing, the
+  // origin-side cadence a blocking reload sees. Parts that land in the same
+  // poll count as one arrival.
+  const arrivals = [...new Set(recs.filter((r) => r.at > firstAt).map((r) => r.at))].sort((a, b) => a - b);
+  const gaps = arrivals.slice(1).map((a, i) => a - arrivals[i]).sort((a, b) => a - b);
+  s.interP50 = gaps.length ? pct(gaps, 0.5) : null;
+  s.interP99 = gaps.length ? pct(gaps, 0.99) : null;
+  s.interMax = gaps.length ? gaps.at(-1) : null;
   out[track] = s;
-  console.log(`LATENESS ${track} n=${s.n} p50=${s.p50}ms p90=${s.p90}ms p99=${s.p99}ms max=${s.max}ms over250=${s.over250} over500=${s.over500}`);
+  console.log(
+    `LATENESS ${track} n=${s.n} p50=${s.p50}ms p90=${s.p90}ms p99=${s.p99}ms max=${s.max}ms over250=${s.over250} over500=${s.over500} interArrival p50=${s.interP50}ms p99=${s.interP99}ms max=${s.interMax}ms`,
+  );
 }
 console.log("LATENESS_JSON", JSON.stringify(out));
 if (PARTS_DIR) {

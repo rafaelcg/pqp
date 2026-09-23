@@ -241,6 +241,11 @@ SOURCE=idle WATCH_SECONDS=120 PART_DEADLINE_GRACE_MS=1000 ./run.sh # the pre-dea
   gaps, repeated. RTP timestamps follow the schedule, and a keyframe goes
   out every 2 s of wall time, standing in for the PLIs a real encoder
   answers.
+- `SOURCE=static` and `SOURCE=mixed` use the cadence the 2026-09-21
+  investigation derived from that party (3 s at ~24 fps then static; or 45 s
+  active / 30 s static, repeated): static gaps are exponential with a 1 s
+  mean clamped to 0.3..3 s, and keyframes come only every 4.1 s, the remux's
+  PLI gate. Seeded, so every run sends the same frames.
 - `pqp-remuxd` runs with production's `CLOCK_CUT_PARTS=true`, and
   `PART_DEADLINE_GRACE_MS` passes through.
 - The playlist server holds blocking reloads the way `tools/hls-edge` does
@@ -252,7 +257,8 @@ SOURCE=idle WATCH_SECONDS=120 PART_DEADLINE_GRACE_MS=1000 ./run.sh # the pre-dea
 - `harness/lateness.mjs` polls `state.json` every 10 ms beside the viewer
   and prints `LATENESS video|audio` (p50/p90/p99/max and counts over 250
   and 500 ms): when each part first appeared against where it ends on the
-  media timeline, read from its tfdt. Every part's bytes and a
+  media timeline, read from its tfdt, plus the inter-arrival of parts at
+  the origin (p50/p99/max). Every part's bytes and a
   `parts.json` index land in `.data/runs/<id>/parts/`.
 - The summary adds the viewer's `WAITING:` line (stalls after first play,
   and freezes sampled every 100 ms), its live latency, and the remux's own

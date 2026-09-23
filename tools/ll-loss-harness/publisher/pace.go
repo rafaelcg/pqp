@@ -14,6 +14,7 @@ package main
 import (
 	"errors"
 	"io"
+	"math/rand"
 	"os"
 	"time"
 
@@ -37,8 +38,63 @@ func ms(v ...int) []time.Duration {
 	return out
 }
 
-// schedules, by PACE name. Each repeats until PACE_SECONDS runs out.
-var schedules = map[string][]phase{
+// schedule is a named pacing: the frame send offsets over a total, and the
+// wall-clock keyframe cadence that stands in for the PLIs a real encoder
+// answers (see idrEvery).
+type schedule struct {
+	times    func(total time.Duration) []time.Duration
+	idrEvery time.Duration
+}
+
+// schedules, by PACE name.
+//
+// idle-bursty is a fixed twenty second cycle. static and mixed follow the
+// shape the 2026-09-21 investigation derived from that party's remux stats
+// (~/.config/pqp/hls-investigation lab, gen-idle.py): about 24 fps when the
+// page moves, and when it does not, gaps drawn from an exponential with a
+// one second mean clamped to 0.3..3 s, keyframes only when the remux's PLI
+// gate (4.1 s) asks. Seeded, so every run of a scenario sends the same
+// frames.
+var schedules = map[string]schedule{
+	"idle-bursty": {times: func(total time.Duration) []time.Duration { return frameTimes(phases["idle-bursty"], total) }, idrEvery: 2 * time.Second},
+	"steady":      {times: func(total time.Duration) []time.Duration { return frameTimes(phases["steady"], total) }, idrEvery: 2 * time.Second},
+	"static": {times: func(total time.Duration) []time.Duration {
+		r := rand.New(rand.NewSource(42))
+		out := activeTimes(r, nil, 0, 3*time.Second)
+		return staticTimes(r, out, 3*time.Second, total)
+	}, idrEvery: 4100 * time.Millisecond},
+	"mixed": {times: func(total time.Duration) []time.Duration {
+		r := rand.New(rand.NewSource(42))
+		var out []time.Duration
+		for at := time.Duration(0); at < total; at += 75 * time.Second {
+			out = activeTimes(r, out, at, min(at+45*time.Second, total))
+			out = staticTimes(r, out, at+45*time.Second, min(at+75*time.Second, total))
+		}
+		return out
+	}, idrEvery: 4100 * time.Millisecond},
+}
+
+func activeTimes(r *rand.Rand, out []time.Duration, from, to time.Duration) []time.Duration {
+	for at := from; at < to; {
+		out = append(out, at)
+		gap := time.Duration((1.0/24 + r.NormFloat64()*0.006) * float64(time.Second))
+		at += max(gap, 10*time.Millisecond)
+	}
+	return out
+}
+
+func staticTimes(r *rand.Rand, out []time.Duration, from, to time.Duration) []time.Duration {
+	for at := from; at < to; {
+		out = append(out, at)
+		gap := min(3.0, max(0.3, r.ExpFloat64()*1.0))
+		at += time.Duration(gap * float64(time.Second))
+	}
+	return out
+}
+
+// phases are the fixed-cycle schedules. Each repeats until PACE_SECONDS
+// runs out.
+var phases = map[string][]phase{
 	// idle-bursty: 30 fps, a nearly static tab (about 1.4 frames a
 	// second), a four second freeze, a one second burst, then an
 	// irregular few frames a second. Twenty seconds per cycle.
@@ -104,15 +160,14 @@ func accessUnits(path string) ([][][]byte, error) {
 	}
 }
 
-// idrEvery is how often, in WALL time, the paced publisher sends a
-// keyframe. A file's keyframes are every N frames, and at a frame a second
+// idrEvery (per schedule) is how often, in WALL time, the paced publisher
+// sends a keyframe. A file's keyframes are every N frames, and at a frame a second
 // that would be one every half a minute: segments would run that long,
 // EXT-X-TARGETDURATION with them, and hls.js would sit tens of seconds
 // behind the live edge where part timing cannot matter. A real presenter's
 // encoder answers the remux's PLIs (KEYFRAME_POLICY=pli, a request after
 // SEGMENT_MS without one), which this file-backed publisher cannot hear, so
 // it keeps a wall-clock keyframe cadence of its own instead.
-const idrEvery = 2 * time.Second
 
 func isIDR(au [][]byte) bool {
 	for _, n := range au {
@@ -127,7 +182,7 @@ func isIDR(au [][]byte) bool {
 // file if the schedule outlasts it. When a keyframe is due it skips ahead
 // to the file's next IDR, which is always a valid place to resume
 // decoding.
-func publishPaced(track *lksdk.LocalTrack, path string, schedule []phase, total time.Duration) error {
+func publishPaced(track *lksdk.LocalTrack, path string, sched schedule, total time.Duration) error {
 	aus, err := accessUnits(path)
 	if err != nil {
 		return err
@@ -135,7 +190,7 @@ func publishPaced(track *lksdk.LocalTrack, path string, schedule []phase, total 
 	if len(aus) == 0 || !isIDR(aus[0]) {
 		return errors.New("rampub: " + path + " must start with an IDR")
 	}
-	times := frameTimes(schedule, total)
+	times := sched.times(total)
 	start := time.Now()
 	cursor := 0
 	var lastIDR time.Time
@@ -147,7 +202,7 @@ func publishPaced(track *lksdk.LocalTrack, path string, schedule []phase, total 
 		if i+1 < len(times) {
 			gap = times[i+1] - at
 		}
-		if time.Since(lastIDR) >= idrEvery {
+		if time.Since(lastIDR) >= sched.idrEvery {
 			for !isIDR(aus[cursor%len(aus)]) {
 				cursor++
 			}
