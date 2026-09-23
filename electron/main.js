@@ -49,6 +49,7 @@ const {
 const {
   nativeHookPlatformSupport,
   macAccessibilityPermission,
+  requestMacAccessibility,
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_INPUT_MONITORING_SETTINGS_URL,
   createNativeHookSession,
@@ -1901,6 +1902,10 @@ if (!gotLock) {
     if (process.platform !== "darwin") {
       return;
     }
+    // Ask first, so pqp is actually in the Accessibility list the pane opens
+    // on (macOS only lists an app once it has asked with the prompt flag).
+    // Only here, on an explicit click; every background probe stays silent.
+    requestMacAccessibility(process.platform, systemPreferences);
     // Both panes: Accessibility is the half we can even ask about, Input
     // Monitoring is the other half of what a global key/mouse hook needs and
     // Electron exposes no query for it at all. Opening both a second time

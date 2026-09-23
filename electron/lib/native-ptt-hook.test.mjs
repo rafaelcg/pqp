@@ -8,6 +8,7 @@ const {
   isWaylandSession,
   nativeHookPlatformSupport,
   macAccessibilityPermission,
+  requestMacAccessibility,
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_INPUT_MONITORING_SETTINGS_URL,
   matchesEngage,
@@ -89,6 +90,37 @@ describe("macAccessibilityPermission", () => {
   it("exports both settings deep links", () => {
     assert.match(MAC_ACCESSIBILITY_SETTINGS_URL, /Privacy_Accessibility$/);
     assert.match(MAC_INPUT_MONITORING_SETTINGS_URL, /Privacy_ListenEvent$/);
+  });
+});
+
+describe("requestMacAccessibility", () => {
+  it("prompts, so macOS adds pqp to the Accessibility list", () => {
+    let promptArg;
+    const probe = { isTrustedAccessibilityClient: (prompt) => { promptArg = prompt; return false; } };
+    assert.equal(requestMacAccessibility("darwin", probe), "denied");
+    assert.equal(promptArg, true);
+  });
+
+  it("answers granted when already trusted", () => {
+    assert.equal(
+      requestMacAccessibility("darwin", { isTrustedAccessibilityClient: () => true }),
+      "granted",
+    );
+  });
+
+  it("never touches the API off darwin", () => {
+    let called = false;
+    const probe = { isTrustedAccessibilityClient: () => { called = true; return false; } };
+    assert.equal(requestMacAccessibility("win32", probe), "not-required");
+    assert.equal(called, false);
+  });
+
+  it("is unknown when the API throws or is missing", () => {
+    assert.equal(
+      requestMacAccessibility("darwin", { isTrustedAccessibilityClient: () => { throw new Error("no"); } }),
+      "unknown",
+    );
+    assert.equal(requestMacAccessibility("darwin", null), "unknown");
   });
 });
 
