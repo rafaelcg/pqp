@@ -50,14 +50,16 @@ component.
 **Added in this PR:**
 
 - An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`),
-  with `sameAs` pointing at the two other public places this product answers
-  for itself today: the GitHub repository and the Google Play listing
-  (`docs/ANDROID_RELEASE.md` records production access as open for it). The
-  App Store is deliberately absent: TestFlight is a beta enrollment, not a
-  public listing.
+  with `sameAs` pointing at the GitHub repository. The Google Play listing
+  was here too until 2026-09-23, when it was removed because the listing
+  still answers 404 to the public. Add it back in the same change that sets
+  `VITE_PLAY_STORE_URL`. The App Store is absent: TestFlight is a beta
+  enrollment, not a public listing.
 - The landing's `SoftwareApplication` node now carries that same `sameAs` and
   an `operatingSystem` list that names every platform the product actually
-  ships on (Web, Windows, macOS, Linux, Android) instead of just "Web".
+  ships on (`SOFTWARE_OPERATING_SYSTEMS`: Web, Windows, macOS, Linux, Android,
+  iOS) instead of just "Web". `client/index.html` carries the same list, and
+  a test keeps the two equal.
 - `Article` + `FAQPage` + `BreadcrumbList` JSON-LD on the six new guides
   (`blog-meta.ts`'s `jsonLdForArticle`), built from the same FAQ copy the page
   renders, same rule the marketing pages already follow.

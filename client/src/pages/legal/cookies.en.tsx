@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "2 September 2026",
+  updated: "23 September 2026",
   sections: [
     {
       id: "intro",
@@ -42,28 +42,36 @@ export const cookiesEn: LegalDocument = {
             individual cookie names and lifetimes on its own site.
           </p>
           <p>
-            The second is <strong>Google Ads conversion tracking</strong>. pqp.gg
-            buys a small amount of advertising, and Google&apos;s tag loads on
-            every page here so we can tell whether an ad produced an account
-            rather than just a click. It sets first-party cookies on the pqp.gg
-            domain whose names begin <code>_gcl_</code>, which record that your
-            visit arrived from an ad and let a later sign-up be matched back to
-            it. These are <strong>not</strong> strictly necessary: block them and
-            everything works exactly as before, and the sign-up simply goes
-            uncounted. Google documents the names and lifetimes on its own site.
+            The second is the <strong>Google Ads tag</strong>. pqp.gg buys a
+            small amount of advertising, and Google&apos;s tag loads on every
+            page here so we can tell whether an ad produced an account rather
+            than just a click. It sets a first-party cookie on the pqp.gg domain
+            called <code>_gcl_au</code> for every visitor, holding a random
+            identifier. When you arrive from an ad, it also records that ad
+            click in other cookies whose names begin <code>_gcl_</code>, so a
+            later sign-up can be matched back to it. These are{" "}
+            <strong>not</strong> strictly necessary: block them and everything
+            works exactly as before, and the sign-up simply goes uncounted.
+            Google documents the names and lifetimes on its own site.
           </p>
           <p>
-            One event goes to Google, once, and only when an account is created:
-            that a sign-up happened. It carries no name, no email, no user id and
-            nothing you typed. We upload no account data to Google, we have not
-            switched on enhanced conversions or any customer-data matching, and
-            we run no remarketing or audience lists. Signing in again sends
-            nothing.
+            <strong>What the tag sends to Google.</strong> Each time you load a
+            page, the tag reports the page view: the page address and title,
+            your screen size, your browser and operating system, and the{" "}
+            <code>_gcl_au</code> identifier. Some of these reports go to the
+            addresses Google Ads uses to build remarketing audiences, so Google
+            Ads can add your visit to an audience list for our ad account. When
+            an account is created, the tag sends one more event: that a sign-up
+            happened. That event carries no name, no email, no user id and
+            nothing you typed. Our code gives the tag no account data at all.
           </p>
           <p>
-            Those are all of them. We set no analytics cookies and no
-            cross-site tracking cookies of any kind, on the app or on the
-            marketing pages.
+            Those are all the cookies on pqp.gg. Our analytics and error
+            reporting set none (see &quot;Third parties your browser
+            contacts&quot;). When the tag contacts Google&apos;s servers, Google
+            can also read and set its own cookies on Google&apos;s domains, if
+            your browser allows third-party cookies. Those are Google&apos;s,
+            under Google&apos;s terms.
           </p>
           <p>
             <strong>This applies to pqp.gg only.</strong> The Google tag is added
@@ -80,53 +88,186 @@ export const cookiesEn: LegalDocument = {
       body: (
         <>
           <p>
-            These are stored by your browser under the pqp.gg origin. They stay
-            on your device and are readable only by pqp.gg. None of them is ever
-            sent to an advertiser, including the last one in this list, which
-            exists to stop something being sent.
+            Your browser keeps these under the pqp.gg origin, so other websites
+            cannot read them. Our code sends none of them to an advertiser. Most
+            are settings. The ones that hold something you typed, or an id, say
+            so. Signing out does not clear them: see &quot;Managing this&quot;.
+          </p>
+          <p>
+            <strong>Appearance and language</strong>
           </p>
           <ul>
             <li>
-              <code>pqp-theme</code> — light, dark, or follow-the-system.
+              <code>pqp-theme</code>: light, dark, or follow the system.
             </li>
             <li>
-              <code>pqp-appearance</code> — Classic, Harmony, Hearth, or Night.
+              <code>pqp-appearance</code>: Classic, Harmony, Hearth, or Night.
               The named look, separate from light and dark.
             </li>
             <li>
-              <code>pqp-accent-hue</code> — a custom accent colour, or the
-              look's default.
+              <code>pqp-accent-hue</code>: a custom accent colour, or the
+              look&apos;s default.
             </li>
             <li>
-              <code>pqp-contrast</code> — default, high, or follow the system
+              <code>pqp-contrast</code>: default, high, or follow the system
               contrast setting.
             </li>
             <li>
-              <code>pqp:locale</code> — your chosen language (English or
+              <code>pqp-chat-display</code>: chat text size and message spacing.
+            </li>
+            <li>
+              <code>pqp:locale</code>: your chosen language (English or
               Portuguese), when you have set one.
             </li>
+          </ul>
+          <p>
+            <strong>Voice, video and sound</strong>
+          </p>
+          <ul>
             <li>
-              <code>pqp-local-settings</code> — mute-on-join, compact peer list,
-              which microphone and speaker you picked, input and output volume,
-              and whether link previews are shown.
+              <code>pqp-local-settings</code>: mute-on-join, compact participant
+              list, voice activation or push-to-talk and its key, input and
+              output volume, whether link previews are shown, and your other
+              voice and video preferences. It also holds which microphone,
+              camera and speaker you picked, as the ids your browser gives
+              those devices.
             </li>
             <li>
-              <code>pqp-notifications</code> — whether you allowed desktop
-              notifications, and your per-server and per-channel notification
-              levels.
+              <code>pqp-sounds</code>: whether message and call sounds play on
+              this device, and which ringtone.
             </li>
             <li>
-              <code>pqp:collapsed-categories</code> — which channel categories
-              you have collapsed in the sidebar.
+              <code>pqp:auto-mute-join-leave-large-rooms</code>: whether join
+              and leave sounds go quiet in a large call.
             </li>
+            <li>
+              <code>pqp:receive-quality</code>: the video quality you asked to
+              receive.
+            </li>
+            <li>
+              <code>pqp:video-fit</code>: whether camera, screen and watch
+              video fill the tile or fit inside it.
+            </li>
+            <li>
+              <code>pqp:share-cursor</code>,{" "}
+              <code>pqp:hide-screen-preview</code>: whether your cursor shows in
+              a screen share, and whether you see a preview of your own share.
+            </li>
+            <li>
+              <code>pqp:call-split</code>,{" "}
+              <code>pqp:participant-rail</code>: how the call and the chat split
+              the window, and whether the participant rail is open.
+            </li>
+          </ul>
+          <p>
+            <strong>Watch parties and music</strong>
+          </p>
+          <ul>
+            <li>
+              <code>pqp:hls-quality</code>, <code>pqp:hls-volume</code>: the
+              quality and volume you picked when watching a stream.
+            </li>
+            <li>
+              <code>pqp:watch-party-activity-open</code>,{" "}
+              <code>pqp:watch-party-audience-monitor</code>,{" "}
+              <code>pqp:watch-camera-pip</code>,{" "}
+              <code>pqp:watch-camera-voice-volume</code>: how the watch party
+              screen is laid out, and the volume of the host&apos;s camera.
+            </li>
+            <li>
+              <code>pqp:mic-in-stream</code>,{" "}
+              <code>pqp:voice-track-mode</code>,{" "}
+              <code>pqp:stream-mix-mic-gain</code>,{" "}
+              <code>pqp:stream-mix-display-gain</code>: for a host, whether your
+              microphone goes into the stream, on which track, and how loud it
+              is next to the film.
+            </li>
+            <li>
+              <code>pqp:watch-party-stream-quality:</code> followed by your
+              account id: for a host, the stream height you picked.
+            </li>
+            <li>
+              <code>pqp:music-volume</code>, <code>pqp:music-placement</code>,{" "}
+              <code>pqp:music-duck</code>, <code>pqp:music-auto-join</code>:
+              the music player&apos;s volume, whether its video shows on the
+              stage, whether it gets quieter while people talk, and whether it
+              turns on by itself when a room starts music.
+            </li>
+          </ul>
+          <p>
+            <strong>Layout and notifications</strong>
+          </p>
+          <ul>
+            <li>
+              <code>pqp-notifications</code>: whether you allowed desktop
+              notifications, and your notification levels, keyed by server and
+              channel id.
+            </li>
+            <li>
+              <code>pqp:collapsed-categories</code>: the ids of the channel
+              categories you collapsed in the sidebar.
+            </li>
+            <li>
+              <code>pqp:member-sidebar</code>, <code>pqp:channel-sidebar</code>,{" "}
+              <code>pqp:channel-sidebar-width</code>: whether the member list
+              and the channel list are open, and how wide.
+            </li>
+            <li>
+              <code>pqp:overview-start-here:</code> followed by a server id: for
+              server staff, the channels you picked for that server&apos;s
+              &quot;Start here&quot; cards.
+            </li>
+            <li>
+              <code>pqp:community-home-viewer</code>: for server staff, which
+              member view of Baú you are previewing.
+            </li>
+          </ul>
+          <p>
+            <strong>Things you have already seen</strong>
+          </p>
+          <ul>
+            <li>
+              <code>pqp:arrived-servers</code>: the ids of the last 50 servers
+              you walked into, so the first-visit card does not show twice.
+            </li>
+            <li>
+              <code>pqp:call-rating-asked</code>: when we last asked you to rate
+              a call, so the prompt does not nag every hang-up.
+            </li>
+            <li>
+              <code>pqp:whats-new</code>, <code>pqp:whats-new-feed</code>: the
+              newest release note you have seen.
+            </li>
+            <li>
+              <code>pqp:community-home-settings-seen</code>, and{" "}
+              <code>pqp:community-home-row-seen:</code> followed by a server
+              id: Baú badges you have already seen.
+            </li>
+            <li>
+              Dismissed product cards and hints, so they stay closed:{" "}
+              <code>pqp:download-hint-dismissed</code>,{" "}
+              <code>pqp:mobile-beta-hint-2026-08</code>,{" "}
+              <code>pqp:qg-hint-2026-08</code>,{" "}
+              <code>pqp:cargos-hint-2026-08</code>,{" "}
+              <code>pqp:cinema-hint-2026-09</code>,{" "}
+              <code>pqp:music-pip-2026-09</code>,{" "}
+              <code>pqp:voice-clean-settings-seen</code>, every key that starts
+              with <code>pqp:feature-hint-</code>, and{" "}
+              <code>pqp:voice-capacity-</code> followed by a voice channel id.
+            </li>
+          </ul>
+          <p>
+            <strong>Sign-up and links</strong>
+          </p>
+          <ul>
             <li>
               <code>pqp:acquisition</code>: if the link that brought you here
               carried campaign parameters (<code>utm_source</code>,{" "}
               <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
               <code>gclid</code> or <code>ref</code>), those values and the
               page you landed on, so we can tell which link a sign-up came
-              from. It holds no identifier of any kind, is never read by a
-              third party, expires after 30 days, is written only once (a
+              from. It holds no identifier of any kind, our code never gives it
+              to a third party, it expires after 30 days, it is written only once (a
               later campaign link does not replace it), and is deleted from
               your device the first time the app loads after you sign in,
               when it is sent to your account once. If you never sign up it
@@ -135,59 +276,100 @@ export const cookiesEn: LegalDocument = {
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the
               account whose sign-up has already been counted by the Google Ads
-              conversion tag described above, so that reloading the app cannot
-              count the same sign-up twice. It is written once, when you create
-              an account, and never leaves your device. If you never sign up it
-              is never written at all.
-            </li>
-            <li>
-              <code>pqp-sounds</code> — whether message and call sounds play on
-              this device.
-            </li>
-            <li>
-              <code>pqp:arrived-servers</code> — servers you have already
-              walked into, so the first-visit card does not show twice.
-            </li>
-            <li>
-              <code>pqp:member-sidebar</code> — whether the member list is open
-              on this device.
-            </li>
-            <li>
-              <code>pqp:call-rating-asked</code> — when we last asked you to rate
-              a call, so the prompt does not nag every hang-up.
-            </li>
-            <li>
-              <code>pqp:whats-new</code>, <code>pqp:download-hint-dismissed</code>,{" "}
-              <code>pqp:mobile-beta-hint-2026-08</code>,{" "}
-              <code>pqp:qg-hint-2026-08</code>,{" "}
-              <code>pqp:cargos-hint-2026-08</code> — dismissed product cards
-              and hints, so they stay closed.
+              tag described above, so that reloading the app cannot count the
+              same sign-up twice. It is written once, when you create an
+              account, and never leaves your device. If you never sign up it is
+              never written at all.
             </li>
             <li>
               <code>pqp:pending-handle-claim</code>,{" "}
               <code>pqp:pending-handle-add</code>,{" "}
-              <code>pqp:pending-community-join</code> — a public handle or
-              community you meant to claim or join before signing in, so we can
-              finish that after you create an account. Cleared once used.
+              <code>pqp:pending-community-join</code>,{" "}
+              <code>pqp:pending-create-community</code>,{" "}
+              <code>pqp:pending-invite-ref</code>: a handle you meant to claim,
+              a person you meant to add, or a community, server or invite you
+              meant to join or create before signing in, so we can finish that
+              after you create an account. Each expires after an hour and is
+              cleared once used.
             </li>
           </ul>
           <p>
-            Most of these settings are also saved to your account on our server
-            so they follow you to another device — see the{" "}
-            <Link to="/privacy">Privacy Policy</Link>. Clerk keeps its own
-            entries here too, for the session.
+            <strong>Text you typed</strong>
+          </p>
+          <ul>
+            <li>
+              <code>pqp:composer-drafts:</code> followed by your account id:
+              <strong> message drafts.</strong> Text you typed in a channel and
+              did not send waits there when you come back, as in Discord or
+              Slack. Text only, never attachments. It keeps up to 50 channels,
+              drops a draft after 30 days, and removes a draft when you send it
+              or empty the box.
+            </li>
+            <li>
+              <code>pqp:outbox:</code> followed by your account id: messages on
+              their way. A text message you send in a channel is saved here
+              first, so it is not lost if the connection drops or the tab
+              closes, and it is removed the moment our server answers. Files,
+              polls and thread replies are not saved here. It normally holds nothing
+              for more than a moment. A message that never got through is sent
+              again when you reconnect, or dropped after 24 hours.
+            </li>
+          </ul>
+          <p>
+            <strong>Kept by other software on the page</strong>
+          </p>
+          <ul>
+            <li>
+              <code>emoji-mart.frequently</code>,{" "}
+              <code>emoji-mart.last</code>: the emoji picker&apos;s recently
+              used emoji.
+            </li>
+            <li>
+              <code>_gcl_ls</code>: written by the Google Ads tag, for the same
+              purpose as its <code>_gcl_</code> cookies under &quot;Cookies&quot;.
+            </li>
+            <li>Clerk keeps its own entries here too, for the session.</li>
+          </ul>
+          <p>
+            Your theme and look, language, chat display, sounds, notification
+            levels and main voice settings (mute-on-join, input mode, volumes)
+            are also saved to your account on our server so they follow you to
+            another device. See the{" "}
+            <Link to="/privacy">Privacy Policy</Link>.
           </p>
           <p>
-            <strong>Session storage</strong> (gone when you close the tab) holds{" "}
-            <code>pqp.connection.callback</code> and{" "}
-            <code>pqp.connection.error</code> for a Steam, Battle.net or Twitch
-            connect hop that leaves pqp.gg and comes back.
+            <strong>Session storage</strong> (gone when you close the tab)
+            holds:
           </p>
-          <p>
-            <strong>Message drafts are not stored.</strong> Anything half-typed
-            in the message box lives in the page&apos;s memory and is gone when
-            you close the tab.
-          </p>
+          <ul>
+            <li>
+              <code>pqp.connection.callback</code> and{" "}
+              <code>pqp.connection.error</code>, for a Steam, Battle.net or
+              Twitch connect hop that leaves pqp.gg and comes back. Each is
+              deleted as soon as it is read.
+            </li>
+            <li>
+              <code>pqp:desktop-login</code>, while you sign in to the desktop
+              app through the browser. Cleared when that finishes.
+            </li>
+            <li>
+              <code>pqp:onboarding-started-at-ms</code>,{" "}
+              <code>pqp:onboarded-at-ms</code>,{" "}
+              <code>pqp:arrival_first_message</code>,{" "}
+              <code>pqp:arrival_first_voice</code>: timings and one-time flags
+              for your first steps, so each is counted once.
+            </li>
+            <li>
+              <code>pqp:confetti-spent</code>: your account id, so the welcome
+              confetti plays once.
+            </li>
+            <li>
+              <code>com.grafana.faro.session</code> and{" "}
+              <code>com.grafana.faro.lastNavigationId</code>: a random session
+              id and page id for error reporting, described under &quot;Third
+              parties your browser contacts&quot;. Neither is your account id.
+            </li>
+          </ul>
         </>
       ),
     },
@@ -245,9 +427,37 @@ export const cookiesEn: LegalDocument = {
               files directly to storage.
             </li>
             <li>
-              <strong>Google Ads</strong> loads the conversion tag described
-              under &quot;Cookies&quot; from{" "}
-              <code>www.googletagmanager.com</code>, on every page of pqp.gg.
+              <strong>Google Ads</strong>: the tag described under
+              &quot;Cookies&quot; loads from{" "}
+              <code>www.googletagmanager.com</code> on every page of pqp.gg,
+              and sends its page-view reports to Google servers on{" "}
+              <code>doubleclick.net</code> and <code>google.com</code>.
+            </li>
+            <li>
+              <strong>Cloudflare Web Analytics</strong>: Cloudflare adds its
+              script, from <code>static.cloudflareinsights.com</code>, to every
+              page as it leaves their network. It counts visits and measures
+              page speed. The privacy notice describes what it records.
+            </li>
+            <li>
+              <strong>Umami</strong>: its script loads from{" "}
+              <code>cloud.umami.is</code> and sends visit counts to{" "}
+              <code>gateway.umami.is</code>. The privacy notice describes what
+              it records.
+            </li>
+            <li>
+              <strong>Grafana Faro</strong>, run by Grafana Labs, reports errors
+              in the web app to us so we can fix them. It sends reports to
+              Grafana&apos;s collector in São Paulo (
+              <code>faro-collector-prod-sa-east-1.grafana.net</code>). A report
+              holds the page address, the error message and where in our code
+              it happened, errors the app writes to the browser console, page
+              speed measurements, the addresses and timings of requests the app
+              makes, and your browser and operating system. It carries the
+              random session id in session storage listed above. Our code
+              never tells it who you are, but some request addresses contain
+              ids, and the link for watching a watch-party stream contains your
+              account id. It does not record clicks, keystrokes or the screen.
             </li>
             <li>
               <strong>Steam, Battle.net and Twitch</strong> — only if you click
@@ -274,31 +484,24 @@ export const cookiesEn: LegalDocument = {
       body: (
         <>
           <p>
-            No retargeting or remarketing pixel, no audience list, no session
-            recording, no error-reporting SDK, and no device fingerprinting.
+            No session replay: nothing on pqp.gg records your screen or what
+            you type. No device fingerprinting by our code.
             Desktop notifications are raised locally by your own browser.
             Phone and web push exist when the hosted API is configured with
             VAPID or APNs; those go through Apple or the browser&apos;s push
             service, not through a third-party analytics SDK. The Google tag
             under &quot;Cookies&quot; above is the one piece of advertising
-            machinery here, and it only ever counts sign-ups.
+            machinery here.
           </p>
           <p>
-            We do use <strong>Cloudflare Web Analytics</strong> to count visits
-            and measure page speed. It is listed here rather than above because
-            it sets no cookie and stores nothing on your device at all — which
-            is also why the statement above, that we set no analytics cookies,
-            is still true. It uses no persistent identifier, so it cannot
-            recognise you across visits or across sites. The privacy notice
-            describes exactly what it records.
-          </p>
-          <p>
-            <strong>Umami</strong>, hosted in the EU, is here for the same
-            reason and on the same terms: it counts visits, sets no cookie,
-            stores nothing on your device, and has no persistent identifier to
-            recognise you with. Your browser fetches its script from{" "}
-            <code>cloud.umami.is</code>, which is the only reason it appears on
-            this page at all.
+            <strong>Cloudflare Web Analytics</strong>, <strong>Umami</strong>{" "}
+            and <strong>Grafana Faro</strong> set no cookie. Cloudflare Web
+            Analytics and Umami also store nothing on your device and use no
+            persistent identifier, so they cannot recognise you across visits
+            or across sites. Grafana Faro keeps only the random session id in
+            session storage listed above, which is gone when you close the tab.
+            That is why the statement under &quot;Cookies&quot;, that our
+            analytics and error reporting set no cookies, is true.
           </p>
         </>
       ),
@@ -307,16 +510,26 @@ export const cookiesEn: LegalDocument = {
       id: "managing",
       heading: "Managing this",
       body: (
-        <p>
-          You can clear cookies, local storage and cached data for pqp.gg in
-          your browser settings, and block third-party requests with a browser
-          extension if you prefer. Blocking Clerk&apos;s cookies will prevent
-          sign-in. Blocking Google&apos;s costs you nothing and costs us one
-          uncounted sign-up. Clearing local storage resets your theme, language
-          and
-          notification preferences on that device but does not touch your
-          account.
-        </p>
+        <>
+          <p>
+            You can clear cookies, local storage and cached data for pqp.gg in
+            your browser settings, and block third-party requests with a
+            browser extension if you prefer. Blocking Clerk&apos;s cookies will
+            prevent sign-in. Blocking Google&apos;s costs you nothing and costs
+            us one uncounted sign-up. Clearing local storage resets your theme,
+            language and notification preferences on that device but does not
+            touch your account.
+          </p>
+          <p>
+            <strong>Signing out does not clear local storage.</strong> Drafts
+            and unsent messages stay on the device under your account id, so
+            they are there when you sign back in and the next person to sign in
+            on the same browser does not see them. Settings belong to the
+            browser, not the account, so the next person gets yours. If you
+            share a device and want all of it gone, clear the site data for
+            pqp.gg in your browser settings.
+          </p>
+        </>
       ),
     },
     {
