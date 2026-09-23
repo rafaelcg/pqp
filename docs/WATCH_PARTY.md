@@ -2627,9 +2627,8 @@ pqp-remux's, but the presenter's `cam360p30` rung and the `-mic.ogg` archive
 are LiveKit egresses either way, so an LL session gets a rungless companion
 room (`llCompanions` in `hls-egress.ts`) that runs the same camera and archive
 code a ladder room does, under the LL row's `started_at`. The three group into
-one broadcast, and **Baixar** offers the camera and the voice. It offers no
-film for an LL show: its segments are fragmented MP4 against several init
-segments, which do not concatenate into one playable file the way MPEG-TS does.
+one broadcast, and **Baixar** offers the camera and the voice, and the film
+once the box has made it (next section).
 An API restart mid-show adopts the companion's egresses like a ladder's; the
 archive is never started twice for one session, because a second egress would
 write over the same `.ogg`.
@@ -2717,7 +2716,7 @@ was missing from rather than reading as an error:
 
 | Entry | What it is | Absent when |
 |---|---|---|
-| Vídeo (stream) | The top available ladder rung's segments, concatenated | a low-latency broadcast (see "Low-latency broadcasts replay too" above) |
+| Vídeo (stream) | The top available ladder rung's segments, concatenated; for a low-latency broadcast, the `film.mp4` the box made after the show (below) | an LL show from before 2026-09-24, or whose film job failed |
 | Câmera do apresentador | The `cam360p30` pip rung, the same way | the presenter kept the camera off |
 | Voz do apresentador | The `<startedAt>-mic.ogg` Track Egress wrote | `LIVE_HLS_MIC_ARCHIVE` was off (see above) |
 
@@ -2729,7 +2728,43 @@ deliverable would mean an ffmpeg per download on the box that runs the chat
 API, and the three are more useful apart anyway: that is the whole reason the
 mic archive is a separate file at all.
 
-**The video comes out as `.ts`, and that is a real file.** A rung's segments
+**An LL broadcast's film is made once, on the media box, after the show.**
+Its picture is pqp-remux's CMAF: fragmented MP4 against a new init segment
+every time the presenter's encoder restarts (the 2026-09-21 show had 35,
+bouncing between 270p and 720p), with video and audio as two renditions. No
+concatenation of that is a file, so when the API stops an LL session the box
+queues a job (`tools/pqp-remux/internal/film`, one at a time, `nice -n 19`,
+two x264 threads) that downloads the session's segments, splits each track at
+every init change and discontinuity, places every group on one timeline from
+its own `tfdt` (an init change keeps the clock; a watchdog restart starts it
+over, which is detected as time going backwards and moved to follow what came
+before, one shift for both tracks so the A/V offset inside it survives),
+re-encodes to 1280x720 at 30 fps H.264 + AAC with faststart, and uploads
+`<prefix>/film.mp4` beside the segments. Under the LL row's own prefix, so the
+retention sweep deletes it with the session and `keep_replay` keeps it, with no
+row of its own. It downloads as an `.mp4`. A two-hour show takes on the order
+of fifteen to twenty-five minutes; a five-minute one well under a minute.
+
+While it works the box keeps `<prefix>/film.json` current (`queued`,
+`processing`, `ready`, `failed`, and an `updatedAt` refreshed every 30 s), and
+the download listing answers `preparing: ["film"]` instead of a missing film,
+which the dialog shows as "sendo preparado" and asks again every 20 s. A
+status that has stopped refreshing for 150 s is a job whose process died (a
+deploy of the box, a crash) and reads as no film, not as "being prepared"
+forever; so does the first three minutes after `ended_at` before the box has
+written anything. A film for a show the box did not make one for (older shows,
+a failed or interrupted job) is made by hand on the box, with the same code:
+
+```bash
+set -a; . /etc/pqp-remux.env; set +a
+/usr/local/bin/pqp-film -prefix live/<channelId>/<startedAt>-ll   # the ROW's object_prefix
+```
+
+`LL_FILM=off` in the box's environment turns the job off without a rebuild;
+`FILM_WORK_DIR` (default the service's private `/tmp`) needs a few gigabytes
+free per hour of show while a job runs.
+
+**The conventional video comes out as `.ts`, and that is a real file.** A rung's segments
 are MPEG-TS, which is a stream format: 188-byte packets carrying their own
 PAT/PMT and timestamps, no header at the front and no index at the back. Byte
 concatenation in playlist order is therefore exactly the bytes a player would

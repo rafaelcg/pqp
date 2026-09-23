@@ -119,11 +119,23 @@ export type WatchPartyDownloads = Record<
  * an API-relative path and the SPA does not live on the API origin, so an
  * unresolved one downloads Pages' `index.html`.
  */
+/** The files of one broadcast, plus the kinds that do not exist YET but are
+ * being made: a low-latency broadcast's film is encoded on the media box
+ * after the show, and until it is uploaded the server lists it here instead
+ * of calling it unavailable. */
+export interface WatchPartyDownloadsResult {
+  downloads: WatchPartyDownloads;
+  preparing: WatchPartyDownloadKind[];
+}
+
 export async function fetchWatchPartyHistoryDownloads(
   channelId: string,
   sessionId: string,
-): Promise<WatchPartyDownloads> {
-  const res = await apiFetch<{ downloads: WatchPartyDownloads }>(
+): Promise<WatchPartyDownloadsResult> {
+  const res = await apiFetch<{
+    downloads: WatchPartyDownloads;
+    preparing?: string[];
+  }>(
     `/api/channels/${channelId}/watch-party/history/${sessionId}/download`,
   );
   const downloads: WatchPartyDownloads = {
@@ -137,5 +149,8 @@ export async function fetchWatchPartyHistoryDownloads(
       downloads[kind] = { bytes: item.bytes, url: resolveHlsUrl(item.url) };
     }
   }
-  return downloads;
+  const preparing = WATCH_PARTY_DOWNLOAD_KINDS.filter(
+    (kind) => downloads[kind] === null && (res.preparing ?? []).includes(kind),
+  );
+  return { downloads, preparing };
 }

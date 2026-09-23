@@ -1,6 +1,8 @@
 package control
 
 import (
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
+
 	"context"
 	"sort"
 	"sync"
@@ -41,6 +43,33 @@ type Registry struct {
 	mu       sync.Mutex
 	sessions map[string]*ManagedSession
 	starting map[string]*startingEntry
+
+	// onEnded, when set, hears about every session the API stopped (see
+	// SetSessionEndedHook). Read without mu: it is set once, before the
+	// server takes its first request.
+	onEnded func(SessionEnded)
+}
+
+// SessionEnded is what a finished session leaves behind for work that runs
+// after it: its object prefix and its whole-session VOD playlists, exactly
+// as the box last wrote them to the bucket.
+type SessionEnded struct {
+	SessionID     string
+	Prefix        string
+	VideoPlaylist string
+	AudioPlaylist string
+}
+
+// SetSessionEndedHook registers fn to run after DELETE /sessions/:id has
+// torn a session down (pipeline closed, R2 writer drained, so every segment
+// the playlists name has had its chance to reach the bucket). Only for a
+// session that recorded video into its replay index, and never for the
+// sessions StopAll ends at process shutdown: a supervisor on its way out
+// has no business starting long jobs, and the API has not said those shows
+// are over. fn must not block; cmd/pqp-remuxd hands it to internal/film's
+// queue.
+func (reg *Registry) SetSessionEndedHook(fn func(SessionEnded)) {
+	reg.onEnded = fn
 }
 
 // NewRegistry builds an empty Registry. ctx is the supervisor's own
@@ -139,7 +168,26 @@ func (reg *Registry) Stop(id string) {
 	reg.mu.Unlock()
 	if ok {
 		ms.Stop()
+		reg.announceEnded(ms)
 	}
+}
+
+func (reg *Registry) announceEnded(ms *ManagedSession) {
+	if reg.onEnded == nil || reg.ctx.Err() != nil {
+		return
+	}
+	vod := ms.cfg.VodIndex
+	if !vod.HasVideo() {
+		return
+	}
+	video, _ := vod.VideoPlaylist()
+	audio, _ := vod.AudioPlaylist()
+	reg.onEnded(SessionEnded{
+		SessionID:     ms.req.SessionID,
+		Prefix:        r2.ObjectPrefix(ms.cfg.ChannelID, ms.startedAtMs, rung),
+		VideoPlaylist: video,
+		AudioPlaylist: audio,
+	})
 }
 
 // Get returns the session with this id, for server.go's media proxy.

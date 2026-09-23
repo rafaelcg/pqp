@@ -159,6 +159,7 @@ const {
   buildReplaySignedPlaylist,
   resetHlsReplayCachesForTests,
   watchPartyDownloadSizes,
+  buildWatchPartyDownloadPlan,
   resetWatchPartyDownloadCacheForTests,
 } = await import("./hls-history.js");
 
@@ -399,7 +400,82 @@ describeDb("LL replay", () => {
     objects[`live/${channelId}/${LL_STARTED_AT}-cam360p30_00000.ts`] = "x".repeat(1000);
     objects[`live/${channelId}/${LL_STARTED_AT}-mic.ogg`] = "o".repeat(500);
     const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
-    expect(sizes).toEqual({ film: null, camera: 1000, voice: 500 });
+    // No film.mp4, no film.json, and the show ended an hour ago: the box
+    // never made one (every LL show before it knew how).
+    expect(sizes).toEqual({ film: null, camera: 1000, voice: 500, preparing: [] });
+  });
+
+  it("offers the box's film.mp4 as the LL film, one object under the ROW's prefix", async () => {
+    objects[`${boxPrefix}/film.mp4`] = "m".repeat(4321);
+    objects[`${boxPrefix}/film.json`] = JSON.stringify({
+      state: "ready",
+      updatedAt: new Date().toISOString(),
+    });
+    const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
+    expect(sizes.film).toBe(4321);
+    expect(sizes.preparing).toEqual([]);
+    const plan = await buildWatchPartyDownloadPlan(channelId, LL_STARTED_AT, "film");
+    expect(plan).toEqual({
+      kind: "film",
+      contentType: "video/mp4",
+      extension: "mp4",
+      keys: [`${boxPrefix}/film.mp4`],
+      bytes: 4321,
+    });
+  });
+
+  it("says the LL film is being prepared while the box's job is alive", async () => {
+    objects[`${boxPrefix}/film.json`] = JSON.stringify({
+      state: "processing",
+      updatedAt: new Date(Date.now() - 20_000).toISOString(),
+    });
+    const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
+    expect(sizes.film).toBeNull();
+    expect(sizes.preparing).toEqual(["film"]);
+    // Not downloadable until it exists.
+    expect(
+      await buildWatchPartyDownloadPlan(channelId, LL_STARTED_AT, "film"),
+    ).toBeNull();
+  });
+
+  it("does not claim a film is being prepared once the job stopped heartbeating", async () => {
+    objects[`${boxPrefix}/film.json`] = JSON.stringify({
+      state: "processing",
+      updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    });
+    const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
+    expect(sizes.film).toBeNull();
+    expect(sizes.preparing).toEqual([]);
+  });
+
+  it("reads a failed job as no film", async () => {
+    objects[`${boxPrefix}/film.json`] = JSON.stringify({
+      state: "failed",
+      updatedAt: new Date().toISOString(),
+      error: "boom",
+    });
+    const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
+    expect(sizes).toMatchObject({ film: null, preparing: [] });
+  });
+
+  it("says preparing in the moments between the show ending and the box's first status", async () => {
+    await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW() - interval '30 seconds' WHERE channel_id = $1`,
+      [channelId],
+    );
+    const sizes = await watchPartyDownloadSizes(channelId, LL_STARTED_AT);
+    expect(sizes.preparing).toEqual(["film"]);
+  });
+
+  it("sees a film that appeared after the panel first looked", async () => {
+    objects[`${boxPrefix}/film.json`] = JSON.stringify({
+      state: "processing",
+      updatedAt: new Date().toISOString(),
+    });
+    expect((await watchPartyDownloadSizes(channelId, LL_STARTED_AT)).preparing).toEqual(["film"]);
+    objects[`${boxPrefix}/film.mp4`] = "m".repeat(10);
+    // Inside the 30 s listing memo: a missing film is asked about again.
+    expect((await watchPartyDownloadSizes(channelId, LL_STARTED_AT)).film).toBe(10);
   });
 
   it("leaves a conventional rung's playlist as it always was", async () => {

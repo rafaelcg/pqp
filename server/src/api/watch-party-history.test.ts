@@ -931,11 +931,14 @@ describeDb("watch party history", () => {
 
       const res = await call<{
         downloads: Record<string, { bytes: number; url: string } | null>;
+        preparing: string[];
       }>(owner, "GET", `${historyPath()}/${startedAt}/download`);
       expect(res.status).toBe(200);
       expect(res.body.downloads.film?.bytes).toBe(
         "[1080p30-first]".length + "[1080p30-second]".length,
       );
+      // A conventional film exists the moment the show ends.
+      expect(res.body.preparing).toEqual([]);
       expect(res.body.downloads.camera?.bytes).toBeGreaterThan(0);
       // No mic row was seeded, so the voice archive is simply not there.
       expect(res.body.downloads.voice).toBeNull();

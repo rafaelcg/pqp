@@ -858,7 +858,8 @@ function closeLlPlaylist(body: string): string {
 //
 // WHAT A DOWNLOAD IS HERE: the objects the egress already wrote, handed back
 // verbatim and in order. Nothing is transcoded, remuxed or muxed together on
-// the API. Three separate files rather than one muxed deliverable, for the
+// the API. (An LL broadcast's film is one object too, but the box made it
+// after the show; see "An LL broadcast's film" below.) Three separate files rather than one muxed deliverable, for the
 // same reason `LIVE_HLS_MIC_ARCHIVE` writes a second object at all
 // (`docs/WATCH_PARTY.md`, "The host's voice as its own file"): the picture,
 // the host's camera and the host's voice are useful as separate tracks in an
@@ -901,11 +902,15 @@ export function isWatchPartyDownloadKind(
   return (WATCH_PARTY_DOWNLOAD_KINDS as readonly string[]).includes(value);
 }
 
-/** What one kind weighs, or null when this broadcast has no such file. */
+/** What one kind weighs, or null when this broadcast has no such file.
+ * `preparing` names the kinds that do not exist YET but are being made: an
+ * LL broadcast's film, which the box encodes after the show
+ * (tools/pqp-remux/internal/film). A kind is never both sized and preparing. */
 export interface WatchPartyDownloadSizes {
   film: number | null;
   camera: number | null;
   voice: number | null;
+  preparing: WatchPartyDownloadKind[];
 }
 
 /** Everything the byte route needs: which objects, in what order, and how
@@ -914,7 +919,7 @@ export interface WatchPartyDownloadPlan {
   kind: WatchPartyDownloadKind;
   contentType: string;
   /** Appended to the caller's filename stem. */
-  extension: "ts" | "ogg";
+  extension: "ts" | "ogg" | "mp4";
   keys: string[];
   /** Exact: every object the download concatenates was priced by the same
    * listing that proved it is there, so this is a `Content-Length` the
@@ -927,6 +932,85 @@ const DOWNLOAD_CONTENT_TYPE: Record<WatchPartyDownloadKind, string> = {
   camera: "video/mp2t",
   voice: "audio/ogg",
 };
+
+// --------------------------------------------------------------------------
+// An LL broadcast's film.
+//
+// There is no ladder rung to concatenate: the picture is pqp-remux's CMAF,
+// many init segments deep, which no byte concatenation turns into a file.
+// So the box makes one after the show, `<prefix>/film.mp4` beside the
+// segments (tools/pqp-remux/internal/film), and writes `<prefix>/film.json`
+// while it works. The film lives under the LL row's own prefix, so the
+// retention sweep deletes it with the session and `keep_replay` keeps it,
+// with no row of its own.
+//
+// "BEING PREPARED" IS A CLAIM WITH A CLOCK ON IT. film.json says queued or
+// processing and carries `updatedAt`, which the box rewrites every 30 s while
+// the job lives. A status that has stopped moving is a job whose process
+// died (a deploy, a crash), and saying "being prepared" about it forever
+// would be a lie, so past LL_FILM_STALE_MS it is read as no film. Between the
+// show ending and the box's first write there is no status at all, which
+// LL_FILM_GRACE_MS covers from the row's `ended_at`.
+// --------------------------------------------------------------------------
+
+export const LL_FILM_OBJECT = "film.mp4";
+export const LL_FILM_STATUS_OBJECT = "film.json";
+const LL_FILM_STALE_MS = 150_000;
+const LL_FILM_GRACE_MS = 180_000;
+
+type FilmSource =
+  | { type: "rung"; rung: string }
+  | { type: "ll"; prefix: string; endedAt: Date | null };
+
+type LlFilmState = { bytes: number } | { preparing: true } | null;
+
+async function llFilmState(
+  source: Extract<FilmSource, { type: "ll" }>,
+  config: ReplayStorageConfig,
+  now = Date.now(),
+): Promise<LlFilmState> {
+  const filmKey = `${source.prefix}/${LL_FILM_OBJECT}`;
+  const statusKey = `${source.prefix}/${LL_FILM_STATUS_OBJECT}`;
+  let sizes = await objectSizes(`${source.prefix}/film`, config, now);
+  if (!sizes.has(filmKey)) {
+    // The memo is there for sizes that cannot change; a film that is being
+    // made is the one thing under this prefix that can. Ask again.
+    sizes = await objectSizes(`${source.prefix}/film`, config, now, {
+      fresh: true,
+    });
+  }
+  const bytes = sizes.get(filmKey);
+  if (bytes !== undefined && bytes > 0) {
+    return { bytes };
+  }
+  if (!sizes.has(statusKey)) {
+    const endedAt = source.endedAt?.getTime() ?? null;
+    return endedAt !== null && now - endedAt < LL_FILM_GRACE_MS
+      ? { preparing: true }
+      : null;
+  }
+  const response = await fetchPlaylistObject(config, statusKey);
+  if (!response.ok) {
+    if (response.status === 404) {
+      return null;
+    }
+    throw new HlsPlaylistUnavailable(
+      `Storage returned HTTP ${response.status} for ${statusKey}`,
+    );
+  }
+  let status: { state?: unknown; updatedAt?: unknown };
+  try {
+    status = (await response.json()) as typeof status;
+  } catch {
+    return null;
+  }
+  const updatedAt =
+    typeof status.updatedAt === "string" ? Date.parse(status.updatedAt) : NaN;
+  const live = status.state === "queued" || status.state === "processing";
+  return live && Number.isFinite(updatedAt) && now - updatedAt < LL_FILM_STALE_MS
+    ? { preparing: true }
+    : null;
+}
 
 /**
  * Per-object signature lifetime while streaming. Generous on purpose: a
@@ -999,6 +1083,9 @@ export function resetWatchPartyDownloadCacheForTests(): void {
 
 interface BroadcastRungRow {
   rung: string | null;
+  mode: string | null;
+  object_prefix: string;
+  ended_at: Date | null;
   available: boolean;
 }
 
@@ -1009,7 +1096,8 @@ async function broadcastRungRows(
   startedAtMs: number,
 ): Promise<BroadcastRungRow[]> {
   const result = await getPool().query<BroadcastRungRow>(
-    `SELECT rung, (${availablePredicate(3, 4)}) AS available
+    `SELECT rung, mode, object_prefix, ended_at,
+            (${availablePredicate(3, 4)}) AS available
      FROM hls_sessions
      WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)`,
     [channelId, startedAtMs, hlsRetentionMinutes(), hlsReplayHours()],
@@ -1060,12 +1148,27 @@ function downloadRungs(rows: BroadcastRungRow[]): Record<
   };
 }
 
+/** Where the film comes from: the top ladder rung, or, for a broadcast that
+ * has none, its available LL row (the ROW's prefix, never one rebuilt from
+ * `started_at`: see the LL replay section on the reconcile script). */
+function filmSource(rows: BroadcastRungRow[]): FilmSource | null {
+  const rung = topLadderRung(rows);
+  if (rung) {
+    return { type: "rung", rung };
+  }
+  const ll = rows.find((row) => row.mode === "ll" && row.available);
+  return ll
+    ? { type: "ll", prefix: ll.object_prefix, endedAt: ll.ended_at }
+    : null;
+}
+
 async function objectSizes(
   prefix: string,
   config: NonNullable<ReturnType<typeof liveHlsStorageConfig>>,
   now = Date.now(),
+  options: { fresh?: boolean } = {},
 ): Promise<Map<string, number>> {
-  const cached = objectListingCache.get(prefix);
+  const cached = options.fresh ? undefined : objectListingCache.get(prefix);
   if (cached && now - cached.at < DOWNLOAD_LISTING_TTL_MS) {
     return cached.sizes;
   }
@@ -1128,8 +1231,19 @@ export async function watchPartyDownloadSizes(
     film: null,
     camera: null,
     voice: null,
+    preparing: [],
   };
-  const rungs = downloadRungs(await broadcastRungRows(channelId, startedAtMs));
+  const rows = await broadcastRungRows(channelId, startedAtMs);
+  const rungs = downloadRungs(rows);
+  const film = filmSource(rows);
+  if (film?.type === "ll") {
+    const state = await llFilmState(film, config);
+    if (state && "bytes" in state) {
+      sizes.film = state.bytes;
+    } else if (state) {
+      sizes.preparing.push("film");
+    }
+  }
   for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
     const rung = rungs[kind];
     if (!rung) {
@@ -1184,9 +1298,27 @@ export async function buildWatchPartyDownloadPlan(
   if (!config) {
     throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
-  const rung = downloadRungs(await broadcastRungRows(channelId, startedAtMs))[
-    kind
-  ];
+  const rows = await broadcastRungRows(channelId, startedAtMs);
+  if (kind === "film") {
+    const film = filmSource(rows);
+    if (film?.type === "ll") {
+      // One object the box already made: nothing to concatenate, and only
+      // offered once it is really there (a film still being made is a 404
+      // here, which the dialog never links to anyway).
+      const state = await llFilmState(film, config);
+      if (!state || !("bytes" in state)) {
+        return null;
+      }
+      return {
+        kind,
+        contentType: "video/mp4",
+        extension: "mp4",
+        keys: [`${film.prefix}/${LL_FILM_OBJECT}`],
+        bytes: state.bytes,
+      };
+    }
+  }
+  const rung = downloadRungs(rows)[kind];
   if (!rung) {
     return null;
   }
