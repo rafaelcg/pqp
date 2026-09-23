@@ -5,51 +5,16 @@ import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerato
 import { getDesktop, type DesktopPttBinding } from "@/lib/desktop";
 import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 import { DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release-delay";
+import { createShellUnbindTracker } from "@/components/voice/shell-unbind";
 
-/**
- * Hand a binding back to the shell, retry once if it refuses, and never
- * leave the rejection unhandled.
- *
- * Nothing better is available on failure: the IPC call is the only door to
- * the main process, and it is the main process that holds the hook. What
- * keeps a failed unbind from leaving the mic open is on the main side, not
- * here: the hook only runs while the window is unfocused and is stopped (and
- * force-released) the moment it regains focus, and every renderer press path
- * still goes through `set`, whose releases are unconditional.
- */
-function unbindQuietly(
-  pending: Promise<unknown>,
-  retry?: () => Promise<unknown>,
-): void {
-  const generation = shellRequestGeneration;
-  pending.catch((err: unknown) => {
-    // One retry, and only if nothing has asked the shell for anything since:
-    // a retry landing after a newer bind would silently undo it.
-    if (!retry || generation !== shellRequestGeneration) {
-      console.warn(
-        "[pqp] push-to-talk: shell refused to release the binding",
-        err,
-      );
-      return;
-    }
-    window.setTimeout(() => {
-      if (generation === shellRequestGeneration) {
-        unbindQuietly(retry());
-      }
-    }, 500);
-  });
-}
-
-/**
- * Bumped on every bind and unbind sent to the shell, so a delayed retry can
- * tell whether it is still the latest request. Module-level because there is
- * one shell and one push-to-talk binding per window.
- */
-let shellRequestGeneration = 0;
-
-function nextShellRequest(): void {
-  shellRequestGeneration += 1;
-}
+const shellUnbind = createShellUnbindTracker({
+  onGiveUp: (err) => {
+    console.error(
+      "[pqp] push-to-talk: the desktop app would not release the background key; it stops the next time this window is focused",
+      err,
+    );
+  },
+});
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
@@ -215,10 +180,7 @@ export function usePushToTalk({
     const wanted = enabled && globalEnabled;
     if (bindNative && subscribeNative) {
       if (!wanted) {
-        nextShellRequest();
-        unbindQuietly(bindNative(null, releaseDelayMs), () =>
-          bindNative(null, releaseDelayMs),
-        );
+        shellUnbind.unbind(() => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         return;
       }
@@ -233,7 +195,7 @@ export function usePushToTalk({
       };
       let cancelled = false;
       const off = subscribeNative((down) => set(down));
-      nextShellRequest();
+      shellUnbind.nextRequest();
       bindNative(descriptor, releaseDelayMs).then(
         (result) => {
           if (!cancelled) {
@@ -249,10 +211,7 @@ export function usePushToTalk({
       return () => {
         cancelled = true;
         off();
-        nextShellRequest();
-        unbindQuietly(bindNative(null, releaseDelayMs), () =>
-          bindNative(null, releaseDelayMs),
-        );
+        shellUnbind.unbind(() => bindNative(null, releaseDelayMs));
         setGlobalHotkey(false);
         set(false);
       };
@@ -270,14 +229,13 @@ export function usePushToTalk({
     }
     const accelerator = wanted ? bindingToAccelerator(stableBinding) : null;
     if (!accelerator) {
-      nextShellRequest();
-      unbindQuietly(bind(null), () => bind(null));
+      shellUnbind.unbind(() => bind(null));
       setGlobalHotkey(false);
       return;
     }
     let cancelled = false;
     const off = subscribe((down) => set(down));
-    nextShellRequest();
+    shellUnbind.nextRequest();
     bind(accelerator).then(
       (registered) => {
         if (!cancelled) {
@@ -293,8 +251,7 @@ export function usePushToTalk({
     return () => {
       cancelled = true;
       off();
-      nextShellRequest();
-      unbindQuietly(bind(null), () => bind(null));
+      shellUnbind.unbind(() => bind(null));
       setGlobalHotkey(false);
       set(false);
     };

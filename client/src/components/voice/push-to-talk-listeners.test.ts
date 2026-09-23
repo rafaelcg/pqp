@@ -14,7 +14,11 @@ class FakeDocument extends EventTarget {
 
 function key(
   type: "keydown" | "keyup",
-  init: Partial<KeyboardEventInit> & { code: string; target?: unknown },
+  init: Partial<KeyboardEventInit> & {
+    code: string;
+    target?: unknown;
+    altGraph?: boolean;
+  },
 ) {
   const event = new Event(type, { cancelable: true });
   Object.assign(event, {
@@ -26,6 +30,8 @@ function key(
     metaKey: init.metaKey ?? false,
     repeat: init.repeat ?? false,
     isComposing: false,
+    getModifierState: (name: string) =>
+      name === "AltGraph" && init.altGraph === true,
   });
   // `target` is read-only on a real Event; the handlers only read it.
   Object.defineProperty(event, "target", {
@@ -110,6 +116,54 @@ describe("push-to-talk listeners: where it works", () => {
     expect(isHeld()).toBe(true);
     win.dispatchEvent(mouse("mouseup", 3));
     expect(isHeld()).toBe(false);
+  });
+});
+
+describe("push-to-talk listeners: AltGr is typing", () => {
+  it("a Left Ctrl binding lets go when Windows' synthetic Ctrl turns out to be AltGr in the composer", () => {
+    // ABNT: AltGr+Q types "/". Windows delivers ControlLeft down, then
+    // AltRight down with key "AltGraph".
+    const leftCtrlBinding: PttBinding = { ...leftCtrl };
+    const { win, log, isHeld } = setup(leftCtrlBinding);
+    win.dispatchEvent(
+      key("keydown", { code: "ControlLeft", ctrlKey: true, target: composer }),
+    );
+    win.dispatchEvent(
+      key("keydown", {
+        code: "AltRight",
+        key: "AltGraph",
+        ctrlKey: true,
+        altKey: true,
+        target: composer,
+        altGraph: true,
+      }),
+    );
+    expect(isHeld()).toBe(false);
+    // The mic was open for the gap between two keydowns of one keystroke, no
+    // longer: the very next event closed it.
+    expect(log).toEqual([true, false]);
+  });
+
+  it("never engages while AltGr is held in a text field", () => {
+    const { win, isHeld } = setup(leftCtrl);
+    win.dispatchEvent(
+      key("keydown", {
+        code: "ControlLeft",
+        ctrlKey: true,
+        target: composer,
+        altGraph: true,
+      }),
+    );
+    expect(isHeld()).toBe(false);
+  });
+
+  it("AltGr outside a text field does not interfere", () => {
+    const { win, isHeld } = setup(leftCtrl);
+    win.dispatchEvent(key("keydown", { code: "ControlLeft", ctrlKey: true }));
+    win.dispatchEvent(
+      key("keydown", { code: "AltRight", key: "AltGraph", altGraph: true }),
+    );
+    expect(isHeld()).toBe(true);
   });
 });
 

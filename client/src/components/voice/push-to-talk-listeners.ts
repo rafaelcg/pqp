@@ -30,6 +30,21 @@ export interface PttDocumentLike extends PttWindowLike {
   readonly visibilityState: string;
 }
 
+/** Is AltGr part of this keydown, by either of the two ways browsers say so? */
+export function isAltGraph(event: {
+  key?: string;
+  getModifierState?: (key: string) => boolean;
+}): boolean {
+  if (event.key === "AltGraph") {
+    return true;
+  }
+  try {
+    return event.getModifierState?.("AltGraph") === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Wire the push-to-talk key (or mouse button) to `set`, and every way of
  * leaving with it still down to `set(false)`. Returns the teardown, which
@@ -91,6 +106,15 @@ export function attachPushToTalkListeners(
       "keydown",
       (event) => {
         const key = event as KeyboardEvent;
+        // AltGr in a text field is typing ("/", "?" and "°" on Brazilian
+        // ABNT, "@" and "€" across Europe). Windows sends a synthetic Left
+        // Ctrl keydown just before the AltGraph one, so a Ctrl binding would
+        // already be held by the time AltGr is recognised: let go then, and
+        // never engage while AltGr is down.
+        if (isAltGraph(key) && isTextEntryTarget(key.target)) {
+          set(false);
+          return;
+        }
         if (!shouldEngage(key, binding)) {
           return;
         }
