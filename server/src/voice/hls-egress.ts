@@ -5434,9 +5434,16 @@ async function reconcileCameraEgress(
   // well after we asked it to stop (a stop that times out, 2026-09-23
   // 20:13:14Z), and priced as a full rendition it refused its own
   // replacement: boxMbps=651 against 600, the camera gone for the cooldown.
+  //
+  // NOT FREE, THOUGH: a stop that timed out leaves it running, so it is
+  // charged at its own weight (a camera, or a voice-only slot), not as a
+  // rendition and not as nothing. When the stop did land that is a brief
+  // over-count of one camera, which errs toward the box.
   const replaced = new Set<string>();
+  let replacedMbps = 0;
   if (current) {
     replaced.add(current.egressId);
+    replacedMbps = current.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
     room.camera = null;
     room.stream = withoutCameraUrl(room.stream);
     await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
@@ -5485,7 +5492,8 @@ async function reconcileCameraEgress(
     runningRungs: await activeLadderEgressCount({
       supersededEgressIds: replaced,
     }),
-    sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
+    sfuLoadMbps:
+      (await currentSfuLoadMbps()) + runningCameraMbps() + replacedMbps,
     boxBudgetMbps: promotionBudgetMbps(),
     hasVideo: Boolean(wantedVideo),
   });

@@ -1255,6 +1255,33 @@ describe("box budget: a camera is not priced against the egress it replaces", ()
       expect.objectContaining({ fromVideo: "TR_CAM", toVideo: "TR_CAM_2" }),
     );
   });
+
+  it("still charges the stuck camera at a camera's weight", async () => {
+    // Excluded as a rendition is not the same as free: a stop that timed out
+    // leaves it running. A box with room for one camera beside the rung but
+    // not two must refuse the replacement rather than run both unpriced.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const oneCamera = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const twoCameras = HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(Math.round((oneCamera + twoCameras) / 2));
+    lk.stop.mockImplementation(async () => {
+      throw new Error("The operation was aborted due to timeout");
+    });
+
+    cameraTrackId = "TR_CAM_2";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.objectContaining({ refusal: "box-budget" }),
+    );
+  });
 });
 
 describe("box budget: the voice archive is not a video rendition", () => {
