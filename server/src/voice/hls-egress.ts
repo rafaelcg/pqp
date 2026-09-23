@@ -2149,6 +2149,17 @@ export function runningCameraCount(): number {
   return total;
 }
 
+/** Voice archives (`-mic.ogg` Track Egress) running across every channel. */
+export function runningMicArchiveCount(): number {
+  let total = 0;
+  for (const room of companionHosts()) {
+    if (room.micArchive) {
+      total += 1;
+    }
+  }
+  return total;
+}
+
 /**
  * What the running cameras (and voice-only rungs) cost the box, in the
  * Mbit/s the ladder is priced in.
@@ -2390,9 +2401,21 @@ export async function activeBoxEgressCount(
 async function activeLadderEgressCount(
   options: BoxCountOptions = {},
 ): Promise<number> {
+  // AND MINUS ITS VOICE ARCHIVES, for the same reason and a bigger one: a
+  // `-mic.ogg` is a Track Egress writing one Opus stream to a file, no
+  // decode and no encode, and it was being priced as a full 150 Mbit/s video
+  // rendition. With the archive on (the default for a watch party) a
+  // two-rung conventional show was 3 x 150 before the camera's own 45, and
+  // the camera was refused `box-budget` on an otherwise idle box: the
+  // 2026-09-23 production rehearsal logged boxMbps=629 and then 637 against
+  // 600 with nothing else live, so no conventional show could ever record
+  // the presenter's camera. It is not added back at any weight: it costs the
+  // box nothing the budget measures.
   return Math.max(
     0,
-    (await activeBoxEgressCount(Date.now(), options)) - runningCameraCount(),
+    (await activeBoxEgressCount(Date.now(), options)) -
+      runningCameraCount() -
+      runningMicArchiveCount(),
   );
 }
 

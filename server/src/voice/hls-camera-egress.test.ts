@@ -105,6 +105,7 @@ function disableHls() {
     "LIVE_HLS_CAMERA",
     "LIVE_HLS_VOICE_TRACK",
     "LIVE_HLS_REAP_ORPHANS",
+    "LIVE_HLS_MIC_ARCHIVE",
     "VOICE_PROMOTION_MAX_SFU_MBPS",
     "LIVE_HLS_SIGNED_URLS",
     "LIVE_HLS_PUBLIC_BASE_URL",
@@ -128,6 +129,14 @@ function fakeLiveKit() {
   const stop = vi.fn(async (egressId: string) => {
     statuses.set(egressId, EgressStatus.EGRESS_COMPLETE);
   });
+  // The voice archive's Track Egress: listed by LiveKit like any other.
+  const startTrack = vi.fn<NonNullable<LiveHlsEgressApi["startTrackEgress"]>>(
+    async () => {
+      const egressId = `EG_${(n += 1)}`;
+      statuses.set(egressId, EgressStatus.EGRESS_ACTIVE);
+      return { egressId };
+    },
+  );
   const list = vi.fn(
     async (opts: { egressId?: string; roomName?: string; active?: boolean }) =>
       [...statuses.entries()]
@@ -141,10 +150,12 @@ function fakeLiveKit() {
   return {
     api: {
       startTrackCompositeEgress: start,
+      startTrackEgress: startTrack,
       stopEgress: stop,
       listEgress: list,
     } satisfies LiveHlsEgressApi,
     start,
+    startTrack,
     stop,
     list,
     kill(egressId: string) {
@@ -157,6 +168,8 @@ function fakeLiveKit() {
 let cameraTrackId: string | null = null;
 /** The sharer's ordinary microphone, optional (`LIVE_HLS_VOICE_TRACK`). */
 let voiceTrackId: string | null = null;
+/** The voice archive's publication, optional (`LIVE_HLS_MIC_ARCHIVE`). */
+let micArchiveTrackId: string | null = null;
 
 function install(lk: ReturnType<typeof fakeLiveKit>) {
   setLiveHlsTestHooks({
@@ -165,6 +178,7 @@ function install(lk: ReturnType<typeof fakeLiveKit>) {
       videoTrackId: "TR_SCREEN",
       ...(cameraTrackId ? { cameraTrackId } : {}),
       ...(voiceTrackId ? { voiceTrackId } : {}),
+      ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
     }),
   });
 }
@@ -204,6 +218,7 @@ beforeEach(() => {
   disableHls();
   cameraTrackId = null;
   voiceTrackId = null;
+  micArchiveTrackId = null;
   liveSessionChannelIds.ids = null;
   logEvent.mockClear();
   query.mockClear();
@@ -1104,6 +1119,42 @@ describe("box budget: a camera must never be priced twice", () => {
 
     expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
     expect(liveHlsActivity().cameraSessions).toBe(2);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+  });
+});
+
+describe("box budget: the voice archive is not a video rendition", () => {
+  it("starts the camera beside a ladder rung and a running -mic.ogg archive", async () => {
+    // The 2026-09-23 production rehearsal: two rungs plus the archive plus
+    // the camera priced at 629 against 600, with nothing else on the box,
+    // because the archive's Track Egress was counted as a third 150 Mbit/s
+    // rendition. Here: one rung and the archive, and a budget with room for
+    // the rung and the camera but not for a phantom second rung.
+    enableHls();
+    process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+    const lk = fakeLiveKit();
+    micArchiveTrackId = "TR_MIC_ARCHIVE";
+    install(lk);
+    const correctBoxMbps = HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    const archiveAsRungMbps = 2 * HLS_RUNG_MBPS + HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(
+      Math.round((correctBoxMbps + archiveAsRungMbps) / 2),
+    );
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    expect(liveHlsActivity()).toMatchObject({ rungs: 1, cameraSessions: 0 });
+
+    // The presenter turns the webcam on.
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
     expect(logEvent).not.toHaveBeenCalledWith(
       "voice.hlsCameraRefused",
       expect.anything(),
