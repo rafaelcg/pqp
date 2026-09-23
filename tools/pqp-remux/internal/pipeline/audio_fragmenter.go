@@ -214,6 +214,7 @@ func (f *AudioFragmenter) closePart() *Fragment {
 		SegmentIndex:   f.segmentIndex,
 		IsSegmentStart: isStart,
 		DurationTicks:  duration,
+		StartTicks:     f.partStart,
 		Bytes:          fragBytes,
 	}
 	f.partStart = f.nextPTS

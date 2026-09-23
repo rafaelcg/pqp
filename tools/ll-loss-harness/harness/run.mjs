@@ -32,6 +32,19 @@ const upstreamPort = Number(process.env.LL_HARNESS_PORT || 18080);
 const proxyPort = Number(process.env.PORT || 18081);
 const pageHtmlPath = new URL("./page.html", import.meta.url);
 
+// NET_PROFILE=name:minMs:maxMs:spikePct:spikeMs delays every media and
+// playlist response by a uniform minMs..maxMs, plus spikeMs on spikePct% of
+// them: a viewer's network, the shape the 2026-09-21 investigation's lab
+// used (br:60:250:1:900, mobile:100:400:3:1500). Unset is no delay.
+const profile = (() => {
+  const v = process.env.NET_PROFILE;
+  if (!v) return null;
+  const [name, a, b, sp, sm] = v.split(":");
+  return { name, a: +a, b: +b, sp: +sp, sm: +sm };
+})();
+const netDelay = () => (profile ? profile.a + Math.random() * (profile.b - profile.a) + (Math.random() * 100 < profile.sp ? profile.sm : 0) : 0);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const proxy = http
   .createServer(async (req, res) => {
     if (req.url.startsWith("/hls.js")) {
@@ -42,8 +55,11 @@ const proxy = http
       res.writeHead(200, { "content-type": "text/html" });
       return res.end(readFileSync(pageHtmlPath));
     }
+    const d = netDelay();
+    await sleep(d / 2);
     const r = await fetch(`http://127.0.0.1:${upstreamPort}${req.url}`);
     const b = Buffer.from(await r.arrayBuffer());
+    await sleep(d / 2);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") || "application/octet-stream" });
     res.end(b);
   })
@@ -107,7 +123,9 @@ for (const v of vids.slice(0, 16)) console.log(((v.t - t0) / 1000).toFixed(1) + 
   }
   if (open != null) stalledMs += L.at(-1).t - open;
   const fz = F ? ` freezes=${F.episodes} frozenMs=${F.frozenMs} longestFreezeMs=${F.longestMs}` : "";
-  console.log(`WAITING: stalls=${stalls} stalledMs=${stalledMs}${fz}`);
+  const playedMin = Math.max(1e-9, (L.at(-1).t - firstPlay) / 60000);
+  const perMin = Number.isFinite(firstPlay) ? (stalls / playedMin).toFixed(1) : "n/a";
+  console.log(`WAITING: stalls=${stalls} stallsPerMin=${perMin} stalledMs=${stalledMs}${fz}${profile ? ` profile=${profile.name}` : ""}`);
   const lat = L.filter((x) => x.k === "tick" && x.o.latency && Number(x.o.ct) > 0).map((x) => Number(x.o.latency));
   if (lat.length) console.log(`LIVE LATENCY: last=${lat.at(-1).toFixed(2)}s max=${Math.max(...lat).toFixed(2)}s`);
 }

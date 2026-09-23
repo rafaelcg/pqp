@@ -172,12 +172,15 @@ screen share). Each is handed to `internal/session`, which:
 
 1. Decodes it (`internal/audiomix.Source`, one per publication) and places
    its PCM on a shared 48kHz sample timeline, anchored **once** to a
-   wall-clock epoch (`Session`'s own construction time in practice — close
-   enough to the video track's true first-packet arrival that treating them
-   as the same instant is a documented approximation) and after that driven
+   wall-clock epoch (`Session`'s own construction time) and after that driven
    entirely by each source's own RTP timestamps, never the wall clock again.
    That is what "derive both from the RTP timestamps against one wall-clock
-   anchor" (the plan's own words for this task) means in code.
+   anchor" (the plan's own words for this task) means in code. Video is put
+   on the same timeline: its media time is offset by how long after the
+   epoch the first video packet arrived (`anchorVideoTimeline`). This used
+   to be called close enough to zero to ignore; it is the time the
+   subscription takes to deliver video, typically a second or more, and it
+   was an A/V offset of exactly that much baked into every LL session.
 2. Mixes every active source with a sum-and-soft-clip curve
    (`internal/audiomix.Mixer.Pull`, `tanh`) at a cadence corrected against
    wall-clock elapsed time on every tick (`framesElapsed` in
@@ -644,6 +647,22 @@ Three things worth knowing before changing it:
   an error it logs per probe. "No part has landed yet" is the ordinary first
   second of every session.
 
+- **`programDateTime` is media time, on one anchor for both tracks.**
+  Each segment's `#EXT-X-PROGRAM-DATE-TIME` is the session's epoch plus the
+  segment's first tfdt (`ring.SetPDTAnchor`), the same epoch for the video
+  and the audio ring. It used to be the wall instant the segment's first
+  part was pushed, which a video segment and an audio segment reach at
+  unrelated moments: the two playlists named the same media 1.5 to 1.7 s
+  apart, and hls.js, which aligns the audio rendition to video by PDT,
+  skipped audio parts and then jumped the gap (33 stalls a minute on the
+  lab's mobile profile, 0.3 with PDT rewritten from media time). A
+  watchdog restart builds a new pipeline whose timeline starts again, on
+  its own epoch, so PDT continues forward across it and its two tracks
+  still agree; a single anchor held across the restart would rewind PDT by
+  everything the old pipeline had published. The replay playlists carry no
+  PDT, so nothing there changes. Pinned by `internal/session`'s
+  `pdt_test.go`, which reads PDT out of rendered `state.json` across a
+  parameter-set change and a restart.
 - **A watchdog restart resumes part numbering, not just segment
   numbering.** Segment indices have been carried across a restart since
   PR #584, because re-using one overwrote an already-uploaded R2 object.

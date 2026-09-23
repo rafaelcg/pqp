@@ -40,16 +40,27 @@ type segment struct {
 	index  int
 	parts  []part
 	sealed bool
-	// openedAt is the wall clock the moment this segment's FIRST part was
-	// pushed -- the anchor internal/llstate renders as
-	// #EXT-X-PROGRAM-DATE-TIME. It is the arrival time of the media, not
-	// a presentation timestamp derived from the RTP clock: this process
-	// has no absolute media clock to map PTS onto (the publisher's own
-	// epoch is not knowable from RTP alone), and a viewer's
-	// latency-from-PDT measurement wants the time the box saw the frame
-	// anyway. Stamped once per segment, never per part, so every part of
-	// one segment shares the segment's anchor exactly the way HLS
-	// expects.
+	// openedAt is what internal/llstate renders as
+	// #EXT-X-PROGRAM-DATE-TIME for this segment: the ring's PDT anchor plus
+	// the segment's first media timestamp (its tfdt), so it names the
+	// instant of the MEDIA, not the instant the box happened to finish
+	// the first part.
+	//
+	// WHY NOT ARRIVAL TIME, WHICH IS WHAT IT USED TO BE. Video and audio
+	// are two renditions, and their segments open at unrelated wall
+	// instants: a video segment opens when its IDR's part closes, an audio
+	// segment on its own schedule. Stamped with arrival, the two playlists
+	// disagreed by 1.5 to 1.7 s about what time the same media was, and
+	// hls.js, which aligns an audio rendition to video by PDT, skipped
+	// audio parts and then jumped the gap it had made: 33 stalls a minute
+	// on a mobile profile in the lab, 0.3 once a proxy rewrote PDT from
+	// media time. Both rings of a session share one anchor
+	// (internal/session's epoch, SetPDTAnchor), so the same media time is
+	// the same PDT on both.
+	//
+	// Stamped once per segment, never per part. Falls back to the ring's
+	// clock only when no anchor was ever set (a ring used on its own in a
+	// test).
 	openedAt time.Time
 	// initURI is the CMAF init segment this segment's samples were built
 	// against (init.mp4, init-2.mp4, ...). Stamped at open from the
@@ -126,6 +137,33 @@ type Ring struct {
 	lastSeq uint32
 	haveSeq bool
 	now     func() time.Time
+	// pdtAnchor is the wall-clock instant media time zero corresponds to.
+	// See segment.openedAt and SetPDTAnchor.
+	pdtAnchor time.Time
+}
+
+// SetPDTAnchor sets the wall-clock instant this ring's media time zero
+// corresponds to. Every segment's #EXT-X-PROGRAM-DATE-TIME is then this
+// anchor plus the segment's first tfdt. Give every ring of one session the
+// SAME anchor: that is what makes the video and audio playlists agree
+// about the time of the same media. Call it before the first Push.
+func (r *Ring) SetPDTAnchor(t time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pdtAnchor = t
+}
+
+// segmentPDT is the PROGRAM-DATE-TIME of a segment whose first part
+// starts at startTicks. Caller holds r.mu.
+func (r *Ring) segmentPDT(startTicks int64) time.Time {
+	if r.pdtAnchor.IsZero() || r.timescale == 0 {
+		return r.now()
+	}
+	// Split to keep the multiplication inside int64 for any session
+	// length: whole seconds, then the remainder in nanoseconds.
+	ts := int64(r.timescale)
+	secs, rem := startTicks/ts, startTicks%ts
+	return r.pdtAnchor.Add(time.Duration(secs)*time.Second + time.Duration(rem*int64(time.Second)/ts))
 }
 
 // New returns an empty Ring. maxSegments is RING_SEGMENTS; timescale must
@@ -242,7 +280,7 @@ func (r *Ring) Push(f *pipeline.Fragment) {
 		r.nextDiscontinuity = false
 		r.segments = append(r.segments, &segment{
 			index:         f.SegmentIndex,
-			openedAt:      r.now(),
+			openedAt:      r.segmentPDT(f.StartTicks),
 			initURI:       initURI,
 			discontinuity: disc,
 		})
