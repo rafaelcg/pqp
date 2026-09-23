@@ -66,10 +66,17 @@ function call(): Call {
   return vi.fn<(...args: unknown[]) => Promise<unknown>>();
 }
 
+function notFound(): Error {
+  return Object.assign(new Error("requested room does not exist"), {
+    status: 404,
+    code: "not_found",
+  });
+}
+
 function box(): Box {
   return {
     listRooms: call().mockResolvedValue([]),
-    listParticipants: call().mockRejectedValue(new Error("room not found")),
+    listParticipants: call().mockRejectedValue(notFound()),
     removeParticipant: call().mockResolvedValue(undefined),
     mutePublishedTrack: call().mockResolvedValue(undefined),
   };
@@ -158,6 +165,20 @@ describe("SFU moderation across regions", () => {
       true,
     );
     expect(boxes.get(HOME)!.mutePublishedTrack).not.toHaveBeenCalled();
+  });
+
+  it("an empty answer is not trusted while another box could not be asked", async () => {
+    boxes.get(HOME)!.listParticipants.mockResolvedValue([]);
+    boxes.get(MIA)!.listParticipants.mockRejectedValue(new Error("connect ETIMEDOUT"));
+
+    await evictSfuRoom("channel-1");
+    await settleSfuEvictions();
+
+    const lines = (console.log as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      (entry) => String(entry[0]),
+    );
+    expect(lines.some((line) => line.includes("voice.sfuRegionCallFailed"))).toBe(true);
+    expect(lines.some((line) => line.includes("voice.sfuEvictFailed"))).toBe(true);
   });
 
   it("still reports a failure when no box answers at all", async () => {

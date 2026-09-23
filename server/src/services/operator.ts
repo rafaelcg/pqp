@@ -489,6 +489,7 @@ export async function setChannelVoiceTransport(
     name: string;
     type: string;
     voice_transport: VoiceRoomTransport | null;
+    sfu_region: string | null;
     previous: VoiceRoomTransport | null;
   }>(
     `UPDATE channels c
@@ -498,7 +499,7 @@ export async function setChannelVoiceTransport(
         AND c.kind = 'server'
         AND c.type IN ('voice', 'watch_party')
       RETURNING c.id, c.server_id, c.name, c.type, c.voice_transport,
-                old.voice_transport AS previous`,
+                c.sfu_region, old.voice_transport AS previous`,
     [channelId, transport],
   );
   const row = result.rows[0];
@@ -543,7 +544,7 @@ export async function setChannelVoiceTransport(
     pinnedTransport: isRoomPinnedLocally(row.id) ? getRoomTransport(row.id) : null,
     wouldOpenOn: { transport: "mesh", reason: "default" },
     streaming: false,
-    sfuRegion: null,
+    sfuRegion: row.sfu_region,
     pinnedRegion: pinnedRoomRegion(row.id),
   };
 }
@@ -580,7 +581,10 @@ export async function setChannelSfuRegion(
   const result = await getPool().query<{
     id: string;
     server_id: string;
+    name: string;
     type: string;
+    voice_transport: VoiceRoomTransport | null;
+    sfu_region: string | null;
     previous: string | null;
   }>(
     `UPDATE channels c
@@ -589,7 +593,8 @@ export async function setChannelSfuRegion(
       WHERE c.id = old.id
         AND c.kind = 'server'
         AND c.type = 'voice'
-      RETURNING c.id, c.server_id, c.type, old.sfu_region AS previous`,
+      RETURNING c.id, c.server_id, c.name, c.type, c.voice_transport,
+                c.sfu_region, old.sfu_region AS previous`,
     [channelId, region],
   );
   const row = result.rows[0];
@@ -615,10 +620,26 @@ export async function setChannelSfuRegion(
     previous: row.previous,
     actorId,
   });
-  const list = await listOperatorChannels(row.server_id);
+  // The re-read is a convenience, never the source of truth for whether the
+  // write landed: it already did, above. Same rule as the transport setter.
+  const list = await listOperatorChannels(row.server_id).catch((error: unknown) => {
+    console.error("[operator] channel re-read failed after a region write:", error);
+    return null;
+  });
   const fresh = list?.channels.find((channel) => channel.id === row.id);
-  if (!fresh) {
-    throw new OperatorTargetMissing("Voice channel not found");
+  if (fresh) {
+    return { ...fresh, serverId: row.server_id };
   }
-  return { ...fresh, serverId: row.server_id };
+  return {
+    id: row.id,
+    serverId: row.server_id,
+    name: row.name,
+    type: row.type,
+    voiceTransport: row.voice_transport,
+    pinnedTransport: isRoomPinnedLocally(row.id) ? getRoomTransport(row.id) : null,
+    wouldOpenOn: { transport: "mesh", reason: "default" },
+    streaming: false,
+    sfuRegion: row.sfu_region,
+    pinnedRegion: pinnedRoomRegion(row.id),
+  };
 }

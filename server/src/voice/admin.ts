@@ -209,6 +209,12 @@ async function firstThatAnswers<T>(
   throw (results[0] as PromiseRejectedResult).reason;
 }
 
+/** LiveKit's answer for a room this box does not hold. */
+function isNotFound(error: unknown): boolean {
+  const shaped = error as { status?: unknown; code?: unknown } | null;
+  return shaped?.status === 404 || shaped?.code === "not_found";
+}
+
 function fanOutRoomService(
   boxes: readonly { id: string; client: RoomServiceClient }[],
 ): SfuRoomService {
@@ -241,10 +247,21 @@ function fanOutRoomService(
         boxes.map((box) => box.client.listParticipants(room)),
       );
       const participants: Awaited<ReturnType<RoomServiceClient["listParticipants"]>> = [];
+      let unreachable: unknown = null;
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") {
           // Not-found on the boxes that do not hold the room is the ordinary
-          // case, so a rejection here is only an error when NO box answered.
+          // case. Anything else means that box could not say, and it may be
+          // the one holding the room.
+          if (!isNotFound(result.reason)) {
+            unreachable ??= result.reason;
+            logEvent("voice.sfuRegionCallFailed", {
+              region: boxes[index]!.id,
+              stage: "listParticipants",
+              room,
+              error: describeError(result.reason),
+            });
+          }
           return;
         }
         for (const participant of result.value) {
@@ -259,7 +276,15 @@ function fanOutRoomService(
         }
       });
       if (results.every((result) => result.status === "rejected")) {
-        throw (results[0] as PromiseRejectedResult).reason;
+        throw unreachable ?? (results[0] as PromiseRejectedResult).reason;
+      }
+      // A room lives on one box, so participants from any box are the whole
+      // room. An empty answer is only trusted when every box answered: if a
+      // box failed, the room may be there, and saying "nobody is here" would
+      // let a sweep pass as done. Throwing makes the caller log it, and the
+      // re-sweep window (`scheduleResweep`) tries again.
+      if (participants.length === 0 && unreachable !== null) {
+        throw unreachable;
       }
       return participants;
     },

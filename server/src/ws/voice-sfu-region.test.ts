@@ -307,6 +307,16 @@ describeDb("voice room SFU region", () => {
     expect(await storedRegion(channel)).toBe("mia");
   });
 
+  it("a room row naming a region since removed from the config is home", async () => {
+    const channel = randomUUID();
+    await getPool().query(
+      `INSERT INTO voice_rooms (channel_id, transport, sfu_region) VALUES ($1, 'livekit', 'lon')`,
+      [channel],
+    );
+    await join(client("US"), channel);
+    expect(pinnedRoomRegion(channel)).toBe("sao");
+  });
+
   it("a resume across an API restart keeps the region (registry on: the row)", async () => {
     const channel = randomUUID();
     const userId = randomUUID();

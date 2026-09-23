@@ -136,7 +136,6 @@ import {
   decideSfuRegion,
   defaultRegionId,
   forgetRoomRegion,
-  homeRegionId,
   pinRoomRegion,
   pinnedRoomRegion,
   regionCountryMap,
@@ -949,16 +948,22 @@ function sameSfuRegion(a: string | null, b: string | null): boolean {
   if (!sfuRegions()) {
     return true;
   }
-  const home = homeRegionId();
-  return (a ?? home) === (b ?? home);
+  return regionOrHome(a) === regionOrHome(b);
 }
 
-/** A remembered region, with null read as home. Null in single-region mode. */
+/**
+ * A remembered region as a configured one: null, and an id that has since
+ * been taken out of `LIVEKIT_REGIONS`, both read as home, which is where
+ * `resolveSfuRegion` would send the token anyway. Null in single-region mode.
+ */
 function regionOrHome(region: string | null | undefined): string | null {
-  if (!sfuRegions()) {
+  const regions = sfuRegions();
+  if (!regions) {
     return null;
   }
-  return region ?? homeRegionId();
+  return regions.some((candidate) => candidate.id === region)
+    ? region!
+    : regions[0]!.id;
 }
 
 /**

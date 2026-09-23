@@ -154,8 +154,13 @@ restart, and rooms already open stay on the box they are on until they empty.
    there lose media; people rejoining after the room empties land at home.
    There is no automatic failover in v1: an unreachable region is reported
    (`/ready`, dashboard, status page) but not avoided.
-3. **Turn regions off entirely:** unset `LIVEKIT_REGIONS`. Everything is
-   single-region again, byte for byte: no column written, no region field in
+3. **Turn regions off entirely:** first do step 1 and wait for the rooms
+   pinned outside home to empty (dashboard, pinned rooms per region, or
+   `SELECT sfu_region, COUNT(*) FROM voice_rooms GROUP BY 1` read-only). Only
+   then unset `LIVEKIT_REGIONS`: while it is unset the API has no credentials
+   for the other boxes, so a member who reconnects to a still-open Miami room
+   would be handed a token for an empty room of the same name at home. Then
+   everything is single-region again, byte for byte: no column written, no region field in
    any response, no region claim in resume tokens. Rows with a stored
    `sfu_region` read as home once the flag is off.
 

@@ -45,8 +45,16 @@ systemctl start pqp-box-metrics.service
 
 echo "== alloy"
 SFU_BOX_NAME="${SFU_BOX_NAME:-sfu-pqp}"
-sed "s|\"sfu-pqp\"|\"${SFU_BOX_NAME}\"|g" "$HERE/config.alloy" >/etc/alloy/config.alloy
-chmod 0644 /etc/alloy/config.alloy
+# A label, nothing else: it is spliced into a sed program run as root.
+if [[ ! "$SFU_BOX_NAME" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+  echo "SFU_BOX_NAME must match ^[a-z][a-z0-9-]{0,31}$, got: $SFU_BOX_NAME" >&2
+  exit 1
+fi
+# Rendered beside the live file and moved over it, so a failed render never
+# leaves Alloy an empty config.
+sed "s|\"sfu-pqp\"|\"${SFU_BOX_NAME}\"|g" "$HERE/config.alloy" >/etc/alloy/config.alloy.new
+chmod 0644 /etc/alloy/config.alloy.new
+mv /etc/alloy/config.alloy.new /etc/alloy/config.alloy
 
 if [[ -n "${GC_PROM_TOKEN:-}" ]]; then
   umask 077
