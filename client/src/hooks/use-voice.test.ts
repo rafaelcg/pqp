@@ -2623,6 +2623,63 @@ describe("voice session resume", () => {
     expect(voice.getState().peerId).toBe(PEER);
   });
 
+  it("refreshes occupancy from a resumed welcome, not just remotePeers", async () => {
+    const { voice } = await connected();
+    // The join path's own occupancy (a real client learns this from the
+    // `voice-roster` that follows `welcome`, not from `welcome` itself).
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [
+        {
+          peerId: PEER,
+          userId: "00000000-0000-4000-8000-0000000000cc",
+          displayName: "Me",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+          serverMuted: false,
+        },
+        {
+          peerId: OTHER,
+          userId: "00000000-0000-4000-8000-0000000000ee",
+          displayName: "Other",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+          serverMuted: false,
+        },
+      ],
+    });
+    expect(
+      voice.getState().occupancy[CHANNEL]?.map((p) => p.peerId).sort(),
+    ).toEqual([OTHER, PEER].sort());
+
+    voice.notifyDisconnected();
+    // A third peer joins the room while this client has no socket to hear a
+    // delta on. The mesh-resume `welcome` is the only frame carrying that
+    // fact back: the server built `peers` fresh from the room as it is now.
+    const THIRD = "00000000-0000-4000-8000-0000000000f3";
+    voice.handleSignaling({
+      ...welcome("mesh", [{ peerId: OTHER }, { peerId: THIRD }]),
+      peerId: PEER,
+      resumed: true,
+      resumeToken: TOKEN,
+    });
+    await settle();
+
+    // `remotePeers` (the stage) recovers either way, via `attachMeshPeers`.
+    // The point of this test is that occupancy (the sidebar, the member
+    // list) recovers with it, rather than staying frozen at [OTHER, PEER]
+    // for the rest of the call because no later `voice-roster-delta` ever
+    // repairs a gap it has no way to know exists.
+    expect(
+      voice.getState().occupancy[CHANNEL]?.map((p) => p.peerId).sort(),
+    ).toEqual([OTHER, PEER, THIRD].sort());
+  });
+
   it("sends resumePeerId on reconnect before any other voice frame", async () => {
     const { voice, sent } = await connected();
     voice.notifyDisconnected();
