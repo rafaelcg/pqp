@@ -419,6 +419,9 @@ func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requeste
 		s.keyReq.Store(keyReq)
 	}
 	s.segmentOpenedAtMs.Store(-1)
+	if r != nil {
+		r.SetPDTAnchor(s.epoch)
+	}
 	return s
 }
 
@@ -525,6 +528,10 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 		s.audioFrag.SetStartSequence(cfg.StartSequence)
 	}
 	s.audioRing = cfg.Ring
+	if s.audioRing != nil {
+		// The same anchor as the video ring's: see ring.SetPDTAnchor.
+		s.audioRing.SetPDTAnchor(s.epoch)
+	}
 
 	audioInit, err := cmaf.BuildAudioInitSegment(cmaf.AudioInitParams{
 		Timescale:  aacenc.SampleRate,
@@ -734,12 +741,34 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	}
 
 	now := s.now()
-	s.videoPacketsSeen.Add(1)
+	if s.videoPacketsSeen.Add(1) == 1 {
+		s.anchorVideoTimeline(now)
+	}
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
 	for _, ordered := range s.reorder.push(pkt, now) {
 		s.handleOrderedVideoPacket(ordered, now)
 	}
+}
+
+// anchorVideoTimeline puts video media time on the session's one timeline.
+// The depacketizer counts PTS from the first video packet's own RTP
+// timestamp, so video media time zero is the instant that packet ARRIVED,
+// while audio media time zero is the session's epoch (internal/audiomix
+// places every source against it). The two differ by however long the
+// subscription took to deliver video: hundreds of milliseconds at best,
+// the whole wait for a presenter who starts sharing late. Left alone,
+// that difference is an A/V offset baked into the media, and it is also
+// why deriving PROGRAM-DATE-TIME from media time needs this: one anchor
+// only means one instant if both tracks count from it. Called once, with
+// videoMu held, on the first video packet.
+func (s *Session) anchorVideoTimeline(firstPacketAt time.Time) {
+	d := firstPacketAt.Sub(s.epoch)
+	if d <= 0 {
+		return
+	}
+	s.frag.SetTimelineOffset(durationToTicks(d))
+	log.Printf("pqp-remux: video timeline anchored %s after the session epoch (first video packet)", d.Round(time.Millisecond))
 }
 
 // handleOrderedVideoPacket is HandleVideoPacket after the reorder buffer:

@@ -64,6 +64,8 @@ async function fetchPart(uri, rec) {
   }
 }
 const pending = [];
+// msn -> { pdt, firstUri } per track, for the PDT skew check below.
+const segPdt = { video: new Map(), audio: new Map() };
 const deadline = Date.now() + secs * 1000;
 while (Date.now() < deadline) {
   const t0 = Date.now();
@@ -74,6 +76,9 @@ while (Date.now() < deadline) {
       const st = await r.json();
       for (const track of ["video", "audio"]) {
         for (const seg of st[track]?.segments ?? []) {
+          if (seg.parts?.length && seg.programDateTime && !segPdt[track].has(seg.msn)) {
+            segPdt[track].set(seg.msn, { pdt: Date.parse(seg.programDateTime), firstUri: seg.parts[0].uri });
+          }
           for (const p of seg.parts ?? []) {
             if (seen[track].has(p.uri)) continue;
             const rec = { at, durationSecs: p.durationSecs };
@@ -129,6 +134,29 @@ for (const track of ["video", "audio"]) {
   console.log(
     `LATENESS ${track} n=${s.n} p50=${s.p50}ms p90=${s.p90}ms p99=${s.p99}ms max=${s.max}ms over250=${s.over250} over500=${s.over500} unmeasured=${s.unmeasured} interArrival p50=${s.interP50}ms p99=${s.interP99}ms max=${s.interMax}ms`,
   );
+}
+// PDT skew: hls.js aligns the audio rendition to video by
+// PROGRAM-DATE-TIME, so for the same media time the two playlists must name
+// the same instant. Each segment's PDT minus its first part's tfdt is the
+// wall instant that track calls media time zero; the two tracks' medians
+// should be equal.
+{
+  const anchors = {};
+  for (const track of ["video", "audio"]) {
+    const vals = [];
+    for (const { pdt, firstUri } of segPdt[track].values()) {
+      const r = seen[track].get(firstUri);
+      if (r?.tfdt != null) vals.push(pdt - (1000 * r.tfdt) / TIMESCALE[track]);
+    }
+    vals.sort((a, b) => a - b);
+    anchors[track] = vals.length ? { median: vals[Math.floor(vals.length / 2)], spread: vals.at(-1) - vals[0], n: vals.length } : null;
+  }
+  if (anchors.video && anchors.audio) {
+    out.pdtSkewMs = Math.round(anchors.video.median - anchors.audio.median);
+    console.log(
+      `PDT SKEW video-audio=${out.pdtSkewMs}ms (same media time) segments video=${anchors.video.n} audio=${anchors.audio.n} spread video=${Math.round(anchors.video.spread)}ms audio=${Math.round(anchors.audio.spread)}ms`,
+    );
+  }
 }
 console.log("LATENESS_JSON", JSON.stringify(out));
 if (PARTS_DIR) {

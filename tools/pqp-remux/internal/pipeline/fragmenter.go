@@ -139,6 +139,9 @@ type Fragmenter struct {
 	// matters. LOWERING it is what stole time, and is what this type no
 	// longer does anywhere. See pendingTruePTS.
 	ptsOffset int64
+	// timelineOffset is the part of ptsOffset SetTimelineOffset put there:
+	// where this session's video media time starts, not a correction.
+	timelineOffset int64
 	// resumePTS is the fragmenter-timeline instant the last IdleFlush
 	// published up to, and therefore where the next part must begin.
 	// Meaningful only while pending == nil and haveFirstIDR is true.
@@ -371,9 +374,27 @@ func (f *Fragmenter) clockCutting() bool {
 // question internal/session asks before it bothers with the part deadline.
 func (f *Fragmenter) ClockCutting() bool { return f.clockCutting() }
 
+// SetTimelineOffset places the publisher's clock on the session's shared
+// media timeline: every access unit's PTS is published offset by ticks.
+// internal/session calls it once, with how long after the session's epoch
+// the first video packet arrived, so video media time and audio media time
+// (which internal/audiomix already counts from that epoch) mean the same
+// instant. Call it before the first IDR is pushed; later calls are ignored,
+// because moving the timeline after media is published would rewind or
+// tear it.
+func (f *Fragmenter) SetTimelineOffset(ticks int64) {
+	if f.haveFirstIDR || ticks < 0 {
+		return
+	}
+	f.ptsOffset = ticks
+	f.timelineOffset = ticks
+}
+
 // PTSOffset is how far this fragmenter has shifted the publisher's clock
-// later to keep the timeline from rewinding (see ptsOffset), in ticks.
-func (f *Fragmenter) PTSOffset() int64 { return f.ptsOffset }
+// later to keep the timeline from rewinding (see ptsOffset), in ticks. The
+// session's own timeline anchor (SetTimelineOffset) is not a shift and is
+// not counted.
+func (f *Fragmenter) PTSOffset() int64 { return f.ptsOffset - f.timelineOffset }
 
 // AnchorPTS is where the last REAL access unit this fragmenter accepted
 // sits on its timeline (ptsOffset included). Together with the wall-clock
@@ -401,10 +422,11 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) ([]*Fragment, error) {
 			return nil, ErrWaitingForIDR
 		}
 		f.haveFirstIDR = true
-		f.segmentStart = au.PTS
-		f.partStart = au.PTS
+		pts := au.PTS + f.ptsOffset
+		f.segmentStart = pts
+		f.partStart = pts
 		f.adoptNextRepeater()
-		f.setPending(au, au.PTS)
+		f.setPending(au, pts)
 		return nil, nil
 	}
 

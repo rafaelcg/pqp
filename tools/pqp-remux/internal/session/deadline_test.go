@@ -72,6 +72,11 @@ func deadlineSession(t *testing.T, grace time.Duration) (*Session, *time.Time, t
 	base := time.Unix(1_800_000_000, 0)
 	clock := base
 	s.now = func() time.Time { return clock }
+	// One clock for the session's epoch too, so the video timeline anchor
+	// (anchorVideoTimeline) is zero here and media time equals the offsets
+	// these tests schedule.
+	s.epoch = base
+	r.SetPDTAnchor(base)
 	s.HandleVideoPacket(videoPacket(singleNAL(7, realishSPS()[1:]), 0, false))
 	s.HandleVideoPacket(videoPacket(singleNAL(8, realishPPS()[1:]), 0, false))
 	s.HandleVideoPacket(videoPacket(singleNAL(5, []byte{0xAA, 0xBB}), 0, true))

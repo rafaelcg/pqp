@@ -269,6 +269,7 @@ echo "   hls.js error summary:   see ${LOG_DIR}/hlsjs.log (ERROR SUMMARY line)"
 echo "   viewer:                 $(grep -E '^WAITING: ' "$LOG_DIR/hlsjs.log" || echo 'WAITING: n/a')"
 echo "   viewer:                 $(grep -E '^LIVE LATENCY: ' "$LOG_DIR/hlsjs.log" || echo 'LIVE LATENCY: n/a')"
 grep -E '^LATENESS (video|audio) ' "$LOG_DIR/lateness.log" | sed 's/^/   part publication:       /' || true
+grep -E '^PDT SKEW ' "$LOG_DIR/lateness.log" | sed 's/^/   playlists:              /' || true
 # The remux's own view of the same thing, summed over the run.
 awk '/stats session/ {
     for (i = 1; i <= NF; i++) {
