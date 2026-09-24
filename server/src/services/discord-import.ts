@@ -26,7 +26,12 @@ import {
   claimServerIdempotencyKey,
   recordServerIdempotencyKey,
 } from "./idempotency-keys.js";
-import { createInviteWith, listInvites, mapInvite } from "./invites.js";
+import {
+  createInviteWith,
+  listInvites,
+  mapInvite,
+  type Queryable,
+} from "./invites.js";
 import { applyPrivateChannelOverwrites, seedDefaultRoles } from "./permissions.js";
 import { listRoles, mapRole } from "./roles.js";
 import {
@@ -208,19 +213,27 @@ type DiscordImportResponse = {
  * time, reading the current rows rather than replaying a snapshot, so an
  * import replayed a while after the fact reflects a rename or icon change in
  * between, the same way any other read of the server would. `null` when the
- * server the key resolved to has since been deleted; the caller falls back
- * to importing fresh.
+ * server the key resolved to has since been deleted, or the caller is no
+ * longer a member of it (the key is scoped to this user, but a member can
+ * transfer ownership and leave; handing back a stale room's name, channels,
+ * roles or a fresh invite to someone who no longer belongs would leak that
+ * room, and a way back in, to them). Either way the caller falls back to
+ * importing fresh.
  *
- * Exported so the API handler can use it as a cheap short-circuit ahead of
- * the outbound Discord fetch `POST /api/import/discord/apply` would
- * otherwise make on every retry, not just the ones that race a concurrent
- * import.
+ * `db` defaults to the pool, for the API handler's pre-fetch short-circuit
+ * ahead of the outbound Discord fetch `POST /api/import/discord/apply`
+ * would otherwise make on every retry. `createServerFromImport` passes its
+ * own open transaction's client instead, so a concurrent burst of duplicate
+ * imports (each already holding a connection open on its own claim check)
+ * does not also have every one of them borrow a second, transient
+ * connection from the same pool for these reads.
  */
 export async function replayImportedServer(
   serverId: string,
   ownerId: string,
+  db: Queryable = getPool(),
 ): Promise<DiscordImportResponse | null> {
-  const serverResult = await getPool().query<DbServer>(
+  const serverResult = await db.query<DbServer>(
     `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1`,
     [serverId],
   );
@@ -228,18 +241,25 @@ export async function replayImportedServer(
   if (!server) {
     return null;
   }
-  const channelsResult = await getPool().query<ChannelRow>(
+  const membership = await db.query(
+    `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
+    [serverId, ownerId],
+  );
+  if (membership.rows.length === 0) {
+    return null;
+  }
+  const channelsResult = await db.query<ChannelRow>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels
       WHERE server_id = $1 AND type <> 'thread'
       ORDER BY position ASC`,
     [serverId],
   );
-  const roles = await listRoles(serverId);
-  const invites = await listInvites(serverId);
+  const roles = await listRoles(serverId, db);
+  const invites = await listInvites(serverId, db);
   // The import makes exactly one invite; the oldest (`listInvites` sorts
   // newest first) is the one it made.
   const inviteRow =
-    invites[invites.length - 1] ?? (await createInviteWith(getPool(), serverId, ownerId));
+    invites[invites.length - 1] ?? (await createInviteWith(db, serverId, ownerId));
   return {
     server: { ...mapServer(server), role: "owner" as const },
     channels: channelsResult.rows.map(mapChannel),
@@ -265,19 +285,18 @@ export async function createServerFromImport(
     if (idempotencyKey) {
       const claim = await claimServerIdempotencyKey(client, ownerId, idempotencyKey);
       if (!claim.claimed && claim.serverId) {
-        // The row this reads is already committed by whichever request
-        // claimed the key (our own INSERT above would still be blocked on
-        // its unique index otherwise), so reading it off the pool rather
-        // than `client` is safe even though our own transaction is still
-        // open and has made no writes of its own yet.
-        const replay = await replayImportedServer(claim.serverId, ownerId);
+        // Passes `client` (this transaction's own connection) as `db` so
+        // the replay reads reuse it instead of borrowing a second,
+        // transient connection off the pool while this one sits open.
+        const replay = await replayImportedServer(claim.serverId, ownerId, client);
         if (replay) {
           await client.query("COMMIT");
           return replay;
         }
-        // The claimed server id no longer resolves to a row (deleted
-        // between the original import and this replay). Fall through and
-        // import fresh, same as `createServer`.
+        // The claimed server id no longer resolves to a row the caller can
+        // see (deleted between the original import and this replay, or the
+        // caller is no longer a member). Fall through and import fresh, same
+        // as `createServer`.
       }
       // claim.claimed, or a stale claim with no resolvable server: either
       // way this call owns the key now and proceeds to import, below.

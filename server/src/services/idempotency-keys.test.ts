@@ -112,6 +112,34 @@ describeDb("server creation idempotency", () => {
     expect(rows.rows).toHaveLength(1);
   });
 
+  it("makes a fresh room rather than replaying one the caller left", async () => {
+    const key = "left-the-room";
+    const first = await createServer("Casa", owner.id, key);
+
+    // Simulates transferring ownership away and leaving: `servers.owner_id`
+    // is unaffected (`createServer` never changes it after the fact, so
+    // real ownership-transfer semantics are out of scope for this test),
+    // but the membership row the replay's access check reads is gone,
+    // exactly as it would be after a real leave.
+    await getPool().query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [first.server.id, owner.id],
+    );
+
+    const second = await createServer("Casa", owner.id, key);
+    expect(second.replayed).toBe(false);
+    expect(second.server.id).not.toBe(first.server.id);
+
+    const rows = await getPool().query(
+      `SELECT id FROM servers WHERE owner_id = $1 ORDER BY created_at ASC`,
+      [owner.id],
+    );
+    expect(rows.rows.map((r: { id: string }) => r.id)).toEqual([
+      first.server.id,
+      second.server.id,
+    ]);
+  });
+
   it("normalizes a blank, missing or absurdly long header to null", () => {
     expect(normalizeIdempotencyKey(undefined)).toBeNull();
     expect(normalizeIdempotencyKey("")).toBeNull();

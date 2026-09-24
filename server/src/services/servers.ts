@@ -212,7 +212,21 @@ export async function createServer(
           [claim.serverId],
         );
         const server = existingServer.rows[0];
+        // Also require the caller to still be a member: the key is scoped to
+        // this user, but a member can transfer ownership and leave, and
+        // handing back a stale room's name and channel list to someone who
+        // no longer belongs would leak that room to them. Falling through to
+        // create a new one is what would have happened anyway if this key
+        // did not exist.
+        let callerStillMember = false;
         if (server) {
+          const membership = await client.query(
+            `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [claim.serverId, ownerId],
+          );
+          callerStillMember = membership.rows.length > 0;
+        }
+        if (server && callerStillMember) {
           const existingChannels = await client.query<ChannelRow>(
             `SELECT ${CHANNEL_COLUMNS} FROM channels
               WHERE server_id = $1 AND type <> 'thread'
@@ -223,8 +237,9 @@ export async function createServer(
           return { server, channels: existingChannels.rows, replayed: true };
         }
         // The claimed server id no longer resolves to a row (deleted between
-        // the original create and this replay). Fall through and make a
-        // fresh one rather than answering with nothing.
+        // the original create and this replay), or the caller is no longer a
+        // member of it. Fall through and make a fresh one rather than
+        // answering with nothing or with a room the caller cannot see.
       }
       // claim.claimed, or a stale claim with no resolvable server: either way
       // this call owns the key now and proceeds to create, below.

@@ -144,6 +144,11 @@ export function CreateServerDialog({
         trimmed,
         createAttemptRef.current.keyFor(trimmed),
       );
+      // The room now exists on the server. Both branches below already
+      // swallow their own errors, so nothing after this point can still
+      // report "create failed" and send a retry back through this key; only
+      // now does the key retire, so a failure before this line is safely
+      // retried with the room already made.
       createAttemptRef.current.reset();
       const [invite] = await Promise.all([
         createInvite(created.server.id, { expiresInHours: 168 })
@@ -221,11 +226,16 @@ export function CreateServerDialog({
         trimmedSource,
         importAttemptRef.current.keyFor(trimmedSource),
       );
-      importAttemptRef.current.reset();
       if (created.invite) {
         rememberInviteCode(created.server.id, created.invite.code);
       }
+      // `onCreated` is awaited directly and can still throw, unlike the
+      // create-by-name path above: keep the key alive until every step that
+      // could still land in the catch below has finished, so a failure here
+      // reports "import failed" but a retry replays the room this call
+      // already made instead of importing a second one.
       await onCreated({ server: created.server, channels: created.channels });
+      importAttemptRef.current.reset();
       setDone({
         serverName: created.server.name,
         serverId: created.server.id,

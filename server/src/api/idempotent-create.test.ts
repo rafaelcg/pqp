@@ -260,6 +260,34 @@ describeDb("idempotent room creation", () => {
       expect(second.status).toBe(201);
       expect(first.body.server.id).not.toBe(second.body.server.id);
     });
+
+    it("makes a fresh room instead of replaying one the caller no longer belongs to", async () => {
+      const headers = { "Idempotency-Key": "left-after-creating" };
+      const first = await call<CreateServerBody>(
+        owner,
+        "POST",
+        "/api/servers",
+        { name: "Sala" },
+        headers,
+      );
+      expect(first.status).toBe(201);
+
+      // Simulates transferring ownership away and leaving.
+      await getPool().query(
+        `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+        [first.body.server.id, owner.id],
+      );
+
+      const second = await call<CreateServerBody>(
+        owner,
+        "POST",
+        "/api/servers",
+        { name: "Sala" },
+        headers,
+      );
+      expect(second.status).toBe(201);
+      expect(second.body.server.id).not.toBe(first.body.server.id);
+    });
   });
 
   describe("POST /api/import/discord/apply", () => {
@@ -294,6 +322,40 @@ describeDb("idempotent room creation", () => {
         [owner.id],
       );
       expect(rows.rows).toHaveLength(1);
+    });
+
+    it("imports fresh instead of replaying a room the caller no longer belongs to", async () => {
+      fetchOk();
+      const headers = { "Idempotency-Key": "left-after-import" };
+      const first = await call<CreateServerBody>(
+        owner,
+        "POST",
+        "/api/import/discord/apply",
+        { source: "abcd1234" },
+        headers,
+      );
+      expect(first.status).toBe(201);
+      expect(safeFetch).toHaveBeenCalledTimes(1);
+
+      // Simulates transferring ownership away and leaving.
+      await getPool().query(
+        `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+        [first.body.server.id, owner.id],
+      );
+
+      fetchOk();
+      const second = await call<CreateServerBody>(
+        owner,
+        "POST",
+        "/api/import/discord/apply",
+        { source: "abcd1234" },
+        headers,
+      );
+      expect(second.status).toBe(201);
+      expect(second.body.server.id).not.toBe(first.body.server.id);
+      // Neither the peek short-circuit nor the in-transaction replay
+      // answered from the stale room, so the outbound fetch ran again.
+      expect(safeFetch).toHaveBeenCalledTimes(2);
     });
   });
 });

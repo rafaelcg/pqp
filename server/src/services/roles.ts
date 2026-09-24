@@ -12,6 +12,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import type { Queryable } from "./invites.js";
 import {
   bumpPermissionsVersion,
   computeMemberPermissions,
@@ -60,8 +61,13 @@ export function mapRole(row: RoleRow) {
 
 const ROLE_COLUMNS = `id, server_id, name, color, hoist, mentionable, permissions::text AS permissions, position, is_everyone, system_key, show_badge`;
 
-export async function listRoles(serverId: string): Promise<RoleRow[]> {
-  const result = await getPool().query<RoleRow>(
+/** `db` defaults to the pool; pass an open transaction's client to read
+ * inside it instead of borrowing a second connection off the pool. */
+export async function listRoles(
+  serverId: string,
+  db: Queryable = getPool(),
+): Promise<RoleRow[]> {
+  const result = await db.query<RoleRow>(
     `SELECT ${ROLE_COLUMNS} FROM roles WHERE server_id = $1 ORDER BY position ASC, name ASC`,
     [serverId],
   );
