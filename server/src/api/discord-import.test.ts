@@ -148,6 +148,16 @@ describeDb("discord layout import API", () => {
       source: "https://evil.example/abcd1234",
     });
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe("notATemplate");
+    expect(vi.mocked(safeFetch)).not.toHaveBeenCalled();
+  });
+
+  it("names a Discord invite link as the wrong paste, without fetching", async () => {
+    const res = await call(user, "POST", "/api/import/discord/preview", {
+      source: "discord.gg/abcdefg",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("inviteLink");
     expect(vi.mocked(safeFetch)).not.toHaveBeenCalled();
   });
 
@@ -162,6 +172,7 @@ describeDb("discord layout import API", () => {
       source: "nope12",
     });
     expect(res.status).toBe(404);
+    expect(res.body.code).toBe("notFound");
   });
 
   it("maps Discord 429 to 429", async () => {
@@ -175,6 +186,7 @@ describeDb("discord layout import API", () => {
       source: "abcd1234",
     });
     expect(res.status).toBe(429);
+    expect(res.body.code).toBe("rateLimited");
   });
 
   it("maps a too-large Discord body to 413", async () => {
@@ -183,6 +195,7 @@ describeDb("discord layout import API", () => {
       source: "abcd1234",
     });
     expect(res.status).toBe(413);
+    expect(res.body.code).toBe("tooLarge");
   });
 
   it("refuses character accounts on both routes", async () => {

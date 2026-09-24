@@ -43,7 +43,7 @@ export interface ServerReadyPanelProps {
   /** Something landed on the clipboard (or in a share sheet). */
   onCopied?: (kind: "link" | "short" | "long" | "share") => void;
   onCopyFailed?: () => void;
-  /** Show the "good for 7 days" line. The wizard does; a custom invite would not. */
+  /** Show how long the link lasts. The wizard does; a custom invite would not. */
   showNote?: boolean;
 }
 
@@ -179,8 +179,16 @@ export function ServerReadyPanel({
             <span className="animate-door-reveal font-medium text-success">
               {t("onboarding.ready.copiedToast")}
             </span>
-          ) : showNote ? (
-            <span>{t("onboarding.ready.note")}</span>
+          ) : showNote && invite.maxUses == null ? (
+            // The Discord import mints a link that never expires (it is
+            // pasted into the old server's #general); the wizard's lasts 7 days.
+            <span>
+              {t(
+                invite.expiresAt == null
+                  ? "onboarding.ready.noteNoExpiry"
+                  : "onboarding.ready.note",
+              )}
+            </span>
           ) : null}
         </p>
       </div>
