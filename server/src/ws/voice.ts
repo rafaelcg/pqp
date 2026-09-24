@@ -2458,6 +2458,14 @@ async function lookUpVanishedSharer(
  * party can reach here while the presenter's old seat is held.
  */
 const reconnectLookupInFlight = new Map<string, Promise<string | null>>();
+/**
+ * When a channel's last look found nobody. A party's roster events arrive in
+ * bursts, and a presenter held for their resume window would otherwise put a
+ * room-wide `voice_peers` read behind every one of them; the answer that
+ * matters (their new seat appearing) is at most this late.
+ */
+const reconnectLookupMissAt = new Map<string, number>();
+const RECONNECT_LOOKUP_MISS_TTL_MS = 2_000;
 
 function locateReconnectedPresenter(
   channelId: string,
@@ -2467,6 +2475,10 @@ function locateReconnectedPresenter(
   const inFlight = reconnectLookupInFlight.get(channelId);
   if (inFlight) {
     return inFlight;
+  }
+  const missAt = reconnectLookupMissAt.get(channelId);
+  if (missAt !== undefined && Date.now() - missAt < RECONNECT_LOOKUP_MISS_TTL_MS) {
+    return Promise.resolve(null);
   }
   const answer = (async () => {
     try {
@@ -2487,7 +2499,20 @@ function locateReconnectedPresenter(
           row.instanceId !== INSTANCE_ID &&
           liveOthers.has(row.instanceId),
       );
-      return seat?.instanceId ?? null;
+      if (!seat) {
+        const at = Date.now();
+        if (reconnectLookupMissAt.size > 64) {
+          for (const [channel, missed] of reconnectLookupMissAt) {
+            if (at - missed >= RECONNECT_LOOKUP_MISS_TTL_MS) {
+              reconnectLookupMissAt.delete(channel);
+            }
+          }
+        }
+        reconnectLookupMissAt.set(channelId, at);
+        return null;
+      }
+      reconnectLookupMissAt.delete(channelId);
+      return seat.instanceId;
     } catch {
       return null;
     }
@@ -6045,6 +6070,7 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
+  reconnectLookupMissAt.clear();
   resetRosterSequences();
   hlsAudience.reset();
   for (const peer of peers.values()) {
