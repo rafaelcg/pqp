@@ -118,7 +118,14 @@ Auth required. Character accounts get 403, same as `POST /api/servers`.
   then creates the server in one transaction.
 
 `source` is a bare code, `discord.new/CODE`, or
-`discord.com/template/CODE`. The pasted string is never fetched as a URL.
+`discord.com/template/CODE`, with or without `https://`. The pasted string is
+never fetched as a URL.
+
+A failure carries `code` beside the English `error`: `notATemplate`,
+`inviteLink` (a `discord.gg` or `discord.com/invite` link, the most common
+wrong paste), `notFound`, `tooMany`, `tooLarge`, `rateLimited`, or
+`unavailable`. The client shows its own sentence for the code and never the
+English one.
 Only `^[A-Za-z0-9]{4,32}$` is interpolated into
 `https://discord.com/api/v10/guilds/templates/{code}`.
 

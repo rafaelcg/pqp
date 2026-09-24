@@ -1,16 +1,24 @@
 import { Check, ChevronRight, Copy, LayoutList } from "lucide-react";
 import { intlLocale } from "@/lib/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Channel, DiscordImportPlan, Invite, Server } from "@pqp/shared";
+import {
+  isDiscordInviteLink,
+  type Channel,
+  type DiscordImportErrorCode,
+  type DiscordImportPlan,
+  type Invite,
+  type Server,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl } from "@/lib/share-invite";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import {
+  ApiError,
   applyDiscordImport,
   createInvite,
   createServer,
@@ -37,6 +45,49 @@ interface CreateServerDialogProps {
   startSource?: string | null;
   onClose: () => void;
   onCreated: (created: CreatedServerPayload) => Promise<void> | void;
+}
+
+const IMPORT_ERROR_KEYS: Record<DiscordImportErrorCode, MessageKey> = {
+  notATemplate: "importDiscord.error.notATemplate",
+  inviteLink: "importDiscord.error.inviteLink",
+  notFound: "importDiscord.error.notFound",
+  tooMany: "importDiscord.error.tooMany",
+  tooLarge: "importDiscord.error.tooLarge",
+  rateLimited: "importDiscord.error.rateLimited",
+  unavailable: "importDiscord.error.unavailable",
+};
+
+/**
+ * The sentence for a failed preview or apply, in the reader's language. The
+ * server's `error` is English, so it is never shown; its `code` picks the
+ * key, and a server that predates the code falls back on the status.
+ */
+export function discordImportErrorKey(
+  error: unknown,
+  fallback: MessageKey,
+): MessageKey {
+  if (!(error instanceof ApiError)) {
+    return fallback;
+  }
+  const details = error.details as { code?: unknown } | null;
+  const code = typeof details?.code === "string" ? details.code : null;
+  if (code && code in IMPORT_ERROR_KEYS) {
+    return IMPORT_ERROR_KEYS[code as DiscordImportErrorCode];
+  }
+  switch (error.status) {
+    case 400:
+      return "importDiscord.error.notATemplate";
+    case 404:
+      return "importDiscord.error.notFound";
+    case 413:
+      return "importDiscord.error.tooLarge";
+    case 429:
+      return "importDiscord.error.rateLimited";
+    case 502:
+      return "importDiscord.error.unavailable";
+    default:
+      return fallback;
+  }
 }
 
 /**
@@ -179,6 +230,12 @@ export function CreateServerDialog({
     if (!source.trim() || busy) {
       return;
     }
+    // An invite is the wrong link people have at hand. Say so here, without
+    // a round trip, instead of letting it read as "not a template".
+    if (isDiscordInviteLink(source)) {
+      setError(t("importDiscord.error.inviteLink"));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -186,9 +243,7 @@ export function CreateServerDialog({
       setPlan(next);
       setStep("preview");
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : t("importDiscord.error.previewFailed"),
-      );
+      setError(t(discordImportErrorKey(err, "importDiscord.error.previewFailed")));
     } finally {
       setBusy(false);
     }
@@ -214,9 +269,7 @@ export function CreateServerDialog({
       });
       setStep("done");
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : t("importDiscord.error.applyFailed"),
-      );
+      setError(t(discordImportErrorKey(err, "importDiscord.error.applyFailed")));
     } finally {
       setBusy(false);
     }

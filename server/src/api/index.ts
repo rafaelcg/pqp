@@ -118,7 +118,9 @@ import {
   discordImportSourceSchema,
   DiscordImportCapError,
   DiscordImportParseError,
+  isDiscordInviteLink,
   parseDiscordTemplateCode,
+  type DiscordImportErrorCode,
   claimCommunityHomeMediaSchema,
   COMMUNITY_HOME_MAX_BYTES,
   pinCommunityHomePostSchema,
@@ -3245,32 +3247,63 @@ router.post("/api/servers", async ({ req, user }) => {
   });
 });
 
+/**
+ * An import failure with a `code` beside the English sentence, so the client
+ * can say it in the reader's language (`DiscordImportErrorCode`).
+ */
+function discordImportError(
+  status: number,
+  message: string,
+  code: DiscordImportErrorCode,
+): HttpErrorWithDetail {
+  return new HttpErrorWithDetail(status, message, { code });
+}
+
 function throwDiscordImportHttp(
   error: unknown,
   res: { setHeader: (name: string, value: string) => void },
 ): never {
   if (error instanceof DiscordImportParseError) {
-    throw new HttpError(400, error.message);
+    throw discordImportError(400, error.message, "notATemplate");
   }
   if (error instanceof DiscordImportCapError) {
-    throw new HttpError(400, error.message);
+    throw discordImportError(400, error.message, "tooMany");
   }
   if (error instanceof DiscordTemplateNotFoundError) {
-    throw new NotFound(error.message);
+    throw discordImportError(404, error.message, "notFound");
   }
   if (error instanceof DiscordTemplateRateLimitedError) {
     if (error.retryAfterSeconds != null) {
       res.setHeader("Retry-After", String(error.retryAfterSeconds));
     }
-    throw new HttpError(429, error.message);
+    throw discordImportError(429, error.message, "rateLimited");
   }
   if (error instanceof DiscordTemplateTooLargeError) {
-    throw new HttpError(413, error.message);
+    throw discordImportError(413, error.message, "tooLarge");
   }
   if (error instanceof DiscordTemplateUnavailableError) {
-    throw new HttpError(502, error.message);
+    throw discordImportError(502, error.message, "unavailable");
   }
   throw error;
+}
+
+/** Refuses a paste that is not a template link, before any limiter token. */
+function requireDiscordTemplateSource(source: string): void {
+  if (parseDiscordTemplateCode(source)) {
+    return;
+  }
+  if (isDiscordInviteLink(source)) {
+    throw discordImportError(
+      400,
+      "That is a Discord invite link. Paste the server template link (discord.new/…).",
+      "inviteLink",
+    );
+  }
+  throw discordImportError(
+    400,
+    "Paste a discord.new link or a Discord template code.",
+    "notATemplate",
+  );
 }
 
 function takeDiscordImportLimiters(
@@ -3283,14 +3316,14 @@ function takeDiscordImportLimiters(
       "Retry-After",
       String(discordImportLimiter.retryAfter(userKey)),
     );
-    throw new HttpError(429, "Slow down");
+    throw discordImportError(429, "Slow down", "rateLimited");
   }
   if (!discordFetchLimiter.take("discord")) {
     res.setHeader(
       "Retry-After",
       String(discordFetchLimiter.retryAfter("discord")),
     );
-    throw new HttpError(429, "Slow down");
+    throw discordImportError(429, "Slow down", "rateLimited");
   }
 }
 
@@ -3299,12 +3332,7 @@ router.post("/api/import/discord/preview", async ({ req, user, res }) => {
     throw new Forbidden("Character accounts cannot create servers");
   }
   const body = discordImportSourceSchema.parse(await readJsonBody(req));
-  if (!parseDiscordTemplateCode(body.source)) {
-    throw new HttpError(
-      400,
-      "Paste a discord.new link or a Discord template code.",
-    );
-  }
+  requireDiscordTemplateSource(body.source);
   takeDiscordImportLimiters(user.id, res);
   try {
     const { plan } = await fetchMappedDiscordTemplate(body.source);
@@ -3319,12 +3347,7 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
     throw new Forbidden("Character accounts cannot create servers");
   }
   const body = discordImportSourceSchema.parse(await readJsonBody(req));
-  if (!parseDiscordTemplateCode(body.source)) {
-    throw new HttpError(
-      400,
-      "Paste a discord.new link or a Discord template code.",
-    );
-  }
+  requireDiscordTemplateSource(body.source);
   takeDiscordImportLimiters(user.id, res);
   try {
     const { code, plan } = await fetchMappedDiscordTemplate(body.source);

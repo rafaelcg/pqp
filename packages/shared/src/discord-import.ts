@@ -459,19 +459,33 @@ export function sanitiseImportedRoleName(
 }
 
 /**
+ * Parse a pasted link as a URL, adding `https://` when it has no scheme.
+ * People type `discord.new/CODE` (the placeholder shows exactly that), and
+ * `new URL()` throws on a string with no scheme.
+ */
+function parsePastedUrl(trimmed: string): URL | null {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    return new URL(withScheme);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Pull a template code out of a paste. Accepts a bare code, discord.new/CODE,
- * or discord.com/template/CODE. Anything else is null — the caller must not
- * fetch the original string as a URL.
+ * or discord.com/template/CODE, with or without `https://`. Anything else is
+ * null — the caller must not fetch the original string as a URL.
  */
 export function parseDiscordTemplateCode(source: string): string | null {
   const trimmed = source.trim();
   if (DISCORD_TEMPLATE_CODE_RE.test(trimmed)) {
     return trimmed;
   }
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
+  const url = parsePastedUrl(trimmed);
+  if (!url) {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -490,6 +504,42 @@ export function parseDiscordTemplateCode(source: string): string | null {
   }
   return null;
 }
+
+/**
+ * True when a paste is a Discord server invite (`discord.gg/x`,
+ * `discord.com/invite/x`), the link people have at hand and the most common
+ * wrong paste. An invite cannot be read as a template, so the import says so
+ * instead of answering "not found".
+ */
+export function isDiscordInviteLink(source: string): boolean {
+  const url = parsePastedUrl(source.trim());
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
+    return false;
+  }
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (host === "discord.gg") {
+    return parts.length > 0;
+  }
+  return (
+    (host === "discord.com" || host === "discordapp.com") &&
+    parts[0] === "invite" &&
+    parts.length > 1
+  );
+}
+
+/**
+ * Why an import request failed, sent as `code` beside the English `error` so
+ * the client can say it in the reader's language.
+ */
+export type DiscordImportErrorCode =
+  | "notATemplate"
+  | "inviteLink"
+  | "notFound"
+  | "tooMany"
+  | "tooLarge"
+  | "rateLimited"
+  | "unavailable";
 
 export function discordTemplateUrl(code: string): string {
   if (!DISCORD_TEMPLATE_CODE_RE.test(code)) {
