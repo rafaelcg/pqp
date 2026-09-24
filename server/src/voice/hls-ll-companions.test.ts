@@ -201,7 +201,8 @@ describe("an LL broadcast's camera and mic archive", () => {
     for (const [sql] of query.mock.calls.filter(([sql]) =>
       sql.includes("INSERT INTO hls_sessions"),
     )) {
-      expect(sql).toMatch(/keep_replay\)\s+VALUES \(.*, TRUE\)/);
+      // `keep_replay` is the tenth column and TRUE its tenth value.
+      expect(sql).toMatch(/keep_replay, runs\)\s+VALUES \([^)]*\), \$4, \$5, \$6, \$7, \$8, \$9, TRUE,/);
     }
     expect(liveHlsActivity()).toMatchObject({ sessions: 0, micArchives: 1, cameraSessions: 1 });
   });

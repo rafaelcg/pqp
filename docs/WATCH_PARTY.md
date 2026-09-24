@@ -1943,6 +1943,100 @@ over, and a viewer stuck on "reconnecting" with the truth in the sidebar
 beside it. Read that first when a party is in a state nobody can explain;
 this section is the restart machinery underneath it.
 
+### A restart keeps the session (2026-09-24)
+
+**The ladder restarts IN PLACE.** Production, 2026-09-24, one conventional show:
+at 07:42:32 the 480p egress died 22 s after go-live (`Timestamping error on
+input streams`) and the restart minted a new `startedAt`; at 07:51:41, right
+after a rolling deploy's adoption, the presenter's resumed client republished
+the screen on a new track sid and the session was stopped and started again.
+Every viewer re-attached twice for one party. Now none of these ends the
+session: an egress that died or stuck (`egress-ended`), a replaced screen or
+screen-audio track (`screen-track-replaced`), and the same person back under a
+fresh peer id with a fresh track (`presenter-reconnected`, recognised through
+`setLiveHlsPresenterIdentity`). The room stays in `rooms`, announced, with the
+same stream, camera and voice archive; the ladder's egresses are stopped and a
+new **egress run** starts under the same `startedAt` (`restartRoomInPlace` in
+`hls-egress.ts`). Only a genuine end ends it: the share gone past its grace, the
+host ending the party, the presenter gone, or the restart budget
+(`HLS_MAX_RESTARTS` in five minutes) running out
+(`hlsStopped reason=restart-budget-exhausted`). A session that was never
+announced (its first playlist never went live) still restarts fresh, since
+nobody is attached to it.
+
+**A run writes under its own names** (`hls-runs.ts`), the camera's `-r<ms>` shape:
+`<startedAt>-<rung>-r<ms>_NNNNN.ts`, `...-r<ms>.m3u8` (live) and
+`...-r<ms>-index.m3u8` (the run's whole record). A fresh egress numbers from
+`_00000` again, so a shared name would overwrite the previous run. Every run
+still starts with the row's `object_prefix`, so retention deletes all of them
+and `keep_replay` keeps all of them through the one row.
+
+**The media sequence is durable, on the row.** `hls_sessions.runs` (JSONB, NULL
+for a rung that never restarted) lists `{suffix, base}` per run. `base` is the
+media sequence the run's first segment takes in the stitched playlist, decided
+once at restart time from the previous run's final live playlist (read after
+its egress is stopped: `#EXT-X-MEDIA-SEQUENCE` plus entries), estimated high
+when that cannot be read. The proxy (`renderSignedPlaylist`) reads the runs
+with its liveness check, merges each finished run's frozen tail capped at the
+next run's base, then the current run, and emits one `#EXT-X-DISCONTINUITY` on
+each run's first segment plus `#EXT-X-DISCONTINUITY-SEQUENCE` once one has
+slid out. Because the base is on the row, a second machine, or an API that
+booted after the restart, renders the same sequence line, and a viewer
+bouncing between them through Cloudflare never sees a number reused. The live
+render also drops `#EXT-X-ENDLIST`: a stopped egress writes one, and the row,
+not the transcoder, says when a session is over. While the new run has not
+written yet (its playlist 404s) the proxy serves the frozen tail, so the
+player holds instead of erroring.
+
+**Viewers** keep their player: the same URL means `sameHlsSession`, and the web
+player treats a frozen same-session playlist as a hold rather than a rebuild
+(`hls-stall.ts` puts `sequence-stuck` ahead of `stall` on the conventional
+path, the hold keeps the loader running, and Safari's native element is given
+40 s before its source is reset). The seam is detection plus the new egress's
+cold start: in `tools/restart-harness` (real API build, two processes behind a
+round-robin edge, ffmpeg as the egress, stock hls.js) a 15 s dead gap left the
+playhead moving again 8 s after the new run started, one hls.js instance, one
+master load, no fatal error, over two restarts.
+
+**Recordings** include every run in order: the replay stitches each run's
+`-index.m3u8` into one VOD with a discontinuity between runs (capped the same
+way as the live render), and the film download plans every run the way the
+camera's does, moving each later run's MPEG-TS clock to where its
+`#EXT-X-PROGRAM-DATE-TIME` says it started.
+
+**Adoption carries the runs.** Both the boot reconcile and the resume adoption
+read `runs`, so the monitor probes the playlist the adopted egress is actually
+writing (probing the first run's frozen one would read a healthy ladder as
+stuck). The boot reconcile also passes the ladder's `audio_track_id` now: left
+out, the first reconcile after a deploy saw the screen's music sid disagree
+with a remembered null and restarted the ladder for nothing. A handover is
+refused while a ladder is between runs (there is no running egress to adopt).
+
+**The camera and the host's voice archive ride through it untouched.** Two
+related fixes from the same show, where ~100 s of camera went missing after the
+first rolling restart: a camera adopted with the presenter's separated voice
+(`audio_track_id` on its row) re-seeds the "separada" declaration, which the
+client never re-sends after a deploy, so the first reconcile no longer restarts
+the camera silent; and a camera that dies once retries after 3 s instead of the
+two-minute cooldown (a second death inside five minutes still waits it out).
+
+`voice.hlsRungRestartingInPlace` (stop), `voice.hlsRungRestartedInPlace`
+(`reason`, `runSuffix`, `bases`, `playlistWaitMs`, `seamMs`) and
+`voice.hlsRungRestartFailed` narrate it; `liveHls.restartsInPlaceTotal`,
+`restartsInPlaceByReason` and `restartingSessions` on `/api/admin/metrics`
+count it.
+
+**LL (pqp-remux) is not covered, and has a narrower version of the same gap.**
+A dead pipeline there is the box's own business: its watchdog restarts a
+stalled session once, inside the same session, and only a second stall demotes
+it to the conventional ladder (a new session, as before). But
+`internal/subscriber` binds the FIRST screen-share track it sees and never
+rebinds, so a republished screen reaches the box only through that one
+watchdog restart, and a second republish in the same party demotes. And a
+presenter back under a fresh peer id still ends the LL session
+(`reconcileLlHlsNow`: any other peer id restarts). Rebinding in the subscriber
+and the same-person rule on the LL side are the follow-ups.
+
 **Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
 `no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
 `playlist-not-ready`, `presenter-gone` (the presenter left while this session

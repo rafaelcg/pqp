@@ -1936,15 +1936,25 @@ export function HlsWatchPlayer({
         return;
       }
       if (decision === "hold") {
-        // Conventional restart dead window: stop the 1 Hz playlist /
-        // last-segment loop, keep the restarting overlay up, and let the
-        // next ticks' `"reconnect"` polls find a fresh master. No seek and
-        // no startLoad — those are what made the dead window look broken.
+        // Conventional restart dead window: keep the restarting overlay up,
+        // and let the next ticks' `"reconnect"` polls ask what is live. No
+        // seek and no startLoad: those are what made the dead window look
+        // broken.
+        //
+        // The loader stops only for a playlist that is GONE (404/410, the
+        // old session). A playlist that is merely FROZEN is, since the
+        // server keeps the session through a transcode restart, a seam that
+        // resumes on the same URL behind an `EXT-X-DISCONTINUITY`: hls.js
+        // keeps polling it at its own cadence (no 1 Hz loop, that was the
+        // ladder), sees the sequence move the moment it does, and plays on
+        // with no reconnect round trip in between.
         clearPendingReconnect();
         console.warn(
           `[hls] stream stalled (${watch.lastReason}), holding for restart`,
         );
-        hlsRef.current?.stopLoad?.();
+        if (watch.lastReason !== "sequence-stuck") {
+          hlsRef.current?.stopLoad?.();
+        }
         return;
       }
       if (
@@ -2095,6 +2105,9 @@ export function HlsWatchPlayer({
         nativeHls: video.canPlayType("application/vnd.apple.mpegurl"),
         mseSupported: Hls.isSupported(),
       });
+      // The native engine shows the watchdog no playlist, so its stall rule
+      // must outlast a seam on its own (`NATIVE_LIVE_STALL_MS`).
+      watch.setNativeLiveEngine(engine === "native" && !isVod);
       if (engine === "native") {
         video.src = activeSrc;
         void play();
@@ -2470,7 +2483,24 @@ export function HlsWatchPlayer({
         // sees a session and after every API restart, while a dead egress
         // is one that stops APPENDING (`livePlaylistProgress`). This is how
         // the watchdog tells a dead egress apart from a slow network.
+        const wasHolding = watch.isHoldingForRestart;
         watch.onMediaSequence(livePlaylistProgress(data.details), Date.now());
+        if (wasHolding && !watch.isHoldingForRestart && !cancelled) {
+          // THE SEAM IS OVER, SAME SESSION. The playlist moved again, so a
+          // reconnect still waiting out its jitter would only answer a
+          // question that no longer applies (and its "nothing fresher"
+          // fall-through would put the player back on "reconnecting").
+          clearPendingReconnect();
+          // A buffer that outlasted the seam never fires `playing` again,
+          // which is the only other thing that takes the restarting copy
+          // down; a player that did freeze clears it on its `playing`.
+          if (!video.paused && video.readyState >= HAVE_FUTURE_DATA) {
+            restarting = false;
+            setStallReason(null);
+            setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+            setPhase("playing");
+          }
+        }
         // LL only, and a SEPARATE signal from the media-sequence one above
         // (Farol review, this PR): under LL's blocking reload, hls.js fires
         // this same event once per PART, not only once per segment --

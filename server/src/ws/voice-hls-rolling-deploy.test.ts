@@ -164,6 +164,8 @@ const box = {
   remuxStops: [] as string[],
   /** Whether the presenter's screen track is published on the SFU. */
   screenPublished: true,
+  /** The sid of that publication: a republish (a resume, a re-pick) changes it. */
+  screenTrack: "TR_SCREEN",
   next: 0,
   reset() {
     this.egresses.clear();
@@ -173,6 +175,7 @@ const box = {
     this.remuxStarts = [];
     this.remuxStops = [];
     this.screenPublished = true;
+    this.screenTrack = "TR_SCREEN";
     this.next = 0;
   },
 };
@@ -184,7 +187,8 @@ const fakeEgress = {
   ) => {
     box.next += 1;
     const egressId = `EG_${box.next}`;
-    const match = /\/(\d+)-([a-z0-9]+)$/.exec(output.filenamePrefix ?? "");
+    // `-r<ms>` is an egress run of an in-place restart: the same session.
+    const match = /\/(\d+)-([a-z0-9]+)(?:-r\d+)?$/.exec(output.filenamePrefix ?? "");
     box.egresses.set(egressId, {
       egressId,
       room: roomName,
@@ -323,7 +327,7 @@ async function bootInstance(name: string): Promise<Instance> {
     egress: fakeEgress,
     findTracks: async () =>
       box.screenPublished
-        ? { videoTrackId: "TR_SCREEN", audioTrackId: "TR_MUSIC", sourceHeight: 720 }
+        ? { videoTrackId: box.screenTrack, audioTrackId: "TR_MUSIC", sourceHeight: 720 }
         : null,
     playlistReady: true,
   });
@@ -667,7 +671,11 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     const b1 = await bootInstance("api-b#1");
     const presenter = await presenterJoinsAndShares(a1, randomUUID(), channel);
 
-    await waitFor(() => owners(channel).length === 1, "the show to go live");
+    // Announced, not merely started: the room exists before its first playlist.
+    await waitFor(
+      () => (a1.egress.liveHlsStreamFor(channel) ?? a1.remux.llStreamFor(channel)) !== null,
+      "the show to go live",
+    );
     expect(owners(channel)).toEqual(["api-a#1"]);
     const liveStream =
       a1.egress.liveHlsStreamFor(channel) ?? a1.remux.llStreamFor(channel);
@@ -786,6 +794,91 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
 
   it("conventional ladder: the same session, one ladder, a moving playlist, through both restarts and a blip", async () => {
     await drill("conventional");
+  }, 60_000);
+
+  /**
+   * 2026-09-24 07:51:37 to 07:51:41: the new process adopted the ladder after
+   * a rolling restart, the presenter resumed and republished the screen on a
+   * new track sid, and the session was stopped and a new one started. Then
+   * an egress died. Both are the same party now: new egress RUNS under the
+   * same `startedAt`, recorded on the rows, the audience never re-attaching.
+   */
+  it("conventional: a screen track replaced after a deploy's adoption, then a dead egress, keep the session", async () => {
+    const channel = fixture.channelId;
+    const a1 = await bootInstance("api-a#1");
+    const presenter = await presenterJoinsAndShares(a1, randomUUID(), channel);
+    // Announced, not merely started: the room exists before its first playlist.
+    await waitFor(() => a1.egress.liveHlsStreamFor(channel) !== null, "the show to go live");
+    const startedAt = a1.egress.liveHlsStreamFor(channel)!.startedAt;
+    const viewer = startViewer(channel, "conventional");
+
+    await drainAndKill(a1, [presenter.socket]);
+    const a2 = await bootInstance("api-a#2");
+    expect(owners(channel)).toEqual(["api-a#2"]);
+    // The resumed client republishes its screen: a new sid on the SFU.
+    box.screenTrack = "TR_SCREEN_AFTER_RESUME";
+    await presenterResumes(a2, presenter, channel);
+    await waitFor(
+      () =>
+        logEvent.mock.calls.some(
+          ([name, detail]) =>
+            name === "voice.hlsRungRestartedInPlace" &&
+            (detail as { reason?: string }).reason === "screen-track-replaced",
+        ),
+      "the ladder to restart in place on the new track",
+    );
+    expect(a2.egress.liveHlsStreamFor(channel)?.startedAt).toBe(startedAt);
+
+    // Then the new primary egress dies on the media box.
+    const primary = [...box.egresses.values()]
+      .filter((egress) => egress.room === channel && egress.stoppedMs === null)
+      .find((egress) => egress.rung === "480p30")!;
+    primary.stoppedMs = Date.now();
+    await a2.egress.checkLiveHlsHealth(Date.now() + 60_000);
+    await waitFor(
+      () =>
+        logEvent.mock.calls.some(
+          ([name, detail]) =>
+            name === "voice.hlsRungRestartedInPlace" &&
+            (detail as { reason?: string }).reason === "egress-ended",
+        ),
+      "the ladder to restart in place after the egress died",
+      12_000,
+    );
+    viewer.stop();
+
+    // One session on the box, from go-live to now.
+    expect(new Set(viewer.samples.flatMap((sample) => sample.sessions))).toEqual(
+      new Set([startedAt]),
+    );
+    expect([...box.egresses.values()].every((egress) => egress.startedAt === startedAt)).toBe(true);
+    // Never two ladders at once.
+    expect(viewer.samples.filter((sample) => sample.running > 1)).toEqual([]);
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsStopped", expect.anything());
+
+    // The rows: one per rung, still open, with every run on them in order and
+    // one monotonic sequence line.
+    const rows = await pools[0]!.getPool().query<{
+      rung: string;
+      ended_at: Date | null;
+      runs: { suffix: string; base: number }[] | null;
+      egress_id: string;
+    }>(
+      `SELECT rung, ended_at, runs, egress_id FROM hls_sessions
+        WHERE channel_id = $1 AND rung IN ('480p30', '720p30') ORDER BY rung`,
+      [channel],
+    );
+    expect(rows.rows).toHaveLength(2);
+    for (const row of rows.rows) {
+      expect(row.ended_at).toBeNull();
+      expect(row.runs).toHaveLength(3);
+      expect(row.runs![0]).toEqual({ suffix: "", base: 0 });
+      expect(row.runs![1]!.base).toBeGreaterThan(0);
+      expect(row.runs![2]!.base).toBeGreaterThan(row.runs![1]!.base);
+      expect(row.runs![1]!.suffix).toMatch(/^-r\d+$/);
+      // The row names the egress writing the LAST run.
+      expect(box.egresses.get(row.egress_id)?.stoppedMs).toBeNull();
+    }
   }, 60_000);
 
   it("low-latency (pqp-remux): the same, for an LL session", async () => {

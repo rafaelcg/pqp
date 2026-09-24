@@ -74,6 +74,11 @@ import {
 } from "./hls-ladder.js";
 import { HlsPlaylistNotFound, HlsPlaylistUnavailable } from "./hls-playlist-proxy.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import {
+  type HlsRun,
+  parseHlsRuns,
+  stitchRunPlaylists,
+} from "./hls-runs.js";
 import { firstPts, TsTimestampShift } from "./ts-timestamp-shift.js";
 
 const LADDER_RUNG_NAMES = Object.keys(LADDER_RUNGS);
@@ -628,8 +633,8 @@ export async function buildReplaySignedPlaylist(
     throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
   const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
-  const session = await getPool().query(
-    `SELECT 1 FROM hls_sessions
+  const session = await getPool().query<{ runs: unknown }>(
+    `SELECT runs FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
        AND ${availablePredicate(3, 4)}`,
@@ -641,12 +646,62 @@ export async function buildReplaySignedPlaylist(
       `No replay ${objectPrefix} for channel ${channelId}`,
     );
   }
-  const body = await fetchReplayPlaylistBody(config, channelId, startedAt, rung);
+  const runs = parseHlsRuns(session.rows[0]?.runs ?? null);
+  const body =
+    runs.length === 1 && runs[0]!.suffix === ""
+      ? await fetchReplayPlaylistBody(config, channelId, startedAt, rung)
+      : await stitchedReplayBody(config, objectPrefix, runs);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
   const rewritten = await signPlaylistObjects(body, prefixDir, config, now);
   pruneStale(replayBodyCache, now);
   replayBodyCache.set(cacheKey, { body: rewritten, at: now });
   return rewritten;
+}
+
+/**
+ * A rung whose egress restarted in place (`hls-runs.ts`): every run's
+ * `-index.m3u8`, in start order, stitched into one VOD playlist. A run whose
+ * playlist is gone or lists nothing is left out (a restart that failed before
+ * its first segment writes neither); when none is left, the same error a
+ * single run's missing playlist raises.
+ */
+async function stitchedReplayBody(
+  config: ReplayStorageConfig,
+  objectPrefix: string,
+  runs: readonly HlsRun[],
+): Promise<string> {
+  const bodies = await mapWithConcurrency(
+    runs,
+    CAMERA_PLAN_CONCURRENCY,
+    async (run) => {
+      const response = await fetchPlaylistObject(
+        config,
+        `${objectPrefix}${run.suffix}-index.m3u8`,
+      );
+      if (response.status === 404) {
+        return "";
+      }
+      if (!response.ok) {
+        // A transient failure is not a missing run: a replay cached with a
+        // hole in it would be served for REPLAY_CACHE_TTL_MS.
+        throw new HlsPlaylistUnavailable(
+          `Storage returned HTTP ${response.status} for the replay playlist`,
+        );
+      }
+      return response.text();
+    },
+  );
+  const caps = runs.map((run, index) => {
+    const next = runs[index + 1];
+    return next ? next.base - run.base : null;
+  });
+  const stitched = stitchRunPlaylists(bodies, caps);
+  if (stitched === null) {
+    throw new HlsPlaylistUnavailable(
+      "Storage returned HTTP 404 for the replay playlist",
+    );
+  }
+  return stitched;
 }
 
 // --------------------------------------------------------------------------
@@ -941,7 +996,8 @@ export interface WatchPartyDownloadPlan {
   keys: string[];
   /** Per key, 90 kHz ticks to move that object's MPEG-TS timestamps by
    * (`ts-timestamp-shift.ts`). Absent, or 0, means byte for byte. Set for a
-   * camera with more than one run, so the runs play one after another. */
+   * camera or a film rung with more than one run, so the runs play one after
+   * another. */
   ptsOffsets?: number[];
   /** Exact: every object the download concatenates was priced by the same
    * listing that proved it is there, so this is a `Content-Length` the
@@ -1349,7 +1405,7 @@ export async function buildWatchPartyDownloadPlan(
   // and then downloading from it must not scan the prefix twice.
   const sizes = await objectSizes(prefix, config);
   if (kind === "camera") {
-    return buildCameraDownloadPlan(prefix, sizes, config);
+    return buildRunsDownloadPlan(kind, prefix, sizes, config);
   }
   if (kind === "voice") {
     const size = sizes.get(prefix);
@@ -1363,6 +1419,17 @@ export async function buildWatchPartyDownloadPlan(
       keys: [prefix],
       bytes: size,
     };
+  }
+  // A rung whose egress restarted in place wrote one run per egress, the
+  // camera's name shape exactly, so it is planned the camera's way. Read from
+  // the listing rather than the row's `runs`: the objects are what the file
+  // is made of. One run (the legacy index alone) stays byte for byte.
+  if (
+    cameraRunPlaylistKeys(prefix, sizes.keys()).some(
+      (key) => key !== `${prefix}-index.m3u8`,
+    )
+  ) {
+    return buildRunsDownloadPlan(kind, prefix, sizes, config);
   }
   const keys = playlistKeys(
     await fetchReplayPlaylistBody(config, channelId, startedAtMs, rung),
@@ -1391,11 +1458,12 @@ export async function buildWatchPartyDownloadPlan(
 }
 
 // --------------------------------------------------------------------------
-// The presenter's camera, every run of it.
+// The presenter's camera, every run of it (and a ladder rung's, the same way).
 //
 // The camera stops and starts inside a broadcast (turned off and on, a device
 // switch, a dead egress coming back), and every run is its own egress writing
-// under its own names (`cameraRunNames` in hls-egress.ts): the first run as
+// under its own names (`cameraRunNames` in hls-egress.ts). A film rung that
+// restarted in place (`hls-runs.ts`) writes the same shape: the first run as
 // `<prefix>_NNNNN.ts` with `<prefix>-index.m3u8`, every later one as
 // `<prefix>-r<its start, ms>_NNNNN.ts` with `<prefix>-r<ms>-index.m3u8`. All
 // of them sit under the one row's prefix, so the listing that prices the
@@ -1414,7 +1482,8 @@ export async function buildWatchPartyDownloadPlan(
 const CAMERA_RUN_INDEX = /-r(\d{1,16})-index\.m3u8$/;
 /** How much of a segment's head is read to find its first PTS. */
 const CAMERA_PTS_PROBE_BYTES = 64 * 1024;
-/** Storage requests in flight at once while planning a camera download. */
+/** Storage requests in flight at once while planning a download over runs
+ * (or stitching a replay over them). */
 const CAMERA_PLAN_CONCURRENCY = 4;
 
 /** `items.map(fn)`, at most `limit` at a time, results in input order. */
@@ -1438,7 +1507,9 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** The camera's run playlists under `prefix`, first run first. */
+/** The run playlists under `prefix` (a camera or a restarted rung), first run
+ * first. Only `<prefix>-index.m3u8` and `<prefix>-r<digits>-index.m3u8`
+ * count, so another run's live playlist or a segment never does. */
 export function cameraRunPlaylistKeys(
   prefix: string,
   keys: Iterable<string>,
@@ -1511,7 +1582,8 @@ async function segmentFirstPts(
   return firstPts(new Uint8Array(await response.arrayBuffer()));
 }
 
-async function buildCameraDownloadPlan(
+async function buildRunsDownloadPlan(
+  kind: "camera" | "film",
   prefix: string,
   sizes: Map<string, number>,
   config: ReplayStorageConfig,
@@ -1588,8 +1660,8 @@ async function buildCameraDownloadPlan(
     }
   }
   return {
-    kind: "camera",
-    contentType: DOWNLOAD_CONTENT_TYPE.camera,
+    kind,
+    contentType: DOWNLOAD_CONTENT_TYPE[kind],
     extension: "ts",
     keys,
     ...(ptsOffsets.some((offset) => offset !== 0) ? { ptsOffsets } : {}),

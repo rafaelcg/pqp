@@ -1404,3 +1404,135 @@ describe("keep-warm loop", () => {
     expect(hlsKeepWarmLoopsActive()).toBe(0);
   });
 });
+
+/**
+ * A LADDER RUNG THAT RESTARTED IN PLACE: the row names its runs
+ * (`hls_sessions.runs`), the proxy reads the current run's live playlist and
+ * the previous run's frozen final one, and serves one continuous playlist.
+ */
+describe("buildSignedPlaylist across egress runs", () => {
+  const RUNG = "720p30";
+  const SUFFIX = "-r1700000060000";
+  const RUNS = [
+    { suffix: "", base: 0 },
+    { suffix: SUFFIX, base: 12 },
+  ];
+
+  function runBody(suffix: string, first: number, count: number, ended = false): string {
+    const lines = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:3",
+      "#EXT-X-TARGETDURATION:4",
+      `#EXT-X-MEDIA-SEQUENCE:${first}`,
+    ];
+    for (let i = 0; i < count; i += 1) {
+      const seq = first + i;
+      lines.push(
+        `#EXT-X-PROGRAM-DATE-TIME:2026-09-24T07:42:${String(seq).padStart(2, "0")}.000Z`,
+        "#EXTINF:4.0,",
+        `${STARTED_AT}-${RUNG}${suffix}_${String(seq).padStart(5, "0")}.ts`,
+      );
+    }
+    if (ended) {
+      lines.push("#EXT-X-ENDLIST");
+    }
+    return lines.join("\n");
+  }
+
+  let current: { status: number; body: string };
+  const fetched: string[] = [];
+
+  beforeEach(() => {
+    disableHls();
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    pool.query.mockReset();
+    pool.query.mockImplementation(async () => ({
+      rowCount: 1,
+      rows: [{ id: "session-1", runs: RUNS }] as unknown as { rung: string }[],
+    }));
+    fetched.length = 0;
+    current = { status: 200, body: runBody(SUFFIX, 0, 3) };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const path = new URL(String(input)).pathname;
+        fetched.push(path);
+        if (path.endsWith(`-${RUNG}${SUFFIX}.m3u8`)) {
+          return new Response(current.body, { status: current.status });
+        }
+        if (path.endsWith(`-${RUNG}.m3u8`)) {
+          // Run 0's egress was stopped for the restart: frozen, closed.
+          return new Response(runBody("", 7, 5, true), { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    disableHls();
+    vi.unstubAllGlobals();
+    pool.query.mockReset();
+    pool.query.mockImplementation(async () => ({ rowCount: pool.rowCount, rows: [] }));
+  });
+
+  function uris(body: string): string[] {
+    return body
+      .split("\n")
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => new URL(line).pathname.split("/").pop()!);
+  }
+
+  it("stitches the previous run's tail and the new run with one discontinuity", async () => {
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, RUNG);
+    expect(body).toContain("#EXT-X-MEDIA-SEQUENCE:7");
+    expect(body.match(/^#EXT-X-DISCONTINUITY$/gm)).toHaveLength(1);
+    // The stopped run's end marker is not the film's.
+    expect(body).not.toContain("#EXT-X-ENDLIST");
+    expect(uris(body)).toEqual([
+      `${STARTED_AT}-${RUNG}_00007.ts`,
+      `${STARTED_AT}-${RUNG}_00008.ts`,
+      `${STARTED_AT}-${RUNG}_00009.ts`,
+      `${STARTED_AT}-${RUNG}_00010.ts`,
+      `${STARTED_AT}-${RUNG}_00011.ts`,
+      `${STARTED_AT}-${RUNG}${SUFFIX}_00000.ts`,
+      `${STARTED_AT}-${RUNG}${SUFFIX}_00001.ts`,
+      `${STARTED_AT}-${RUNG}${SUFFIX}_00002.ts`,
+    ]);
+    // The row was asked for its runs.
+    expect(String(pool.query.mock.calls[0]![0])).toContain("runs");
+  });
+
+  it("serves the frozen tail, not an error, while the new run has not written yet", async () => {
+    current = { status: 404, body: "" };
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, RUNG);
+    expect(body).toContain("#EXT-X-MEDIA-SEQUENCE:7");
+    expect(body).not.toContain("#EXT-X-ENDLIST");
+    expect(uris(body).at(-1)).toBe(`${STARTED_AT}-${RUNG}_00011.ts`);
+  });
+
+  it("keeps one monotonic sequence line as the new run grows", async () => {
+    const seen: number[] = [];
+    for (let first = 0; first <= 12; first += 1) {
+      current = { status: 200, body: runBody(SUFFIX, first, 5) };
+      resetHlsPlaylistCacheForTests();
+      const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, RUNG);
+      seen.push(Number(body.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)$/m)![1]));
+    }
+    for (let i = 1; i < seen.length; i += 1) {
+      expect(seen[i]!).toBeGreaterThanOrEqual(seen[i - 1]!);
+    }
+  });
+
+  it("a rung whose row has no runs is served exactly as before", async () => {
+    pool.query.mockImplementation(async () => ({
+      rowCount: 1,
+      rows: [{ id: "session-1", runs: null }] as unknown as { rung: string }[],
+    }));
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, RUNG);
+    expect(body).not.toContain("DISCONTINUITY");
+    expect(fetched.every((path) => path.endsWith(`-${RUNG}.m3u8`))).toBe(true);
+  });
+});

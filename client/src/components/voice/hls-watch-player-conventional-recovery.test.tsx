@@ -340,6 +340,13 @@ describe("the conventional recovery ladder is what it was before #646", () => {
    *
    * Zero seeks in thirty seconds now, where it used to be three; either
    * way the claim of this case is the same one, that nothing repeats.
+   *
+   * AND NO `stopLoad` EITHER, since the server keeps the session through a
+   * transcode restart: a FROZEN playlist is a seam that resumes on the same
+   * URL, so hls.js keeps polling it at its own cadence and sees it move.
+   * Only a GONE playlist (404/410) stops the loader
+   * (`hls-watch-player-restart.test.tsx`, and the seam suite in
+   * `hls-watch-player-seamless-restart.test.tsx`).
    */
   it("does not loop on a frozen playlist: one hold, then reconnect checks", async () => {
     await mount();
@@ -349,7 +356,7 @@ describe("the conventional recovery ladder is what it was before #646", () => {
       });
       await tick(1);
     }
-    expect(calls).toEqual(["stopLoad"]);
+    expect(calls).toEqual([]);
     const warned = warn.mock.calls.map((args: unknown[]) => String(args[0]));
     // The hold, once, in place of the old three-step ladder.
     expect(warned[0]).toBe(

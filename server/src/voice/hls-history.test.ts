@@ -559,6 +559,213 @@ describeDb("LL replay", () => {
     expect(body).not.toContain("#EXT-X-ENDLIST");
     expect(body).toContain(`https://s3.example.test/pqp-live-test/live/${channelId}/${LL_STARTED_AT + 1}-720p30_00000.ts?X-Amz-`);
   });
+
+  /** A 720p30 rung of its own broadcast whose egress restarted in place:
+   * one run per entry, each with its own index playlist and two segments,
+   * each egress starting its clock at 3600 s. */
+  async function restartedRung(
+    runs: { suffix: string; base: number; at: number }[],
+    options: { rowRuns?: string | null; startedAt?: number } = {},
+  ): Promise<{ startedAt: number; prefix: string; names: string[] }> {
+    const startedAt = options.startedAt ?? LL_STARTED_AT + 2;
+    const prefix = `live/${channelId}/${startedAt}-720p30`;
+    await getPool().query(
+      `INSERT INTO hls_sessions
+         (channel_id, object_prefix, started_at, ended_at, keep_replay, rung, runs)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW() - interval '1 hour', TRUE, '720p30', $4::jsonb)`,
+      [
+        channelId,
+        prefix,
+        startedAt,
+        options.rowRuns !== undefined
+          ? options.rowRuns
+          : JSON.stringify(runs.map(({ suffix, base }) => ({ suffix, base }))),
+      ],
+    );
+    const names = runs.map((run) => `${startedAt}-720p30${run.suffix}`);
+    for (const [index, run] of runs.entries()) {
+      const name = names[index]!;
+      objects[`live/${channelId}/${name}-index.m3u8`] = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        `#EXT-X-TARGETDURATION:${index === 1 ? 5 : 4}`,
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:EVENT",
+        `#EXT-X-PROGRAM-DATE-TIME:${new Date(run.at).toISOString()}`,
+        "#EXTINF:4.000,",
+        `${name}_00000.ts`,
+        "#EXTINF:4.000,",
+        `${name}_00001.ts`,
+        "",
+      ].join("\n");
+      // Each run's live playlist sits beside it and is never a run.
+      objects[`live/${channelId}/${name}.m3u8`] = "#EXTM3U\n";
+      objects[`live/${channelId}/${name}_00000.ts`] = tsWithPts(3600 * 90_000);
+      objects[`live/${channelId}/${name}_00001.ts`] = tsWithPts(3604 * 90_000);
+    }
+    return { startedAt, prefix, names };
+  }
+
+  const T0 = Date.parse("2026-09-24T21:00:00.000Z");
+
+  it("replays a rung that restarted twice as one VOD playlist, runs in order", async () => {
+    const { startedAt, names } = await restartedRung([
+      { suffix: "", base: 0, at: T0 },
+      { suffix: `-r${T0 + 100_000}`, base: 2, at: T0 + 100_000 },
+      { suffix: `-r${T0 + 160_000}`, base: 4, at: T0 + 160_000 },
+    ]);
+    const body = await buildReplaySignedPlaylist(channelId, startedAt, "720p30");
+    const lines = body.split("\n");
+    const segments = lines.filter((line) => line.includes(".ts?X-Amz-"));
+    expect(segments.map((line) => new URL(line).pathname)).toEqual(
+      names.flatMap((name) => [
+        `/pqp-live-test/live/${channelId}/${name}_00000.ts`,
+        `/pqp-live-test/live/${channelId}/${name}_00001.ts`,
+      ]),
+    );
+    expect(lines.filter((line) => line === "#EXT-X-DISCONTINUITY")).toHaveLength(2);
+    // Each DISCONTINUITY opens a later run, ahead of that run's own tags.
+    const firstBreak = lines.indexOf("#EXT-X-DISCONTINUITY");
+    expect(lines[firstBreak + 1]).toBe(
+      `#EXT-X-PROGRAM-DATE-TIME:${new Date(T0 + 100_000).toISOString()}`,
+    );
+    expect(body.match(/#EXT-X-ENDLIST/g)).toHaveLength(1);
+    expect(body.trimEnd().endsWith("#EXT-X-ENDLIST")).toBe(true);
+    expect(body.match(/^#EXT-X-MEDIA-SEQUENCE:.*$/gm)).toEqual([
+      "#EXT-X-MEDIA-SEQUENCE:0",
+    ]);
+    expect(body).toContain("#EXT-X-TARGETDURATION:5\n");
+    expect(body).toContain("#EXT-X-PLAYLIST-TYPE:VOD");
+    expect(body).not.toContain("EVENT");
+  });
+
+  it("caps a run at its successor's base and skips a run whose playlist is gone", async () => {
+    const { startedAt, names } = await restartedRung([
+      { suffix: "", base: 0, at: T0 },
+      // Base 1: the first run was stopped after one segment; its second
+      // entry is a leftover egress writing on after its stop.
+      { suffix: `-r${T0 + 100_000}`, base: 1, at: T0 + 100_000 },
+      { suffix: `-r${T0 + 160_000}`, base: 3, at: T0 + 160_000 },
+    ]);
+    delete objects[`live/${channelId}/${names[1]}-index.m3u8`];
+    const body = await buildReplaySignedPlaylist(channelId, startedAt, "720p30");
+    const paths = body
+      .split("\n")
+      .filter((line) => line.includes(".ts?X-Amz-"))
+      .map((line) => new URL(line).pathname.split("/").pop());
+    expect(paths).toEqual([
+      `${names[0]}_00000.ts`,
+      `${names[2]}_00000.ts`,
+      `${names[2]}_00001.ts`,
+    ]);
+    expect(body.match(/^#EXT-X-DISCONTINUITY$/gm)).toHaveLength(1);
+  });
+
+  it("keeps the replay's not-available error when no run's playlist is left", async () => {
+    const { startedAt, names } = await restartedRung([
+      { suffix: "", base: 0, at: T0 },
+      { suffix: `-r${T0 + 100_000}`, base: 2, at: T0 + 100_000 },
+    ]);
+    for (const name of names) {
+      delete objects[`live/${channelId}/${name}-index.m3u8`];
+    }
+    await expect(
+      buildReplaySignedPlaylist(channelId, startedAt, "720p30"),
+    ).rejects.toThrow(/HTTP 404 for the replay playlist/);
+  });
+
+  it("serves a single-run rung byte for byte, whether runs is NULL or spelled out", async () => {
+    const legacy = await restartedRung([{ suffix: "", base: 0, at: T0 }], {
+      rowRuns: null,
+    });
+    const nullBody = await buildReplaySignedPlaylist(
+      channelId,
+      legacy.startedAt,
+      "720p30",
+      T0,
+    );
+    const raw = objects[`${legacy.prefix}-index.m3u8`] as string;
+    // Only the segment lines differ from what the egress wrote.
+    expect(nullBody.split("\n").filter((line) => !line.includes("?X-Amz-"))).toEqual(
+      raw.split("\n").filter((line) => !line.endsWith(".ts")),
+    );
+    expect(nullBody).not.toContain("#EXT-X-ENDLIST");
+
+    const spelled = await restartedRung([{ suffix: "", base: 0, at: T0 }], {
+      rowRuns: JSON.stringify([{ suffix: "", base: 0 }]),
+      startedAt: LL_STARTED_AT + 3,
+    });
+    const spelledBody = await buildReplaySignedPlaylist(
+      channelId,
+      spelled.startedAt,
+      "720p30",
+      T0,
+    );
+    expect(spelledBody.replace(/\?X-Amz-[^\n]*/g, "").replaceAll(String(LL_STARTED_AT + 3), "S")).toBe(
+      nullBody.replace(/\?X-Amz-[^\n]*/g, "").replaceAll(String(LL_STARTED_AT + 2), "S"),
+    );
+  });
+
+  it("downloads the film of a restarted rung as every run in order, on one clock", async () => {
+    const { startedAt, names } = await restartedRung([
+      { suffix: "", base: 0, at: T0 },
+      { suffix: `-r${T0 + 100_000}`, base: 2, at: T0 + 100_000 },
+      { suffix: `-r${T0 + 160_000}`, base: 4, at: T0 + 160_000 },
+    ]);
+    const plan = await buildWatchPartyDownloadPlan(channelId, startedAt, "film");
+    expect(plan).toEqual({
+      kind: "film",
+      contentType: "video/mp2t",
+      extension: "ts",
+      keys: names.flatMap((name) => [
+        `live/${channelId}/${name}_00000.ts`,
+        `live/${channelId}/${name}_00001.ts`,
+      ]),
+      // Run 1 as it is; runs 2 and 3 moved to 100 s and 160 s after it.
+      ptsOffsets: [0, 0, 9_000_000, 9_000_000, 14_400_000, 14_400_000],
+      bytes: 6 * 188,
+    });
+    // The size on the button counts every run's segments, and only those.
+    expect((await watchPartyDownloadSizes(channelId, startedAt)).film).toBe(6 * 188);
+  });
+
+  it("downloads a restarted rung's film from the listing even if the row never recorded its runs", async () => {
+    const { startedAt, names } = await restartedRung(
+      [
+        { suffix: "", base: 0, at: T0 },
+        { suffix: `-r${T0 + 100_000}`, base: 2, at: T0 + 100_000 },
+      ],
+      { rowRuns: null },
+    );
+    const plan = await buildWatchPartyDownloadPlan(channelId, startedAt, "film");
+    expect(plan?.keys).toEqual(
+      names.flatMap((name) => [
+        `live/${channelId}/${name}_00000.ts`,
+        `live/${channelId}/${name}_00001.ts`,
+      ]),
+    );
+    expect(plan?.ptsOffsets).toEqual([0, 0, 9_000_000, 9_000_000]);
+  });
+
+  it("leaves a single-run film download exactly as it was", async () => {
+    const { startedAt, names } = await restartedRung(
+      [{ suffix: "", base: 0, at: T0 }],
+      { rowRuns: null },
+    );
+    const plan = await buildWatchPartyDownloadPlan(channelId, startedAt, "film");
+    expect(plan).toEqual({
+      kind: "film",
+      contentType: "video/mp2t",
+      extension: "ts",
+      keys: [
+        `live/${channelId}/${names[0]}_00000.ts`,
+        `live/${channelId}/${names[0]}_00001.ts`,
+      ],
+      bytes: 2 * 188,
+    });
+    // Planned from the legacy index alone: no segment was probed for a PTS.
+    expect(fetched.some((key) => key.endsWith("_00000.ts"))).toBe(false);
+  });
 });
 
 /** One MPEG-TS packet starting a video PES with this PTS. */

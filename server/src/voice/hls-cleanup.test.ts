@@ -251,6 +251,49 @@ describeDb("sweepHlsSessions", () => {
     );
   });
 
+  it("sweeps every in-place restart run of a rung with it, and keep_replay keeps them all", async () => {
+    process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    process.env.LIVE_HLS_REPLAY_HOURS = "24";
+    // Runs write under `<object_prefix>-r<ms>...` (hls-runs.ts), so the one
+    // prefix the row names is still everything the rung ever wrote.
+    const runObjects = (prefix: string): string[] => [
+      `${prefix}_00000.ts`,
+      `${prefix}-index.m3u8`,
+      `${prefix}.m3u8`,
+      `${prefix}-r1790000100000_00000.ts`,
+      `${prefix}-r1790000100000-index.m3u8`,
+      `${prefix}-r1790000100000.m3u8`,
+    ];
+    const due = `live/${channelA}/5000-720p30`;
+    const kept = `live/${channelA}/6000-720p30`;
+    const dueId = await makeSession({
+      channelId: channelA,
+      prefix: due,
+      endedMinutesAgo: 25 * 60,
+      keepReplay: true,
+      rung: "720p30",
+    });
+    await getPool().query(
+      `UPDATE hls_sessions SET runs = $2::jsonb WHERE id = $1`,
+      [dueId, JSON.stringify([{ suffix: "", base: 0 }, { suffix: "-r1790000100000", base: 1 }])],
+    );
+    await makeSession({
+      channelId: channelA,
+      prefix: kept,
+      endedMinutesAgo: 30,
+      keepReplay: true,
+      rung: "720p30",
+    });
+    for (const key of [...runObjects(due), ...runObjects(kept)]) {
+      bucket.objects.add(key);
+    }
+
+    expect(await sweepHlsSessions()).toBe(1);
+
+    expect(bucket.deleted.sort()).toEqual(runObjects(due).sort());
+    expect([...bucket.objects].sort()).toEqual(runObjects(kept).sort());
+  });
+
   it("never deletes another channel's objects, even if a bucket listing leaks one", async () => {
     process.env.LIVE_HLS_RETENTION_MINUTES = "10";
     await makeSession({

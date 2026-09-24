@@ -325,7 +325,7 @@ describe("live HLS egress", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("restarts on a new screen track sid from the same presenter", async () => {
+  it("restarts IN PLACE on a new screen track sid from the same presenter: same session, a new run", async () => {
     enableHls();
     let egressN = 0;
     const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
@@ -352,8 +352,29 @@ describe("live HLS egress", () => {
       expect.objectContaining({ videoTrackId: "TR_V2" }),
     );
     expect(second?.presenterPeerId).toBe("peer-1");
-    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    // THE SAME SESSION: same playlist URL, same `startedAt`, so no viewer
+    // re-attaches. The new egress writes under its own run names.
+    expect(second?.hlsUrl).toBe(first?.hlsUrl);
+    expect(second?.startedAt).toBe(first?.startedAt);
+    const run = start.mock.calls[1]![1] as {
+      filenamePrefix: string;
+      livePlaylistName: string;
+      playlistName: string;
+    };
+    expect(run.livePlaylistName).toMatch(
+      new RegExp(`^${first!.startedAt}-720p30-r\\d+\\.m3u8$`),
+    );
+    expect(run.playlistName).toMatch(
+      new RegExp(`^${first!.startedAt}-720p30-r\\d+-index\\.m3u8$`),
+    );
+    expect(run.filenamePrefix).toMatch(
+      new RegExp(`/${first!.startedAt}-720p30-r\\d+$`),
+    );
     expect(liveHlsStreamFor(CHANNEL)).toEqual(second);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsRungRestartedInPlace",
+      expect.objectContaining({ reason: "screen-track-replaced" }),
+    );
 
     // Same sid again: nothing moves.
     const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
@@ -404,7 +425,9 @@ describe("live HLS egress", () => {
     expect(start.mock.calls[1]![2]).toEqual(
       expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A1" }),
     );
-    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    // In place: the audience keeps its URL.
+    expect(second?.hlsUrl).toBe(first?.hlsUrl);
+    expect(second?.hasAudio).toBe(true);
 
     // Same audio sid again: nothing moves, same as the video-sid case.
     const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
@@ -422,7 +445,7 @@ describe("live HLS egress", () => {
     expect(start.mock.calls[2]![2]).toEqual(
       expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A2" }),
     );
-    expect(fourth?.hlsUrl).not.toBe(second?.hlsUrl);
+    expect(fourth?.hlsUrl).toBe(second?.hlsUrl);
   });
 
   it("keeps the egress when the SFU cannot be asked which sid is live", async () => {
@@ -1624,7 +1647,7 @@ describe("live HLS egress", () => {
       vi.useRealTimers();
     });
 
-    it("restarts an egress that ended abnormally, once, with a new playlist URL", async () => {
+    it("restarts an egress that ended abnormally, once, IN PLACE: same playlist URL", async () => {
       enableHls();
       const lk = fakeLiveKit();
       setLiveHlsTestHooks({
@@ -1645,9 +1668,10 @@ describe("live HLS egress", () => {
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "scheduled" },
       ]);
-      // The room is gone right away (viewers must not be handed the dead
-      // URL), the restart itself waits for the backoff.
-      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+      // THE SESSION STAYS: the audience holds on the same URL through the
+      // backoff (the proxy serves the last run's tail), and the restart
+      // itself waits for the backoff.
+      expect(liveHlsStreamFor(CHANNEL)).toEqual(first);
       expect(heard).toEqual([]);
       await advance(2_000);
       expect(heard).toEqual(["egress-ended"]);
@@ -1655,7 +1679,13 @@ describe("live HLS egress", () => {
 
       const second = liveHlsStreamFor(CHANNEL);
       expect(second).not.toBeNull();
-      expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+      expect(second?.hlsUrl).toBe(first?.hlsUrl);
+      expect(second?.startedAt).toBe(first?.startedAt);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsRungRestartedInPlace",
+        expect.objectContaining({ reason: "egress-ended", startedAt: first!.startedAt }),
+      );
+      expect(liveHlsActivity().restartsInPlaceTotal).toBe(1);
       expect(lk.start).toHaveBeenCalledTimes(2);
       // The dead one is not "stopped" again: it is already gone.
       expect(lk.stop).not.toHaveBeenCalled();
@@ -2249,9 +2279,18 @@ describe("live HLS egress", () => {
 
         await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
+        // A restart in place, narrated as one: the session was not stopped.
         expect(logEvent).toHaveBeenCalledWith(
-          "voice.hlsStopped",
+          "voice.hlsRungRestartingInPlace",
           expect.objectContaining({ reason: "screen-track-replaced" }),
+        );
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsRungRestartedInPlace",
+          expect.objectContaining({ reason: "screen-track-replaced" }),
+        );
+        expect(logEvent).not.toHaveBeenCalledWith(
+          "voice.hlsStopped",
+          expect.anything(),
         );
       });
 
