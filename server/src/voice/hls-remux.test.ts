@@ -356,8 +356,16 @@ function createFakeRemuxServer() {
     calls.push({ method, path: pathname, headers: new Headers(init.headers), body });
 
     if (method === "POST" && pathname === "/sessions") {
-      const req = JSON.parse(body) as { sessionId: string; room: string; channelId: string };
-      const info = buildInfo(req.sessionId, req.room, req.channelId);
+      const req = JSON.parse(body) as {
+        sessionId: string;
+        room: string;
+        channelId: string;
+        presenterIdentity?: string;
+      };
+      const info: ReturnType<typeof buildInfo> & { presenterIdentity?: string } = {
+        ...buildInfo(req.sessionId, req.room, req.channelId),
+        presenterIdentity: req.presenterIdentity,
+      };
       sessions.set(req.sessionId, info);
       created.push(req.sessionId);
       return new Response(JSON.stringify(info), { status: 201 });
@@ -388,6 +396,7 @@ function createFakeRemuxServer() {
             return new Response(JSON.stringify({ error: "session not found" }), { status: 404 });
           }
           rebinds.push({ sessionId: id, presenterIdentity });
+          (sessions.get(id) as { presenterIdentity?: string }).presenterIdentity = presenterIdentity;
           return new Response(
             JSON.stringify({ sessionId: id, presenterIdentity, result: "bound" }),
             { status: 200 },
@@ -1635,6 +1644,36 @@ describe("a presenter track change keeps the LL session (rebind in place)", () =
       expect.objectContaining({ step: "presenter-peer" }),
     );
     await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
+  });
+
+  it("a rebind whose row write died with the process is recovered from the box, not replaced", async () => {
+    // The box accepted the rebind, the row write failed, and the process
+    // restarted before retrying it. The new process knows nothing about the
+    // person (no identity hook answers for the old peer) and the row still
+    // names peer-1; the box says it follows peer-2.
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { db, server, first } = await started();
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("SET presenter_peer_id = $2")) {
+        throw new Error("connection reset");
+      }
+      return db.queryImpl(sql, params);
+    });
+    await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-1");
+
+    // The process restarts.
+    resetHlsRemuxForTests();
+    enableLL();
+    query.mockImplementation(db.queryImpl);
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    const again = await reconcileLlHlsNow(CHANNEL, "peer-2");
+
+    expect(again?.startedAt).toBe(first.startedAt);
+    expect(again?.presenterPeerId).toBe("peer-2");
+    expect(server.created).toHaveLength(1);
+    expect(server.calls.some((c) => c.method === "DELETE")).toBe(false);
     expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
   });
 

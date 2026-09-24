@@ -2472,11 +2472,16 @@ function locateReconnectedPresenter(
   userId: string,
   orphanPeerId: string,
 ): Promise<string | null> {
-  const inFlight = reconnectLookupInFlight.get(channelId);
+  // KEYED BY WHO IS BEING LOOKED FOR, not just the channel (Farol review,
+  // PR #813): an answer about one orphaned presenter must never be handed to
+  // a lookup for another, or a session would be released to the machine
+  // where somebody else is sharing.
+  const key = `${channelId}\u0000${userId}\u0000${orphanPeerId}`;
+  const inFlight = reconnectLookupInFlight.get(key);
   if (inFlight) {
     return inFlight;
   }
-  const missAt = reconnectLookupMissAt.get(channelId);
+  const missAt = reconnectLookupMissAt.get(key);
   if (missAt !== undefined && Date.now() - missAt < RECONNECT_LOOKUP_MISS_TTL_MS) {
     return Promise.resolve(null);
   }
@@ -2508,19 +2513,19 @@ function locateReconnectedPresenter(
             }
           }
         }
-        reconnectLookupMissAt.set(channelId, at);
+        reconnectLookupMissAt.set(key, at);
         return null;
       }
-      reconnectLookupMissAt.delete(channelId);
+      reconnectLookupMissAt.delete(key);
       return seat.instanceId;
     } catch {
       return null;
     }
   })();
-  reconnectLookupInFlight.set(channelId, answer);
+  reconnectLookupInFlight.set(key, answer);
   const settle = () => {
-    if (reconnectLookupInFlight.get(channelId) === answer) {
-      reconnectLookupInFlight.delete(channelId);
+    if (reconnectLookupInFlight.get(key) === answer) {
+      reconnectLookupInFlight.delete(key);
     }
   };
   answer.then(settle, settle);

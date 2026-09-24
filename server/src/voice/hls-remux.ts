@@ -2253,19 +2253,37 @@ export async function adoptRunningLlHlsSession(
   // resume window; a peer nobody can name is a different person, which is
   // what this always assumed.
   let reconnectedFrom: string | null = null;
+  let rowPresenterStale = false;
   if (row.presenterPeerId !== presenterPeerId) {
     if (
-      !row.presenterPeerId ||
-      !(await sameLlPerson(channelId, row.presenterPeerId, presenterPeerId))
+      row.presenterPeerId &&
+      (await sameLlPerson(channelId, row.presenterPeerId, presenterPeerId))
     ) {
-      // A DIFFERENT PERSON IS PRESENTING NOW. A genuine handover deserves its
-      // own session.
-      return refuse("fresh", "presenter-changed", {
-        startedAt: row.startedAtMs,
-        was: row.presenterPeerId,
-      });
+      reconnectedFrom = row.presenterPeerId;
+    } else {
+      // ...UNLESS THE BOX ALREADY FOLLOWS THIS PEER: a rebind whose row write
+      // was lost with the process that made it. The box, not the row, is the
+      // durable record of who it follows (Farol review, PR #813). Asked only
+      // on this mismatch, so an ordinary resume costs nothing extra.
+      let boxFollows = false;
+      try {
+        const listed = await remuxListSessions();
+        boxFollows =
+          listed.find((session) => session.sessionId === row.remuxSessionId)
+            ?.presenterIdentity === presenterPeerId;
+      } catch {
+        boxFollows = false;
+      }
+      if (!boxFollows) {
+        // A DIFFERENT PERSON IS PRESENTING NOW. A genuine handover deserves
+        // its own session.
+        return refuse("fresh", "presenter-changed", {
+          startedAt: row.startedAtMs,
+          was: row.presenterPeerId,
+        });
+      }
+      rowPresenterStale = true;
     }
-    reconnectedFrom = row.presenterPeerId;
   }
 
   const liveOthers = await liveOtherInstances();
@@ -2358,6 +2376,9 @@ export async function adoptRunningLlHlsSession(
     presenterUserId: await llIdentityOf(channelId, presenterPeerId),
   };
   llRooms.set(channelId, adoptedRoom);
+  if (rowPresenterStale) {
+    await persistLlPresenter(channelId, adoptedRoom);
+  }
   // Not remembered in the decision cache: an adoption is answered once and
   // every later call short-circuits on `llRooms.has` above.
   logEvent("voice.hlsLlSessionResumeAdopted", {
@@ -3178,14 +3199,20 @@ export async function adoptLlHlsSessions(): Promise<{
       continue;
     }
     const startedAt = new Date(row.started_at).getTime();
-    llRooms.set(row.channel_id, {
+    // THE BOX IS THE DURABLE RECORD OF WHO IT FOLLOWS. A rebind whose row
+    // write never landed (and a process that died before retrying it) leaves
+    // `presenter_peer_id` naming the old peer while the box follows the new
+    // one; trusting the row would have the new peer's reconnect read as a
+    // different presenter and replace the session (Farol review, PR #813).
+    const bootPresenter = remote.presenterIdentity || row.presenter_peer_id;
+    const bootRoom: LlRoom = {
       sessionId: remote.sessionId,
       startedAt,
-      presenterPeerId: row.presenter_peer_id,
+      presenterPeerId: bootPresenter,
       stream: {
         hlsUrl: llPlaylistUrl(row.channel_id, startedAt),
         startedAt,
-        presenterPeerId: row.presenter_peer_id,
+        presenterPeerId: bootPresenter,
         delaySeconds: llDelaySeconds(),
         mode: "ll",
         // OFF THE ROW, not off this process's own config: an adopted
@@ -3194,7 +3221,11 @@ export async function adoptLlHlsSessions(): Promise<{
         partTargetMs: row.part_target_ms ?? remuxSessionConfig().partMs,
       },
       adoptedAtMs: Date.now(),
-    });
+    };
+    llRooms.set(row.channel_id, bootRoom);
+    if (bootPresenter !== row.presenter_peer_id) {
+      await persistLlPresenter(row.channel_id, bootRoom);
+    }
     adopted += 1;
     logEvent("voice.hlsLlSessionAdopted", {
       channelId: row.channel_id,

@@ -81,6 +81,12 @@ case "$SCENARIO" in
   reconnect) export REPUBLISH=identity REPUBLISH_AFTER="${REPUBLISH_AFTER:-25}" REPUBLISH_IDENTITY="${REPUBLISH_IDENTITY:-ramp-presenter-2}" ;;
   *) echo "run.sh: SCENARIO must be republish or reconnect, got '$SCENARIO'" >&2; exit 1 ;;
 esac
+# The paced publisher (SOURCE=idle/static/mixed) has no republish path:
+# refuse the combination rather than run a scenario that never happens.
+if [ -n "$SCENARIO" ] && [ "$SOURCE" != "ramp" ]; then
+  echo "run.sh: SCENARIO=$SCENARIO needs SOURCE=ramp (the paced sources do not republish), got SOURCE=$SOURCE" >&2
+  exit 1
+fi
 
 # Host ports, overridable so two runs (two worktrees, two agents) can share
 # one Docker host: give each its own COMPOSE_PROJECT_NAME and ports, or the
