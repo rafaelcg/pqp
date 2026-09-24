@@ -1579,6 +1579,7 @@ async function recordLlSessionStarted(
   partTargetMs: number,
   originBaseUrl: string,
   watchPartySessionId: string | null,
+  presenterUserId: string | null = null,
 ): Promise<boolean> {
   try {
     await getPool().query(
@@ -1587,8 +1588,8 @@ async function recordLlSessionStarted(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, mode, remux_session_id,
           presenter_peer_id, part_target_ms, origin_base_url, instance_id,
-          watch_party_session_id, keep_replay)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9, TRUE)
+          watch_party_session_id, keep_replay, presenter_user_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9, TRUE, $10)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
@@ -1607,6 +1608,9 @@ async function recordLlSessionStarted(
         // channel" are certainly the same. A demotion reads it back off the
         // row rather than asking the channel again.
         watchPartySessionId,
+        // The person, so the machine this is handed to can recognise them
+        // coming back under another peer id (see the column's comment).
+        presenterUserId,
       ],
     );
     return true;
@@ -1705,6 +1709,8 @@ interface OpenLlRow {
   instanceId: string | null;
   /** The `channel_sessions` row that asked for LL. NULL on a pre-column row. */
   watchPartySessionId: string | null;
+  /** The presenter as a person (`presenter_user_id`). NULL on older rows. */
+  presenterUserId: string | null;
   /**
    * `part_target_ms` AS STORED, which is what a resume must hand the
    * audience rather than whatever `LIVE_HLS_REMUX_PART_MS` says right now:
@@ -1742,9 +1748,11 @@ async function findOpenLlRow(
       instance_id: string | null;
       watch_party_session_id: string | null;
       part_target_ms: number | null;
+      presenter_user_id?: string | null;
     }>(
       `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at,
-              stop_attempts, instance_id, watch_party_session_id, part_target_ms
+              stop_attempts, instance_id, watch_party_session_id, part_target_ms,
+              presenter_user_id
        FROM hls_sessions
        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
        ORDER BY started_at DESC
@@ -1767,6 +1775,7 @@ async function findOpenLlRow(
         instanceId: row.instance_id,
         watchPartySessionId: row.watch_party_session_id,
         partTargetMs: row.part_target_ms,
+        presenterUserId: row.presenter_user_id ?? null,
       },
     };
   } catch (error) {
@@ -1947,6 +1956,7 @@ async function startLlSession(
       cfg.partMs,
       originBaseUrl,
       party.ok ? party.id : null,
+      await llIdentityOf(channelId, presenterPeerId),
     );
     if (!inserted) {
       // No remux call was ever made: nothing on the box to roll back.
@@ -2257,8 +2267,12 @@ export async function adoptRunningLlHlsSession(
   if (row.presenterPeerId !== presenterPeerId) {
     if (
       row.presenterPeerId &&
-      (await sameLlPerson(channelId, row.presenterPeerId, presenterPeerId))
+      ((await sameLlPerson(channelId, row.presenterPeerId, presenterPeerId)) ||
+        (row.presenterUserId !== null &&
+          row.presenterUserId === (await llIdentityOf(channelId, presenterPeerId))))
     ) {
+      // The same person: known from the old peer if anything still names it,
+      // and otherwise from the row (a reload leaves no seat behind).
       reconnectedFrom = row.presenterPeerId;
     } else {
       // ...UNLESS THE BOX ALREADY FOLLOWS THIS PEER: a rebind whose row write
@@ -3008,6 +3022,8 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
     instanceId: row.instance_id,
     watchPartySessionId: row.watch_party_session_id,
     partTargetMs: row.part_target_ms,
+    // Only a stop is ever retried from here; nothing reads the person.
+    presenterUserId: null,
   };
 }
 

@@ -281,6 +281,9 @@ describe("HLS start reads the stage gate", () => {
     // about the grace is about what happens when a share genuinely stops, so
     // they run with it off and keep asserting exactly what they always did.
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    // The old end-of-share timing is what this pins; the presenter return
+    // window (voice.ts presenterReturnGraceMs) has its own tests.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     resetWatchPartyLiveForTests();
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
@@ -488,6 +491,9 @@ describe("HLS start reads the stage gate", () => {
       // The suite's own default is 0 (see the outer `beforeEach`), which is
       // what keeps every other case pinning the stop rather than the grace.
       process.env.HLS_NO_SHARER_GRACE_MS = "5000";
+      // The old end-of-share timing is what this pins; the presenter return
+      // window (voice.ts presenterReturnGraceMs) has its own tests.
+      process.env.HLS_PRESENTER_RETURN_GRACE_MS = "5000";
     });
 
     it("does not end the broadcast inside the grace window", async () => {
@@ -536,6 +542,9 @@ describe("HLS start reads the stage gate", () => {
       // produces, so nothing else would ever look again) and faking it away
       // would leave that untested.
       process.env.HLS_NO_SHARER_GRACE_MS = "50";
+      // The old end-of-share timing is what this pins; the presenter return
+      // window (voice.ts presenterReturnGraceMs) has its own tests.
+      process.env.HLS_PRESENTER_RETURN_GRACE_MS = "50";
       await releaseStage(host, "host");
       await settle();
       expect(egress.streams.has(CINEMA)).toBe(true);
@@ -613,6 +622,9 @@ describe("live HLS reaches the channel", () => {
     // Off here too: every case in this describe is about what the CHANNEL
     // hears when a share stops, not about the grace that now precedes it.
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    // The old end-of-share timing is what this pins; the presenter return
+    // window (voice.ts presenterReturnGraceMs) has its own tests.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 

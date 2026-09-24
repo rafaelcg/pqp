@@ -4109,6 +4109,15 @@ ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL
 -- one run, the legacy names, base 0.
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS runs JSONB;
 
+-- WHO IS PRESENTING, AS A PERSON (users.id), for an LL session: the peer id
+-- beside it changes on every reconnect that cannot resume, and a page reload
+-- leaves no seat anywhere that still names the person. The machine a session
+-- is handed to reads this to tell "the same presenter came back" (continue the
+-- session, rebind the box) from "somebody else is presenting" (a new one).
+-- Plain TEXT, no foreign key: it is a comparison key, and a deleted account
+-- must not block ending the row. NULL on every row written before it.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS presenter_user_id TEXT;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.
