@@ -278,10 +278,52 @@ type Session struct {
 	// HasIdr.
 	idrSeen atomic.Bool
 
+	// --- source rebinds (2026-09-24) ---
+	//
+	// A watch party's presenter republishes their screen on a new track
+	// more often than anybody planned for: the web client does it on every
+	// resume after an API deploy, and whenever the presenter picks a
+	// different window or tab. Until now this session could only ever read
+	// the first track it was handed, so the second one reached the audience
+	// through a watchdog restart at best and a demotion to the conventional
+	// ladder at worst. BeginVideoSource is how the subscriber hands it the
+	// next one inside the SAME session: same ring, same part and segment
+	// numbering, same epoch and so the same PROGRAM-DATE-TIME anchor.
+	//
+	// videoSourceFresh is set by BeginVideoSource and consumed by the first
+	// packet of the new source, which is what maps the new publisher clock
+	// onto the session timeline (pipeline.Fragmenter.RebaseSource).
+	// awaitingSourceIDR drops the new source's access units until its first
+	// IDR: a P-frame from an encoder this session has never seen a keyframe
+	// from decodes to garbage, and the segment the new source opens has to
+	// start on an IDR anyway. Both guarded by videoMu.
+	videoSourceFresh  bool
+	awaitingSourceIDR bool
+	// videoSourceSince is when the current source was bound (BeginVideoSource),
+	// for the log line that says how long its first keyframe took. videoMu.
+	videoSourceSince time.Time
+	// awaitingIDRSinceNs is when the current rebind started waiting for the
+	// new source's first IDR (UnixNano), 0 when not waiting. The control
+	// watchdog reads it (RebindWaitingSince): a rebind's keyframe wait is
+	// neither a stalled muxer nor an IDR gap, and must not restart or demote
+	// the session.
+	awaitingIDRSinceNs atomic.Int64
+	// videoRebinds counts BeginVideoSource calls that replaced a source (the
+	// session's first source is not a rebind); rebindDroppedAUs counts the
+	// new sources' access units dropped while waiting for their first IDR.
+	videoRebinds     atomic.Uint64
+	rebindDroppedAUs atomic.Uint64
+	screenAudioSwaps atomic.Uint64
+
 	// --- L1.3: audio (nil/zero until EnableAudio succeeds) ---
 
-	audioMixer        *audiomix.Mixer
-	screenAudioSource *audiomix.Source
+	audioMixer *audiomix.Mixer
+	// screenAudioSource is the mix slot the presenter's screen-share audio
+	// is decoded into. A pointer that can be swapped, not a field set once:
+	// a republished screen (ReplaceScreenAudio) brings a new Opus stream
+	// with its own RTP timestamp base, and the old Source's anchor would
+	// place its samples wherever the old stream's clock said.
+	screenAudioSource atomic.Pointer[audiomix.Source]
 	// audioEncoder holds a remuxEncoder (atomic.Value, not
 	// atomic.Pointer[aacenc.Encoder]: an interface lets
 	// audio_robustness_test.go substitute a fake encoder whose writes
@@ -512,8 +554,9 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	}
 
 	s.audioMixer = audiomix.NewMixer()
-	s.screenAudioSource = audiomix.NewSource()
-	s.audioMixer.AddSource("screen", s.screenAudioSource)
+	screen := audiomix.NewSource()
+	s.screenAudioSource.Store(screen)
+	s.audioMixer.AddSource("screen", screen)
 
 	s.storeEncoder(enc)
 	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{
@@ -743,6 +786,15 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	now := s.now()
 	if s.videoPacketsSeen.Add(1) == 1 {
 		s.anchorVideoTimeline(now)
+	} else if s.videoSourceFresh {
+		// The first packet of a replacement source: its RTP clock starts
+		// here, so this instant is where its PTS zero belongs.
+		s.videoSourceFresh = false
+		d := now.Sub(s.epoch)
+		if d < 0 {
+			d = 0
+		}
+		s.frag.RebaseSource(durationToTicks(d))
 	}
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
@@ -822,6 +874,21 @@ func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
 	if s.videoIdle.CompareAndSwap(true, false) {
 		log.Printf("pqp-remux: video source resumed: first frame after %s of silence (frames=%d idr=%d)",
 			silence.Round(time.Millisecond), s.videoFramesSeen.Load(), s.videoKeyframesSeen.Load())
+	}
+
+	if s.awaitingSourceIDR {
+		// A replacement source's frames before its first keyframe: nothing
+		// here can decode them, and the segment it opens must start on an
+		// IDR. Counted as frames above on purpose -- the source IS sending,
+		// and the watchdog's idle rule must see that -- and dropped here.
+		if !au.IsIDR {
+			s.rebindDroppedAUs.Add(1)
+			return true
+		}
+		s.awaitingSourceIDR = false
+		s.awaitingIDRSinceNs.Store(0)
+		log.Printf("pqp-remux: video source rebound: first keyframe from the new source %s after the bind (dropped=%d before it, seg=%d part=%d)",
+			now.Sub(s.videoSourceSince).Round(time.Millisecond), s.rebindDroppedAUs.Load(), s.frag.CurrentSegmentIndex(), s.frag.CurrentSequence())
 	}
 
 	if au.IsIDR {
@@ -1212,6 +1279,90 @@ func spsSummary(sps []byte) (width, height, profile, level uint32) {
 	return
 }
 
+// BeginVideoSource tells the session that the packets HandleVideoPacket
+// receives from now on come from a different RTP stream than the ones before:
+// the subscriber has bound a new screen-share track (internal/subscriber's
+// rebind), because the presenter republished their screen or came back under
+// a new identity. The caller must guarantee that no packet from the previous
+// stream reaches HandleVideoPacket after this returns (the subscriber's
+// switch lock does).
+//
+// What it keeps is the point: the ring, the fragmenter and therefore part
+// and segment numbering, the init segment (a new one is published only if
+// the new source's parameter sets differ, through the ordinary
+// parameter-set-change path, as a new init map with a discontinuity), the
+// session epoch and therefore PROGRAM-DATE-TIME, the audio track, the R2
+// prefix and the replay index. What it resets is everything that belongs to
+// one RTP stream: the depacketizer's sequence and timestamp state, the
+// reorder buffer, the damage latch. The next packet re-anchors the new
+// publisher clock on the session timeline, and the new source's frames are
+// dropped until its first IDR, which opens a new segment.
+//
+// The session's first source is not a rebind: before any packet has
+// arrived this only records the bind time, and the first packet anchors the
+// timeline exactly as it always has.
+func (s *Session) BeginVideoSource() {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	now := s.now()
+	s.videoSourceSince = now
+	if s.videoPacketsSeen.Load() == 0 {
+		return
+	}
+	if s.videoStopped {
+		return
+	}
+	// Whatever the reorder buffer is holding belongs to the old stream: it
+	// either goes to the depacketizer now, still under the old stream's
+	// sequence space, or not at all. Not at all: the old source is being
+	// replaced, and a frame of it arriving after this point would land in the
+	// new source's segment.
+	s.reorder.resetSource()
+	s.dep.ResetSource()
+	s.videoSourceFresh = true
+	s.awaitingSourceIDR = true
+	s.awaitingIDRSinceNs.Store(now.UnixNano())
+	s.droppingDamaged.Store(false)
+	s.damageOpen.Store(false)
+	n := s.videoRebinds.Add(1)
+	log.Printf("pqp-remux: video source rebound: a new screen-share track replaces the previous one inside this session (rebind %d, seg=%d part=%d init=%d); waiting for its first keyframe",
+		n, s.frag.CurrentSegmentIndex(), s.frag.CurrentSequence(), s.initGeneration.Load())
+	if kr := s.keyReq.Load(); kr != nil {
+		kr.OnLoss(now)
+	}
+}
+
+// ReplaceScreenAudio gives the presenter's screen-share audio a fresh mix
+// slot, for a republished screen whose audio arrives as a new Opus stream:
+// its RTP timestamps have their own base, and the previous Source's anchor
+// would place its samples wherever the old stream's clock said. The mix
+// itself, the AAC encoder and the audio track's numbering are untouched.
+// A no-op before EnableAudio.
+func (s *Session) ReplaceScreenAudio() {
+	if s.audioMixer == nil {
+		return
+	}
+	src := audiomix.NewSource()
+	s.screenAudioSource.Store(src)
+	s.audioMixer.AddSource("screen", src)
+	n := s.screenAudioSwaps.Add(1)
+	log.Printf("pqp-remux: screen-share audio rebound: a new track replaces the previous one inside this session (swap %d)", n)
+}
+
+// RebindWaitingSince is when the current rebind began waiting for the new
+// source's first keyframe, and false when no rebind is waiting.
+func (s *Session) RebindWaitingSince() (time.Time, bool) {
+	ns := s.awaitingIDRSinceNs.Load()
+	if ns == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, ns), true
+}
+
+// VideoRebinds is how many times a replacement screen-share track was bound
+// inside this session (BeginVideoSource past the first).
+func (s *Session) VideoRebinds() uint64 { return s.videoRebinds.Load() }
+
 // Finish flushes any partial fragment still open in the fragmenter and
 // publishes it, exactly as HandleVideoPacket would for a fragment closed
 // by a part/segment boundary. Call it once, when the subscribed video
@@ -1496,10 +1647,11 @@ func (s *Session) HandleAudioPacket(pkt *rtp.Packet) {
 	if s.audioPacketsSeen.Add(1) == 1 {
 		log.Printf("pqp-remux: screen-share audio track present (payload type %d)", pkt.PayloadType)
 	}
-	if s.screenAudioSource == nil {
+	src := s.screenAudioSource.Load()
+	if src == nil {
 		return
 	}
-	if err := s.screenAudioSource.Push(pkt.Payload, pkt.Timestamp, time.Now(), s.epoch); err != nil {
+	if err := src.Push(pkt.Payload, pkt.Timestamp, time.Now(), s.epoch); err != nil {
 		log.Printf("pqp-remux: screen-share audio decode: %v", err)
 	}
 }

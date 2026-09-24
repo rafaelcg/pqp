@@ -34,6 +34,8 @@ const {
   llStreamFor,
   llHlsActivity,
   reconcileLlHlsNow,
+  rebindLlForReplacedTrack,
+  setLlPresenterIdentity,
   stopLlSession,
   adoptLlHlsSessions,
   setHlsRemuxTestHooks,
@@ -155,6 +157,16 @@ function createFakeDb() {
         });
       }
       return { rowCount: 1, rows: [] };
+    }
+
+    // `rebindLlSession`: the row follows the peer the box was rebound to.
+    if (sql.includes("SET presenter_peer_id = $2")) {
+      const [objectPrefix, presenterPeerId] = p as [string, string];
+      const row = hlsRows.find((r) => r.object_prefix === objectPrefix && r.ended_at === null);
+      if (row) {
+        row.presenter_peer_id = presenterPeerId;
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
     }
 
     // `claimHlsSessionRow`: the compare-and-set an LL start or adoption runs
@@ -306,8 +318,18 @@ function createFakeDb() {
   return { hlsRows, channelSessions, queryImpl };
 }
 
-/** A minimal in-memory stand-in for the control API's three routes. */
+/**
+ * How the fake box answers `POST /sessions/:id/rebind`: a box with the route
+ * (`ok`), one without it (`missing-route`, Go's plain-text 404), one that has
+ * lost the session regardless of what it holds (`gone`), a demoted session
+ * (`demoted`), or no answer at all (`unreachable`).
+ */
+type FakeRebindMode = "ok" | "missing-route" | "gone" | "demoted" | "unreachable";
+
+/** A minimal in-memory stand-in for the control API's routes. */
 function createFakeRemuxServer() {
+  let rebindMode: FakeRebindMode = "ok";
+  const rebinds: { sessionId: string; presenterIdentity: string }[] = [];
   const sessions = new Map<string, ReturnType<typeof buildInfo>>();
   const calls: { method: string; path: string; headers: Headers; body: string }[] = [];
   const created: string[] = [];
@@ -334,8 +356,16 @@ function createFakeRemuxServer() {
     calls.push({ method, path: pathname, headers: new Headers(init.headers), body });
 
     if (method === "POST" && pathname === "/sessions") {
-      const req = JSON.parse(body) as { sessionId: string; room: string; channelId: string };
-      const info = buildInfo(req.sessionId, req.room, req.channelId);
+      const req = JSON.parse(body) as {
+        sessionId: string;
+        room: string;
+        channelId: string;
+        presenterIdentity?: string;
+      };
+      const info: ReturnType<typeof buildInfo> & { presenterIdentity?: string } = {
+        ...buildInfo(req.sessionId, req.room, req.channelId),
+        presenterIdentity: req.presenterIdentity,
+      };
       sessions.set(req.sessionId, info);
       created.push(req.sessionId);
       return new Response(JSON.stringify(info), { status: 201 });
@@ -348,10 +378,44 @@ function createFakeRemuxServer() {
     if (method === "GET" && pathname === "/sessions") {
       return new Response(JSON.stringify({ sessions: [...sessions.values()] }), { status: 200 });
     }
+    const rebind = /^\/sessions\/([^/]+)\/rebind$/.exec(pathname);
+    if (method === "POST" && rebind) {
+      const id = rebind[1]!;
+      const { presenterIdentity } = JSON.parse(body) as { presenterIdentity: string };
+      switch (rebindMode) {
+        case "missing-route":
+          return new Response("404 page not found\n", { status: 404 });
+        case "unreachable":
+          throw new Error("ECONNREFUSED");
+        case "demoted":
+          return new Response(JSON.stringify({ error: "session is demoted" }), { status: 409 });
+        case "gone":
+          return new Response(JSON.stringify({ error: "session not found" }), { status: 404 });
+        default:
+          if (!sessions.has(id)) {
+            return new Response(JSON.stringify({ error: "session not found" }), { status: 404 });
+          }
+          rebinds.push({ sessionId: id, presenterIdentity });
+          (sessions.get(id) as { presenterIdentity?: string }).presenterIdentity = presenterIdentity;
+          return new Response(
+            JSON.stringify({ sessionId: id, presenterIdentity, result: "bound" }),
+            { status: 200 },
+          );
+      }
+    }
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   };
 
-  return { fetchImpl, sessions, calls, created };
+  return {
+    fetchImpl,
+    sessions,
+    calls,
+    created,
+    rebinds,
+    setRebindMode: (mode: FakeRebindMode) => {
+      rebindMode = mode;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -1361,6 +1425,9 @@ describe("llHlsActivity", () => {
       startFailures: 0,
       stopFailures: 0,
       demoted: 0,
+      rebindsTotal: 0,
+      rebindsByReason: {},
+      rebindFailuresByWhy: {},
     });
   });
 
@@ -1380,7 +1447,244 @@ describe("llHlsActivity", () => {
       startFailures: 0,
       stopFailures: 0,
       demoted: 0,
+      rebindsTotal: 0,
+      rebindsByReason: {},
+      rebindFailuresByWhy: {},
     });
     expect(llHasRoom(CHANNEL)).toBe(false);
+  });
+});
+
+describe("a presenter track change keeps the LL session (rebind in place)", () => {
+  /** peer id -> person, the answer `ws/voice.ts` registers. */
+  function people(map: Record<string, string>) {
+    setLlPresenterIdentity((_channel, peerId) => map[peerId] ?? null);
+  }
+
+  async function started() {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    expect(first).not.toBeNull();
+    // A new session is keyed by its start instant: make sure one started
+    // after this cannot share this one's millisecond.
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    return { db, server, first: first! };
+  }
+
+  it("names the presenter on the start request, so the box follows only their screen", async () => {
+    const { server } = await started();
+    const post = server.calls.find((c) => c.method === "POST" && c.path === "/sessions");
+    const body = remuxStartSessionRequestSchema.parse(JSON.parse(post!.body));
+    expect(body.presenterIdentity).toBe("peer-1");
+  });
+
+  it("the same person under a new peer id is rebound on the box: same session, same URL, no stop", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { db, server, first } = await started();
+
+    const again = await reconcileLlHlsNow(CHANNEL, "peer-2");
+
+    expect(again?.startedAt).toBe(first.startedAt);
+    expect(again?.hlsUrl).toBe(first.hlsUrl);
+    expect(again?.presenterPeerId).toBe("peer-2");
+    expect(server.created).toHaveLength(1);
+    expect(server.calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(server.rebinds).toEqual([
+      { sessionId: server.created[0], presenterIdentity: "peer-2" },
+    ]);
+    // The row follows, so the other machine's resume adoption matches the
+    // peer that is presenting now.
+    expect(db.hlsRows).toHaveLength(1);
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
+    expect(db.hlsRows[0]!.ended_at).toBeNull();
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebound",
+      expect.objectContaining({
+        channelId: CHANNEL,
+        reason: "presenter-reconnected",
+        from: "peer-1",
+        to: "peer-2",
+        result: "bound",
+      }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+    expect(llHlsActivity().rebindsByReason).toEqual({ "presenter-reconnected": 1 });
+    // And the peer it now follows keeps it on the next roster event.
+    expect(await reconcileLlHlsNow(CHANNEL, "peer-2")).toEqual(again);
+    expect(server.rebinds).toHaveLength(1);
+  });
+
+  it("a DIFFERENT person is a new session, as before: no rebind is attempted", async () => {
+    people({ "peer-1": "user-rafa", "peer-9": "user-andre" });
+    const { server, first } = await started();
+    const next = await reconcileLlHlsNow(CHANNEL, "peer-9");
+    expect(server.rebinds).toHaveLength(0);
+    expect(server.created).toHaveLength(2);
+    expect(next?.startedAt).not.toBe(first.startedAt);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStopped",
+      expect.objectContaining({ reason: "presenter-changed" }),
+    );
+  });
+
+  it("an older box without the route falls back to a new session, and says why", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { server, first } = await started();
+    server.setRebindMode("missing-route");
+    const next = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(next?.startedAt).not.toBe(first.startedAt);
+    expect(server.created).toHaveLength(2);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebindFailed",
+      expect.objectContaining({ why: "unsupported", fallback: "new-session", status: 404 }),
+    );
+    expect(llHlsActivity().rebindFailuresByWhy).toEqual({ unsupported: 1 });
+  });
+
+  it("a box that lost the session falls back to a new session rather than a demotion", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { server } = await started();
+    server.setRebindMode("gone");
+    await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(server.created).toHaveLength(2);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebindFailed",
+      expect.objectContaining({ why: "session-gone", fallback: "new-session" }),
+    );
+    expect(llHlsActivity().demoted).toBe(0);
+  });
+
+  it("a demoted session is held for the demotion sweep, never replaced here", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { server, first } = await started();
+    server.setRebindMode("demoted");
+    const held = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(held).toEqual(first);
+    expect(server.created).toHaveLength(1);
+    expect(server.calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebindFailed",
+      expect.objectContaining({ why: "demoted", fallback: "demotion-sweep" }),
+    );
+  });
+
+  it("a control API it cannot reach holds the session and rebinds on the next reconcile", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { server, first } = await started();
+    server.setRebindMode("unreachable");
+    const held = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(held).toEqual(first);
+    expect(server.created).toHaveLength(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebindFailed",
+      expect.objectContaining({ why: "control-api-error", fallback: "retry" }),
+    );
+
+    server.setRebindMode("ok");
+    const rebound = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(rebound?.startedAt).toBe(first.startedAt);
+    expect(rebound?.presenterPeerId).toBe("peer-2");
+    expect(server.created).toHaveLength(1);
+  });
+
+  it("a replaced screen track under the same peer is a nudge to the box, never a new session", async () => {
+    const { server, first } = await started();
+    await rebindLlForReplacedTrack(CHANNEL, "peer-1", { videoFrom: "TR_a", videoTo: "TR_b" });
+    expect(server.rebinds).toEqual([
+      { sessionId: server.created[0], presenterIdentity: "peer-1" },
+    ]);
+    expect(server.created).toHaveLength(1);
+    expect(llStreamFor(CHANNEL)).toEqual(first);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebound",
+      expect.objectContaining({ reason: "screen-track-replaced", videoTo: "TR_b" }),
+    );
+    // An older box: logged, and nothing else happens at all.
+    server.setRebindMode("missing-route");
+    await rebindLlForReplacedTrack(CHANNEL, "peer-1");
+    expect(server.created).toHaveLength(1);
+    expect(llStreamFor(CHANNEL)).toEqual(first);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebindFailed",
+      expect.objectContaining({ reason: "screen-track-replaced", why: "unsupported", fallback: "none" }),
+    );
+  });
+
+  it("a replaced-track nudge says whether to ask again: only when the box could not be asked", async () => {
+    const { server } = await started();
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+    server.setRebindMode("unreachable");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(false);
+    server.setRebindMode("missing-route");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+    server.setRebindMode("demoted");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+  });
+
+  it("a presenter row write that failed after a rebind is retried until it lands", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { db } = await started();
+    let failPresenterWrite = true;
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("SET presenter_peer_id = $2") && failPresenterWrite) {
+        failPresenterWrite = false;
+        throw new Error("connection reset");
+      }
+      return db.queryImpl(sql, params);
+    });
+    const rebound = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(rebound?.presenterPeerId).toBe("peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-1");
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlSessionRecordFailed",
+      expect.objectContaining({ step: "presenter-peer" }),
+    );
+    await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
+  });
+
+  it("a rebind whose row write died with the process is recovered from the box, not replaced", async () => {
+    // The box accepted the rebind, the row write failed, and the process
+    // restarted before retrying it. The new process knows nothing about the
+    // person (no identity hook answers for the old peer) and the row still
+    // names peer-1; the box says it follows peer-2.
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { db, server, first } = await started();
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("SET presenter_peer_id = $2")) {
+        throw new Error("connection reset");
+      }
+      return db.queryImpl(sql, params);
+    });
+    await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-1");
+
+    // The process restarts.
+    resetHlsRemuxForTests();
+    enableLL();
+    query.mockImplementation(db.queryImpl);
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    const again = await reconcileLlHlsNow(CHANNEL, "peer-2");
+
+    expect(again?.startedAt).toBe(first.startedAt);
+    expect(again?.presenterPeerId).toBe("peer-2");
+    expect(server.created).toHaveLength(1);
+    expect(server.calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
+  });
+
+  it("knows the person from the old peer when the session was adopted before anybody was back", async () => {
+    // A boot adoption records no person (no socket is back yet); the old
+    // peer, held for its resume window, is still in this process's map when
+    // the new one arrives.
+    const { server, first } = await started();
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const next = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(next?.startedAt).toBe(first.startedAt);
+    expect(server.rebinds).toHaveLength(1);
   });
 });

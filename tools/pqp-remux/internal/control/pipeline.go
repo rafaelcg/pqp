@@ -118,6 +118,14 @@ type PipelineHealth struct {
 	R2InFlight      int64
 	R2LastLatencyMs int64
 	R2MaxLatencyMs  int64
+
+	// VideoRebinds is how many replacement screen-share tracks this
+	// pipeline bound (internal/session.Session.VideoRebinds).
+	VideoRebinds uint64
+	// RebindWaitingSince is when a rebind began waiting for the new
+	// source's first keyframe; zero when none is waiting. See
+	// evaluateWatchdog's rebind rule.
+	RebindWaitingSince time.Time
 }
 
 // Pipeline is the minimal surface a managed session's media pipeline
@@ -144,6 +152,14 @@ type Pipeline interface {
 	Close()
 }
 
+// Rebinder is the optional half of Pipeline a production pipeline has and a
+// test fake need not: follow a different presenter identity inside the same
+// pipeline (internal/subscriber.Session.SetPresenter). A pipeline without
+// it answers POST /sessions/:id/rebind with "unsupported".
+type Rebinder interface {
+	Rebind(identity string) string
+}
+
 // PipelineConfig is everything a PipelineFactory needs to build one
 // session's Pipeline: the per-request fields from StartSessionRequest, this
 // session's own fixed identity (SessionID, StartedAtMs -- unchanged across
@@ -161,6 +177,9 @@ type PipelineConfig struct {
 	KeyframePolicy KeyframePolicy
 	PliPaceMs      int
 	PliGateFactor  float64
+	// PresenterIdentity is who the pipeline's subscriber follows: the
+	// start request's, or the latest rebind's for a watchdog replacement.
+	PresenterIdentity string
 
 	// StartVideoSegmentIndex/StartAudioSegmentIndex are 0 for a session's
 	// very first pipeline (ordinary "start counting from segment 0"), and

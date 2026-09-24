@@ -733,6 +733,20 @@ export interface AdminMetrics {
      */
     llStopFailures: number;
     /**
+     * LL sessions kept across a presenter track change instead of replaced
+     * (`voice.hlsLlRebound`), in total and by reason: `presenter-reconnected`
+     * (the same person under a new peer id) and `screen-track-replaced` (a
+     * republish). The LL twin of the ladder's in-place restarts.
+     */
+    llRebindsTotal: number;
+    llRebindsByReason: Record<string, number>;
+    /**
+     * Rebinds the box could not do, by why (`voice.hlsLlRebindFailed`):
+     * `unsupported`, `session-gone`, `demoted`, `control-api-error`. Belongs
+     * at zero once the box carries the rebind route.
+     */
+    llRebindFailuresByWhy: Record<string, number>;
+    /**
      * An LL session was demoted back to the conventional ladder by `L1.6`'s
      * watchdog, which does not exist yet -- this reads zero on every
      * deployment until that task ships. Reserved here now so the dashboard
@@ -1564,6 +1578,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       llStartFailures: llActivity.startFailures,
       llStopFailures: llActivity.stopFailures,
       llDemoted: llActivity.demoted,
+      llRebindsTotal: llActivity.rebindsTotal,
+      llRebindsByReason: llActivity.rebindsByReason,
+      llRebindFailuresByWhy: llActivity.rebindFailuresByWhy,
       startsTotal: hlsActivity.startsTotal,
       stopsTotal: hlsActivity.stopsTotal,
       restartsScheduled: hlsActivity.restartsScheduledTotal,

@@ -69,6 +69,7 @@ import {
   forgetLlResumeDecisions,
   llAdoptedAt,
   llStreamFor,
+  rebindLlForReplacedTrack,
   reconcileLlHlsNow,
   releaseLlRoom,
   resetHlsRemuxForTests,
@@ -2427,6 +2428,7 @@ export function setLiveHlsTestHooks(hooks: {
 export function resetLiveHlsForTests(): void {
   rooms.clear();
   llCompanions.clear();
+  llScreenTracksSeen.clear();
   restartHistory.clear();
   failedUntil.clear();
   for (const timer of pendingRestarts.values()) {
@@ -4050,14 +4052,94 @@ async function reconcileLlCompanions(
     }
   } else {
     // A reconnect that kept the media keeps the session under a new peer id
-    // (`voice.hlsPresenterReattached`'s case); the slots follow it.
+    // (`voice.hlsPresenterReattached`'s case), and so does one the remux box
+    // rebound in place (`voice.hlsLlRebound reason=presenter-reconnected`);
+    // the slots follow it.
+    const from = room.stream.presenterPeerId;
+    if (from !== stream.presenterPeerId && voiceTrackSeparatedByChannel.get(channelId) === from) {
+      // "Separada" moves with the person: it was declared by their previous
+      // socket, and without this the reattached presenter's camera would be
+      // restarted without their voice on the next reconcile.
+      voiceTrackSeparatedByChannel.set(channelId, stream.presenterPeerId);
+    }
     room.stream = { ...room.stream, presenterPeerId: stream.presenterPeerId };
   }
+  await noteLlScreenTracks(channelId, stream, tracks);
   return {
     stream,
     cameraTrackId: tracks.cameraTrackId ?? null,
     voiceTrackId: tracks.voiceTrackId ?? null,
   };
+}
+
+/**
+ * The screen-share tracks the LL companion probe last saw per channel, for
+ * the session they were seen under. Kept apart from the companion room's own
+ * `videoTrackId`, which a boot reconcile parks from a row that may name
+ * another track entirely (`parkLlCompanion`).
+ */
+const llScreenTracksSeen = new Map<
+  string,
+  { startedAt: number; presenterPeerId: string; video: string; audio: string | null }
+>();
+
+/**
+ * SAME PRESENTER, NEW SCREEN TRACK: the LL twin of the ladder's
+ * `screen-track-replaced`. The web client republishes the screen when it
+ * resumes after a deploy and whenever the presenter picks something else to
+ * share; the remux box follows the presenter's newest track on its own, and
+ * this tells it again (`rebindLlForReplacedTrack`) so the log narrates it and
+ * a box that missed it binds it now. Nothing is stopped or restarted here.
+ * The first sighting per session only records; a presenter change is the
+ * rebind path's business, not this one's.
+ */
+async function noteLlScreenTracks(
+  channelId: string,
+  stream: LiveHlsStream,
+  tracks: LiveHlsScreenTracks,
+): Promise<void> {
+  if (!tracks.videoTrackId) {
+    // Between an unpublish and the republish: nothing to compare yet.
+    return;
+  }
+  const video = tracks.videoTrackId;
+  const audio = tracks.audioTrackId ?? null;
+  const seen = llScreenTracksSeen.get(channelId);
+  const record = () =>
+    llScreenTracksSeen.set(channelId, {
+      startedAt: stream.startedAt,
+      presenterPeerId: stream.presenterPeerId,
+      video,
+      audio,
+    });
+  if (
+    !seen ||
+    seen.startedAt !== stream.startedAt ||
+    seen.presenterPeerId !== stream.presenterPeerId ||
+    (seen.video === video && seen.audio === audio)
+  ) {
+    record();
+    return;
+  }
+  logEvent("voice.hlsTrackReplaced", {
+    channelId,
+    mode: "ll",
+    startedAt: stream.startedAt,
+    from: seen.video,
+    to: video,
+    audioFrom: seen.audio,
+    audioTo: audio,
+  });
+  // RECORDED ONLY ONCE IT IS DEALT WITH (Farol review, PR #813). A nudge the
+  // control API never heard leaves the old tracks as "seen", so the next
+  // reconcile sees the same replacement and asks again.
+  const dealtWith = await rebindLlForReplacedTrack(channelId, stream.presenterPeerId, {
+    videoFrom: seen.video,
+    videoTo: video,
+  });
+  if (dealtWith) {
+    record();
+  }
 }
 
 /**
@@ -4209,6 +4291,7 @@ export function hasLadderRoomFor(channelId: string, startedAt: number): boolean 
 
 /** Stop an LL broadcast's camera and archive and close their rows. */
 async function stopLlCompanions(channelId: string, reason: string): Promise<void> {
+  llScreenTracksSeen.delete(channelId);
   const room = llCompanions.get(channelId);
   if (!room) {
     return;

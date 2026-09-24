@@ -29,6 +29,25 @@ func fakeExitingBinary(t *testing.T, exitCode int) string {
 	return path
 }
 
+// fakeDrainingBinary is a stand-in for ffmpeg that behaves like the real one
+// at shutdown: it reads its input until EOF and only then exits 0. The clean
+// exit case needs this, not fakeExitingBinary: a process that exits the
+// instant it starts can exit before the test gets to Close, and then the
+// "Close was not called" report is correct rather than a bug (CI hit exactly
+// that interleaving once, on PR #813).
+func fakeDrainingBinary(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fakeDrainingBinary needs a POSIX shell")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fake-ffmpeg-drain.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ncat >/dev/null\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("writing fake binary: %v", err)
+	}
+	return path
+}
+
 // TestEncoderReportsAnUnexpectedExitThroughErrs is the regression test
 // for Farol's "unexpected ffmpeg exit is exposed as clean audio
 // completion" finding: a process that exits on its own (crash, killed,
@@ -82,7 +101,7 @@ func TestEncoderReportsAnUnexpectedExitThroughErrs(t *testing.T) {
 // thing Close does, strictly before anything that could let the
 // process's exit become observable to readADTS.
 func TestEncoderCleanExitAfterCloseReportsNoError(t *testing.T) {
-	bin := fakeExitingBinary(t, 0)
+	bin := fakeDrainingBinary(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

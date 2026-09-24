@@ -97,6 +97,7 @@ func NewServer(secret, mediaOriginKey string, registry *Registry) *Server {
 	s.mux.HandleFunc("POST /sessions", s.withSigning(s.handleStart))
 	s.mux.HandleFunc("DELETE /sessions/{id}", s.withSigning(s.handleStop))
 	s.mux.HandleFunc("GET /sessions", s.withSigning(s.handleList))
+	s.mux.HandleFunc("POST /sessions/{id}/rebind", s.withSigning(s.handleRebind))
 	s.mux.HandleFunc("/s/{id}/{rest...}", s.withOriginKey(s.handleMedia))
 	return s
 }
@@ -253,6 +254,38 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleList implements GET /sessions.
+// handleRebind is POST /sessions/:id/rebind. 404 (with a JSON error body,
+// which is how pqp-api tells "no such session" from "a box too old to have
+// this route", whose ServeMux answers a plain-text 404) for an unknown
+// session, 409 for a demoted one, 200 with RebindResponse otherwise.
+func (s *Server) handleRebind(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req RebindRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := req.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ms, ok := s.registry.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	result, err := ms.Rebind(req.PresenterIdentity)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, RebindResponse{
+		SessionID:         id,
+		PresenterIdentity: req.PresenterIdentity,
+		Result:            result,
+	})
+}
+
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ListSessionsResponse{Sessions: s.registry.List()})
 }

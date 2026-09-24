@@ -21,7 +21,10 @@ holds N of that same pipeline in one process, driven over HTTP by
    participant — it never publishes anything (`internal/subscriber`).
 2. Finds the presenter's screen-share video track (`Source ==
    SCREEN_SHARE`), its screen-share audio track if present, and every stage
-   participant's microphone (`Source == MICROPHONE`, any identity).
+   participant's microphone (`Source == MICROPHONE`, any identity). The
+   presenter is the identity `pqp-api` names, and a republished screen is
+   bound inside the same session: see "A republished screen is the same
+   session" below.
 3. Depayloads the H.264 RTP stream (single NAL, STAP-A, FU-A) into access
    units, in AVCC form, with SPS/PPS/IDR detection (`internal/h264`,
    `internal/nal`).
@@ -611,6 +614,7 @@ lifetime) — never a subprocess, never a container per session.
 | `POST /sessions` | yes | Start a session. Body: `sessionId`, `room`, `channelId`, `partMs`, `segmentMs`, `ringSegments`, `keyframePolicy`, `pliPaceMs`, `pliGateFactor` — one field per `pqp-remux` config knob (see Config above). 201 with the session's info, or 409 with the SAME info if `sessionId` already names a session (idempotent retry). |
 | `DELETE /sessions/:id` | yes | Stop a session. 204 always, including "already gone" — stopping is idempotent. |
 | `GET /sessions` | yes | Every session this process currently holds. |
+| `POST /sessions/:id/rebind` | yes | Follow a different presenter identity inside the same session. Body: `presenterIdentity`. 200 with `{sessionId, presenterIdentity, result}` (`bound`, `unchanged`, `waiting`, `pending`, `unsupported`); 404 with a JSON error for an unknown session (a box without this route answers a PLAIN-TEXT 404, which is how `pqp-api` tells the two apart); 409 for a demoted one. See "A republished screen is the same session". |
 | `GET /s/:id/*` | origin key (see below) | That session's media: `init.mp4`, `playlist.m3u8`, `state.json` (see below), `part-N.m4s`, `seg-N.m4s` and their `audio-*` twins — the exact route shapes `internal/serve.Server` already answers, mounted per session under one prefix so `L2.3`'s edge Worker has one origin path shape regardless of how many sessions are live. Never HMAC-signed like `/sessions` (a viewer's player cannot produce that signature, and does not need to reach this route through anything but the edge Worker in a real deployment) — see "Access control" below for what actually gates it. |
 
 #### `GET /s/:id/state.json`
@@ -709,6 +713,75 @@ the TS schema has not grown yet. That schema is a plain `z.object({...})`
 with no `.strict()`, so `pqp-api`'s own `.parse()` call silently strips
 whatever it does not name (Zod's documented default) — returning the extra
 fields today is forward-compatible, not a contract violation.
+
+### A republished screen is the same session
+
+Production, 2026-09-24. A watch party's presenter republishes their screen on a
+new track far more often than the first version of this box allowed for: the
+web client does it on every resume after an API deploy, and again whenever the
+presenter picks something else to share. The subscriber bound the FIRST
+screen-share track it saw and never looked at another, so the replacement
+reached the audience only through the watchdog's one restart (a new pipeline,
+a gap, a new PDT epoch), a second republish in the same party demoted it, and a
+presenter back under a new identity was a new session on the API side.
+
+Now a replacement is **bound inside the session**:
+
+- **Who.** `POST /sessions` carries `presenterIdentity` (a pqp peer id, which is
+  what LiveKit identities are), and the subscriber binds only that identity's
+  screen share, the newest one it has, and its audio
+  (`internal/subscriber/binder.go`, the whole policy, unit tested without a
+  room). No identity (an older `pqp-api`) keeps the old rule for the first
+  bind, and then follows that same person. A co-host sharing at the same moment
+  is never bound. `POST /sessions/:id/rebind` names a new identity: the same
+  person reconnected without resuming. Named before they have published, the
+  picture already showing is held until their track arrives (`waiting`).
+- **How.** Every screen-share track stays subscribed, so a replacement can be
+  bound without a round trip, but only the bound ones are FORWARDED
+  (`SetEnabled`): a co-host's share, or the presenter's old track while it
+  lingers, costs the box no bandwidth and no reader work. A rebind enables the
+  new track, asks for a keyframe, and takes the subscriber's switch lock
+  for write, so no packet of the old track reaches the session after it is
+  told the stream changed (`session.Session.BeginVideoSource`), and none of the
+  new one before. The session keeps its ring, fragmenter, part and segment
+  numbering, init generation, epoch (so PROGRAM-DATE-TIME keeps its one anchor,
+  #787), audio track, R2 prefix and replay index; it resets what belongs to one
+  RTP stream (the depacketizer's sequence and timestamp state, the reorder
+  buffer, the damage latch). The next packet re-anchors the new publisher
+  clock on the session timeline (`pipeline.Fragmenter.RebaseSource`), frames
+  are dropped until the new source's first IDR, and that IDR opens a new
+  segment. Different parameter sets publish a new init map with a
+  discontinuity through the ordinary parameter-set path (#769). The timeline
+  never rewinds (the offset rises past published media if the wall mapping
+  would land behind it) and never gains a hole (the old source's last frame,
+  or the keep-alive's repeat of it, covers the gap).
+- **The keyframe wait is not a stall.** Between the bind and the new
+  source's first IDR no part is published and the last IDR recedes while
+  packets and frames arrive, which the watchdog would otherwise answer with a
+  `part-stuck` restart at 3 s and an `idr-gap-exceeded` demotion at 12 s.
+  `PipelineHealth.RebindWaitingSince` exempts the wait from both, for up to
+  `FIRST_PART_TIMEOUT_MS` (then `demoting (rebind-no-keyframe)`), logs
+  `rebind-awaiting-keyframe` once, and restarts both clocks when the keyframe
+  lands (`watchdog_rebind_test.go`).
+- **The end of a track is no longer the end of the session.** The trailing
+  fragment flush (`OnVideoTrackEnded`, `session.Session.Finish`) runs once, at
+  `Close`; a track ending mid-session is a presenter between two shares, and
+  the keep-alive holds the picture meanwhile.
+- **Log lines.** `subscriber: bound screen-share video track <sid> from
+  "<identity>" ... (rebind N)`, `video source rebound: a new screen-share track
+  replaces the previous one inside this session`, `video source rebound: first
+  keyframe from the new source <d> after the bind (dropped=N ...)`,
+  `control: session <id>: rebind presenter "<a>" -> "<b>": <result>`.
+  `GET /sessions` carries `presenterIdentity` and `videoRebinds` (across
+  watchdog restarts); a watchdog restart builds its replacement following the
+  latest identity.
+
+Pinned by `internal/subscriber/rebind_test.go`, `internal/session/rebind_test.go`
+(init change mid-session, parts continue, PDT continuous, the replay playlist
+and the film planner read one clock), `internal/pipeline/fragmenter_rebase_test.go`,
+`internal/control/rebind_test.go`, `internal/film`'s
+`TestBuildJoinsARebindIntoOneContinuousFilm`, and `tools/ll-loss-harness`'s
+`SCENARIO=republish` / `SCENARIO=reconnect`.
 
 ### Signing
 
