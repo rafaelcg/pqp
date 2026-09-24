@@ -671,7 +671,11 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     const b1 = await bootInstance("api-b#1");
     const presenter = await presenterJoinsAndShares(a1, randomUUID(), channel);
 
-    await waitFor(() => owners(channel).length === 1, "the show to go live");
+    // Announced, not merely started: the room exists before its first playlist.
+    await waitFor(
+      () => (a1.egress.liveHlsStreamFor(channel) ?? a1.remux.llStreamFor(channel)) !== null,
+      "the show to go live",
+    );
     expect(owners(channel)).toEqual(["api-a#1"]);
     const liveStream =
       a1.egress.liveHlsStreamFor(channel) ?? a1.remux.llStreamFor(channel);
@@ -803,7 +807,8 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     const channel = fixture.channelId;
     const a1 = await bootInstance("api-a#1");
     const presenter = await presenterJoinsAndShares(a1, randomUUID(), channel);
-    await waitFor(() => owners(channel).length === 1, "the show to go live");
+    // Announced, not merely started: the room exists before its first playlist.
+    await waitFor(() => a1.egress.liveHlsStreamFor(channel) !== null, "the show to go live");
     const startedAt = a1.egress.liveHlsStreamFor(channel)!.startedAt;
     const viewer = startViewer(channel, "conventional");
 
