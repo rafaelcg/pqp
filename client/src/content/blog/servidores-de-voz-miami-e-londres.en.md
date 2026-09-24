@@ -2,7 +2,7 @@ pqp now runs voice servers in three places: São Paulo, still home, plus Miami a
 
 ## Closer servers, lower delay
 
-Until yesterday, every call that went through a server went through São Paulo, wherever you were. Great if you play from Brazil. For everyone else, every sentence made a long trip down here and back.
+Until this week, every call that went through a server went through São Paulo, wherever you were. Great if you play from Brazil. For everyone else, every sentence made a long trip down here and back.
 
 Here is how it works now:
 
@@ -14,7 +14,7 @@ The difference is big. We measured it today from the UK: the London server answe
 
 ## How it works
 
-You do not have to do anything. In communities and bigger servers, voice goes through a pqp server, and that server is picked by where the first person to join the call is. Everyone who joins after lands on the same one, so nobody gets split off from the conversation.
+You do not have to do anything. In communities and bigger servers, voice goes through a pqp server, and pqp picks the one closest to the people in that server. Everyone in the call lands on the same one, so nobody gets split off from the conversation.
 
 DM calls and calls in small servers already connect you straight to each other, with no server in the middle. That has not changed.
 
@@ -24,7 +24,7 @@ Want to see where pqp runs, and whether each server is up right now? There is a 
 
 Watch parties still stream from São Paulo, and reach you through Cloudflare's network, close to wherever you are watching.
 
-They also got better this week:
+They got better too:
 
 - Low-latency mode is smoother. When your connection hiccups, the player takes a few seconds of cushion instead of freezing, then gives them back when it can.
 - In **Past broadcasts** you can rewatch a show, and **Download** has the presenter's camera and voice. A low-latency show also gets the whole video, ready a few minutes after it ends.

@@ -2,7 +2,7 @@ A pqp agora tem servidor de voz em três lugares: São Paulo, que continua sendo
 
 ## Servidor perto, menos atraso
 
-Até ontem toda call que passava por servidor ia pra São Paulo, de onde quer que você estivesse. Pra quem joga do Brasil, ótimo. Pra galera de fora, cada frase fazia uma viagem longa até aqui e voltava.
+Até esta semana, toda call que passava por servidor ia pra São Paulo, de onde quer que você estivesse. Pra quem joga do Brasil, ótimo. Pra galera de fora, cada frase fazia uma viagem longa até aqui e voltava.
 
 Agora fica assim:
 
@@ -14,7 +14,7 @@ A diferença é grande. Medimos hoje do Reino Unido: o servidor de Londres respo
 
 ## Como funciona
 
-Você não precisa fazer nada. Nas comunidades e nos servidores maiores, a voz passa por um servidor da pqp, e ele é escolhido pela região de quem entra primeiro na call. Todo mundo que entra depois cai no mesmo lugar, então ninguém fica separado da conversa.
+Você não precisa fazer nada. Nas comunidades e nos servidores maiores, a voz passa por um servidor da pqp, e a pqp escolhe o que fica mais perto da galera daquele servidor. Todo mundo na call cai no mesmo lugar, então ninguém fica separado da conversa.
 
 DM call e call em servidor pequeno já ligam vocês direto, de um pro outro, sem passar por servidor nenhum. Isso não mudou.
 
@@ -24,7 +24,7 @@ Quer ver onde a pqp roda e se cada servidor tá no ar agora? Tem um mapa novo na
 
 A watch party continua saindo de São Paulo e chega em você pela rede da Cloudflare, perto de onde você tá assistindo.
 
-E ela ficou melhor esta semana:
+E ela também melhorou:
 
 - O modo de baixa latência ficou mais liso. Quando a conexão engasga, o player ganha uns segundos de folga em vez de travar, e depois devolve quando dá.
 - Em **Transmissões anteriores** dá pra rever o que passou, e em **Baixar** tem a câmera e a voz de quem apresentou. Numa transmissão de baixa latência também sai o vídeo inteiro, pronto uns minutos depois que acaba.
