@@ -8,7 +8,14 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { formatPostDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
-import { postBySlug, type BlogLocale } from "@/lib/blog/posts";
+import {
+  blogLocaleFor,
+  blogReadLocaleFor,
+  postBySlug,
+  postLocale,
+  postSummary,
+  postTitle,
+} from "@/lib/blog/posts";
 import { loadArticleBody } from "@/lib/blog/article-bodies";
 import {
   articleBySlug,
@@ -62,7 +69,8 @@ const MARKDOWN_COMPONENTS: Components = {
 export function BlogPostPage() {
   const { slug } = useParams<{ slug: string }>();
   const { t, locale } = useTranslation();
-  const blogLocale: BlogLocale = locale === "pt-BR" ? "pt-BR" : "en";
+  const blogLocale = blogLocaleFor(locale);
+  const readLocale = blogReadLocaleFor(locale);
   const post = slug ? postBySlug(slug) : null;
   const article = !post && slug ? articleBySlug(slug) : null;
   const [body, setBody] = useState<string | null>(null);
@@ -74,7 +82,7 @@ export function BlogPostPage() {
     let live = true;
     setBody(null);
     const load = post
-      ? loadPostBody(post.slug, blogLocale)
+      ? loadPostBody(post.slug, readLocale)
       : loadArticleBody(article!.slug, blogLocale);
     void load.then((text) => {
       if (live) {
@@ -86,7 +94,7 @@ export function BlogPostPage() {
     return () => {
       live = false;
     };
-  }, [post, article, blogLocale]);
+  }, [post, article, blogLocale, readLocale]);
 
   if (!post && !article) {
     return (
@@ -119,8 +127,12 @@ export function BlogPostPage() {
     );
   }
 
-  const title = post ? post.title[blogLocale] : articleTitle(article!, blogLocale);
-  const summary = post ? post.summary[blogLocale] : articleSummary(article!, blogLocale);
+  const title = post
+    ? postTitle(post, readLocale)
+    : articleTitle(article!, blogLocale);
+  const summary = post
+    ? postSummary(post, readLocale)
+    : articleSummary(article!, blogLocale);
   const faq = article ? articleFaq(article, blogLocale) : [];
 
   return (
@@ -149,7 +161,7 @@ export function BlogPostPage() {
               dateTime={post.date}
               className="mt-4 block text-sm text-paper-muted/80"
             >
-              {formatPostDate(post.date, blogLocale)}
+              {formatPostDate(post.date, postLocale(post, readLocale))}
             </time>
           ) : (
             <time

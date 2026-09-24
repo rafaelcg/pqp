@@ -365,9 +365,10 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     url.search,
     context.request.headers.get("accept-language"),
   );
-  // Marketing pages carry Spanish copy of their own; the blog, invite,
-  // community and profile cards do not yet, so Spanish readers get their
-  // English card. The blog still stamps `es` for the app to boot in.
+  // Marketing pages carry Spanish copy of their own; the invite, community and
+  // profile cards do not yet, so Spanish readers get their English card. The
+  // blog gets `en` as its base too, and serves a post's Spanish card itself
+  // when that post has one (`injectBlogHead` reads the stamped `es`).
   const cardLocale = locale === "es" ? "en" : locale;
 
   if (marketing) {

@@ -1,4 +1,6 @@
-import type { BlogLocale } from "./posts";
+import type { BlogLocale, BlogReadLocale } from "./posts";
+
+type BodyLoader = () => Promise<string>;
 
 /**
  * The prose of every release note, one lazy importer per post and locale.
@@ -18,7 +20,10 @@ import type { BlogLocale } from "./posts";
  * `react-markdown` the app already ships for chat messages, so there is nothing
  * to transform at build time and nothing new in the dependency tree.
  */
-const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
+const BODIES: Record<
+  string,
+  Record<BlogLocale, BodyLoader> & { es?: BodyLoader }
+> = {
   "servidores-de-voz-miami-e-londres": {
     "pt-BR": () =>
       import("@/content/blog/servidores-de-voz-miami-e-londres.pt-BR.md?raw").then(
@@ -26,6 +31,10 @@ const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
       ),
     en: () =>
       import("@/content/blog/servidores-de-voz-miami-e-londres.en.md?raw").then(
+        (m) => m.default,
+      ),
+    es: () =>
+      import("@/content/blog/servidores-de-voz-miami-e-londres.es.md?raw").then(
         (m) => m.default,
       ),
   },
@@ -158,18 +167,30 @@ const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
  * string catalogue and deliberate: the catalogue's source of truth is English
  * because that is where new keys are written, but release notes are written for
  * the people already using the product, and they are in Brazil.
+ *
+ * Spanish is the exception, and optional per post: a Spanish reader gets the
+ * `.es.md` when the post has one, and the English body otherwise, which is
+ * what every Spanish reader got before Spanish posts existed.
  */
 export async function loadPostBody(
   slug: string,
-  locale: BlogLocale,
+  locale: BlogReadLocale,
 ): Promise<string | null> {
   const bodies = BODIES[slug];
   if (!bodies) {
     return null;
   }
-  const load = bodies[locale] ?? bodies["pt-BR"];
+  const load =
+    locale === "es"
+      ? (bodies.es ?? bodies.en)
+      : (bodies[locale] ?? bodies["pt-BR"]);
   return load();
 }
+
+/** Every slug with a Spanish body, so a test can pin it against `POSTS`. */
+export const SLUGS_WITH_ES_BODIES = Object.keys(BODIES).filter(
+  (slug) => BODIES[slug]?.es !== undefined,
+);
 
 /** Every slug that has prose, so a test can pin it against `POSTS`. */
 export const SLUGS_WITH_BODIES = Object.keys(BODIES);

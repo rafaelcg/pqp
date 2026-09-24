@@ -42,18 +42,65 @@
  */
 export type BlogLocale = "pt-BR" | "en";
 
+/**
+ * The language a reader asked for, which can be one more than the two every
+ * post must have. Spanish is OPTIONAL per post: a post written in Spanish
+ * carries an `es` title, summary and body, and every other post is read in
+ * English by a Spanish reader, exactly as before Spanish posts existed.
+ * `blog-meta.test.ts` pins that a post has either all three `es` parts or none.
+ */
+export type BlogReadLocale = BlogLocale | "es";
+
+/** Both required languages, plus Spanish when the post was written in it. */
+export type BlogText = Record<BlogLocale, string> & { es?: string };
+
 export interface BlogPost {
   /** URL segment. Lowercase, hyphenated, never changed once published. */
   slug: string;
   /** `YYYY-MM-DD`, the day it reached people. */
   date: string;
-  title: Record<BlogLocale, string>;
+  title: BlogText;
   /**
    * One or two sentences. Does double duty as the card blurb on the index and
    * the `<meta name="description">` the edge injects, so it has to read as a
    * complete thought on its own.
    */
-  summary: Record<BlogLocale, string>;
+  summary: BlogText;
+}
+
+/** The two required languages, from an app locale. Spanish reads English. */
+export function blogLocaleFor(appLocale: string): BlogLocale {
+  return appLocale === "pt-BR" ? "pt-BR" : "en";
+}
+
+/** The reader's language as far as the blog can honour it. */
+export function blogReadLocaleFor(appLocale: string): BlogReadLocale {
+  return appLocale === "es" ? "es" : blogLocaleFor(appLocale);
+}
+
+/**
+ * The language one post is actually shown in for this reader: Spanish only
+ * when the post was written in Spanish, otherwise the English fallback a
+ * Spanish reader has always had.
+ */
+export function postLocale(
+  post: BlogPost,
+  reader: BlogReadLocale,
+): BlogReadLocale {
+  if (reader === "es") {
+    return post.title.es ? "es" : "en";
+  }
+  return reader;
+}
+
+export function postTitle(post: BlogPost, reader: BlogReadLocale): string {
+  const shown = postLocale(post, reader);
+  return shown === "es" ? post.title.es! : post.title[shown];
+}
+
+export function postSummary(post: BlogPost, reader: BlogReadLocale): string {
+  const shown = postLocale(post, reader);
+  return shown === "es" ? post.summary.es! : post.summary[shown];
 }
 
 /**
@@ -69,11 +116,13 @@ export const POSTS: readonly BlogPost[] = [
     title: {
       "pt-BR": "Servidor de voz em Miami e Londres",
       en: "Voice servers in Miami and London",
+      es: "Servidores de voz en Miami y Londres",
     },
     summary: {
       "pt-BR":
         "A pqp agora tem servidor de voz em São Paulo, Miami e Londres. Do Reino Unido, Londres responde em uns 15 ms contra uns 190 ms de São Paulo. E watch party mais lisa, com replay e download.",
       en: "pqp now runs voice servers in São Paulo, Miami and London. From the UK, London answers in about 15 ms versus about 190 ms to São Paulo. Plus smoother watch parties, with replays and downloads.",
+      es: "pqp ahora tiene servidores de voz en São Paulo, Miami y Londres. Desde el Reino Unido, Londres responde en unos 15 ms contra unos 190 ms de São Paulo. Y watch parties más fluidas.",
     },
   },
   {
