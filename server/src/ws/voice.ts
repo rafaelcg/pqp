@@ -104,6 +104,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  disownUnheldHlsRows,
   forgetLiveHlsResumeDecisions,
   isHlsSessionOpen,
   isLiveHlsEnabled,
@@ -2245,10 +2246,17 @@ const noSharerSince = new Map<string, number>();
 
 /**
  * How often a vanished sharer is looked for again while the broadcast is being
- * held for them. Each look is one registry read and one heartbeat read, and
- * only for a channel whose presenter is missing from this process.
+ * held for them, as a FALLBACK. The event that ends a hold is a resume, and a
+ * resume reaches this process on its own: here, as the presenter's own frames;
+ * on the other machine, as that machine's stand-down relayed to this one. So
+ * this only catches a lost relay, and costs one registry read and one
+ * heartbeat read per held party per tick (a Farol finding on this PR: at two
+ * seconds that was sustained polling during exactly the deploy that holds
+ * every party at once).
  */
-const SHARER_RECHECK_MS = 2_000;
+const SHARER_RECHECK_MS = 10_000;
+/** After a handover that could not be made (the rows did not move). */
+const HANDOVER_RETRY_MS = 5_000;
 
 /**
  * How long a session this process has just ADOPTED waits for its presenter
@@ -2308,14 +2316,16 @@ type VanishedSharer =
  *    pressed stop): `gone`, and the ordinary five-second grace applies.
  */
 /**
- * One registry read per channel per second while a sharer is missing, shared
- * by every push that asks: a burst of seated joins during a resume window
- * would otherwise be one `voice_peers` read each.
+ * One registry read per channel AT A TIME while a sharer is missing, shared by
+ * every push that asks while it is in flight: a burst of seated joins during a
+ * resume window would otherwise be one `voice_peers` read each. Deliberately
+ * not a cache past the read itself: the push that matters most here is the
+ * one right after the presenter resumed somewhere, and it must see the new
+ * seat, not an answer from a second ago.
  */
-const SHARER_LOOKUP_MEMO_MS = 1_000;
-const sharerLookupMemo = new Map<
+const sharerLookupInFlight = new Map<
   string,
-  { at: number; key: string; answer: Promise<VanishedSharer> }
+  { key: string; answer: Promise<VanishedSharer> }
 >();
 
 function locateVanishedSharer(
@@ -2325,19 +2335,18 @@ function locateVanishedSharer(
   now: number,
 ): Promise<VanishedSharer> {
   const key = `${presenterPeerId}:${since}`;
-  const memo = sharerLookupMemo.get(channelId);
-  if (memo && memo.key === key && now - memo.at < SHARER_LOOKUP_MEMO_MS) {
-    return memo.answer;
+  const inFlight = sharerLookupInFlight.get(channelId);
+  if (inFlight && inFlight.key === key) {
+    return inFlight.answer;
   }
   const answer = lookUpVanishedSharer(channelId, presenterPeerId, since, now);
-  sharerLookupMemo.set(channelId, { at: now, key, answer });
-  if (sharerLookupMemo.size > 256) {
-    for (const [id, entry] of sharerLookupMemo) {
-      if (now - entry.at >= SHARER_LOOKUP_MEMO_MS) {
-        sharerLookupMemo.delete(id);
-      }
+  const entry = { key, answer };
+  sharerLookupInFlight.set(channelId, entry);
+  void answer.finally(() => {
+    if (sharerLookupInFlight.get(channelId) === entry) {
+      sharerLookupInFlight.delete(channelId);
     }
-  }
+  });
   return answer;
 }
 
@@ -2714,12 +2723,22 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       noSharerSince.set(voiceChannelId, since);
       logNoSharer(voiceChannelId, prev.presenterPeerId);
     }
-    const where = await locateVanishedSharer(
-      voiceChannelId,
-      prev.presenterPeerId,
-      since,
-      now,
-    );
+    // THE PRESENTER IS HERE AND NOT SHARING: they stopped, or a permission
+    // bump cleared the bit. That is this process's own knowledge and the
+    // registry cannot improve on it, so it is answered without a round trip,
+    // exactly as before (and a stop followed at once by a new share still
+    // turns the session over in order). Only a presenter this process does
+    // not hold at all is looked for elsewhere.
+    const localPresenter = peers.get(prev.presenterPeerId);
+    const where: VanishedSharer =
+      localPresenter && localPresenter.voiceChannelId === voiceChannelId
+        ? { kind: "gone" }
+        : await locateVanishedSharer(
+            voiceChannelId,
+            prev.presenterPeerId,
+            since,
+            now,
+          );
     // The room can have moved on while the registry was asked: a sharer came
     // back (its own push reconciles it), or another push already settled
     // this vanish. Either way this answer is stale.
@@ -2735,6 +2754,9 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
         startedAt: prev.startedAt,
         toInstanceId: where.instanceId,
         presenterPeerId: prev.presenterPeerId,
+        // Re-asked inside the channel's queue, right before the rows move: a
+        // re-share that landed here meanwhile keeps the session here.
+        stillAbsent: () => !pickHlsSharer(getRoomPeers(voiceChannelId)),
       });
       if (released) {
         noSharerSince.delete(voiceChannelId);
@@ -2748,7 +2770,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
         relayHlsReconcile(voiceChannelId, Date.now(), true);
         return;
       }
-      scheduleSharerRecheck(voiceChannelId, SHARER_RECHECK_MS);
+      scheduleSharerRecheck(voiceChannelId, HANDOVER_RETRY_MS);
       return;
     }
     if (where.kind === "held") {
@@ -3580,6 +3602,37 @@ function publishChannelLive(
  */
 const RECONCILE_RELAY_THROTTLE_MS = 1_000;
 const lastReconcileRelayAt = new Map<string, number>();
+/**
+ * At most one disown check per channel per few seconds: a non-owner hears
+ * every relay for a channel it has viewers in, and almost all of them find
+ * nothing to give back.
+ */
+const DISOWN_CHECK_MS = 5_000;
+const lastDisownCheckAt = new Map<string, number>();
+
+function maybeDisownUnheldRows(channelId: string, now = Date.now()): void {
+  if (!registryOn()) {
+    return;
+  }
+  const last = lastDisownCheckAt.get(channelId);
+  if (last !== undefined && now - last < DISOWN_CHECK_MS) {
+    return;
+  }
+  lastDisownCheckAt.set(channelId, now);
+  if (lastDisownCheckAt.size > 512) {
+    for (const [id, at] of lastDisownCheckAt) {
+      if (now - at >= DISOWN_CHECK_MS) {
+        lastDisownCheckAt.delete(id);
+      }
+    }
+  }
+  void disownUnheldHlsRows(channelId).then((given) => {
+    if (given > 0) {
+      relayHlsReconcile(channelId, Date.now(), true);
+    }
+  });
+}
+
 /** One pending trailing relay per channel (see the throttle below). */
 const trailingReconcileRelay = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -3653,61 +3706,84 @@ export const HLS_SHARER_SWEEP_MS = 15_000;
 const SHARER_SWEEP_LOG_MS = 60_000;
 const sharerSweepLoggedAt = new Map<string, number>();
 
+/** One sweep at a time: a slow pass must not overlap the next tick. */
+let sharerSweepRunning = false;
+/** Channels reconciled at once by one pass. */
+const SHARER_SWEEP_CONCURRENCY = 4;
+
 export async function sweepHlsSharersWithoutSession(): Promise<number> {
-  if (!isLiveHlsEnabled() && !isLiveHlsLLEnabled()) {
+  if ((!isLiveHlsEnabled() && !isLiveHlsLLEnabled()) || sharerSweepRunning) {
     return 0;
   }
-  const channels = new Map<string, string>();
-  for (const peer of peers.values()) {
-    if (
-      peer.watchParty &&
-      peer.sharingScreen &&
-      peer.canStream &&
-      !channels.has(peer.voiceChannelId)
-    ) {
-      channels.set(peer.voiceChannelId, peer.id);
+  sharerSweepRunning = true;
+  try {
+    const channels = new Map<string, string>();
+    for (const peer of peers.values()) {
+      if (
+        peer.watchParty &&
+        peer.sharingScreen &&
+        peer.canStream &&
+        !channels.has(peer.voiceChannelId)
+      ) {
+        channels.set(peer.voiceChannelId, peer.id);
+      }
     }
+    const now = Date.now();
+    const due: [string, string][] = [];
+    for (const [channelId, sharerId] of channels) {
+      if (
+        liveHlsOwnsChannel(channelId) ||
+        getRoomTransport(channelId) !== "livekit" ||
+        watchPartyKnownOver(channelId) ||
+        isLiveHlsFailed(channelId)
+      ) {
+        continue;
+      }
+      const known = hlsAudience.stream(channelId);
+      if (
+        known &&
+        known.presenterPeerId !== sharerId &&
+        !peers.has(known.presenterPeerId)
+      ) {
+        continue;
+      }
+      due.push([channelId, sharerId]);
+      hlsSessionMoves.swept += 1;
+      const last = sharerSweepLoggedAt.get(channelId);
+      if (last === undefined || now - last >= SHARER_SWEEP_LOG_MS) {
+        sharerSweepLoggedAt.set(channelId, now);
+        logEvent("voice.hlsSharerWithoutSession", {
+          channelId,
+          presenterPeerId: sharerId,
+          streamKnown: known !== null,
+        });
+      }
+    }
+    // BOUNDED, NOT SERIAL: each reconcile can wait on the media server and
+    // the registry, and one slow channel must not hold every other one to
+    // the next tick (a Farol finding on this PR).
+    let next = 0;
+    const worker = async () => {
+      while (next < due.length) {
+        const [channelId] = due[next]!;
+        next += 1;
+        await pushLiveHls(channelId).catch((error: unknown) => {
+          console.error("[voice] pushLiveHls failed on the sharer sweep:", channelId, error);
+        });
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(SHARER_SWEEP_CONCURRENCY, due.length) }, worker),
+    );
+    for (const [channelId, at] of sharerSweepLoggedAt) {
+      if (now - at > 10 * SHARER_SWEEP_LOG_MS) {
+        sharerSweepLoggedAt.delete(channelId);
+      }
+    }
+    return due.length;
+  } finally {
+    sharerSweepRunning = false;
   }
-  let pushed = 0;
-  const now = Date.now();
-  for (const [channelId, sharerId] of channels) {
-    if (
-      liveHlsOwnsChannel(channelId) ||
-      getRoomTransport(channelId) !== "livekit" ||
-      watchPartyKnownOver(channelId) ||
-      isLiveHlsFailed(channelId)
-    ) {
-      continue;
-    }
-    const known = hlsAudience.stream(channelId);
-    if (
-      known &&
-      known.presenterPeerId !== sharerId &&
-      !peers.has(known.presenterPeerId)
-    ) {
-      continue;
-    }
-    pushed += 1;
-    hlsSessionMoves.swept += 1;
-    const last = sharerSweepLoggedAt.get(channelId);
-    if (last === undefined || now - last >= SHARER_SWEEP_LOG_MS) {
-      sharerSweepLoggedAt.set(channelId, now);
-      logEvent("voice.hlsSharerWithoutSession", {
-        channelId,
-        presenterPeerId: sharerId,
-        streamKnown: known !== null,
-      });
-    }
-    await pushLiveHls(channelId).catch((error: unknown) => {
-      console.error("[voice] pushLiveHls failed on the sharer sweep:", channelId, error);
-    });
-  }
-  for (const [channelId, at] of sharerSweepLoggedAt) {
-    if (now - at > 10 * SHARER_SWEEP_LOG_MS) {
-      sharerSweepLoggedAt.delete(channelId);
-    }
-  }
-  return pushed;
 }
 
 /**
@@ -4326,7 +4402,7 @@ export function resetRosterSequences(): void {
   }
   sharerRecheckTimers.clear();
   sharerHeldReason.clear();
-  sharerLookupMemo.clear();
+  sharerLookupInFlight.clear();
   noSharerSince.clear();
   sharerSweepLoggedAt.clear();
   lastReconcileRelayAt.clear();
@@ -4334,6 +4410,7 @@ export function resetRosterSequences(): void {
     clearTimeout(timer);
   }
   trailingReconcileRelay.clear();
+  lastDisownCheckAt.clear();
   relayedLiveAt.clear();
   hlsTokenRemint.loops = 0;
   hlsTokenRemint.tokens = 0;
@@ -10548,6 +10625,12 @@ subscribeToCluster(VOICE_HLS_RECONCILE_TOPIC, (data) => {
   // asks again. Any other machine, with no sharer, still drops it.
   if (!liveHlsOwnsChannel(channelId)) {
     if (!pickHlsSharer(getRoomPeers(channelId))) {
+      // Neither owner nor sharer. But if the rows still name THIS process
+      // (a handover landed here after the presenter had already left, so
+      // nothing was adopted), every other machine is standing down in front
+      // of a session nobody monitors. Give the rows back and tell the sender,
+      // which is the machine that has the presenter. See `disownUnheldHlsRows`.
+      maybeDisownUnheldRows(channelId);
       return;
     }
     forgetLiveHlsResumeDecisions(channelId);

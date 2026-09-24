@@ -1803,6 +1803,14 @@ export function releaseLiveHlsSession(input: {
   startedAt: number;
   toInstanceId: string;
   presenterPeerId: string;
+  /**
+   * Asked again inside the channel's queue, immediately before the rows move:
+   * whether the presenter is STILL absent from this process. A re-share that
+   * landed here while the handover waited its turn cancels it, because the
+   * reconcile that re-share queued runs right after this and has to find the
+   * session still ours.
+   */
+  stillAbsent?: () => boolean;
 }): Promise<boolean> {
   const { channelId } = input;
   const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
@@ -1834,8 +1842,18 @@ async function releaseLiveHlsSessionNow(input: {
   startedAt: number;
   toInstanceId: string;
   presenterPeerId: string;
+  stillAbsent?: () => boolean;
 }): Promise<boolean> {
   const { channelId, startedAt, toInstanceId, presenterPeerId } = input;
+  if (input.stillAbsent && !input.stillAbsent()) {
+    logEvent("voice.hlsHandoverCancelled", {
+      channelId,
+      startedAt,
+      to: toInstanceId,
+      reason: "presenter-back",
+    });
+    return false;
+  }
   const ladder = rooms.get(channelId);
   const ll = llStreamFor(channelId);
   const mode =
@@ -1847,22 +1865,66 @@ async function releaseLiveHlsSessionNow(input: {
   if (mode === null || toInstanceId === hlsOwnerInstanceId()) {
     return false;
   }
+  // THIS SESSION'S ROWS, AND ONLY IF ITS FILM IS AMONG THEM. One statement,
+  // so it is all or nothing: the rows of `startedAt` move together, and they
+  // move only when the row the target will adopt BY is there to move (a
+  // ladder rung for the conventional path, the LL row for pqp-remux). A room
+  // whose row never landed (its insert failed at start) cannot be adopted
+  // anywhere else, so handing it over would leave its egress with no monitor
+  // at all and the target free to start a second one; it stays here instead
+  // (a Farol finding on this PR).
   const result = await getPool().query<{ id: string }>(
-    `UPDATE hls_sessions
+    `WITH film AS (
+       SELECT 1
+         FROM hls_sessions p
+        WHERE p.channel_id = $1
+          AND (p.object_prefix = $5 OR p.object_prefix LIKE $6)
+          AND p.ended_at IS NULL
+          AND p.cleaned_at IS NULL
+          AND (p.instance_id IS NULL OR p.instance_id = $3)
+          AND CASE
+                WHEN $7::text = 'll' THEN p.mode = 'll'
+                ELSE p.mode <> 'll'
+                     AND p.egress_id IS NOT NULL
+                     AND COALESCE(p.rung, '') <> ALL($8::text[])
+              END
+        LIMIT 1
+     )
+     UPDATE hls_sessions s
         SET instance_id = $2,
             presenter_peer_id = CASE
-              WHEN presenter_peer_id IS NULL THEN NULL
+              WHEN s.presenter_peer_id IS NULL THEN NULL
               ELSE $4
             END
-      WHERE channel_id = $1
-        AND ended_at IS NULL
-        AND cleaned_at IS NULL
+      WHERE s.channel_id = $1
+        AND (s.object_prefix = $5 OR s.object_prefix LIKE $6)
+        AND s.ended_at IS NULL
+        AND s.cleaned_at IS NULL
         -- Only what is ours to give. A row a third machine holds is not.
-        AND (instance_id IS NULL OR instance_id = $3)
-      RETURNING id`,
-    [channelId, toInstanceId, hlsOwnerInstanceId(), presenterPeerId],
+        AND (s.instance_id IS NULL OR s.instance_id = $3)
+        AND EXISTS (SELECT 1 FROM film)
+      RETURNING s.id`,
+    [
+      channelId,
+      toInstanceId,
+      hlsOwnerInstanceId(),
+      presenterPeerId,
+      hlsObjectPrefix(channelId, startedAt),
+      sessionPrefixPattern(channelId, startedAt),
+      mode,
+      [MIC_ARCHIVE_RUNG, CAMERA_RUNG_NAME],
+    ],
   );
   const sessionIds = result.rows.map((row) => row.id);
+  if (sessionIds.length === 0) {
+    logEvent("voice.hlsHandoverCancelled", {
+      channelId,
+      startedAt,
+      to: toInstanceId,
+      reason: "no-session-row",
+    });
+    return false;
+  }
   // A queued stamp for these rows would write this process back over the
   // handover minutes from now.
   forgetPendingHlsSessionClaims(sessionIds);
@@ -1910,6 +1972,70 @@ async function releaseLiveHlsSessionNow(input: {
     egressIds,
   });
   return true;
+}
+
+/**
+ * ROWS THIS PROCESS OWNS FOR A SESSION IT DOES NOT HOLD, GIVEN BACK.
+ *
+ * A row stamped with a live instance that has no room for it in memory is in
+ * limbo: every other machine stands down in front of it ("a live machine owns
+ * this"), and the owner never monitors it. A handover whose target lost the
+ * presenter before it adopted leaves exactly that. So a machine asked to
+ * reconcile a channel it holds nothing for, with no sharer of its own there,
+ * clears its stamp from that channel's open rows, and the machine that asked
+ * (the one with the presenter) can adopt them on its next reconcile. Nothing
+ * is stopped; this only changes who may take the session.
+ *
+ * Serialised on the channel's queue and re-checked inside it, so it can never
+ * run between an adoption's claim and the room it builds. Answers how many
+ * rows it gave back (0 on any failure: could not ask changes nothing).
+ */
+export function disownUnheldHlsRows(channelId: string): Promise<number> {
+  const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(async () => {
+      if (
+        rooms.has(channelId) ||
+        llHasRoom(channelId) ||
+        llCompanions.has(channelId)
+      ) {
+        return 0;
+      }
+      const result = await getPool().query<{ id: string }>(
+        `UPDATE hls_sessions
+            SET instance_id = NULL
+          WHERE channel_id = $1
+            AND instance_id = $2
+            AND ended_at IS NULL
+            AND cleaned_at IS NULL
+          RETURNING id`,
+        [channelId, hlsOwnerInstanceId()],
+      );
+      const ids = result.rows.map((row) => row.id);
+      if (ids.length > 0) {
+        forgetPendingHlsSessionClaims(ids);
+        logEvent("voice.hlsRowsDisowned", { channelId, sessionIds: ids });
+      }
+      return ids.length;
+    });
+  const queued = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  reconcileQueue.set(channelId, queued);
+  void queued.finally(() => {
+    if (reconcileQueue.get(channelId) === queued) {
+      reconcileQueue.delete(channelId);
+    }
+  });
+  return run.catch((error: unknown) => {
+    logEvent("voice.hlsRowsDisownFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  });
 }
 
 /**

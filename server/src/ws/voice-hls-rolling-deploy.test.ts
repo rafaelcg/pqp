@@ -810,6 +810,105 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     await drill("ll");
   }, 60_000);
 
+  it("a session whose rows never landed is not handed over: it stays where it is monitored", async () => {
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    // A room in memory with no `hls_sessions` row behind it (its insert
+    // failed at start). Nothing anywhere could adopt it.
+    const startedAt = Date.now() - 30_000;
+    a.egress.adoptLiveHlsSession({
+      channelId: channel,
+      egressId: "EG_rowless",
+      startedAt,
+      presenterPeerId: "peer-presenter",
+      videoTrackId: "TR_SCREEN",
+      rung: "480p30",
+    });
+
+    const released = await a.egress.releaseLiveHlsSession({
+      channelId: channel,
+      startedAt,
+      toInstanceId: b.bus.INSTANCE_ID,
+      presenterPeerId: "peer-presenter",
+    });
+
+    expect(released).toBe(false);
+    expect(owners(channel)).toEqual(["api-a"]);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsHandoverCancelled",
+      expect.objectContaining({ channelId: channel, reason: "no-session-row" }),
+    );
+  }, 30_000);
+
+  it("rows left naming a machine that holds nothing are given back to the machine with the presenter", async () => {
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    // A handover landed on api-b after the presenter had already moved on,
+    // so nothing was adopted: the rows name api-b, api-b holds no room, and
+    // the presenter is sharing on api-a.
+    const rec = recorder();
+    const userId = randomUUID();
+    a.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
+    await a.voice.handleVoiceMessage(
+      { socket: rec.socket, user: asUser(userId) },
+      { type: "join-voice-room", voiceChannelId: channel, resume: true },
+    );
+    const peerId = rec.frames.find((frame) => frame.type === "welcome")!.peerId as string;
+    const startedAt = Date.now() - 60_000;
+    const egressId = (
+      await fakeEgress.startTrackCompositeEgress(channel, {
+        filenamePrefix: `live/${channel}/${startedAt}-480p30`,
+      })
+    ).egressId;
+    await pools[0]!.getPool().query(
+      `INSERT INTO hls_sessions
+         (channel_id, object_prefix, started_at, egress_id, presenter_peer_id,
+          video_track_id, audio_track_id, rung, instance_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, 'TR_SCREEN', 'TR_MUSIC', '480p30', $6)`,
+      [channel, `live/${channel}/${startedAt}-480p30`, startedAt, egressId, peerId, b.bus.INSTANCE_ID],
+    );
+    // api-a has been told there is a party (it relays only then).
+    a.bus.publishToCluster(a.voice.VOICE_LIVE_TOPIC, {
+      channelId: channel,
+      stream: {
+        hlsUrl: `/api/voice/hls-playlist/${channel}/${startedAt}`,
+        startedAt,
+        presenterPeerId: peerId,
+        delaySeconds: 10,
+      },
+      endsStartedAt: null,
+      at: Date.now(),
+    });
+    b.bus.publishToCluster(b.voice.VOICE_LIVE_TOPIC, {
+      channelId: channel,
+      stream: {
+        hlsUrl: `/api/voice/hls-playlist/${channel}/${startedAt}`,
+        startedAt,
+        presenterPeerId: peerId,
+        delaySeconds: 10,
+      },
+      endsStartedAt: null,
+      at: Date.now(),
+    });
+    const startsBefore = box.starts.length;
+
+    await a.voice.handleVoiceMessage(
+      { socket: rec.socket, user: asUser(userId) },
+      { type: "set-sharing-screen", sharing: true },
+    );
+
+    await waitFor(() => owners(channel).join() === "api-a", "api-a to adopt the given-back session");
+    expect(a.egress.liveHlsStreamFor(channel)?.startedAt).toBe(startedAt);
+    expect(box.starts.length).toBe(startsBefore);
+    expect(box.stops).toEqual([]);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsRowsDisowned",
+      expect.objectContaining({ channelId: channel }),
+    );
+  }, 30_000);
+
   it("a host still sharing with no session anywhere gets one back from the sweep", async () => {
     const channel = fixture.channelId;
     const a = await bootInstance("api-a");
