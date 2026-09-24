@@ -1458,6 +1458,12 @@ interface LlRoom {
    * party, and their session is rebound in place rather than replaced.
    */
   presenterUserId?: string | null;
+  /**
+   * The row's `presenter_peer_id` has not caught up with a rebind yet (its
+   * UPDATE failed). Retried on every reconcile until it lands: the other
+   * machine's resume adoption matches on that column.
+   */
+  presenterRowStale?: boolean;
 }
 
 const llRooms = new Map<string, LlRoom>();
@@ -2451,8 +2457,35 @@ async function sameLlPresenterPerson(
 
 type LlRebindOutcome =
   | { kind: "rebound"; stream: LiveHlsStream }
-  | { kind: "held"; stream: LiveHlsStream }
+  | { kind: "held"; stream: LiveHlsStream; why: string }
   | { kind: "fallback" };
+
+/**
+ * Write the room's presenter peer id onto its row. Returns whether it landed;
+ * a failure marks the room so the next reconcile tries again (Farol review,
+ * PR #813: a single swallowed failure left the row naming the old peer for
+ * good, and a later handover could then no longer recognise the presenter).
+ */
+async function persistLlPresenter(channelId: string, room: LlRoom): Promise<boolean> {
+  try {
+    await getPool().query(
+      `UPDATE hls_sessions SET presenter_peer_id = $2
+        WHERE object_prefix = $1 AND ended_at IS NULL`,
+      [llObjectPrefix(channelId, room.startedAt), room.presenterPeerId],
+    );
+    room.presenterRowStale = false;
+    return true;
+  } catch (error) {
+    room.presenterRowStale = true;
+    logEvent("voice.hlsLlSessionRecordFailed", {
+      channelId,
+      startedAt: room.startedAt,
+      step: "presenter-peer",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
 
 /**
  * KEEP THE SESSION, CHANGE THE TRACK. PR #803 made the conventional ladder
@@ -2495,22 +2528,10 @@ async function rebindLlSession(
     if (from !== presenterPeerId) {
       room.presenterPeerId = presenterPeerId;
       room.stream = { ...room.stream, presenterPeerId };
-      await getPool()
-        .query(
-          `UPDATE hls_sessions SET presenter_peer_id = $2
-            WHERE object_prefix = $1 AND ended_at IS NULL`,
-          [llObjectPrefix(channelId, room.startedAt), presenterPeerId],
-        )
-        .catch((error: unknown) => {
-          // The session is rebound on the box either way; only the other
-          // machine's adoption reads this, and it retries on the next roster
-          // event.
-          logEvent("voice.hlsLlSessionRecordFailed", {
-            channelId,
-            startedAt: room.startedAt,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+      // The session is rebound on the box either way; only the other
+      // machine's adoption reads the row, and a failed write is retried on
+      // the next reconcile (`presenterRowStale`).
+      await persistLlPresenter(channelId, room);
     }
     llRebindsTotal += 1;
     llRebindsByReason.set(reason, (llRebindsByReason.get(reason) ?? 0) + 1);
@@ -2560,7 +2581,7 @@ async function rebindLlSession(
   if (fallback === "new-session") {
     return { kind: "fallback" };
   }
-  return { kind: "held", stream: room.stream };
+  return { kind: "held", stream: room.stream, why };
 }
 
 /**
@@ -2574,13 +2595,16 @@ async function rebindLlSession(
  * or restarts anything: an older box that cannot rebind is left to its own
  * watchdog, exactly as before.
  *
- * Serialized with this channel's reconciles (`llReconcileQueue`).
+ * Serialized with this channel's reconciles (`llReconcileQueue`). Answers
+ * whether the replacement is dealt with; false means the control API could
+ * not be asked, and the caller should nudge again on its next reconcile.
  */
 export function rebindLlForReplacedTrack(
   channelId: string,
   presenterPeerId: string,
   detail: Record<string, unknown> = {},
-): Promise<void> {
+): Promise<boolean> {
+  let done = true;
   const previous = llReconcileQueue.get(channelId) ?? Promise.resolve();
   const chained = previous
     .catch(() => undefined)
@@ -2589,7 +2613,17 @@ export function rebindLlForReplacedTrack(
       if (!room || room.presenterPeerId !== presenterPeerId) {
         return room?.stream ?? null;
       }
-      await rebindLlSession(channelId, room, presenterPeerId, "screen-track-replaced", detail);
+      const outcome = await rebindLlSession(
+        channelId,
+        room,
+        presenterPeerId,
+        "screen-track-replaced",
+        detail,
+      );
+      // ONLY "could not ask" is worth asking again. A box without the route,
+      // one that lost the session, or a demoted session will answer the same
+      // way next time, and their fallbacks are somebody else's.
+      done = !(outcome.kind === "held" && outcome.why === "control-api-error");
       return llRooms.get(channelId)?.stream ?? null;
     });
   llReconcileQueue.set(channelId, chained);
@@ -2598,7 +2632,7 @@ export function rebindLlForReplacedTrack(
       llReconcileQueue.delete(channelId);
     }
   });
-  return chained.then(() => undefined);
+  return chained.then(() => done);
 }
 
 /**
@@ -2651,6 +2685,9 @@ async function reconcileLlHlsNowLocked(
   }
   const current = llRooms.get(channelId);
   if (current && current.presenterPeerId === presenterPeerId) {
+    if (current.presenterRowStale) {
+      await persistLlPresenter(channelId, current);
+    }
     return current.stream;
   }
   if (current) {

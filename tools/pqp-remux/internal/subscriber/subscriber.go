@@ -123,6 +123,14 @@ type screenTrack struct {
 	pub         *lksdk.RemoteTrackPublication
 }
 
+// setEnabled asks the SFU to forward (or stop forwarding) this track's media
+// to us. A no-op without a real publication (tests).
+func (t screenTrack) setEnabled(on bool) {
+	if t.pub != nil {
+		t.pub.SetEnabled(on)
+	}
+}
+
 // Session is a live hidden-subscriber connection to one room.
 type Session struct {
 	room *lksdk.Room
@@ -135,6 +143,12 @@ type Session struct {
 	mu     sync.Mutex
 	b      *binder
 	tracks map[string]screenTrack
+	// enabled is whether each subscribed screen-share track is currently
+	// being forwarded to us. Only the bound ones are: a co-host's share, or
+	// the presenter's old track while it lingers, stays subscribed (so a
+	// rebind can bind it at once) but disabled, so the SFU sends it no media
+	// and this box pays nothing for it (Farol review, PR #813). Guarded by mu.
+	enabled map[string]bool
 
 	// switchMu is what makes a rebind atomic with respect to packets.
 	// Every screen-share reader holds it for READ around one packet's
@@ -288,6 +302,7 @@ func newSession(cfg Config, h Handlers) *Session {
 		h:           h,
 		b:           newBinder(cfg.PresenterIdentity),
 		tracks:      make(map[string]screenTrack),
+		enabled:     make(map[string]bool),
 		onEndedHook: h.OnVideoTrackEnded,
 	}
 }
@@ -345,8 +360,9 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 // as it is published: registers it with the binder, reads every packet and
 // delivers the ones from the bound track, and on the way out lets the binder
 // pick whatever should be bound instead. Every screen-share track is read,
-// bound or not, so a replacement is already flowing the moment it is chosen
-// and an unbound one never backs a receive buffer up.
+// bound or not, so an unbound one never backs a receive buffer up; the SFU
+// forwards media only for the bound ones (reconcileLocked's SetEnabled), so
+// reading an unbound one costs nothing while it stays unbound.
 //
 // read is the track's ReadRTP; a function rather than the *webrtc.TrackRemote
 // so the switching can be tested without a room (rebind_test.go).
@@ -398,6 +414,7 @@ func (s *Session) readScreenTrack(sid, identity string, st screenTrack, read fun
 	defer s.mu.Unlock()
 	wasBound := s.b.activeVideo == sid || s.b.activeAudio == sid
 	delete(s.tracks, sid)
+	delete(s.enabled, sid)
 	s.b.remove(sid)
 	if closing {
 		// The session is being torn down and every track is ending with
@@ -421,6 +438,17 @@ func (s *Session) readScreenTrack(sid, identity string, st screenTrack, read fun
 func (s *Session) reconcileLocked() {
 	wantV, wantA := s.b.desired()
 	s.b.bind(wantV, wantA)
+	// Forward only what is bound. A track is subscribed from the moment it
+	// is published (auto-subscribe), which is what lets a rebind bind it
+	// without a round trip; disabling the rest is what keeps that from
+	// costing the box a second stream's bandwidth and reader work.
+	for sid, t := range s.tracks {
+		want := sid == wantV || sid == wantA
+		if on, known := s.enabled[sid]; !known || on != want {
+			t.setEnabled(want)
+			s.enabled[sid] = want
+		}
+	}
 	videoChanged := wantV != s.activeVideo
 	audioChanged := wantA != s.activeAudio
 	if !videoChanged && !audioChanged {

@@ -736,8 +736,11 @@ Now a replacement is **bound inside the session**:
   is never bound. `POST /sessions/:id/rebind` names a new identity: the same
   person reconnected without resuming. Named before they have published, the
   picture already showing is held until their track arrives (`waiting`).
-- **How.** Every screen-share track is read, bound or not, so a replacement is
-  flowing the moment it is chosen. A rebind takes the subscriber's switch lock
+- **How.** Every screen-share track stays subscribed, so a replacement can be
+  bound without a round trip, but only the bound ones are FORWARDED
+  (`SetEnabled`): a co-host's share, or the presenter's old track while it
+  lingers, costs the box no bandwidth and no reader work. A rebind enables the
+  new track, asks for a keyframe, and takes the subscriber's switch lock
   for write, so no packet of the old track reaches the session after it is
   told the stream changed (`session.Session.BeginVideoSource`), and none of the
   new one before. The session keeps its ring, fragmenter, part and segment

@@ -296,9 +296,13 @@ with `videoRebinds >= 1`. Before the rebind (`tools/pqp-remux/README.md`, "A
 republished screen is the same session") the replacement was simply never
 read: the session went quiet until the watchdog restarted it.
 
-Two runs at once need their own `COMPOSE_PROJECT_NAME` and ports
-(`LL_HARNESS_LIVEKIT_PORT`, `LL_HARNESS_REMUXD_PORT`, `LL_HARNESS_PORT`,
-`PORT`).
+A run on a Docker host something else is using needs its own
+`COMPOSE_PROJECT_NAME` and ports (`LL_HARNESS_LIVEKIT_PORT`,
+`LL_HARNESS_REMUXD_PORT`, `LL_HARNESS_PORT`, `PORT`). Two runs from the SAME
+checkout still cannot overlap: each one regenerates `.data/harness.env`, so the
+second's keys replace the first's mid-run and the first's control calls come
+back 401 `invalid signature`. Run them one after another, or from two
+checkouts.
 
 ## Loss injection: exactly what it models
 

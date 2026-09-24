@@ -4105,18 +4105,20 @@ async function noteLlScreenTracks(
   const video = tracks.videoTrackId;
   const audio = tracks.audioTrackId ?? null;
   const seen = llScreenTracksSeen.get(channelId);
-  llScreenTracksSeen.set(channelId, {
-    startedAt: stream.startedAt,
-    presenterPeerId: stream.presenterPeerId,
-    video,
-    audio,
-  });
+  const record = () =>
+    llScreenTracksSeen.set(channelId, {
+      startedAt: stream.startedAt,
+      presenterPeerId: stream.presenterPeerId,
+      video,
+      audio,
+    });
   if (
     !seen ||
     seen.startedAt !== stream.startedAt ||
     seen.presenterPeerId !== stream.presenterPeerId ||
     (seen.video === video && seen.audio === audio)
   ) {
+    record();
     return;
   }
   logEvent("voice.hlsTrackReplaced", {
@@ -4128,10 +4130,16 @@ async function noteLlScreenTracks(
     audioFrom: seen.audio,
     audioTo: audio,
   });
-  await rebindLlForReplacedTrack(channelId, stream.presenterPeerId, {
+  // RECORDED ONLY ONCE IT IS DEALT WITH (Farol review, PR #813). A nudge the
+  // control API never heard leaves the old tracks as "seen", so the next
+  // reconcile sees the same replacement and asks again.
+  const dealtWith = await rebindLlForReplacedTrack(channelId, stream.presenterPeerId, {
     videoFrom: seen.video,
     videoTo: video,
   });
+  if (dealtWith) {
+    record();
+  }
 }
 
 /**

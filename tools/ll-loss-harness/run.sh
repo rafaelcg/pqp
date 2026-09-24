@@ -207,6 +207,18 @@ sleep 1
 echo "run.sh: starting publisher (LOSS_PCT=${LOSS_PCT}%)"
 ROOM="$ROOM" LOSS_PCT="$LOSS_PCT" docker compose --profile publish run --rm -d --name "ll-loss-publisher-${RUN_ID}" publisher > "$LOG_DIR/publisher-start.log" 2>&1
 
+REBIND_PID=""
+if [ "$SCENARIO" = "reconnect" ]; then
+  # pqp-api's half of a reconnect: it sees the presenter's new peer id on the
+  # voice socket and tells the box who to follow. Timed from the publisher's
+  # own start (not after any warm-up below), for the moment the publisher
+  # leaves: the rejoin and the new publish take it another 1.5 s or more, so
+  # the rebind lands first, as the socket join does in production. The box
+  # answers `waiting` and binds the new identity's track when it appears.
+  ( sleep "$REPUBLISH_AFTER"; node harness/remux-ctl.mjs rebind "$SID" "$REPUBLISH_IDENTITY" > "$LOG_DIR/rebind.log" 2>&1 ) &
+  REBIND_PID=$!
+fi
+
 if [ "$SOURCE" != "ramp" ]; then
   # Start the viewer on a stream that already has a few segments, the way a
   # real audience joins a party in progress. Started cold, hls.js retries a
@@ -226,13 +238,6 @@ if [ "$SOURCE" != "ramp" ]; then
     [ "${parts:-0}" -ge 24 ] && break
     sleep 1
   done
-fi
-
-if [ "$SCENARIO" = "reconnect" ]; then
-  # pqp-api's half of a reconnect: it sees the presenter's new peer id on the
-  # voice socket and tells the box who to follow. Sent a little before the
-  # new identity publishes, as the socket join comes first in production.
-  ( sleep "$((REPUBLISH_AFTER + 1))"; node harness/remux-ctl.mjs rebind "$SID" "$REPUBLISH_IDENTITY" > "$LOG_DIR/rebind.log" 2>&1 ) &
 fi
 
 echo "run.sh: watching for ${WATCH_SECONDS}s (cfg=${CFG} source=${SOURCE} grace=${PART_DEADLINE_GRACE_MS}ms scenario=${SCENARIO:-none})"
@@ -269,13 +274,18 @@ VERDICT_LINE="$(grep -E '^VERDICT: ' "$LOG_DIR/hlsjs.log" || echo 'VERDICT: FAIL
 REBIND_NOTE="n/a (no SCENARIO)"
 REBIND_OK=1
 if [ -n "$SCENARIO" ]; then
+  [ -n "$REBIND_PID" ] && { wait "$REBIND_PID" 2>/dev/null || true; }
   node harness/remux-ctl.mjs list > "$LOG_DIR/sessions-after.json" 2>&1 || true
   # grep -c prints 0 AND exits 1 on no match: `|| true`, not `|| echo 0`.
   REBOUND_LINES="$(grep -c "video source rebound: first keyframe" "$LOG_DIR/remuxd-full.log" 2>/dev/null || true)"
   RESTARTS="$(grep -cE "restarting \(|demoting \(" "$LOG_DIR/remuxd-full.log" 2>/dev/null || true)"
   REBOUND_LINES="${REBOUND_LINES:-0}" RESTARTS="${RESTARTS:-0}"
   SAME_SESSION="$(SID="$SID" node -e '
-    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    // `remux-ctl.mjs list` prints the unwrapped array; accept the raw
+    // `{ sessions }` body too, so a change to the CLI cannot fail this
+    // silently.
+    const raw = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const s = Array.isArray(raw) ? raw : raw.sessions || [];
     const x = s.find((e) => e.sessionId === process.env.SID);
     console.log(x && !x.demoted && x.videoRebinds >= 1 ? "yes" : "no");
   ' "$LOG_DIR/sessions-after.json" 2>/dev/null || echo no)"

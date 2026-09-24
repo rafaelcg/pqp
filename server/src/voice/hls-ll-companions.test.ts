@@ -27,7 +27,7 @@ vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 const ll = vi.hoisted(() => ({
   stream: null as LiveHlsStream | null,
   mode: "ll" as "ll" | "conventional",
-  rebind: vi.fn(async (_channelId: string, _peerId: string, _detail?: unknown) => {}),
+  rebind: vi.fn(async (_channelId: string, _peerId: string, _detail?: unknown) => true),
 }));
 vi.mock("./hls-remux.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./hls-remux.js")>();
@@ -369,6 +369,28 @@ describe("an LL broadcast's companions across a presenter track change", () => {
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     await flush();
     expect(ll.rebind).toHaveBeenCalledTimes(1);
+  });
+
+  it("a nudge the control API never heard is sent again on the next reconcile, and only until it lands", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    setLiveHlsTestHooks({ findTracks: tracks({ screen: "TR_SCREEN_2" }) });
+    ll.rebind.mockResolvedValueOnce(false);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.rebind).toHaveBeenCalledTimes(2);
+    expect(ll.rebind.mock.calls[1]).toEqual([
+      CHANNEL,
+      "peer-1",
+      { videoFrom: "TR_SCREEN", videoTo: "TR_SCREEN_2" },
+    ]);
   });
 
   it("a moment with no screen track at all (between unpublish and publish) nudges nothing", async () => {

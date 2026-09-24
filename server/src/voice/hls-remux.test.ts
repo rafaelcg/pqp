@@ -1605,6 +1605,39 @@ describe("a presenter track change keeps the LL session (rebind in place)", () =
     );
   });
 
+  it("a replaced-track nudge says whether to ask again: only when the box could not be asked", async () => {
+    const { server } = await started();
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+    server.setRebindMode("unreachable");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(false);
+    server.setRebindMode("missing-route");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+    server.setRebindMode("demoted");
+    expect(await rebindLlForReplacedTrack(CHANNEL, "peer-1")).toBe(true);
+  });
+
+  it("a presenter row write that failed after a rebind is retried until it lands", async () => {
+    people({ "peer-1": "user-rafa", "peer-2": "user-rafa" });
+    const { db } = await started();
+    let failPresenterWrite = true;
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("SET presenter_peer_id = $2") && failPresenterWrite) {
+        failPresenterWrite = false;
+        throw new Error("connection reset");
+      }
+      return db.queryImpl(sql, params);
+    });
+    const rebound = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(rebound?.presenterPeerId).toBe("peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-1");
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlSessionRecordFailed",
+      expect.objectContaining({ step: "presenter-peer" }),
+    );
+    await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(db.hlsRows[0]!.presenter_peer_id).toBe("peer-2");
+  });
+
   it("knows the person from the old peer when the session was adopted before anybody was back", async () => {
     // A boot adoption records no person (no socket is back yet); the old
     // peer, held for its resume window, is still in this process's map when

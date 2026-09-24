@@ -173,6 +173,14 @@ func TestSession_RepublishSwitchesTheStreamWithNoOldPacketAfterTheChange(t *test
 	repl := newFakeTrack()
 	startReader(s, "TR_2", "peer-1", repl, true)
 	waitUntil(t, func() bool { return changes.Load() == 2 })
+	// The old track is still subscribed but no longer forwarded to us: the
+	// box pays nothing for a stream the audience cannot see.
+	s.mu.Lock()
+	oldOn, newOn := s.enabled["TR_1"], s.enabled["TR_2"]
+	s.mu.Unlock()
+	if oldOn || !newOn {
+		t.Fatalf("forwarding after the rebind: old=%t new=%t, want old off and new on", oldOn, newOn)
+	}
 	// The old track is still up for a moment and still sending: dropped.
 	for i := 0; i < 20; i++ {
 		old.ch <- &rtp.Packet{Header: rtp.Header{SSRC: 0}}
