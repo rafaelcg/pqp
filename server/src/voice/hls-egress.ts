@@ -596,6 +596,11 @@ interface RoomHls {
   micArchiveHad?: boolean;
   /** A start is awaiting LiveKit: a second caller must not start another. */
   micArchiveStarting?: boolean;
+  /** A newer mic sid seen while that start was in flight, reconciled after it. */
+  micArchiveWanted?: string;
+  /** The runs this process knows of (`micRunsWithStart`), for when the row
+   * cannot be read. */
+  micArchiveRuns?: HlsRun[];
   /**
    * Stop looking for that publication after this instant. Zero means never
    * look, which is what an ADOPTED session gets: its archive either came back
@@ -5998,6 +6003,8 @@ async function restartMicArchiveInPlace(
   reason: string,
 ): Promise<void> {
   if (room.micArchiveStarting) {
+    // Not dropped: reconciled against whatever that start ends up recording.
+    room.micArchiveWanted = trackId;
     return;
   }
   if (room.micArchive) {
@@ -6035,6 +6042,7 @@ async function reconcileMicArchive(
   const archive = room.micArchive;
   if (archive) {
     if (archive.trackId === trackId) {
+      archive.adopted = false;
       return;
     }
     if (archive.adopted) {
@@ -6084,6 +6092,7 @@ async function micRunsWithStart(
   startedAt: number,
   runSuffix: string,
   atMs: number,
+  known: HlsRun[] | undefined,
 ): Promise<HlsRun[]> {
   let runs: HlsRun[] = [];
   if (runSuffix !== "") {
@@ -6094,9 +6103,10 @@ async function micRunsWithStart(
       );
       runs = parseHlsRuns(row.rows[0]?.runs ?? null);
     } catch {
-      // The run is still started; the download places it after the previous
-      // one instead of at its wall-clock moment.
-      runs = [...LEGACY_RUNS];
+      // What this process wrote itself, so a transient read failure does not
+      // erase when the first run started. Only an inherited session with no
+      // memory of its runs falls back to "follow the previous run".
+      runs = known && known.length > 0 ? known : [...LEGACY_RUNS];
     }
   }
   const previous = runs[runs.length - 1];
@@ -6117,6 +6127,27 @@ async function micRunsWithStart(
  * in place (`restartMicArchiveInPlace`). Returns whether a run is recording.
  */
 async function startMicArchive(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  trackId: string,
+  options: { runSuffix?: string; reason?: string } = {},
+): Promise<boolean> {
+  if (room.micArchiveStarting) {
+    room.micArchiveWanted = trackId;
+    return false;
+  }
+  const started = await startMicArchiveOnce(egress, channelId, room, trackId, options);
+  // A newer sid arrived while LiveKit was answering: bring the archive onto it.
+  const wanted = room.micArchiveWanted;
+  room.micArchiveWanted = undefined;
+  if (wanted && wanted !== trackId && companionHost(channelId) === room) {
+    await reconcileMicArchive(channelId, wanted);
+  }
+  return started;
+}
+
+async function startMicArchiveOnce(
   egress: LiveHlsEgressApi,
   channelId: string,
   room: RoomHls,
@@ -6167,9 +6198,17 @@ async function startMicArchive(
     sessionId: null,
     presenterPeerId: room.stream.presenterPeerId,
   };
+  const previous = { until: room.micArchiveUntil, had: room.micArchiveHad };
   room.micArchiveUntil = 0;
   room.micArchiveHad = true;
-  const { sessionId } = await recordSessionStarted(
+  const runs = await micRunsWithStart(
+    channelId,
+    startedAt,
+    runSuffix,
+    runStartedAt,
+    room.micArchiveRuns,
+  );
+  const { ok, sessionId } = await recordSessionStarted(
     channelId,
     startedAt,
     egressId,
@@ -6179,8 +6218,21 @@ async function startMicArchive(
     // A restart reopens the row the previous run's end closed.
     runSuffix !== "",
     null,
-    await micRunsWithStart(channelId, startedAt, runSuffix, runStartedAt),
+    runs,
   );
+  if (!ok) {
+    // A run whose row still reads ended would be swept by retention while it
+    // records. Give it up; the caller retries on the death cadence (a first
+    // run on its window).
+    if (room.micArchive && room.micArchive.egressId === egressId) {
+      room.micArchive = null;
+      room.micArchiveUntil = previous.until;
+      room.micArchiveHad = previous.had;
+    }
+    await stopEgressById(egressId, channelId);
+    return false;
+  }
+  room.micArchiveRuns = runs;
   if (room.micArchive && room.micArchive.egressId === egressId) {
     room.micArchive.sessionId = sessionId;
   }
@@ -6273,8 +6325,11 @@ async function tendMicArchive(
   now: number,
 ): Promise<void> {
   if (!micArchiveEnabled()) {
-    // Turned off mid-party. Stop the recording; leave the party alone.
+    // Turned off mid-party. Stop the recording; leave the party alone. And
+    // it stays off for this session: nothing here restarts it if the flag
+    // comes back.
     room.micArchiveRestart = null;
+    room.micArchiveHad = false;
     await stopMicArchive(channelId, room, "disabled");
     return;
   }
