@@ -6,8 +6,7 @@ import { currentPoolStats, type PoolStats } from "../lib/runtime.js";
 import { headObject, isStorageConfigured } from "../lib/s3.js";
 import { isLiveKitConfigured } from "../voice/backends.js";
 import { isLiveHlsEnabled, probeLiveHlsStorage } from "../voice/hls-egress.js";
-import { pingSfu } from "../voice/admin.js";
-import { sfuHost } from "../voice/sfu-stats.js";
+import { readSfuStats, sfuHost } from "../voice/sfu-stats.js";
 
 /**
  * `GET /ready` - the deep check, for external monitors.
@@ -55,7 +54,11 @@ import { sfuHost } from "../voice/sfu-stats.js";
  * by the rate limiter (a few requests per second per address). LiveKit and
  * object storage are network calls to a third party, so their result is
  * cached for `REMOTE_CACHE_TTL_MS` and concurrent callers share one probe;
- * a monitor cannot make this process hammer the SFU.
+ * a monitor cannot make this process hammer the SFU. The LiveKit probe goes
+ * further and reuses `sfu-stats.ts`'s own reader (its 10 s cache, shared with
+ * the admin dashboard and the `/status.json` sampler), so a monitor polling
+ * `/ready` and a dashboard open at the same time draw on one `listRooms`
+ * probe, not two.
  */
 
 export const READY_PATH = "/ready";
@@ -312,7 +315,24 @@ const checker = createReadyChecker({
   // `getPool()` throws without DATABASE_URL, which is correctly "not ok".
   probePostgres: () => getPool().query("SELECT 1"),
   poolStats: currentPoolStats,
-  probeLivekit: () => (isLiveKitConfigured() ? () => pingSfu() : null),
+  // REUSES `sfu-stats.ts`'s reader rather than calling `listRooms` again on
+  // its own schedule. Before this, `/ready` and the admin dashboard /
+  // `/status.json` sampler each ran an independent `listRooms` probe with its
+  // own cache (this one 30s, `sfu-stats.ts`'s 10s), so under load the two
+  // could be in flight against the SFU at the same time for no benefit --
+  // exactly the "caching listRooms" the 2026-09-23 control-plane latency
+  // review called for. `readSfuStats()` never rejects (it turns a failure
+  // into `reachable: false`), so that is translated back into the
+  // throw-on-failure shape `remoteCheck` expects.
+  probeLivekit: () =>
+    isLiveKitConfigured()
+      ? async () => {
+          const stats = await readSfuStats();
+          if (!stats.reachable) {
+            throw new Error(stats.failure ?? "sfu unreachable");
+          }
+        }
+      : null,
   livekitHost: sfuHost,
   probeStorage: () =>
     isStorageConfigured() ? () => headObject(STORAGE_PROBE_KEY) : null,

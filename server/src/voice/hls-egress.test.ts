@@ -1950,6 +1950,55 @@ describe("live HLS egress", () => {
         expect(liveHlsActivity().orphansStopped).toBe(0);
       });
 
+      /**
+       * Two leftovers on the channel used to cost two sequential `stopEgress`
+       * round trips before the new ladder's readiness probe even started
+       * (`endSupersededSessions` awaited them one at a time). Each stop is a
+       * real RPC to the SFU (2026-09-23 evidence: `stopEgress` timed out
+       * 18:28:22, 20:13:14-27, 21:24:06-11), so N leftovers meant up to N
+       * timeouts stacked in front of "share to first playlist". Both must be
+       * issued before either is allowed to resolve, which is what a deferred
+       * promise per id proves deterministically instead of racing on timing.
+       */
+      it("stops multiple leftover egresses in parallel, not one at a time", async () => {
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "720p30";
+        const resolvers = new Map<string, () => void>();
+        const stop = vi.fn(
+          (egressId: string) =>
+            new Promise<void>((resolve) => {
+              resolvers.set(egressId, resolve);
+            }),
+        );
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: async () => ({ egressId: "EG_NEW" }),
+            stopEgress: stop,
+            listEgress: async () => [
+              { egressId: "EG_OLD_1", status: EgressStatus.EGRESS_ACTIVE, roomName: CHANNEL },
+              { egressId: "EG_OLD_2", status: EgressStatus.EGRESS_ACTIVE, roomName: CHANNEL },
+            ],
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        const result = reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        // Drain microtasks without landing any timer: nothing on this path
+        // uses `setTimeout` in test mode (the readiness probe short-circuits
+        // on `injectedEgress`), so once both leftovers are in flight further
+        // ticks do nothing until the deferred promises below settle.
+        for (let tick = 0; tick < 50; tick += 1) {
+          await Promise.resolve();
+        }
+        expect(stop).toHaveBeenCalledWith("EG_OLD_1");
+        expect(stop).toHaveBeenCalledWith("EG_OLD_2");
+        // Both were issued while BOTH were still pending -- proof they were
+        // started together, not one awaited before the other began.
+        expect(resolvers.size).toBe(2);
+        resolvers.get("EG_OLD_1")?.();
+        resolvers.get("EG_OLD_2")?.();
+        await result;
+      });
+
       it("is off in one command, without a deploy", async () => {
         enableHls();
         process.env.LIVE_HLS_REAP_ORPHANS = "false";
@@ -2204,6 +2253,53 @@ describe("live HLS egress", () => {
           "voice.hlsStopped",
           expect.objectContaining({ reason: "screen-track-replaced" }),
         );
+      });
+
+      /**
+       * `stopRungs` used to await each rung's `stopEgress` one at a time
+       * (a for-await loop). A 2-3 rung ladder is the ordinary case, and each
+       * `stopEgress` is a real, sometimes-slow RPC to the SFU (2026-09-23:
+       * `stopEgress` timed out 18:28:22, 20:13:14-27, 21:24:06-11) -- so
+       * tearing down a ladder cost up to N sequential waits, entirely inside
+       * this channel's serialised `reconcileQueue`, delaying whatever the
+       * NEXT reconcile for this channel was (a restart, a presenter picking a
+       * new share). Both stops must be issued before either is allowed to
+       * resolve.
+       */
+      it("stops every rung of a ladder in parallel, not one at a time", async () => {
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "720p30,1080p30";
+        let n = 0;
+        const resolvers = new Map<string, () => void>();
+        const stop = vi.fn(
+          (egressId: string) =>
+            new Promise<void>((resolve) => {
+              resolvers.set(egressId, resolve);
+            }),
+        );
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: async () => ({
+              egressId: `EG_${(n += 1)}`,
+            }),
+            stopEgress: stop,
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        expect(n).toBe(2);
+
+        const result = reconcileLiveHls(CHANNEL, null, SERVER);
+        for (let tick = 0; tick < 50; tick += 1) {
+          await Promise.resolve();
+        }
+        expect(stop).toHaveBeenCalledWith("EG_1");
+        expect(stop).toHaveBeenCalledWith("EG_2");
+        // Both in flight together, neither awaited to completion first.
+        expect(resolvers.size).toBe(2);
+        resolvers.get("EG_1")?.();
+        resolvers.get("EG_2")?.();
+        await result;
       });
 
       it("says the server is not allowlisted, which is a different sentence", async () => {
