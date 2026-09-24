@@ -96,17 +96,30 @@ struct AgeStep: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Button {
-                Task { await submit() }
-            } label: {
-                HStack(spacing: 8) {
-                    if submitting { ProgressView().tint(Palette.inkDeep) }
-                    Text(submitting ? "Saving…" : "Continue")
+            VStack(spacing: 6) {
+                Button {
+                    Task { await submit() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if submitting { ProgressView().tint(Palette.inkDeep) }
+                        Text(submitting ? "Saving…" : "Continue")
+                    }
                 }
+                .buttonStyle(PrimaryButtonStyle(isEnabled: dateOfBirth != nil))
+                .disabled(dateOfBirth == nil || submitting)
+                .accessibilityIdentifier("ageGate.submit")
+
+                // The way out for a wrong account. Not a way around the
+                // question, which has no "later".
+                Button("Sign out") {
+                    Task { await session.signOut() }
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Palette.paperMuted)
+                .frame(minHeight: 36)
+                .disabled(submitting)
+                .accessibilityIdentifier("ageGate.signOut")
             }
-            .buttonStyle(PrimaryButtonStyle(isEnabled: dateOfBirth != nil))
-            .disabled(dateOfBirth == nil || submitting)
-            .accessibilityIdentifier("ageGate.submit")
             .padding(.horizontal, 20)
             .padding(.top, 10)
             .padding(.bottom, 12)

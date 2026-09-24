@@ -11,6 +11,9 @@ struct DiscordImportForm: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Told when a preview or an import starts and stops, so the wizard can
+    /// hold "Later" while a room is being made.
+    var busyChanged: ((Bool) -> Void)?
     /// Called once the server exists, with the invite the import minted.
     let onCreated: (DiscordImportResult, _ sourceName: String) -> Void
 
@@ -38,6 +41,7 @@ struct DiscordImportForm: View {
             }
         }
         .sensoryFeedback(.error, trigger: failures)
+        .onChange(of: busy) { _, value in busyChanged?(value) }
         .animation(FirstRunMotion.step(reduceMotion), value: preview)
         .animation(.easeInOut(duration: 0.2), value: error)
     }
@@ -245,6 +249,18 @@ struct DiscordImportForm: View {
             )
             onCreated(result, plan.serverName)
         } catch {
+            // The import may have landed and only the answer been lost. The
+            // server names the room after the template, so look for it before
+            // offering a retry that would make a second copy.
+            if case APIError.transport = error,
+               let ownerId = session.currentUser?.id,
+               let made = await session.api.recentlyCreatedServer(named: plan.serverName, ownerId: ownerId),
+               let invite = try? await session.api.createInvite(
+                   serverId: made.id, expiresInHours: Onboarding.inviteLifetimeHours
+               ) {
+                onCreated(DiscordImportResult(server: made, invite: invite), plan.serverName)
+                return
+            }
             self.error = Self.message(for: error, fallback: String(localized: "Could not copy that Discord layout"))
             failures += 1
         }

@@ -399,14 +399,23 @@ final class SessionStore {
     /// marks the arrival (so "you" can say which room is waiting), and a refusal
     /// switches its copy to "That invite did not work" instead of raising an
     /// alert over a screen that is asking somebody their name.
+    ///
+    /// A TRANSIENT failure (no network, a 5xx, the rate limiter) is not a
+    /// refusal. It is retried twice with a short pause, and if it still has
+    /// not gone through the code is stashed again so the next launch tries
+    /// once more, rather than telling a new person their invite is dead.
     private func redeemInvite(_ code: String) async {
         let run = firstRun.flatMap { $0.path == .invite && $0.inviteCode == code ? $0 : nil }
         do {
-            let serverId = try await api.joinInvite(code: code)
+            let serverId = try await joinRetryingTransient(code: code)
             linkError = nil
             run?.arrival = .joined(serverId: serverId)
             navigationRequest = .server(id: serverId)
         } catch let error as APIError {
+            if Self.isTransient(error) {
+                PendingInvite.stash(code)
+                pendingInviteCode = PendingInvite.peek()
+            }
             if let run {
                 run.arrival = .failed
             } else {
@@ -418,6 +427,28 @@ final class SessionStore {
             } else {
                 linkError = error.localizedDescription
             }
+        }
+    }
+
+    private func joinRetryingTransient(code: String) async throws -> String {
+        var attempt = 0
+        while true {
+            do {
+                return try await api.joinInvite(code: code)
+            } catch let error as APIError where Self.isTransient(error) && attempt < 2 {
+                attempt += 1
+                try? await Task.sleep(for: .seconds(1.5 * Double(attempt)))
+            }
+        }
+    }
+
+    /// Worth trying again: the request never got an answer, or the answer was
+    /// "not now" rather than "no".
+    static func isTransient(_ error: APIError) -> Bool {
+        switch error {
+        case .transport, .rateLimited: true
+        case .server(let status, _): status >= 500
+        default: false
         }
     }
 
@@ -442,10 +473,17 @@ final class SessionStore {
         var serverCount: Int?
         // Only asked when the answer matters: a fresh gate already decides it,
         // and a stamped account never runs it.
+        //
+        // Bounded, because this sits between the splash and the app: an
+        // account that does not answer in three seconds is treated as settled
+        // (no wizard) rather than kept waiting for a question it may not need.
+        // The list lands in the read cache, so the hub's own fetch is warm.
         if !answeredAgeGateThisLaunch,
            let preferences,
            (preferences.onboardedAt ?? "").isEmpty {
-            serverCount = (try? await api.servers())?.count
+            serverCount = try? await withDeadline(seconds: 3) {
+                try await self.api.servers().count
+            }
         }
         guard Onboarding.shouldRun(
             preferences: preferences,
@@ -479,8 +517,15 @@ final class SessionStore {
     /// Optimistic, like `settleFirstRun`: the local copy is stamped first so the
     /// wizard goes on the tap, and a failed write costs one more walk through a
     /// wizard that can be skipped from its first screen.
+    ///
+    /// The write is retried (three tries, backing off) because a lost stamp is
+    /// the one failure here somebody would see again: the web would walk them
+    /// through a wizard they already finished on the phone. Every write is
+    /// checked against the account it was made for, so a sign-out in the
+    /// middle cannot land one account's stamp on the next.
     func finishFirstRun() async {
         guard let run = firstRun else { return }
+        let accountId = currentUser?.id
         firstRun = nil
         let stamp = Onboarding.completedStamp()
         var local = currentUser?.preferences ?? UserPreferences()
@@ -497,8 +542,17 @@ final class SessionStore {
             }
         }
 
-        if let saved = try? await api.markOnboarded(at: stamp) {
-            currentUser?.preferences = saved
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+            }
+            guard currentUser?.id == accountId, accountId != nil else { return }
+            if let saved = try? await api.markOnboarded(at: stamp) {
+                if currentUser?.id == accountId {
+                    currentUser?.preferences = saved
+                }
+                return
+            }
         }
     }
 

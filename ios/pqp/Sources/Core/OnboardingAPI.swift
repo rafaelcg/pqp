@@ -124,6 +124,21 @@ extension APIClient {
         return response.preferences
     }
 
+    /// A room this account made in the last two minutes under exactly this
+    /// name, if there is one.
+    ///
+    /// For a create whose response was lost (the request reached the server,
+    /// the answer never came back): trying again would make a second room, so
+    /// the caller asks first whether the first one exists and carries on with
+    /// it. Two minutes and an exact name keep it from adopting anything the
+    /// person did not just make.
+    func recentlyCreatedServer(named name: String, ownerId: String, now: Date = Date()) async -> Server? {
+        guard let servers = try? await servers() else { return nil }
+        return servers
+            .filter { $0.ownerId == ownerId && $0.name == name && now.timeIntervalSince($0.createdAt) < 120 }
+            .max { $0.createdAt < $1.createdAt }
+    }
+
     func previewDiscordImport(source: String) async throws -> DiscordImportPreview {
         struct Body: Encodable { let source: String }
         return try await post("/api/import/discord/preview", body: Body(source: source))

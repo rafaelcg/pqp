@@ -33,6 +33,9 @@ struct FirstRunFlowView: View {
     @State private var step: OnboardingScreen = .you
     @State private var created: CreatedRoom?
     @State private var finishing = false
+    /// A create, import or join is in flight on the room step. Skipping then
+    /// would strand a room that is about to exist, so "Later" waits for it.
+    @State private var roomBusy = false
 
     /// The room step made (or imported), for the ready step.
     struct CreatedRoom: Equatable {
@@ -97,13 +100,6 @@ struct FirstRunFlowView: View {
     @ViewBuilder
     private var trailingAction: some View {
         switch screen {
-        case .age:
-            Button("Sign out") {
-                Task { await session.signOut() }
-            }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(Palette.paperMuted)
-            .accessibilityIdentifier("ageGate.signOut")
         case .you where run.path == .cold:
             skipButton("I'll sort it later")
         case .room:
@@ -120,7 +116,7 @@ struct FirstRunFlowView: View {
             .minimumScaleFactor(0.7)
             .frame(maxWidth: 160, alignment: .trailing)
             .foregroundStyle(Palette.paperMuted)
-            .disabled(finishing)
+            .disabled(finishing || roomBusy)
             .accessibilityIdentifier("onboarding.later")
     }
 
@@ -141,6 +137,7 @@ struct FirstRunFlowView: View {
             }
         case .room:
             RoomStep(
+                working: $roomBusy,
                 onCreated: { room in
                     created = room
                     // Behind the wizard, so "Go into the room" reveals it
@@ -487,7 +484,7 @@ struct YouStep: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                LazyHStack(spacing: 10) {
                     ForEach(Array(Self.presets.enumerated()), id: \.element) { index, url in
                         presetButton(url, index: index)
                     }
@@ -835,6 +832,7 @@ struct RoomStep: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @Binding var working: Bool
     let onCreated: (FirstRunFlowView.CreatedRoom) -> Void
     let onJoined: (String) -> Void
 
@@ -874,6 +872,7 @@ struct RoomStep: View {
     @State private var roomName = ""
     @State private var inviteInput = ""
     @State private var busy = false
+    @State private var importBusy = false
     @State private var createFailed = false
     @State private var inviteFailed = false
     @State private var failures = 0
@@ -905,6 +904,8 @@ struct RoomStep: View {
         .sensoryFeedback(.selection, trigger: open)
         .sensoryFeedback(.error, trigger: failures)
         .animation(FirstRunMotion.step(reduceMotion), value: open)
+        .onChange(of: busy || importBusy) { _, value in working = value }
+        .onDisappear { working = false }
     }
 
     private func doorCard(_ door: Door, index: Int) -> some View {
@@ -1027,7 +1028,7 @@ struct RoomStep: View {
                 .accessibilityIdentifier("door.create.action")
             }
         case .discord:
-            DiscordImportForm { result, sourceName in
+            DiscordImportForm(busyChanged: { importBusy = $0 }) { result, sourceName in
                 onCreated(FirstRunFlowView.CreatedRoom(
                     server: result.server,
                     invite: result.invite,
@@ -1090,13 +1091,22 @@ struct RoomStep: View {
         createFailed = false
         fieldFocused = false
         defer { busy = false }
+        let finalName = String(name.prefix(100))
         let server: Server
         do {
-            server = try await session.api.createServer(name: String(name.prefix(100)))
+            server = try await session.api.createServer(name: finalName)
         } catch {
-            createFailed = true
-            failures += 1
-            return
+            // A lost response is not a failed create: if the room exists,
+            // carry on with it instead of inviting a second one.
+            if case APIError.transport = error,
+               let ownerId = session.currentUser?.id,
+               let made = await session.api.recentlyCreatedServer(named: finalName, ownerId: ownerId) {
+                server = made
+            } else {
+                createFailed = true
+                failures += 1
+                return
+            }
         }
         let invite = try? await session.api.createInvite(
             serverId: server.id, expiresInHours: Onboarding.inviteLifetimeHours

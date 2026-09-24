@@ -179,6 +179,18 @@ final class OnboardingV2Tests: XCTestCase {
         XCTAssertEqual(plan.roles.count, 1)
     }
 
+    // MARK: - Joining behind the wizard
+
+    @MainActor
+    func testOnlyARefusalCountsAsADeadInvite() {
+        XCTAssertTrue(SessionStore.isTransient(.transport("offline")))
+        XCTAssertTrue(SessionStore.isTransient(.rateLimited(retryAfter: 5)))
+        XCTAssertTrue(SessionStore.isTransient(.server(status: 503, message: "")))
+        XCTAssertFalse(SessionStore.isTransient(.server(status: 400, message: "Invite expired")))
+        XCTAssertFalse(SessionStore.isTransient(.notFound("gone")))
+        XCTAssertFalse(SessionStore.isTransient(.unauthorized))
+    }
+
     // MARK: - Session
 
     @MainActor
