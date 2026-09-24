@@ -2339,14 +2339,32 @@ function locateVanishedSharer(
   if (inFlight && inFlight.key === key) {
     return inFlight.answer;
   }
-  const answer = lookUpVanishedSharer(channelId, presenterPeerId, since, now);
+  // NEVER REJECTS. `pushLiveHls` awaits this outside its own try, and many of
+  // its callers are fire-and-forget: a throw here would be an unhandled
+  // rejection. Anything unexpected is "could not ask", which holds exactly
+  // like a failed registry read does.
+  const answer = lookUpVanishedSharer(channelId, presenterPeerId, since, now).catch(
+    (error: unknown): VanishedSharer => {
+      logEvent("voice.hlsSharerLookupFailed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const until = since + VOICE_RESUME_TTL_MS;
+      return sharerResumeHoldEnabled() && now < until
+        ? { kind: "held", reason: "lookup-failed", until }
+        : { kind: "gone" };
+    },
+  );
   const entry = { key, answer };
   sharerLookupInFlight.set(channelId, entry);
-  void answer.finally(() => {
+  const settle = () => {
     if (sharerLookupInFlight.get(channelId) === entry) {
       sharerLookupInFlight.delete(channelId);
     }
-  });
+  };
+  // Both branches, belt and braces: `answer` cannot reject (above), and an
+  // unobserved rejection is how this server used to die (pitfall 10).
+  answer.then(settle, settle);
   return answer;
 }
 
