@@ -14,8 +14,10 @@ struct DiscordImportForm: View {
     /// Told when a preview or an import starts and stops, so the wizard can
     /// hold "Later" while a room is being made.
     var busyChanged: ((Bool) -> Void)?
-    /// Called once the server exists, with the invite the import minted.
-    let onCreated: (DiscordImportResult, _ sourceName: String) -> Void
+    /// Called once the server exists, with the invite the import minted (nil
+    /// only after a recovered lost response whose fresh invite also failed;
+    /// the ready panel then offers to make one).
+    let onCreated: (Server, Invite?, _ sourceName: String) -> Void
 
     @State private var source = ""
     @State private var preview: DiscordImportPreview?
@@ -243,22 +245,26 @@ struct DiscordImportForm: View {
         busy = true
         error = nil
         defer { busy = false }
+        let ownerId = session.currentUser?.id
+        let before = await session.api.serverIdsSnapshot()
         do {
             let result = try await session.api.applyDiscordImport(
                 source: source.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            onCreated(result, plan.serverName)
+            onCreated(result.server, result.invite, plan.serverName)
         } catch {
             // The import may have landed and only the answer been lost. The
-            // server names the room after the template, so look for it before
-            // offering a retry that would make a second copy.
+            // server names the room after the template, so look for a room
+            // that was not there before offering a retry that would make a
+            // second copy. Found, it goes on to the ready step even if a fresh
+            // invite cannot be minted right now; that step can retry it.
             if case APIError.transport = error,
-               let ownerId = session.currentUser?.id,
-               let made = await session.api.recentlyCreatedServer(named: plan.serverName, ownerId: ownerId),
-               let invite = try? await session.api.createInvite(
-                   serverId: made.id, expiresInHours: Onboarding.inviteLifetimeHours
-               ) {
-                onCreated(DiscordImportResult(server: made, invite: invite), plan.serverName)
+               let ownerId, let before,
+               let made = await session.api.serverCreatedSince(before, named: plan.serverName, ownerId: ownerId) {
+                let invite = try? await session.api.createInvite(
+                    serverId: made.id, expiresInHours: Onboarding.inviteLifetimeHours
+                )
+                onCreated(made, invite, plan.serverName)
                 return
             }
             self.error = Self.message(for: error, fallback: String(localized: "Could not copy that Discord layout"))
@@ -289,15 +295,19 @@ struct DiscordImportSheet: View {
     /// The server was made; the hub refreshes and opens it on close.
     let onFinished: (Server) -> Void
 
-    @State private var result: DiscordImportResult?
+    @State private var created: Server?
+    @State private var invite: Invite?
     @State private var sourceName = ""
     @State private var burst = 0
+    @State private var busy = false
+    @State private var retrying = false
+    @Environment(SessionStore.self) private var session
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if let result {
+                    if created != nil {
                         StepHeading(
                             eyebrow: Text("Room's ready"),
                             title: Text("Now bring everyone"),
@@ -305,10 +315,10 @@ struct DiscordImportSheet: View {
                             eyebrowIcon: "sparkles"
                         )
                         ServerReadyPanel(
-                            invite: result.invite,
-                            inviteFailed: false,
-                            retrying: false,
-                            onRetry: {},
+                            invite: invite,
+                            inviteFailed: invite == nil,
+                            retrying: retrying,
+                            onRetry: { Task { await retryInvite() } },
                             discordServerName: sourceName
                         )
                     } else {
@@ -318,9 +328,10 @@ struct DiscordImportSheet: View {
                             description: Text("Paste a Discord template link. This copies the sidebar, not the people or the messages."),
                             eyebrowIcon: "square.and.arrow.down.on.square"
                         )
-                        DiscordImportForm { created, name in
+                        DiscordImportForm(busyChanged: { busy = $0 }) { server, madeInvite, name in
                             sourceName = name
-                            withAnimation(FirstRunMotion.step(reduceMotion)) { result = created }
+                            invite = madeInvite
+                            withAnimation(FirstRunMotion.step(reduceMotion)) { created = server }
                             burst += 1
                         }
                     }
@@ -332,19 +343,34 @@ struct DiscordImportSheet: View {
             .sensoryFeedback(.success, trigger: burst)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    if let result {
-                        Button("Done") {
-                            onFinished(result.server)
-                            dismiss()
-                        }
-                        .accessibilityIdentifier("discordSheet.done")
+                    if created != nil {
+                        Button("Done") { dismiss() }
+                            .accessibilityIdentifier("discordSheet.done")
                     } else {
+                        // Not while an import is running: closing the sheet
+                        // then would leave a room made with nobody told.
                         Button("Cancel") { dismiss() }
+                            .disabled(busy)
                     }
                 }
             }
         }
+        // A swipe down is a dismissal too, and is held the same way. Once a
+        // room exists, every way out hands it to the hub, which opens it.
+        .interactiveDismissDisabled(busy)
+        .onDisappear {
+            if let created { onFinished(created) }
+        }
         .preferredColorScheme(.dark)
         .tint(Palette.signal)
+    }
+
+    private func retryInvite() async {
+        guard let created else { return }
+        retrying = true
+        defer { retrying = false }
+        invite = try? await session.api.createInvite(
+            serverId: created.id, expiresInHours: Onboarding.inviteLifetimeHours
+        )
     }
 }

@@ -124,19 +124,34 @@ extension APIClient {
         return response.preferences
     }
 
-    /// A room this account made in the last two minutes under exactly this
-    /// name, if there is one.
-    ///
-    /// For a create whose response was lost (the request reached the server,
-    /// the answer never came back): trying again would make a second room, so
-    /// the caller asks first whether the first one exists and carries on with
-    /// it. Two minutes and an exact name keep it from adopting anything the
-    /// person did not just make.
-    func recentlyCreatedServer(named name: String, ownerId: String, now: Date = Date()) async -> Server? {
+    /// The ids of every room this account is in, before it makes a new one.
+    /// Nil when the list cannot be read, which switches recovery off rather
+    /// than guessing.
+    func serverIdsSnapshot() async -> Set<String>? {
         guard let servers = try? await servers() else { return nil }
-        return servers
-            .filter { $0.ownerId == ownerId && $0.name == name && now.timeIntervalSince($0.createdAt) < 120 }
-            .max { $0.createdAt < $1.createdAt }
+        return Set(servers.map(\.id))
+    }
+
+    /// The room a create made, when the create's response was lost.
+    ///
+    /// The request may have reached the server and only the answer gone
+    /// missing, and trying again would make a second room. So the caller takes
+    /// a snapshot of its rooms BEFORE creating and, on a transport failure,
+    /// asks for one it owns, with exactly that name, that was not there
+    /// before. No clock is involved, so a phone whose time is off cannot make
+    /// an old room look new, and an old room of the same name is excluded by
+    /// construction.
+    func serverCreatedSince(
+        _ before: Set<String>,
+        named name: String,
+        ownerId: String
+    ) async -> Server? {
+        guard let servers = try? await servers() else { return nil }
+        let fresh = servers.filter {
+            !before.contains($0.id) && $0.ownerId == ownerId && $0.name == name
+        }
+        // Exactly one, or it is not ours to guess between.
+        return fresh.count == 1 ? fresh[0] : nil
     }
 
     func previewDiscordImport(source: String) async throws -> DiscordImportPreview {

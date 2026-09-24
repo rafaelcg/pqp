@@ -1028,11 +1028,11 @@ struct RoomStep: View {
                 .accessibilityIdentifier("door.create.action")
             }
         case .discord:
-            DiscordImportForm(busyChanged: { importBusy = $0 }) { result, sourceName in
+            DiscordImportForm(busyChanged: { importBusy = $0 }) { server, invite, sourceName in
                 onCreated(FirstRunFlowView.CreatedRoom(
-                    server: result.server,
-                    invite: result.invite,
-                    inviteFailed: false,
+                    server: server,
+                    invite: invite,
+                    inviteFailed: invite == nil,
                     discordSourceName: sourceName
                 ))
             }
@@ -1092,6 +1092,8 @@ struct RoomStep: View {
         fieldFocused = false
         defer { busy = false }
         let finalName = String(name.prefix(100))
+        let ownerId = session.currentUser?.id
+        let before = await session.api.serverIdsSnapshot()
         let server: Server
         do {
             server = try await session.api.createServer(name: finalName)
@@ -1099,8 +1101,8 @@ struct RoomStep: View {
             // A lost response is not a failed create: if the room exists,
             // carry on with it instead of inviting a second one.
             if case APIError.transport = error,
-               let ownerId = session.currentUser?.id,
-               let made = await session.api.recentlyCreatedServer(named: finalName, ownerId: ownerId) {
+               let ownerId, let before,
+               let made = await session.api.serverCreatedSince(before, named: finalName, ownerId: ownerId) {
                 server = made
             } else {
                 createFailed = true

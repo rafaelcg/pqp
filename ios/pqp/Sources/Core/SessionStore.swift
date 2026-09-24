@@ -469,6 +469,19 @@ final class SessionStore {
 
     /// Decides, on the way into `.ready`, whether the wizard covers the app.
     private func prepareFirstRun() async {
+        // A finish whose stamp never reached the server (offline at the time)
+        // is still a finish: honour it here and try the write again, rather
+        // than walking the same person through the wizard twice.
+        if let accountId = currentUser?.id,
+           (currentUser?.preferences?.onboardedAt ?? "").isEmpty,
+           let owed = Self.owedOnboardedStamp(for: accountId) {
+            var local = currentUser?.preferences ?? UserPreferences()
+            local.onboardedAt = owed
+            currentUser?.preferences = local
+            firstRun = nil
+            Task { await writeOnboardedStamp(owed, for: accountId) }
+            return
+        }
         let preferences = currentUser?.preferences
         var serverCount: Int?
         // Only asked when the answer matters: a fresh gate already decides it,
@@ -542,18 +555,39 @@ final class SessionStore {
             }
         }
 
+        guard let accountId else { return }
+        await writeOnboardedStamp(stamp, for: accountId)
+    }
+
+    /// Three tries, backing off; on the last failure the stamp is remembered
+    /// on this device for this account, and `prepareFirstRun` settles it next
+    /// launch. Never applied to an account other than the one it is for.
+    private func writeOnboardedStamp(_ stamp: String, for accountId: String) async {
         for attempt in 0..<3 {
             if attempt > 0 {
                 try? await Task.sleep(for: .seconds(Double(attempt) * 2))
             }
-            guard currentUser?.id == accountId, accountId != nil else { return }
+            guard currentUser?.id == accountId else { break }
             if let saved = try? await api.markOnboarded(at: stamp) {
                 if currentUser?.id == accountId {
                     currentUser?.preferences = saved
                 }
+                UserDefaults.standard.removeObject(forKey: Self.owedStampKey(accountId))
                 return
             }
         }
+        UserDefaults.standard.set(stamp, forKey: Self.owedStampKey(accountId))
+    }
+
+    private static func owedStampKey(_ accountId: String) -> String {
+        "pqp.owedOnboardedAt.\(accountId)"
+    }
+
+    static func owedOnboardedStamp(for accountId: String, defaults: UserDefaults = .standard) -> String? {
+        guard let stamp = defaults.string(forKey: owedStampKey(accountId)), !stamp.isEmpty else {
+            return nil
+        }
+        return stamp
     }
 
     // MARK: - Push registration
