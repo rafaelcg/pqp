@@ -64,6 +64,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "servidores-de-voz-miami-e-londres",
+    date: "2026-09-24",
+    title: {
+      "pt-BR": "Servidor de voz em Miami e Londres",
+      en: "Voice servers in Miami and London",
+    },
+    summary: {
+      "pt-BR":
+        "A pqp agora tem servidor de voz em São Paulo, Miami e Londres. Do Reino Unido, Londres responde em uns 15 ms contra uns 190 ms de São Paulo. E watch party mais lisa, com replay e download.",
+      en: "pqp now runs voice servers in São Paulo, Miami and London. From the UK, London answers in about 15 ms versus about 190 ms to São Paulo. Plus smoother watch parties, with replays and downloads.",
+    },
+  },
+  {
     slug: "call-avisa-som-iphone",
     date: "2026-09-20",
     title: {
