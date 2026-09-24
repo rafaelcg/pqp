@@ -97,6 +97,8 @@ describe("preferredLocale", () => {
     expect(preferredLocale("", "es-MX,es;q=0.9,en;q=0.8")).toBe("es");
     expect(preferredLocale("", "es-419")).toBe("es");
     expect(preferredLocale("", "en-US,es;q=0.9")).toBe("en");
+    // q=0 is a refusal, not a preference.
+    expect(preferredLocale("", "es;q=0,en-US")).toBe("en");
   });
 
   it("does not mistake an English fallback for an English reader", () => {
