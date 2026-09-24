@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import gg.pqp.app.onboarding.markOnboarded
@@ -197,11 +198,38 @@ class SessionStore(
         _phase.value = SessionPhase.Ready(
             current.copy(preferences = (current.preferences ?: MePreferences()).copy(onboardedAt = now)),
         )
+        // Bound to the credential of the account that finished, not to the
+        // swappable `tokens`: a sign-out and sign-in racing this write must
+        // not mark somebody else's first run as done.
+        val bound = ApiClient(tokens, http)
         scope.launch {
-            runCatching { api.markOnboarded(now) }
+            runCatching { bound.markOnboarded(now) }
                 .onFailure { Log.w(TAG, "onboardedAt not saved: ${it.message}") }
         }
+        // The invite link's join was still running when the wizard handed
+        // over (the ten-second cap on "Entrar em"). It lives on this scope,
+        // not on the wizard's, so it finishes anyway, and the room opens then.
+        val join = inviteJoin
+        if (landing == null && join != null && join.isActive) {
+            scope.launch {
+                val joined = join.await() ?: return@launch
+                if ((_phase.value as? SessionPhase.Ready)?.me?.id == current.id) {
+                    _landing.value = Landing(joined.serverId, joined.serverName, Landing.Kind.Arrived)
+                }
+            }
+        }
+        inviteJoin = null
     }
+
+    /**
+     * The invite link's join, started when first run begins and owned by the
+     * session rather than by a screen, so the wizard closing cannot cancel
+     * the only attempt at a code that has already been taken off the link.
+     */
+    private var inviteJoin: kotlinx.coroutines.Deferred<JoinInviteResponse?>? = null
+
+    fun startInviteJoin(code: String): kotlinx.coroutines.Deferred<JoinInviteResponse?> =
+        inviteJoin ?: scope.async { redeemInvite(code) }.also { inviteJoin = it }
 
     fun refreshServers() {
         scope.launch {
@@ -277,6 +305,8 @@ class SessionStore(
         _servers.value = emptyList()
         _linkError.value = null
         _landing.value = null
+        inviteJoin?.cancel()
+        inviteJoin = null
         _phase.value = SessionPhase.SignedOut
     }
 

@@ -189,7 +189,9 @@ fun OnboardingFlow(session: SessionStore, push: PushController) {
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.You) }
     var forward by remember { mutableStateOf(true) }
-    var created by remember { mutableStateOf<CreatedRoom?>(null) }
+    // Saved with the step: a recreation on "pronto" must come back to the
+    // same room and link, not to a step with nothing to draw.
+    var created by rememberSaveable(stateSaver = CreatedRoom.Saver) { mutableStateOf<CreatedRoom?>(null) }
     var celebrated by rememberSaveable { mutableStateOf(false) }
     var backProgress by remember { mutableFloatStateOf(0f) }
     val haptics = rememberOnboardingHaptics()
@@ -234,6 +236,9 @@ fun OnboardingFlow(session: SessionStore, push: PushController) {
     BackHandler(enabled = step == OnboardingStep.Ready) {
         created?.let { finish(it.landing()) }
     }
+
+    // Belt and braces for the saver: never sit on "pronto" with no room.
+    if (step == OnboardingStep.Ready && created == null) step = OnboardingStep.Room
 
     val position = screenPosition(path, step.screen())
 
@@ -450,7 +455,12 @@ private class ArrivalState {
     /** `serverId` to `serverName` once the join landed. */
     var joined by mutableStateOf<Pair<String, String>?>(null)
     var failed by mutableStateOf(false)
-    var members by mutableStateOf<List<ServerMember>?>(null)
+
+    /** Everybody else in the room, counted once when the list lands. */
+    var others by mutableStateOf<Int?>(null)
+
+    /** At most five of them, pictures first: all the card draws. */
+    var faces by mutableStateOf<List<ServerMember>>(emptyList())
     val pending: Boolean get() = joined == null && !failed
 }
 
@@ -464,7 +474,7 @@ private fun rememberArrival(session: SessionStore, code: String?): ArrivalState 
         state.preview = fetchInvitePreview(session.http, code)
     }
     LaunchedEffect(code) {
-        val joined = session.redeemInvite(code)
+        val joined = session.startInviteJoin(code).await()
         if (joined == null) {
             // `linkError` keeps the server's own sentence; the app shows it in
             // the room list the moment first run hands over.
@@ -472,7 +482,15 @@ private fun rememberArrival(session: SessionStore, code: String?): ArrivalState 
         } else {
             val name = joined.serverName.ifBlank { state.preview?.serverName.orEmpty() }
             state.joined = joined.serverId to name
-            state.members = runCatching { session.api.serverMembers(joined.serverId) }.getOrNull()
+            // Reduced to a count and five faces here, once, so the card does
+            // no work over the whole roster on every recomposition.
+            val selfId = (session.phase.value as? SessionPhase.Ready)?.me?.id
+            val members = runCatching { session.api.serverMembers(joined.serverId) }.getOrNull()
+            if (members != null) {
+                val others = members.filter { it.id != selfId }
+                state.others = others.size
+                state.faces = others.sortedByDescending { !it.avatarUrl.isNullOrBlank() }.take(5)
+            }
         }
     }
     return state
@@ -624,7 +642,7 @@ private fun YouStep(
     StepScaffold(
         header = {
             if (invite && !arrival.failed) {
-                ArrivalCard(arrival = arrival, selfId = me.id)
+                ArrivalCard(arrival = arrival)
                 Spacer(Modifier.height(Spacing.xl))
             }
             StepHeader(
@@ -722,12 +740,11 @@ private fun ErrorLine(text: String) {
  * would otherwise read as signing up for nothing.
  */
 @Composable
-private fun ArrivalCard(arrival: ArrivalState, selfId: String) {
+private fun ArrivalCard(arrival: ArrivalState) {
     val name = arrival.joined?.second ?: arrival.preview?.serverName
     val iconUrl = arrival.preview?.iconUrl
-    val others = arrival.members?.filter { it.id != selfId }
-    val count = others?.size ?: arrival.preview?.memberCount
-    val faces = others.orEmpty().sortedByDescending { !it.avatarUrl.isNullOrBlank() }.take(5)
+    val count = arrival.others ?: arrival.preview?.memberCount
+    val faces = arrival.faces
 
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -1147,6 +1164,23 @@ data class CreatedRoom(
     val ref: InviteRef,
 ) {
     fun landing() = Landing(serverId, serverName, Landing.Kind.Owner, inviteCode)
+
+    companion object {
+        val Saver: androidx.compose.runtime.saveable.Saver<CreatedRoom?, Any> =
+            androidx.compose.runtime.saveable.listSaver(
+                save = { room ->
+                    if (room == null) emptyList() else listOf(room.serverId, room.serverName, room.inviteCode.orEmpty(), room.ref.name)
+                },
+                restore = { saved ->
+                    if (saved.size < 4) null else CreatedRoom(
+                        serverId = saved[0],
+                        serverName = saved[1],
+                        inviteCode = saved[2].ifEmpty { null },
+                        ref = InviteRef.valueOf(saved[3]),
+                    )
+                },
+            )
+    }
 }
 
 @Composable
@@ -1175,11 +1209,20 @@ private fun RoomStep(
         form.busy = true
         form.error = null
         scope.launch {
+            val before = session.servers.value.map { it.id }.toSet()
             val server = try {
                 session.api.createServer(trimmed).server
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
+                // The create may have committed and only the answer been lost.
+                // A retry would then make a second room, so look first.
+                val made = madeSince(session, before, trimmed)
+                if (made != null) {
+                    onMade(session, made, InviteRef.Onboarding, haptics, onCreated)
+                    form.busy = false
+                    return@launch
+                }
                 haptics.reject()
                 form.error = R.string.onboarding_room_create_error
                 form.busy = false
@@ -1245,11 +1288,18 @@ private fun RoomStep(
         form.busy = true
         form.error = null
         scope.launch {
+            val before = session.servers.value.map { it.id }.toSet()
             val result = try {
                 session.api.applyDiscordImport(source)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
+                val made = form.plan?.serverName?.let { madeSince(session, before, it) }
+                if (made != null) {
+                    onMade(session, made, InviteRef.Discord, haptics, onCreated)
+                    form.busy = false
+                    return@launch
+                }
                 haptics.reject()
                 form.error = R.string.onboarding_room_import_apply_error
                 form.busy = false
@@ -1338,6 +1388,35 @@ private fun RoomStep(
         }
         form.error?.let { ErrorLine(stringResource(it)) }
     }
+}
+
+/**
+ * A room this account owns, named [name], that was not in [before]: what an
+ * ambiguous create or import (the request failed after it may have
+ * committed) looks like when it did commit. Null when it did not, or when
+ * the list cannot be read, in which case the error stands.
+ */
+private suspend fun madeSince(
+    session: SessionStore,
+    before: Set<String>,
+    name: String,
+): gg.pqp.app.core.ServerSummary? {
+    val me = (session.phase.value as? SessionPhase.Ready)?.me?.id ?: return null
+    val servers = runCatching { session.api.servers() }.getOrNull() ?: return null
+    return servers.firstOrNull { it.id !in before && it.ownerId == me && it.name == name.trim() }
+}
+
+private suspend fun onMade(
+    session: SessionStore,
+    server: gg.pqp.app.core.ServerSummary,
+    ref: InviteRef,
+    haptics: OnboardingHaptics,
+    onCreated: (CreatedRoom) -> Unit,
+) {
+    val code = runCatching { session.api.createInvite(server.id) }.getOrNull()?.code
+    session.refreshServers()
+    haptics.confirm()
+    onCreated(CreatedRoom(server.id, server.name, code, ref))
 }
 
 /**
