@@ -261,6 +261,10 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}
         />
+        {/* `/ven`: the Spanish address of the same page (302 in `_redirects`).
+            A full navigation, not `<Navigate>`: the locale is read once at
+            boot, so only a reload with `?lang=es` switches it. */}
+        <Route path="/ven" element={<SpanishCampaignRedirect />} />
         <Route path="/app/*" element={<App devBypass={devBypass} />} />
         {/* The design system's token sheet. A sibling of `/app/*` rather than a
             path inside it: `/app` has no react-router children (it parses its
@@ -290,6 +294,13 @@ interface ClerkColors {
  * Clerk renders in its own default light theme otherwise, which reads as a
  * broken modal inside a dark shell.
  */
+function SpanishCampaignRedirect() {
+  useEffect(() => {
+    window.location.replace(`/vem?lang=es${window.location.hash}`);
+  }, []);
+  return null;
+}
+
 /**
  * Clerk's own strings in the user's language.
  *
@@ -311,14 +322,22 @@ function useClerkLocalization(locale: Locale): ClerkLocalization {
   const [localization, setLocalization] = useState<ClerkLocalization>();
 
   useEffect(() => {
-    if (locale !== "pt-BR") {
+    // es-MX is the closest of Clerk's Spanish catalogues to the app's own
+    // neutral Latin American Spanish (es-ES says "vosotros" and "ordenador").
+    const load =
+      locale === "pt-BR"
+        ? () => import("@clerk/localizations/pt-BR").then((m) => m.ptBR)
+        : locale === "es"
+          ? () => import("@clerk/localizations/es-MX").then((m) => m.esMX)
+          : null;
+    if (!load) {
       return;
     }
     let cancelled = false;
-    void import("@clerk/localizations/pt-BR").then(
-      (module) => {
+    void load().then(
+      (loaded) => {
         if (!cancelled) {
-          setLocalization(module.ptBR);
+          setLocalization(loaded);
         }
       },
       () => {

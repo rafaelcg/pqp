@@ -365,6 +365,10 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     url.search,
     context.request.headers.get("accept-language"),
   );
+  // Marketing pages carry Spanish copy of their own; the blog, invite,
+  // community and profile cards do not yet, so Spanish readers get their
+  // English card. The blog still stamps `es` for the app to boot in.
+  const cardLocale = locale === "es" ? "en" : locale;
 
   if (marketing) {
     // No API involved: the copy is constant per page and locale, so the only
@@ -379,7 +383,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     // title, summary and date are checked into the repository, so the head can
     // be written without asking the API anything.
     const html = await response.text();
-    return rewritten(response, injectBlogHead(html, blog, locale));
+    return rewritten(response, injectBlogHead(html, blog, cardLocale, locale));
   }
 
   if (inviteCode) {
@@ -394,7 +398,10 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     const html = await response.text();
     return rewritten(
       response,
-      injectInviteHead(html, inviteCode, { siteOrigin: url.origin, locale }),
+      injectInviteHead(html, inviteCode, {
+        siteOrigin: url.origin,
+        locale: cardLocale,
+      }),
     );
   }
 
@@ -419,7 +426,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       injectCommunityHead(html, community, {
         siteOrigin: url.origin,
         apiOrigin,
-        locale,
+        locale: cardLocale,
       }),
     );
   }
@@ -439,7 +446,7 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     injectProfileHead(html, profile, {
       siteOrigin: url.origin,
       apiOrigin,
-      locale,
+      locale: cardLocale,
     }),
   );
 }

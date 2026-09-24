@@ -36,9 +36,13 @@ export function shareUrlFor(handle: string): string {
  * pun, which would be neither funny nor clear.
  */
 export function shareTextFor(handle: string, locale: string): string {
-  return locale === "pt-BR"
-    ? `eu fui pra pqp. me acha em ${shareUrlFor(handle)}`
-    : `I'm on pqp. Find me at ${shareUrlFor(handle)}`;
+  if (locale === "pt-BR") {
+    return `eu fui pra pqp. me acha em ${shareUrlFor(handle)}`;
+  }
+  if (locale === "es") {
+    return `ya me mudé a pqp. búscame en ${shareUrlFor(handle)}`;
+  }
+  return `I'm on pqp. Find me at ${shareUrlFor(handle)}`;
 }
 
 export type ShareOutcome = "shared" | "copied" | "dismissed" | "failed";

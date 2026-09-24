@@ -6,10 +6,10 @@
  * outranks the OS.
  */
 
-export type Locale = "en" | "pt-BR";
+export type Locale = "en" | "pt-BR" | "es";
 
 export const DEFAULT_LOCALE: Locale = "en";
-export const SUPPORTED_LOCALES: readonly Locale[] = ["en", "pt-BR"];
+export const SUPPORTED_LOCALES: readonly Locale[] = ["en", "pt-BR", "es"];
 
 const STORAGE_KEY = "pqp:locale";
 /** `?lang=` accepts the bare language too, since nobody types the region. */
@@ -26,7 +26,38 @@ function normalize(value: string | null | undefined): Locale | null {
   if (lower === "en" || lower.startsWith("en-")) {
     return "en";
   }
+  // One Spanish, written for Latin America: es-MX, es-AR, es-419, es-US and
+  // es-ES all land here. A Spaniard reads "computadora" and "celular" fine;
+  // splitting the catalogue per region is not worth a second file to keep.
+  if (lower === "es" || lower.startsWith("es-")) {
+    return "es";
+  }
   return null;
+}
+
+/**
+ * The BCP-47 tag to hand `Intl` for dates, numbers and relative times.
+ *
+ * The catalogue is one Spanish, but number and date conventions are not:
+ * Mexico writes 1,234.5 and Argentina 1.234,5. So the browser's own Spanish
+ * region wins when it lists one, and `es-419` (CLDR's Latin America) is the
+ * default when it does not.
+ */
+export function intlLocale(locale: Locale): string {
+  if (locale === "es") {
+    try {
+      const own = (navigator.languages ?? [navigator.language]).find((tag) =>
+        tag.toLowerCase().startsWith("es-"),
+      );
+      if (own) {
+        return own;
+      }
+    } catch {
+      // No navigator (tests, edge): use the regional default.
+    }
+    return "es-419";
+  }
+  return locale;
 }
 
 /**

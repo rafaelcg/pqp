@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
@@ -229,7 +230,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
 
   const since = monthStampToDate(community.createdMonth);
   const sinceLabel = since
-    ? since.toLocaleDateString(locale === "pt-BR" ? "pt-BR" : "en", {
+    ? since.toLocaleDateString(intlLocale(locale), {
         month: "long",
         year: "numeric",
         timeZone: "UTC",
@@ -239,11 +240,11 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
   const memberLabel = t("publicCommunity.members", {
     count: community.memberCount,
     countLabel: community.memberCount.toLocaleString(
-      locale === "pt-BR" ? "pt-BR" : "en-US",
+      locale === "en" ? "en-US" : intlLocale(locale),
     ),
   });
   const countLabel = community.memberCount.toLocaleString(
-    locale === "pt-BR" ? "pt-BR" : "en-US",
+    locale === "en" ? "en-US" : intlLocale(locale),
   );
   const stagger = (index: number): CSSProperties | undefined =>
     reduced ? undefined : ({ "--stagger": Math.min(index, 8) } as CSSProperties);

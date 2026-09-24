@@ -38,9 +38,13 @@ export function watchPartyShareText(
   url: string,
   locale: string,
 ): string {
-  return locale === "pt-BR"
-    ? `watch party: ${name}. entra em ${url}`
-    : `watch party: ${name}. join at ${url}`;
+  if (locale === "pt-BR") {
+    return `watch party: ${name}. entra em ${url}`;
+  }
+  if (locale === "es") {
+    return `watch party: ${name}. únete en ${url}`;
+  }
+  return `watch party: ${name}. join at ${url}`;
 }
 
 export async function shareWatchParty(

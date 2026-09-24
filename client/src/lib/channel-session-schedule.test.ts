@@ -53,4 +53,14 @@ describe("formatSessionRelativeTime", () => {
       formatSessionRelativeTime("2026-09-11T21:00:00", now, "en"),
     ).toBe("Friday at 21:00");
   });
+
+  it("renders Spanish when asked", () => {
+    expect(formatSessionRelativeTime(now, now, "es")).toBe("en vivo ahora");
+    expect(
+      formatSessionRelativeTime("2026-09-08T18:12:00", now, "es"),
+    ).toBe("en 12 min");
+    expect(
+      formatSessionRelativeTime("2026-09-11T21:00:00", now, "es"),
+    ).toBe("el viernes a las 21:00");
+  });
 });

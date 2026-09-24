@@ -91,6 +91,16 @@ describe("preferredLocale", () => {
     expect(preferredLocale("", "en-US,en;q=0.9")).toBe("en");
   });
 
+  it("answers Spanish, so the stamp it feeds does not boot a Mexican browser in Portuguese", () => {
+    expect(preferredLocale("?lang=es", "pt-BR")).toBe("es");
+    expect(preferredLocale("?lang=es-MX", null)).toBe("es");
+    expect(preferredLocale("", "es-MX,es;q=0.9,en;q=0.8")).toBe("es");
+    expect(preferredLocale("", "es-419")).toBe("es");
+    expect(preferredLocale("", "en-US,es;q=0.9")).toBe("en");
+    // q=0 is a refusal, not a preference.
+    expect(preferredLocale("", "es;q=0,en-US")).toBe("en");
+  });
+
   it("does not mistake an English fallback for an English reader", () => {
     expect(preferredLocale("", "pt-BR,pt;q=0.9,en;q=0.8")).toBe("pt-BR");
   });

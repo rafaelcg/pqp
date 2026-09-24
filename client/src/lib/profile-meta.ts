@@ -80,22 +80,54 @@ export function handleFromMetaPath(pathname: string): string | null {
  * and their browser is the only signal available at the edge. Portuguese is the
  * default rather than the fallback: this is a Brazilian product, and an English
  * card shown to a Brazilian audience is the wrong default in the common case.
+ *
+ * Spanish is answered too, and it has to be: whatever this returns is stamped
+ * into marketing and blog heads as `pqp:locale`, which the client trusts over
+ * `navigator.languages`. Before Spanish existed here a Mexican browser got the
+ * Portuguese default stamped in, and the app booted in Portuguese. Injectors
+ * that have no Spanish copy of their own map it to English at the call site.
  */
+export type EdgeLocale = "pt-BR" | "en" | "es";
+
+/**
+ * The first language tag the header actually accepts, lowercased and without
+ * its parameters. `q=0` means "not this one" (RFC 9110), so an entry carrying
+ * it is skipped rather than read as a preference.
+ */
+function firstAcceptedTag(acceptLanguage: string | null): string {
+  for (const entry of acceptLanguage?.split(",") ?? []) {
+    const [tag = "", ...params] = entry.trim().toLowerCase().split(";");
+    const q = params
+      .map((param) => param.trim())
+      .find((param) => param.startsWith("q="));
+    if (q && Number(q.slice(2)) === 0) {
+      continue;
+    }
+    return tag.trim();
+  }
+  return "";
+}
+
 export function preferredLocale(
   search: string,
   acceptLanguage: string | null,
-): "pt-BR" | "en" {
+): EdgeLocale {
   const forced = new URLSearchParams(search).get("lang");
   if (forced) {
-    return forced.toLowerCase().startsWith("pt") ? "pt-BR" : "en";
-  }
-  if (acceptLanguage && /(^|,)\s*en\b/i.test(acceptLanguage)) {
-    // Only when English actually outranks Portuguese; a `pt-BR,en;q=0.8`
-    // header is a Portuguese reader with a fallback, not an English one.
-    const first = acceptLanguage.split(",")[0]?.trim().toLowerCase() ?? "";
-    if (first.startsWith("en")) {
-      return "en";
+    const lower = forced.toLowerCase();
+    if (lower.startsWith("pt")) {
+      return "pt-BR";
     }
+    return lower === "es" || lower.startsWith("es-") ? "es" : "en";
+  }
+  const first = firstAcceptedTag(acceptLanguage);
+  if (first === "es" || first.startsWith("es-")) {
+    return "es";
+  }
+  // Only when English actually leads; a `pt-BR,en;q=0.8` header is a
+  // Portuguese reader with a fallback, not an English one.
+  if (first === "en" || first.startsWith("en-")) {
+    return "en";
   }
   return "pt-BR";
 }

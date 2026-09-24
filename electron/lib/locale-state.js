@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SUPPORTED = new Set(["en", "pt-BR"]);
+const SUPPORTED = new Set(["en", "pt-BR", "es"]);
 
 function localePath(userDataPath) {
   return path.join(userDataPath, "locale.json");
@@ -17,6 +17,9 @@ function normalize(value) {
   }
   if (lower === "en" || lower.startsWith("en-")) {
     return "en";
+  }
+  if (lower === "es" || lower.startsWith("es-")) {
+    return "es";
   }
   return null;
 }

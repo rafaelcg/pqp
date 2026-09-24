@@ -1,4 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
+import { intlLocale } from "@/lib/locale";
 import {
   ArrowDown,
   ArrowRight,
@@ -875,7 +876,7 @@ const SAMPLE_PLAN: DiscordImportPlan = {
 function PreviewMock() {
   const { t, locale } = useTranslation();
   const snapshot = new Date(SAMPLE_PLAN.templateUpdatedAt!).toLocaleDateString(
-    locale === "pt-BR" ? "pt-BR" : "en",
+    intlLocale(locale),
     { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" },
   );
   return (
@@ -1302,7 +1303,13 @@ export function VemPage() {
         title={t("vem.seo.title")}
         description={t("vem.seo.description")}
         path="/vem"
-        image={locale === "en" ? "/images/og-vem-en.png" : "/images/og-vem.png"}
+        image={
+          locale === "en"
+            ? "/images/og-vem-en.png"
+            : locale === "es"
+              ? "/images/og-vem-es.png"
+              : "/images/og-vem.png"
+        }
       />
       <MarketingNav />
 

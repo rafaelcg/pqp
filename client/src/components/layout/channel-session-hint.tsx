@@ -18,14 +18,14 @@ export function ChannelSessionHint({
   startsAt: string;
   now: Date;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   return (
     <span
       data-channel-session-hint
       className="ml-1 shrink-0 truncate text-[10px] text-paper-muted/80"
     >
       {t("watchPartySchedule.sidebarHint", {
-        when: formatSessionRelativeTime(startsAt, now, "pt-BR"),
+        when: formatSessionRelativeTime(startsAt, now, locale),
       })}
     </span>
   );

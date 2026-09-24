@@ -2435,7 +2435,7 @@ function ChannelRow({
   /** Upcoming/live session start time for a voice channel's sidebar hint (VITE_WATCH_PARTY_SCHEDULE only). */
   sessionHint?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
   const canOpenSettings = canManage || canManageRoles;
   const openSettings = () =>
@@ -2606,7 +2606,7 @@ function ChannelRow({
     muted ? t("chrome.mutedSr") : null,
     sessionHint
       ? t("watchPartySchedule.sidebarHint", {
-          when: formatSessionRelativeTime(sessionHint, new Date(), "pt-BR"),
+          when: formatSessionRelativeTime(sessionHint, new Date(), locale),
         })
       : null,
   ]

@@ -1688,7 +1688,7 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const when = formatSessionRelativeTime(
     party.startsAt ?? "",
     now,
-    locale === "pt-BR" ? "pt-BR" : "en",
+    locale,
   );
 
   return (

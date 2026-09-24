@@ -192,6 +192,12 @@ function jsonLdForArticle(article: BlogArticle, locale: BlogLocale): string {
 export function renderBlogHead(
   target: BlogTarget,
   locale: BlogLocale,
+  /**
+   * The app language to stamp, when it differs from the copy's: posts exist
+   * in Portuguese and English only, so a Spanish reader gets the English post
+   * while the chrome around it should still boot in Spanish.
+   */
+  servedLocale: string = locale,
 ): string {
   const isPost = target.kind === "post";
   const isArticle = target.kind === "article";
@@ -251,7 +257,7 @@ export function renderBlogHead(
     // read back. `detectLocale()` prefers it over `navigator.languages`,
     // which is what stops a crawler's English renderer overwriting this
     // head with the English one. See `lib/locale.ts`.
-    `<meta name="pqp:locale" content="${locale}" />`,
+    `<meta name="pqp:locale" content="${servedLocale}" />`,
     `<script type="application/ld+json">${
       isPost
         ? jsonLdForPost(target.post, locale)
@@ -282,6 +288,7 @@ export function injectBlogHead(
   html: string,
   target: BlogTarget,
   locale: BlogLocale,
+  servedLocale: string = locale,
 ): string {
   if (html.indexOf("<head>") === -1) {
     return html;
@@ -294,7 +301,7 @@ export function injectBlogHead(
   return (
     stripped.slice(0, insertAt) +
     "\n    " +
-    renderBlogHead(target, locale) +
+    renderBlogHead(target, locale, servedLocale) +
     stripped.slice(insertAt)
   );
 }

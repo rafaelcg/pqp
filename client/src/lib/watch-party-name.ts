@@ -8,8 +8,11 @@
 import { weekdayName } from "@/lib/channel-session-schedule";
 
 export function suggestedWatchPartyName(date: Date, locale: string): string {
-  const day = weekdayName(date, locale === "pt-BR" ? "pt-BR" : "en");
-  return locale === "pt-BR"
-    ? `Sessão de ${day}`
-    : `${day} session`;
+  if (locale === "pt-BR") {
+    return `Sessão de ${weekdayName(date, "pt-BR")}`;
+  }
+  if (locale === "es") {
+    return `Función del ${weekdayName(date, "es")}`;
+  }
+  return `${weekdayName(date, "en")} session`;
 }

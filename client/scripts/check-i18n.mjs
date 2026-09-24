@@ -18,11 +18,17 @@ const en = JSON.parse(
 const pt = JSON.parse(
   readFileSync(join(clientSrc, "locales/pt-BR/translation.json"), "utf8"),
 );
+const es = JSON.parse(
+  readFileSync(join(clientSrc, "locales/es/translation.json"), "utf8"),
+);
 const electronEn = JSON.parse(
   readFileSync(join(root, "electron/locales/en.json"), "utf8"),
 );
 const electronPt = JSON.parse(
   readFileSync(join(root, "electron/locales/pt-BR.json"), "utf8"),
+);
+const electronEs = JSON.parse(
+  readFileSync(join(root, "electron/locales/es.json"), "utf8"),
 );
 
 const errors = [];
@@ -49,6 +55,30 @@ for (const [key, translated] of Object.entries(pt)) {
   }
   if (/\{\{/.test(translated) || /\{\{/.test(en[key])) {
     errors.push(`double-brace leftover on "${key}"`);
+  }
+}
+
+// Spanish, same rules. One addition: CLDR gives Spanish a `many` category
+// (1,000,000 is "un millón de"), which English does not have, so an es-only
+// `_many` beside an English `_other` is expected rather than stale.
+for (const key of Object.keys(en)) {
+  if (!(key in es)) {
+    errors.push(`es is missing "${key}"`);
+  }
+}
+
+for (const [key, translated] of Object.entries(es)) {
+  const manyBase = key.endsWith("_many") ? key.slice(0, -"_many".length) : null;
+  const source = key in en ? en[key] : manyBase ? en[`${manyBase}_other`] : undefined;
+  if (source === undefined) {
+    errors.push(`es has stale key "${key}"`);
+    continue;
+  }
+  if (JSON.stringify(slots(translated)) !== JSON.stringify(slots(source))) {
+    errors.push(`es placeholder mismatch on "${key}"`);
+  }
+  if (/\{\{/.test(translated)) {
+    errors.push(`es double-brace leftover on "${key}"`);
   }
 }
 
@@ -100,6 +130,21 @@ for (const [key, translated] of Object.entries(electronPt)) {
   }
   if (JSON.stringify(slots(translated)) !== JSON.stringify(slots(electronEn[key] ?? ""))) {
     errors.push(`electron placeholder mismatch on "${key}"`);
+  }
+}
+
+for (const key of Object.keys(electronEn)) {
+  if (!(key in electronEs)) {
+    errors.push(`electron es is missing "${key}"`);
+  }
+}
+
+for (const [key, translated] of Object.entries(electronEs)) {
+  if (!(key in electronEn)) {
+    errors.push(`electron es has stale key "${key}"`);
+  }
+  if (JSON.stringify(slots(translated)) !== JSON.stringify(slots(electronEn[key] ?? ""))) {
+    errors.push(`electron es placeholder mismatch on "${key}"`);
   }
 }
 

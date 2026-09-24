@@ -59,8 +59,11 @@ export interface LegalSection {
   sourceRev?: string;
 }
 
+/** The languages a legal document is actually written in. */
+export type LegalLocale = Extract<Locale, "en" | "pt-BR">;
+
 export interface LegalDocument {
-  locale: Locale;
+  locale: LegalLocale;
   /** Route path. Identical across languages — the language comes from `?lang=`. */
   path: string;
   /** `<title>` and meta description, both translated. */
@@ -80,10 +83,33 @@ export interface LegalDocument {
  * boot, so a full navigation is what switches the language, and the click also
  * persists the choice so the next page stays put.
  */
-const OTHER_LANGUAGE: Record<Locale, { locale: Locale; label: string }> = {
+const OTHER_LANGUAGE: Record<
+  LegalLocale,
+  { locale: LegalLocale; label: string }
+> = {
   en: { locale: "pt-BR", label: "Ler em português" },
   "pt-BR": { locale: "en", label: "Read this in English" },
 };
+
+/**
+ * The legal documents exist in English and Portuguese only. A Spanish reader
+ * gets the English text with this note on top, not a machine translation: a
+ * policy is a binding text, and a translation nobody qualified has read would
+ * be a third version that says something slightly different from the two that
+ * govern. Replace this with a real `*.es.tsx` once a lawyer has signed one off.
+ */
+function SpanishNotice() {
+  return (
+    <p
+      lang="es"
+      className="rounded-lg border border-border bg-surface-2 px-4 py-3 text-sm"
+    >
+      Este documento todavía no está en español, así que te mostramos la
+      versión en inglés. La versión en inglés y la versión en portugués son las
+      que valen legalmente.
+    </p>
+  );
+}
 
 function LanguageSwitch({ doc }: { doc: LegalDocument }) {
   const other = OTHER_LANGUAGE[doc.locale];
@@ -105,7 +131,13 @@ function LanguageSwitch({ doc }: { doc: LegalDocument }) {
  * spacing in `.legal-prose` is sibling-based (`space-y-6` plus a heading
  * margin), so a wrapper per section would quietly change every gap on the page.
  */
-export function LegalDocumentView({ doc }: { doc: LegalDocument }) {
+export function LegalDocumentView({
+  doc,
+  notice,
+}: {
+  doc: LegalDocument;
+  notice?: ReactNode;
+}) {
   return (
     <LegalPage
       title={doc.title}
@@ -114,6 +146,7 @@ export function LegalDocumentView({ doc }: { doc: LegalDocument }) {
       heading={doc.heading}
       updated={doc.updated}
     >
+      {notice}
       <LanguageSwitch doc={doc} />
       {doc.sections.map((section) => (
         <Fragment key={section.id}>
@@ -125,12 +158,14 @@ export function LegalDocumentView({ doc }: { doc: LegalDocument }) {
   );
 }
 
-type Loaders = Record<Locale, () => Promise<LegalDocument>>;
+type Loaders = Record<LegalLocale, () => Promise<LegalDocument>>;
 
-function lazyView(load: () => Promise<LegalDocument>) {
+function lazyView(load: () => Promise<LegalDocument>, notice?: ReactNode) {
   return lazy(async () => {
     const doc = await load();
-    return { default: () => <LegalDocumentView doc={doc} /> };
+    return {
+      default: () => <LegalDocumentView doc={doc} notice={notice} />,
+    };
   });
 }
 
@@ -146,6 +181,7 @@ export function createLegalRoute(loaders: Loaders) {
   const views: Record<Locale, ReturnType<typeof lazyView>> = {
     en: lazyView(loaders.en),
     "pt-BR": lazyView(loaders["pt-BR"]),
+    es: lazyView(loaders.en, <SpanishNotice />),
   };
   return function LegalRoute() {
     const { locale } = useTranslation();

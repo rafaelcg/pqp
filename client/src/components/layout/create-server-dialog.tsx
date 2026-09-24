@@ -1,4 +1,5 @@
 import { Check, ChevronRight, Copy, LayoutList } from "lucide-react";
+import { intlLocale } from "@/lib/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Channel, DiscordImportPlan, Invite, Server } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -229,7 +230,7 @@ export function CreateServerDialog({
     if (Number.isNaN(date.getTime())) {
       return plan.templateUpdatedAt;
     }
-    return date.toLocaleDateString(locale === "pt-BR" ? "pt-BR" : "en", {
+    return date.toLocaleDateString(intlLocale(locale), {
       year: "numeric",
       month: "short",
       day: "numeric",

@@ -4,7 +4,8 @@
  * Transports (`realtime.ts`, voice hooks) look up copy without a React
  * context. English is bundled and initialised synchronously so `t()` works
  * before the provider mounts. Portuguese is a separate chunk, loaded on
- * demand — never imported from this file, or every visitor would download it.
+ * demand, and so is Spanish. Neither is imported statically from this file, or
+ * every visitor would download both.
  */
 
 import i18n from "i18next";
@@ -66,17 +67,27 @@ void i18n.init({
   parseMissingKeyHandler: isTest ? throwOnMissingKey : undefined,
 });
 
-let ptLoaded = false;
+/**
+ * One dynamic import per language, each path written out literally so Vite
+ * splits one chunk per catalogue. A templated path would glob English in too.
+ */
+const LOADERS: Partial<Record<Locale, () => Promise<unknown>>> = {
+  "pt-BR": () => import("@/locales/pt-BR/translation.json"),
+  es: () => import("@/locales/es/translation.json"),
+};
+
+const loaded = new Set<Locale>(["en"]);
 
 export async function loadLocale(locale: Locale): Promise<void> {
-  if (locale === "pt-BR" && !ptLoaded) {
-    const loaded = await import("@/locales/pt-BR/translation.json");
-    const bundle = ((loaded as { default?: unknown }).default ?? loaded) as Record<
+  const loader = LOADERS[locale];
+  if (loader && !loaded.has(locale)) {
+    const module = await loader();
+    const bundle = ((module as { default?: unknown }).default ?? module) as Record<
       string,
       string
     >;
-    i18n.addResourceBundle("pt-BR", "translation", bundle, true, true);
-    ptLoaded = true;
+    i18n.addResourceBundle(locale, "translation", bundle, true, true);
+    loaded.add(locale);
   }
   await i18n.changeLanguage(locale);
 }
