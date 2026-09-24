@@ -1190,7 +1190,10 @@ async function mergeFinishedRuns(
   const wanted = runs
     .slice(0, -1)
     .map((run, index) => ({ run, index, next: runs[index + 1]! }))
-    .filter(({ next }) => next.base - 1 >= floor);
+    .filter(({ next }) => next.base - 1 >= floor)
+    // A window is fifteen segments; more than the last few finished runs can
+    // never reach it, however short each one was.
+    .slice(-4);
   const bodies = await Promise.all(
     wanted.map(async ({ run }) => {
       const key = `${rungKey}#${run.suffix}`;

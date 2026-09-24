@@ -801,6 +801,7 @@ function startCameraCooldown(
 const CAMERA_QUICK_RETRY_MS = 3_000;
 const CAMERA_DEATH_WINDOW_MS = 5 * 60_000;
 const cameraDeaths = new Map<string, number[]>();
+let cameraDeathsPruneAt = 256;
 
 function cameraDeathCooldownMs(channelId: string, now: number): number {
   const recent = (cameraDeaths.get(channelId) ?? []).filter(
@@ -808,12 +809,15 @@ function cameraDeathCooldownMs(channelId: string, now: number): number {
   );
   recent.push(now);
   cameraDeaths.set(channelId, recent);
-  if (cameraDeaths.size > 256) {
+  // Amortised, like `endedRungs` in the proxy: a sweep that could not shrink
+  // the map raises the bar, so a burst of deaths never rescans on every one.
+  if (cameraDeaths.size > cameraDeathsPruneAt) {
     for (const [channel, deaths] of cameraDeaths) {
       if (deaths.every((at) => now - at >= CAMERA_DEATH_WINDOW_MS)) {
         cameraDeaths.delete(channel);
       }
     }
+    cameraDeathsPruneAt = Math.max(256, cameraDeaths.size * 2);
   }
   return recent.length === 1
     ? Math.min(CAMERA_QUICK_RETRY_MS, cameraCooldownMs)
@@ -6634,27 +6638,39 @@ async function abandonInPlaceAttempt(
   await stopRungs(channelId, attempt);
   const startedAt = room.stream.startedAt;
   const before = new Map(previous.map((entry) => [entry.rung.name, entry]));
+  // Twice at most. If the rows still cannot be put back, the next attempt's
+  // own row write replaces the whole run list anyway; what is left at risk is
+  // only a process that dies before then, whose successor finds the attempt's
+  // stopped egress on the row and starts the party fresh, which is what every
+  // restart did before this file kept sessions at all.
   await Promise.all(
     attempt.map(async (entry) => {
       const prior = before.get(entry.rung.name);
-      try {
-        await getPool().query(
-          `UPDATE hls_sessions
-              SET runs = $2::jsonb,
-                  egress_id = COALESCE($3, egress_id)
-            WHERE object_prefix = $1`,
-          [
-            hlsObjectPrefix(channelId, startedAt, entry.rung.name),
-            serializeHlsRuns((entry.runs ?? [...LEGACY_RUNS]).slice(0, -1)),
-            prior?.egressId ?? null,
-          ],
-        );
-      } catch (error) {
-        logEvent("voice.hlsRunRestoreFailed", {
-          channelId,
-          rung: entry.rung.name,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      for (let tries = 1; ; tries += 1) {
+        try {
+          await getPool().query(
+            `UPDATE hls_sessions
+                SET runs = $2::jsonb,
+                    egress_id = COALESCE($3, egress_id)
+              WHERE object_prefix = $1`,
+            [
+              hlsObjectPrefix(channelId, startedAt, entry.rung.name),
+              serializeHlsRuns((entry.runs ?? [...LEGACY_RUNS]).slice(0, -1)),
+              prior?.egressId ?? null,
+            ],
+          );
+          return;
+        } catch (error) {
+          if (tries < 2) {
+            continue;
+          }
+          logEvent("voice.hlsRunRestoreFailed", {
+            channelId,
+            rung: entry.rung.name,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
       }
     }),
   );
