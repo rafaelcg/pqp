@@ -1184,31 +1184,52 @@ async function mergeFinishedRuns(
   now: number,
 ): Promise<void> {
   const floor = history.newestSequence - windowSegments * 2;
-  for (let index = 0; index < runs.length - 1; index += 1) {
-    const run = runs[index]!;
-    const next = runs[index + 1]!;
-    if (next.base - 1 < floor) {
-      continue;
-    }
-    const key = `${rungKey}#${run.suffix}`;
-    let body = finishedRunBodies.get(key);
-    if (body === undefined) {
+  // Only runs whose tail can still reach the window, read in parallel: a
+  // process meeting a rendition for the first time after several restarts
+  // pays one storage round trip, not one per run.
+  const wanted = runs
+    .slice(0, -1)
+    .map((run, index) => ({ run, index, next: runs[index + 1]! }))
+    .filter(({ next }) => next.base - 1 >= floor);
+  const bodies = await Promise.all(
+    wanted.map(async ({ run }) => {
+      const key = `${rungKey}#${run.suffix}`;
+      const known = finishedRunBodies.get(key);
+      if (known !== undefined) {
+        return known;
+      }
+      let response: Response;
       try {
-        const response = await fetch(
+        response = await fetch(
           internalPlaylistUrl(channelId, startedAt, rung, run.suffix),
           { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
         );
-        if (!response.ok) {
-          // Swept, or never written (an egress that died before its first
-          // segment). The window simply starts at the next run.
-          continue;
-        }
-        body = await response.text();
-      } catch {
-        // Not remembered: the next render asks again.
-        continue;
+      } catch (error) {
+        // NOT the same as absent: publishing the new run without the old
+        // tail it should follow is a playlist this process would then have
+        // to contradict. Fail this render; the next one asks again.
+        throw new HlsPlaylistUnavailable(
+          error instanceof Error ? error.message : "Storage unreachable",
+        );
       }
+      if (response.status === 404) {
+        // Swept, or never written: the window simply starts at the next run.
+        return null;
+      }
+      if (!response.ok) {
+        throw new HlsPlaylistUnavailable(
+          `Storage returned HTTP ${response.status} for a finished run`,
+        );
+      }
+      const body = await response.text();
       finishedRunBodies.set(key, body);
+      return body;
+    }),
+  );
+  wanted.forEach(({ run, index, next }, i) => {
+    const body = bodies[i];
+    if (body === null || body === undefined) {
+      return;
     }
     history.merge(parseMediaPlaylist(body), now, {
       base: run.base,
@@ -1216,7 +1237,7 @@ async function mergeFinishedRuns(
       limit: next.base - run.base,
       current: false,
     });
-  }
+  });
 }
 
 async function renderSignedPlaylist(

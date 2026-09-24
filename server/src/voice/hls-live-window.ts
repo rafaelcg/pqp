@@ -346,12 +346,22 @@ export class LiveWindowHistory {
     // already slid out of the window. Omitted while every listed segment is
     // from the first run, so a rung that never restarted renders exactly as
     // it always did.
+    //
+    // A segment's discontinuity number is its run's index, whatever this
+    // process happened to see: the boundary is wherever the run changes
+    // between two listed entries (not only at a run's local segment 0, which
+    // a process that started reading late never sees), and the header counts
+    // the boundaries before the first entry.
     if (first && entries.some((entry) => entry.run > 0)) {
       lines.push(
         `${DISCONTINUITY_SEQUENCE_TAG}${first.run - (first.firstOfRun ? 1 : 0)}`,
       );
     }
+    let previousRun: number | null = null;
     for (const entry of entries) {
+      const boundary =
+        previousRun === null ? entry.firstOfRun : entry.run !== previousRun;
+      previousRun = entry.run;
       let tags = entry.segment.tags.some((tag) =>
         tag.startsWith(PROGRAM_DATE_TIME_PREFIX),
       )
@@ -360,7 +370,7 @@ export class LiveWindowHistory {
             `${PROGRAM_DATE_TIME_PREFIX}${new Date(entry.firstSeenAt).toISOString()}`,
             ...entry.segment.tags,
           ];
-      if (entry.firstOfRun && !tags.includes(DISCONTINUITY_TAG)) {
+      if (boundary && !tags.includes(DISCONTINUITY_TAG)) {
         tags = [DISCONTINUITY_TAG, ...tags];
       }
       lines.push(...tags, entry.segment.uri);

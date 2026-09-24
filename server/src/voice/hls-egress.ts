@@ -808,6 +808,13 @@ function cameraDeathCooldownMs(channelId: string, now: number): number {
   );
   recent.push(now);
   cameraDeaths.set(channelId, recent);
+  if (cameraDeaths.size > 256) {
+    for (const [channel, deaths] of cameraDeaths) {
+      if (deaths.every((at) => now - at >= CAMERA_DEATH_WINDOW_MS)) {
+        cameraDeaths.delete(channel);
+      }
+    }
+  }
   return recent.length === 1
     ? Math.min(CAMERA_QUICK_RETRY_MS, cameraCooldownMs)
     : cameraCooldownMs;
@@ -6039,6 +6046,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   }
   rooms.delete(channelId);
   clearCameraCooldown(channelId);
+  cameraDeaths.delete(channelId);
   voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
   hlsStopsTotal += 1;
@@ -6564,20 +6572,99 @@ async function nextRunsFor(
       written.set(entry.rung.name, body === null ? null : segmentsWritten(body));
     }),
   );
+  // A RUNG THIS PROCESS HAS NO HISTORY FOR (dropped before a deploy, its
+  // ended row never adopted) may still have runs on its row: read them, so
+  // reopening it continues the recording instead of replacing it.
+  const missing = liveHlsLadder()
+    .map((rung) => rung.name)
+    .filter((name) => !known.has(name));
+  const durable = new Map<string, HlsRun[] | null>();
+  if (missing.length > 0) {
+    try {
+      const result = await getPool().query<{ rung: string; runs: unknown }>(
+        `SELECT rung, runs FROM hls_sessions
+          WHERE object_prefix = ANY($1::text[]) AND cleaned_at IS NULL`,
+        [missing.map((name) => hlsObjectPrefix(channelId, startedAt, name))],
+      );
+      for (const row of result.rows ?? []) {
+        durable.set(row.rung, parseHlsRuns(row.runs ?? null));
+      }
+      for (const name of missing) {
+        if (!durable.has(name)) {
+          durable.set(name, null);
+        }
+      }
+    } catch {
+      // Could not ask: assumed below to have a legacy run.
+    }
+  }
   const out = new Map<string, HlsRun[]>();
   for (const rung of liveHlsLadder()) {
-    const prior = known.get(rung.name);
-    // A rung this session never ran here still gets a suffixed run: a
-    // process that inherited the session cannot know whether an earlier one
-    // wrote the legacy names, and a suffix can never overwrite them.
-    out.set(
-      rung.name,
-      prior
-        ? nextRun(prior, at, written.get(rung.name) ?? null, startedAt)
-        : [{ suffix: runSuffixAt(at), base: 0 }],
-    );
+    const prior = known.get(rung.name) ?? durable.get(rung.name);
+    if (prior) {
+      out.set(rung.name, nextRun(prior, at, written.get(rung.name) ?? null, startedAt));
+    } else if (prior === null) {
+      // No row at all: this rung never ran in this session. A suffixed run
+      // anyway, since a suffix can never overwrite anything.
+      out.set(rung.name, [{ suffix: runSuffixAt(at), base: 0 }]);
+    } else {
+      // Unknown (the lookup failed): keep a legacy run in front, based high,
+      // so whatever the first run wrote is neither dropped nor renumbered.
+      out.set(rung.name, nextRun([...LEGACY_RUNS], at, null, startedAt));
+    }
   }
   return out;
+}
+
+/**
+ * AN ATTEMPT AT THE NEXT RUN THAT NEVER WENT LIVE LEAVES NO RUN BEHIND. Its
+ * egresses are stopped, the room goes back to the run it replaced, and the
+ * rows are put back to that run's list: a run that wrote nothing would sit
+ * on the sequence line as an empty discontinuity and make two processes
+ * number the ones after it differently. Then the ordinary retry.
+ */
+async function abandonInPlaceAttempt(
+  channelId: string,
+  room: RoomHls,
+  previous: RunningRung[],
+  attempt: RunningRung[],
+  reason: string,
+  presenterPeerId: string,
+): Promise<LiveHlsReconcileResult> {
+  await stopRungs(channelId, attempt);
+  const startedAt = room.stream.startedAt;
+  const before = new Map(previous.map((entry) => [entry.rung.name, entry]));
+  await Promise.all(
+    attempt.map(async (entry) => {
+      const prior = before.get(entry.rung.name);
+      try {
+        await getPool().query(
+          `UPDATE hls_sessions
+              SET runs = $2::jsonb,
+                  egress_id = COALESCE($3, egress_id)
+            WHERE object_prefix = $1`,
+          [
+            hlsObjectPrefix(channelId, startedAt, entry.rung.name),
+            serializeHlsRuns((entry.runs ?? [...LEGACY_RUNS]).slice(0, -1)),
+            prior?.egressId ?? null,
+          ],
+        );
+      } catch (error) {
+        logEvent("voice.hlsRunRestoreFailed", {
+          channelId,
+          rung: entry.rung.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }),
+  );
+  if (rooms.get(channelId) === room) {
+    room.rungs = previous;
+    if (room.restarting) {
+      room.restarting.stopped = true;
+    }
+  }
+  return retryInPlaceLater(channelId, room, reason, presenterPeerId);
 }
 
 /**
@@ -6691,6 +6778,11 @@ async function finishInPlaceRestart(input: {
   running.forEach((entry, i) => {
     entry.sessionId = recorded[i]?.sessionId ?? null;
   });
+  if (recorded.some((result) => !result.ok)) {
+    // A run whose row does not name it cannot be adopted after a restart of
+    // this process and is missing from the replay: not a finished restart.
+    return abandonInPlaceAttempt(channelId, room, previous, running, "row-write-failed", presenterPeerId);
+  }
   const kept = new Set(running.map((entry) => entry.rung.name));
   for (const entry of previous) {
     if (!kept.has(entry.rung.name)) {
@@ -6726,10 +6818,6 @@ async function finishInPlaceRestart(input: {
     return { stream: null };
   }
   if (!ready) {
-    await stopRungs(channelId, running);
-    if (room.restarting) {
-      room.restarting.stopped = true;
-    }
     logEvent("voice.hlsRungRestartFailed", {
       channelId,
       reason,
@@ -6737,7 +6825,7 @@ async function finishInPlaceRestart(input: {
       runSuffix: runSuffixOf(primary),
       playlistWaitMs: Date.now() - waitStartedAt,
     });
-    return retryInPlaceLater(channelId, room, "playlist-not-ready", presenterPeerId);
+    return abandonInPlaceAttempt(channelId, room, previous, running, "playlist-not-ready", presenterPeerId);
   }
   room.restarting = null;
   restartsInPlaceTotal += 1;
@@ -7325,10 +7413,21 @@ async function reconcileLiveHlsNow(
     // BETWEEN RUNS. The restart timer's own reconcile starts the next run
     // after its backoff; a roster event landing inside that backoff changes
     // nothing (the audience is already holding on the tail).
-    if (pendingRestarts.has(channelId)) {
+    if (
+      pendingRestarts.has(channelId) &&
+      current.stream.presenterPeerId === presenterPeerId
+    ) {
       return { stream: announcedStreamOf(current) };
     }
     if (samePresenterPerson(current, channelId, presenterPeerId)) {
+      // The same person under a new peer id, inside the backoff: restart
+      // now, for the peer that is actually here, rather than let the timer
+      // retry for a socket that has gone and read that as "presenter gone".
+      const pending = pendingRestarts.get(channelId);
+      if (pending) {
+        clearTimeout(pending);
+        pendingRestarts.delete(channelId);
+      }
       return restartRoomInPlace(
         channelId,
         current,

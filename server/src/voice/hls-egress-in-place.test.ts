@@ -340,6 +340,53 @@ describe("a restart nobody picks up", () => {
   });
 });
 
+describe("an attempt that does not finish", () => {
+  it("a run whose row write failed is abandoned: stopped, and the rows put back", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    const original = query.getMockImplementation()!;
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (String(sql).includes("INSERT INTO hls_sessions")) {
+        throw new Error("database_unavailable");
+      }
+      return original(sql, params);
+    });
+    tracks = { videoTrackId: "TR_NEW" };
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // Still the same session, still holding, the new egress stopped.
+    expect(stream?.startedAt).toBe(first!.startedAt);
+    expect(lk.stop).toHaveBeenCalledWith("EG_2");
+    expect(liveHlsActivity().restartingSessions).toBe(1);
+    const restore = query.mock.calls.find(([sql]) => String(sql).includes("SET runs = $2::jsonb"));
+    expect(restore?.[1]).toEqual([
+      `live/${CHANNEL}/${first!.startedAt}-480p30`,
+      null,
+      "EG_1",
+    ]);
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsRungRestartedInPlace", expect.anything());
+    query.mockImplementation(original);
+  });
+
+  it("a presenter reconnecting under a new peer id inside the backoff restarts now, for that peer", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    setLiveHlsPresenterIdentity(() => "user-rafa");
+    setLiveHlsChangeListener(() => {});
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    lk.kill("EG_1");
+    await advance(20_000);
+    expect(await checkLiveHlsHealth()).toEqual([{ channelId: CHANNEL, outcome: "scheduled" }]);
+    // Inside the 2 s backoff, the same person is back as peer-1b.
+    const again = await reconcileLiveHls(CHANNEL, "peer-1b", SERVER);
+    expect(again?.startedAt).toBe(first!.startedAt);
+    expect(again?.presenterPeerId).toBe("peer-1b");
+    expect(liveHlsActivity().restartsInPlaceTotal).toBe(1);
+  });
+});
+
 describe("a replaced screen track", () => {
   it("after a deploy's adoption, continues the adopted run's history instead of a new session (07:51:41)", async () => {
     enableHls();

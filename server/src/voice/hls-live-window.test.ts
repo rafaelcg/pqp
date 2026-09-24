@@ -388,6 +388,27 @@ describe("LiveWindowHistory across egress runs", () => {
     expect(sequenceOf(b.render(9))).toBe(7);
   });
 
+  it("marks the boundary even for a process that first saw the new run past its segment 0", () => {
+    const history = new LiveWindowHistory();
+    // Run 1's local 0 was never listed here; its local 1 onwards were. With
+    // run 0's tail rebased so the two touch, the boundary is still tagged.
+    history.merge(parseMediaPlaylist(runPlaylist("", 7, 5)), 0, {
+      base: 0,
+      index: 0,
+      limit: 12,
+      current: false,
+    });
+    history.merge(parseMediaPlaylist(runPlaylist("-r1", 1, 3)), 0, {
+      base: 11,
+      index: 1,
+      current: true,
+    });
+    const lines = history.render(15).split("\n");
+    const boundary = lines.indexOf("1789207838217-720p30-r1_00001.ts");
+    expect(lines.slice(boundary - 4, boundary)).toContain("#EXT-X-DISCONTINUITY");
+    expect(lines.filter((l) => l === "#EXT-X-DISCONTINUITY")).toHaveLength(1);
+  });
+
   it("leaves a rung that never restarted byte-for-byte as it was", () => {
     const legacy = new LiveWindowHistory();
     const runs = new LiveWindowHistory();
