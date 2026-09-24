@@ -94,13 +94,24 @@ const ZONES: Record<string, Place> = {
   "America/Denver": { lon: -104.99, lat: 39.74, region: "mia" },
   "America/Phoenix": { lon: -112.07, lat: 33.45, region: "mia" },
   "America/Los_Angeles": { lon: -118.24, lat: 34.05, region: "mia" },
+  "America/Boise": { lon: -116.2, lat: 43.62, region: "mia" },
+  "America/Menominee": { lon: -87.61, lat: 45.11, region: "mia" },
   "America/Puerto_Rico": { lon: -66.1, lat: 18.47, region: "mia" },
   "Europe/London": { lon: -0.13, lat: 51.51, region: "lhr" },
 };
 
+const US_FAMILIES: [string, Place][] = [
+  ["America/Indiana/", { lon: -86.16, lat: 39.77, region: "mia" }],
+  ["America/Kentucky/", { lon: -85.76, lat: 38.25, region: "mia" }],
+  ["America/North_Dakota/", { lon: -100.78, lat: 46.81, region: "mia" }],
+];
+
 export function visitorFromTimeZone(timeZone: string | undefined): Place | null {
   if (!timeZone) return null;
-  return Object.prototype.hasOwnProperty.call(ZONES, timeZone) ? ZONES[timeZone] : null;
+  if (Object.prototype.hasOwnProperty.call(ZONES, timeZone)) return ZONES[timeZone];
+  // The US zones that come in families. Alaska and Hawaii are off the map.
+  const family = US_FAMILIES.find(([prefix]) => timeZone.startsWith(prefix));
+  return family ? family[1] : null;
 }
 
 // ---------------------------------------------------------------------------

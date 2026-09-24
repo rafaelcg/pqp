@@ -69,6 +69,9 @@ describe("visitorFromTimeZone", () => {
     expect(visitorFromTimeZone("America/Sao_Paulo")?.region).toBe("gru");
     expect(visitorFromTimeZone("America/New_York")?.region).toBe("mia");
     expect(visitorFromTimeZone("Europe/London")?.region).toBe("lhr");
+    expect(visitorFromTimeZone("America/Indiana/Indianapolis")?.region).toBe("mia");
+    expect(visitorFromTimeZone("America/Kentucky/Louisville")?.region).toBe("mia");
+    expect(visitorFromTimeZone("America/Boise")?.region).toBe("mia");
   });
 
   it("stays generic anywhere else", () => {
