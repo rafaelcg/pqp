@@ -25,9 +25,11 @@ import {
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
 import {
+  HLS_SHARER_SWEEP_MS,
   IDLE_ALONE_SWEEP_MS,
   localVoicePeerCount,
   runVoiceReconcile,
+  sweepHlsSharersWithoutSession,
   sweepIdleAloneSeats,
   sweepVoiceChannelAccessCache,
 } from "./ws/voice.js";
@@ -580,6 +582,17 @@ const idleAloneSweep = setInterval(() => {
   void sweepIdleAloneSeats();
 }, IDLE_ALONE_SWEEP_MS);
 idleAloneSweep.unref?.();
+
+// A watch party whose host is sharing here and whose broadcast is running
+// nowhere this process knows of gets reconciled, so an ended session is
+// restarted (or a handed-over one adopted) even when no event says so. See
+// `sweepHlsSharersWithoutSession`.
+const hlsSharerSweep = setInterval(() => {
+  void sweepHlsSharersWithoutSession().catch((error: unknown) => {
+    console.error("[hls] sharer sweep failed:", error);
+  });
+}, HLS_SHARER_SWEEP_MS);
+hlsSharerSweep.unref?.();
 
 /**
  * Multi-instance chat, off by default.

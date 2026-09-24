@@ -2032,6 +2032,45 @@ before the column existed) is adoptable exactly as before.
 `liveHls.skippedOwnedElsewhere` counts what was left alone, and belongs at zero
 on a one-machine deployment. See `server/src/voice/hls-ownership.ts`.
 
+**And the session follows the presenter, instead of ending when they move.**
+Owning a session is monitoring it; the transcode itself is on the media box.
+The presenter's seat can land on the other machine at any moment (a rolling
+deploy drains one, a Wi-Fi blip reconnects through the proxy to the sibling),
+and until 2026-09-24 the owner read "no sharer among MY peers" as "no sharer"
+and ended the party five seconds later, while the machine holding the sharer
+correctly refused to adopt a session a live machine owned. The rehearsal on
+channel `ad99074f` lost its broadcast twice in one deploy that way, and nothing
+brought it back. Now, when the owner finds no local sharer, `pushLiveHls` asks
+the registry where the presenter is (`locateVanishedSharer` in
+`server/src/ws/voice.ts`):
+
+- **seated and sharing on another live machine**: the session is handed over.
+  `releaseLiveHlsSession` re-stamps the open rows with that machine's instance
+  id, forgets the room here WITHOUT stopping anything, and says so on the
+  `voice.hlsReconcile` topic; the machine with the sharer forgets its cached
+  "stand down" and adopts the same egresses (or the same remux session, and
+  the LL camera and mic archive with it). Same `startedAt`, same playlist, no
+  viewer notices. `voice.hlsHandedOver`.
+- **seated, but the seat is orphaned (resuming) or its machine is gone**: the
+  broadcast is held for the seat's own resume window (90 s), the same promise
+  the seat gets, and the same thing a presenter orphaned on the owning machine
+  always got. `voice.hlsSharerHeld` with the reason. A registry that cannot be
+  read holds too, bounded the same way.
+- **one process, no registry**: a session adopted in the last 30 s is held,
+  because right after a restart the presenter simply has not reconnected.
+- **present and not sharing, or gone**: the ordinary 5 s grace, unchanged. A
+  host who presses stop still ends the broadcast promptly.
+
+Two backstops for the case where a session ends anyway while the host is still
+sharing: the machine holding the sharer reconciles as soon as it hears the
+stop on the bus, and every 15 s `sweepHlsSharersWithoutSession` reconciles any
+channel with a sharer here and no session this machine knows of
+(`voice.hlsSharerWithoutSession`). `HLS_SHARER_RESUME_HOLD=off` turns the holds
+off (the handover stays). Counters: `cluster.hlsSessionsHandedOver`,
+`hlsSharerHolds`, `hlsSharerSweeps` on the voice activity snapshot. Pinned by
+`server/src/ws/voice-hls-rolling-deploy.test.ts`, which plays the whole deploy
+on four real module graphs over one bus and one Postgres, for both modes.
+
 **`liveHls.orphansStopped` belongs at zero.** It is the only evidence a leak
 ever happened, because the leak itself is silent: the box simply gets slower and
 the parties on it start stalling. This matters more than it looks:

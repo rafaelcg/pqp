@@ -121,6 +121,12 @@ vi.mock("../voice/hls-egress.js", () => ({
   setLiveHlsPresenterCheck: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
+  // The cross-machine half (handover, adoption hold, sharer sweep): one
+  // process and no registry here, so nothing is ever adopted or handed over.
+  isLiveHlsFailed: () => false,
+  liveHlsAdoptedAt: () => null,
+  forgetLiveHlsResumeDecisions: () => {},
+  releaseLiveHlsSession: async () => false,
   // `stampViewerStream` (hls-viewer-token.ts) reads this to decide whether
   // to prepend an edge host; unset here, same as every deployment today.
   playlistBaseUrl: () => null,

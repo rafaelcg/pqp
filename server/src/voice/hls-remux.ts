@@ -1374,6 +1374,15 @@ interface LlRoom {
    * appears.
    */
   noVideoSinceMs?: number;
+  /**
+   * When THIS process took the session over rather than starting it (the
+   * boot adoption, a resume adoption, a handover from the other machine).
+   * Absent on a session this process started. `pushLiveHls` holds a sharer
+   * that has not come back yet for a short while after it, because right
+   * after an adoption "no presenter here" usually means "their socket has
+   * not reconnected yet", not "they stopped sharing".
+   */
+  adoptedAtMs?: number;
 }
 
 const llRooms = new Map<string, LlRoom>();
@@ -1949,6 +1958,45 @@ export async function stopLlSession(channelId: string, reason: string): Promise<
   logEvent("voice.hlsLlStopped", { channelId, sessionId: room.sessionId, reason });
 }
 
+/** When this process adopted the LL session it holds for a channel, if it did. */
+export function llAdoptedAt(channelId: string): number | null {
+  return llRooms.get(channelId)?.adoptedAtMs ?? null;
+}
+
+/**
+ * LET GO OF AN LL SESSION WITHOUT STOPPING IT: the other machine is taking it.
+ *
+ * The remux session lives on the egress box, not in this process, so handing
+ * it over is forgetting it here and nothing else. `hls-egress.ts`
+ * (`releaseLiveHlsSession`) has already re-stamped the row with the new
+ * owner, which is what lets `adoptRunningLlHlsSession` over there claim it.
+ * Answers whether there was exactly this session to let go of.
+ */
+export function releaseLlRoom(channelId: string, startedAt: number): boolean {
+  const room = llRooms.get(channelId);
+  if (!room || room.startedAt !== startedAt) {
+    return false;
+  }
+  llRooms.delete(channelId);
+  return true;
+}
+
+/**
+ * Forget every cached resume decision for a channel. Called when the machine
+ * that held the session says it has just handed it over: a `stand-down`
+ * remembered a second ago ("somebody alive owns this") is exactly the answer
+ * that has stopped being true.
+ */
+export function forgetLlResumeDecisions(channelId: string): void {
+  llResumeDecisionEpoch.set(channelId, (llResumeDecisionEpoch.get(channelId) ?? 0) + 1);
+  const prefix = `${channelId.length}:${channelId}:`;
+  for (const key of llResumeDecisionCache.keys()) {
+    if (key.startsWith(prefix)) {
+      llResumeDecisionCache.delete(key);
+    }
+  }
+}
+
 /**
  * THE PRESENTER MOVED MACHINES; THE REMUX DID NOT.
  *
@@ -2007,6 +2055,8 @@ const llResumeDecisionCache = new Map<
   { at: number; decision: LlResumeAdoption }
 >();
 const LL_RESUME_DECISION_TTL_MS = 5_000;
+/** See `forgetLlResumeDecisions`. */
+const llResumeDecisionEpoch = new Map<string, number>();
 const LL_RESUME_DECISION_MAX_ENTRIES = 128;
 const llResumeRefusalLoggedAt = new Map<string, number>();
 const LL_RESUME_REFUSAL_LOG_THROTTLE_MS = 30_000;
@@ -2030,7 +2080,13 @@ export async function adoptRunningLlHlsSession(
   if (cached && now - cached.at < LL_RESUME_DECISION_TTL_MS) {
     return cached.decision;
   }
+  const epoch = llResumeDecisionEpoch.get(channelId) ?? 0;
   const remember = (decision: LlResumeAdoption): LlResumeAdoption => {
+    // Same rule as the conventional twin: a handover that landed while this
+    // was being decided makes the answer unfit to remember.
+    if ((llResumeDecisionEpoch.get(channelId) ?? 0) !== epoch) {
+      return decision;
+    }
     if (llResumeDecisionCache.size > LL_RESUME_DECISION_MAX_ENTRIES) {
       for (const [seen, entry] of llResumeDecisionCache) {
         if (now - entry.at >= LL_RESUME_DECISION_TTL_MS) {
@@ -2182,6 +2238,7 @@ export async function adoptRunningLlHlsSession(
     startedAt,
     presenterPeerId,
     stream,
+    adoptedAtMs: Date.now(),
   });
   // Not remembered in the decision cache: an adoption is answered once and
   // every later call short-circuits on `llRooms.has` above.
@@ -2735,6 +2792,7 @@ export async function adoptLlHlsSessions(): Promise<{
         // machine) and is still writing at the cadence it was started with.
         partTargetMs: row.part_target_ms ?? remuxSessionConfig().partMs,
       },
+      adoptedAtMs: Date.now(),
     });
     adopted += 1;
     logEvent("voice.hlsLlSessionAdopted", {
@@ -2823,6 +2881,7 @@ export function resetHlsRemuxForTests(): void {
   llRooms.clear();
   llReconcileQueue.clear();
   llResumeDecisionCache.clear();
+  llResumeDecisionEpoch.clear();
   llResumeRefusalLoggedAt.clear();
   lastLookupFailureLoggedAt.clear();
   lastModeResolved.clear();
