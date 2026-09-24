@@ -96,11 +96,15 @@ final class WatchModel {
             } else {
                 syncWatching()
             }
+            syncPresence()
         }
     }
 
     private var channelId: String?
     private var session: SessionStore?
+    /// The presence beat's loop, running only while a picture is actually
+    /// attached (`syncPresence`). See its doc comment below.
+    private var presenceTask: Task<Void, Never>?
     private let handlerKey = "watch-" + UUID().uuidString
     /// What we last told the server, so a keyframe does not re-send it and a
     /// reconnect does.
@@ -146,6 +150,8 @@ final class WatchModel {
 
     func close() {
         setWatching(false)
+        presenceTask?.cancel()
+        presenceTask = nil
         if let session { session.eventHandlers.removeValue(forKey: handlerKey) }
         channelId = nil
         session = nil
@@ -309,6 +315,7 @@ final class WatchModel {
         if next != nil { sawStream = true }
         phase = Self.phase(stream: next, sawStream: sawStream)
         syncWatching()
+        syncPresence()
     }
 
     /// The player could not keep a picture up. Kept separate from the wire so
@@ -342,4 +349,55 @@ final class WatchModel {
         declaredWatching = next
         Task { await session.realtime.watchLive(channelId: channelId, watching: next) }
     }
+
+    // MARK: - The presence beat
+
+    /**
+     "I AM STILL WATCHING", MIRRORING `client/src/lib/hls-playback.ts`.
+
+     `watch-live` above counts a live audience for the badge, and it is not
+     what this is for. A broadcast's PERSISTED peak/unique numbers
+     (`hls_session_viewer_stats`, shown in the past-broadcasts dialog) are
+     built from exactly three sightings server-side: a request through the
+     API's own playlist proxy, a verified telemetry batch, and
+     `POST /api/live-hls/presence` (`noteHlsViewer` in
+     `server/src/voice/hls-viewer-counts.ts`). None of those is `watch-live`.
+
+     And a phone watching low-latency straight off the edge
+     (`LIVE_HLS_PLAYLIST_BASE_URL`) never makes that first kind of request at
+     all — `AVPlayer` talks to the edge Worker's cache, not this API. Without
+     this beat every such viewer would be invisible in a party's own numbers.
+     So this sends the same beat the web client does, every 30 s, for as long
+     as a picture is actually attached, using the `?t=` this account's own
+     `stream.hlsUrl` already carries (`hlsSessionToken`).
+
+     Fire-and-forget, like the web client's `sendHlsPresence`: a missed beat
+     is one fewer sighting and the next one is 30 s away, never worth
+     surfacing to the viewer.
+     */
+    private func syncPresence() {
+        let shouldRun = stream != nil && !isSeated
+        guard shouldRun else {
+            presenceTask?.cancel()
+            presenceTask = nil
+            return
+        }
+        guard presenceTask == nil, let session else { return }
+        presenceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let self, let token = self.stream.flatMap({ hlsSessionToken(from: $0.hlsUrl) }) {
+                    let _: EmptyResponse? = try? await session.api.post(
+                        "/api/live-hls/presence",
+                        body: LiveHlsPresenceRequest(sessionToken: token)
+                    )
+                }
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+}
+
+/// Body of `POST /api/live-hls/presence`, mirroring `liveHlsPresenceSchema`.
+private struct LiveHlsPresenceRequest: Encodable, Sendable {
+    let sessionToken: String
 }

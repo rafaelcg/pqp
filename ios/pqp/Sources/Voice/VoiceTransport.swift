@@ -70,6 +70,13 @@ struct VoiceSessionInfo: Decodable, Equatable, Sendable {
     let room: String
     /// Equal to the peer id we asked for. Kept so a mismatch is visible.
     let identity: String
+    /// The SFU region the room is pinned to (`sao`, `mia`, ...), present only
+    /// when the deployment runs more than one. Informational: `url` already
+    /// names the box, and that is what `Room.connect` dials. This build does
+    /// not declare the `sfu-region` capability, so a room it opens stays
+    /// home; see `wireCaps` in `RealtimeClient.swift` and
+    /// `docs/plans/SFU_REGIONS.md`.
+    let region: String?
 }
 
 /// Answer to `GET /api/voice/backend`: what a *new* room on this deployment

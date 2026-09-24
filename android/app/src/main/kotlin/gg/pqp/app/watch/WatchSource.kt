@@ -27,6 +27,28 @@ fun watchSourceChanged(current: LiveStream?, next: LiveStream?): Boolean =
     current?.startedAt != next?.startedAt
 
 /**
+ * The `?t=` viewer token, pulled back out of [LiveStream.hlsUrl].
+ *
+ * The same capability that authorises the playlist fetch is what
+ * `POST /api/live-hls/presence` wants back (`WatchPane`'s presence beat,
+ * mirroring `client/src/lib/hls-playback.ts`'s `sendHlsPresence`), so this is
+ * the query string read the other direction. Works on either shape `hlsUrl`
+ * comes in as (API-relative or an absolute bucket URL): both are a query
+ * string, and [java.net.URI] does not care which. `null` on anything that
+ * does not parse or carries no `t`, rather than throwing — a beat this
+ * cannot address is simply skipped.
+ */
+fun hlsSessionToken(hlsUrl: String): String? {
+    val query = runCatching { java.net.URI(hlsUrl).query }.getOrNull() ?: return null
+    for (pair in query.split("&")) {
+        val eq = pair.indexOf('=')
+        if (eq < 0) continue
+        if (pair.substring(0, eq) == "t") return pair.substring(eq + 1)
+    }
+    return null
+}
+
+/**
  * What the watchdog's reconnect path should attach to, given a refetch that
  * just finished.
  *

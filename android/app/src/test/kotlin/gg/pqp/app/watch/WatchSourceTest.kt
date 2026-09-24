@@ -167,4 +167,27 @@ class WatchSourceTest {
         val audienceKeyframeMs = 30_000L
         assertTrue(HLS_VIEWER_TOKEN_TTL_MS - WATCH_TOKEN_RENEWAL_MS > audienceKeyframeMs)
     }
+
+    // MARK: - The presence beat's own credential
+
+    @Test
+    fun `hlsSessionToken reads the t off an api-relative url`() {
+        assertEquals(
+            "abc.def-_",
+            hlsSessionToken("/api/voice/hls-playlist/c1/1757000000000?t=abc.def-_"),
+        )
+    }
+
+    @Test
+    fun `hlsSessionToken reads the t off an absolute url`() {
+        assertEquals(
+            "xyz",
+            hlsSessionToken("https://cdn.example/live/x.m3u8?t=xyz&other=1"),
+        )
+    }
+
+    @Test
+    fun `hlsSessionToken is null without one`() {
+        assertEquals(null, hlsSessionToken("https://cdn.example/live/x.m3u8?sig=1"))
+    }
 }
