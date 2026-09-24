@@ -27,6 +27,7 @@ import {
   VoiceFrame,
 } from "@/components/marketing/product-frames";
 import { Seo } from "@/components/marketing/seo";
+import { WhereWeRun } from "@/components/marketing/where-we-run";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -44,7 +45,7 @@ function stagger(i: number): CSSProperties {
 const PROOF: { key: MessageKey; href?: string; external?: boolean }[] = [
   { key: "landing.proof.openSource", href: SOURCE_REPO_URL, external: true },
   { key: "landing.proof.watchParty", href: "/#voice" },
-  { key: "landing.proof.region", href: "/#faq" },
+  { key: "landing.proof.region", href: "/#where" },
   { key: "landing.proof.platforms", href: "/download" },
   { key: "landing.proof.languages" },
 ];
@@ -490,6 +491,11 @@ export function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* Where it runs: the three voice boxes, the edge, the numbers we
+          measured, and a live reading of the boxes. The page's answer to "is
+          this for real". */}
+      <WhereWeRun className="border-b border-ink-4/40" />
 
       <section id="hosting" className={cn(SECTION, "border-b border-ink-4/40")}>
         <div className="mx-auto max-w-4xl">
