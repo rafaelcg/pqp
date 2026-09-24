@@ -1,6 +1,9 @@
 package gg.pqp.app.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -40,6 +43,10 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.DeepLinkTarget
+import gg.pqp.app.core.Landing
+import gg.pqp.app.onboarding.shouldRunOnboarding
+import gg.pqp.app.onboarding.ui.ArrivalBanner
+import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
@@ -121,13 +128,26 @@ fun PqpApp(
     ) {
         AnimatedContent(
             targetState = phaseKey(phase),
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            transitionSpec = {
+                // First run rises into place once, from the gate or the
+                // sign-in; everything else is the plain cross-fade it was.
+                if (targetState == PhaseKey.Onboarding) {
+                    (fadeIn(tween(320)) + slideInVertically(spring(dampingRatio = 0.85f, stiffness = 300f)) { it / 12 })
+                        .togetherWith(fadeOut(tween(160)))
+                } else {
+                    fadeIn() togetherWith fadeOut()
+                }
+            },
             label = "session-phase",
         ) { key ->
             when (key) {
                 PhaseKey.Launching -> Box(Modifier.fillMaxSize())
-                PhaseKey.SignedOut -> SignInScreen(session)
-                PhaseKey.AgeGate -> AgeGateScreen(session)
+                PhaseKey.SignedOut -> SignInScreen(session, push)
+                PhaseKey.AgeGate -> AgeGateScreen(
+                    session = session,
+                    arrivedOnInvite = push.pendingTarget.value is DeepLinkTarget.Invite,
+                )
+                PhaseKey.Onboarding -> OnboardingFlow(session, push)
                 PhaseKey.Failed -> FailedScreen(
                     reason = (phase as? SessionPhase.Failed)?.reason.orEmpty(),
                     onRetry = session::restore,
@@ -147,13 +167,16 @@ fun PqpApp(
  * account. Without this projection every profile refresh would be a new target
  * state and cross-fade the whole app.
  */
-private enum class PhaseKey { Launching, SignedOut, AgeGate, Ready, Failed, Blocked }
+private enum class PhaseKey { Launching, SignedOut, AgeGate, Onboarding, Ready, Failed, Blocked }
 
 private fun phaseKey(phase: SessionPhase): PhaseKey = when (phase) {
     is SessionPhase.Launching -> PhaseKey.Launching
     is SessionPhase.SignedOut -> PhaseKey.SignedOut
     is SessionPhase.AgeGate -> PhaseKey.AgeGate
-    is SessionPhase.Ready -> PhaseKey.Ready
+    // First run is a phase of its own rather than a dialog over the app: on a
+    // phone the wizard is the whole screen, and the app behind it would only
+    // be something to mount, load and throw away.
+    is SessionPhase.Ready -> if (shouldRunOnboarding(phase.me)) PhaseKey.Onboarding else PhaseKey.Ready
     is SessionPhase.Failed -> PhaseKey.Failed
     is SessionPhase.Blocked -> PhaseKey.Blocked
 }
@@ -260,6 +283,17 @@ private fun SignedInNav(
                 }
             },
         )
+    }
+
+    // Where first run handed over: open that room, and greet the person in it.
+    // Consumed once, so a later recomposition cannot navigate a second time.
+    var arrival by remember { mutableStateOf<Landing?>(null) }
+    LaunchedEffect(Unit) {
+        session.landing.filterNotNull().collect { landing ->
+            session.consumeLanding()
+            nav.navigate(ChannelsRoute(landing.serverId, landing.serverName))
+            arrival = landing
+        }
     }
 
     // The live connection, app-wide. It used to be a strip inside the chat
@@ -446,6 +480,26 @@ private fun SignedInNav(
                 composable<YouRoute> {
                     YouScreen(session = session, onBack = nav::popBackStack)
                 }
+            }
+
+            arrival?.let { landing ->
+                ArrivalBanner(
+                    session = session,
+                    landing = landing,
+                    onOpenChannel = { channel ->
+                        arrival = null
+                        nav.navigate(
+                            ChatRoute(
+                                channel.id,
+                                channel.name,
+                                channel.slowmodeSeconds,
+                                serverId = landing.serverId,
+                                isVoiceChannel = channel.isVoice,
+                            ),
+                        )
+                    },
+                    onDismiss = { arrival = null },
+                )
             }
         }
     }

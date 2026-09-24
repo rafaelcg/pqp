@@ -50,6 +50,20 @@ data class Me(
      * unfinished.
      */
     val ageGate: String? = null,
+    /**
+     * The account's stored preferences, of which only `onboardedAt` is read
+     * here. Null means the API predates the preference store, which is read
+     * as "this deployment cannot record that onboarding ran", so the wizard
+     * never runs rather than running on every launch forever. Same rule as
+     * `shouldRunOnboarding` in `client/src/lib/onboarding.ts`.
+     */
+    val preferences: MePreferences? = null,
+)
+
+@Serializable
+data class MePreferences(
+    /** Finished, skipped, or grandfathered. Present means "not again", on every device. */
+    val onboardedAt: String? = null,
 )
 
 // --- servers and channels ---

@@ -243,6 +243,54 @@ screen (`AgeGateScreen`). The date travels as a plain `YYYY-MM-DD` with no time
 and no zone, because attaching an instant to a date of birth is the classic way
 to refuse somebody on their own birthday.
 
+## First run (onboarding V2)
+
+The native reading of the web's onboarding V2 (PR #786, `client/src/components/onboarding/*`,
+spec in `docs/ONBOARDING.md`). Same steps, same copy in pt-BR and en, same
+rules; the shell is the phone's rather than a dialog's.
+
+| Screen | Shown to | What it does |
+|---|---|---|
+| Idade | everyone with `ageGate: pending` | Three fields (day, month list, year) with the focus moving itself, the one-attempt warning before the button, no way out. Draws the rail when a wizard follows (`SessionStore.gateLeadsToOnboarding`). |
+| Você | everyone the wizard runs for | Name (with the "came from your account" hint), six photo presets, the @ as a chip that copies on tap with a haptic, "Trocar" to rename inline. On an invite link: the room's card (public preview first, then the members once the join lands) and "Entrar em {server}". |
+| Sala | cold start only | Three doors, one open at a time: create (name, then `POST /api/servers` + a 7-day invite), the Discord template import (how-to, paste, a preview drawn as the sidebar it becomes, then `/api/import/discord/apply`), and paste an invite. |
+| Pronto | after a room is made | The invite link (copy, with a check and a haptic), "Traz a galera" short and long texts with the system share sheet (`ACTION_SEND`), and three lines of what the room can do. Confetti once. |
+| Arrival | after the wizard | A banner in the room: invitees get "Você entrou em {server}", the first text and voice channels as one-tap chips, and confetti; organizers get "Sua sala tá pronta" with "Copiar convite". |
+
+**Who sees it.** `GET /api/me` carries `preferences`; the wizard runs when
+`preferences.onboardedAt` is absent, and never when `preferences` itself is
+absent (an API that cannot record it). Finishing or skipping patches
+`onboardedAt` (`PATCH /api/me/preferences`), so an account that onboarded on
+the web never sees it here, and the reverse. It is a session phase
+(`PhaseKey.Onboarding`), not a dialog over the app.
+
+**Invitees.** An App Link to `/app/invite/<code>` is parked on
+`PushController.pendingTarget` through sign-in and the gate. The signed-out
+screen names the room from `GET /api/public/invites/:code` (no auth header, on
+purpose, see pitfall 16); the wizard takes the code off the controller, joins
+behind the "você" step, and lands in the room with the banner. A dead link is
+explained by the existing `linkError` dialog once the wizard hands over.
+
+**Motion and access.** Steps slide on a spring and the system back gesture
+previews the step behind (`PredictiveBackHandler`, "sala" back to "você"
+only: the room made on "sala" exists, so back on "pronto" means go in).
+Compose scales its own animations by the animator duration scale; the
+confetti and staggered entrances read `ANIMATOR_DURATION_SCALE` themselves and
+are skipped at zero. Haptics: a tick for doors and toggles, confirm for a copy
+or a room made, a longer one for arriving. The rail reads "Passo 2 de 4" to
+TalkBack, doors announce open or closed, presets are labelled, and copy
+feedback is a polite live region.
+
+**Verified on an emulator** (Pixel 10 Pro image, 1280x2856, and the same image
+at 720x1280 and 1080x1920, dev bypass against a local API): the cold organizer
+flow end to end, the invitee flow from an `https://pqp.gg/app/invite/<code>`
+intent, the Discord door against the real `discord.new/hgM48av5Q69A`
+template, a rename that kept its number, pt-BR dark, en light at 1.3x font,
+"remove animations" (no confetti, flow intact), and the predictive back
+gesture. **Not verified:** the Clerk signed-out screen with an invite (no
+publishable key in this session; the dev sign-in screen carries the same
+header), and TalkBack by ear (labels were checked in the accessibility tree).
+
 ## The bug that made every real channel look empty
 
 Worth writing down in full, because the symptom pointed at the wrong layer and

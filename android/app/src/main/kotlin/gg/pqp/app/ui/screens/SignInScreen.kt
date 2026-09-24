@@ -37,6 +37,21 @@ import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.ui.theme.Spacing
+import gg.pqp.app.onboarding.InvitePreview
+import gg.pqp.app.onboarding.fetchInvitePreview
+import gg.pqp.app.onboarding.ui.riseIn
+import gg.pqp.app.push.DeepLinkTarget
+import gg.pqp.app.push.PushController
+import gg.pqp.app.ui.components.Avatar
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.text.style.TextOverflow
 
 /**
  * Sign in, in whichever of the two modes this build was configured for.
@@ -51,11 +66,56 @@ import gg.pqp.app.ui.theme.Spacing
  * and has no Play Store counterpart.
  */
 @Composable
-fun SignInScreen(session: SessionStore) {
+fun SignInScreen(session: SessionStore, push: PushController) {
+    // Signed out and holding an invite: name the room before asking for an
+    // account ("Você foi convidado pra {server}"). The public preview needs
+    // no session; any failure is simply no preview and today's generic copy.
+    val code = (push.pendingTarget.collectAsStateWithLifecycle().value as? DeepLinkTarget.Invite)?.code
+    var preview by remember(code) { mutableStateOf<InvitePreview?>(null) }
+    LaunchedEffect(code) {
+        if (code != null) preview = fetchInvitePreview(session.http, code)
+    }
     when (Backend.authMode) {
-        AuthMode.Clerk -> ClerkSignIn(session)
-        AuthMode.DevBypass -> DevSignIn(session)
+        AuthMode.Clerk -> ClerkSignIn(session, preview)
+        AuthMode.DevBypass -> DevSignIn(session, preview)
         AuthMode.Misconfigured -> MisconfiguredSignIn()
+    }
+}
+
+/**
+ * The invite, said before the form: the room's face, its name and how many
+ * are inside. Rises in once, after the preview lands.
+ */
+@Composable
+private fun InviteHeader(preview: InvitePreview, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.riseIn(delayMillis = 60),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(name = preview.serverName, url = preview.iconUrl, size = 48.dp, cornerRadius = 13.dp)
+        Spacer(Modifier.width(Spacing.md))
+        Column(Modifier.weight(1f, fill = false)) {
+            Text(
+                text = stringResource(R.string.signed_out_invite_eyebrow).uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = stringResource(R.string.signed_out_invite_title, preview.serverName),
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (preview.memberCount > 0) {
+                    pluralStringResource(R.plurals.onboarding_you_members, preview.memberCount, preview.memberCount)
+                } else {
+                    stringResource(R.string.signed_out_invite_body)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -95,7 +155,7 @@ private fun MisconfiguredSignIn() {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ClerkSignIn(session: SessionStore) {
+private fun ClerkSignIn(session: SessionStore, preview: InvitePreview?) {
     val initialized by Clerk.isInitialized.collectAsStateWithLifecycle()
     val authFlowComplete by Clerk.isAuthFlowCompleteFlow.collectAsStateWithLifecycle()
     val clerkSession by Clerk.sessionFlow.collectAsStateWithLifecycle()
@@ -112,9 +172,20 @@ private fun ClerkSignIn(session: SessionStore) {
     // with the keyboard up the form stays exactly where it was and whatever is
     // under the fold is simply covered: holding on to 32dp there would put the
     // "Continue" button behind the top row of keys on a shorter phone.
-    val lift = if (WindowInsets.isImeVisible) 0.dp else Spacing.xxl
+    val lift = if (WindowInsets.isImeVisible || preview != null) 0.dp else Spacing.xxl
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Column(Modifier.fillMaxSize()) {
+        // Above Clerk's own scaffold rather than inside it: its top bar is a
+        // logo slot of fixed height, and the invite is two lines and a face.
+        if (preview != null && !WindowInsets.isImeVisible) {
+            InviteHeader(
+                preview,
+                Modifier
+                    .statusBarsPadding()
+                    .padding(horizontal = Spacing.gutter + Spacing.xs, vertical = Spacing.md),
+            )
+        }
+    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
         if (!initialized) {
             CircularProgressIndicator()
         } else {
@@ -149,6 +220,7 @@ private fun ClerkSignIn(session: SessionStore) {
             )
         }
     }
+    }
 }
 
 /**
@@ -177,7 +249,7 @@ private fun PqpMark() {
  * the loud colour appears once and it is on the thing to press.
  */
 @Composable
-private fun DevSignIn(session: SessionStore) {
+private fun DevSignIn(session: SessionStore, preview: InvitePreview?) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -186,12 +258,17 @@ private fun DevSignIn(session: SessionStore) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            painter = painterResource(R.drawable.ic_launcher_foreground),
-            contentDescription = null,
-            modifier = Modifier.size(96.dp),
-        )
-        Spacer(Modifier.height(Spacing.lg))
+        if (preview != null) {
+            InviteHeader(preview)
+            Spacer(Modifier.height(Spacing.xxl))
+        } else {
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_foreground),
+                contentDescription = null,
+                modifier = Modifier.size(96.dp),
+            )
+            Spacer(Modifier.height(Spacing.lg))
+        }
         Text(
             text = stringResource(R.string.sign_in_title),
             style = MaterialTheme.typography.displaySmall,
