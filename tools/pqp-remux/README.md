@@ -755,6 +755,14 @@ Now a replacement is **bound inside the session**:
   never rewinds (the offset rises past published media if the wall mapping
   would land behind it) and never gains a hole (the old source's last frame,
   or the keep-alive's repeat of it, covers the gap).
+- **The keyframe wait is not a stall.** Between the bind and the new
+  source's first IDR no part is published and the last IDR recedes while
+  packets and frames arrive, which the watchdog would otherwise answer with a
+  `part-stuck` restart at 3 s and an `idr-gap-exceeded` demotion at 12 s.
+  `PipelineHealth.RebindWaitingSince` exempts the wait from both, for up to
+  `FIRST_PART_TIMEOUT_MS` (then `demoting (rebind-no-keyframe)`), logs
+  `rebind-awaiting-keyframe` once, and restarts both clocks when the keyframe
+  lands (`watchdog_rebind_test.go`).
 - **The end of a track is no longer the end of the session.** The trailing
   fragment flush (`OnVideoTrackEnded`, `session.Session.Finish`) runs once, at
   `Close`; a track ending mid-session is a presenter between two shares, and

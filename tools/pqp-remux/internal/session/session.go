@@ -302,6 +302,12 @@ type Session struct {
 	// videoSourceSince is when the current source was bound (BeginVideoSource),
 	// for the log line that says how long its first keyframe took. videoMu.
 	videoSourceSince time.Time
+	// awaitingIDRSinceNs is when the current rebind started waiting for the
+	// new source's first IDR (UnixNano), 0 when not waiting. The control
+	// watchdog reads it (RebindWaitingSince): a rebind's keyframe wait is
+	// neither a stalled muxer nor an IDR gap, and must not restart or demote
+	// the session.
+	awaitingIDRSinceNs atomic.Int64
 	// videoRebinds counts BeginVideoSource calls that replaced a source (the
 	// session's first source is not a rebind); rebindDroppedAUs counts the
 	// new sources' access units dropped while waiting for their first IDR.
@@ -880,6 +886,7 @@ func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
 			return true
 		}
 		s.awaitingSourceIDR = false
+		s.awaitingIDRSinceNs.Store(0)
 		log.Printf("pqp-remux: video source rebound: first keyframe from the new source %s after the bind (dropped=%d before it, seg=%d part=%d)",
 			now.Sub(s.videoSourceSince).Round(time.Millisecond), s.rebindDroppedAUs.Load(), s.frag.CurrentSegmentIndex(), s.frag.CurrentSequence())
 	}
@@ -1314,6 +1321,7 @@ func (s *Session) BeginVideoSource() {
 	s.dep.ResetSource()
 	s.videoSourceFresh = true
 	s.awaitingSourceIDR = true
+	s.awaitingIDRSinceNs.Store(now.UnixNano())
 	s.droppingDamaged.Store(false)
 	s.damageOpen.Store(false)
 	n := s.videoRebinds.Add(1)
@@ -1339,6 +1347,16 @@ func (s *Session) ReplaceScreenAudio() {
 	s.audioMixer.AddSource("screen", src)
 	n := s.screenAudioSwaps.Add(1)
 	log.Printf("pqp-remux: screen-share audio rebound: a new track replaces the previous one inside this session (swap %d)", n)
+}
+
+// RebindWaitingSince is when the current rebind began waiting for the new
+// source's first keyframe, and false when no rebind is waiting.
+func (s *Session) RebindWaitingSince() (time.Time, bool) {
+	ns := s.awaitingIDRSinceNs.Load()
+	if ns == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, ns), true
 }
 
 // VideoRebinds is how many times a replacement screen-share track was bound

@@ -122,6 +122,10 @@ type PipelineHealth struct {
 	// VideoRebinds is how many replacement screen-share tracks this
 	// pipeline bound (internal/session.Session.VideoRebinds).
 	VideoRebinds uint64
+	// RebindWaitingSince is when a rebind began waiting for the new
+	// source's first keyframe; zero when none is waiting. See
+	// evaluateWatchdog's rebind rule.
+	RebindWaitingSince time.Time
 }
 
 // Pipeline is the minimal surface a managed session's media pipeline

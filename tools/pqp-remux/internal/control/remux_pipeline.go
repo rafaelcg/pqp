@@ -297,6 +297,9 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		DemoteReason:         p.sess.DemoteReason(),
 		VideoRebinds:         p.sess.VideoRebinds(),
 	}
+	if since, waiting := p.sess.RebindWaitingSince(); waiting {
+		ph.RebindWaitingSince = since
+	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {
 		ph.LastPartAt = started.Add(msDuration(h.LastPartAtMs))

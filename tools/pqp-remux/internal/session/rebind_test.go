@@ -148,6 +148,9 @@ func TestRebind_InitChangeMidSessionKeepsNumberingAndTheTimeline(t *testing.T) {
 	if got := s.VideoRebinds(); got != 1 {
 		t.Fatalf("VideoRebinds = %d, want 1 (the first bind is not a rebind)", got)
 	}
+	if _, waiting := s.RebindWaitingSince(); waiting {
+		t.Fatal("RebindWaitingSince still reports a wait after the new source's keyframe")
+	}
 	if got := s.rebindDroppedAUs.Load(); got != 4 {
 		t.Fatalf("dropped %d of the new source's frames before its keyframe, want the 4 P-frames", got)
 	}
@@ -344,4 +347,43 @@ func (u *objectUploader) get(name string) []byte {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.objects[name]
+}
+
+// The watchdog's view of a rebind: waiting from the bind until the new
+// source's first keyframe, and not before or after.
+func TestRebind_ReportsTheKeyframeWaitToTheWatchdog(t *testing.T) {
+	sps := buildSPS(t, 1280, 720, 0x1F)
+	pps := buildPPS()
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	epoch := time.Date(2026, 9, 24, 7, 51, 0, 0, time.UTC)
+	s.epoch = epoch
+	clock := epoch
+	s.now = func() time.Time { return clock }
+	a := &rtpSource{seq: 1, tsBase: 1000}
+	for i := 0; i < 60; i++ {
+		clock = epoch.Add(time.Duration(i) * time.Second / 30)
+		a.frame(s, sps, pps, i%30 == 0, uint32(i*3000))
+	}
+	if _, waiting := s.RebindWaitingSince(); waiting {
+		t.Fatal("a session that never rebound reports a keyframe wait")
+	}
+	clock = clock.Add(100 * time.Millisecond)
+	bindAt := clock
+	s.BeginVideoSource()
+	b := &rtpSource{seq: 9000, tsBase: 77}
+	for i := 0; i < 30*16; i++ { // 16 s of P-frames: a slow keyframe
+		clock = bindAt.Add(time.Duration(i) * time.Second / 30)
+		b.frame(s, sps, pps, false, uint32(i*3000))
+	}
+	since, waiting := s.RebindWaitingSince()
+	if !waiting || !since.Equal(bindAt) {
+		t.Fatalf("RebindWaitingSince = %s, %t; want %s, true", since, waiting, bindAt)
+	}
+	b.frame(s, sps, pps, true, uint32(30*16*3000))
+	if _, waiting := s.RebindWaitingSince(); waiting {
+		t.Fatal("still waiting after the keyframe")
+	}
+	if s.DemoteReason() != "" {
+		t.Fatalf("the session asked to be demoted: %s", s.DemoteReason())
+	}
 }

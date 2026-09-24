@@ -2026,16 +2026,16 @@ two-minute cooldown (a second death inside five minutes still waits it out).
 `restartsInPlaceByReason` and `restartingSessions` on `/api/admin/metrics`
 count it.
 
-**LL (pqp-remux) is not covered, and has a narrower version of the same gap.**
-A dead pipeline there is the box's own business: its watchdog restarts a
-stalled session once, inside the same session, and only a second stall demotes
-it to the conventional ladder (a new session, as before). But
-`internal/subscriber` binds the FIRST screen-share track it sees and never
-rebinds, so a republished screen reaches the box only through that one
-watchdog restart, and a second republish in the same party demotes. And a
-presenter back under a fresh peer id still ends the LL session
-(`reconcileLlHlsNow`: any other peer id restarts). Rebinding in the subscriber
-and the same-person rule on the LL side are the follow-ups.
+**LL (pqp-remux) keeps its session the same way, on the box.** A dead
+pipeline there is the box's own business: its watchdog restarts a stalled
+session once, inside the same session, and only a second stall demotes it to
+the conventional ladder. A replaced screen or screen-audio track and the same
+person back under a fresh peer id are no longer restarts at all: the box
+rebinds its subscriber to the new track inside the running session, and the
+API tells it who to follow (`POST /sessions/:id/rebind`, `rebindLlSession`).
+The same reasons apply (`screen-track-replaced`, `presenter-reconnected`) and
+the log line is `voice.hlsLlRebound`. See "A low-latency party keeps its
+session when the presenter republishes or reconnects" below.
 
 **Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
 `no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
@@ -2110,6 +2110,15 @@ resume) was a new LL session with a new `startedAt`. Now:
 - **The camera and the host's voice archive ride through it.** Same
   `startedAt`, so the LL companion is kept; the camera follows its new track,
   and "separada" moves with the reattached peer id.
+- **Waiting for the new source's keyframe is not a stall.** The box drops the
+  new source's frames until its first IDR, so no part is published and the
+  last IDR recedes while packets arrive: exactly what the watchdog's
+  part-stuck restart and IDR-gap demotion (3x the segment target) read as a
+  broken session. While a rebind waits (`RebindWaitingSince` on the pipeline's
+  health) neither fires, for up to `FIRST_PART_TIMEOUT_MS` (60 s), after which
+  it demotes with its own reason, `rebind-no-keyframe`. When the keyframe
+  lands both clocks restart from it. So a publisher slow to answer the
+  keyframe request (15 s and more) leaves `liveHls.llDemoted` at 0.
 - **The replay and the film are one recording.** The VOD playlist lists every
   segment once, in order, with the init switch; the film planner reads it as
   one clock (an init change, not a restart).
