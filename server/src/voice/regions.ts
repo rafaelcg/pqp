@@ -224,7 +224,11 @@ export type SfuRegionReason =
    * the room that feeds them has to be there. Beats the operator override.
    */
   | "watch-party"
-  /** The first joiner did not declare `sfu-region`: kept home, where every client has always gone. */
+  /**
+   * The first joiner did not declare `sfu-region` AND the operator set
+   * `LIVEKIT_REGION_REQUIRE_CAP=true`: kept home. Only the rollback switch
+   * produces it; by default every client is trusted to follow the URL.
+   */
   | "old-client"
   /** `channels.sfu_region`, set by an operator. */
   | "override"
@@ -310,6 +314,29 @@ export interface SfuRegionPolicyInput {
   serverCountries?: ReadonlyMap<string, number> | null;
   /** The first joiner's socket declared `sfu-region`. */
   clientDeclaresRegions: boolean;
+  /**
+   * `LIVEKIT_REGION_REQUIRE_CAP`: only a joiner that declared `sfu-region`
+   * may open a room off home. Default false (`regionCapRequired()`).
+   */
+  requireRegionCap?: boolean;
+}
+
+/**
+ * `LIVEKIT_REGION_REQUIRE_CAP=true` restores the old caution: a room opened
+ * by a client that never declared `sfu-region` stays home. OFF by default,
+ * because every client build that can reach an SFU room dials the URL the
+ * server hands it and nothing else (audited 2026-09-24 across the whole
+ * history of web, Electron, iOS and Android: `Room.connect(session.url)`,
+ * `room.connect(url: info.url)` and `created.connect(credentials.url)`, each
+ * fed by a fresh `POST /api/voice/token` per connect attempt, never by
+ * `GET /api/voice/backend`, a cache or a hardcoded host). That is what lets
+ * phones already in people's hands, which do not send the cap, get regions
+ * without an app update. The switch is the rollback if a build turns out to
+ * disagree, without a code revert.
+ */
+export function regionCapRequired(): boolean {
+  const raw = (process.env.LIVEKIT_REGION_REQUIRE_CAP ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "on";
 }
 
 /**
@@ -321,11 +348,10 @@ export interface SfuRegionPolicyInput {
  * 2. conversations are home (they are mesh and never promoted);
  * 3. a watch party channel is home, whatever anybody set, because the
  *    transcode can only reach the home box;
- * 4. a first joiner that never said it dials the URL it is handed keeps the
- *    room home. Every shipped client does in fact dial that URL (web,
- *    Electron, iOS and Android all pass `session.url` straight to
- *    `Room.connect`), so this is caution, not a known break: the region is
- *    only moved by a client that has promised it can follow;
+ * 4. ONLY with `LIVEKIT_REGION_REQUIRE_CAP` on (the rollback, default off):
+ *    a first joiner that never declared `sfu-region` keeps the room home.
+ *    By default it is not consulted, because every shipped client dials the
+ *    URL it is handed (see `regionCapRequired`);
  * 5. the operator override;
  * 6. the server's people: a clear majority of its recently active members
  *    (by region) takes the room to their box, and a server with enough
@@ -345,7 +371,7 @@ export function decideSfuRegion(input: SfuRegionPolicyInput): SfuRegionDecision 
   if (isWatchPartyChannelType(input.channel.type)) {
     return { region: home, reason: "watch-party" };
   }
-  if (!input.clientDeclaresRegions) {
+  if (input.requireRegionCap && !input.clientDeclaresRegions) {
     return { region: home, reason: "old-client" };
   }
   const override = input.channel.sfuRegion;

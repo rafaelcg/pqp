@@ -142,6 +142,7 @@ import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
   SFU_REGION_CAP,
   decideSfuRegion,
+  regionCapRequired,
   defaultRegionId,
   forgetRoomRegion,
   pinRoomRegion,
@@ -910,10 +911,13 @@ export function isRoomPinnedLocally(voiceChannelId: string): boolean {
  *
  * Null in single-region mode, which is every deployment without
  * `LIVEKIT_REGIONS`: nothing below reads a header, issues a query or writes a
- * column then. With regions on, it is decided from the FIRST joiner's
- * `CF-IPCountry` and `sfu-region` capability, whatever the room's transport:
- * a mesh room carries a region too, so a mid-call promotion onto the SFU has
- * a box to go to that the first joiner chose, not whoever clicked a camera.
+ * column then. With regions on, it is decided when the FIRST joiner opens the
+ * room (`decideSfuRegion`: the override, else the server's people, else that
+ * joiner's `CF-IPCountry`), whatever the room's transport: a mesh room
+ * carries a region too, so a mid-call promotion onto the SFU has a box to go
+ * to that was chosen when the room opened, not by whoever clicked a camera.
+ * The joiner's `sfu-region` capability is consulted only under the rollback
+ * `LIVEKIT_REGION_REQUIRE_CAP` (`regionCapRequired`).
  */
 async function decideRoomRegion(
   channel: ChannelRow,
@@ -924,10 +928,14 @@ async function decideRoomRegion(
     return null;
   }
   const clientDeclaresRegions = socketHasCap(socket, SFU_REGION_CAP);
+  const requireRegionCap = regionCapRequired();
+  // Whether this joiner may open the room off home at all. True for every
+  // client unless the rollback switch asks for the cap.
+  const clientMayMove = clientDeclaresRegions || !requireRegionCap;
   let override: string | null = null;
   // The override query is skipped wherever the policy answers without it.
   if (
-    clientDeclaresRegions &&
+    clientMayMove &&
     channel.kind === "server" &&
     !isWatchPartyChannelType(channel.type)
   ) {
@@ -947,7 +955,7 @@ async function decideRoomRegion(
     override !== null && regions.some((region) => region.id === override);
   let serverCountries: Map<string, number> | null = null;
   if (
-    clientDeclaresRegions &&
+    clientMayMove &&
     channel.kind === "server" &&
     !isWatchPartyChannelType(channel.type) &&
     !overrideApplies &&
@@ -966,6 +974,7 @@ async function decideRoomRegion(
     channel: { kind: channel.kind, type: channel.type, sfuRegion: override },
     country: socketCountry(socket),
     clientDeclaresRegions,
+    requireRegionCap,
     serverCountries,
   });
 }

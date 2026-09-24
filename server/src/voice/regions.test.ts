@@ -172,10 +172,21 @@ describe("decideSfuRegion", () => {
     });
   });
 
-  it("keeps a room home for a first joiner that did not declare sfu-region", () => {
+  it("trusts a first joiner without sfu-region by default (every shipped phone)", () => {
     expect(decideSfuRegion({ ...base, clientDeclaresRegions: false })).toEqual({
-      region: "sao",
-      reason: "old-client",
+      region: "mia",
+      reason: "country",
+    });
+  });
+
+  it("keeps a room home for a joiner without sfu-region under LIVEKIT_REGION_REQUIRE_CAP", () => {
+    expect(
+      decideSfuRegion({ ...base, clientDeclaresRegions: false, requireRegionCap: true }),
+    ).toEqual({ region: "sao", reason: "old-client" });
+    // A joiner that declared the cap is unaffected by the switch.
+    expect(decideSfuRegion({ ...base, requireRegionCap: true })).toEqual({
+      region: "mia",
+      reason: "country",
     });
   });
 
@@ -323,7 +334,7 @@ describe("decideSfuRegion: the server's people", () => {
     ).toEqual({ region: "lon", reason: "override" });
   });
 
-  it("a watch party, a conversation, an old client and single-region mode ignore the tally", () => {
+  it("a watch party, a conversation, a capless joiner under the switch and single-region mode ignore the tally", () => {
     const london = countries({ GB: 50 });
     expect(
       decideSfuRegion({
@@ -340,8 +351,17 @@ describe("decideSfuRegion: the server's people", () => {
       }),
     ).toEqual({ region: "sao", reason: "dm" });
     expect(
-      decideSfuRegion({ ...base, clientDeclaresRegions: false, serverCountries: london }),
+      decideSfuRegion({
+        ...base,
+        clientDeclaresRegions: false,
+        requireRegionCap: true,
+        serverCountries: london,
+      }),
     ).toEqual({ region: "sao", reason: "old-client" });
+    // Without the switch a phone opening the room follows the server.
+    expect(
+      decideSfuRegion({ ...base, clientDeclaresRegions: false, serverCountries: london }),
+    ).toMatchObject({ region: "lon", reason: "server-majority" });
     expect(decideSfuRegion({ ...base, regionIds: null, serverCountries: london })).toEqual({
       region: "sao",
       reason: "single",
