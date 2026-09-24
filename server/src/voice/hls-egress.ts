@@ -55,8 +55,11 @@ import {
   llHasRoom,
   llPlaylistFrontConfigured,
   llPlaylistUrl,
+  forgetLlResumeDecisions,
+  llAdoptedAt,
   llStreamFor,
   reconcileLlHlsNow,
+  releaseLlRoom,
   resetHlsRemuxForTests,
   resolveHlsModeForChannel,
   runBounded,
@@ -423,6 +426,14 @@ interface RunningRung {
 }
 
 interface RoomHls {
+  /**
+   * When THIS process took the session over instead of starting it: the boot
+   * adoption, a resume adoption, a handover from the other machine. Absent on
+   * a session this process started. Read by `pushLiveHls` through
+   * `liveHlsAdoptedAt`: right after an adoption, "no presenter here" usually
+   * means their socket has not reconnected yet, not that they stopped.
+   */
+  adoptedAtMs?: number;
   /**
    * Every rendition running for this session, LOWEST BITRATE FIRST. The
    * first entry is the primary: it is what the readiness probe waited for,
@@ -1715,6 +1726,319 @@ export function liveHlsOwnsChannel(channelId: string): boolean {
 }
 
 /**
+ * When this process ADOPTED the session it holds for a channel (either mode),
+ * or null when it started it itself or holds nothing. See `RoomHls.adoptedAtMs`.
+ */
+export function liveHlsAdoptedAt(channelId: string): number | null {
+  const room = rooms.get(channelId);
+  if (room) {
+    return room.adoptedAtMs ?? null;
+  }
+  return llAdoptedAt(channelId);
+}
+
+/**
+ * Forget every cached resume decision for a channel, both modes. Called when
+ * the machine that held the session says it has just handed it to this one:
+ * the `stand-down` remembered a moment ago ("a live machine owns this") is
+ * precisely the answer that stopped being true, and serving it for another
+ * five seconds would leave the party with no monitor for no reason.
+ */
+export function forgetLiveHlsResumeDecisions(channelId: string): void {
+  resumeDecisionEpoch.set(channelId, (resumeDecisionEpoch.get(channelId) ?? 0) + 1);
+  const prefix = `${channelId.length}:${channelId}:`;
+  for (const key of resumeDecisionCache.keys()) {
+    if (key.startsWith(prefix)) {
+      resumeDecisionCache.delete(key);
+    }
+  }
+  forgetLlResumeDecisions(channelId);
+}
+
+/** Sessions this process handed to another machine since it started. */
+let handoversTotal = 0;
+
+export function liveHlsHandoverCount(): number {
+  return handoversTotal;
+}
+
+/**
+ * HAND A RUNNING SESSION TO THE MACHINE THE PRESENTER IS ON, AND STOP NOTHING.
+ *
+ * The presenter's seat can land on the OTHER `pqp-api` machine at any time: a
+ * rolling deploy drains this one's sockets, a Wi-Fi blip reconnects through
+ * the proxy to the sibling. The transcode itself is not on either machine (it
+ * is a LiveKit egress or a pqp-remux session on the media box), so the only
+ * question is which process monitors it, and the answer has to be the one
+ * holding the presenter: that is where `set-sharing-screen`, a track
+ * replacement and the end of the share arrive.
+ *
+ * Until 2026-09-24 nothing could move it. The owner saw no local sharer and
+ * ended the session after five seconds (`hlsStopped reason=no-share`) while
+ * the machine with the sharer refused to adopt a session a live machine
+ * owned (`hlsSkippedOwnedElsewhere site=resume-adopt`). Each side was right
+ * by its own rules, and the party went dark twice in one rolling deploy of a
+ * rehearsal (channel `ad99074f`).
+ *
+ * THE ROW IS THE HANDOVER. Every open row of the channel this process owns is
+ * re-stamped with the target instance in one conditional UPDATE (and with the
+ * presenter's current peer id, so a reattach this process made in memory does
+ * not read as a different presenter over there). Only when that lands is the
+ * room forgotten here, WITHOUT stopping a single egress. The target's own
+ * `adoptRunningLiveHlsSession` / `adoptRunningLlHlsSession` then claims the
+ * rows as its own, which is the path a resume already takes after a deploy.
+ * Between the two nothing is torn down: the ladder keeps writing segments on
+ * the media box, so viewers see nothing at all. Never two ladders (nothing is
+ * started here), never zero (nothing is stopped here).
+ *
+ * If the UPDATE fails, nothing changes and the caller tries again later. If
+ * the target dies before it adopts, its heartbeat lapses and the rows are free
+ * for whichever machine the presenter resumes on next, exactly like a crash.
+ *
+ * Serialised on the channel's reconcile queue, so it can never interleave with
+ * a start, a stop or a mode flip for the same channel.
+ */
+export function releaseLiveHlsSession(input: {
+  channelId: string;
+  startedAt: number;
+  toInstanceId: string;
+  presenterPeerId: string;
+  /**
+   * Asked again inside the channel's queue, immediately before the rows move:
+   * whether the presenter is STILL absent from this process. A re-share that
+   * landed here while the handover waited its turn cancels it, because the
+   * reconcile that re-share queued runs right after this and has to find the
+   * session still ours.
+   */
+  stillAbsent?: () => boolean;
+}): Promise<boolean> {
+  const { channelId } = input;
+  const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(() => releaseLiveHlsSessionNow(input));
+  const queued = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  reconcileQueue.set(channelId, queued);
+  void queued.finally(() => {
+    if (reconcileQueue.get(channelId) === queued) {
+      reconcileQueue.delete(channelId);
+    }
+  });
+  return run.catch((error: unknown) => {
+    logEvent("voice.hlsHandoverFailed", {
+      channelId,
+      to: input.toInstanceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  });
+}
+
+async function releaseLiveHlsSessionNow(input: {
+  channelId: string;
+  startedAt: number;
+  toInstanceId: string;
+  presenterPeerId: string;
+  stillAbsent?: () => boolean;
+}): Promise<boolean> {
+  const { channelId, startedAt, toInstanceId, presenterPeerId } = input;
+  if (input.stillAbsent && !input.stillAbsent()) {
+    logEvent("voice.hlsHandoverCancelled", {
+      channelId,
+      startedAt,
+      to: toInstanceId,
+      reason: "presenter-back",
+    });
+    return false;
+  }
+  const ladder = rooms.get(channelId);
+  const ll = llStreamFor(channelId);
+  const mode =
+    ladder && ladder.stream.startedAt === startedAt
+      ? "conventional"
+      : ll && ll.startedAt === startedAt
+        ? "ll"
+        : null;
+  if (mode === null || toInstanceId === hlsOwnerInstanceId()) {
+    return false;
+  }
+  // THIS SESSION'S ROWS, AND ONLY IF ITS FILM IS AMONG THEM. One statement,
+  // so it is all or nothing: the rows of `startedAt` move together, and they
+  // move only when the row the target will adopt BY is there to move (a
+  // ladder rung for the conventional path, the LL row for pqp-remux). A room
+  // whose row never landed (its insert failed at start) cannot be adopted
+  // anywhere else, so handing it over would leave its egress with no monitor
+  // at all and the target free to start a second one; it stays here instead
+  // (a Farol finding on this PR).
+  const result = await getPool().query<{ id: string }>(
+    `WITH film AS (
+       SELECT 1
+         FROM hls_sessions p
+        WHERE p.channel_id = $1
+          AND (p.object_prefix = $5 OR p.object_prefix LIKE $6)
+          AND p.ended_at IS NULL
+          AND p.cleaned_at IS NULL
+          AND (p.instance_id IS NULL OR p.instance_id = $3)
+          AND CASE
+                WHEN $7::text = 'll' THEN p.mode = 'll'
+                ELSE p.mode <> 'll'
+                     AND p.egress_id IS NOT NULL
+                     AND COALESCE(p.rung, '') <> ALL($8::text[])
+              END
+        LIMIT 1
+     )
+     UPDATE hls_sessions s
+        SET instance_id = $2,
+            presenter_peer_id = CASE
+              WHEN s.presenter_peer_id IS NULL THEN NULL
+              ELSE $4
+            END
+      WHERE s.channel_id = $1
+        AND (s.object_prefix = $5 OR s.object_prefix LIKE $6)
+        AND s.ended_at IS NULL
+        AND s.cleaned_at IS NULL
+        -- Only what is ours to give. A row a third machine holds is not.
+        AND (s.instance_id IS NULL OR s.instance_id = $3)
+        AND EXISTS (SELECT 1 FROM film)
+      RETURNING s.id`,
+    [
+      channelId,
+      toInstanceId,
+      hlsOwnerInstanceId(),
+      presenterPeerId,
+      hlsObjectPrefix(channelId, startedAt),
+      sessionPrefixPattern(channelId, startedAt),
+      mode,
+      [MIC_ARCHIVE_RUNG, CAMERA_RUNG_NAME],
+    ],
+  );
+  const sessionIds = result.rows.map((row) => row.id);
+  if (sessionIds.length === 0) {
+    logEvent("voice.hlsHandoverCancelled", {
+      channelId,
+      startedAt,
+      to: toInstanceId,
+      reason: "no-session-row",
+    });
+    return false;
+  }
+  // A queued stamp for these rows would write this process back over the
+  // handover minutes from now.
+  forgetPendingHlsSessionClaims(sessionIds);
+  let egressIds: string[] = [];
+  if (mode === "conventional") {
+    const room = rooms.get(channelId);
+    if (room && room.stream.startedAt === startedAt) {
+      egressIds = [
+        ...room.rungs.map((entry) => entry.egressId),
+        ...(room.camera ? [room.camera.egressId] : []),
+        ...(room.micArchive ? [room.micArchive.egressId] : []),
+      ];
+      rooms.delete(channelId);
+      clearCameraCooldown(channelId);
+      voiceTrackSeparatedByChannel.delete(channelId);
+      clearCameraProbeRetry(channelId);
+      const pending = pendingRestarts.get(channelId);
+      if (pending) {
+        clearTimeout(pending);
+        pendingRestarts.delete(channelId);
+      }
+    }
+  } else {
+    releaseLlRoom(channelId, startedAt);
+    const companion = llCompanions.get(channelId);
+    if (companion && companion.stream.startedAt === startedAt) {
+      egressIds = [
+        ...(companion.camera ? [companion.camera.egressId] : []),
+        ...(companion.micArchive ? [companion.micArchive.egressId] : []),
+      ];
+      llCompanions.delete(channelId);
+      clearCameraCooldown(channelId);
+      voiceTrackSeparatedByChannel.delete(channelId);
+      clearCameraProbeRetry(channelId);
+    }
+  }
+  handoversTotal += 1;
+  logEvent("voice.hlsHandedOver", {
+    channelId,
+    startedAt,
+    mode,
+    to: toInstanceId,
+    presenterPeerId,
+    sessionIds,
+    egressIds,
+  });
+  return true;
+}
+
+/**
+ * ROWS THIS PROCESS OWNS FOR A SESSION IT DOES NOT HOLD, GIVEN BACK.
+ *
+ * A row stamped with a live instance that has no room for it in memory is in
+ * limbo: every other machine stands down in front of it ("a live machine owns
+ * this"), and the owner never monitors it. A handover whose target lost the
+ * presenter before it adopted leaves exactly that. So a machine asked to
+ * reconcile a channel it holds nothing for, with no sharer of its own there,
+ * clears its stamp from that channel's open rows, and the machine that asked
+ * (the one with the presenter) can adopt them on its next reconcile. Nothing
+ * is stopped; this only changes who may take the session.
+ *
+ * Serialised on the channel's queue and re-checked inside it, so it can never
+ * run between an adoption's claim and the room it builds. Answers how many
+ * rows it gave back (0 on any failure: could not ask changes nothing).
+ */
+export function disownUnheldHlsRows(channelId: string): Promise<number> {
+  const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(async () => {
+      if (
+        rooms.has(channelId) ||
+        llHasRoom(channelId) ||
+        llCompanions.has(channelId)
+      ) {
+        return 0;
+      }
+      const result = await getPool().query<{ id: string }>(
+        `UPDATE hls_sessions
+            SET instance_id = NULL
+          WHERE channel_id = $1
+            AND instance_id = $2
+            AND ended_at IS NULL
+            AND cleaned_at IS NULL
+          RETURNING id`,
+        [channelId, hlsOwnerInstanceId()],
+      );
+      const ids = result.rows.map((row) => row.id);
+      if (ids.length > 0) {
+        forgetPendingHlsSessionClaims(ids);
+        logEvent("voice.hlsRowsDisowned", { channelId, sessionIds: ids });
+      }
+      return ids.length;
+    });
+  const queued = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  reconcileQueue.set(channelId, queued);
+  void queued.finally(() => {
+    if (reconcileQueue.get(channelId) === queued) {
+      reconcileQueue.delete(channelId);
+    }
+  });
+  return run.catch((error: unknown) => {
+    logEvent("voice.hlsRowsDisownFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  });
+}
+
+/**
  * The last resort `getChannelLiveState` (`server/src/ws/voice.ts`) reaches
  * for when this process never ran the egress itself: `rooms`, `llStreamFor`
  * and `hlsAudience.stream` are every one of them in-process maps, populated
@@ -2007,6 +2331,8 @@ export function resetLiveHlsForTests(): void {
   cameraProbeRetryAttempts.clear();
   resumeRefusalLoggedAt.clear();
   resumeDecisionCache.clear();
+  resumeDecisionEpoch.clear();
+  handoversTotal = 0;
   changeListener = null;
   sfuLoadReader = null;
   presenterCheck = null;
@@ -3450,7 +3776,20 @@ async function reconcileLlCompanions(
       announced: true,
     };
     llCompanions.set(channelId, room);
+    // A COMPANION THAT ALREADY EXISTS ON THE MEDIA BOX IS INHERITED, NOT
+    // DUPLICATED. This process is building the slot for an LL session it may
+    // just have adopted (a resume onto this machine, a handover from the
+    // other one), in which case the camera and the archive are still running
+    // under rows somebody else started. Starting fresh ones beside them would
+    // write a second archive over `<startedAt>-mic.ogg` and a second camera
+    // nobody tracks. Cheap on a genuinely new session: one indexed read that
+    // finds nothing.
+    await adoptLlCompanionRows(channelId, room, stream.startedAt);
+    if (llCompanions.get(channelId) !== room) {
+      return { stream };
+    }
     if (
+      !room.micArchive &&
       micArchiveEnabled() &&
       tracks.micArchiveTrackId &&
       Date.now() < room.micArchiveUntil
@@ -3467,6 +3806,106 @@ async function reconcileLlCompanions(
     cameraTrackId: tracks.cameraTrackId ?? null,
     voiceTrackId: tracks.voiceTrackId ?? null,
   };
+}
+
+/**
+ * Take back an LL broadcast's camera and mic-archive egresses that are still
+ * running under open rows for this session: the LL twin of the camera and
+ * archive half of `adoptRunningLiveHlsSession`. Same refusals: a row a live
+ * other machine owns is left alone, "could not ask" adopts nothing, and an
+ * egress LiveKit no longer lists is not inherited.
+ */
+async function adoptLlCompanionRows(
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+): Promise<void> {
+  let rows: OpenHlsSessionRow[];
+  try {
+    const result = await getPool().query<OpenHlsSessionRow>(
+      `SELECT id, object_prefix, egress_id, presenter_peer_id,
+              video_track_id, audio_track_id, rung, instance_id
+         FROM hls_sessions
+        WHERE channel_id = $1
+          AND ended_at IS NULL
+          AND cleaned_at IS NULL
+          AND mode <> 'll'
+          AND egress_id IS NOT NULL`,
+      [channelId],
+    );
+    rows = result.rows;
+  } catch (error) {
+    logEvent("voice.hlsLlCompanionLookupFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Could not ask whether an archive is already running for this session,
+    // so do not start a second one: the same rule an adopted ladder follows.
+    room.micArchiveUntil = 0;
+    return;
+  }
+  const candidates = rows.flatMap((row) => {
+    const parsed = parseHlsObjectPrefix(row.object_prefix);
+    const rung = row.rung ?? parsed?.rung ?? null;
+    return parsed &&
+      parsed.startedAt === startedAt &&
+      (rung === CAMERA_RUNG_NAME || rung === MIC_ARCHIVE_RUNG)
+      ? [{ row, rung }]
+      : [];
+  });
+  if (candidates.length === 0) {
+    return;
+  }
+  // Rows exist, so this session was inherited: never a second archive,
+  // whatever happens below.
+  room.micArchiveUntil = 0;
+  const liveOthers = await liveOtherInstances();
+  const active = liveOthers === null ? null : await listActiveEgresses();
+  if (liveOthers === null || active === null) {
+    return;
+  }
+  const listed = new Set(active.map((info) => info.egressId));
+  const adopted: string[] = [];
+  for (const { row, rung } of candidates) {
+    if (
+      ownedByLiveOtherInstance(row.instance_id, liveOthers) ||
+      !row.egress_id ||
+      !listed.has(row.egress_id)
+    ) {
+      continue;
+    }
+    if (rung === CAMERA_RUNG_NAME) {
+      const stream = adoptLiveHlsSession({
+        channelId,
+        egressId: row.egress_id,
+        startedAt,
+        presenterPeerId: room.stream.presenterPeerId,
+        videoTrackId: row.video_track_id ?? "",
+        audioTrackId: row.audio_track_id,
+        rung: CAMERA_RUNG_NAME,
+      });
+      if (stream) {
+        adopted.push(row.id);
+      }
+    } else if (
+      adoptLiveHlsMicArchive({
+        channelId,
+        egressId: row.egress_id,
+        startedAt,
+        trackId: row.video_track_id ?? "",
+      })
+    ) {
+      adopted.push(row.id);
+    }
+  }
+  if (adopted.length > 0) {
+    await claimHlsSessionRows(adopted);
+    logEvent("voice.hlsLlCompanionsAdopted", {
+      channelId,
+      startedAt,
+      sessionIds: adopted,
+    });
+  }
 }
 
 /**
@@ -3833,6 +4272,10 @@ export function adoptLiveHlsSession(input: {
     // An adopted session was serving a playlist on the media box before this
     // process knew it existed: there is nothing to wait for.
     announced: true,
+    adoptedAtMs:
+      existing && existing.stream.startedAt === input.startedAt
+        ? (existing.adoptedAtMs ?? Date.now())
+        : Date.now(),
   });
   logEvent("voice.hlsSessionAdopted", {
     channelId: input.channelId,
@@ -4062,6 +4505,11 @@ const resumeDecisionCache = new Map<
 >();
 const RESUME_DECISION_TTL_MS = 5_000;
 /**
+ * Bumped per channel by `forgetLiveHlsResumeDecisions`, so a decision that was
+ * already being made when the cache was cleared cannot write itself back.
+ */
+const resumeDecisionEpoch = new Map<string, number>();
+/**
  * Sweep only past this many entries, not on every miss. The sweep is O(size)
  * and a burst of first-time channels would otherwise be quadratic in it; past
  * this the map is worth walking once, and below it the whole thing is smaller
@@ -4132,7 +4580,15 @@ export async function adoptRunningLiveHlsSession(
   if (cached && now - cached.at < RESUME_DECISION_TTL_MS) {
     return cached.decision;
   }
+  const epoch = resumeDecisionEpoch.get(channelId) ?? 0;
   const remember = (decision: ResumeAdoption): ResumeAdoption => {
+    // A HANDOVER LANDED WHILE THIS WAS BEING DECIDED. The answer is still
+    // returned (it was true when it was read), but not remembered: the next
+    // reconcile, already queued behind this one, must ask again rather than
+    // be served "a live machine owns this" about a session that is now ours.
+    if ((resumeDecisionEpoch.get(channelId) ?? 0) !== epoch) {
+      return decision;
+    }
     if (resumeDecisionCache.size > RESUME_DECISION_MAX_ENTRIES) {
       for (const [seen, entry] of resumeDecisionCache) {
         if (now - entry.at >= RESUME_DECISION_TTL_MS) {
