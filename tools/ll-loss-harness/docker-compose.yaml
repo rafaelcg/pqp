@@ -64,6 +64,11 @@ services:
       LOSS_PCT: "${LOSS_PCT:-0}"
       PACE: "${PACE:-}"
       PACE_SECONDS: "${PACE_SECONDS:-90}"
+      # SCENARIO=republish / reconnect in run.sh: replace the screen track
+      # mid-show (see publisher/republish.go). Empty: publish once.
+      REPUBLISH_AFTER: "${REPUBLISH_AFTER:-}"
+      REPUBLISH: "${REPUBLISH:-}"
+      REPUBLISH_IDENTITY: "${REPUBLISH_IDENTITY:-}"
     volumes:
       - ./.data:/media:ro
     cap_add:

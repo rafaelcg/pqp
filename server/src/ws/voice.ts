@@ -122,7 +122,7 @@ import {
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
-import { isLiveHlsLLEnabled, llStreamFor } from "../voice/hls-remux.js";
+import { isLiveHlsLLEnabled, llStreamFor, setLlPresenterIdentity } from "../voice/hls-remux.js";
 import { liveOtherInstances } from "../voice/hls-ownership.js";
 import {
   liveHlsForcesSfu,
@@ -2400,6 +2400,29 @@ async function lookUpVanishedSharer(
       return hold("lookup-failed", since + VOICE_RESUME_TTL_MS);
     }
     const seat = rows.find((row) => row.peerId === presenterPeerId);
+    // THE SAME PERSON, SHARING UNDER A NEW PEER ID ON THE OTHER MACHINE: a
+    // reconnect that could not resume, landing there. Their old seat is
+    // still in the registry (held for its resume window, or not yet
+    // released), which is what names them. The session is handed to the
+    // machine holding the new seat, whose adoption recognises the person and
+    // keeps the session (the LL remux is rebound in place). Without this the
+    // old seat's resume hold froze the broadcast here for up to the whole
+    // window, while the machine with the presenter stood down.
+    const sameUserElsewhere = seat
+      ? rows.find(
+          (row) =>
+            row.peerId !== presenterPeerId &&
+            row.userId === seat.userId &&
+            row.sharingScreen &&
+            row.canStream &&
+            !row.orphanedAt &&
+            row.instanceId !== INSTANCE_ID &&
+            liveOthers!.has(row.instanceId),
+        )
+      : undefined;
+    if (sameUserElsewhere) {
+      return { kind: "elsewhere", instanceId: sameUserElsewhere.instanceId };
+    }
     if (!seat || !seat.sharingScreen || !seat.canStream) {
       return { kind: "gone" };
     }
@@ -2424,6 +2447,59 @@ async function lookUpVanishedSharer(
     return hold("adopted-recently", adoptedAt + ADOPTED_SHARER_HOLD_MS);
   }
   return { kind: "gone" };
+}
+
+/**
+ * The instance where `userId` is seated and sharing in this room under a peer
+ * id OTHER than `orphanPeerId`, live and not itself orphaned, on another
+ * machine that is answering its heartbeat; null for anything else, including
+ * a registry that could not be read (the orphan's resume hold then applies,
+ * as it always did). One read per channel at a time: every roster event of a
+ * party can reach here while the presenter's old seat is held.
+ */
+const reconnectLookupInFlight = new Map<string, Promise<string | null>>();
+
+function locateReconnectedPresenter(
+  channelId: string,
+  userId: string,
+  orphanPeerId: string,
+): Promise<string | null> {
+  const inFlight = reconnectLookupInFlight.get(channelId);
+  if (inFlight) {
+    return inFlight;
+  }
+  const answer = (async () => {
+    try {
+      const [rows, liveOthers] = await Promise.all([
+        listVoicePeersInRoom(channelId),
+        liveOtherInstances(),
+      ]);
+      if (!liveOthers) {
+        return null;
+      }
+      const seat = rows.find(
+        (row) =>
+          row.peerId !== orphanPeerId &&
+          row.userId === userId &&
+          row.sharingScreen &&
+          row.canStream &&
+          !row.orphanedAt &&
+          row.instanceId !== INSTANCE_ID &&
+          liveOthers.has(row.instanceId),
+      );
+      return seat?.instanceId ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  reconnectLookupInFlight.set(channelId, answer);
+  const settle = () => {
+    if (reconnectLookupInFlight.get(channelId) === answer) {
+      reconnectLookupInFlight.delete(channelId);
+    }
+  };
+  answer.then(settle, settle);
+  return answer;
 }
 
 /** One pending look per channel, keeping whichever is due soonest. */
@@ -2700,6 +2776,47 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (over && prev && sharing) {
     logWatchPartyOverStop(voiceChannelId, sharing.id);
   }
+  // THE PRESENTER'S SEAT HERE IS AN ORPHAN AND THE SAME PERSON IS SHARING ON
+  // THE OTHER MACHINE: a reconnect that could not resume (a fresh peer id)
+  // landed there. The orphan still counts as the sharer here for its whole
+  // resume window, so without this the broadcast sat frozen on this machine
+  // for up to that window while the machine with the presenter stood down,
+  // and then ended for a new session. Hand it over now; the new owner's
+  // adoption recognises the person and keeps the session (the LL remux is
+  // rebound in place, `rebindLlSession` in `hls-remux.ts`).
+  if (
+    sharing &&
+    !over &&
+    prev &&
+    sharing.orphanedAt !== undefined &&
+    prev.presenterPeerId === sharing.id &&
+    registryOn()
+  ) {
+    const target = await locateReconnectedPresenter(voiceChannelId, sharing.userId, sharing.id);
+    if (target) {
+      const released = await releaseLiveHlsSession({
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        toInstanceId: target,
+        presenterPeerId: prev.presenterPeerId,
+        stillAbsent: () => {
+          const now = pickHlsSharer(getRoomPeers(voiceChannelId));
+          return !now || now.orphanedAt !== undefined;
+        },
+      });
+      if (released) {
+        logEvent("voice.hlsPresenterReconnectedElsewhere", {
+          channelId: voiceChannelId,
+          startedAt: prev.startedAt,
+          from: sharing.id,
+          toInstanceId: target,
+        });
+        hlsSessionMoves.handedOver += 1;
+        relayHlsReconcile(voiceChannelId, Date.now(), true);
+        return;
+      }
+    }
+  }
   if (sharing) {
     noSharerSince.delete(voiceChannelId);
     clearSharerRecheck(voiceChannelId);
@@ -2941,6 +3058,26 @@ setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
 // Only this process's own peers: a presenter the egress process is about to
 // restart for has to be seated here for it to be reconciling at all.
 setLiveHlsPresenterIdentity((_channelId, peerId) => peers.get(peerId)?.userId ?? null);
+
+// Which person a peer is, so an LL presenter who came back under a fresh peer
+// id (a reconnect that could not resume) keeps their party's session: the
+// remux box is told to follow the new identity (`rebindLlSession` in
+// `hls-remux.ts`) instead of the session being replaced.
+setLlPresenterIdentity((_channelId, peerId) => {
+  const local = peers.get(peerId)?.userId;
+  if (local) {
+    return local;
+  }
+  // The presenter's previous socket may have been on the other machine
+  // (a reconnect that landed here during a rolling deploy): its row is
+  // held in the registry for the resume window.
+  if (!registryOn()) {
+    return null;
+  }
+  return getVoicePeerRow(peerId)
+    .then((row) => row?.userId ?? null)
+    .catch(() => null);
+});
 
 /**
  * The stream a `channel-live` frame carries for this channel, from THIS

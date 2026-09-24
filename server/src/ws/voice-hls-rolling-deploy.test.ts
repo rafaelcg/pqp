@@ -162,6 +162,8 @@ const box = {
   stops: [] as string[],
   remuxStarts: [] as string[],
   remuxStops: [] as string[],
+  /** `POST /sessions/:id/rebind` calls, in order. */
+  remuxRebinds: [] as { sessionId: string; presenterIdentity: string }[],
   /** Whether the presenter's screen track is published on the SFU. */
   screenPublished: true,
   /** The sid of that publication: a republish (a resume, a re-pick) changes it. */
@@ -174,6 +176,7 @@ const box = {
     this.stops = [];
     this.remuxStarts = [];
     this.remuxStops = [];
+    this.remuxRebinds = [];
     this.screenPublished = true;
     this.screenTrack = "TR_SCREEN";
     this.next = 0;
@@ -264,6 +267,16 @@ async function fakeRemuxApi(url: string, init: RequestInit): Promise<Response> {
       box.remuxStarts.push(body.sessionId);
     }
     return json(describeSession(box.remux.get(body.sessionId)!), 201);
+  }
+  const rebind = /^\/sessions\/([^/]+)\/rebind$/.exec(path);
+  if (method === "POST" && rebind) {
+    const session = box.remux.get(rebind[1]!);
+    if (!session || session.stoppedMs !== null) {
+      return json({ error: "session not found" }, 404);
+    }
+    const { presenterIdentity } = JSON.parse(String(init.body)) as { presenterIdentity: string };
+    box.remuxRebinds.push({ sessionId: session.sessionId, presenterIdentity });
+    return json({ sessionId: session.sessionId, presenterIdentity, result: "bound" });
   }
   if (method === "DELETE" && path.startsWith("/sessions/")) {
     const id = path.slice("/sessions/".length);
@@ -902,6 +915,91 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     );
     await drill("ll");
   }, 60_000);
+
+  it("low-latency: the same person back under a NEW peer id on the other machine keeps the session, rebound on the box", async () => {
+    // A reconnect that could NOT resume (a fresh peer id), landing on the
+    // other replica: the case #802's handover did not cover, because a new
+    // peer id was a new presenter to both machines. The old seat is held for
+    // its resume window, which used to freeze the broadcast on api-a for that
+    // whole window while api-b stood down, and then end it for a new one.
+    process.env.LIVE_HLS_LL = "true";
+    process.env.LIVE_HLS_REMUX_CONTROL_URL = REMUX_CONTROL;
+    process.env.LIVE_HLS_REMUX_CONTROL_SECRET = "test-remux-secret";
+    process.env.LIVE_HLS_REMUX_ORIGIN_URL = "https://hls-origin.example.test";
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    const pool = pools[0]!.getPool();
+    const host = await pool.query<{ owner_id: string }>(
+      `SELECT owner_id FROM servers WHERE id = $1`,
+      [fixture.serverId],
+    );
+    await pool.query(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Ensaio', 'live', $2, TRUE)`,
+      [fixture.channelId, host.rows[0]!.owner_id],
+    );
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live on api-a");
+    const live = a.remux.llStreamFor(channel)!;
+    expect(live.mode).toBe("ll");
+    const [sessionId] = box.remuxStarts;
+    const viewer = startViewer(channel, "ll");
+
+    // The socket drops on api-a (its seat held for resume), and the client
+    // comes back WITHOUT resuming: a new peer id, on api-b.
+    a.voice.removeVoicePeerBySocket(presenter.socket);
+    await a.registry.settleVoiceRegistryWrites();
+    const again = await presenterJoinsAndShares(b, userId, channel);
+    expect(again.peerId).not.toBe(presenter.peerId);
+    await b.registry.settleVoiceRegistryWrites();
+    // api-a's next look finds the same person sharing on api-b.
+    await viewerVisits(a, channel);
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the person to api-b");
+    await waitFor(
+      () => box.remuxRebinds.some((call) => call.presenterIdentity === again.peerId),
+      "the box to be told who to follow now",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    viewer.stop();
+
+    // One session on the box the whole way through, rebound, never replaced.
+    expect(box.remuxStarts).toEqual([sessionId]);
+    expect(box.remuxStops).toEqual([]);
+    expect(box.remuxRebinds).toEqual([{ sessionId, presenterIdentity: again.peerId }]);
+    expect(viewer.samples.filter((sample) => sample.running !== 1)).toEqual([]);
+    expect(b.remux.llStreamFor(channel)).toEqual(
+      expect.objectContaining({
+        startedAt: live.startedAt,
+        hlsUrl: live.hlsUrl,
+        presenterPeerId: again.peerId,
+      }),
+    );
+    const rows = await pool.query<{ presenter_peer_id: string; ended_at: Date | null; instance_id: string }>(
+      `SELECT presenter_peer_id, ended_at, instance_id FROM hls_sessions WHERE channel_id = $1 AND mode = 'll'`,
+      [channel],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({
+        presenter_peer_id: again.peerId,
+        ended_at: null,
+        instance_id: b.bus.INSTANCE_ID,
+      }),
+    ]);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebound",
+      expect.objectContaining({
+        channelId: channel,
+        reason: "presenter-reconnected",
+        from: presenter.peerId,
+        to: again.peerId,
+      }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+  }, 30_000);
 
   it("a session whose rows never landed is not handed over: it stays where it is monitored", async () => {
     const channel = fixture.channelId;

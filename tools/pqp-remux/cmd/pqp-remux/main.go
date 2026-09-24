@@ -153,16 +153,20 @@ func runServer(cfg config.Config) error {
 		OnVideoTrackFound: func(*subscriber.Session) { sess.MarkSubscribed() },
 		OnVideoPacket:     sess.HandleVideoPacket,
 		OnAudioPacket:     sess.HandleAudioPacket,
+		// A republished screen continues this session (see
+		// session.Session.BeginVideoSource).
+		OnVideoSourceChanged: sess.BeginVideoSource,
+		OnScreenAudioChanged: sess.ReplaceScreenAudio,
 		// Every stage microphone, not just the presenter's screen-share
 		// audio above — see subscriber.Handlers.OnMicTrackFound's doc
 		// comment for why no further authorization check belongs here.
 		// sess.NewMicSink is a harmless no-op sink when EnableAudio
 		// failed above (see NewMicSink's doc comment).
 		OnMicTrackFound: func(identity string) subscriber.AudioSink { return sess.NewMicSink(identity) },
-		// The track ending (presenter stopped sharing, or the room
-		// disconnected) is the only signal that a trailing partial
+		// The session ending is the only signal that a trailing partial
 		// fragment needs flushing; without this, whatever accumulated
-		// since the last part boundary is silently lost.
+		// since the last part boundary is silently lost. (A track ending
+		// mid-session is a presenter between two shares, not an end.)
 		OnVideoTrackEnded: sess.Finish,
 	})
 	if err != nil {

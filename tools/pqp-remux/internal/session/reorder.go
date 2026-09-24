@@ -125,6 +125,16 @@ func newReorderBuffer(holdMax time.Duration) *reorderBuffer {
 	return &reorderBuffer{pending: make(map[uint16]pendingPacket), holdMax: holdMax, maxPending: reorderMaxPending}
 }
 
+// resetSource drops every held packet and the sequence number the buffer
+// was waiting for, so a new RTP stream (a republished screen track, with its
+// own sequence space) starts clean instead of being judged against the old
+// one's numbers. The counters stay: the stats line prints their deltas.
+func (r *reorderBuffer) resetSource() {
+	r.have = false
+	r.next = 0
+	r.pending = make(map[uint16]pendingPacket)
+}
+
 // holding reports whether any packet is waiting behind a hole. While one
 // is, the frame the hole belongs to is unknown and could be older than
 // every packet held, which is why the part deadline (deadlineTick) does

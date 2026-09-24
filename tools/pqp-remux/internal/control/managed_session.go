@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
@@ -47,6 +48,14 @@ type ManagedSession struct {
 	lastHealth  PipelineHealth
 	haveHealth  bool
 	bytesServed atomic.Uint64
+	// presenterIdentity is who the session follows: the start request's,
+	// then the latest rebind's. Guarded by mu, and handed to every pipeline
+	// a watchdog restart builds, so a restart never binds the identity the
+	// presenter had before they reconnected.
+	presenterIdentity string
+	// rebindsBefore is the screen-track rebinds earlier pipelines of this
+	// session made, so GET /sessions counts them across a restart.
+	rebindsBefore atomic.Uint64
 
 	wdMu sync.Mutex
 	wd   watchdogState
@@ -80,6 +89,8 @@ func newManagedSession(ctx context.Context, req StartSessionRequest, startedAtMs
 		PliPaceMs:      req.PliPaceMs,
 		PliGateFactor:  req.PliGateFactor,
 		Global:         global,
+
+		PresenterIdentity: req.PresenterIdentity,
 	}
 	// ONE INDEX PER SESSION, built here rather than in the factory, because
 	// the factory runs again on every watchdog restart and the replay is the
@@ -108,6 +119,7 @@ func newManagedSession(ctx context.Context, req StartSessionRequest, startedAtMs
 		factory:           factory,
 		watchdogCfg:       watchdogCfg,
 		current:           p,
+		presenterIdentity: req.PresenterIdentity,
 		pipelineStartedAt: time.Now(),
 		stopCh:            make(chan struct{}),
 		wdDone:            make(chan struct{}),
@@ -229,9 +241,13 @@ func (m *ManagedSession) restart() {
 	m.mu.Unlock()
 
 	cfg := m.cfg
+	m.mu.Lock()
+	cfg.PresenterIdentity = m.presenterIdentity
+	m.mu.Unlock()
 	if old != nil {
 		old.Close()
 		oldHealth := old.Health()
+		m.rebindsBefore.Add(oldHealth.VideoRebinds)
 		cfg.StartVideoSegmentIndex = oldHealth.VideoSegmentIndex + 1
 		cfg.StartAudioSegmentIndex = oldHealth.AudioSegmentIndex + 1
 		// And the same handoff one level down, for PART names. Segment
@@ -271,6 +287,44 @@ func (m *ManagedSession) restart() {
 // removes it from the registry. The last real Health() this session ever
 // reported is cached so GET /sessions still shows meaningful counters for
 // a demoted session rather than resetting to zero.
+// errSessionDemoted is Rebind's answer for a session the watchdog already
+// gave up on: there is no pipeline to rebind, and pqp-api's demotion sweep
+// owns what happens next.
+var errSessionDemoted = errors.New("session is demoted")
+
+// Rebind makes the session follow identity from now on: pqp-api's answer to
+// the same presenter coming back under a new peer id (a reconnect that could
+// not resume), and its nudge when it sees the presenter's screen track
+// replaced. Everything that makes the session the SAME session is kept: the
+// id, the R2 prefix, part and segment numbering, the PROGRAM-DATE-TIME
+// anchor, the replay index. Only the screen-share track the subscriber reads
+// changes (internal/subscriber's binder). The result is RebindResponse's.
+//
+// A pipeline that cannot rebind (a test fake) answers "unsupported"; one
+// between the two halves of a watchdog restart answers "pending", and the
+// replacement is built following identity.
+func (m *ManagedSession) Rebind(identity string) (string, error) {
+	if m.demoted.Load() {
+		return "", errSessionDemoted
+	}
+	m.mu.Lock()
+	previous := m.presenterIdentity
+	m.presenterIdentity = identity
+	p := m.current
+	m.mu.Unlock()
+
+	result := "pending"
+	if p != nil {
+		if r, ok := p.(Rebinder); ok {
+			result = r.Rebind(identity)
+		} else {
+			result = "unsupported"
+		}
+	}
+	log.Printf("pqp-remux: control: session %s: rebind presenter %q -> %q: %s", m.req.SessionID, previous, identity, result)
+	return result, nil
+}
+
 func (m *ManagedSession) demote(reason string) {
 	m.demoted.Store(true)
 	m.demotedReason.Store(reason)
@@ -381,6 +435,13 @@ func (m *ManagedSession) Info() SessionInfo {
 		info.AudioHealth = AudioHealth{Enabled: h.AudioEnabled, Dead: h.AudioDead, Restarts: h.AudioRestarts}
 	}
 
+	m.mu.Lock()
+	info.PresenterIdentity = m.presenterIdentity
+	m.mu.Unlock()
+	info.VideoRebinds = m.rebindsBefore.Load()
+	if haveHealth {
+		info.VideoRebinds += h.VideoRebinds
+	}
 	info.BytesServed = m.bytesServed.Load()
 	info.State = m.stateFor(p, info.Demoted)
 	return info

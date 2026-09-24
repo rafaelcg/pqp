@@ -3,6 +3,10 @@
 // caller. It never decodes a frame: this is the WebRTC plumbing L1.1 calls
 // for, everything downstream of an *rtp.Packet is internal/h264 and
 // internal/pipeline's job.
+//
+// Which screen-share track feeds the caller is binder.go's decision, and it
+// can change inside one session (a republish, a presenter back under a new
+// identity): see Handlers.OnVideoSourceChanged and Session.SetPresenter.
 package subscriber
 
 import (
@@ -35,6 +39,11 @@ type Config struct {
 	// spanning an all-day stream never needs a mid-session reconnect just
 	// because its own token expired.
 	TokenTTL time.Duration
+	// PresenterIdentity is the LiveKit identity (a pqp peer id) whose screen
+	// share this session shows. Empty means "whoever shares first, and then
+	// that same person", which is what every session did before pqp-api
+	// started naming one. See binder.go.
+	PresenterIdentity string
 }
 
 // AudioSink receives one dynamically-discovered stage microphone's RTP
@@ -54,35 +63,47 @@ type Handlers struct {
 	// this in as one stage source, keyed "screen" by the caller — see
 	// internal/session).
 	OnAudioPacket func(pkt *rtp.Packet)
-	// OnVideoTrackFound/OnAudioTrackFound fire once, when the presenter's
-	// screen-share publication is subscribed, before any packet callback:
-	// this is where a caller building an idr-log or a keyframe requester
-	// gets the participant + track handle it needs.
+	// OnVideoTrackFound/OnAudioTrackFound fire every time a screen-share
+	// track is BOUND (the first, and each replacement), before any of its
+	// packets: this is where a caller building an idr-log or a keyframe
+	// requester gets the participant + track handle it needs.
 	OnVideoTrackFound func(s *Session)
 	OnAudioTrackFound func(s *Session)
+	// OnVideoSourceChanged fires, with no video packet in flight, every
+	// time the bound screen-share video track changes to another one:
+	// the packets OnVideoPacket receives after it come from a different RTP
+	// stream (new SSRC, new sequence numbers, a new timestamp base) than
+	// the ones before. internal/session.Session.BeginVideoSource is what
+	// production passes. It also fires for the session's first track; the
+	// callee tells the two apart. Nil is fine for a caller that only ever
+	// expects one stream.
+	OnVideoSourceChanged func()
+	// OnScreenAudioChanged is OnVideoSourceChanged's twin for the
+	// screen-share audio track (internal/session.Session.ReplaceScreenAudio).
+	// It fires only for a replacement, not for the first audio track.
+	OnScreenAudioChanged func()
 	// OnMicTrackFound fires once per participant microphone publication
 	// subscribed: every stage speaker's microphone, not just the
 	// presenter's. LiveKit's own SPEAK grant is what gates who can
 	// publish a microphone at all (liveKitPublishGrant, server-side), so
-	// every mic track this process ever sees already is a stage speaker —
-	// the same reasoning isScreenShareVideo's doc comment gives for not
-	// re-checking authorization on the screen share. identity is the
-	// publishing participant's LiveKit identity (their peer id), stable
-	// for that publication's lifetime. Unlike the screen-share slots
-	// above, multiple microphones may be found concurrently; each gets
-	// its own AudioSink and its own RTP-reading goroutine. A nil
-	// OnMicTrackFound (the idr-log mode's Handlers never sets it) means
-	// every microphone track is drained and discarded, matching how a nil
-	// per-packet callback already behaves elsewhere in this file.
+	// every mic track this process ever sees already is a stage speaker.
+	// identity is the publishing participant's LiveKit identity (their peer
+	// id), stable for that publication's lifetime. Multiple microphones may
+	// be found concurrently; each gets its own AudioSink and its own
+	// RTP-reading goroutine. A nil OnMicTrackFound means every microphone
+	// track is drained and discarded.
 	OnMicTrackFound func(identity string) AudioSink
-	// OnVideoTrackEnded fires once the screen-share video track's RTP read
-	// loop returns (the publisher stopped sharing, or the room
-	// disconnected): the caller's only signal to flush a trailing partial
-	// CMAF fragment (session.Session.Finish exists for exactly this).
-	// There is no equivalent for screen-share audio or a microphone: the
-	// audio pipeline has no per-fragment "trailing partial" to flush the
-	// way the video muxer does (see internal/pipeline.AudioFragmenter's
-	// doc comment), only a mix that keeps running with one fewer source.
+	// OnVideoTrackEnded fires ONCE, when the session closes (Session.Close),
+	// if any screen-share video track was ever bound: the caller's signal to
+	// flush a trailing partial CMAF fragment (session.Session.Finish exists
+	// for exactly this).
+	//
+	// It used to fire when the bound track's read loop returned, which was
+	// also the end of the session in practice, because nothing was ever
+	// bound after it. Now a track ending mid-session is a presenter between
+	// two shares, and flushing the fragmenter there would end a segment the
+	// replacement has to continue; the keep-alive publishes the held frame
+	// in the meantime (internal/session's idleTick).
 	OnVideoTrackEnded func()
 }
 
@@ -96,60 +117,66 @@ type videoBinding struct {
 	pub         *lksdk.RemoteTrackPublication
 }
 
+// screenTrack is one subscribed screen-share publication, bound or not.
+type screenTrack struct {
+	participant *lksdk.RemoteParticipant
+	pub         *lksdk.RemoteTrackPublication
+}
+
 // Session is a live hidden-subscriber connection to one room.
 type Session struct {
 	room *lksdk.Room
+	cfg  Config
+	h    Handlers
 
-	// video is set exactly once, by whichever screen-share video track is
-	// subscribed first (see Connect's OnTrackSubscribed): a second
-	// concurrent screen share in the same room must not be allowed to
-	// rebind it, since Session.HandleVideoPacket's depacketizer/fragmenter
-	// pair assumes a single RTP source (interleaving two streams into one
-	// depacketizer produces invalid fragments). This matches how the
-	// conventional Track Composite egress already picks a presenter
-	// (`pickHlsSharer` in hls-egress.ts: sharing state, not a
-	// server-held identity, is the authorization signal throughout pqp's
-	// screen-share code) — L1.5's API control plane is where a
-	// designated-presenter concept, if ever needed, would be added.
+	// mu guards the binder and the tracks map: which screen-share tracks
+	// exist and which of them is bound. Never held while a packet is
+	// delivered.
+	mu     sync.Mutex
+	b      *binder
+	tracks map[string]screenTrack
+
+	// switchMu is what makes a rebind atomic with respect to packets.
+	// Every screen-share reader holds it for READ around one packet's
+	// check-and-deliver; a rebind holds it for WRITE while it changes the
+	// bound sid AND tells the caller (OnVideoSourceChanged), so no packet
+	// of the old track can reach OnVideoPacket after the caller has been
+	// told the stream changed, and none of the new one before. Lock order:
+	// mu, then switchMu, then whatever the callbacks take
+	// (internal/session's videoMu); a reader holds only switchMu.
+	switchMu    sync.RWMutex
+	activeVideo string
+	activeAudio string
+
+	// video is the bound screen share, for RequestKeyframe/VideoSSRC.
 	video atomic.Pointer[videoBinding]
+	// videoEverBound says OnVideoTrackEnded is owed at Close.
+	videoEverBound atomic.Bool
+	rebinds        atomic.Uint64
+	// audioEverBound says a screen-share audio track has been bound before,
+	// so the next one is a replacement (OnScreenAudioChanged). Guarded by mu.
+	audioEverBound bool
 
-	// audioBound guards the same single-track invariant for the
-	// screen-share audio track, so two concurrent audio publications
-	// cannot both start a reader against the caller's OnAudioPacket.
-	audioBound atomic.Bool
-
-	// closeMu pairs "am I closed" with "register a video reader" into one
-	// atomic decision, closing a second race Farol caught on the first
-	// version of this fix (PR #584, round 2): that version called
-	// videoWG.Add(1) with no synchronization against Close at all, so
-	// Add could run concurrently with a Wait that was observing a zero
-	// counter -- both a documented WaitGroup misuse (the race detector
-	// catches it: "WaitGroup misuse: Add called concurrently with Wait")
-	// and, depending on scheduling, a Close that sailed through Wait
-	// before the video reader it should have waited for had even
-	// started. See Close's own doc comment for the ordering this field
-	// now guarantees instead.
+	// closeMu pairs "am I closed" with "register a screen-share reader"
+	// into one atomic decision (Farol review round 2, PR #584): readersWG.Add
+	// runs under it, strictly before Close's Wait can observe a zero
+	// counter, or never at all once closed is set.
 	closeMu sync.Mutex
-	// closed is set under closeMu by Close, before Disconnect and before
-	// Wait -- see Close's doc comment. Read under closeMu by
-	// OnTrackSubscribed's video case before it registers a reader.
-	closed bool
-	// videoWG is held for the video track's entire readRTP call: Add(1)
-	// runs (under closeMu, see above) in OnTrackSubscribed's video case,
-	// strictly before that case starts readRTP, and Done() runs only
-	// after readRTP returns -- which itself only happens after it has
-	// already called Handlers.OnVideoTrackEnded (session.Session.Finish
-	// in production). Close waits on it after disconnecting, which is
-	// what makes "the video track has fully ended, including its caller
-	// callback" something Close's RETURN can be trusted to mean, instead
-	// of merely "disconnect was requested" -- see Close's own doc
-	// comment for the race this closes (Farol review, PR #584).
-	videoWG sync.WaitGroup
+	closed  bool
+	// readersWG is held for every screen-share reader's entire read loop.
+	// Close waits on it after disconnecting, and only then fires
+	// OnVideoTrackEnded, which is what makes "Close returned" mean "the
+	// video track's teardown, callback included, is fully done" (Farol
+	// review, PR #584; restart() in internal/control reads the old
+	// pipeline's final indices the instant Close returns).
+	readersWG   sync.WaitGroup
+	endedOnce   sync.Once
+	onEndedHook func()
 }
 
-// VideoSSRC returns the subscribed screen-share video track's SSRC, for a
+// VideoSSRC returns the bound screen-share video track's SSRC, for a
 // caller that wants to send a PLI directly (see RequestKeyframe, which does
-// this for you); ok is false before the track is found.
+// this for you); ok is false while nothing is bound.
 func (s *Session) VideoSSRC() (webrtc.SSRC, bool) {
 	b := s.video.Load()
 	if b == nil || b.pub == nil {
@@ -162,9 +189,9 @@ func (s *Session) VideoSSRC() (webrtc.SSRC, bool) {
 	return track.SSRC(), true
 }
 
-// RequestKeyframe sends one RTCP PLI for the subscribed screen-share video
+// RequestKeyframe sends one RTCP PLI for the bound screen-share video
 // track: the only lever section 3 of the plan found for asking a WebRTC
-// publisher for an IDR. A no-op before the track is found.
+// publisher for an IDR. A no-op while nothing is bound.
 func (s *Session) RequestKeyframe() {
 	b := s.video.Load()
 	if b == nil || b.participant == nil {
@@ -177,62 +204,64 @@ func (s *Session) RequestKeyframe() {
 	b.participant.WritePLI(ssrc)
 }
 
-// Close disconnects from the room and waits for the video track's readRTP
-// goroutine to fully finish -- including having already called
-// Handlers.OnVideoTrackEnded -- before returning. Safe to call more than
-// once (the second call's Wait returns immediately: videoWG's counter is
-// already back at zero, and closed is already true so no third reader can
-// ever register after the first Close).
-//
-// This closes a real race Farol caught in review (PR #584): a caller that
-// tears an old pipeline down and then immediately reads its Health() (see
-// managed_session.go's restart, which does exactly this to compute the
-// replacement's starting segment index) used to be able to observe
-// session.Session's fragmenter mid-flush. Disconnect makes the room's
-// track end, but the goroutine that notices that and calls
-// OnVideoTrackEnded is the LiveKit SDK's own track-subscription dispatch
-// goroutine (see readRTP's doc comment: it "blocks reading RTP packets...
-// until the track ends... then calls onEnded"), which this call was never
-// joined with before -- Disconnect returning said nothing about whether
-// that goroutine, and the Session.Finish it runs, had reached its own end
-// yet. A slow or merely-not-yet-scheduled Finish could still be flushing
-// the trailing fragment (advancing the very segment index restart() was
-// about to read) after Close had already returned. videoWG makes "Close
-// returned" and "the video track's own teardown, callback included, is
-// fully done" the same fact: Wait cannot return before Done does, and
-// Done runs only after OnVideoTrackEnded has already returned.
+// Rebinds is how many times the bound screen-share video track was replaced
+// by another inside this session (the first bind is not counted).
+func (s *Session) Rebinds() uint64 { return s.rebinds.Load() }
+
+// BindResult is SetPresenter's answer.
+type BindResult string
+
+const (
+	// BindUnchanged: the presenter's newest screen track was already bound.
+	BindUnchanged BindResult = "unchanged"
+	// BindBound: a screen track from the presenter was bound by this call.
+	BindBound BindResult = "bound"
+	// BindWaiting: the presenter has no screen track in the room yet; it is
+	// bound the moment one is subscribed, and whatever is showing keeps
+	// showing until then.
+	BindWaiting BindResult = "waiting"
+)
+
+// SetPresenter names the identity this session follows from now on and
+// binds that identity's newest screen share if one is already subscribed:
+// POST /sessions/:id/rebind, for a presenter who came back under a new peer
+// id. Idempotent.
+func (s *Session) SetPresenter(identity string) BindResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	before := s.b.activeVideo
+	s.b.setPresenter(identity)
+	s.reconcileLocked()
+	after := s.b.activeVideo
+	switch {
+	case after == "" || s.b.identityOf(after) != identity:
+		return BindWaiting
+	case after == before:
+		return BindUnchanged
+	default:
+		return BindBound
+	}
+}
+
+// Presenter is the identity currently followed ("" before any is named and
+// before a first track was bound).
+func (s *Session) Presenter() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.target()
+}
+
+// Close disconnects from the room, waits for every screen-share reader to
+// finish, and then -- once, and only if a screen-share video track was ever
+// bound -- calls Handlers.OnVideoTrackEnded, before returning. Safe to call
+// more than once.
 //
 // closed is set FIRST, under closeMu, before Disconnect and before Wait
-// (Farol review round 2, PR #584 -- the first version of this fix called
-// videoWG.Add(1) with no synchronization against Close at all, which the
-// race detector flags directly as "Add called concurrently with Wait" and
-// which could also let Close's Wait observe a zero counter and return
-// before a video track that was subscribing AT THAT EXACT MOMENT ever
-// got the chance to register). OnTrackSubscribed's video case takes the
-// SAME mutex before it decides whether to start a reader at all: if closed
-// is already true, it returns without binding a track or calling Add,
-// full stop -- a video track discovered after Close has begun is simply
-// never read, not read-then-raced. If closed is still false, it calls
-// Add(1) WHILE STILL HOLDING closeMu, and only then releases it and starts
-// readRTP. Because closeMu enforces one total order between "Close begins"
-// and "a reader registers," every Add is now provably either fully
-// complete before Wait is ever called (the reader's critical section ran
-// first) or never happens at all (Close's critical section ran first) --
-// exactly the happens-before relationship sync.WaitGroup's own contract
-// requires of a caller that Adds while the counter could be zero.
+// (Farol review round 2, PR #584): a reader registers (readersWG.Add) under
+// the same mutex, so every Add either fully precedes Wait or never happens.
 //
-// A video track that never bound at all (e.g. Close called on a session
-// still in its StateWaiting phase, before any presenter ever shared) means
-// videoWG's counter was never incremented, so Wait returns immediately --
-// this never blocks callers with nothing to wait for.
-//
-// Do not call Close from inside Handlers.OnVideoTrackEnded or
-// Handlers.OnVideoPacket (or anything else readRTP invokes for the video
-// track): that callback runs ON the goroutine whose Done Close is waiting
-// for, so Close would wait on its own caller and never return. No handler
-// in this codebase does this today (session.Session.Finish and the
-// idr-log mode's closeReaderDone both only ever touch session/local
-// state), and it is not a pattern this package needs to support.
+// Do not call Close from inside a Handlers callback that a reader invokes:
+// it would wait on its own caller.
 func (s *Session) Close() {
 	s.closeMu.Lock()
 	s.closed = true
@@ -241,17 +270,34 @@ func (s *Session) Close() {
 	if s.room != nil {
 		s.room.Disconnect()
 	}
-	s.videoWG.Wait()
+	s.readersWG.Wait()
+	if s.videoEverBound.Load() {
+		s.endedOnce.Do(func() {
+			if s.onEndedHook != nil {
+				s.onEndedHook()
+			}
+		})
+	}
 }
 
 var errMissingConfig = errors.New("subscriber: URL, APIKey, APISecret and Room are all required")
+
+func newSession(cfg Config, h Handlers) *Session {
+	return &Session{
+		cfg:         cfg,
+		h:           h,
+		b:           newBinder(cfg.PresenterIdentity),
+		tracks:      make(map[string]screenTrack),
+		onEndedHook: h.OnVideoTrackEnded,
+	}
+}
 
 // Connect joins cfg.Room as a hidden (Hidden: true), publish-nothing,
 // subscribe-only participant, and wires h up to the presenter's
 // screen-share video track and (if present) its screen-share audio track.
 // It returns once the room connection itself succeeds; tracks are found
 // asynchronously as OnTrackSubscribed fires; h.OnVideoTrackFound tells the
-// caller when that has happened.
+// caller when one has been bound.
 func Connect(cfg Config, h Handlers) (*Session, error) {
 	if cfg.URL == "" || cfg.APIKey == "" || cfg.APISecret == "" || cfg.Room == "" {
 		return nil, errMissingConfig
@@ -262,77 +308,21 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 		return nil, fmt.Errorf("subscriber: building the hidden-subscriber token: %w", err)
 	}
 
-	sess := &Session{}
+	sess := newSession(cfg, h)
 
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		switch {
-		case isScreenShareVideo(pub):
-			// closeMu pairs "is this session already closed" with "Add
-			// a video reader" into one atomic decision (Farol review
-			// round 2, PR #584): the whole bind-check-and-Add below
-			// runs under the SAME mutex Close takes to set closed
-			// before it Waits, so this either completes entirely
-			// before Close's Wait can observe it (Add happens-before
-			// Wait, satisfying sync.WaitGroup's own contract) or never
-			// runs at all (closed was already true) -- never
-			// concurrently with Wait, and never after Wait has already
-			// returned on a zero counter. See Close's own doc comment.
-			sess.closeMu.Lock()
-			if sess.closed {
-				sess.closeMu.Unlock()
-				return
+		case isScreenShareVideo(pub), isScreenShareAudio(pub):
+			sid := pub.SID()
+			if sid == "" {
+				sid = track.ID()
 			}
-			bound := sess.video.CompareAndSwap(nil, &videoBinding{participant: rp, pub: pub})
-			if !bound {
-				sess.closeMu.Unlock()
-				log.Printf("subscriber: ignoring an additional screen-share video track from %q in room %q; already bound to a presenter", rp.Identity(), cfg.Room)
-				return
+			read := func() (*rtp.Packet, error) {
+				pkt, _, err := track.ReadRTP()
+				return pkt, err
 			}
-			// Add still under closeMu -- released only once Add has
-			// already run, per the ordering the doc comment above
-			// describes; readRTP itself (and the caller callbacks it
-			// invokes) run with the lock released, so a long-running
-			// handler never blocks Close's own Lock/Unlock.
-			sess.videoWG.Add(1)
-			sess.closeMu.Unlock()
-			defer sess.videoWG.Done()
-			// PIN THE TOP SIMULCAST LAYER. A watch-party screen share is
-			// published as simulcast with dynacast on (client
-			// livekit-session.ts), and this is a passive "hidden" subscriber
-			// that otherwise expresses no quality preference. With dynacast,
-			// the SFU pauses or downgrades any layer no subscriber has asked
-			// for at HIGH, so whichever layer it settles on is what this
-			// subscriber is fed -- and it flips between layers, changing the
-			// resolution (and therefore the H.264 parameter set) under us.
-			// Every flip is a new init segment, and an HLS viewer's decoder
-			// dies on that churn (production channel d5559e70, 2026-09-16: 11
-			// resolution changes -- 720p/360p/270p -- in 46 minutes, viewers
-			// getting MEDIA_ERR_DECODE while the box itself was healthy).
-			// Asking for HIGH keeps the top, size-pinned layer (client PR
-			// #475's maintain-resolution + scaleResolutionDownBy 1) always
-			// live and forwarded, so the remux is fed ONE stable resolution
-			// and never a layer switch. Best-effort: a non-simulcast track
-			// (a single layer, nothing to choose) makes this a harmless no-op
-			// on the SFU side, so a failure here is logged, not fatal.
-			if err := pub.SetVideoQuality(livekit.VideoQuality_HIGH); err != nil {
-				log.Printf("subscriber: could not pin screen-share to HIGH quality in room %q: %v", cfg.Room, err)
-			} else {
-				log.Printf("subscriber: pinned screen-share subscription to HIGH (top simulcast layer) in room %q", cfg.Room)
-			}
-			if h.OnVideoTrackFound != nil {
-				h.OnVideoTrackFound(sess)
-			}
-			readRTP(track, h.OnVideoPacket, h.OnVideoTrackEnded)
-		case isScreenShareAudio(pub):
-			if !sess.audioBound.CompareAndSwap(false, true) {
-				log.Printf("subscriber: ignoring an additional screen-share audio track from %q in room %q; already bound", rp.Identity(), cfg.Room)
-				return
-			}
-			if h.OnAudioTrackFound != nil {
-				h.OnAudioTrackFound(sess)
-			}
-			readRTP(track, h.OnAudioPacket, nil)
+			sess.readScreenTrack(sid, rp.Identity(), screenTrack{participant: rp, pub: pub}, read, isScreenShareVideo(pub))
 		case isMicrophone(pub):
 			if h.OnMicTrackFound == nil {
 				readRTP(track, nil, nil) // drain and discard; see Handlers.OnMicTrackFound's doc comment
@@ -351,14 +341,161 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 	return sess, nil
 }
 
+// readScreenTrack runs one screen-share track (video or audio) for as long
+// as it is published: registers it with the binder, reads every packet and
+// delivers the ones from the bound track, and on the way out lets the binder
+// pick whatever should be bound instead. Every screen-share track is read,
+// bound or not, so a replacement is already flowing the moment it is chosen
+// and an unbound one never backs a receive buffer up.
+//
+// read is the track's ReadRTP; a function rather than the *webrtc.TrackRemote
+// so the switching can be tested without a room (rebind_test.go).
+func (s *Session) readScreenTrack(sid, identity string, st screenTrack, read func() (*rtp.Packet, error), video bool) {
+	s.closeMu.Lock()
+	if s.closed {
+		s.closeMu.Unlock()
+		return
+	}
+	s.readersWG.Add(1)
+	s.closeMu.Unlock()
+	defer s.readersWG.Done()
+
+	s.mu.Lock()
+	s.tracks[sid] = st
+	if video {
+		s.b.addVideo(sid, identity)
+	} else {
+		s.b.addAudio(sid, identity)
+	}
+	s.reconcileLocked()
+	s.mu.Unlock()
+
+	deliver := s.h.OnAudioPacket
+	if video {
+		deliver = s.h.OnVideoPacket
+	}
+	for {
+		pkt, err := read()
+		if err != nil {
+			break
+		}
+		s.switchMu.RLock()
+		bound := s.activeAudio == sid
+		if video {
+			bound = s.activeVideo == sid
+		}
+		if bound && deliver != nil {
+			deliver(pkt)
+		}
+		s.switchMu.RUnlock()
+	}
+
+	s.closeMu.Lock()
+	closing := s.closed
+	s.closeMu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wasBound := s.b.activeVideo == sid || s.b.activeAudio == sid
+	delete(s.tracks, sid)
+	s.b.remove(sid)
+	if closing {
+		// The session is being torn down and every track is ending with
+		// it: nothing is to be bound in anything's place.
+		return
+	}
+	if wasBound {
+		kind := "audio"
+		if video {
+			kind = "video"
+		}
+		log.Printf("subscriber: bound screen-share %s track %s from %q ended in room %q; waiting for a replacement", kind, sid, identity, s.cfg.Room)
+	}
+	s.reconcileLocked()
+}
+
+// reconcileLocked applies the binder's answer: switches the bound video
+// and audio track when it changed, with no packet of either in flight, and
+// then does the per-bind work (pin the top simulcast layer, ask for a
+// keyframe, tell the caller). Called with mu held.
+func (s *Session) reconcileLocked() {
+	wantV, wantA := s.b.desired()
+	s.b.bind(wantV, wantA)
+	videoChanged := wantV != s.activeVideo
+	audioChanged := wantA != s.activeAudio
+	if !videoChanged && !audioChanged {
+		return
+	}
+	newV := s.tracks[wantV]
+	firstVideo := !s.videoEverBound.Load()
+	audioReplaced := audioChanged && wantA != "" && s.audioEverBound
+
+	s.switchMu.Lock()
+	s.activeVideo, s.activeAudio = wantV, wantA
+	if videoChanged {
+		if wantV != "" {
+			s.video.Store(&videoBinding{participant: newV.participant, pub: newV.pub})
+			if s.h.OnVideoSourceChanged != nil {
+				s.h.OnVideoSourceChanged()
+			}
+		} else {
+			s.video.Store(nil)
+		}
+	}
+	if audioReplaced && s.h.OnScreenAudioChanged != nil {
+		s.h.OnScreenAudioChanged()
+	}
+	s.switchMu.Unlock()
+
+	if audioChanged && wantA != "" {
+		s.audioEverBound = true
+		log.Printf("subscriber: bound screen-share audio track %s from %q in room %q (replacement=%t)", wantA, s.b.identityOf(wantA), s.cfg.Room, audioReplaced)
+		if s.h.OnAudioTrackFound != nil {
+			s.h.OnAudioTrackFound(s)
+		}
+	}
+	if !videoChanged || wantV == "" {
+		return
+	}
+	s.videoEverBound.Store(true)
+	n := uint64(0)
+	if !firstVideo {
+		n = s.rebinds.Add(1)
+	}
+	log.Printf("subscriber: bound screen-share video track %s from %q in room %q (rebind %d)", wantV, s.b.identityOf(wantV), s.cfg.Room, n)
+	// PIN THE TOP SIMULCAST LAYER. A watch-party screen share is
+	// published as simulcast with dynacast on (client
+	// livekit-session.ts), and this is a passive "hidden" subscriber that
+	// otherwise expresses no quality preference. With dynacast, the SFU
+	// pauses or downgrades any layer no subscriber has asked for at HIGH,
+	// so whichever layer it settles on is what this subscriber is fed --
+	// and it flips between layers, changing the resolution (and therefore
+	// the H.264 parameter set) under us. Every flip is a new init segment,
+	// and an HLS viewer's decoder dies on that churn (production channel
+	// d5559e70, 2026-09-16: 11 resolution changes in 46 minutes). Asking
+	// for HIGH keeps the top, size-pinned layer always live and
+	// forwarded. Best-effort: a non-simulcast track makes this a harmless
+	// no-op on the SFU side, so a failure here is logged, not fatal. Every
+	// bound track needs it, a replacement as much as the first.
+	if newV.pub != nil {
+		if err := newV.pub.SetVideoQuality(livekit.VideoQuality_HIGH); err != nil {
+			log.Printf("subscriber: could not pin screen-share to HIGH quality in room %q: %v", s.cfg.Room, err)
+		}
+	}
+	if s.h.OnVideoTrackFound != nil {
+		s.h.OnVideoTrackFound(s)
+	}
+	// A replacement's first keyframe is what the session is waiting for;
+	// the SFU asks the publisher for one on a new subscription anyway, and
+	// one PLI more costs nothing.
+	s.RequestKeyframe()
+}
+
 // readRTP blocks reading RTP packets off track and forwards each to cb,
-// until the track ends (the publisher stopped sharing, or the session
-// disconnected), then calls onEnded exactly once if it is non-nil. It is
-// meant to run in its own goroutine, one per subscribed track; Connect
-// starts it directly rather than handing the caller a raw
-// *webrtc.TrackRemote; a nil cb still drains the track so a caller that
-// only wants the video (no OnAudioPacket set) does not leave a buffer
-// filling up unread.
+// until the track ends (the publisher stopped publishing, or the session
+// disconnected), then calls onEnded exactly once if it is non-nil. Used for
+// microphones; screen-share tracks go through readScreenTrack. A nil cb
+// still drains the track so an unread buffer never fills up.
 func readRTP(track *webrtc.TrackRemote, cb func(*rtp.Packet), onEnded func()) {
 	for {
 		pkt, _, err := track.ReadRTP()

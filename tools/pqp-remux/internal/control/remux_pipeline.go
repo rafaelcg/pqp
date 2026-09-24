@@ -145,12 +145,19 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 		APIKey:    global.LiveKitAPIKey,
 		APISecret: global.LiveKitAPISec,
 		Room:      cfg.Room,
+		// Who to follow through every republish; see internal/subscriber's
+		// binder.go.
+		PresenterIdentity: cfg.PresenterIdentity,
 	}, subscriber.Handlers{
 		OnVideoTrackFound: func(*subscriber.Session) { sess.MarkSubscribed() },
 		OnVideoPacket:     sess.HandleVideoPacket,
 		OnAudioPacket:     sess.HandleAudioPacket,
-		OnMicTrackFound:   func(identity string) subscriber.AudioSink { return sess.NewMicSink(identity) },
-		OnVideoTrackEnded: sess.Finish,
+		// A republished screen continues THIS session: same ring, same
+		// numbering, same epoch. See session.Session.BeginVideoSource.
+		OnVideoSourceChanged: sess.BeginVideoSource,
+		OnScreenAudioChanged: sess.ReplaceScreenAudio,
+		OnMicTrackFound:      func(identity string) subscriber.AudioSink { return sess.NewMicSink(identity) },
+		OnVideoTrackEnded:    sess.Finish,
 	})
 	if err != nil {
 		// Nothing subscribed: tear down in the same order Close below
@@ -288,6 +295,7 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		R2LastLatencyMs:      st.R2LastLatencyMs,
 		R2MaxLatencyMs:       st.R2MaxLatencyMs,
 		DemoteReason:         p.sess.DemoteReason(),
+		VideoRebinds:         p.sess.VideoRebinds(),
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {
@@ -301,6 +309,13 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		ph.OpenSegmentOK = true
 	}
 	return ph
+}
+
+// Rebind makes the subscriber follow identity from now on, binding that
+// identity's newest screen share at once if it is already in the room. The
+// session, its ring and its numbering are untouched: that is the point.
+func (p *remuxPipeline) Rebind(identity string) string {
+	return string(p.sub.SetPresenter(identity))
 }
 
 func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.srv.ServeHTTP(w, r) }

@@ -63,6 +63,25 @@ case "$SOURCE" in
 esac
 export PART_DEADLINE_GRACE_MS="${PART_DEADLINE_GRACE_MS:-150}"
 
+# SCENARIO=republish replaces the presenter's screen track REPUBLISH_AFTER
+# seconds into the show (the same participant, a new track: what the web
+# client does on every resume after an API deploy), and SCENARIO=reconnect
+# does it under a NEW identity (a reconnect that could not resume), with this
+# script playing pqp-api's part: POST /sessions/:id/rebind naming the new
+# identity. Either way the file starts over on the new track, so the new
+# source's parameter sets differ (an init change inside the session). The run
+# is green only if the viewer passes AND the box kept the one session: it
+# logged the rebind, never restarted or demoted, and GET /sessions still
+# lists the same session with videoRebinds >= 1. See README.md "A mid-show
+# republish".
+SCENARIO="${SCENARIO:-}"
+case "$SCENARIO" in
+  "") ;;
+  republish) export REPUBLISH=track REPUBLISH_AFTER="${REPUBLISH_AFTER:-25}" ;;
+  reconnect) export REPUBLISH=identity REPUBLISH_AFTER="${REPUBLISH_AFTER:-25}" REPUBLISH_IDENTITY="${REPUBLISH_IDENTITY:-ramp-presenter-2}" ;;
+  *) echo "run.sh: SCENARIO must be republish or reconnect, got '$SCENARIO'" >&2; exit 1 ;;
+esac
+
 # Host ports, overridable so two runs (two worktrees, two agents) can share
 # one Docker host: give each its own COMPOSE_PROJECT_NAME and ports, or the
 # second run's opening `down` tears the first one's containers away.
@@ -209,7 +228,14 @@ if [ "$SOURCE" != "ramp" ]; then
   done
 fi
 
-echo "run.sh: watching for ${WATCH_SECONDS}s (cfg=${CFG} source=${SOURCE} grace=${PART_DEADLINE_GRACE_MS}ms)"
+if [ "$SCENARIO" = "reconnect" ]; then
+  # pqp-api's half of a reconnect: it sees the presenter's new peer id on the
+  # voice socket and tells the box who to follow. Sent a little before the
+  # new identity publishes, as the socket join comes first in production.
+  ( sleep "$((REPUBLISH_AFTER + 1))"; node harness/remux-ctl.mjs rebind "$SID" "$REPUBLISH_IDENTITY" > "$LOG_DIR/rebind.log" 2>&1 ) &
+fi
+
+echo "run.sh: watching for ${WATCH_SECONDS}s (cfg=${CFG} source=${SOURCE} grace=${PART_DEADLINE_GRACE_MS}ms scenario=${SCENARIO:-none})"
 SID="$SID" PARTS_DIR="$LOG_DIR/parts" node harness/lateness.mjs "$WATCH_SECONDS" > "$LOG_DIR/lateness.log" 2>&1 &
 LATENESS_PID=$!
 set +e
@@ -239,6 +265,28 @@ DAMAGE_NONZERO="$(grep -oE 'damage=\+[0-9]+' "$LOG_DIR/remuxd-full.log" 2>/dev/n
 
 VERDICT_LINE="$(grep -E '^VERDICT: ' "$LOG_DIR/hlsjs.log" || echo 'VERDICT: FAIL (no verdict line emitted)')"
 
+# --- the republish scenarios: one session, rebound, never restarted -----
+REBIND_NOTE="n/a (no SCENARIO)"
+REBIND_OK=1
+if [ -n "$SCENARIO" ]; then
+  node harness/remux-ctl.mjs list > "$LOG_DIR/sessions-after.json" 2>&1 || true
+  # grep -c prints 0 AND exits 1 on no match: `|| true`, not `|| echo 0`.
+  REBOUND_LINES="$(grep -c "video source rebound: first keyframe" "$LOG_DIR/remuxd-full.log" 2>/dev/null || true)"
+  RESTARTS="$(grep -cE "restarting \(|demoting \(" "$LOG_DIR/remuxd-full.log" 2>/dev/null || true)"
+  REBOUND_LINES="${REBOUND_LINES:-0}" RESTARTS="${RESTARTS:-0}"
+  SAME_SESSION="$(SID="$SID" node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const x = s.find((e) => e.sessionId === process.env.SID);
+    console.log(x && !x.demoted && x.videoRebinds >= 1 ? "yes" : "no");
+  ' "$LOG_DIR/sessions-after.json" 2>/dev/null || echo no)"
+  if [ "$REBOUND_LINES" != "0" ] && [ "$RESTARTS" = "0" ] && [ "$SAME_SESSION" = "yes" ]; then
+    REBIND_NOTE="kept the session (rebound x${REBOUND_LINES}, no restart or demotion, videoRebinds>=1)"
+  else
+    REBIND_NOTE="NOT kept (rebound x${REBOUND_LINES}, restarts/demotions=${RESTARTS}, same session=${SAME_SESSION})"
+    REBIND_OK=0
+  fi
+fi
+
 LOSS_EXPECTED=0
 awk "BEGIN{exit !($LOSS_PCT>0)}" && LOSS_EXPECTED=1
 
@@ -263,6 +311,7 @@ echo "   loss:              ${LOSS_PCT}%"
 echo "   room:               ${ROOM}"
 echo "   ${VERDICT_LINE}"
 echo "   remux loss defense:     ${LOSS_DEFENSE_NOTE}"
+echo "   republish (${SCENARIO:-none}):  ${REBIND_NOTE}"
 echo "   remux discard mentions: ${DISCARD_COUNT} (full log: ${LOG_DIR}/remuxd-full.log)"
 echo "   remux relevant lines:   ${LOG_DIR}/remuxd-relevant.log"
 echo "   hls.js error summary:   see ${LOG_DIR}/hlsjs.log (ERROR SUMMARY line)"
@@ -282,7 +331,11 @@ awk '/stats session/ {
     }
     seen = 0
   } END { printf "   remux counters:         deadline=%d late250=%d late500=%d lateMaxMs=%d ptsShiftMs=%s videoTimelineRatio=%s\n", d, l2, l5, m, s, r }' "$LOG_DIR/remuxd-full.log" || true
-if [ "$FINAL_STATUS" != "$VERDICT_STATUS" ]; then
+if [ "$REBIND_OK" = "0" ]; then
+  FINAL_STATUS=1
+  echo "   overall:                 FAIL (the republish did not keep the session -- see above)"
+fi
+if [ "$FINAL_STATUS" != "$VERDICT_STATUS" ] && [ "$REBIND_OK" = "1" ]; then
   echo "   overall:                 FAIL (hls.js passed but the loss defense did not fire -- see WARNING above)"
 fi
 echo "================================================================"

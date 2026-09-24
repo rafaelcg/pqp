@@ -2061,6 +2061,65 @@ monitor reads that every tick, ends the `hls_sessions` row, counts
 party's `low_latency_requested` and reconciles the channel so the rungs start.
 See `docs/plans/LL_HLS.md` §5.
 
+**A low-latency party keeps its session when the presenter republishes or
+reconnects (2026-09-24).** The LL twin of the ladder's in-place restart
+(PR #803). Until now `pqp-remux`'s subscriber bound the FIRST screen-share
+track it saw and never looked at another: a republish (the web client does one
+on every resume after an API deploy, and whenever the presenter picks
+something else to share) reached the box only through its one watchdog
+restart, a second republish in the same party demoted it to the conventional
+ladder, and a presenter back under a new peer id (a reconnect that could not
+resume) was a new LL session with a new `startedAt`. Now:
+
+- **The box follows one presenter identity** (`presenterIdentity` on
+  `POST /sessions`; LiveKit identities are peer ids) and binds that
+  identity's newest screen-share track, and its audio, whenever one appears
+  (`tools/pqp-remux/internal/subscriber/binder.go`). A replacement is bound
+  INSIDE the same session: the same ring, part and segment numbering, the same
+  epoch and so the same PROGRAM-DATE-TIME anchor, the same R2 prefix and
+  replay index (`session.Session.BeginVideoSource`). The new source's frames
+  are dropped until its first IDR, which opens a new segment; a new source
+  whose parameter sets differ publishes a new init map with a discontinuity,
+  the path #769 already built. The timeline never rewinds and never gains a
+  hole: the old source's last frame (or the keep-alive's repeat of it) covers
+  the gap. A co-host sharing at the same moment is never bound.
+- **The API rebinds rather than replaces.** The same PERSON under a new peer id
+  (`setLlPresenterIdentity`, registered by `ws/voice.ts` from its peers and
+  the voice registry) is `POST /sessions/:id/rebind` naming the new identity
+  (`rebindLlSession` in `hls-remux.ts`): same URL, same row (whose
+  `presenter_peer_id` follows), `voice.hlsLlRebound reason=presenter-reconnected`.
+  A republish under the same peer id is seen by the LL companion's track probe
+  and nudges the box the same way (`reason=screen-track-replaced`); the box has
+  normally rebound on its own by then and answers `unchanged`.
+- **What the box cannot do is said, and handled by what it could.** An older
+  box without the route (a plain-text 404) falls back to a new session, as LL
+  always did; a box that lost the session does too; a demoted session is left
+  to the demotion sweep; a control API that cannot be reached holds the
+  session and retries on the next reconcile. Each is
+  `voice.hlsLlRebindFailed` with `why` and `fallback`, and
+  `liveHls.llRebindFailuresByWhy` on the dashboard, which belongs at zero.
+  `liveHls.llRebindsTotal` / `llRebindsByReason` count the ones that worked.
+- **Across the two replicas.** A reconnect that lands on the OTHER machine
+  used to be frozen behind the old seat's 90 s resume hold on the machine that
+  owned the session, while the machine with the presenter stood down (the
+  session was owned elsewhere), and then ended for a new one. The owner now
+  looks up the same user sharing on another live machine and hands the session
+  there (`voice.hlsPresenterReconnectedElsewhere`, then #802's ordinary
+  handover); the receiving machine's resume adoption recognises the person
+  from the old seat's registry row and rebinds.
+- **The camera and the host's voice archive ride through it.** Same
+  `startedAt`, so the LL companion is kept; the camera follows its new track,
+  and "separada" moves with the reattached peer id.
+- **The replay and the film are one recording.** The VOD playlist lists every
+  segment once, in order, with the init switch; the film planner reads it as
+  one clock (an init change, not a restart).
+
+Pinned by `tools/pqp-remux/internal/{subscriber,session,pipeline,control,film}`'s
+rebind tests, `server/src/voice/hls-remux.test.ts` §"a presenter track change
+keeps the LL session", `hls-ll-companions.test.ts`, the two-machine case in
+`server/src/ws/voice-hls-rolling-deploy.test.ts`, and
+`tools/ll-loss-harness`'s `SCENARIO=republish` / `SCENARIO=reconnect`.
+
 **An LL session ending has to reach the audience the same way a conventional
 one does, and for eighteen minutes on 2026-09-15 it did not.** `pushLiveHls`
 took its "what was playing a moment ago" from `liveHlsStreamFor`, which is the

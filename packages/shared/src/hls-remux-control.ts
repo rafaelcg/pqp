@@ -158,6 +158,14 @@ export const remuxStartSessionRequestSchema = z.object({
   pliPaceMs: z.number().int().positive(),
   /** Multiple of `segmentMs` to wait with no IDR before asking. `PLI_GATE_FACTOR`. */
   pliGateFactor: z.number().positive(),
+  /**
+   * The LiveKit identity (a pqp peer id) whose screen share the session
+   * shows, followed through every republish of it. Optional: a box that
+   * predates it ignores the field and binds the first screen share it sees,
+   * and an API that does not send it gets that same behaviour from a newer
+   * box. `POST /sessions/:id/rebind` changes it mid-session.
+   */
+  presenterIdentity: z.string().min(1).max(256).optional(),
 });
 export type RemuxStartSessionRequest = z.infer<
   typeof remuxStartSessionRequestSchema
@@ -212,6 +220,10 @@ export const remuxSessionInfoSchema = z.object({
   demotedReason: z.string().nullable().optional(),
   /** How long since the last IDR, ms. Diagnostic; the box decides, not us. */
   lastIdrAgeMs: z.number().int().nonnegative().nullable().optional(),
+  /** Who the session follows now; empty before anyone was named or bound. */
+  presenterIdentity: z.string().optional(),
+  /** Screen-share tracks replaced inside this session (republish, reconnect). */
+  videoRebinds: z.number().int().nonnegative().optional(),
 });
 export type RemuxSessionInfo = z.infer<typeof remuxSessionInfoSchema>;
 
@@ -228,3 +240,45 @@ export const remuxErrorResponseSchema = z.object({
   error: z.string(),
 });
 export type RemuxErrorResponse = z.infer<typeof remuxErrorResponseSchema>;
+
+/**
+ * `POST /sessions/:id/rebind`: follow a different presenter identity inside
+ * the SAME session. `pqp-api` sends it when the same person is presenting
+ * under a new peer id (a reconnect that could not resume), and as a nudge
+ * when it sees the presenter's screen track replaced. The box keeps the
+ * session id, the R2 prefix, part and segment numbering and the
+ * PROGRAM-DATE-TIME anchor; only the track its subscriber reads changes.
+ *
+ * Answers: 200 with `remuxRebindResponseSchema`; 404 with a JSON error body
+ * for a session the box does not hold (an older box without the route
+ * answers a PLAIN-TEXT 404 instead, which is how the caller tells the two
+ * apart); 409 for a demoted session.
+ */
+export const remuxRebindRequestSchema = z.object({
+  presenterIdentity: z.string().min(1).max(256),
+});
+export type RemuxRebindRequest = z.infer<typeof remuxRebindRequestSchema>;
+
+/**
+ * `bound`: the presenter's screen track was bound by this call.
+ * `unchanged`: it already was. `waiting`: the presenter has no screen track
+ * in the room yet; it is bound the moment one appears, and the picture holds
+ * until then. `pending`: the session is between the two halves of a watchdog
+ * restart, whose replacement follows the new identity. `unsupported`: the
+ * box's pipeline cannot rebind.
+ */
+export const remuxRebindResultSchema = z.enum([
+  "bound",
+  "unchanged",
+  "waiting",
+  "pending",
+  "unsupported",
+]);
+export type RemuxRebindResult = z.infer<typeof remuxRebindResultSchema>;
+
+export const remuxRebindResponseSchema = z.object({
+  sessionId: z.string().uuid(),
+  presenterIdentity: z.string().min(1),
+  result: remuxRebindResultSchema,
+});
+export type RemuxRebindResponse = z.infer<typeof remuxRebindResponseSchema>;
