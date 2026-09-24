@@ -125,6 +125,58 @@ private fun lucideFilled(vararg paths: String) = lazy {
  */
 private object Lucide {
 
+    // First run (onboarding V2), from lucide 0.469 as the web client draws them.
+    val sparkles by lucide(
+        "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
+        "M20 3v4",
+        "M22 5h-4",
+        "M4 17v2",
+        "M5 18H3",
+    )
+    val layoutList by lucide(
+        "M4 3h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+        "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+        "M14 4h7",
+        "M14 9h7",
+        "M14 15h7",
+        "M14 20h7",
+    )
+    val link2 by lucide(
+        "M9 17H7A5 5 0 0 1 7 7h2",
+        "M15 7h2a5 5 0 1 1 0 10h-2",
+        "M8 12L16 12",
+    )
+    val copy by lucide(
+        "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
+        "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+    )
+    val share2 by lucide(
+        "M15 5a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M3 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M15 19a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M8.59 13.51L15.42 17.49",
+        "M15.41 6.51L8.59 10.49",
+    )
+    val tv by lucide(
+        "M4 7h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z",
+        "M17 2L12 7L7 2",
+    )
+    val cake by lucide(
+        "M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8",
+        "M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1",
+        "M2 21h20",
+        "M7 8v3",
+        "M12 8v3",
+        "M17 8v3",
+        "M7 4h.01",
+        "M12 4h.01",
+        "M17 4h.01",
+    )
+    val circleCheck by lucide(
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        "m9 12 2 2 4-4",
+    )
+
     val archive by lucide(
         "M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
         "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8",
@@ -359,6 +411,15 @@ private object Lucide {
  * The icon set, addressed by job.
  */
 object PqpIcons {
+    // First run.
+    val Sparkles get() = Lucide.sparkles
+    val Layout get() = Lucide.layoutList
+    val Link get() = Lucide.link2
+    val Copy get() = Lucide.copy
+    val Share get() = Lucide.share2
+    val WatchParty get() = Lucide.tv
+    val Birthday get() = Lucide.cake
+    val Done get() = Lucide.circleCheck
 
     // ---------------------------------------------------------------------
     // What the app calls things.

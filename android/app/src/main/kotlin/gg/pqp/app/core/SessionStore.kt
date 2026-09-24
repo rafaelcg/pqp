@@ -8,7 +8,28 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import gg.pqp.app.onboarding.markOnboarded
 import okhttp3.OkHttpClient
+
+/**
+ * The room first run opens when it hands over, and how to greet the person
+ * there. [inviteCode] is the organizer's fresh invite, for the owner banner's
+ * copy button; null for everybody else.
+ */
+data class Landing(
+    val serverId: String,
+    val serverName: String,
+    val kind: Kind,
+    val inviteCode: String? = null,
+) {
+    enum class Kind {
+        /** Arrived on an invite (the link, or the room step's invite door). */
+        Arrived,
+
+        /** Made the room during first run. */
+        Owner,
+    }
+}
 
 /**
  * Which screen the app is allowed to be on.
@@ -80,6 +101,27 @@ class SessionStore(
 
     private var restoreJob: Job? = null
 
+    /**
+     * Whether the account sitting at the age gate will be shown the wizard
+     * after it, so the gate can draw the right number of dots. Read from the
+     * same `/api/me` that sent the phase there.
+     */
+    @Volatile
+    var gateLeadsToOnboarding: Boolean = true
+        private set
+
+    /**
+     * Where the app should open the moment first run hands over: the room an
+     * invite joined, or the one the organizer just made. Consumed once by the
+     * signed-in navigation, which also draws the arrival banner from it.
+     */
+    private val _landing = MutableStateFlow<Landing?>(null)
+    val landing: StateFlow<Landing?> = _landing.asStateFlow()
+
+    fun consumeLanding() {
+        _landing.value = null
+    }
+
     fun useDevAccount(suffix: String? = null) {
         tokens = DevTokenProvider(suffix)
         restore()
@@ -112,7 +154,10 @@ class SessionStore(
                     refreshServers()
                 }
                 "blocked" -> _phase.value = SessionPhase.Blocked(me.ageGate)
-                else -> _phase.value = SessionPhase.AgeGate
+                else -> {
+                    gateLeadsToOnboarding = gg.pqp.app.onboarding.shouldRunOnboarding(me)
+                    _phase.value = SessionPhase.AgeGate
+                }
             }
         }
     }
@@ -122,6 +167,39 @@ class SessionStore(
             runCatching { api.submitAgeCheck(dateOfBirth) }
                 .onSuccess { restore() }
                 .onFailure { onError(it.message.orEmpty()) }
+        }
+    }
+
+    /**
+     * A profile saved on the wizard's "você" step, reflected into the session
+     * without a round trip. The preferences are kept from the session rather
+     * than taken from the response, so a save can never be the thing that
+     * reads as "onboarding finished" or "not finished".
+     */
+    fun applyProfile(updated: Me) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            updated.copy(ageGate = current.ageGate, preferences = current.preferences),
+        )
+    }
+
+    /**
+     * Close the wizard for good, on every device, and open [landing] behind it.
+     *
+     * The phase moves first and the write is not awaited: a failed write costs
+     * one repeat of the wizard on the next launch, whereas awaiting it would
+     * make a slow network look like a frozen button on the last tap of signup.
+     */
+    fun finishOnboarding(landing: Landing?) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        val now = java.time.Instant.now().toString()
+        _landing.value = landing
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(onboardedAt = now)),
+        )
+        scope.launch {
+            runCatching { api.markOnboarded(now) }
+                .onFailure { Log.w(TAG, "onboardedAt not saved: ${it.message}") }
         }
     }
 
@@ -198,6 +276,7 @@ class SessionStore(
         realtime.disconnect()
         _servers.value = emptyList()
         _linkError.value = null
+        _landing.value = null
         _phase.value = SessionPhase.SignedOut
     }
 
