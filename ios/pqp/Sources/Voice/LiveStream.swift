@@ -64,6 +64,23 @@ func liveStreamURL(hlsUrl: String, apiBaseURL: URL) -> URL? {
     return URL(string: trimmed, relativeTo: apiBaseURL)?.absoluteURL
 }
 
+/**
+ THE `?t=` VIEWER TOKEN, PULLED BACK OUT OF `hlsUrl`.
+
+ The same capability that authorises the playlist fetch is what
+ `POST /api/live-hls/presence` wants back (`WatchModel`'s presence beat,
+ mirroring `client/src/lib/hls-playback.ts`'s `sendHlsPresence`), so this is
+ just the query string read the other direction. Works on either shape
+ `hlsUrl` comes in (API-relative or an absolute bucket URL): both are query
+ strings, and `URLComponents` does not care which.
+ */
+func hlsSessionToken(from hlsUrl: String) -> String? {
+    URLComponents(string: hlsUrl)?
+        .queryItems?
+        .first(where: { $0.name == "t" })?
+        .value
+}
+
 /// What the player currently holds, so the swap rule can compare it against
 /// the freshest frame.
 struct AttachedStream: Equatable, Sendable {

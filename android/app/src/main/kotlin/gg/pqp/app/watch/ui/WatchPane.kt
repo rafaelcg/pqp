@@ -64,6 +64,7 @@ import gg.pqp.app.watch.ChannelLive
 import gg.pqp.app.watch.HlsLiveEdge
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
+import gg.pqp.app.watch.hlsSessionToken
 import gg.pqp.app.watch.WatchPhase
 import gg.pqp.app.watch.WATCH_TOKEN_RENEWAL_MS
 import gg.pqp.app.watch.WatchdogDecision
@@ -142,6 +143,12 @@ fun WatchPane(
     live: ChannelLive,
     /** Newest URL for this channel, straight from the API. Null means gone. */
     refresh: suspend () -> LiveStream?,
+    /**
+     * "I am still watching" (`ApiClient.sendHlsPresence`). Called every 30 s
+     * while a picture is attached; a default no-op keeps every other caller
+     * (previews, tests) exactly as they were.
+     */
+    sendPresence: suspend (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -160,6 +167,7 @@ fun WatchPane(
     var attached by remember { mutableStateOf<LiveStream?>(null) }
     val newest by rememberUpdatedState(live.stream)
     val refreshNow by rememberUpdatedState(refresh)
+    val sendPresenceNow by rememberUpdatedState(sendPresence)
 
     // Set for exactly the one reattach that follows a completed refetch in
     // the Reconnect branch below, and consumed (reset to false) the instant
@@ -415,6 +423,28 @@ fun WatchPane(
                 // composition), so an unbounded loop here never outlives the
                 // attach it belongs to.
             }
+        }
+    }
+
+    // "I am still watching" (`ApiClient.sendHlsPresence`), every 30 s while a
+    // picture is attached and this pane has not given up on it. This is what
+    // makes a broadcast's PERSISTED peak/unique numbers
+    // (`hls_session_viewer_stats`) count a phone that plays low-latency
+    // segments straight off the edge Worker, which never makes a request
+    // this API's own playlist proxy can see — see the doc comment on
+    // `ApiClient.sendHlsPresence`. Reads the freshest URL each tick, same as
+    // the attach effect above, because the keyframe restamps the token every
+    // 30 s and a beat sent with a just-expired one is a beat wasted.
+    // Fire-and-forget: a failed send is one fewer sighting, never shown.
+    LaunchedEffect(attached?.startedAt, attempt, dead) {
+        if (attached == null || dead) return@LaunchedEffect
+        while (true) {
+            (newest ?: attached)?.let { stream ->
+                hlsSessionToken(stream.hlsUrl)?.let { token ->
+                    runCatching { sendPresenceNow(token) }
+                }
+            }
+            delay(30_000)
         }
     }
 

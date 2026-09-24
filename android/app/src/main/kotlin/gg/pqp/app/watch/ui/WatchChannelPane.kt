@@ -80,6 +80,7 @@ fun WatchChannelPane(
                 null
             }
         },
+        sendPresence = { sessionToken -> session.api.sendHlsPresence(sessionToken) },
         modifier = modifier,
     )
 }

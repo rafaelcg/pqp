@@ -296,6 +296,31 @@ class ApiClient(
         ).close()
     }
 
+    /**
+     * "I am still watching", mirroring `client/src/lib/hls-playback.ts`'s
+     * `sendHlsPresence`. `WatchPane`'s presence beat calls this every 30 s
+     * while a picture is attached, so a broadcast's PERSISTED peak/unique
+     * numbers (`hls_session_viewer_stats`, built server-side from exactly
+     * this route plus the playlist proxy and verified telemetry —
+     * `noteHlsViewer` in `server/src/voice/hls-viewer-counts.ts`) count a
+     * phone watching low-latency straight off the edge, which never makes a
+     * playlist request this API can see at all.
+     *
+     * Fire-and-forget like [leaveVoiceBeacon]: a failed beat is one fewer
+     * sighting and the next one is 30 s away, never worth surfacing.
+     */
+    suspend fun sendHlsPresence(sessionToken: String) {
+        val body = json.encodeToString(
+            LiveHlsPresenceRequest.serializer(),
+            LiveHlsPresenceRequest(sessionToken = sessionToken),
+        )
+        execute(
+            Request.Builder()
+                .url(url("/api/live-hls/presence"))
+                .post(body.toRequestBody(JSON_MEDIA_TYPE)),
+        ).close()
+    }
+
     // --- plumbing ---
 
     private suspend inline fun <reified T> get(

@@ -119,6 +119,29 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertNil(liveStreamURL(hlsUrl: "  ", apiBaseURL: URL(string: "https://a.b")!))
     }
 
+    // MARK: - The presence beat's own credential
+
+    /// `hlsSessionToken` reads the same `?t=` back out, whichever shape
+    /// `hlsUrl` came in as, which is what the presence beat sends to
+    /// `POST /api/live-hls/presence`.
+    func testHlsSessionTokenReadsTheTOffARelativeUrl() {
+        XCTAssertEqual(
+            hlsSessionToken(from: "/api/voice/hls-playlist/c1/1757000000000?t=abc.def-_"),
+            "abc.def-_"
+        )
+    }
+
+    func testHlsSessionTokenReadsTheTOffAnAbsoluteUrl() {
+        XCTAssertEqual(
+            hlsSessionToken(from: "https://cdn.example/live/x.m3u8?t=xyz&other=1"),
+            "xyz"
+        )
+    }
+
+    func testHlsSessionTokenIsNilWithoutOne() {
+        XCTAssertNil(hlsSessionToken(from: "https://cdn.example/live/x.m3u8?sig=1"))
+    }
+
     // MARK: - When the player may be restarted, and when it may not
 
     private func stream(_ startedAt: Int, _ token: String) -> LiveHlsStream {

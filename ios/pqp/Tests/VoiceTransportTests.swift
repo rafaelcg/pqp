@@ -212,6 +212,22 @@ final class VoiceTransportTests: XCTestCase {
         XCTAssertEqual(info.url, "wss://sfu.example.test")
         XCTAssertEqual(info.token, "jwt")
         XCTAssertEqual(info.identity, "p1")
+        // Single-region deployments (today's default) omit `region` entirely;
+        // it must decode as nil rather than fail.
+        XCTAssertNil(info.region)
+    }
+
+    /// `region` is optional and informational (`voiceSessionSchema`): present
+    /// only on a multi-region deployment, and `url` is still what gets dialed.
+    /// This build never declares `sfu-region` in `wireCaps`, so it should not
+    /// need to act on this field, only carry it without crashing.
+    func testTokenResponseDecodesWithRegion() throws {
+        let json = """
+        {"backend":"livekit","url":"wss://sfu-mia.example.test","token":"jwt",
+         "room":"33333333-3333-3333-3333-333333333333","identity":"p1","region":"mia"}
+        """
+        let info = try Coding.decoder.decode(VoiceSessionInfo.self, from: Data(json.utf8))
+        XCTAssertEqual(info.region, "mia")
     }
 
     // MARK: - The 45 second clock

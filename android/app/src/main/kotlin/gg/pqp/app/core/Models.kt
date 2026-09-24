@@ -494,6 +494,15 @@ data class VoiceLeaveBeacon(
     val resumeToken: String,
 )
 
+/**
+ * The body of `POST /api/live-hls/presence`, mirroring `liveHlsPresenceSchema`.
+ * See `ApiClient.sendHlsPresence` and `WatchPane`'s presence beat.
+ */
+@Serializable
+data class LiveHlsPresenceRequest(
+    val sessionToken: String,
+)
+
 // --- errors ---
 
 @Serializable
