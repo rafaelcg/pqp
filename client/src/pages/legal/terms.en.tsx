@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "7 September 2026",
+  updated: "24 September 2026",
   sections: [
     {
       id: "intro",
@@ -365,8 +365,9 @@ export const termsEn: LegalDocument = {
           Voice uses WebRTC. In a small room, audio and screen-share video
           travel directly between participants and pass through no server of
           ours. In a large room they are relayed by a media server we run
-          ourselves in São Paulo, Brazil, which passes them on and keeps
-          nothing: no call is recorded by us or stored by us on either path.
+          ourselves, on whichever of our boxes is nearest to the room (São
+          Paulo, Miami or London), which passes them on and keeps nothing: no
+          call is recorded by us or stored by us on either path.
           Which rooms are which, and what relaying means for your data, is set
           out in the <Link to="/privacy">Privacy Policy</Link>. A watch party
           syncs a YouTube video on each person&apos;s device; we do not host

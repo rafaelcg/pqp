@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "7 de setembro de 2026",
+  updated: "24 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -404,16 +404,17 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "a679eede",
+      sourceRev: "f1b5598f",
       heading: "Voz e mídia",
       body: (
         <p>
           A voz usa WebRTC. Em sala pequena, o áudio e o vídeo de tela
           compartilhada vão direto entre os participantes e não passam por
           servidor nenhum nosso. Em sala grande, eles são repassados por um
-          servidor de mídia que a gente mesmo roda em São Paulo, no Brasil, que
-          repassa e não guarda nada: nenhuma chamada é gravada nem armazenada
-          pela gente, em nenhum dos dois caminhos. Quais salas são quais, e o
+          servidor de mídia que a gente mesmo roda, o mais perto possível da
+          sala (São Paulo, Miami ou Londres), que repassa e não guarda nada:
+          nenhuma chamada é gravada nem armazenada pela gente, em nenhum dos
+          dois caminhos. Quais salas são quais, e o
           que esse repasse significa para os seus dados, está na{" "}
           <Link to="/privacy">Política de Privacidade</Link>. Uma watch party
           sincroniza um vídeo do YouTube no aparelho de cada um; a gente não

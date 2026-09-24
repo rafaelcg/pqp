@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "7 de setembro de 2026",
+  updated: "24 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -396,7 +396,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "4ffed91f",
+      sourceRev: "e214af53",
       heading: "Chamadas de voz",
       body: (
         <>
@@ -408,8 +408,9 @@ export const privacyPtBr: LegalDocument = {
             canal, por WebRTC, criptografados pelo navegador (DTLS-SRTP), e não
             passam por servidor nenhum nosso. Em sala grande, eles são
             repassados por um{" "}
-            <strong>servidor de mídia que a gente mesmo roda</strong>, em São
-            Paulo, no Brasil.
+            <strong>servidor de mídia que a gente mesmo roda</strong>, o mais
+            perto possível da sala:{" "}
+            <strong>São Paulo, Miami ou Londres</strong>.
           </p>
           <p>Quais salas são quais:</p>
           <ul>
@@ -485,10 +486,11 @@ export const privacyPtBr: LegalDocument = {
               máquina, sem terceiro nenhum no meio.
             </li>
             <li>
-              <strong>Quem cuida da máquina.</strong> O servidor de mídia é uma
-              máquina virtual que a gente aluga da <strong>Vultr</strong> em São
-              Paulo e administra por conta própria. A Vultr entrega o hardware,
-              a rede e o prédio; o software que roda em cima é nosso.
+              <strong>Quem cuida das máquinas.</strong> Cada servidor de mídia
+              é uma máquina virtual que a gente aluga da <strong>Vultr</strong>{" "}
+              — em São Paulo, Miami e Londres — e administra por conta própria.
+              A Vultr entrega o hardware, a rede e o prédio; o software que
+              roda em cada uma é nosso.
             </li>
             <li>
               <strong>Isso é uma promessa, não uma prova.</strong> No caminho
@@ -612,7 +614,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "266a6929",
+      sourceRev: "bfa92d43",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -631,11 +633,13 @@ export const privacyPtBr: LegalDocument = {
               <strong>São Paulo, Brasil (região gru da Fly)</strong>.
             </li>
             <li>
-              <strong>Vultr</strong>, a máquina virtual onde roda o nosso
-              servidor de mídia de voz, em <strong>São Paulo, Brasil</strong>. O
-              software em cima dela é nosso; a Vultr entrega a máquina e a rede.
-              Em sala grande, o áudio e o vídeo de tela passam por ali para
-              serem repassados, como está em &quot;Chamadas de voz&quot; acima.
+              <strong>Vultr</strong>, as máquinas virtuais onde rodam os
+              nossos servidores de mídia de voz, em{" "}
+              <strong>São Paulo, Miami e Londres</strong>. O software em cima
+              delas é nosso; a Vultr entrega as máquinas e a rede. Em sala
+              grande, o áudio e o vídeo de tela passam pela mais perto da
+              sala para serem repassados, como está em &quot;Chamadas de
+              voz&quot; acima.
             </li>
             <li>
               <strong>Umami</strong> — contagem de visitas sem cookie, hospedado
@@ -721,7 +725,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "7843ade0",
+      sourceRev: "d31aee2f",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -734,11 +738,13 @@ export const privacyPtBr: LegalDocument = {
             de STUN/TURN e o Google Fonts operam globalmente e normalmente
             tratam dados nos Estados Unidos e na Europa. Os servidores de
             aplicação e o banco de dados rodam na <strong>Fly.io</strong> em{" "}
-            <strong>São Paulo, Brasil (região gru da Fly)</strong>, e o servidor
-            de mídia de voz roda em uma máquina da Vultr também em{" "}
-            <strong>São Paulo</strong>, então uma chamada repassada não sai do
-            Brasil. A pessoa que administra o pqp.gg está no Reino Unido, então
-            tudo que é tratado por um humano é tratado lá.
+            <strong>São Paulo, Brasil (região gru da Fly)</strong>. Os
+            servidores de mídia de voz rodam em máquinas da Vultr em{" "}
+            <strong>São Paulo, Miami e Londres</strong>, o que estiver mais
+            perto da sala, então uma chamada repassada pode ou não sair do
+            Brasil, dependendo de onde estão as pessoas nela. A pessoa que
+            administra o pqp.gg está no Reino Unido, então tudo que é tratado
+            por um humano é tratado lá.
           </p>
           <p>
             A base honesta dessas transferências: são serviços comerciais
