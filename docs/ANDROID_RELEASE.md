@@ -618,6 +618,29 @@ and answer/decline buttons. New blocked users list in settings. Mentions
 playing after a while.
 ```
 
+### 0.4.1 (`versionCode` 8)
+
+Since 0.4.0 (`versionCode` 7): a rebuilt first-run flow, a full-screen wizard
+instead of a dialog, with the age gate, handle and room steps, an invite
+link with a share sheet, and an arrival banner (#806); plus small parity
+fixes against recent web changes, carrying the SFU region field through
+voice sessions like the other clients already do (#804).
+
+**pt-BR** (used first; this is the audience):
+
+```
+Primeiro acesso reformulado: um assistente em tela cheia para escolher seu
+nome, criar ou entrar numa sala e compartilhar o convite. Pequenos ajustes
+de paridade com o app web.
+```
+
+**en-US**:
+
+```
+Reworked first run: a full-screen wizard to pick your name, create or join
+a room, and share the invite. Small parity fixes with the web app.
+```
+
 ---
 
 ## Why `compileSdk` is still 37
