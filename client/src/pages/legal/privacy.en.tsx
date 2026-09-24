@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "7 September 2026",
+  updated: "24 September 2026",
   sections: [
     {
       id: "intro",
@@ -370,8 +370,9 @@ export const privacyEn: LegalDocument = {
             <strong>straight from your device to the other people</strong> in
             the channel over WebRTC, encrypted by the browser (DTLS-SRTP), and
             pass through no server of ours at all. In a large room they are
-            relayed by a <strong>media server we run ourselves</strong>, in São
-            Paulo, Brazil.
+            relayed by a <strong>media server we run ourselves</strong>, on
+            whichever of our boxes is nearest to the room:{" "}
+            <strong>São Paulo, Miami or London</strong>.
           </p>
           <p>Which rooms are which:</p>
           <ul>
@@ -446,10 +447,11 @@ export const privacyEn: LegalDocument = {
               with no third party in the middle.
             </li>
             <li>
-              <strong>Who looks after the machine.</strong> The media server is
-              a virtual machine we rent from <strong>Vultr</strong> in São Paulo
-              and administer ourselves. Vultr provides the hardware, the network
-              and the building; the software running on it is ours.
+              <strong>Who looks after the machines.</strong> Each media server
+              is a virtual machine we rent from <strong>Vultr</strong> —
+              in São Paulo, Miami and London — and administer ourselves.
+              Vultr provides the hardware, the network and the building; the
+              software running on each one is ours.
             </li>
             <li>
               <strong>This is a promise, not a proof.</strong> On the direct
@@ -589,12 +591,12 @@ export const privacyEn: LegalDocument = {
               <strong>São Paulo, Brazil (Fly region gru)</strong>.
             </li>
             <li>
-              <strong>Vultr</strong>, the virtual machine our voice media
-              server runs on, in <strong>São Paulo, Brazil</strong>. The
-              software on it is ours; Vultr provides the machine and the
-              network. In a large room your audio and screen-share video pass
-              through it to be relayed, as described under &quot;Voice
-              calls&quot; above.
+              <strong>Vultr</strong>, the virtual machines our voice media
+              servers run on, in <strong>São Paulo, Miami and London</strong>.
+              The software on them is ours; Vultr provides the machines and
+              the network. In a large room your audio and screen-share video
+              pass through whichever one is nearest to the room to be
+              relayed, as described under &quot;Voice calls&quot; above.
             </li>
             <li>
               <strong>Umami</strong> — cookieless visit counts, hosted by its
@@ -687,11 +689,13 @@ export const privacyEn: LegalDocument = {
             Google Fonts operate globally and typically process data in the
             United States and Europe. The application servers and database run
             on <strong>Fly.io</strong> in{" "}
-            <strong>São Paulo, Brazil (Fly region gru)</strong>, and the voice
-            media server runs on a Vultr machine in <strong>São Paulo</strong>{" "}
-            as well, so a relayed call does not leave Brazil either. The person
-            who operates pqp.gg is in the United Kingdom, so anything handled by
-            a human is handled there.
+            <strong>São Paulo, Brazil (Fly region gru)</strong>. Voice media
+            servers run on Vultr machines in{" "}
+            <strong>São Paulo, Miami and London</strong>, whichever is nearest
+            to the room, so a relayed call may or may not leave Brazil
+            depending on where the people on it are. The person who operates
+            pqp.gg is in the United Kingdom, so anything handled by a human is
+            handled there.
           </p>
           <p>
             The honest basis for those transfers: these are ordinary commercial

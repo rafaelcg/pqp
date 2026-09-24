@@ -192,9 +192,9 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, servidores em São Paulo.",
-      en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, hosted in São Paulo.",
-      es: "Pega el link de la plantilla de tu Discord y tu servidor aparece igualito en pqp: categorías, canales, roles. Voz, pantalla compartida con sonido y chat en el navegador. Gratis, de código abierto, con servidores en São Paulo.",
+        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, voz rápida nas Américas e na Europa.",
+      en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, fast voice across the Americas and Europe.",
+      es: "Pega el link de la plantilla de tu Discord y tu servidor aparece igualito en pqp: categorías, canales, roles. Voz, pantalla compartida con sonido y chat en el navegador. Gratis, de código abierto, voz rápida en América y Europa.",
     },
     image: {
       "pt-BR": "/images/og-vem.png",
@@ -335,7 +335,7 @@ export const LANDING_FAQ: Record<
     {
       question: "É seguro criar conta?",
       answer:
-        "É um site. Não precisa instalar nada. Os servidores ficam em São Paulo. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
+        "É um site. Não precisa instalar nada. A voz conecta no servidor mais perto, São Paulo, Miami ou Londres. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
     },
     {
       question: "O pqp é de graça mesmo?",
@@ -360,14 +360,14 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
+        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo. A voz conecta no servidor mais perto, São Paulo, Miami ou Londres. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
     },
   ],
   en: [
     {
       question: "Is it safe to create an account?",
       answer:
-        "It's a website. You don't have to install anything. The servers are in São Paulo. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
+        "It's a website. You don't have to install anything. Voice calls connect to whichever server is nearest, São Paulo, Miami or London. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
     },
     {
       question: "Is pqp really free?",
@@ -392,14 +392,14 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
+        "Your account and community live on our server in São Paulo. Voice itself connects to whichever media server is nearest, São Paulo, Miami or London. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
     },
   ],
   es: [
     {
       question: "¿Es seguro crear una cuenta?",
       answer:
-        "Es un sitio web. No tienes que instalar nada. Los servidores están en São Paulo. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
+        "Es un sitio web. No tienes que instalar nada. La voz se conecta al servidor más cercano: São Paulo, Miami o Londres. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
     },
     {
       question: "¿pqp de verdad es gratis?",
@@ -424,7 +424,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Viven en servidores en São Paulo. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina.",
+        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo. La voz se conecta al servidor más cercano: São Paulo, Miami o Londres. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina.",
     },
   ],
 };
@@ -652,7 +652,7 @@ export const VEM_FAQ: Record<
     {
       question: "Isso é seguro?",
       answer:
-        "É um site: não instala nada. Os servidores ficam em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
+        "É um site: não instala nada. A voz conecta no servidor mais perto, São Paulo, Miami ou Londres, e a sua conta mora no nosso servidor em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
     },
     {
       question: "É de graça mesmo? Qual é a pegadinha?",
@@ -694,7 +694,7 @@ export const VEM_FAQ: Record<
     {
       question: "Is it safe?",
       answer:
-        "It is a website: nothing to install. Servers are in São Paulo. You delete your account from inside the app and export your data whenever you want. Blocking, reports and automod exist. The code is public if you want to look, and you don't need to read it to use it. pqp is for adults, 18 and over.",
+        "It is a website: nothing to install. Voice calls connect to whichever server is nearest, São Paulo, Miami or London, and your account lives on our server in São Paulo. You delete your account from inside the app and export your data whenever you want. Blocking, reports and automod exist. The code is public if you want to look, and you don't need to read it to use it. pqp is for adults, 18 and over.",
     },
     {
       question: "Is it really free? What's the catch?",
@@ -736,7 +736,7 @@ export const VEM_FAQ: Record<
     {
       question: "¿Es seguro?",
       answer:
-        "Es un sitio web: no instalas nada. Los servidores están en São Paulo. Borras tu cuenta desde la app y exportas tus datos cuando quieras. Hay bloqueo, reportes y automod. El código es público si quieres echarle un ojo, y no necesitas leerlo para usarlo. pqp es para mayores de 18.",
+        "Es un sitio web: no instalas nada. La voz se conecta al servidor más cercano, São Paulo, Miami o Londres, y tu cuenta vive en nuestro servidor en São Paulo. Borras tu cuenta desde la app y exportas tus datos cuando quieras. Hay bloqueo, reportes y automod. El código es público si quieres echarle un ojo, y no necesitas leerlo para usarlo. pqp es para mayores de 18.",
     },
     {
       question: "¿De verdad es gratis? ¿Cuál es el truco?",
