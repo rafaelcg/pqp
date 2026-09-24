@@ -233,6 +233,29 @@ export const HLS_WATCH_PLAYER_STALL_MS = 15_000;
 export const STALL_NO_PROGRESS_MS = 5_000;
 export const STALL_WHILE_RECEIVING_FACTOR = 2;
 
+/**
+ * THE SEAM (conventional). When the transcode restarts mid-party the server
+ * keeps the session: same `startedAt`, same URLs, and the media playlist
+ * simply stops growing for the seam (10-30 s) and then continues behind an
+ * `#EXT-X-DISCONTINUITY`. A newest segment that moves again after being
+ * silent this long is that seam ending, not ordinary jitter (a healthy
+ * playlist moves every 4 s), and the `waiting` it caused was never this
+ * player's fault. See `onMediaSequence`.
+ */
+export const PLAYLIST_RESUME_GAP_MS = 10_000;
+
+/**
+ * The stall threshold on the NATIVE engine (Safari, iOS) for a live stream.
+ * Native HLS shows the watchdog no playlist at all, so a seam and a wedged
+ * element look identical from here: `waiting`, and nothing else. There is no
+ * hls.js to nudge either, so every in-place ladder step is a no-op and the
+ * only thing the stall rule can ever do is the rebuild, which re-assigns
+ * `video.src` and throws away a player that was about to resume by itself
+ * (Safari handles `EXT-X-DISCONTINUITY` natively). Longer than any seam plus
+ * the first segment after it, so only a genuinely wedged element gets there.
+ */
+export const NATIVE_LIVE_STALL_MS = 40_000;
+
 const FATAL_LADDER: readonly HlsStallDecision[] = [
   "recover-media-error",
   "start-load",
@@ -353,6 +376,8 @@ export class HlsStallWatch {
    * the reconnect backoff rather than repeating stopLoad every second.
    */
   private heldForRestart = false;
+  /** The native engine on a live stream: see `NATIVE_LIVE_STALL_MS`. */
+  private nativeLive = false;
 
   private pendingFatal = false;
   private pendingDecodeError = false;
@@ -530,6 +555,15 @@ export class HlsStallWatch {
     }
   }
 
+  /**
+   * Which engine this attach is playing on. True only for the native engine
+   * on a live stream, which stretches the stall rule to
+   * `NATIVE_LIVE_STALL_MS`; hls.js and replays keep `stallMs` exactly.
+   */
+  setNativeLiveEngine(on: boolean): void {
+    this.nativeLive = on;
+  }
+
   /** The element started or resumed rendering: the current episode is over. */
   onPlaying(): void {
     this.hasPlayed = true;
@@ -572,6 +606,22 @@ export class HlsStallWatch {
   /** hls.js `LEVEL_UPDATED` / `LEVEL_LOADED`: the playlist's media sequence. */
   onMediaSequence(sequence: number, now: number): void {
     if (sequence !== this.lastSequence) {
+      // A seam just ended (`PLAYLIST_RESUME_GAP_MS`): restart the stall
+      // clock, so the first segments of the new run get a whole `stallMs`
+      // to arrive. Without this, a viewer already `waiting` through the seam
+      // is instantly "stalled" the moment the playlist moves, and the
+      // ladder's 1 Hz `startLoad` (which aborts the in-flight fragment in
+      // hls.js) cancels the very download that would end the stall, all the
+      // way to a rebuild. Conventional only; LL paces itself off parts.
+      if (
+        this.mode === "conventional" &&
+        this.lastSequence !== null &&
+        this.sequenceSeenAt !== null &&
+        now - this.sequenceSeenAt >= PLAYLIST_RESUME_GAP_MS &&
+        this.waitingSince !== null
+      ) {
+        this.waitingSince = now;
+      }
       this.lastSequence = sequence;
       this.sequenceSeenAt = now;
       // A live playlist that advances again is real recovery from a
@@ -739,17 +789,37 @@ export class HlsStallWatch {
     if (this.pendingFatal || this.pendingDecodeError) {
       return "fatal";
     }
+    // A FROZEN PLAYLIST EXPLAINS THE STALL (conventional). A seam starves
+    // the element too, and when both are true the playlist is the cause:
+    // the stall ladder would nudge a loader with nothing to load and then
+    // rebuild the player onto the same session, which cannot invent the
+    // segments the server has not written yet. The sequence-stuck path
+    // holds and asks the server instead, and never rebuilds.
+    if (this.mode === "conventional" && this.sequenceStuck(now)) {
+      return "sequence-stuck";
+    }
+    const stallMs = this.nativeLive
+      ? Math.max(this.stallMs, NATIVE_LIVE_STALL_MS)
+      : this.stallMs;
     if (
       this.waitingSince !== null &&
-      now - this.waitingSince >= this.stallMs &&
+      now - this.waitingSince >= stallMs &&
       !this.inStartupGrace(now) &&
       (this.bufferProgressAt === null ||
         now - this.bufferProgressAt >= STALL_NO_PROGRESS_MS ||
-        now - this.waitingSince >= this.stallMs * STALL_WHILE_RECEIVING_FACTOR)
+        now - this.waitingSince >= stallMs * STALL_WHILE_RECEIVING_FACTOR)
     ) {
       return "stall";
     }
-    if (
+    if (this.sequenceStuck(now)) {
+      return "sequence-stuck";
+    }
+    return null;
+  }
+
+  /** The live playlist's newest segment has not moved for `sequenceStuckMs`. */
+  private sequenceStuck(now: number): boolean {
+    return (
       this.sequenceSeenAt !== null &&
       this.lastSequence !== null &&
       now - this.sequenceSeenAt >= this.sequenceStuckMs &&
@@ -762,10 +832,7 @@ export class HlsStallWatch {
       // part signal at all -- a conventional session, or an LL one whose
       // `LEVEL_UPDATED` has never carried a part -- this is unchanged.
       !this.partsAdvancing(now)
-    ) {
-      return "sequence-stuck";
-    }
-    return null;
+    );
   }
 
   tick(now: number): HlsStallDecision {

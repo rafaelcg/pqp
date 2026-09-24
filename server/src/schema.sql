@@ -4097,6 +4097,18 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL DEFAULT 0;
 
+-- THE EGRESS RUNS BEHIND ONE LADDER RUNG, for a watch party that restarted
+-- its transcode IN PLACE (`restartRoomInPlace` in hls-egress.ts). A rung row
+-- is one rendition of one session for the whole party; each restart of its
+-- egress (it died, its playlist stuck, the presenter's screen track was
+-- replaced) writes under its own names (`<startedAt>-<rung>-r<ms>...`) and
+-- appends one entry here: `{"suffix":"-r<ms>","base":<media sequence of its
+-- first segment>}`. The playlist proxy stitches every run into one live
+-- playlist with `#EXT-X-DISCONTINUITY` between them, the replay and the film
+-- download read every run in order. NULL is the only shape a row had before:
+-- one run, the legacy names, base 0.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS runs JSONB;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.

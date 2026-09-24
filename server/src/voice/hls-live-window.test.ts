@@ -270,3 +270,132 @@ describe("liveWindowSegments", () => {
     expect(liveWindowSegments()).toBe(120);
   });
 });
+
+/**
+ * A LADDER RUNG THAT RESTARTED IN PLACE (`hls-runs.ts`). Each egress run
+ * numbers from 0 under its own names; the history rebases a run onto its
+ * durable `base`, caps a finished run where the next begins, and marks the
+ * boundary with one discontinuity.
+ */
+describe("LiveWindowHistory across egress runs", () => {
+  function runPlaylist(suffix: string, first: number, count = 5, ended = false): string {
+    return egressPlaylist(first, count, ended).replaceAll(
+      "1789207838217-720p30_",
+      `1789207838217-720p30${suffix}_`,
+    );
+  }
+
+  it("continues the sequence into the next run with one discontinuity", () => {
+    const history = new LiveWindowHistory();
+    // Run 0 wrote 0..11 and was stopped (its egress closed the playlist).
+    history.merge(parseMediaPlaylist(runPlaylist("", 7, 5, true)), 0, {
+      base: 0,
+      index: 0,
+      limit: 12,
+      current: false,
+    });
+    // Run 1 (base 12) has written its first three segments.
+    history.merge(parseMediaPlaylist(runPlaylist("-r1790235781814", 0, 3)), 0, {
+      base: 12,
+      index: 1,
+      current: true,
+    });
+    const body = history.render(15);
+    expect(sequenceOf(body)).toBe(7);
+    expect(body).toContain("#EXT-X-DISCONTINUITY-SEQUENCE:0");
+    expect(body).not.toContain("#EXT-X-ENDLIST");
+    const lines = body.split("\n");
+    const firstNew = lines.indexOf("1789207838217-720p30-r1790235781814_00000.ts");
+    // The discontinuity belongs to the first segment of the new run, and to
+    // nothing else.
+    expect(lines.slice(0, firstNew).filter((l) => l === "#EXT-X-DISCONTINUITY")).toHaveLength(1);
+    expect(lines.filter((l) => l === "#EXT-X-DISCONTINUITY")).toHaveLength(1);
+    expect(urisOf(body)).toEqual([
+      "1789207838217-720p30_00007.ts",
+      "1789207838217-720p30_00008.ts",
+      "1789207838217-720p30_00009.ts",
+      "1789207838217-720p30_00010.ts",
+      "1789207838217-720p30_00011.ts",
+      "1789207838217-720p30-r1790235781814_00000.ts",
+      "1789207838217-720p30-r1790235781814_00001.ts",
+      "1789207838217-720p30-r1790235781814_00002.ts",
+    ]);
+  });
+
+  it("counts the discontinuity once it slides out of the window", () => {
+    const history = new LiveWindowHistory();
+    history.merge(parseMediaPlaylist(runPlaylist("", 7)), 0, {
+      base: 0,
+      index: 0,
+      limit: 12,
+      current: false,
+    });
+    for (let first = 0; first <= 10; first += 1) {
+      history.merge(parseMediaPlaylist(runPlaylist("-r1", first)), 0, {
+        base: 12,
+        index: 1,
+        current: true,
+      });
+    }
+    const body = history.render(5);
+    // Only run 1 is listed: sequence continues from its base, and the one
+    // discontinuity that already went by is counted in the header.
+    expect(sequenceOf(body)).toBe(12 + 10);
+    expect(body).toContain("#EXT-X-DISCONTINUITY-SEQUENCE:1");
+    expect(body).not.toContain("#EXT-X-DISCONTINUITY\n");
+  });
+
+  it("never lists what a leftover egress wrote past the next run's base", () => {
+    const history = new LiveWindowHistory();
+    // Run 0's egress was asked to stop at 12 segments and wrote two more.
+    history.merge(parseMediaPlaylist(runPlaylist("", 9, 5)), 0, {
+      base: 0,
+      index: 0,
+      limit: 12,
+      current: false,
+    });
+    history.merge(parseMediaPlaylist(runPlaylist("-r1", 0, 2)), 0, {
+      base: 12,
+      index: 1,
+      current: true,
+    });
+    const uris = urisOf(history.render(15));
+    expect(uris).not.toContain("1789207838217-720p30_00012.ts");
+    expect(uris).not.toContain("1789207838217-720p30_00013.ts");
+    expect(uris.at(-2)).toBe("1789207838217-720p30-r1_00000.ts");
+  });
+
+  it("renders the same bytes on a process that only ever saw the final playlists", () => {
+    // Machine A watched the whole thing; machine B booted after the restart
+    // and reads run 0's frozen final playlist from the bucket. A viewer
+    // bouncing between them must see one sequence line.
+    const a = new LiveWindowHistory();
+    for (let first = 0; first <= 7; first += 1) {
+      a.merge(parseMediaPlaylist(runPlaylist("", first)), 0, { base: 0, index: 0, current: true });
+    }
+    const final0 = runPlaylist("", 7, 5, true);
+    const run1 = runPlaylist("-r1", 0, 4);
+    a.merge(parseMediaPlaylist(final0), 0, { base: 0, index: 0, limit: 12, current: false });
+    a.merge(parseMediaPlaylist(run1), 0, { base: 12, index: 1, current: true });
+
+    const b = new LiveWindowHistory();
+    b.merge(parseMediaPlaylist(final0), 0, { base: 0, index: 0, limit: 12, current: false });
+    b.merge(parseMediaPlaylist(run1), 0, { base: 12, index: 1, current: true });
+
+    // A's window is wider (it remembers older segments); the overlap and the
+    // sequence numbers agree exactly.
+    expect(a.render(9)).toBe(b.render(9));
+    expect(sequenceOf(b.render(9))).toBe(7);
+  });
+
+  it("leaves a rung that never restarted byte-for-byte as it was", () => {
+    const legacy = new LiveWindowHistory();
+    const runs = new LiveWindowHistory();
+    for (let first = 0; first <= 4; first += 1) {
+      widenLivePlaylist(legacy, egressPlaylist(first), 15, 0);
+      runs.merge(parseMediaPlaylist(egressPlaylist(first)), 0, { base: 0, index: 0, current: true });
+    }
+    expect(runs.render(15)).toBe(legacy.render(15));
+    expect(runs.render(15)).not.toContain("DISCONTINUITY");
+  });
+});

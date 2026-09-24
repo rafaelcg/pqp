@@ -116,6 +116,11 @@ const SEGMENT_TAG_PREFIXES = [
 ];
 
 function isSegmentTag(line: string): boolean {
+  // `#EXT-X-DISCONTINUITY-SEQUENCE` shares a prefix with the per-segment
+  // `#EXT-X-DISCONTINUITY` and is a playlist header, not a segment tag.
+  if (line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:")) {
+    return false;
+  }
   return SEGMENT_TAG_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 
@@ -170,10 +175,38 @@ export function parseMediaPlaylist(body: string): ParsedMediaPlaylist {
 }
 
 const PROGRAM_DATE_TIME_PREFIX = "#EXT-X-PROGRAM-DATE-TIME:";
+const DISCONTINUITY_TAG = "#EXT-X-DISCONTINUITY";
+const DISCONTINUITY_SEQUENCE_TAG = "#EXT-X-DISCONTINUITY-SEQUENCE:";
+
+/**
+ * Where one fetched playlist sits in a rung's run history (`hls-runs.ts`).
+ * The default is the only shape there was before runs: the one and only run,
+ * numbered as the egress numbered it.
+ */
+export interface MergeRun {
+  /** Added to every sequence number in the playlist. */
+  base?: number;
+  /** The run's position, 0 for the first. */
+  index?: number;
+  /** Segments at or past this LOCAL sequence number are ignored (a finished run's cap). */
+  limit?: number;
+  /** Whether this is the run being written now (its header and end marker count). */
+  current?: boolean;
+}
+
+const CURRENT_LEGACY_RUN: MergeRun = { base: 0, index: 0, current: true };
 
 /** One remembered segment, plus the wall clock this process first saw it. */
 interface HistoryEntry {
   segment: ParsedSegment;
+  /**
+   * Which egress run of the rung this segment came from (`hls-runs.ts`), 0
+   * for the first. Its discontinuity sequence number: a player decodes each
+   * run as its own timeline.
+   */
+  run: number;
+  /** The first segment of a run after the first: it carries the discontinuity. */
+  firstOfRun: boolean;
   /**
    * `Date.now()` (or the caller's clock) the instant this segment was first
    * merged in -- BROADCAST_PIPELINE B0.3's T5-T6 stamp: "in the bucket, to
@@ -192,6 +225,8 @@ export class LiveWindowHistory {
   private header: string[] = [];
   private ended = false;
   private newest = -1;
+  /** The run the newest segment belongs to. */
+  private newestRun = 0;
 
   /**
    * Fold a freshly fetched playlist in. A playlist whose newest entry is
@@ -203,20 +238,51 @@ export class LiveWindowHistory {
    * should pass the same clock they use everywhere else in one request so a
    * test (and `X-Pqp-Playlist-Age-Ms`) can reason about it.
    */
-  merge(playlist: ParsedMediaPlaylist, now = Date.now()): void {
-    this.header = playlist.header;
-    this.ended = playlist.ended;
-    const last = playlist.segments[playlist.segments.length - 1];
-    if (last && last.seq < this.newest) {
+  merge(
+    playlist: ParsedMediaPlaylist,
+    now = Date.now(),
+    run: MergeRun = CURRENT_LEGACY_RUN,
+  ): void {
+    const base = run.base ?? 0;
+    const index = run.index ?? 0;
+    const current = run.current ?? true;
+    // Only the run being written NOW describes the playlist: its header is
+    // the one a viewer should see, and only it can say the stream ended. A
+    // finished run's final playlist is read for its tail and nothing else.
+    if (current || this.header.length === 0) {
+      this.header = playlist.header.filter(
+        (line) => !line.startsWith(DISCONTINUITY_SEQUENCE_TAG),
+      );
+    }
+    if (current) {
+      this.ended = playlist.ended;
+    }
+    const segments =
+      run.limit === undefined
+        ? playlist.segments
+        : playlist.segments.filter((segment) => segment.seq < run.limit!);
+    const last = segments[segments.length - 1];
+    // Same numbering restarting under the same name is a different stream
+    // (the camera's shared live playlist does that). A LATER RUN of a rung is
+    // not: it was rebased onto its own `base` before it got here, so its
+    // numbers never run backwards and nothing is thrown away.
+    if (current && last && base + last.seq < this.newest && index === this.newestRun) {
       this.segments.clear();
       this.newest = -1;
     }
-    for (const segment of playlist.segments) {
-      if (!this.segments.has(segment.seq)) {
-        this.segments.set(segment.seq, { segment, firstSeenAt: now });
+    for (const segment of segments) {
+      const seq = base + segment.seq;
+      if (!this.segments.has(seq)) {
+        this.segments.set(seq, {
+          segment: base === 0 ? segment : { ...segment, seq },
+          firstSeenAt: now,
+          run: index,
+          firstOfRun: index > 0 && segment.seq === 0,
+        });
       }
-      if (segment.seq > this.newest) {
-        this.newest = segment.seq;
+      if (seq > this.newest) {
+        this.newest = seq;
+        this.newestRun = index;
       }
     }
   }
@@ -276,8 +342,17 @@ export class LiveWindowHistory {
     lines.push(
       `${MEDIA_SEQUENCE_TAG}${first ? first.segment.seq : Math.max(this.newest, 0)}`,
     );
+    // RUNS: one discontinuity per egress restart, and the count of those that
+    // already slid out of the window. Omitted while every listed segment is
+    // from the first run, so a rung that never restarted renders exactly as
+    // it always did.
+    if (first && entries.some((entry) => entry.run > 0)) {
+      lines.push(
+        `${DISCONTINUITY_SEQUENCE_TAG}${first.run - (first.firstOfRun ? 1 : 0)}`,
+      );
+    }
     for (const entry of entries) {
-      const tags = entry.segment.tags.some((tag) =>
+      let tags = entry.segment.tags.some((tag) =>
         tag.startsWith(PROGRAM_DATE_TIME_PREFIX),
       )
         ? entry.segment.tags
@@ -285,6 +360,9 @@ export class LiveWindowHistory {
             `${PROGRAM_DATE_TIME_PREFIX}${new Date(entry.firstSeenAt).toISOString()}`,
             ...entry.segment.tags,
           ];
+      if (entry.firstOfRun && !tags.includes(DISCONTINUITY_TAG)) {
+        tags = [DISCONTINUITY_TAG, ...tags];
+      }
       lines.push(...tags, entry.segment.uri);
     }
     if (this.ended) {

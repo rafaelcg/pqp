@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HLS_WATCH_PLAYER_STALL_MS,
   HlsStallWatch,
+  NATIVE_LIVE_STALL_MS,
   channelIdFromHlsUrl,
   livePlaylistProgress,
   type HlsStallDecision,
@@ -1083,6 +1084,62 @@ describe("HlsStallWatch", () => {
       expect(decisions.filter((d) => d === "jump-live")).toHaveLength(1);
       expect(decisions).toContain("rebuild");
     });
+  });
+});
+
+describe("HlsStallWatch through a same-session seam", () => {
+  const stallMs = HLS_WATCH_PLAYER_STALL_MS;
+
+  it("holds on a frozen playlist even when the element stalled first, and never rebuilds", () => {
+    const watch = new HlsStallWatch({ stallMs });
+    watch.onSourceChanged(T0);
+    watch.onMediaSequence(100, T0);
+    watch.onPlaying();
+    // Starved early: the stall clock runs out before the playlist's own.
+    watch.onWaiting(T0 + 2_000);
+    const decisions: HlsStallDecision[] = [];
+    for (let t = T0 + 17_000; t <= T0 + 60_000; t += 1_000) {
+      decisions.push(watch.tick(t));
+    }
+    expect(decisions).not.toContain("rebuild");
+    expect(decisions).not.toContain("dead");
+    expect(decisions).toContain("hold");
+    expect(watch.lastReason).toBe("sequence-stuck");
+  });
+
+  it("gives the first segments after the seam a whole stall window", () => {
+    const watch = new HlsStallWatch({ stallMs });
+    watch.onSourceChanged(T0);
+    watch.onMediaSequence(100, T0);
+    watch.onPlaying();
+    watch.onWaiting(T0 + 5_000);
+    for (let t = T0 + 20_000; t <= T0 + 25_000; t += 1_000) {
+      watch.tick(t);
+    }
+    expect(watch.isHoldingForRestart).toBe(true);
+    // The same playlist continues behind a discontinuity.
+    watch.onMediaSequence(101, T0 + 25_000);
+    expect(watch.isHoldingForRestart).toBe(false);
+    for (let t = T0 + 26_000; t < T0 + 25_000 + stallMs; t += 1_000) {
+      expect(watch.tick(t)).toBe("none");
+    }
+  });
+
+  it("stretches the stall rule on the native live engine, and only there", () => {
+    const native = new HlsStallWatch({ stallMs });
+    native.setNativeLiveEngine(true);
+    native.onSourceChanged(T0);
+    native.onPlaying();
+    native.onWaiting(T0);
+    expect(native.tick(T0 + stallMs + 1_000)).toBe("none");
+    expect(native.tick(T0 + NATIVE_LIVE_STALL_MS - 1_000)).toBe("none");
+    expect(native.tick(T0 + NATIVE_LIVE_STALL_MS)).not.toBe("none");
+
+    const hlsjs = new HlsStallWatch({ stallMs });
+    hlsjs.onSourceChanged(T0);
+    hlsjs.onPlaying();
+    hlsjs.onWaiting(T0);
+    expect(hlsjs.tick(T0 + stallMs + 1_000)).not.toBe("none");
   });
 });
 

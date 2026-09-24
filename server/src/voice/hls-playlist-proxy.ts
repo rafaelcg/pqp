@@ -21,7 +21,12 @@ import {
   type MasterVariant,
 } from "./hls-ladder.js";
 import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
-import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
+import {
+  LiveWindowHistory,
+  liveWindowSegments,
+  parseMediaPlaylist,
+} from "./hls-live-window.js";
+import { LEGACY_RUNS, parseHlsRuns, type HlsRun } from "./hls-runs.js";
 import { edgeSegmentUrl, hlsSegmentBaseUrl } from "./hls-segment-token.js";
 import { hlsSessionOwnedElsewhere } from "./hls-ownership.js";
 import {
@@ -254,6 +259,8 @@ export function resetHlsPlaylistCacheForTests(): void {
   endedRungsPruneAt = 1024;
   livenessInflight.clear();
   rungSessionIds.clear();
+  rungRuns.clear();
+  finishedRunBodies.clear();
   rendersWithoutDb = 0;
   segmentUrlMemo.clear();
   stopAllKeepWarmLoops();
@@ -956,6 +963,21 @@ const livenessInflight = new Map<string, Promise<string | null>>();
 /** The `hls_sessions.id` each rendition's last successful check returned. */
 const rungSessionIds = new Map<string, string | null>();
 
+/**
+ * The egress runs each rendition's last successful check returned
+ * (`hls_sessions.runs`, see `hls-runs.ts`), so a render ridden out on a
+ * database blip still stitches the runs it knew about.
+ */
+const rungRuns = new Map<string, HlsRun[]>();
+
+/**
+ * A FINISHED run's final live playlist, per rendition and run. It is frozen
+ * (its egress was stopped before the run after it was recorded), so it is
+ * read once and kept for as long as its rendition is: every render that still
+ * lists the run's tail re-merges it from here instead of the bucket.
+ */
+const finishedRunBodies = new Map<string, string>();
+
 /** Renders served from storage on a recent confirmation because the check failed or was slow. */
 let rendersWithoutDb = 0;
 
@@ -1044,8 +1066,8 @@ function livenessCheck(
     return existing;
   }
   const check = getPool()
-    .query<{ id: string }>(
-      `SELECT id FROM hls_sessions
+    .query<{ id: string; runs?: unknown }>(
+      `SELECT id, runs FROM hls_sessions
        WHERE channel_id = $1
          AND object_prefix = $2
          AND ended_at IS NULL
@@ -1061,6 +1083,7 @@ function livenessCheck(
         windowHistory.delete(rungKey);
         segmentUrlMemo.delete(rungKey);
         rungSessionIds.delete(rungKey);
+        forgetRuns(rungKey);
         liveConfirmed.delete(rungKey);
         // Amortised: a pass that could not shrink the map raises the
         // threshold, so a large, still-live set is not rescanned per insert.
@@ -1079,6 +1102,7 @@ function livenessCheck(
       }
       const id = session.rows?.[0]?.id ?? null;
       rungSessionIds.set(rungKey, id);
+      rungRuns.set(rungKey, parseHlsRuns(session.rows?.[0]?.runs ?? null));
       endedRungs.delete(rungKey);
       stampLive(rungKey, now);
       noteSessionLive(channelId, startedAt, now);
@@ -1120,6 +1144,81 @@ async function confirmSessionLive(
   return rungSessionIds.get(rungKey) ?? null;
 }
 
+function forgetRuns(rungKey: string): void {
+  rungRuns.delete(rungKey);
+  const prefix = `${rungKey}#`;
+  for (const key of finishedRunBodies.keys()) {
+    if (key.startsWith(prefix)) {
+      finishedRunBodies.delete(key);
+    }
+  }
+}
+
+function stripEndList(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => line.trim() !== "#EXT-X-ENDLIST")
+    .join("\n");
+}
+
+/**
+ * Merge the tails of a rendition's FINISHED runs into its window history,
+ * each rebased onto its durable `base` and capped where the next run begins
+ * (`hls-runs.ts`), so the rendered window runs straight from the last
+ * segments of one egress into the first of the next with one
+ * `#EXT-X-DISCONTINUITY` between them, identically on every process.
+ *
+ * Only the runs whose tail can still reach the window are read, and each one
+ * once: a process that never saw a finished run (it booted after the
+ * restart, or it is the other machine) reads its final playlist from the
+ * bucket, where it stays until retention sweeps the session.
+ */
+async function mergeFinishedRuns(
+  history: LiveWindowHistory,
+  channelId: string,
+  startedAt: number,
+  rung: string | undefined,
+  rungKey: string,
+  runs: readonly HlsRun[],
+  windowSegments: number,
+  now: number,
+): Promise<void> {
+  const floor = history.newestSequence - windowSegments * 2;
+  for (let index = 0; index < runs.length - 1; index += 1) {
+    const run = runs[index]!;
+    const next = runs[index + 1]!;
+    if (next.base - 1 < floor) {
+      continue;
+    }
+    const key = `${rungKey}#${run.suffix}`;
+    let body = finishedRunBodies.get(key);
+    if (body === undefined) {
+      try {
+        const response = await fetch(
+          internalPlaylistUrl(channelId, startedAt, rung, run.suffix),
+          { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        );
+        if (!response.ok) {
+          // Swept, or never written (an egress that died before its first
+          // segment). The window simply starts at the next run.
+          continue;
+        }
+        body = await response.text();
+      } catch {
+        // Not remembered: the next render asks again.
+        continue;
+      }
+      finishedRunBodies.set(key, body);
+    }
+    history.merge(parseMediaPlaylist(body), now, {
+      base: run.base,
+      index,
+      limit: next.base - run.base,
+      current: false,
+    });
+  }
+}
+
 async function renderSignedPlaylist(
   channelId: string,
   startedAt: number,
@@ -1158,9 +1257,14 @@ async function renderSignedPlaylist(
     rungKey,
     now,
   );
+  // The egress runs behind this rendition (`hls-runs.ts`): one for a rung
+  // that never restarted, one more for every in-place restart. The last is
+  // the one being written; the rest are finished and frozen.
+  const runs = rungRuns.get(rungKey) ?? [...LEGACY_RUNS];
+  const current = runs[runs.length - 1]!;
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
-  const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
+  const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung, current.suffix);
 
   let response: Response;
   try {
@@ -1173,18 +1277,51 @@ async function renderSignedPlaylist(
       error instanceof Error ? error.message : "Storage unreachable",
     );
   }
-  if (!response.ok) {
+  // A RUN THAT HAS NOT WRITTEN ITS FIRST PLAYLIST YET is the seam of an
+  // in-place restart, not a missing stream: the row already names the new
+  // run (it is recorded when its egress starts) and the bucket will have its
+  // playlist within seconds. The previous runs are still there to list, so
+  // the viewer is served the frozen tail and holds, exactly as it held while
+  // the dead egress was being detected. A rendition that never restarted
+  // keeps the old answer.
+  const seam = !response.ok && response.status === 404 && runs.length > 1;
+  if (!response.ok && !seam) {
     throw new HlsPlaylistUnavailable(
       `Storage returned HTTP ${response.status} for the playlist`,
     );
   }
+  const currentBody = seam ? null : await response.text();
   // The egress lists five segments. Remember them and list more: the
   // objects are still in the bucket, and a viewer with only two seconds of
   // listed media behind the playhead stalls on every slow poll. The widened
   // body still carries the egress's own URI lines, so the rewrite below is
   // unchanged.
   const history = historyFor(cacheKey(channelId, startedAt, rung));
-  const body = widenLivePlaylist(history, await response.text(), undefined, now);
+  const windowSegments = liveWindowSegments();
+  if (runs.length > 1) {
+    await mergeFinishedRuns(history, channelId, startedAt, rung, rungKey, runs, windowSegments, now);
+  }
+  if (currentBody !== null) {
+    history.merge(parseMediaPlaylist(currentBody), now, {
+      base: current.base,
+      index: runs.length - 1,
+      current: true,
+    });
+  }
+  history.prune(windowSegments);
+  if (currentBody === null && history.size === 0) {
+    // Between runs and nothing of the earlier ones could be read either:
+    // there is no playlist to hand out, only an honest retry-later.
+    throw new HlsPlaylistUnavailable("No run of this rendition is readable yet");
+  }
+  // NO `#EXT-X-ENDLIST` ON A LIVE RENDER. The row is what says a session is
+  // over (a finished session 404s above, and the client follows `/live`),
+  // while the end marker is only ever what an egress writes when it STOPS:
+  // a transcode that died, or one stopped to be restarted in place. Passing
+  // it through told every player the film was over in the middle of it (hls.js
+  // turns the playlist into VOD and stops reloading it), which is precisely
+  // the seam the in-place restart exists to hide.
+  const body = stripEndList(history.render(windowSegments));
   const ttl = hlsUrlTtlSeconds();
   // Quantised, never `new Date()`: see `segmentSigningTime` above. A segment
   // appearing for the first time is signed at this instant; one already in

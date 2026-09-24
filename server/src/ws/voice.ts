@@ -118,6 +118,7 @@ import {
   releaseLiveHlsSession,
   setLiveHlsChangeListener,
   setLiveHlsPresenterCheck,
+  setLiveHlsPresenterIdentity,
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
@@ -2933,6 +2934,13 @@ setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
   }
   return pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId;
 });
+
+// Which person a peer is, so a presenter who came back under a fresh peer id
+// (a reconnect that could not resume) keeps their party's session: the ladder
+// restarts in place instead of minting a new one (`samePresenterPerson`).
+// Only this process's own peers: a presenter the egress process is about to
+// restart for has to be seated here for it to be reconciling at all.
+setLiveHlsPresenterIdentity((_channelId, peerId) => peers.get(peerId)?.userId ?? null);
 
 /**
  * The stream a `channel-live` frame carries for this channel, from THIS

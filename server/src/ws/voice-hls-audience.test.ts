@@ -119,6 +119,7 @@ vi.mock("../voice/hls-egress.js", () => ({
   setLiveHlsChangeListener: () => {},
   setLiveHlsSfuLoadReader: () => {},
   setLiveHlsPresenterCheck: () => {},
+  setLiveHlsPresenterIdentity: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
   // The cross-machine half (handover, adoption hold, sharer sweep): one
