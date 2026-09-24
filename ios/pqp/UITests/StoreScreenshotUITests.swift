@@ -32,7 +32,6 @@ final class StoreScreenshotUITests: XCTestCase {
         let table: [String: [String: String]] = [
             "Settings": ["en": "Settings", "pt-BR": "Ajustes"],
             "All": ["en": "All", "pt-BR": "Tudo"],
-            "Skip": ["en": "Skip", "pt-BR": "Pular"],
         ]
         return table[key]?[locale] ?? table[key]?["en"] ?? key
     }
@@ -41,7 +40,7 @@ final class StoreScreenshotUITests: XCTestCase {
         // Always pin the simulator's language explicitly, even for "en": a
         // prior pt-BR run leaves the simulator itself set to pt-BR, and
         // without this the English pass would render Portuguese strings
-        // while searching for English selectors like "Settings"/"All"/"Skip".
+        // while searching for English selectors like "Settings"/"All".
         let apple = locale == "en" ? "en" : locale
         let region = locale == "en" ? "en_US" : locale.replacingOccurrences(of: "-", with: "_")
         return ["-AppleLanguages", "(\(apple))", "-AppleLocale", region]
@@ -204,7 +203,7 @@ final class StoreScreenshotUITests: XCTestCase {
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO",
                                "-pqp.lastVisited", ""] + localeLaunchArguments
         app.launch()
-        if app.buttons[t("Skip")].waitForExistence(timeout: 15) {
+        if app.buttons["welcome.start"].waitForExistence(timeout: 15) {
             shoot("00-onboarding")
         } else {
             print("SHOT-SKIP: onboarding did not appear")

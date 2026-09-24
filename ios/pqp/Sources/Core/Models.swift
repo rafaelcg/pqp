@@ -678,13 +678,16 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// own exactly the way `setStatus` patches `status`; nothing else in the blob
     /// is disturbed.
     ///
-    /// Note what is NOT here: `onboardedAt`. The web gates its sign-up wizard on
-    /// it, while iOS gates its intro beats on a device-local `UserDefaults` bool
-    /// (`SessionStore.onboardedKey`) — so the two flows do not know about each
-    /// other, and somebody who signed up on the web still sees the beats here.
-    /// Worth fixing, but it is a change to the sign-in path rather than to
-    /// first-run guidance, and it is not what this field is for.
     var firstRunDismissedAt: String?
+    /// When the first-run wizard (age, you, room, ready) was finished or
+    /// skipped, as an ISO instant. The SAME key the web wizard writes, so
+    /// answering it on either device answers it on both. Absent means an
+    /// account that has not answered yet; see `Onboarding.shouldRun`.
+    ///
+    /// The pre-sign-in welcome is a different thing and is still gated on the
+    /// device-local `SessionStore.onboardedKey`: it runs before there is an
+    /// account to ask.
+    var onboardedAt: String?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }
