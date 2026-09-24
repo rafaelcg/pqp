@@ -152,6 +152,7 @@ import {
   socketCountry,
   type SfuRegionDecision,
 } from "../voice/regions.js";
+import { serverMemberCountries } from "../voice/region-audience.js";
 import {
   adoptVoicePeer,
   clearMusicIfEmpty,
@@ -937,6 +938,23 @@ async function decideRoomRegion(
       console.error("[voice] sfu region override lookup failed:", error);
     }
   }
+  // Where the server's people are. Read only where the policy would reach
+  // it (no override), cached per server for hours, and a failed read is "no
+  // data", which falls back to the first joiner's country as before.
+  let serverCountries: Map<string, number> | null = null;
+  if (
+    clientDeclaresRegions &&
+    channel.kind === "server" &&
+    !isWatchPartyChannelType(channel.type) &&
+    !override &&
+    channel.server_id
+  ) {
+    try {
+      serverCountries = await serverMemberCountries(channel.server_id);
+    } catch (error) {
+      console.error("[voice] sfu region member tally failed:", error);
+    }
+  }
   return decideSfuRegion({
     regionIds: regions.map((region) => region.id),
     defaultRegion: defaultRegionId(regions),
@@ -944,6 +962,7 @@ async function decideRoomRegion(
     channel: { kind: channel.kind, type: channel.type, sfuRegion: override },
     country: socketCountry(socket),
     clientDeclaresRegions,
+    serverCountries,
   });
 }
 
@@ -7867,6 +7886,14 @@ export async function handleVoiceMessage(
             ? "resume"
             : (openingRegion?.reason ?? "adopted"),
         country: socketCountry(socket),
+        // The server tally behind `server-majority` / `server-mixed`.
+        ...(openingRegion?.sample && resume.kind === "cold"
+          ? {
+              share: Math.round(openingRegion.sample.share * 100) / 100,
+              sample: openingRegion.sample.total,
+              byRegion: openingRegion.sample.byRegion,
+            }
+          : {}),
       });
     }
     if (!wasPinned) {

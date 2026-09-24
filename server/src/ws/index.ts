@@ -4,6 +4,8 @@ import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
+import { recordUserCountry } from "../voice/region-audience.js";
+import { socketCountry } from "../voice/regions.js";
 import { createFrameBudget } from "./frame-budget.js";
 import {
   deleteAuthenticatedSocket,
@@ -338,6 +340,10 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       // client connecting mid-show is told about every party it may see. Both
       // are fire and forget: `ready` must not wait on either, and the worst
       // case is a sidebar block that arrives with the next state change.
+      // Where this account was just seen, for picking the SFU region of its
+      // servers' voice rooms (`voice/region-audience.ts`). Country only,
+      // throttled, never throws, and a no-op without `LIVEKIT_REGIONS`.
+      void recordUserCountry(resolved.user.id, socketCountry(socket));
       void onHostSocketOpened(resolved.user.id).catch((error) => {
         console.error("[watch-party] host reconnect failed:", error);
       });

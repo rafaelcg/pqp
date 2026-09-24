@@ -7,7 +7,9 @@ import {
   regionCountryMap,
   resetRoomRegions,
   resolveSfuRegion,
+  SERVER_MAJORITY_MIN_SAMPLE,
   sfuRegions,
+  tallyServerRegions,
   type SfuRegionPolicyInput,
 } from "./regions.js";
 
@@ -209,5 +211,147 @@ describe("decideSfuRegion", () => {
         channel: { kind: "dm", type: "voice", sfuRegion: null },
       }),
     ).toEqual({ region: "sao", reason: "dm" });
+  });
+});
+
+describe("decideSfuRegion: the server's people", () => {
+  const base: SfuRegionPolicyInput = {
+    regionIds: ["sao", "mia", "lon"],
+    defaultRegion: "sao",
+    countryMap: new Map([
+      ["US", "mia"],
+      ["CA", "mia"],
+      ["GB", "lon"],
+    ]),
+    channel: { kind: "server", type: "voice", sfuRegion: null },
+    country: "GB",
+    clientDeclaresRegions: true,
+  };
+  const countries = (entries: Record<string, number>) =>
+    new Map(Object.entries(entries));
+
+  it("a Brazilian server stays home when a visitor from London opens the room", () => {
+    const decision = decideSfuRegion({
+      ...base,
+      serverCountries: countries({ BR: 40, PT: 3, GB: 1 }),
+    });
+    expect(decision).toMatchObject({ region: "sao", reason: "server-majority" });
+    // Unmapped countries (BR, PT) count for the default region.
+    expect(decision.sample).toEqual({
+      total: 44,
+      top: "sao",
+      share: 43 / 44,
+      byRegion: { sao: 43, lon: 1 },
+    });
+  });
+
+  it("a North American server goes to Miami, whoever opens it", () => {
+    expect(
+      decideSfuRegion({
+        ...base,
+        country: "BR",
+        serverCountries: countries({ US: 7, CA: 2, BR: 1 }),
+      }),
+    ).toMatchObject({ region: "mia", reason: "server-majority" });
+  });
+
+  it("exactly 60% is a clear majority", () => {
+    expect(
+      decideSfuRegion({ ...base, serverCountries: countries({ GB: 3, BR: 2 }) }),
+    ).toMatchObject({ region: "lon", reason: "server-majority" });
+  });
+
+  it("no clear majority stays on the default, never the first joiner's box", () => {
+    expect(
+      decideSfuRegion({ ...base, serverCountries: countries({ GB: 11, BR: 9 }) }),
+    ).toMatchObject({ region: "sao", reason: "server-mixed" });
+    // Three ways, nobody near 60%.
+    expect(
+      decideSfuRegion({
+        ...base,
+        serverCountries: countries({ GB: 4, US: 4, BR: 4 }),
+      }),
+    ).toMatchObject({ region: "sao", reason: "server-mixed" });
+  });
+
+  it("a tie never wins, and the tally breaks it deterministically home first", () => {
+    const decision = decideSfuRegion({
+      ...base,
+      serverCountries: countries({ GB: 5, BR: 5 }),
+    });
+    expect(decision).toMatchObject({ region: "sao", reason: "server-mixed" });
+    expect(decision.sample?.top).toBe("sao");
+    expect(decision.sample?.share).toBe(0.5);
+    // Same numbers, other key order: same answer.
+    expect(
+      decideSfuRegion({ ...base, serverCountries: countries({ BR: 5, GB: 5 }) }),
+    ).toEqual(decision);
+  });
+
+  it("a mixed server follows LIVEKIT_REGION_DEFAULT, like an unmapped joiner", () => {
+    expect(
+      decideSfuRegion({
+        ...base,
+        defaultRegion: "mia",
+        serverCountries: countries({ GB: 5, JP: 5 }),
+      }),
+    ).toMatchObject({ region: "mia", reason: "server-mixed" });
+  });
+
+  it("too few known members: the first joiner's country decides, as before", () => {
+    const few = countries({ GB: SERVER_MAJORITY_MIN_SAMPLE - 1 });
+    expect(decideSfuRegion({ ...base, country: "US", serverCountries: few })).toEqual({
+      region: "mia",
+      reason: "country",
+    });
+    expect(
+      decideSfuRegion({ ...base, country: "BR", serverCountries: new Map() }),
+    ).toEqual({ region: "sao", reason: "default" });
+    expect(decideSfuRegion({ ...base, serverCountries: null })).toEqual({
+      region: "lon",
+      reason: "country",
+    });
+  });
+
+  it("the operator override beats the server's people", () => {
+    expect(
+      decideSfuRegion({
+        ...base,
+        channel: { ...base.channel, sfuRegion: "lon" },
+        serverCountries: countries({ BR: 50 }),
+      }),
+    ).toEqual({ region: "lon", reason: "override" });
+  });
+
+  it("a watch party, a conversation, an old client and single-region mode ignore the tally", () => {
+    const london = countries({ GB: 50 });
+    expect(
+      decideSfuRegion({
+        ...base,
+        channel: { kind: "server", type: "watch_party", sfuRegion: null },
+        serverCountries: london,
+      }),
+    ).toEqual({ region: "sao", reason: "watch-party" });
+    expect(
+      decideSfuRegion({
+        ...base,
+        channel: { kind: "dm", type: "voice", sfuRegion: null },
+        serverCountries: london,
+      }),
+    ).toEqual({ region: "sao", reason: "dm" });
+    expect(
+      decideSfuRegion({ ...base, clientDeclaresRegions: false, serverCountries: london }),
+    ).toEqual({ region: "sao", reason: "old-client" });
+    expect(decideSfuRegion({ ...base, regionIds: null, serverCountries: london })).toEqual({
+      region: "sao",
+      reason: "single",
+    });
+  });
+
+  it("a country mapped to a region no longer configured counts for the default", () => {
+    expect(
+      tallyServerRegions(countries({ DE: 6, GB: 1 }), ["sao", "lon"], new Map([["DE", "fra"], ["GB", "lon"]]), "sao"),
+    ).toEqual({ total: 7, top: "sao", share: 6 / 7, byRegion: { sao: 6, lon: 1 } });
+    expect(tallyServerRegions(new Map(), ["sao"], new Map(), "sao")).toBeNull();
   });
 });

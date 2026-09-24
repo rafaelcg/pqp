@@ -17,7 +17,17 @@ the whole room is on that box.
   `VOICE_REGISTRY=postgres`, which production runs; an in-process map always).
   Everybody in the room is sent to that box. LiveKit single nodes do not relay
   to each other, so there is no other correct answer.
-- **The signal is the first joiner's `CF-IPCountry`**, captured from the
+- **The signal is where the server's people are** (since 2026-09-24). Every
+  account's last seen country (two letters, never an IP) is recorded at WS
+  auth, throttled to once per 6 h unless it changes. A room opens on the
+  region that at least 60% of its server's members seen in the last 30 days
+  map to, given at least 5 of them; with 5 or more but no such majority it
+  opens on `LIVEKIT_REGION_DEFAULT` (home unless set). Only a server with
+  fewer than 5 known members falls back to the first joiner's
+  `CF-IPCountry`, which is how it worked before: one visitor from London
+  first into a Brazilian server's channel used to move the whole call to
+  London. See `server/src/voice/region-audience.ts`.
+- **The country comes from `CF-IPCountry`**, captured from the
   WebSocket upgrade. Cloudflare adds it on every proxied request; Caddy passes
   it through unchanged (verified locally against the `(upstreams)` snippet of
   `tools/api-host/Caddyfile`, on plain HTTP and on the `/ws` upgrade).
@@ -48,11 +58,13 @@ the whole room is on that box.
   where the participant is. A banned account's LiveKit connection outlives its
   WebSocket, so the boxes themselves are the authority, not the pin.
 - **Mesh rooms carry a region too**, so a mid-call promotion onto the SFU goes
-  to the box the first joiner chose.
+  to the box decided when the room opened.
 
 Decision order (`decideSfuRegion` in `server/src/voice/regions.ts`): single
 region, conversation (home), watch party (home), first joiner without the cap
-(home), operator override, country map, `LIVEKIT_REGION_DEFAULT`.
+(home), operator override, the server's members (`server-majority`, or
+`server-mixed` to the default), and only with too few known members the first
+joiner's country through the map, then `LIVEKIT_REGION_DEFAULT`.
 
 ## Configuration
 
