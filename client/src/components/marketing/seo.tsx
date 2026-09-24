@@ -51,6 +51,7 @@ export function Seo({
     setLink("alternate", `${SITE_URL}${path}`, "x-default");
     setLink("alternate", `${SITE_URL}${path}?lang=pt-BR`, "pt-BR");
     setLink("alternate", `${SITE_URL}${path}?lang=en`, "en");
+    setLink("alternate", `${SITE_URL}${path}?lang=es`, "es");
     setMeta("twitter:card", "summary_large_image");
     setMeta("twitter:title", socialTitle);
     setMeta("twitter:description", socialDescription);

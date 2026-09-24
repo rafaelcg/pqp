@@ -30,6 +30,12 @@ function ensureInit() {
   } catch {
     // English-only until the Portuguese file is on disk.
   }
+  let es = {};
+  try {
+    es = readBundle("es");
+  } catch {
+    // Same for Spanish.
+  }
   i18next.init({
     lng: "en",
     fallbackLng: "en",
@@ -46,6 +52,7 @@ function ensureInit() {
     resources: {
       en: { translation: en },
       "pt-BR": { translation: ptBR },
+      es: { translation: es },
     },
   });
   initialized = true;
@@ -54,7 +61,9 @@ function ensureInit() {
 
 function setLanguage(locale) {
   ensureInit();
-  i18next.changeLanguage(locale === "pt-BR" ? "pt-BR" : "en");
+  i18next.changeLanguage(
+    locale === "pt-BR" || locale === "es" ? locale : "en",
+  );
 }
 
 function t(key, vars) {

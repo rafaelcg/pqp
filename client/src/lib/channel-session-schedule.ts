@@ -17,7 +17,7 @@ export function isChannelSessionScheduleEnabled(): boolean {
   return import.meta.env.VITE_WATCH_PARTY_SCHEDULE === "true";
 }
 
-export type SessionScheduleLocale = "pt-BR" | "en";
+export type SessionScheduleLocale = "pt-BR" | "en" | "es";
 
 const WEEKDAYS_PT = [
   "domingo",
@@ -26,6 +26,15 @@ const WEEKDAYS_PT = [
   "quarta",
   "quinta",
   "sexta",
+  "sábado",
+];
+const WEEKDAYS_ES = [
+  "domingo",
+  "lunes",
+  "martes",
+  "miércoles",
+  "jueves",
+  "viernes",
   "sábado",
 ];
 const WEEKDAYS_EN = [
@@ -40,7 +49,15 @@ const WEEKDAYS_EN = [
 
 /** The weekday's name in the locale's own casing ("sábado", "Saturday"). */
 export function weekdayName(date: Date, locale: SessionScheduleLocale): string {
-  return (locale === "pt-BR" ? WEEKDAYS_PT : WEEKDAYS_EN)[date.getDay()]!;
+  return weekdays(locale)[date.getDay()]!;
+}
+
+function weekdays(locale: SessionScheduleLocale): string[] {
+  return locale === "pt-BR"
+    ? WEEKDAYS_PT
+    : locale === "es"
+      ? WEEKDAYS_ES
+      : WEEKDAYS_EN;
 }
 
 function pad2(n: number): string {
@@ -70,41 +87,82 @@ export function formatSessionRelativeTime(
 ): string {
   const target = typeof startsAt === "string" ? new Date(startsAt) : startsAt;
   const diffMs = target.getTime() - now.getTime();
-  const pt = locale === "pt-BR";
+  const words = PHRASES[locale];
 
   if (diffMs <= 0) {
-    return pt ? "ao vivo agora" : "live now";
+    return words.live;
   }
 
   const diffMinutes = Math.round(diffMs / 60_000);
   if (diffMinutes < 1) {
-    return pt ? "em menos de 1 min" : "in less than 1 min";
+    return words.underAMinute;
   }
   if (diffMinutes < 60) {
-    return pt ? `em ${diffMinutes} min` : `in ${diffMinutes} min`;
+    return words.inMinutes(diffMinutes);
   }
 
   const diffHours = diffMs / 3_600_000;
-  const hh = pad2(target.getHours());
-  const mm = pad2(target.getMinutes());
+  const clock = words.clock(pad2(target.getHours()), pad2(target.getMinutes()));
   if (sameCalendarDay(target, now)) {
-    return pt ? `hoje às ${hh}h${mm}` : `today at ${hh}:${mm}`;
+    return words.today(clock);
   }
 
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   if (sameCalendarDay(target, tomorrow)) {
-    return pt ? `amanhã às ${hh}h${mm}` : `tomorrow at ${hh}:${mm}`;
+    return words.tomorrow(clock);
   }
 
   if (diffHours < 24 * 6) {
-    const weekday = (pt ? WEEKDAYS_PT : WEEKDAYS_EN)[target.getDay()];
-    return pt ? `${weekday} às ${hh}h${mm}` : `${weekday} at ${hh}:${mm}`;
+    return words.weekday(weekdays(locale)[target.getDay()]!, clock);
   }
 
-  const diffDays = Math.round(diffHours / 24);
-  return pt ? `em ${diffDays} dias` : `in ${diffDays} days`;
+  return words.inDays(Math.round(diffHours / 24));
 }
+
+interface SchedulePhrases {
+  live: string;
+  underAMinute: string;
+  inMinutes: (n: number) => string;
+  clock: (hh: string, mm: string) => string;
+  today: (clock: string) => string;
+  tomorrow: (clock: string) => string;
+  weekday: (day: string, clock: string) => string;
+  inDays: (n: number) => string;
+}
+
+const PHRASES: Record<SessionScheduleLocale, SchedulePhrases> = {
+  "pt-BR": {
+    live: "ao vivo agora",
+    underAMinute: "em menos de 1 min",
+    inMinutes: (n) => `em ${n} min`,
+    clock: (hh, mm) => `${hh}h${mm}`,
+    today: (clock) => `hoje às ${clock}`,
+    tomorrow: (clock) => `amanhã às ${clock}`,
+    weekday: (day, clock) => `${day} às ${clock}`,
+    inDays: (n) => `em ${n} dias`,
+  },
+  es: {
+    live: "en vivo ahora",
+    underAMinute: "en menos de 1 min",
+    inMinutes: (n) => `en ${n} min`,
+    clock: (hh, mm) => `${hh}:${mm}`,
+    today: (clock) => `hoy a las ${clock}`,
+    tomorrow: (clock) => `mañana a las ${clock}`,
+    weekday: (day, clock) => `el ${day} a las ${clock}`,
+    inDays: (n) => `en ${n} días`,
+  },
+  en: {
+    live: "live now",
+    underAMinute: "in less than 1 min",
+    inMinutes: (n) => `in ${n} min`,
+    clock: (hh, mm) => `${hh}:${mm}`,
+    today: (clock) => `today at ${clock}`,
+    tomorrow: (clock) => `tomorrow at ${clock}`,
+    weekday: (day, clock) => `${day} at ${clock}`,
+    inDays: (n) => `in ${n} days`,
+  },
+};
 
 // ---------------------------------------------------------- reminder toast bus
 

@@ -244,7 +244,7 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   },
 
   setLocale(locale) {
-    if (locale !== "en" && locale !== "pt-BR") {
+    if (locale !== "en" && locale !== "pt-BR" && locale !== "es") {
       return Promise.resolve(null);
     }
     return ipcRenderer.invoke("pqp:set-locale", locale);

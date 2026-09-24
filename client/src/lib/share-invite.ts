@@ -61,6 +61,13 @@ export function shareInviteText(
       ? `Vem pra pqp: ${url} #vemprapqp`
       : `A gente mudou pra pqp. Abre no navegador, entra na call e já era: ${url} #vemprapqp`;
   }
+  // Spanish gets its own campaign line and hashtag (`/ven`, #venapqp): the
+  // Portuguese pun does not survive the trip, the invitation does.
+  if (locale === "es") {
+    return kind === "short"
+      ? `Ven a pqp: ${url} #venapqp`
+      : `Nos mudamos a pqp. Abre en el navegador, entras a la llamada y listo: ${url} #venapqp`;
+  }
   return kind === "short"
     ? `Come hang out on pqp: ${url} #vemprapqp`
     : `We moved to pqp. Opens in the browser, join the call and that's it: ${url} #vemprapqp`;

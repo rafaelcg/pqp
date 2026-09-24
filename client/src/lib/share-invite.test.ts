@@ -87,6 +87,14 @@ describe("shareInviteText", () => {
   });
 });
 
+describe("shareInviteText in Spanish", () => {
+  it("has its own line and hashtag, not the Portuguese pun", () => {
+    const url = "https://pqp.gg/app/invite/abc";
+    expect(shareInviteText("short", "es", url)).toBe(`Ven a pqp: ${url} #venapqp`);
+    expect(shareInviteText("long", "es", url)).toContain("Nos mudamos a pqp");
+  });
+});
+
 describe("shareInvite", () => {
   it("prefers the native sheet when there is one", async () => {
     const share = vi.fn().mockResolvedValue(undefined);

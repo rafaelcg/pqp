@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -231,7 +232,7 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
 
   const since = monthStampToDate(profile.memberSince);
   const sinceLabel = since
-    ? since.toLocaleDateString(locale === "pt-BR" ? "pt-BR" : "en", {
+    ? since.toLocaleDateString(intlLocale(locale), {
         month: "long",
         year: "numeric",
         timeZone: "UTC",

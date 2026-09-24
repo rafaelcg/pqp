@@ -1,8 +1,4 @@
-import {
-  SignUpButton,
-  SignedIn,
-  SignedOut,
-} from "@clerk/clerk-react";
+import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
 import { Ban, Check, Minus, X, type LucideIcon } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
@@ -106,9 +102,21 @@ const VERDICT: Record<
   Verdict,
   { icon: LucideIcon; label: MessageKey; className: string }
 > = {
-  yes: { icon: Check, label: "vsDiscord.chip.yes", className: "bg-success/15 text-success" },
-  no: { icon: X, label: "vsDiscord.chip.no", className: "bg-ink-3 text-paper-muted" },
-  partial: { icon: Minus, label: "vsDiscord.chip.partial", className: "bg-warning/15 text-warning" },
+  yes: {
+    icon: Check,
+    label: "vsDiscord.chip.yes",
+    className: "bg-success/15 text-success",
+  },
+  no: {
+    icon: X,
+    label: "vsDiscord.chip.no",
+    className: "bg-ink-3 text-paper-muted",
+  },
+  partial: {
+    icon: Minus,
+    label: "vsDiscord.chip.partial",
+    className: "bg-warning/15 text-warning",
+  },
 };
 
 function stagger(i: number): CSSProperties {
@@ -196,7 +204,11 @@ function CreateRoomButton({ className }: { className?: string }) {
  * Discord wins.
  */
 export function VsDiscordPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  // The featured card is about a Brazilian regulatory story, and the Spanish
+  // page is written for readers outside Brazil to whom it means nothing. They
+  // get the comparison and the CTA without it.
+  const showBrazilCard = locale !== "es";
   const betaUrl = testflightUrl();
 
   return (
@@ -223,9 +235,7 @@ export function VsDiscordPage() {
               <span className="font-brand text-6xl tracking-tight text-paper sm:text-7xl">
                 pqp
               </span>
-              <span
-                className="inline-block -rotate-6 font-brand text-2xl text-signal sm:text-3xl"
-              >
+              <span className="inline-block -rotate-6 font-brand text-2xl text-signal sm:text-3xl">
                 vs
               </span>
               <span className="font-brand text-6xl tracking-tight text-paper-muted sm:text-7xl">
@@ -246,64 +256,73 @@ export function VsDiscordPage() {
 
           {/* The reason this page exists, pulled out of the table. The CTA sits
               here because this card is the conversion moment, not the footer. */}
-          <section
-            className="animate-rise mt-14"
-            style={stagger(2)}
-            aria-labelledby="vs-discord-featured"
-          >
-            <h2
-              id="vs-discord-featured"
-              className="text-center text-xs font-semibold uppercase tracking-[0.22em] text-paper-muted"
+          {showBrazilCard ? (
+            <section
+              className="animate-rise mt-14"
+              style={stagger(2)}
+              aria-labelledby="vs-discord-featured"
             >
-              {t("vsDiscord.row.screen.label")}
-            </h2>
-            <div className="mt-5 grid overflow-hidden rounded-2xl border border-ink-4 md:grid-cols-2">
-              <div className="relative bg-signal/[0.07] p-6 sm:p-8">
-                <div
-                  className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--glow-accent),transparent_65%)]"
-                  aria-hidden
-                />
-                <div className="relative">
-                  <p className="font-brand text-lg tracking-tight text-signal">
-                    pqp
+              <h2
+                id="vs-discord-featured"
+                className="text-center text-xs font-semibold uppercase tracking-[0.22em] text-paper-muted"
+              >
+                {t("vsDiscord.row.screen.label")}
+              </h2>
+              <div className="mt-5 grid overflow-hidden rounded-2xl border border-ink-4 md:grid-cols-2">
+                <div className="relative bg-signal/[0.07] p-6 sm:p-8">
+                  <div
+                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--glow-accent),transparent_65%)]"
+                    aria-hidden
+                  />
+                  <div className="relative">
+                    <p className="font-brand text-lg tracking-tight text-signal">
+                      pqp
+                    </p>
+                    <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight sm:text-4xl">
+                      <span
+                        aria-hidden
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal"
+                      >
+                        <Check className="h-5 w-5" strokeWidth={3} />
+                      </span>
+                      {t("vsDiscord.chip.works")}
+                    </p>
+                    <p className="mt-3 text-pretty text-sm leading-relaxed text-paper-muted">
+                      {t("vsDiscord.featured.pqpDetail")}
+                    </p>
+                    <CreateRoomButton className="mt-6" />
+                  </div>
+                </div>
+                <div className="border-t border-ink-4 bg-ink-2/60 p-6 sm:p-8 md:border-l md:border-t-0">
+                  <p className="pt-1 text-xs font-semibold uppercase tracking-[0.18em] text-paper-muted">
+                    Discord
                   </p>
-                  <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight sm:text-4xl">
+                  <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight text-danger sm:text-4xl">
                     <span
                       aria-hidden
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger/15 text-danger"
                     >
-                      <Check className="h-5 w-5" strokeWidth={3} />
+                      <Ban className="h-5 w-5" strokeWidth={3} />
                     </span>
-                    {t("vsDiscord.chip.works")}
+                    {t("vsDiscord.chip.suspended")}
                   </p>
                   <p className="mt-3 text-pretty text-sm leading-relaxed text-paper-muted">
-                    {t("vsDiscord.featured.pqpDetail")}
+                    {t("vsDiscord.featured.discordDetail")}
                   </p>
-                  <CreateRoomButton className="mt-6" />
                 </div>
               </div>
-              <div className="border-t border-ink-4 bg-ink-2/60 p-6 sm:p-8 md:border-l md:border-t-0">
-                <p className="pt-1 text-xs font-semibold uppercase tracking-[0.18em] text-paper-muted">
-                  Discord
-                </p>
-                <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight text-danger sm:text-4xl">
-                  <span
-                    aria-hidden
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger/15 text-danger"
-                  >
-                    <Ban className="h-5 w-5" strokeWidth={3} />
-                  </span>
-                  {t("vsDiscord.chip.suspended")}
-                </p>
-                <p className="mt-3 text-pretty text-sm leading-relaxed text-paper-muted">
-                  {t("vsDiscord.featured.discordDetail")}
-                </p>
-              </div>
+              <p className="mx-auto mt-4 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80">
+                {t("vsDiscord.hero.disclaimer")}
+              </p>
+            </section>
+          ) : (
+            <div
+              className="animate-rise mt-10 flex justify-center"
+              style={stagger(2)}
+            >
+              <CreateRoomButton />
             </div>
-            <p className="mx-auto mt-4 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80">
-              {t("vsDiscord.hero.disclaimer")}
-            </p>
-          </section>
+          )}
 
           {/* The full record, including the rows Discord wins. */}
           <section

@@ -29,5 +29,10 @@
 # route in main.tsx for builds served outside Pages) so the address can later
 # become the public paste box without breaking links already shared.
 /discord      /vem#importar        301
+# The Spanish door to the same page: "ven" is "vem" for Latin America. A 302
+# rather than its own page so there is one campaign page to keep honest, and
+# `?lang=es` outranks every other locale signal (a stored pt-BR preference
+# included), so whoever typed `/ven` reads Spanish. Twin route in main.tsx.
+/ven          /vem?lang=es         302
 
 /*    /index.html   200

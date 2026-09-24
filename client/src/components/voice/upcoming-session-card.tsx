@@ -41,7 +41,7 @@ export function UpcomingSessionCard({
   onCancel: () => Promise<void>;
   onEdit?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [reminding, setReminding] = useState(session.reminding);
   const [reminderBusy, setReminderBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -63,7 +63,7 @@ export function UpcomingSessionCard({
     }
   };
 
-  const relative = formatSessionRelativeTime(session.startsAt, now, "pt-BR");
+  const relative = formatSessionRelativeTime(session.startsAt, now, locale);
   const isScheduled = session.status === "scheduled";
   const isLive = session.status === "live";
 

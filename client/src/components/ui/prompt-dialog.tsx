@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useTranslation } from "@/lib/i18n";
 
 /**
  * What a typed channel name becomes, keystroke by keystroke.
@@ -52,9 +53,9 @@ export function PromptDialog({
   open,
   title,
   description,
-  label = "Name",
+  label,
   placeholder,
-  confirmLabel = "Confirm",
+  confirmLabel,
   initialValue = "",
   checkboxLabel,
   checkboxDefault = false,
@@ -64,6 +65,7 @@ export function PromptDialog({
   onClose,
   onConfirm,
 }: PromptDialogProps) {
+  const { t } = useTranslation();
   const [value, setValue] = useState(initialValue);
   const [secondary, setSecondary] = useState("");
   const [checked, setChecked] = useState(checkboxDefault);
@@ -98,7 +100,7 @@ export function PromptDialog({
   return (
     <Dialog
       open={open}
-      eyebrow="Channel"
+      eyebrow={t("channelMeta.eyebrow")}
       title={title}
       description={description}
       size="sm"
@@ -106,10 +108,10 @@ export function PromptDialog({
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button type="submit" form={formId} disabled={!value.trim() || busy}>
-            {busy ? "Working…" : confirmLabel}
+            {busy ? t("common.working") : (confirmLabel ?? t("common.save"))}
           </Button>
         </>
       }
@@ -121,7 +123,7 @@ export function PromptDialog({
       >
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
-            {label}
+            {label ?? t("channelSettings.name")}
           </span>
           <Input
             value={value}

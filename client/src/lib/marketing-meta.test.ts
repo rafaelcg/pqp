@@ -5,6 +5,7 @@ import INDEX_HTML from "../../index.html?raw";
 import { describe, expect, it } from "vitest";
 import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
+import es from "../locales/es/translation.json";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
@@ -309,6 +310,83 @@ describe("the /vem campaign page", () => {
       for (const [key, value] of Object.entries(catalogue)) {
         if (!key.startsWith("vem.")) continue;
         expect(value.toLowerCase(), key).not.toMatch(/anpd|suspen/);
+      }
+    }
+  });
+});
+
+describe("Spanish", () => {
+  it("serves the Spanish head, card and FAQ for /vem, stamped es", () => {
+    const head = renderMarketingHead("/vem", "es");
+    expect(head).toContain(`<title>${es["vem.seo.title"]}</title>`);
+    expect(head).toContain(
+      '<meta property="og:image" content="https://pqp.gg/images/og-vem-es.png" />',
+    );
+    expect(head).toContain('<meta name="pqp:locale" content="es" />');
+    expect(head).toContain('hreflang="es" href="https://pqp.gg/vem?lang=es"');
+    expect(head).toContain(es["vem.faq.friends.q"]);
+  });
+
+  it("every page with catalogue copy matches the es catalogue", () => {
+    for (const [path, prefix] of [
+      ["/", "landing"],
+      ["/vs-discord", "vsDiscord"],
+      ["/tela", "tela"],
+      ["/vem", "vem"],
+      ["/beta", "betaPage"],
+      ["/android", "androidPage"],
+      ["/download", "downloadPage"],
+      ["/claim", "claim"],
+    ] as const) {
+      const head = renderMarketingHead(path, "es");
+      expect(head, path).toContain(
+        `<title>${(es as Record<string, string>)[`${prefix}.seo.title`]}</title>`,
+      );
+    }
+  });
+
+  it("every Spanish FAQ pair matches its catalogue twin", () => {
+    const sets = [
+      [LANDING_FAQ.es, "landing", ["safe", "free", "install", "capacity", "import", "data"]],
+      [VS_DISCORD_FAQ.es, "vsDiscord", ["why", "when", "how", "catch"]],
+      [TELA_FAQ.es, "tela", ["download", "vpn", "people", "free", "mobile", "data", "why"]],
+      [
+        VEM_FAQ.es,
+        "vem",
+        ["friends", "safe", "free", "bots", "messages", "install", "size", "back"],
+      ],
+    ] as const;
+    const catalogue = es as Record<string, string>;
+    for (const [faq, prefix, ids] of sets) {
+      expect(faq).toHaveLength(ids.length);
+      ids.forEach((id, index) => {
+        expect(faq[index]).toEqual({
+          question: catalogue[`${prefix}.faq.${id}.q`],
+          answer: catalogue[`${prefix}.faq.${id}.a`],
+        });
+      });
+    }
+  });
+
+  it("falls back to English on the pages with no Spanish prose", () => {
+    expect(renderMarketingHead("/terms", "es")).toContain(
+      "<title>Terms of service · pqp</title>",
+    );
+  });
+
+  it("sets <html lang> to es", () => {
+    const html = '<html lang="en"><head><title>x</title></head></html>';
+    expect(injectMarketingHead(html, "/vem", "es")).toContain('<html lang="es">');
+  });
+
+  it("never mentions the ANPD, the suspension or a VPN anywhere in Spanish", () => {
+    for (const [key, value] of Object.entries(es)) {
+      expect(value.toLowerCase(), key).not.toMatch(/anpd|suspendid[oa]s? en brasil|\bvpn\b.*discord/);
+    }
+    for (const path of ["/", "/vs-discord", "/tela", "/vem"] as const) {
+      const head = renderMarketingHead(path, "es").toLowerCase();
+      for (const word of ["anpd", "suspen", "vpn"]) {
+        expect(head, `${path} ${word}`).not.toContain(word);
       }
     }
   });

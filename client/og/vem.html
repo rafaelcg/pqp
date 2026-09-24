@@ -1,11 +1,12 @@
 <!doctype html>
 <!--
-  Source of the /vem share cards (public/images/og-vem.png, og-vem-en.png).
+  Source of the /vem share cards (public/images/og-vem.png, og-vem-en.png,
+  og-vem-es.png).
   Rendered to PNG by render-og.mjs in this folder, so the text is real type,
   not a raster from a design tool. Art direction: the campaign's VISUALS.md
   section 2. Colours are the Classic dark theme values from src/index.css,
   copied here because this page is rendered outside the app.
-  Open it in a browser with ?lang=en for the English card.
+  Open it in a browser with ?lang=en or ?lang=es for the other cards.
 -->
 <html lang="pt-BR">
   <head>
@@ -151,13 +152,21 @@
           accent: "everyone.",
           sub: "Paste your Discord template. Your room shows up on pqp.",
         },
+        es: {
+          lead: "Casa nueva.<br />La misma ",
+          accent: "banda.",
+          sub: "Pega la plantilla de tu Discord. Tu sala aparece igualita en pqp.",
+          url: "pqp.gg/ven",
+        },
       };
-      const lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "pt-BR";
+      const requested = new URLSearchParams(location.search).get("lang");
+      const lang = requested === "en" || requested === "es" ? requested : "pt-BR";
       document.documentElement.lang = lang;
       const c = copy[lang];
       document.getElementById("headline").innerHTML =
         c.lead + '<span class="accent">' + c.accent + "</span>";
       document.getElementById("sub").textContent = c.sub;
+      if (c.url) document.querySelector(".url").textContent = c.url;
     </script>
   </body>
 </html>

@@ -1,4 +1,5 @@
 import type { Channel, OutgoingWebhook } from "@pqp/shared";
+import { intlLocale, type Locale } from "@/lib/locale";
 import { Check, ChevronDown, Copy, Hash, Plus, Webhook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -137,9 +138,9 @@ function hostOf(url: string): string {
   }
 }
 
-function formatRelative(iso: string, locale: string): string {
+function formatRelative(iso: string, locale: Locale): string {
   const deltaSec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat(locale === "pt-BR" ? "pt-BR" : "en", {
+  const rtf = new Intl.RelativeTimeFormat(intlLocale(locale), {
     numeric: "auto",
   });
   const abs = Math.abs(deltaSec);

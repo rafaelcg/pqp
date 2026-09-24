@@ -80,6 +80,19 @@ describe("detectLocale", () => {
     expect(detectLocale()).toBe("en");
   });
 
+  it("reads every Spanish region as the one Spanish catalogue", () => {
+    for (const tag of ["es", "es-MX", "es-AR", "es-419", "es-US", "es-CO", "es-CL"]) {
+      stub({ navigatorLanguages: [tag, "en-US"] });
+      expect(detectLocale(), tag).toBe("es");
+    }
+    stub({ search: "?lang=es", servedLocale: "pt-BR" });
+    expect(detectLocale()).toBe("es");
+    stub({ stored: "es", navigatorLanguages: ["pt-BR"] });
+    expect(detectLocale()).toBe("es");
+    stub({ servedLocale: "es", navigatorLanguages: ["en-US"] });
+    expect(detectLocale()).toBe("es");
+  });
+
   it("ignores a stamp it cannot parse rather than failing to boot", () => {
     stub({ servedLocale: "klingon", navigatorLanguages: ["pt-BR"] });
     expect(detectLocale()).toBe("pt-BR");

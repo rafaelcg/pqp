@@ -123,6 +123,7 @@ import {
 } from "@/lib/voice-clean";
 import {
   SUPPORTED_LOCALES,
+  intlLocale,
   setLocalePreference,
   type Locale,
 } from "@/lib/locale";
@@ -2072,6 +2073,7 @@ function ContrastPicker() {
 const LOCALE_LABELS: Record<Locale, MessageKey> = {
   en: "settings.appearance.language.en",
   "pt-BR": "settings.appearance.language.ptBR",
+  es: "settings.appearance.language.es",
 };
 
 /**
@@ -2102,7 +2104,14 @@ function LanguagePicker() {
     // closed phone's push should read in, and there is no i18next there to
     // ask instead. Immediate, not debounced — the reload two lines down
     // would otherwise race the request and drop it.
-    queuePreferenceSync({ locale: next }, { immediate: true });
+    //
+    // The server's enum is still `pt-BR | en` (push copy has no Spanish yet),
+    // so a Spanish reader is stored as English: an English push beats a
+    // Portuguese one, which is what an absent value defaults to.
+    queuePreferenceSync(
+      { locale: next === "es" ? "en" : next },
+      { immediate: true },
+    );
     await getDesktop()?.setLocale?.(next);
     try {
       const url = new URL(window.location.href);
@@ -3460,7 +3469,7 @@ function ProfileSection({
           <p className="mt-1.5 text-xs text-warning">
             {t("settings.profile.publicHandle.cooldown", {
               date: renameAvailableAt.toLocaleDateString(
-                locale === "pt-BR" ? "pt-BR" : "en",
+                intlLocale(locale),
                 { day: "numeric", month: "long", year: "numeric" },
               ),
             })}

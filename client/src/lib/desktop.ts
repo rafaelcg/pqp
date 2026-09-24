@@ -31,7 +31,7 @@ export interface PqpDesktop {
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
-  setLocale?(locale: "en" | "pt-BR"): Promise<string | null>;
+  setLocale?(locale: "en" | "pt-BR" | "es"): Promise<string | null>;
   /**
    * Launch at login. macOS and Windows only: Electron's login-item API has no
    * Linux implementation, so a Linux shell answers `false` to both rather

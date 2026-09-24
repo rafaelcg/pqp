@@ -20,6 +20,7 @@ try {
   for (const [lang, file] of [
     ["pt-BR", "og-vem.png"],
     ["en", "og-vem-en.png"],
+    ["es", "og-vem-es.png"],
   ]) {
     await page.goto(`file://${source}?lang=${lang}`);
     await page.evaluate(() => document.fonts.ready);
