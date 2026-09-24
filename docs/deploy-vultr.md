@@ -107,9 +107,8 @@ ssh pqp@<new-ip> 'cloud-init status --wait'
 
 ```bash
 ssh pqp@<new-ip> 'mkdir -p /tmp/pqp-provision'
-scp -r tools/api-host tools/db-backup pqp@<new-ip>:/tmp/pqp-provision/
-ssh pqp@<new-ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
-  sudo SSH_ALLOWLIST_CIDRS="<your CIDRs>" \
+scp -r tools/api-host pqp@<new-ip>:/tmp/pqp-provision/
+ssh pqp@<new-ip> 'sudo SSH_ALLOWLIST_CIDRS="<your CIDRs>" \
     PQP_DEPLOY_PUBLIC_KEY="$(cat deploy_vultr_api.pub)" \
     VULTR_CONFIG_HMAC_KEY=<same value as the GitHub secret, see step 4> \
     GHCR_USER=<gh username> GHCR_TOKEN=<PAT scoped to read:packages only> \
@@ -118,9 +117,8 @@ ssh pqp@<new-ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-ho
     bash /tmp/pqp-provision/api-host/provision.sh'
 ```
 
-`scp` needs `/tmp/pqp-provision` to already exist before it will accept two
-source directories in one call — hence the `mkdir -p` first; skipping it
-fails the copy before either directory lands.
+`scp` needs `/tmp/pqp-provision` to already exist first, hence the
+`mkdir -p` before it.
 
 `PQP_DEPLOY_PUBLIC_KEY` here is the same public key you already pasted into
 `cloud-init.yaml`'s `__PQP_DEPLOY_PUBLIC_KEY__` placeholder in step 1 (now
@@ -139,10 +137,12 @@ idempotent; re-run it (without the secrets, which persist once set) any time
 to check for drift, the same way `tools/sfu/install.sh` works.
 
 **This step does not start `api-a`/`api-b`, `worker` or `caddy`.** It lays out
-`/opt/pqp/{compose.yaml,Caddyfile,.env,backup.env}`, installs Docker, ufw,
-unattended-upgrades, Alloy, and the nightly backup cron. `.env` and
-`backup.env` are written as empty templates the first time only — fill them
-in next.
+`/opt/pqp/{compose.yaml,Caddyfile,.env}`, installs Docker, ufw,
+unattended-upgrades, Alloy, `rclone`, and the nightly backup cron
+(`tools/api-host/db-backup.sh` installed to `/opt/pqp/backup/run.sh`, run by
+root's crontab, see `docs/DB_RUNBOOK.md`). `.env` is written as an empty
+template the first time only, fill it in next; the backup has no secrets
+file of its own, it reads `DATABASE_URL` and `LIVE_HLS_S3_*` out of `.env`.
 
 ## 3. Secrets
 
@@ -158,6 +158,8 @@ TURN_URL / TURN_USERNAME / TURN_CREDENTIAL   (or CLOUDFLARE_TURN_* / METERED_*)
 LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
 S3_ENDPOINT / S3_BUCKET / S3_REGION / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_FORCE_PATH_STYLE / S3_PUBLIC_BASE_URL
 MAX_ATTACHMENT_BYTES / ATTACHMENT_URL_TTL_SECONDS
+LIVE_HLS_S3_ENDPOINT / LIVE_HLS_S3_BUCKET / LIVE_HLS_S3_REGION / LIVE_HLS_S3_ACCESS_KEY_ID / LIVE_HLS_S3_SECRET_ACCESS_KEY / LIVE_HLS_S3_FORCE_PATH_STYLE
+  (watch party recording; also what the nightly backup below uploads to, see docs/DB_RUNBOOK.md)
 PUBLIC_APP_URL / STEAM_WEB_API_KEY / BATTLENET_CLIENT_ID / BATTLENET_CLIENT_SECRET / TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
 CLUSTER_BUS / VOICE_REGISTRY    (both "postgres", matching fly.toml — this
                                   box is one machine, same as pqp-api today,
@@ -223,11 +225,12 @@ box's containers read.
 Vultr Managed PostgreSQL's port is not 5432 by default — read it off the
 instance's **Connection Details** tab, don't assume it.
 
-`/opt/pqp/backup.env` needs `BACKUP_DATABASE_URL` (a read-only role against
-whichever Postgres this box now backs up), `R2_BACKUP_BUCKET`,
-`R2_ACCOUNT_ID` (or `R2_BACKUP_ENDPOINT`), `R2_BACKUP_ACCESS_KEY_ID`,
-`R2_BACKUP_SECRET_ACCESS_KEY` — same names, same bucket, `tools/db-backup`
-run as a nightly cron job instead of a scheduled Fly machine (`docs/DB_RUNBOOK.md`).
+The nightly backup needs no secrets of its own: it dumps with the same
+`DATABASE_URL` above and uploads with the `LIVE_HLS_S3_*` values also above
+(the watch party recording bucket, reused rather than minting a dedicated
+backup credential). See `docs/DB_RUNBOOK.md` for what it does and the
+`trusted_ips` restriction on the managed cluster that this box's address
+has to be inside for the dump to connect at all.
 
 **TLS.** Pick Mode A or B in `tools/api-host/Caddyfile` (the file's header
 comment explains both). Mode A needs `/opt/pqp/certs/origin.{pem,key}`
@@ -428,8 +431,7 @@ rotation, but rolling — see §9.
 nothing that already matches and never touches the running containers.
 
 **Backups.** `cat /var/log/pqp-db-backup.log` on the box, or check the R2
-bucket listing — same verification steps as `docs/DB_RUNBOOK.md` describes
-for the Fly-scheduled version, since it is the identical script.
+bucket listing, see `docs/DB_RUNBOOK.md` for the verification steps.
 
 **Reboot.** `unattended-upgrades` may schedule a kernel update; a reboot is
 manual (`Automatic-Reboot` is left `false`, same call as the SFU box). In a
@@ -552,9 +554,8 @@ compose.yaml, and rollback fails the same way. Do this instead:
 ```bash
 # From a checkout of this PR's branch (or main, once merged):
 ssh pqp@<ip> 'mkdir -p /tmp/pqp-provision'
-scp -r tools/api-host tools/db-backup pqp@<ip>:/tmp/pqp-provision/
-ssh pqp@<ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
-  sudo bash /tmp/pqp-provision/api-host/provision.sh'
+scp -r tools/api-host pqp@<ip>:/tmp/pqp-provision/
+ssh pqp@<ip> 'sudo bash /tmp/pqp-provision/api-host/provision.sh'
 ```
 No new secrets needed for this re-run (`provision.sh` is idempotent and
 keeps whatever it already has — see step 2 above); this only needs to

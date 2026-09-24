@@ -151,7 +151,7 @@ fly apps list | grep pqp-api
 
 `fly apps create` does **not** allocate IPs or machines — nothing is running or billing yet.
 
-Other Fly apps in the org, for orientation: `pqp-api-staging` (staging API, `docs/STAGING.md`), `pqp-db-backup` (nightly Postgres dump to R2 as a scheduled machine, `docs/DB_RUNBOOK.md`), and the ambient runner (`tools/ambient/fly.toml`, `docs/ambient-deploy.md`).
+Other Fly apps in the org, for orientation: `pqp-api-staging` (staging API, `docs/STAGING.md`), and the ambient runner (`tools/ambient/fly.toml`, `docs/ambient-deploy.md`). The nightly Postgres backup used to run here as a scheduled machine, `pqp-db-backup`; that app was destroyed 2026-09-24 and the backup now runs as a root cron job on the API box instead, see `docs/DB_RUNBOOK.md`.
 
 > Do not run `fly launch`. It rewrites `fly.toml` from its own detection and will happily throw away the single-machine configuration this app depends on.
 

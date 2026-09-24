@@ -12,15 +12,18 @@ arithmetic: [`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`](../../docs/plans
 | File | Role | On the box |
 |---|---|---|
 | `cloud-init.yaml` | First-boot only: Docker, the `pqp` user, base ufw rules, unattended-upgrades. Paste into Vultr's "User Data" at instance creation. | consumed once by cloud-init |
-| `provision.sh` | Idempotent installer. Safe to re-run to check for drift. Lays out `/opt/pqp`, installs Alloy, wires the nightly `tools/db-backup` cron, and does the initial `install` of `pqp-deploy.sh` below. Never starts/restarts `api-a`/`api-b`/`worker`/`caddy` — that is the deploy workflow's job. | run from a scp'd copy |
+| `provision.sh` | Idempotent installer. Safe to re-run to check for drift. Lays out `/opt/pqp`, installs Alloy and `rclone`, wires the nightly `db-backup.sh` root cron job, and does the initial `install` of `pqp-deploy.sh` below. Never starts/restarts `api-a`/`api-b`/`worker`/`caddy`, that is the deploy workflow's job. | run from a scp'd copy |
+| `db-backup.sh` | The nightly Postgres backup job (`docs/DB_RUNBOOK.md`): `pg_dump` against `DATABASE_URL` from `/opt/pqp/.env`, uploaded with `rclone` to the `LIVE_HLS_S3_*` R2 bucket. No secrets of its own. | `/opt/pqp/backup/run.sh`, run by root's crontab (`/etc/cron.d/pqp-db-backup`) |
 | `compose.yaml` | `api-a` + `api-b` (two copies of the API half, same image as `pqp-api` on Fly, `WORKER_MODE=api` on both — `api-b` is Compose-profile-gated, see `docs/deploy-vultr.md` §9 "Two replicas on one box"), `worker` (same image, `WORKER_MODE=worker`, stays single, same `stop_grace_period` contract as `fly.toml`'s `kill_timeout`), `caddy` | `/opt/pqp/compose.yaml` |
 | `pqp-deploy.sh` | The one command the unprivileged `pqp-deploy` SSH account may sudo. Rolling-updates `api-a` → `api-b` → `worker`, verifies each replica's own reported version, splits `PG_POOL_MAX` across however many replicas are running. Signed and transferred by the deploy workflow the same way as `compose.yaml`/`Caddyfile` (same HMAC manifest) and installs a newer copy of itself mid-run when one is staged — see its own header comment for why that self-replacement is safe. A box whose installed copy predates this file's `api-a`/`api-b` split needs ONE manual `provision.sh` re-run first; `docs/deploy-vultr.md` §9 "Migrating an existing box" has the exact commands. | `/usr/local/bin/pqp-deploy` (root:root, 0755) |
 | `Caddyfile` | TLS for `api.pqp.gg` (two modes documented in its header: Cloudflare Origin CA, or Caddy automatic HTTPS), load-balancing reverse proxy across `api-a:3001` / `api-b:3001` with active health checking, WebSocket pass-through | `/opt/pqp/Caddyfile` |
 | `config.alloy` | Box metrics + `api-a`/`api-b`/`worker` container logs (labeled by Compose service name automatically — no changes needed here for the second replica), both to the same Grafana Cloud stack `tools/sfu-monitoring` and `tools/log-shipper` already use | `/etc/alloy/config.alloy` |
 
-Not here, and never in git: `.env`, `backup.env`, `certs/origin.{pem,key}`,
-`/etc/alloy/credentials.env`. `provision.sh` writes empty templates for the
-first two and refuses to overwrite anything that already exists.
+Not here, and never in git: `.env`, `certs/origin.{pem,key}`,
+`/etc/alloy/credentials.env`. `provision.sh` writes an empty template for
+the first and refuses to overwrite anything that already exists. The
+nightly backup has no secrets file of its own, `db-backup.sh` reads
+`DATABASE_URL` and `LIVE_HLS_S3_*` straight out of `.env`.
 
 ## Deploy
 
