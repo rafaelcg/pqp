@@ -343,6 +343,13 @@ export const voiceSessionSchema = z.object({
    * Absent reads as `speak`.
    */
   stream: z.boolean().optional(),
+  /**
+   * The SFU region the room is pinned to (`sao`, `mia`, ...). Only present
+   * when the deployment runs more than one region; informational, since
+   * `url` already names the box. Clients must dial `url`, never a host of
+   * their own.
+   */
+  region: z.string().optional(),
 });
 
 export type VoiceSessionRequest = z.infer<typeof voiceSessionRequestSchema>;

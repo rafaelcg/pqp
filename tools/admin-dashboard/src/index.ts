@@ -331,6 +331,11 @@ const OPERATOR_ROUTES: {
     path: "/operator/channel-transport",
     forward: (_url, origin) => `${origin}/api/admin/channel-voice-transport`,
   },
+  {
+    method: "PUT",
+    path: "/operator/channel-sfu-region",
+    forward: (_url, origin) => `${origin}/api/admin/channel-sfu-region`,
+  },
 ];
 
 function matchOperatorRoute(method: string, path: string) {

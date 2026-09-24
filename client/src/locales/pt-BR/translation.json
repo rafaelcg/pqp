@@ -1985,6 +1985,7 @@
   "serverSettings.audit.action.automod.block": "teve uma mensagem bloqueada pelo AutoMod",
   "serverSettings.audit.action.server.live_hls_update": "mudou a transmissão ao vivo de watch party neste servidor",
   "serverSettings.audit.action.channel.voice_transport_update": "mudou o caminho de mídia de um canal de voz",
+  "serverSettings.audit.action.channel.sfu_region_update": "mudou a região do servidor de mídia de um canal de voz",
   "serverSettings.export.title": "Exportar dados",
   "serverSettings.export.description": "Baixe todos os canais, membros e mensagens de {server} num arquivo JSON. Os arquivos anexados não vão junto, só o nome e o tamanho deles.",
   "serverSettings.export.action": "Exportar dados do servidor",

@@ -130,7 +130,20 @@ import {
   promotionRoomSize,
   type SfuRoomLoad,
 } from "../voice/promotion.js";
-import { readSfuStats } from "../voice/sfu-stats.js";
+import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
+import {
+  SFU_REGION_CAP,
+  decideSfuRegion,
+  defaultRegionId,
+  forgetRoomRegion,
+  pinRoomRegion,
+  pinnedRoomRegion,
+  regionCountryMap,
+  resetRoomRegions,
+  sfuRegions,
+  socketCountry,
+  type SfuRegionDecision,
+} from "../voice/regions.js";
 import {
   adoptVoicePeer,
   clearMusicIfEmpty,
@@ -153,6 +166,7 @@ import {
   persistMusic,
   persistWatchParty,
   claimVoiceRoomTransport,
+  readChannelSfuRegion,
   promoteVoiceRoomTransport,
   readMusicWithAnchor,
   readWatchParty,
@@ -637,6 +651,7 @@ function writePeerRow(peer: VoicePeer): void {
       orphanedAt:
         peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
       transport: getRoomTransport(peer.voiceChannelId),
+      sfuRegion: pinnedRoomRegion(peer.voiceChannelId),
       // The same identity check as above, handed to the registry so it can
       // ask it AGAIN at the moment the row goes out. With
       // `VOICE_REGISTRY_BATCH` on the write is issued a window later than it
@@ -882,6 +897,76 @@ export function isRoomPinnedLocally(voiceChannelId: string): boolean {
 }
 
 /**
+ * THE ROOM'S SFU REGION, pinned beside its transport (`voice/regions.ts`).
+ *
+ * Null in single-region mode, which is every deployment without
+ * `LIVEKIT_REGIONS`: nothing below reads a header, issues a query or writes a
+ * column then. With regions on, it is decided from the FIRST joiner's
+ * `CF-IPCountry` and `sfu-region` capability, whatever the room's transport:
+ * a mesh room carries a region too, so a mid-call promotion onto the SFU has
+ * a box to go to that the first joiner chose, not whoever clicked a camera.
+ */
+async function decideRoomRegion(
+  channel: ChannelRow,
+  socket: WebSocket,
+): Promise<SfuRegionDecision | null> {
+  const regions = sfuRegions();
+  if (!regions) {
+    return null;
+  }
+  const clientDeclaresRegions = socketHasCap(socket, SFU_REGION_CAP);
+  let override: string | null = null;
+  // The override query is skipped wherever the policy answers without it.
+  if (
+    clientDeclaresRegions &&
+    channel.kind === "server" &&
+    !isWatchPartyChannelType(channel.type)
+  ) {
+    try {
+      override = await readChannelSfuRegion(channel.id);
+    } catch (error) {
+      // A failed read must not refuse the join: automatic is the fallback.
+      console.error("[voice] sfu region override lookup failed:", error);
+    }
+  }
+  return decideSfuRegion({
+    regionIds: regions.map((region) => region.id),
+    defaultRegion: defaultRegionId(regions),
+    countryMap: regionCountryMap(regions),
+    channel: { kind: channel.kind, type: channel.type, sfuRegion: override },
+    country: socketCountry(socket),
+    clientDeclaresRegions,
+  });
+}
+
+/**
+ * Whether two remembered regions name the same box. Null is the home region
+ * (a room or a token from before regions, or a single-region deployment), so
+ * in single-region mode every pair is the same box.
+ */
+function sameSfuRegion(a: string | null, b: string | null): boolean {
+  if (!sfuRegions()) {
+    return true;
+  }
+  return regionOrHome(a) === regionOrHome(b);
+}
+
+/**
+ * A remembered region as a configured one: null, and an id that has since
+ * been taken out of `LIVEKIT_REGIONS`, both read as home, which is where
+ * `resolveSfuRegion` would send the token anyway. Null in single-region mode.
+ */
+function regionOrHome(region: string | null | undefined): string | null {
+  const regions = sfuRegions();
+  if (!regions) {
+    return null;
+  }
+  return regions.some((candidate) => candidate.id === region)
+    ? region!
+    : regions[0]!.id;
+}
+
+/**
  * What an empty room would open on. One query at most (the server's member
  * count and community flag), and none at all when LiveKit is off, the channel
  * is a conversation, or the channel carries an override. Called once per pin.
@@ -1012,6 +1097,7 @@ function recheckRoomTransport(
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
+  resetRoomRegions();
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
@@ -2262,6 +2348,19 @@ function scheduleCameraFollowUpReconciles(voiceChannelId: string): void {
 
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
+    return;
+  }
+  // THE WATCH PARTY STAYS HOME. Egress and remux only reach the home SFU, so
+  // a transcode for a room on another box would attach to an empty room of
+  // the same name. `decideSfuRegion` already keeps every `watch_party`
+  // channel home, ahead of the operator override; this is the backstop for
+  // a room that got elsewhere anyway, and it logs rather than failing
+  // quietly. A no-op in single-region mode (the pin is null).
+  if (!sameSfuRegion(pinnedRoomRegion(voiceChannelId), null)) {
+    logEvent("voice.hlsRefusedRemoteRegion", {
+      channelId: voiceChannelId,
+      region: pinnedRoomRegion(voiceChannelId),
+    });
     return;
   }
   // THE RECONCILE HAS TO HAPPEN WHERE THE TRANSCODE IS.
@@ -4332,6 +4431,7 @@ function removePeer(peerId: string) {
   // moves. Orphans keep the pin so a resume cannot flip transport.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+    forgetRoomRegion(voiceChannelId);
     forgetTransportDecision(voiceChannelId);
     // Same lifetime for the moderator mutes: a sanction on a call that is
     // over must not be waiting for the next call in this channel.
@@ -4704,6 +4804,7 @@ function dropVoicePeerSilently(peerId: string): void {
   }
   if (getRoomPeers(peer.voiceChannelId).length === 0) {
     roomTransports.delete(peer.voiceChannelId);
+    forgetRoomRegion(peer.voiceChannelId);
     forgetTransportDecision(peer.voiceChannelId);
     roomServerMutes.delete(peer.voiceChannelId);
     roomRaisedHands.delete(peer.voiceChannelId);
@@ -5301,6 +5402,7 @@ export function resetVoicePeers(): void {
   socketToPeerId.clear();
   retiredPeerIds.clear();
   roomTransports.clear();
+  resetRoomRegions();
   pendingTransportDecisions.clear();
   pendingPeerWrites.clear();
   rosterCoalescer.reset();
@@ -5795,7 +5897,13 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
 
 type VoiceResumePlan =
   | { kind: "reattach"; peer: VoicePeer }
-  | { kind: "reconstruct"; peerId: string; transport: VoiceRoomTransport }
+  | {
+      kind: "reconstruct";
+      peerId: string;
+      transport: VoiceRoomTransport;
+      /** The SFU region the token remembers; null names none (home). */
+      region: string | null;
+    }
   /**
    * The row exists and another instance holds it: taken over by
    * `adoptVoicePeer` once the transport is settled. Decided in the join
@@ -5805,6 +5913,7 @@ type VoiceResumePlan =
       kind: "adopt";
       peerId: string;
       transport: VoiceRoomTransport;
+      region: string | null;
       row: VoicePeerRow;
     }
   | { kind: "cold" };
@@ -5856,10 +5965,19 @@ function planVoiceResume(
   if (pinned && pinned !== verified.transport) {
     return { kind: "cold" };
   }
+  // Same rule one level down: LiveKit media held on one box is no use in a
+  // room pinned to another. Mesh media has no box, so only an SFU room asks.
+  if (
+    pinned === "livekit" &&
+    !sameSfuRegion(pinnedRoomRegion(payload.voiceChannelId), verified.region)
+  ) {
+    return { kind: "cold" };
+  }
   return {
     kind: "reconstruct",
     peerId: claimed,
     transport: verified.transport,
+    region: verified.region,
   };
 }
 
@@ -5924,6 +6042,7 @@ async function welcomeVoicePeer(
     peerId: peer.id,
     voiceChannelId: peer.voiceChannelId,
     transport,
+    region: pinnedRoomRegion(peer.voiceChannelId),
   });
   // Orphans stay on the roster (sidebar still shows them) but must not be
   // in `welcome.peers`. A joiner that offered to a closed socket would sit
@@ -6350,6 +6469,12 @@ export async function handleVoiceMessage(
     const opening = roomTransports.has(payload.voiceChannelId)
       ? null
       : await decideRoomTransportOnce(payload.voiceChannelId, channel);
+    // And which SFU box it would open on. Not shared across a stampede like
+    // the transport decision: it is per joiner (their country, their caps)
+    // and costs no query outside multi-region mode.
+    const openingRegion = roomTransports.has(payload.voiceChannelId)
+      ? null
+      : await decideRoomRegion(channel, socket);
 
     // The awaits above mean the socket may have closed, or the client may have
     // sent a second join, while this one was in flight. Registering a peer for a
@@ -6394,7 +6519,13 @@ export async function handleVoiceMessage(
         row.userId === user.id &&
         row.channelId === payload.voiceChannelId
       ) {
-        resume = { kind: "adopt", peerId: claimed, transport: resume.transport, row };
+        resume = {
+          kind: "adopt",
+          peerId: claimed,
+          transport: resume.transport,
+          region: resume.region,
+          row,
+        };
       } else if (row) {
         // Somebody else's seat under this id, or this person's seat in
         // another room: the token proved neither. Cold, like a local
@@ -6410,6 +6541,14 @@ export async function handleVoiceMessage(
       (resume.kind === "reconstruct" || resume.kind === "adopt"
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
+    // Same shape for the region: the pin, else what a resume remembers, else
+    // this join's decision. Null throughout in single-region mode.
+    let region: string | null = regionOrHome(
+      pinnedRoomRegion(payload.voiceChannelId) ??
+        (resume.kind === "reconstruct" || resume.kind === "adopt"
+          ? resume.region
+          : (openingRegion?.region ?? null)),
+    );
 
     // NO MESH GUARD ANY MORE. Until 2026-09-08 a second live instance made
     // a room that would open on mesh open on the SFU instead (and, before
@@ -6449,8 +6588,23 @@ export async function handleVoiceMessage(
         const claim = await claimVoiceRoomTransport(
           payload.voiceChannelId,
           transport,
+          region,
         );
         const stored = claim.transport;
+        // The region rides the same row. A room another process (or this
+        // one, before a restart) opened keeps the box it opened on, and a
+        // stored null is a room from before regions: home.
+        if (region !== null) {
+          const storedRegion = regionOrHome(claim.region);
+          if (storedRegion !== region) {
+            logEvent("voice.regionAdopted", {
+              channelId: payload.voiceChannelId,
+              wanted: region,
+              stored: storedRegion,
+            });
+            region = storedRegion;
+          }
+        }
         if (stored !== transport) {
           logEvent("voice.transportAdopted", {
             channelId: payload.voiceChannelId,
@@ -6478,6 +6632,16 @@ export async function handleVoiceMessage(
         if (
           (resume.kind === "reconstruct" || resume.kind === "adopt") &&
           resume.transport !== stored
+        ) {
+          resume = { kind: "cold" };
+        }
+        // And on the box: LiveKit media held on Miami is no use in a room
+        // pinned to São Paulo, which is what a restart that lost the local
+        // pin would otherwise hand it.
+        if (
+          (resume.kind === "reconstruct" || resume.kind === "adopt") &&
+          stored === "livekit" &&
+          !sameSfuRegion(resume.region, region)
         ) {
           resume = { kind: "cold" };
         }
@@ -6592,6 +6756,7 @@ export async function handleVoiceMessage(
           kind: "reconstruct",
           peerId: resume.peerId,
           transport: resume.transport,
+          region: resume.region,
         };
       }
       if (socket.readyState !== 1) {
@@ -6999,6 +7164,18 @@ export async function handleVoiceMessage(
       roomTransports.set(payload.voiceChannelId, resume.transport);
     } else if (!wasPinned) {
       roomTransports.set(payload.voiceChannelId, transport);
+    }
+    if (region !== null && pinnedRoomRegion(payload.voiceChannelId) === null) {
+      pinRoomRegion(payload.voiceChannelId, region);
+      logEvent("voice.regionPinned", {
+        channelId: payload.voiceChannelId,
+        region,
+        reason:
+          resume.kind === "reconstruct" || resume.kind === "adopt"
+            ? "resume"
+            : (openingRegion?.reason ?? "adopted"),
+        country: socketCountry(socket),
+      });
     }
     if (!wasPinned) {
       // Pinned: every later join reads the pin, so the shared decision has no
@@ -9174,8 +9351,11 @@ async function attemptPromotion(
 ): Promise<boolean> {
   const seated = getRoomPeers(voiceChannelId);
   const budgetMbps = promotionBudgetMbps();
+  // The box this room would move onto: its own region's, when it has one.
+  // The load budget below still prices every room on every box together,
+  // which over-counts for a remote room and so errs towards refusing.
   const [stats, rooms] = await Promise.all([
-    readSfuStats().catch(() => null),
+    readSfuStatsForRegion(pinnedRoomRegion(voiceChannelId)).catch(() => null),
     readRoomLoads(),
   ]);
   // Priced as it will be once the claim lands. The cluster's row for this room

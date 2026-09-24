@@ -446,8 +446,8 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
-and written back through `PUT /operator/server-live-hls` and
-`PUT /operator/channel-transport`:
+and written back through `PUT /operator/server-live-hls`,
+`PUT /operator/channel-transport` and `PUT /operator/channel-sfu-region`:
 
 - **servers**, searched by name (`?q=`, `ILIKE`, 25 at a time): member count,
   watch party channels, the `live_hls_enabled` row, the **effective** answer
@@ -458,6 +458,13 @@ and written back through `PUT /operator/server-live-hls` and
   and what a room opening now **would** be pinned to plus the reason, computed
   by `resolveVoiceTransport`, the same function the join path calls, so the
   page cannot drift from what actually happens
+- **a channel's SFU region**, only when the API runs more than one
+  (`LIVEKIT_REGIONS`): "país" (the first joiner's `CF-IPCountry` decides) or
+  one region id, applied to the next room that opens. Watch party channels
+  show "sempre <home>" and take no override. The voz / sfu section lists each
+  box's own reading and how many WebSocket upgrades arrived with a country,
+  which is the check to read before routing anybody. See
+  `docs/plans/SFU_REGIONS.md`
 - Server side: `server/src/services/operator.ts`, the route table in
   `server/src/api/index.ts`, tests in `server/src/api/operator.test.ts`
 

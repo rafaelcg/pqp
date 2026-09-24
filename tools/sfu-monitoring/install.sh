@@ -8,6 +8,12 @@
 # GC_PROM_USER / GC_PROM_TOKEN are only needed the first time (or to rotate);
 # without them an existing /etc/alloy/credentials.env is left alone.
 #
+# SFU_BOX_NAME is the `instance` / `box` label every series from this box
+# carries. Defaults to `sfu-pqp`, the São Paulo box, which keeps its rendered
+# config byte for byte. A second region's box MUST set its own
+# (`SFU_BOX_NAME=sfu-mia`), or its series land on top of São Paulo's in
+# Grafana. See docs/plans/SFU_REGIONS.md.
+#
 # Nothing here touches the livekit or caddy containers, so it never interrupts
 # a call.
 set -euo pipefail
@@ -38,7 +44,17 @@ systemctl enable --now pqp-box-metrics.timer
 systemctl start pqp-box-metrics.service
 
 echo "== alloy"
-install -m 0644 "$HERE/config.alloy" /etc/alloy/config.alloy
+SFU_BOX_NAME="${SFU_BOX_NAME:-sfu-pqp}"
+# A label, nothing else: it is spliced into a sed program run as root.
+if [[ ! "$SFU_BOX_NAME" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+  echo "SFU_BOX_NAME must match ^[a-z][a-z0-9-]{0,31}$, got: $SFU_BOX_NAME" >&2
+  exit 1
+fi
+# Rendered beside the live file and moved over it, so a failed render never
+# leaves Alloy an empty config.
+sed "s|\"sfu-pqp\"|\"${SFU_BOX_NAME}\"|g" "$HERE/config.alloy" >/etc/alloy/config.alloy.new
+chmod 0644 /etc/alloy/config.alloy.new
+mv /etc/alloy/config.alloy.new /etc/alloy/config.alloy
 
 if [[ -n "${GC_PROM_TOKEN:-}" ]]; then
   umask 077

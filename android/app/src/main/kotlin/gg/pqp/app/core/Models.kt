@@ -471,6 +471,14 @@ data class VoiceSessionResponse(
      * LiveKit itself refuses a publish the grant does not cover.
      */
     val stream: Boolean = speak,
+    /**
+     * The SFU region the room is pinned to (`sao`, `mia`, ...), present only
+     * when the deployment runs more than one. Informational: [url] already
+     * names the box, and that is what `LiveKitEngine` dials. This build does
+     * not declare the `sfu-region` capability, so rooms it opens stay in São
+     * Paulo; see `docs/plans/SFU_REGIONS.md`.
+     */
+    val region: String? = null,
 )
 
 /**

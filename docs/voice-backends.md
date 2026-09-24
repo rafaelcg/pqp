@@ -517,6 +517,20 @@ Flag off means off: `isVoiceRegistryEnabled()` is read on every path and every r
 
 **With M5 (the drain, the two-machine `fly.toml`, the CI count and image assertion, and the mesh guard above) plus the 2026-09-08 prerequisites (mesh across instances, mutes on the bus, the frame counters) the code is enough to run two machines.** Production ran two for 2 h 39 min on 2026-09-07 and is back to one by choice; the flip is M6 (`docs/deploy-fly.md` 6a-bis), after the staging rehearsal with `LIVEKIT_*` set (`docs/STAGING.md`).
 
+### SFU regions (`LIVEKIT_REGIONS`, off by default)
+
+More than one LiveKit box, one per region, with each **room** on exactly one of them. `server/src/voice/regions.ts`; runbook in [`docs/plans/SFU_REGIONS.md`](./plans/SFU_REGIONS.md).
+
+- **Same rule as the transport pin, one level down.** The region is decided when the room's first peer joins and kept until it empties: in-process (`roomRegions`), and in `voice_rooms.sfu_region` with the registry on, claimed in the same `INSERT ... ON CONFLICT` as the transport so two replicas agree (the loser logs `voice.regionAdopted`). A mesh room carries one too, so a promotion onto the SFU has somewhere decided to go.
+- **The signal** is the first joiner's `CF-IPCountry` from the WebSocket upgrade, through `LIVEKIT_REGION_COUNTRIES`, else `LIVEKIT_REGION_DEFAULT`, else home. The decision order is `decideSfuRegion`: conversations, watch party channels and first joiners without the `sfu-region` capability stay home; then the operator override (`channels.sfu_region`, dashboard or `PUT /api/admin/channel-sfu-region`); then the country.
+- **The token is the contract.** `POST /api/voice/token` signs with the room's box's key pair and answers that box's `url` (and a `region` field, only with regions on). The region comes from the local pin, else the room row, else the caller's resume token, else home. Every client dials `url` and nothing else; none hardcodes a host.
+- **Resume keeps the box.** The resume token carries `r` (only with regions on). A reconstruct or adopt whose token names another box than the room is pinned to is a cold join, the same rule as a transport mismatch.
+- **Watch parties are home.** Egress and remux only reach the home box, so `watch_party` channels are pinned home ahead of the override, and `pushLiveHls` refuses a room pinned elsewhere (`voice.hlsRefusedRemoteRegion`).
+- **Moderation fans out.** With regions on, `voice/admin.ts` lists a room on every box and removes, mutes or re-grants on the box that answered. The pin is not trusted for this: a LiveKit connection outlives the WebSocket and the pin with it.
+- **Health.** `/ready` adds `checks.livekitRegions.<id>` (never part of the top-level `ok`, which the deploy gates on); `/status.json` adds a `voice-<id>` component; the dashboard's voz / sfu section lists each box and how many upgrades carried a country.
+
+With `LIVEKIT_REGIONS` unset, nothing above runs: no header is read for routing, no column written, no field added. `server/src/ws/voice-sfu-region.test.ts` pins pinning, the second replica, resume across a restart (row and token), the old-client and watch-party rules and the flag-off guarantee, on a real Postgres with `VOICE_REGISTRY=postgres`.
+
 ## The roster wire: a whole room, or only what changed
 
 Voice occupancy drives the channel-list badges, so `voice-roster` goes to everyone who can **see** the channel, not to the people in the call. That audience is the server's membership, and the frame is the size of the room, and the product of the two is what stopped working on 2026-09-05: 130 people in a 508-member community is roughly 45 KB to every socket, and #260 had bounded how OFTEN that goes out without touching how BIG it is.

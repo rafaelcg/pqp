@@ -431,3 +431,51 @@ describe("checkReady's livekit probe reuses sfu-stats' reader", () => {
     expect(report.ok).toBe(false);
   });
 });
+
+describe("ready checker with SFU regions", () => {
+  function regionChecker(mia: "ok" | "fail" | null) {
+    return createReadyChecker({
+      version: () => "test",
+      probePostgres: async () => "ok",
+      poolStats: () => ({ max: 10, total: 2, idle: 2, waiting: 0 }),
+      probeLivekit: () => async () => [],
+      livekitHost: () => "sfu.pqp.gg",
+      probeStorage: () => null,
+      probeLiveHls: () => null,
+      livekitRegions: () =>
+        mia === null
+          ? null
+          : [
+              {
+                id: "mia",
+                host: "sfu-mia.pqp.gg",
+                probe: async () => {
+                  if (mia === "fail") throw new Error("down");
+                  return [];
+                },
+              },
+            ],
+      remoteTimeoutMs: 5,
+    });
+  }
+
+  it("adds nothing to the report in single-region mode", async () => {
+    const report = await regionChecker(null).check();
+    expect(report.checks).not.toHaveProperty("livekitRegions");
+  });
+
+  it("reports each region with its host", async () => {
+    const report = await regionChecker("ok").check();
+    expect(report.checks.livekitRegions?.mia).toMatchObject({
+      ok: true,
+      host: "sfu-mia.pqp.gg",
+    });
+  });
+
+  it("a region that is down is reported, and does not fail the API's own verdict", async () => {
+    const report = await regionChecker("fail").check();
+    expect(report.checks.livekitRegions?.mia?.ok).toBe(false);
+    // The deploy gates on this. A Miami outage must not roll back São Paulo.
+    expect(report.ok).toBe(true);
+  });
+});

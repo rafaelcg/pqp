@@ -18,6 +18,7 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import { getRoomTransport, isRoomPinnedLocally } from "../ws/voice.js";
+import { pinnedRoomRegion, sfuRegions } from "../voice/regions.js";
 
 /**
  * The operator dashboard's WRITE surface: the two levers somebody running an
@@ -68,6 +69,7 @@ export const OPERATOR_CHANNELS_PATH = "/api/admin/server-channels";
 export const OPERATOR_SERVER_LIVE_HLS_PATH = "/api/admin/server-live-hls";
 export const OPERATOR_CHANNEL_TRANSPORT_PATH =
   "/api/admin/channel-voice-transport";
+export const OPERATOR_CHANNEL_SFU_REGION_PATH = "/api/admin/channel-sfu-region";
 
 export const setServerLiveHlsSchema = z.object({
   serverId: z.string().uuid(),
@@ -86,6 +88,21 @@ export const setChannelVoiceTransportSchema = z.object({
   /** `null` is automatic: size, community and HLS decide, as they always did. */
   transport: z.enum(["mesh", "livekit"]).nullable(),
 });
+
+export const setChannelSfuRegionSchema = z.object({
+  channelId: z.string().uuid(),
+  /**
+   * A configured region id (`LIVEKIT_REGIONS`, or the home id), or `null`
+   * for automatic: the first joiner's country decides.
+   */
+  region: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,15}$/)
+    .nullable(),
+});
+
+/** The operator asked for a region this deployment does not run. */
+export class OperatorBadRequest extends Error {}
 
 export interface OperatorServerSummary {
   id: string;
@@ -131,6 +148,10 @@ export interface OperatorChannelSummary {
   pinnedTransport: VoiceRoomTransport | null;
   /** What a room opening now would be pinned to, and why. */
   wouldOpenOn: VoiceTransportDecision;
+  /** `channels.sfu_region`, the region override. Null is automatic. */
+  sfuRegion: string | null;
+  /** The SFU region this process has the open room pinned to; null when empty or single-region. */
+  pinnedRegion: string | null;
   /** This process is running an HLS egress for this channel right now. */
   streaming: boolean;
 }
@@ -142,6 +163,8 @@ export interface OperatorChannelList {
   /** `getServerVoiceBackend() === "livekit" && isLiveKitConfigured()`. */
   liveKitConfigured: boolean;
   liveHlsEffective: boolean;
+  /** Configured SFU region ids, home first; null without `LIVEKIT_REGIONS`. */
+  sfuRegions: string[] | null;
 }
 
 function liveHlsSourceFor(override: boolean | null): OperatorServerSummary["liveHlsSource"] {
@@ -298,8 +321,9 @@ export async function listOperatorChannels(
     name: string;
     type: string;
     voice_transport: VoiceRoomTransport | null;
+    sfu_region: string | null;
   }>(
-    `SELECT id, name, type, voice_transport
+    `SELECT id, name, type, voice_transport, sfu_region
        FROM channels
       WHERE server_id = $1 AND kind = 'server' AND type IN ('voice', 'watch_party')
       ORDER BY position ASC, name ASC`,
@@ -320,6 +344,7 @@ export async function listOperatorChannels(
     serverName: row.name,
     liveKitConfigured,
     liveHlsEffective,
+    sfuRegions: sfuRegions()?.map((region) => region.id) ?? null,
     channels: channels.rows.map((channel) => ({
       id: channel.id,
       name: channel.name,
@@ -339,6 +364,8 @@ export async function listOperatorChannels(
         server: profile,
       }),
       streaming: running.has(channel.id),
+      sfuRegion: channel.sfu_region,
+      pinnedRegion: pinnedRoomRegion(channel.id),
     })),
   };
 }
@@ -462,6 +489,7 @@ export async function setChannelVoiceTransport(
     name: string;
     type: string;
     voice_transport: VoiceRoomTransport | null;
+    sfu_region: string | null;
     previous: VoiceRoomTransport | null;
   }>(
     `UPDATE channels c
@@ -471,7 +499,7 @@ export async function setChannelVoiceTransport(
         AND c.kind = 'server'
         AND c.type IN ('voice', 'watch_party')
       RETURNING c.id, c.server_id, c.name, c.type, c.voice_transport,
-                old.voice_transport AS previous`,
+                c.sfu_region, old.voice_transport AS previous`,
     [channelId, transport],
   );
   const row = result.rows[0];
@@ -516,5 +544,102 @@ export async function setChannelVoiceTransport(
     pinnedTransport: isRoomPinnedLocally(row.id) ? getRoomTransport(row.id) : null,
     wouldOpenOn: { transport: "mesh", reason: "default" },
     streaming: false,
+    sfuRegion: row.sfu_region,
+    pinnedRegion: pinnedRoomRegion(row.id),
+  };
+}
+
+/**
+ * Pin a voice channel's SFU region, or hand it back to the first joiner's
+ * country.
+ *
+ * Same safety property as the transport override above: NOT retroactive. The
+ * region is read when a room's first peer joins and pinned for the room's
+ * life, so a wrong value here cannot move a live call between boxes; it
+ * changes where the NEXT room opens.
+ *
+ * Refuses a region the deployment does not run (a typo would otherwise read
+ * as automatic without saying so), and refuses a `watch_party` channel
+ * outright: its transcode can only reach the home box, and the policy
+ * ignores the override there, so accepting it would be a control that does
+ * nothing.
+ */
+export async function setChannelSfuRegion(
+  channelId: string,
+  region: string | null,
+  actorId: string | null,
+): Promise<OperatorChannelSummary & { serverId: string }> {
+  if (region !== null) {
+    const configured = sfuRegions();
+    if (!configured) {
+      throw new OperatorBadRequest("SFU regions are not configured");
+    }
+    if (!configured.some((candidate) => candidate.id === region)) {
+      throw new OperatorBadRequest(`Unknown SFU region: ${region}`);
+    }
+  }
+  const result = await getPool().query<{
+    id: string;
+    server_id: string;
+    name: string;
+    type: string;
+    voice_transport: VoiceRoomTransport | null;
+    sfu_region: string | null;
+    previous: string | null;
+  }>(
+    `UPDATE channels c
+        SET sfu_region = $2
+       FROM (SELECT id, sfu_region FROM channels WHERE id = $1) old
+      WHERE c.id = old.id
+        AND c.kind = 'server'
+        AND c.type = 'voice'
+      RETURNING c.id, c.server_id, c.name, c.type, c.voice_transport,
+                c.sfu_region, old.sfu_region AS previous`,
+    [channelId, region],
+  );
+  const row = result.rows[0];
+  if (!row || !row.server_id) {
+    throw new OperatorTargetMissing("Voice channel not found");
+  }
+  if (row.previous !== region) {
+    await logAudit({
+      serverId: row.server_id,
+      actorId,
+      action: "channel.sfu_region_update",
+      targetType: "channel",
+      targetId: row.id,
+      changes: [{ key: "sfuRegion", old: row.previous, new: region }],
+    }).catch((error: unknown) => {
+      console.error("[operator] audit write failed:", error);
+    });
+  }
+  logEvent("operator.channelSfuRegionSet", {
+    channelId: row.id,
+    serverId: row.server_id,
+    region,
+    previous: row.previous,
+    actorId,
+  });
+  // The re-read is a convenience, never the source of truth for whether the
+  // write landed: it already did, above. Same rule as the transport setter.
+  const list = await listOperatorChannels(row.server_id).catch((error: unknown) => {
+    console.error("[operator] channel re-read failed after a region write:", error);
+    return null;
+  });
+  const fresh = list?.channels.find((channel) => channel.id === row.id);
+  if (fresh) {
+    return { ...fresh, serverId: row.server_id };
+  }
+  return {
+    id: row.id,
+    serverId: row.server_id,
+    name: row.name,
+    type: row.type,
+    voiceTransport: row.voice_transport,
+    pinnedTransport: isRoomPinnedLocally(row.id) ? getRoomTransport(row.id) : null,
+    wouldOpenOn: { transport: "mesh", reason: "default" },
+    streaming: false,
+    sfuRegion: row.sfu_region,
+    pinnedRegion: pinnedRoomRegion(row.id),
   };
 }

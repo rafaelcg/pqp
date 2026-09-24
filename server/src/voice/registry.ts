@@ -14,6 +14,7 @@ import {
   type InstanceSnapshot,
 } from "../lib/instance-snapshot.js";
 import { logEvent } from "../lib/log.js";
+import { regionCountryMap, sfuRegions } from "./regions.js";
 import {
   VOICE_RESUME_TOKEN_TTL_MS,
   VOICE_RESUME_TTL_MS,
@@ -121,8 +122,18 @@ export function voiceConfigHash(): string {
   if (!url || !key) {
     return "mesh";
   }
+  // Regions join the digest only when configured, so a single-region
+  // deployment keeps the hash it always had and an instance that has the
+  // region list and one that does not are visibly different.
+  const regions = sfuRegions();
+  const regionPart = regions
+    ? `\n${regions
+        .slice(1)
+        .map((region) => `${region.id}=${region.url}=${region.apiKey}`)
+        .join(",")}\n${[...regionCountryMap(regions)].join(",")}`
+    : "";
   return createHash("sha256")
-    .update(`${url}\n${key}`)
+    .update(`${url}\n${key}${regionPart}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -269,38 +280,86 @@ export async function pinVoiceRoom(
 export async function claimVoiceRoomTransport(
   channelId: string,
   wanted: VoiceRoomTransport,
-): Promise<{ transport: VoiceRoomTransport; won: boolean }> {
+  /**
+   * The SFU region this join would pin (`voice/regions.ts`), or null in
+   * single-region mode, where the column is never written. Pinned in the
+   * same statement as the transport so the two can never disagree about
+   * which join opened the room.
+   */
+  wantedRegion: string | null = null,
+): Promise<{ transport: VoiceRoomTransport; won: boolean; region: string | null }> {
   const pool = getPool();
-  const inserted = await pool.query<{ transport: VoiceRoomTransport }>(
-    `INSERT INTO voice_rooms (channel_id, transport)
-     VALUES ($1, $2)
-     ON CONFLICT (channel_id) DO NOTHING
-     RETURNING transport`,
-    [channelId, wanted],
-  );
-  const won = inserted.rows[0]?.transport;
+  const insert = async () =>
+    wantedRegion === null
+      ? pool.query<{ transport: VoiceRoomTransport; sfu_region: string | null }>(
+          `INSERT INTO voice_rooms (channel_id, transport)
+           VALUES ($1, $2)
+           ON CONFLICT (channel_id) DO NOTHING
+           RETURNING transport`,
+          [channelId, wanted],
+        )
+      : pool.query<{ transport: VoiceRoomTransport; sfu_region: string | null }>(
+          `INSERT INTO voice_rooms (channel_id, transport, sfu_region)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id) DO NOTHING
+           RETURNING transport, sfu_region`,
+          [channelId, wanted, wantedRegion],
+        );
+  const inserted = await insert();
+  const won = inserted.rows[0];
   if (won) {
-    return { transport: won, won: true };
+    return { transport: won.transport, won: true, region: won.sfu_region ?? null };
   }
-  const existing = await readVoiceRoomTransport(channelId);
+  const existing = await readVoiceRoomPin(channelId);
   if (existing) {
-    return { transport: existing, won: false };
+    return { ...existing, won: false };
   }
   // The row was deleted between the two statements (the room's last peer
   // left at the same moment). Rare; one more attempt is enough, because a
   // second conflict means somebody else pinned it and the read will succeed.
-  const retry = await pool.query<{ transport: VoiceRoomTransport }>(
-    `INSERT INTO voice_rooms (channel_id, transport)
-     VALUES ($1, $2)
-     ON CONFLICT (channel_id) DO NOTHING
-     RETURNING transport`,
-    [channelId, wanted],
-  );
+  const retry = await insert();
   if (retry.rows[0]) {
-    return { transport: retry.rows[0].transport, won: true };
+    return {
+      transport: retry.rows[0].transport,
+      won: true,
+      region: retry.rows[0].sfu_region ?? null,
+    };
   }
-  const stored = await readVoiceRoomTransport(channelId);
-  return stored ? { transport: stored, won: false } : { transport: wanted, won: true };
+  const stored = await readVoiceRoomPin(channelId);
+  return stored
+    ? { ...stored, won: false }
+    : { transport: wanted, won: true, region: wantedRegion };
+}
+
+/**
+ * `channels.sfu_region`, the operator's region override. Read once per room
+ * pin and only in multi-region mode, so a deployment without regions never
+ * issues it.
+ */
+export async function readChannelSfuRegion(channelId: string): Promise<string | null> {
+  const result = await getPool().query<{ sfu_region: string | null }>(
+    `SELECT sfu_region FROM channels WHERE id = $1`,
+    [channelId],
+  );
+  return result.rows[0]?.sfu_region ?? null;
+}
+
+/**
+ * The room's transport AND its SFU region, one read. `region` is null for a
+ * room pinned in single-region mode (or before the column existed), which
+ * every reader takes to mean the home region.
+ */
+export async function readVoiceRoomPin(
+  channelId: string,
+): Promise<{ transport: VoiceRoomTransport; region: string | null } | null> {
+  const result = await getPool().query<{
+    transport: VoiceRoomTransport;
+    sfu_region: string | null;
+  }>(`SELECT transport, sfu_region FROM voice_rooms WHERE channel_id = $1`, [
+    channelId,
+  ]);
+  const row = result.rows[0];
+  return row ? { transport: row.transport, region: row.sfu_region ?? null } : null;
 }
 
 /**
@@ -395,6 +454,13 @@ export type VoicePeerWrite = Omit<VoicePeerRow, "instanceId"> & {
   /** What the room runs on, so a missing room row can be recreated. */
   transport: VoiceRoomTransport;
   /**
+   * The room's SFU region, for the same reason: a room row recreated by a
+   * peer write must not lose the region the room is live on, or a token
+   * minted on another instance would send the next joiner to the home box.
+   * Absent in single-region mode.
+   */
+  sfuRegion?: string | null;
+  /**
    * Whether the caller still holds this seat, asked again at WRITE time.
    *
    * Unbatched this is redundant: `ws/voice.ts`'s `writePeerRow` checks peer
@@ -485,9 +551,14 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
     await countedQuery(
       pool,
       "registry.upsertPeerRoom",
-      `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, $2)
+      peer.sfuRegion
+        ? `INSERT INTO voice_rooms (channel_id, transport, sfu_region) VALUES ($1, $2, $3)
+       ON CONFLICT (channel_id) DO NOTHING`
+        : `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, $2)
        ON CONFLICT (channel_id) DO NOTHING`,
-      [peer.channelId, peer.transport],
+      peer.sfuRegion
+        ? [peer.channelId, peer.transport, peer.sfuRegion]
+        : [peer.channelId, peer.transport],
     );
     try {
       await countedQuery(

@@ -1,4 +1,5 @@
 import { isLiveKitConfigured } from "./backends.js";
+import { sfuRegions } from "./regions.js";
 
 /**
  * What the SFU is doing right now, for the operator dashboard.
@@ -265,7 +266,82 @@ export function peekSfuStats(): SfuStatsPeek | null {
   return reader.peek();
 }
 
+/**
+ * One reader per non-home SFU region, created on first use. Same cache, same
+ * timeout, same arithmetic as the home reader; the host is read per call, so
+ * a region removed from the config reads as not configured.
+ */
+const regionReaders = new Map<string, SfuStatsReader>();
+
+function regionReader(regionId: string): SfuStatsReader {
+  let existing = regionReaders.get(regionId);
+  if (!existing) {
+    existing = createSfuStatsReader({
+      host: () => {
+        const region = sfuRegions()?.find((candidate) => candidate.id === regionId);
+        return region ? sfuHostFromUrl(region.url) : null;
+      },
+      listRooms: async () =>
+        (await import("./admin.js")).listSfuRoomsInRegion(regionId),
+    });
+    regionReaders.set(regionId, existing);
+  }
+  return existing;
+}
+
+/**
+ * `readSfuStats` for the box a room is pinned to. Null, and the home id, are
+ * the home reader itself, so a single-region deployment reads exactly what
+ * it always read.
+ */
+export function readSfuStatsForRegion(regionId: string | null): Promise<SfuStats> {
+  const regions = sfuRegions();
+  if (!regionId || !regions || regions[0]!.id === regionId) {
+    return readSfuStats();
+  }
+  return regionReader(regionId).read();
+}
+
+export interface SfuRegionStats extends SfuStats {
+  id: string;
+  home: boolean;
+}
+
+/**
+ * Every configured region's reading, home first, or null in single-region
+ * mode. For the operator dashboard and the status page.
+ */
+export async function readAllSfuRegionStats(): Promise<SfuRegionStats[] | null> {
+  const regions = sfuRegions();
+  if (!regions) {
+    return null;
+  }
+  return Promise.all(
+    regions.map(async (region) => ({
+      ...(await readSfuStatsForRegion(region.id)),
+      id: region.id,
+      home: region.home,
+    })),
+  );
+}
+
+/** The last reading per region, never a new one. Null in single-region mode. */
+export function peekAllSfuRegionStats():
+  | { id: string; home: boolean; peek: SfuStatsPeek | null }[]
+  | null {
+  const regions = sfuRegions();
+  if (!regions) {
+    return null;
+  }
+  return regions.map((region) => ({
+    id: region.id,
+    home: region.home,
+    peek: region.home ? reader.peek() : regionReader(region.id).peek(),
+  }));
+}
+
 /** Test hook. */
 export function resetSfuStats(): void {
   reader.reset();
+  regionReaders.clear();
 }

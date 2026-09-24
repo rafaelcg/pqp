@@ -54,12 +54,19 @@ export type RealtimeStatus =
  * mesh onto the voice server, mid-call, without rejoining. Handled in
  * `hooks/use-voice.ts`. A socket that does not declare it is released from a
  * promoted room instead of being left on a mesh nobody else is on.
+ *
+ * `sfu-region`: this build dials whatever media server URL
+ * `POST /api/voice/token` names (`session.url` into `Room.connect`, see
+ * `lib/livekit-session.ts`) and never a host of its own. With SFU regions on,
+ * the server only moves a room off the home box when the room's FIRST joiner
+ * declared this; see `server/src/voice/regions.ts`.
  */
 const WIRE_CAPS = [
   "voice-roster-delta",
   "presence-delta",
   "voice-transport-changed",
   "mesh-resume",
+  "sfu-region",
 ] as const;
 
 const PING_INTERVAL_MS = 20_000;

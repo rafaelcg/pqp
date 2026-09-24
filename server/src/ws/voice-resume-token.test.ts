@@ -40,7 +40,35 @@ describe("voice resume token", () => {
       peerId: PEER,
       voiceChannelId: CHANNEL,
       transport: "mesh",
+      region: null,
     });
+  });
+
+  it("carries an SFU region only when one is given, and a token without one reads as none", () => {
+    process.env.CLERK_SECRET_KEY = "sk_test_resume";
+    const withRegion = mintVoiceResumeToken({
+      userId: USER,
+      peerId: PEER,
+      voiceChannelId: CHANNEL,
+      transport: "livekit",
+      region: "mia",
+      now: 1_000,
+    });
+    const without = mintVoiceResumeToken({
+      userId: USER,
+      peerId: PEER,
+      voiceChannelId: CHANNEL,
+      transport: "livekit",
+      now: 1_000,
+    });
+    const expected = { userId: USER, peerId: PEER, voiceChannelId: CHANNEL };
+    expect(verifyVoiceResumeToken(withRegion!, expected, 2_000)?.region).toBe("mia");
+    expect(verifyVoiceResumeToken(without!, expected, 2_000)?.region).toBeNull();
+    // Single-region mode mints exactly the claims it always did: no `r`.
+    const payload = JSON.parse(
+      Buffer.from(without!.split(".")[0]!, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(["c", "e", "p", "t", "u", "v"]);
   });
 
   it("rejects a stolen id (token for a different peer)", () => {
