@@ -6297,13 +6297,45 @@ function cameraStillWanted(
  * when: a restart must not go straight back onto one while LiveKit still
  * lists it beside its successor. See `chooseCameraTrack`.
  */
-const staleCameraTracks = new Map<string, { sid: string; until: number }>();
+const staleCameraTracks = new Map<string, Map<string, number>>();
 const STALE_CAMERA_TRACK_MS = 30_000;
 
+/**
+ * Every recently dead or replaced camera sid per channel, each with its own
+ * expiry (Farol review, PR #817: one slot per channel let a second death
+ * forget the first, and the first could then be chosen again).
+ */
 function markCameraTrackStale(channelId: string, sid: string | null, now = Date.now()): void {
-  if (sid) {
-    staleCameraTracks.set(channelId, { sid, until: now + STALE_CAMERA_TRACK_MS });
+  if (!sid) {
+    return;
   }
+  const entries = staleCameraTracks.get(channelId) ?? new Map<string, number>();
+  for (const [seen, until] of entries) {
+    if (until <= now) {
+      entries.delete(seen);
+    }
+  }
+  entries.set(sid, now + STALE_CAMERA_TRACK_MS);
+  staleCameraTracks.set(channelId, entries);
+}
+
+function staleCameraSids(channelId: string, now: number): Set<string> {
+  const entries = staleCameraTracks.get(channelId);
+  const out = new Set<string>();
+  if (!entries) {
+    return out;
+  }
+  for (const [sid, until] of entries) {
+    if (until > now) {
+      out.add(sid);
+    } else {
+      entries.delete(sid);
+    }
+  }
+  if (entries.size === 0) {
+    staleCameraTracks.delete(channelId);
+  }
+  return out;
 }
 
 /**
@@ -6340,17 +6372,17 @@ function chooseCameraTrack(
   if (running && candidates.includes(running)) {
     return running;
   }
-  const stale = staleCameraTracks.get(channelId);
-  if (!stale || stale.until <= now) {
-    staleCameraTracks.delete(channelId);
+  const stale = staleCameraSids(channelId, now);
+  if (stale.size === 0) {
     return cameraTrackId && candidates.includes(cameraTrackId) ? cameraTrackId : candidates[0]!;
   }
-  const fresh = candidates.filter((sid) => sid !== stale.sid);
+  const fresh = candidates.filter((sid) => !stale.has(sid));
   if (fresh.length > 0) {
-    if (candidates.includes(stale.sid)) {
+    const skipped = candidates.filter((sid) => stale.has(sid));
+    if (skipped.length > 0) {
       logEvent("voice.hlsCameraTrackStaleSkipped", {
         channelId,
-        stale: stale.sid,
+        stale: skipped.join(","),
         chosen: fresh[0],
       });
     }

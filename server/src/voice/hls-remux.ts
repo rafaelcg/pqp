@@ -1464,6 +1464,13 @@ interface LlRoom {
    * machine's resume adoption matches on that column.
    */
   presenterRowStale?: boolean;
+  /**
+   * Whether the row carries `presenter_user_id`. False for a session this
+   * process adopted (a row written before the column, or by a machine that
+   * could not name the person): filled on the first reconcile that can,
+   * while the presenter is still here to be named (Farol review, PR #817).
+   */
+  presenterUserRecorded?: boolean;
 }
 
 const llRooms = new Map<string, LlRoom>();
@@ -1936,6 +1943,7 @@ async function startLlSession(
   // truth (see `OpenLlRow.partTargetMs`). A NULL on a pre-column row falls
   // back to today's config, which is what it would have been written with.
   let partTargetMs = cfg.partMs;
+  const startedAtFromRow = openRow !== null;
   if (openRow) {
     // Our own unresolved attempt for this exact presenter: resume it
     // deterministically. `remuxSessionId` should already be set (the INSERT
@@ -2003,6 +2011,8 @@ async function startLlSession(
     return null;
   }
 
+  const startPerson = await llIdentityOf(channelId, presenterPeerId);
+  const resumedRow = startedAtFromRow;
   const stream: LiveHlsStream = {
     hlsUrl: llPlaylistUrl(channelId, startedAt),
     startedAt,
@@ -2022,7 +2032,8 @@ async function startLlSession(
     startedAt,
     presenterPeerId,
     stream,
-    presenterUserId: await llIdentityOf(channelId, presenterPeerId),
+    presenterUserId: startPerson,
+    presenterUserRecorded: startPerson !== null && !resumedRow,
   });
   logEvent("voice.hlsLlStarted", { channelId, sessionId, subscribed: info.subscribed });
   return stream;
@@ -2391,6 +2402,7 @@ export async function adoptRunningLlHlsSession(
   };
   llRooms.set(channelId, adoptedRoom);
   if (rowPresenterStale) {
+    adoptedRoom.presenterRowStale = true;
     await persistLlPresenter(channelId, adoptedRoom);
   }
   // Not remembered in the decision cache: an adoption is answered once and
@@ -2503,11 +2515,23 @@ type LlRebindOutcome =
  */
 async function persistLlPresenter(channelId: string, room: LlRoom): Promise<boolean> {
   try {
+    const person = await llIdentityOf(channelId, room.presenterPeerId);
+    if (!person && !room.presenterRowStale && room.presenterPeerId) {
+      // Nothing to add: the peer id is already on the row, and nobody can
+      // name the person yet. Asked again on a later reconcile.
+      return true;
+    }
     await getPool().query(
-      `UPDATE hls_sessions SET presenter_peer_id = $2
+      `UPDATE hls_sessions
+          SET presenter_peer_id = $2,
+              presenter_user_id = COALESCE($3, presenter_user_id)
         WHERE object_prefix = $1 AND ended_at IS NULL`,
-      [llObjectPrefix(channelId, room.startedAt), room.presenterPeerId],
+      [llObjectPrefix(channelId, room.startedAt), room.presenterPeerId, person],
     );
+    if (person) {
+      room.presenterUserId = person;
+      room.presenterUserRecorded = true;
+    }
     room.presenterRowStale = false;
     return true;
   } catch (error) {
@@ -2566,6 +2590,7 @@ async function rebindLlSession(
       // The session is rebound on the box either way; only the other
       // machine's adoption reads the row, and a failed write is retried on
       // the next reconcile (`presenterRowStale`).
+      room.presenterRowStale = true;
       await persistLlPresenter(channelId, room);
     }
     llRebindsTotal += 1;
@@ -2720,7 +2745,7 @@ async function reconcileLlHlsNowLocked(
   }
   const current = llRooms.get(channelId);
   if (current && current.presenterPeerId === presenterPeerId) {
-    if (current.presenterRowStale) {
+    if (current.presenterRowStale || !current.presenterUserRecorded) {
       await persistLlPresenter(channelId, current);
     }
     return current.stream;
@@ -3240,6 +3265,7 @@ export async function adoptLlHlsSessions(): Promise<{
     };
     llRooms.set(row.channel_id, bootRoom);
     if (bootPresenter !== row.presenter_peer_id) {
+      bootRoom.presenterRowStale = true;
       await persistLlPresenter(row.channel_id, bootRoom);
     }
     adopted += 1;
