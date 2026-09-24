@@ -1976,7 +1976,58 @@ h2,
   }
 }
 
+/* The landing's "where pqp runs" map (`where-we-run.tsx`). A call arc draws
+   from the caller to the box, holds, and fades, on a long loop; an edge city
+   glows and settles. Stroke-dashoffset and opacity only. The static state is
+   the finished picture: every arc drawn, every dot lit. */
+@keyframes where-arc {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  30%,
+  78% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes where-twinkle {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.where-arc {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: where-arc 6.3s var(--ease-standard) infinite backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
+.where-arc-mine {
+  animation-duration: 4.2s;
+}
+
+.where-twinkle {
+  animation: where-twinkle 2.7s var(--ease-standard) infinite backwards;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .where-arc,
+  .where-twinkle,
   .pqp-marquee,
   .animate-toast-in,
   .animate-toast-out,
