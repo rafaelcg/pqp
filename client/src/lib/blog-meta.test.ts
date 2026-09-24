@@ -10,8 +10,8 @@ import {
   renderBlogHead,
 } from "./blog-meta";
 import { ARTICLES, articleFaq, articleTitle } from "./blog/articles";
-import { POSTS } from "./blog/posts";
-import { loadPostBody } from "./blog/bodies";
+import { POSTS, postTitle, postSummary } from "./blog/posts";
+import { loadPostBody, SLUGS_WITH_ES_BODIES } from "./blog/bodies";
 import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 
@@ -345,5 +345,84 @@ describe("POSTS", () => {
 
   it("answers null for an unknown slug instead of throwing", async () => {
     expect(await loadPostBody("nao-existe", "pt-BR")).toBeNull();
+  });
+});
+
+describe("Spanish posts", () => {
+  const withEs = POSTS.filter((post) => post.title.es !== undefined);
+  const withoutEs = POSTS.filter((post) => post.title.es === undefined);
+
+  it("has at least one of each, or these tests prove nothing", () => {
+    expect(withEs.length).toBeGreaterThan(0);
+    expect(withoutEs.length).toBeGreaterThan(0);
+  });
+
+  it("carries all three Spanish parts or none", () => {
+    // A Spanish title over an English body (or the reverse) is the half-done
+    // translation this rule exists to keep off the page.
+    for (const post of POSTS) {
+      const hasTitle = post.title.es !== undefined;
+      const hasSummary = post.summary.es !== undefined;
+      const hasBody = SLUGS_WITH_ES_BODIES.includes(post.slug);
+      expect([hasTitle, hasSummary, hasBody], post.slug).toEqual([
+        hasTitle,
+        hasTitle,
+        hasTitle,
+      ]);
+      if (hasTitle) {
+        expect(post.title.es!.trim().length).toBeGreaterThan(0);
+        expect(post.summary.es!.trim().length).toBeGreaterThan(0);
+        expect(post.summary.es!.length).toBeLessThanOrEqual(200);
+      }
+    }
+  });
+
+  it("serves the Spanish body when the post has one", async () => {
+    for (const post of withEs) {
+      const es = await loadPostBody(post.slug, "es");
+      const en = await loadPostBody(post.slug, "en");
+      expect(es, post.slug).toBeTruthy();
+      expect(es!.length).toBeGreaterThan(200);
+      expect(es).not.toBe(en);
+      expect(postTitle(post, "es")).toBe(post.title.es);
+      expect(postSummary(post, "es")).toBe(post.summary.es);
+    }
+  });
+
+  it("falls back to English for a Spanish reader, exactly as before", async () => {
+    for (const post of withoutEs) {
+      expect(await loadPostBody(post.slug, "es")).toBe(
+        await loadPostBody(post.slug, "en"),
+      );
+      expect(postTitle(post, "es")).toBe(post.title.en);
+      expect(postSummary(post, "es")).toBe(post.summary.en);
+    }
+  });
+
+  it("writes a Spanish card, hreflang and html lang at the edge only for a Spanish post", () => {
+    const esPost = withEs[0]!;
+    const esHead = renderBlogHead({ kind: "post", post: esPost }, "en", "es");
+    expect(esHead).toContain(`<title>${esPost.title.es} · pqp</title>`);
+    expect(esHead).toContain(
+      `<link rel="alternate" hreflang="es" href="https://pqp.gg/blog/${esPost.slug}?lang=es" />`,
+    );
+    expect(esHead).toContain('"inLanguage":"es"');
+    expect(esHead).toContain('<meta name="pqp:locale" content="es" />');
+    expect(
+      injectBlogHead(INDEX_HTML, { kind: "post", post: esPost }, "en", "es"),
+    ).toContain('<html lang="es"');
+
+    const oldPost = withoutEs[0]!;
+    const oldHead = renderBlogHead({ kind: "post", post: oldPost }, "en", "es");
+    expect(oldHead).toContain(`<title>${oldPost.title.en} · pqp</title>`);
+    expect(oldHead).not.toContain('hreflang="es"');
+    expect(oldHead).toContain('<meta name="pqp:locale" content="es" />');
+    expect(
+      injectBlogHead(INDEX_HTML, { kind: "post", post: oldPost }, "en", "es"),
+    ).not.toContain('<html lang="es"');
+
+    // An English reader of the Spanish post still gets the English card.
+    const enHead = renderBlogHead({ kind: "post", post: esPost }, "en");
+    expect(enHead).toContain(`<title>${esPost.title.en} · pqp</title>`);
   });
 });
