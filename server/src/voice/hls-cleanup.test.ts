@@ -294,6 +294,42 @@ describeDb("sweepHlsSessions", () => {
     expect([...bucket.objects].sort()).toEqual(runObjects(kept).sort());
   });
 
+  it("sweeps every voice archive run with its row, and keep_replay keeps them all", async () => {
+    process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    process.env.LIVE_HLS_REPLAY_HOURS = "24";
+    // `-mic.ogg`, then `-mic-r<ms>.ogg` per restart in place: all under the
+    // `mic` row's one prefix.
+    const runObjects = (prefix: string): string[] => [
+      `${prefix}.ogg`,
+      `${prefix}-r1790000100000.ogg`,
+      `${prefix}-r1790000200000.ogg`,
+    ];
+    const due = `live/${channelA}/5100-mic`;
+    const kept = `live/${channelA}/6100-mic`;
+    await makeSession({
+      channelId: channelA,
+      prefix: due,
+      endedMinutesAgo: 25 * 60,
+      keepReplay: true,
+      rung: "mic",
+    });
+    await makeSession({
+      channelId: channelA,
+      prefix: kept,
+      endedMinutesAgo: 30,
+      keepReplay: true,
+      rung: "mic",
+    });
+    for (const key of [...runObjects(due), ...runObjects(kept)]) {
+      bucket.objects.add(key);
+    }
+
+    expect(await sweepHlsSessions()).toBe(1);
+
+    expect(bucket.deleted.sort()).toEqual(runObjects(due).sort());
+    expect([...bucket.objects].sort()).toEqual(runObjects(kept).sort());
+  });
+
   it("never deletes another channel's objects, even if a bucket listing leaks one", async () => {
     process.env.LIVE_HLS_RETENTION_MINUTES = "10";
     await makeSession({

@@ -571,7 +571,31 @@ interface RoomHls {
    * until the presenter's `mic-archive` publication shows up (or forever,
    * when the feature is off or their browser never publishes one).
    */
-  micArchive: { egressId: string; trackId: string; sessionId: string | null } | null;
+  micArchive: {
+    egressId: string;
+    trackId: string;
+    sessionId: string | null;
+    /**
+     * Inherited from another process (`adoptLiveHlsMicArchive`), whose row
+     * does not name the mic sid: the first probe teaches it rather than
+     * reading as a replaced track.
+     */
+    adopted?: boolean;
+    /** Who was presenting when this run started, to tell a reconnect apart. */
+    presenterPeerId?: string;
+  } | null;
+  /**
+   * THE ARCHIVE IS COMING BACK, and why. Set when its egress ended (or a
+   * restart could not start one) while the session is live; the next run
+   * starts at `at` (`MIC_ARCHIVE_QUICK_RETRY_MS` after a first death, the
+   * cooldown after a repeat). See `scheduleMicArchiveRetry`.
+   */
+  micArchiveRestart?: { reason: string; at: number } | null;
+  /** This session has recorded the host's voice at least once, so a later
+   * run is a restart in place and never a first archive. */
+  micArchiveHad?: boolean;
+  /** A start is awaiting LiveKit: a second caller must not start another. */
+  micArchiveStarting?: boolean;
   /**
    * Stop looking for that publication after this instant. Zero means never
    * look, which is what an ADOPTED session gets: its archive either came back
@@ -2445,6 +2469,7 @@ export function resetLiveHlsForTests(): void {
   restartsInPlaceTotal = 0;
   restartsInPlaceByReason.clear();
   cameraDeaths.clear();
+  resetMicArchiveRetriesForTests();
   deferredStops.clear();
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
@@ -4069,6 +4094,7 @@ async function reconcileLlCompanions(
     stream,
     cameraTrackId: tracks.cameraTrackId ?? null,
     voiceTrackId: tracks.voiceTrackId ?? null,
+    micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
 }
 
@@ -4297,6 +4323,7 @@ async function stopLlCompanions(channelId: string, reason: string): Promise<void
     return;
   }
   llCompanions.delete(channelId);
+  clearMicArchiveRetry(channelId);
   const camera = room.camera;
   room.camera = null;
   await stopMicArchive(channelId, room, reason);
@@ -4791,8 +4818,15 @@ export function adoptLiveHlsMicArchive(input: {
   // touches this archive (the health monitor, a stop) leaves it null too --
   // adoption is rare enough that a gap in B0.4's coverage here is an honest
   // one, not worth a second query on a boot-time path.
-  room.micArchive = { egressId: input.egressId, trackId: input.trackId, sessionId: null };
+  room.micArchive = {
+    egressId: input.egressId,
+    trackId: input.trackId,
+    sessionId: null,
+    adopted: true,
+  };
   room.micArchiveUntil = 0;
+  // A session that recorded, so an archive that ends from here on restarts.
+  room.micArchiveHad = true;
   logEvent("voice.hlsMicArchiveAdopted", {
     channelId: input.channelId,
     egressId: input.egressId,
@@ -5791,14 +5825,19 @@ export const MIC_ARCHIVE_RUNG = "mic";
 export function micArchiveObjectKey(
   channelId: string,
   startedAt: number,
+  runSuffix = "",
 ): string {
-  return `${hlsObjectPrefix(channelId, startedAt, MIC_ARCHIVE_RUNG)}.ogg`;
+  return `${hlsObjectPrefix(channelId, startedAt, MIC_ARCHIVE_RUNG)}${runSuffix}.ogg`;
 }
 
-function micArchiveOutput(channelId: string, startedAt: number): DirectFileOutput {
+function micArchiveOutput(
+  channelId: string,
+  startedAt: number,
+  runSuffix: string,
+): DirectFileOutput {
   const storage = liveHlsStorage()!;
   return new DirectFileOutput({
-    filepath: micArchiveObjectKey(channelId, startedAt),
+    filepath: micArchiveObjectKey(channelId, startedAt, runSuffix),
     output: {
       case: "s3",
       value: new S3Upload({
@@ -5814,26 +5853,287 @@ function micArchiveOutput(channelId: string, startedAt: number): DirectFileOutpu
 }
 
 /**
+ * THE ARCHIVE RESTARTS IN PLACE, like the ladder and the camera.
+ *
+ * On 2026-09-24 a conventional rehearsal's archive egress ended seven minutes
+ * into a show that ran on for seven more; the rungs and the camera came back
+ * under #803 and the voice did not, so the host's voice download stopped
+ * halfway. Now an archive that ends while its session is live comes back as a
+ * new RUN under the same session: `<startedAt>-mic-r<its start ms>.ogg`
+ * beside `<startedAt>-mic.ogg`, never over it, still under the `mic` row's
+ * `object_prefix` (so retention and `keep_replay` cover every run), and the
+ * voice download joins them into one file with silence where it was down
+ * (`buildMicRunsDownloadPlan` in hls-history.ts).
+ *
+ * Same cadence as the camera: a first death retries in
+ * `MIC_ARCHIVE_QUICK_RETRY_MS`, a second inside `MIC_ARCHIVE_DEATH_WINDOW_MS`
+ * waits the cooldown, so an egress that will not stay up costs one attempt
+ * every two minutes rather than one per monitor tick. A mic track that was
+ * replaced (a device switch, the presenter back on a new socket) is not a
+ * death: its run is stopped and the next one started at once.
+ */
+const MIC_ARCHIVE_QUICK_RETRY_MS = 3_000;
+const MIC_ARCHIVE_COOLDOWN_MS = 2 * 60 * 1000;
+const MIC_ARCHIVE_DEATH_WINDOW_MS = 5 * 60_000;
+const micArchiveDeaths = new Map<string, number[]>();
+const micArchiveRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let micArchiveCooldownMs = MIC_ARCHIVE_COOLDOWN_MS;
+
+/** Tests only: a shorter cooldown, or the default back with no argument. */
+export function setMicArchiveCooldownMsForTests(ms?: number): void {
+  micArchiveCooldownMs = ms ?? MIC_ARCHIVE_COOLDOWN_MS;
+}
+
+function micArchiveRetryDelayMs(channelId: string, now: number): number {
+  const recent = (micArchiveDeaths.get(channelId) ?? []).filter(
+    (at) => now - at < MIC_ARCHIVE_DEATH_WINDOW_MS,
+  );
+  recent.push(now);
+  micArchiveDeaths.set(channelId, recent);
+  return recent.length === 1
+    ? Math.min(MIC_ARCHIVE_QUICK_RETRY_MS, micArchiveCooldownMs)
+    : micArchiveCooldownMs;
+}
+
+/** Forget a channel's archive retries: its session is over. */
+function clearMicArchiveRetry(channelId: string): void {
+  micArchiveDeaths.delete(channelId);
+  const timer = micArchiveRetryTimers.get(channelId);
+  if (timer) {
+    clearTimeout(timer);
+    micArchiveRetryTimers.delete(channelId);
+  }
+}
+
+function resetMicArchiveRetriesForTests(): void {
+  for (const timer of micArchiveRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  micArchiveRetryTimers.clear();
+  micArchiveDeaths.clear();
+  micArchiveCooldownMs = MIC_ARCHIVE_COOLDOWN_MS;
+}
+
+/**
+ * Bring the archive back after `delay`, ON A TIMER as well as on the monitor:
+ * a presenter alone on stage produces no roster event to hang a retry on.
+ */
+function scheduleMicArchiveRetry(
+  channelId: string,
+  room: RoomHls,
+  reason: string,
+  now = Date.now(),
+): number {
+  const delayMs = micArchiveRetryDelayMs(channelId, now);
+  room.micArchiveRestart = { reason, at: now + delayMs };
+  const previous = micArchiveRetryTimers.get(channelId);
+  if (previous) {
+    clearTimeout(previous);
+  }
+  const timer = setTimeout(() => {
+    micArchiveRetryTimers.delete(channelId);
+    void retryMicArchive(channelId, room).catch((error: unknown) => {
+      logEvent("voice.hlsMicArchiveFailed", {
+        channelId,
+        stage: "retry",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, delayMs + 50);
+  timer.unref?.();
+  micArchiveRetryTimers.set(channelId, timer);
+  return delayMs;
+}
+
+/** A due retry: one probe, and a new run when the track is there. */
+async function retryMicArchive(
+  channelId: string,
+  room: RoomHls,
+  now = Date.now(),
+): Promise<void> {
+  const pending = room.micArchiveRestart;
+  if (
+    !pending ||
+    now < pending.at ||
+    room.micArchive ||
+    companionHost(channelId) !== room ||
+    !micArchiveEnabled()
+  ) {
+    return;
+  }
+  const egress = getEgress();
+  if (!egress) {
+    return;
+  }
+  const tracks = await probeScreenTracks(channelId, room.stream.presenterPeerId);
+  if (companionHost(channelId) !== room || room.micArchive) {
+    return;
+  }
+  if (!tracks?.micArchiveTrackId) {
+    // Nothing to record right now (the host's mic is off, or they left).
+    // Not hunted for on every tick: the track coming back is a roster event,
+    // and `reconcileMicArchive` restarts the archive then.
+    room.micArchiveRestart = null;
+    return;
+  }
+  await restartMicArchiveInPlace(
+    egress,
+    channelId,
+    room,
+    tracks.micArchiveTrackId,
+    pending.reason,
+  );
+}
+
+/**
+ * Start the next run of a session that already recorded: stop the running
+ * one first when there is one (a replaced track), then a new egress under a
+ * new name. A failure to start is a death for the retry cadence.
+ */
+async function restartMicArchiveInPlace(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  trackId: string,
+  reason: string,
+): Promise<void> {
+  if (room.micArchiveStarting) {
+    return;
+  }
+  if (room.micArchive) {
+    await stopMicArchive(channelId, room, reason);
+  }
+  room.micArchiveRestart = null;
+  const started = await startMicArchive(egress, channelId, room, trackId, {
+    runSuffix: runSuffixAt(Date.now()),
+    reason,
+  });
+  if (!started && companionHost(channelId) === room && !room.micArchive) {
+    scheduleMicArchiveRetry(channelId, room, reason);
+  }
+}
+
+/**
+ * The archive against the presenter's `mic-archive` publication, on every
+ * reconcile that probed the tracks (the next link of the channel's queue,
+ * after the camera). A new sid on a running archive is a replaced track; a
+ * sid on a session whose archive ended is a restart; a first archive is not
+ * this function's to start (`startMicArchive`'s window is).
+ */
+async function reconcileMicArchive(
+  channelId: string,
+  trackId: string | null,
+): Promise<void> {
+  const room = companionHost(channelId);
+  if (!room || !trackId || !micArchiveEnabled()) {
+    return;
+  }
+  const egress = getEgress();
+  if (!egress?.startTrackEgress) {
+    return;
+  }
+  const archive = room.micArchive;
+  if (archive) {
+    if (archive.trackId === trackId) {
+      return;
+    }
+    if (archive.adopted) {
+      // Inherited without its sid: this is the sid, not a replacement.
+      archive.trackId = trackId;
+      archive.adopted = false;
+      return;
+    }
+    await restartMicArchiveInPlace(
+      egress,
+      channelId,
+      room,
+      trackId,
+      archive.presenterPeerId &&
+        archive.presenterPeerId !== room.stream.presenterPeerId
+        ? "presenter-reconnected"
+        : "mic-track-replaced",
+    );
+    return;
+  }
+  if (!room.micArchiveHad) {
+    return;
+  }
+  const pending = room.micArchiveRestart;
+  if (pending && Date.now() < pending.at) {
+    // Cooling down after a death: the timer asks again.
+    return;
+  }
+  await restartMicArchiveInPlace(
+    egress,
+    channelId,
+    room,
+    trackId,
+    pending?.reason ?? "mic-track-returned",
+  );
+}
+
+/**
+ * `hls_sessions.runs` for the `mic` row: one entry per run, `base` the ms
+ * after the session's `startedAt` the run started. Nothing renders a `mic`
+ * row as a playlist (it is not a ladder rung), so `base` carries the one fact
+ * the voice download needs and a run's name cannot: when the FIRST run
+ * started. Later runs carry theirs in their `-r<ms>` too.
+ */
+async function micRunsWithStart(
+  channelId: string,
+  startedAt: number,
+  runSuffix: string,
+  atMs: number,
+): Promise<HlsRun[]> {
+  let runs: HlsRun[] = [];
+  if (runSuffix !== "") {
+    try {
+      const row = await getPool().query<{ runs: unknown }>(
+        `SELECT runs FROM hls_sessions WHERE object_prefix = $1`,
+        [hlsObjectPrefix(channelId, startedAt, MIC_ARCHIVE_RUNG)],
+      );
+      runs = parseHlsRuns(row.rows[0]?.runs ?? null);
+    } catch {
+      // The run is still started; the download places it after the previous
+      // one instead of at its wall-clock moment.
+      runs = [...LEGACY_RUNS];
+    }
+  }
+  const previous = runs[runs.length - 1];
+  const base = Math.max(
+    previous ? previous.base + 1 : 0,
+    Math.max(0, Math.trunc(atMs - startedAt)),
+  );
+  return [...runs, { suffix: runSuffix, base }];
+}
+
+/**
  * Start the archive for a session that has just found its `mic-archive`
  * track. Failure is never fatal: the party is the segments, and a party that
  * refused to start because a side recording could not is a worse product than
  * one that plays with no recording.
+ *
+ * `runSuffix` is "" for a session's first run and `-r<ms>` for every restart
+ * in place (`restartMicArchiveInPlace`). Returns whether a run is recording.
  */
 async function startMicArchive(
   egress: LiveHlsEgressApi,
   channelId: string,
   room: RoomHls,
   trackId: string,
-): Promise<void> {
-  if (!egress.startTrackEgress || room.micArchive) {
-    return;
+  { runSuffix = "", reason }: { runSuffix?: string; reason?: string } = {},
+): Promise<boolean> {
+  if (!egress.startTrackEgress || room.micArchive || room.micArchiveStarting) {
+    return false;
   }
   const startedAt = room.stream.startedAt;
+  const runStartedAt = Date.now();
   let egressId: string;
+  room.micArchiveStarting = true;
   try {
     const started = await egress.startTrackEgress(
       channelId,
-      micArchiveOutput(channelId, startedAt),
+      micArchiveOutput(channelId, startedAt, runSuffix),
       trackId,
     );
     egressId = started.egressId;
@@ -5842,23 +6142,33 @@ async function startMicArchive(
       channelId,
       startedAt,
       trackId,
+      runSuffix,
       error: error instanceof Error ? error.message : String(error),
     });
-    // No retry budget of its own: the deadline below is still open, so the
-    // next monitor tick tries again until it closes.
-    return;
+    // A first run has no retry budget of its own: its window is still open,
+    // so the next monitor tick tries again until it closes. A restart is
+    // retried by its caller on the death cadence.
+    return false;
+  } finally {
+    room.micArchiveStarting = false;
   }
   // The room may have been replaced while LiveKit was answering. Stop what we
   // just started rather than filing it on a session nobody owns any more.
-  if (companionHost(channelId) !== room) {
+  if (companionHost(channelId) !== room || room.micArchive) {
     await stopEgressById(egressId, channelId);
-    return;
+    return false;
   }
   // Set synchronously, before the write below, so a second call landing
   // during that await sees `room.micArchive` already taken and refuses
   // rather than starting a duplicate egress on the same track.
-  room.micArchive = { egressId, trackId, sessionId: null };
+  room.micArchive = {
+    egressId,
+    trackId,
+    sessionId: null,
+    presenterPeerId: room.stream.presenterPeerId,
+  };
   room.micArchiveUntil = 0;
+  room.micArchiveHad = true;
   const { sessionId } = await recordSessionStarted(
     channelId,
     startedAt,
@@ -5866,18 +6176,37 @@ async function startMicArchive(
     MIC_ARCHIVE_RUNG,
     room.stream.presenterPeerId,
     room.videoTrackId,
+    // A restart reopens the row the previous run's end closed.
+    runSuffix !== "",
+    null,
+    await micRunsWithStart(channelId, startedAt, runSuffix, runStartedAt),
   );
   if (room.micArchive && room.micArchive.egressId === egressId) {
     room.micArchive.sessionId = sessionId;
   }
-  logEvent("voice.hlsMicArchiveStarted", {
-    channelId,
-    startedAt,
-    egressId,
-    trackId,
-    sessionId,
-    key: micArchiveObjectKey(channelId, startedAt),
-  });
+  const key = micArchiveObjectKey(channelId, startedAt, runSuffix);
+  if (runSuffix === "") {
+    logEvent("voice.hlsMicArchiveStarted", {
+      channelId,
+      startedAt,
+      egressId,
+      trackId,
+      sessionId,
+      key,
+    });
+  } else {
+    logEvent("voice.hlsMicArchiveRestartedInPlace", {
+      channelId,
+      startedAt,
+      egressId,
+      trackId,
+      sessionId,
+      reason: reason ?? null,
+      runSuffix,
+      key,
+    });
+  }
+  return true;
 }
 
 /**
@@ -5929,7 +6258,8 @@ async function stopMicArchive(
 
 /**
  * One monitor pass for the archive: start it when the track finally shows up,
- * notice when it has ended, and stop it when the flag went off underneath.
+ * notice when it has ended (and bring it back in place), and stop it when the
+ * flag went off underneath.
  *
  * The late arrival is the normal case, not an edge: the browser publishes the
  * second track only once the mix is running, which is after the share is up,
@@ -5944,6 +6274,7 @@ async function tendMicArchive(
 ): Promise<void> {
   if (!micArchiveEnabled()) {
     // Turned off mid-party. Stop the recording; leave the party alone.
+    room.micArchiveRestart = null;
     await stopMicArchive(channelId, room, "disabled");
     return;
   }
@@ -5951,28 +6282,48 @@ async function tendMicArchive(
     if (!egress.listEgress) {
       return;
     }
+    const archive = room.micArchive;
     let health: EgressHealth = "unknown";
     try {
       const listing = await egress.listEgress({
-        egressId: room.micArchive.egressId,
+        egressId: archive.egressId,
       });
-      health = healthFromListing(room.micArchive.egressId, listing);
+      health = healthFromListing(archive.egressId, listing);
     } catch (error) {
       logEvent("voice.hlsMicArchiveHealthFailed", {
         channelId,
-        egressId: room.micArchive.egressId,
+        egressId: archive.egressId,
         error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
-    if (health === "ended") {
+    if (health === "ended" && room.micArchive === archive) {
       // LiveKit says it is over, so there is nothing to stop: asking would
       // only log a failure about an egress that finished. The row is closed
-      // so retention collects whatever was written.
+      // so retention collects whatever was written, and reopened by the
+      // next run.
       await stopMicArchive(channelId, room, "egress-ended", {
         stopEgress: false,
       });
+      if (companionHost(channelId) === room) {
+        const retryInMs = scheduleMicArchiveRetry(
+          channelId,
+          room,
+          "egress-ended",
+          now,
+        );
+        logEvent("voice.hlsMicArchiveDied", {
+          channelId,
+          startedAt: room.stream.startedAt,
+          egressId: archive.egressId,
+          retryInMs,
+        });
+      }
     }
+    return;
+  }
+  if (room.micArchiveRestart) {
+    await retryMicArchive(channelId, room, now);
     return;
   }
   if (now >= room.micArchiveUntil) {
@@ -6134,6 +6485,9 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   rooms.delete(channelId);
   clearCameraCooldown(channelId);
   cameraDeaths.delete(channelId);
+  if (!llCompanions.has(channelId)) {
+    clearMicArchiveRetry(channelId);
+  }
   voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
   hlsStopsTotal += 1;
@@ -6576,6 +6930,8 @@ interface LiveHlsReconcileResult {
   cameraTrackId?: string | null;
   /** Same optional-vs-null convention as `cameraTrackId`, for the mic. */
   voiceTrackId?: string | null;
+  /** The presenter's `mic-archive` sid, for `reconcileMicArchive`. */
+  micArchiveTrackId?: string | null;
 }
 
 /**
@@ -6954,6 +7310,7 @@ async function finishInPlaceRestart(input: {
     stream: room.stream,
     cameraTrackId: tracks.cameraTrackId ?? null,
     voiceTrackId: tracks.voiceTrackId ?? null,
+    micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
 }
 
@@ -7365,7 +7722,7 @@ async function startRoom(
   // for `reconcileLiveHls` to reconcile as the NEXT link of this channel's own
   // serialisation queue: chained, so it can never overlap a later push's own
   // camera work for this channel, but never awaited by the film path either.
-  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
+  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
 }
 
 /**
@@ -7417,6 +7774,21 @@ export function reconcileLiveHls(
     .catch((error: unknown) => {
       logEvent("voice.hlsCameraReconcileFailed", {
         channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
+    // THE ARCHIVE AFTER THE CAMERA, on the same probe: a replaced mic track
+    // or an archive whose egress ended comes back as a new run here.
+    .then(() => filmPromise.catch(() => null))
+    .then((result) =>
+      result?.micArchiveTrackId === undefined
+        ? undefined
+        : reconcileMicArchive(channelId, result.micArchiveTrackId),
+    )
+    .catch((error: unknown) => {
+      logEvent("voice.hlsMicArchiveFailed", {
+        channelId,
+        stage: "reconcile",
         error: error instanceof Error ? error.message : String(error),
       });
     });
@@ -7565,7 +7937,7 @@ async function reconcileLiveHlsNow(
       // `listParticipants` call above, so it costs no extra RPC. The camera
       // itself is reconciled by the caller, as the next link of the queue —
       // never here.
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     // A NEW AUDIO SID WITH THE SAME VIDEO SID IS STILL A REPLACEMENT. Ticking
     // "share audio" on after the ladder was already running, losing the
@@ -7629,7 +8001,7 @@ async function reconcileLiveHlsNow(
       if (voiceTrackSeparatedByChannel.get(channelId) === from) {
         voiceTrackSeparatedByChannel.set(channelId, presenterPeerId);
       }
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     if (
       tracks &&
