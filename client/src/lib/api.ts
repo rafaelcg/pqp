@@ -284,10 +284,11 @@ export async function apiFetch<T>(
   }
 }
 
-function post<T>(path: string, body?: unknown) {
+function post<T>(path: string, body?: unknown, headers?: Record<string, string>) {
   return apiFetch<T>(path, {
     method: "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(headers ? { headers } : {}),
   });
 }
 
@@ -863,19 +864,27 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
-export const createServer = (name: string) =>
-  post<{ server: Server; channels: Channel[] }>("/api/servers", { name });
+export const createServer = (name: string, idempotencyKey?: string) =>
+  post<{ server: Server; channels: Channel[] }>(
+    "/api/servers",
+    { name },
+    idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  );
 
 export const previewDiscordImport = (source: string) =>
   post<DiscordImportPlan>("/api/import/discord/preview", { source });
 
-export const applyDiscordImport = (source: string) =>
+export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
   post<{
     server: Server;
     channels: Channel[];
     roles: ServerRole[];
     invite: Invite;
-  }>("/api/import/discord/apply", { source });
+  }>(
+    "/api/import/discord/apply",
+    { source },
+    idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  );
 
 export const updateServer = (
   serverId: string,

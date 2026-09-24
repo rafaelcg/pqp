@@ -32,7 +32,13 @@ class ApiClientTest {
     /** Queued answers, one per request. */
     private val answers = LinkedBlockingQueue<Answer>()
 
-    data class Recorded(val method: String, val path: String, val query: String?, val authorization: String?)
+    data class Recorded(
+        val method: String,
+        val path: String,
+        val query: String?,
+        val authorization: String?,
+        val idempotencyKey: String?,
+    )
 
     data class Answer(val status: Int, val body: String)
 
@@ -45,6 +51,7 @@ class ApiClientTest {
                 path = exchange.requestURI.path,
                 query = exchange.requestURI.query,
                 authorization = exchange.requestHeaders.getFirst("Authorization"),
+                idempotencyKey = exchange.requestHeaders.getFirst("Idempotency-Key"),
             )
             val answer = answers.poll() ?: Answer(500, """{"error":"no answer queued"}""")
             val bytes = answer.body.toByteArray()
@@ -129,6 +136,34 @@ class ApiClientTest {
         answers += Answer(200, """{"servers":[]}""")
         client(TokenProvider { null }).servers()
         assertNull(received.take().authorization)
+    }
+
+    /**
+     * The `Idempotency-Key` header pqp#806 asked for: `createServer` forwards
+     * it exactly when given one, and sends nothing extra when not, so an old
+     * server build sees requests unchanged from before the header existed.
+     */
+    @Test
+    fun `createServer sends the given idempotency key as a header`() = runTest {
+        answers += Answer(
+            200,
+            """{"server":{"id":"s1","name":"Sala","ownerId":"u1","createdAt":"2026-01-01T00:00:00Z"},"channels":[]}""",
+        )
+        client().createServer("Sala", idempotencyKey = "attempt-1")
+        val request = received.take()
+        assertEquals("POST", request.method)
+        assertEquals("/api/servers", request.path)
+        assertEquals("attempt-1", request.idempotencyKey)
+    }
+
+    @Test
+    fun `createServer sends no idempotency key header when none is given`() = runTest {
+        answers += Answer(
+            200,
+            """{"server":{"id":"s1","name":"Sala","ownerId":"u1","createdAt":"2026-01-01T00:00:00Z"},"channels":[]}""",
+        )
+        client().createServer("Sala")
+        assertNull(received.take().idempotencyKey)
     }
 
     /**

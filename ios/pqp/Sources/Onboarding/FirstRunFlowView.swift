@@ -876,6 +876,11 @@ struct RoomStep: View {
     @State private var createFailed = false
     @State private var inviteFailed = false
     @State private var failures = 0
+    /// One key per create attempt, reused across a retry of the same name so
+    /// a lost response never makes a second room; an edited name starts a
+    /// fresh attempt. Backs up `serverCreatedSince` below, which stays as
+    /// the first line of defense for a build old enough to predate this.
+    @State private var createAttempt = IdempotencyAttempt()
     @FocusState private var fieldFocused: Bool
     @Namespace private var ring
     @ScaledMetric(relativeTo: .headline) private var tileSize: CGFloat = 40
@@ -1096,10 +1101,16 @@ struct RoomStep: View {
         let before = await session.api.serverIdsSnapshot()
         let server: Server
         do {
-            server = try await session.api.createServer(name: finalName)
+            server = try await session.api.createServer(
+                name: finalName, idempotencyKey: createAttempt.keyFor(finalName)
+            )
         } catch {
             // A lost response is not a failed create: if the room exists,
-            // carry on with it instead of inviting a second one.
+            // carry on with it instead of inviting a second one. The
+            // idempotency key above already makes a literal retry safe; this
+            // heuristic stays as a second line of defense for whatever it
+            // still catches that the key does not (a response lost before a
+            // retry is even attempted, an older build of the API).
             if case APIError.transport = error,
                let ownerId, let before,
                let made = await session.api.serverCreatedSince(before, named: finalName, ownerId: ownerId) {
@@ -1110,6 +1121,7 @@ struct RoomStep: View {
                 return
             }
         }
+        createAttempt.reset()
         let invite = try? await session.api.createInvite(
             serverId: server.id, expiresInHours: Onboarding.inviteLifetimeHours
         )

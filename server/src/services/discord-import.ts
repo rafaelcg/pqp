@@ -22,7 +22,11 @@ import {
 } from "../lib/s3.js";
 import { logAudit } from "./audit.js";
 import { scanAllowsAttachment, scanImage } from "./content-scan.js";
-import { createInviteWith, mapInvite } from "./invites.js";
+import {
+  claimServerIdempotencyKey,
+  recordServerIdempotencyKey,
+} from "./idempotency-keys.js";
+import { createInviteWith, listInvites, mapInvite } from "./invites.js";
 import { applyPrivateChannelOverwrites, seedDefaultRoles } from "./permissions.js";
 import { listRoles, mapRole } from "./roles.js";
 import {
@@ -191,22 +195,93 @@ async function insertChannelRows(
   return result.rows;
 }
 
-export async function createServerFromImport(
-  ownerId: string,
-  code: string,
-  plan: DiscordImportPlan,
-): Promise<{
+type DiscordImportResponse = {
   server: ReturnType<typeof mapServer> & { role: "owner" };
   channels: ReturnType<typeof mapChannel>[];
   roles: ReturnType<typeof mapRole>[];
   invite: ReturnType<typeof mapInvite>;
-}> {
+  replayed: boolean;
+};
+
+/**
+ * Rebuilds the response `createServerFromImport` would have sent the first
+ * time, reading the current rows rather than replaying a snapshot, so an
+ * import replayed a while after the fact reflects a rename or icon change in
+ * between, the same way any other read of the server would. `null` when the
+ * server the key resolved to has since been deleted; the caller falls back
+ * to importing fresh.
+ *
+ * Exported so the API handler can use it as a cheap short-circuit ahead of
+ * the outbound Discord fetch `POST /api/import/discord/apply` would
+ * otherwise make on every retry, not just the ones that race a concurrent
+ * import.
+ */
+export async function replayImportedServer(
+  serverId: string,
+  ownerId: string,
+): Promise<DiscordImportResponse | null> {
+  const serverResult = await getPool().query<DbServer>(
+    `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1`,
+    [serverId],
+  );
+  const server = serverResult.rows[0];
+  if (!server) {
+    return null;
+  }
+  const channelsResult = await getPool().query<ChannelRow>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels
+      WHERE server_id = $1 AND type <> 'thread'
+      ORDER BY position ASC`,
+    [serverId],
+  );
+  const roles = await listRoles(serverId);
+  const invites = await listInvites(serverId);
+  // The import makes exactly one invite; the oldest (`listInvites` sorts
+  // newest first) is the one it made.
+  const inviteRow =
+    invites[invites.length - 1] ?? (await createInviteWith(getPool(), serverId, ownerId));
+  return {
+    server: { ...mapServer(server), role: "owner" as const },
+    channels: channelsResult.rows.map(mapChannel),
+    roles: roles.map(mapRole),
+    invite: mapInvite({ ...inviteRow, server_name: server.name }),
+    replayed: true,
+  };
+}
+
+export async function createServerFromImport(
+  ownerId: string,
+  code: string,
+  plan: DiscordImportPlan,
+  idempotencyKey?: string | null,
+): Promise<DiscordImportResponse> {
   const client = await getPool().connect();
-  let server: DbServer;
-  let channelRows: ChannelRow[];
+  let server!: DbServer;
+  let channelRows!: ChannelRow[];
   let invite: Awaited<ReturnType<typeof createInviteWith>>;
   try {
     await client.query("BEGIN");
+
+    if (idempotencyKey) {
+      const claim = await claimServerIdempotencyKey(client, ownerId, idempotencyKey);
+      if (!claim.claimed && claim.serverId) {
+        // The row this reads is already committed by whichever request
+        // claimed the key (our own INSERT above would still be blocked on
+        // its unique index otherwise), so reading it off the pool rather
+        // than `client` is safe even though our own transaction is still
+        // open and has made no writes of its own yet.
+        const replay = await replayImportedServer(claim.serverId, ownerId);
+        if (replay) {
+          await client.query("COMMIT");
+          return replay;
+        }
+        // The claimed server id no longer resolves to a row (deleted
+        // between the original import and this replay). Fall through and
+        // import fresh, same as `createServer`.
+      }
+      // claim.claimed, or a stale claim with no resolvable server: either
+      // way this call owns the key now and proceeds to import, below.
+    }
 
     const serverResult = await client.query<DbServer>(
       `INSERT INTO servers (name, owner_id) VALUES ($1, $2)
@@ -327,6 +402,10 @@ export async function createServerFromImport(
       client,
     );
 
+    if (idempotencyKey) {
+      await recordServerIdempotencyKey(client, ownerId, idempotencyKey, server.id);
+    }
+
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -346,6 +425,7 @@ export async function createServerFromImport(
   const roles = await listRoles(server.id);
   return {
     server: { ...mappedServer, role: "owner" as const },
+    replayed: false,
     channels: channelRows.map(mapChannel),
     roles: roles.map(mapRole),
     invite: mapInvite({ ...invite, server_name: server.name }),

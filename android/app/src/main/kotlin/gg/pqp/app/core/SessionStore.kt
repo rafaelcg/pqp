@@ -239,10 +239,27 @@ class SessionStore(
         }
     }
 
-    fun createServer(name: String, onError: (String) -> Unit) {
+    /**
+     * `idempotencyKey`, when given, is forwarded to [ApiClient.createServer]
+     * so a caller that retries this call for the same room (the person
+     * reopening the create dialog and typing the same name again after a
+     * failure, say) gets that room back instead of a second one. `onSuccess`
+     * is the caller's cue that the attempt is over and the key may be
+     * retired; a caller with nothing to do there may leave it as the no-op
+     * default.
+     */
+    fun createServer(
+        name: String,
+        idempotencyKey: String? = null,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit,
+    ) {
         scope.launch {
-            runCatching { api.createServer(name) }
-                .onSuccess { refreshServers() }
+            runCatching { api.createServer(name, idempotencyKey) }
+                .onSuccess {
+                    refreshServers()
+                    onSuccess()
+                }
                 .onFailure { onError(it.message.orEmpty()) }
         }
     }

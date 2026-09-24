@@ -20,6 +20,9 @@ vi.mock("./services/reports.js", () => ({
 vi.mock("./services/sanctions.js", () => ({
   pruneExpiredTimeouts: vi.fn(async () => 0),
 }));
+vi.mock("./services/idempotency-keys.js", () => ({
+  pruneExpiredServerIdempotencyKeys: vi.fn(async () => 0),
+}));
 vi.mock("./services/retention.js", () => ({
   sweepMessageRetention: vi.fn(async () => 0),
 }));
@@ -70,6 +73,7 @@ import {
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
+import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
@@ -145,10 +149,11 @@ describe("cold jobs", () => {
     jobs = startColdJobs();
     // 15 before the watch party host sweep, which runs on the same minute
     // tick as the session reminders; 16 before the cluster rate-limit bucket
-    // sweep. Bump this when a job is added, and assert the new job's cadence
-    // below rather than only moving the number: a count on its own passes for
-    // a job that is registered and never fires.
-    expect(jobs.count).toBe(17);
+    // sweep; 17 before the server-create idempotency key prune. Bump this
+    // when a job is added, and assert the new job's cadence below rather
+    // than only moving the number: a count on its own passes for a job that
+    // is registered and never fires.
+    expect(jobs.count).toBe(18);
 
     // One occupancy row a minute, and not one at boot: an extra sample at t=0
     // would land in the same minute bucket as the first tick anyway, so the
@@ -171,6 +176,7 @@ describe("cold jobs", () => {
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
     expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);
+    expect(pruneExpiredServerIdempotencyKeys).toHaveBeenCalledTimes(1);
     // Refilled cluster rate-limit buckets: rows, not disk pages, and nothing
     // depends on the tick landing — a refilled row is spent exactly like an
     // absent one.

@@ -208,10 +208,22 @@ actor APIClient {
         try await send(path: path, method: "GET", query: query, body: Optional<Data>.none)
     }
 
+    /// `idempotencyKey`, when given, rides the `Idempotency-Key` header: the
+    /// server pairs it with the caller and, for a POST that makes something
+    /// (a room today), answers a repeat with the same thing it made the
+    /// first time instead of making a second one. Generate one per attempt
+    /// and reuse it on a retry of that same attempt (see
+    /// `IdempotencyAttempt`); leave it `nil` for every POST that is not
+    /// creating something, which is every caller of this function today
+    /// except `createServer`.
     @discardableResult
-    func post<T: Decodable>(_ path: String, body: (some Encodable)? = Optional<Data>.none) async throws -> T {
+    func post<T: Decodable>(
+        _ path: String,
+        body: (some Encodable)? = Optional<Data>.none,
+        idempotencyKey: String? = nil
+    ) async throws -> T {
         let data = try body.map { try Coding.encoder.encode($0) }
-        return try await send(path: path, method: "POST", query: [], body: data)
+        return try await send(path: path, method: "POST", query: [], body: data, idempotencyKey: idempotencyKey)
     }
 
     @discardableResult
@@ -230,10 +242,12 @@ actor APIClient {
         path: String,
         method: String,
         query: [URLQueryItem],
-        body: Data?
+        body: Data?,
+        idempotencyKey: String? = nil
     ) async throws -> T {
         let (data, _) = try await perform(
-            path: path, method: method, query: query, body: body, ifNoneMatch: nil
+            path: path, method: method, query: query, body: body,
+            ifNoneMatch: nil, idempotencyKey: idempotencyKey
         )
 
         if T.self == EmptyResponse.self, let empty = EmptyResponse() as? T {
@@ -259,7 +273,8 @@ actor APIClient {
         method: String,
         query: [URLQueryItem],
         body: Data?,
-        ifNoneMatch: String?
+        ifNoneMatch: String?,
+        idempotencyKey: String? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: backend.apiBaseURL.appendingPathComponent(path),
@@ -280,6 +295,9 @@ actor APIClient {
         }
         if let ifNoneMatch {
             request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+        }
+        if let idempotencyKey {
+            request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
 
@@ -467,10 +485,12 @@ extension APIClient {
         return response.members
     }
 
-    func createServer(name: String) async throws -> Server {
+    func createServer(name: String, idempotencyKey: String? = nil) async throws -> Server {
         struct Body: Encodable { let name: String }
         struct Response: Decodable { let server: Server }
-        let response: Response = try await post("/api/servers", body: Body(name: name))
+        let response: Response = try await post(
+            "/api/servers", body: Body(name: name), idempotencyKey: idempotencyKey
+        )
         return response.server
     }
 
