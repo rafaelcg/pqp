@@ -166,8 +166,8 @@ export function handleErrorMessage(error: unknown): MessageKey {
  * the account's existing number whenever it can; that is the common case, not
  * news. Comparing whole tags reads every successful rename as a reassignment
  * the moment the name differs from before, which is the bug the Android port
- * of this function found on its emulator walk (PR #806): "Esse já tinha dono"
- * after every rename that worked.
+ * of this function found on its emulator walk, pull request 806: "Esse já
+ * tinha dono" after every rename that worked.
  */
 export function tagWasReassigned(
   requestedUsername: string,
