@@ -159,6 +159,26 @@ describe("a taken username", () => {
     expect(tagWasReassigned("joao", "joao#0417", "joao#0417")).toBe(false);
     expect(tagWasReassigned("joao", "old#0417", null)).toBe(false);
   });
+
+  it("says nothing when a rename keeps its number", () => {
+    // The ordinary, non-colliding path: the name part changes (that's the
+    // user's own doing) but the server kept the same discriminator, because
+    // it could. Comparing whole tags reads this as a reassignment on every
+    // successful rename, which is the bug PR #806 found on Android: the
+    // same function, ported, showed "Esse já tinha dono" after every rename
+    // that worked.
+    expect(tagWasReassigned("joao", "joao_example_com#0417", "joao#0417")).toBe(
+      false,
+    );
+  });
+
+  it("notices a genuine reassignment even when the name also changed", () => {
+    // The name changed AND the number the account had could not be kept for
+    // the new name, so the server rolled a fresh one. That is real news.
+    expect(tagWasReassigned("joao", "joao_example_com#0417", "joao#9931")).toBe(
+      true,
+    );
+  });
 });
 
 describe("normalizeInviteCode", () => {

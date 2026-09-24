@@ -153,25 +153,35 @@ export function handleErrorMessage(error: unknown): MessageKey {
 }
 
 /**
- * Did the server hand back a different tag than the one asked for?
+ * Did the server hand back a different NUMBER than the one they had?
  *
  * A rename that collides is answered with the same name and a fresh number,
  * silently. Silently is right for the settings modal, where the user already
  * knows their handle; it is wrong here, where the whole point of the step is
  * that they are seeing it for the first time. Told once, they know what to give
  * out. Not told, they hand out the number they typed at and nobody finds them.
+ *
+ * Compared on the number rather than on the whole tag. The name part is what
+ * they chose, so a change there is their own doing, and `updateProfile` keeps
+ * the account's existing number whenever it can; that is the common case, not
+ * news. Comparing whole tags reads every successful rename as a reassignment
+ * the moment the name differs from before, which is the bug the Android port
+ * of this function found on its emulator walk, pull request 806: "Esse já
+ * tinha dono" after every rename that worked.
  */
 export function tagWasReassigned(
   requestedUsername: string,
   previousTag: string | null,
   nextTag: string | null,
 ): boolean {
-  if (!nextTag || nextTag === previousTag) {
+  if (!nextTag || !nextTag.startsWith(`${requestedUsername}#`)) {
     return false;
   }
-  // The name part is what they chose; a change there is their own doing. Only a
-  // change in the number is news.
-  return nextTag.startsWith(`${requestedUsername}#`);
+  const previousNumber = previousTag?.split("#").pop() ?? "";
+  if (!previousNumber) {
+    return false;
+  }
+  return nextTag.split("#").pop() !== previousNumber;
 }
 
 /**
