@@ -2856,6 +2856,48 @@ makes it a download. The headerless door
 (`tryWatchPartyDownloadCapabilityDoor`) is therefore the one that answers the
 product's own link, with the Bearer route for everything else.
 
+## How many people watched
+
+Per broadcast (channel plus `startedAt`, the key the history dialog uses) the
+server keeps three numbers: the **peak** of concurrent viewers, the **unique**
+accounts that watched, and a **per-minute series** of concurrent viewers
+(`hls_session_viewer_minutes`). Same for LL and conventional.
+
+- **Where viewers are seen.** Every playing web viewer posts
+  `POST /api/live-hls/presence` every 30 s with the `?t=` viewer token it
+  already holds (`LIVE_HLS_PRESENCE_INTERVAL_MS`), so viewers the edge Worker
+  serves entirely are counted too. Playlist responses this API serves and
+  verified telemetry batches count as sightings as well, which covers tabs
+  that predate the heartbeat and the native apps on the API path. The viewer
+  is the authenticated account and must match the token's user, so an
+  account can only count itself.
+- **No write per poll.** A sighting is a map write in
+  `server/src/voice/hls-viewer-counts.ts`. Each API process flushes at most
+  once a minute per broadcast, in one statement: who it saw into
+  `hls_session_viewers`, the concurrent reading into its minute and the
+  running peak, and the accounts new to this broadcast added to the unique
+  total in `hls_session_viewer_stats`.
+- **Two API processes** write who they saw, not how many. Unique grows only
+  by rows actually inserted (once per account), and the higher reading of a
+  minute wins.
+- **Concurrent means present at the same instant.** Each flush evaluates an
+  instant 90 s in the past (by then both processes have written it) and
+  counts viewers whose first-to-last-seen span covers it within 45 s (one
+  heartbeat plus its timer). Fifty people who leave and fifty who arrive a
+  minute later read as a peak of 50, not 100. The operator's "watching now"
+  is looser on purpose: seen in the last 120 s.
+- **An outage delays the count, it does not lose it.** A sighting no flush
+  has stored is kept in memory until one does.
+- **Privacy.** User ids stay in `hls_session_viewers`, are pruned 24 h after
+  last seen, and nothing reads them back out: every reader counts rows.
+- **Where it shows.** The past-broadcasts dialog ("pico de 12 pessoas · 31
+  únicas"), `liveHls.viewers` on `GET /api/admin/metrics` (per live broadcast:
+  now, peak, unique, plus this process's sightings and flush health), and a
+  line under "transmissões" on the operator dashboard.
+- **Not counted:** native apps playing an LL session straight from the edge
+  Worker (they do not send the heartbeat yet), and broadcasts from before
+  this shipped.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for

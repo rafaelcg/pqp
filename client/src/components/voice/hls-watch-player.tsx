@@ -31,6 +31,7 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
+  createHlsPresenceBeat,
   createHlsTelemetryQueue,
   encodeToPaintLatencyMs,
   hasHlsViewerToken,
@@ -49,6 +50,7 @@ import {
   resolveHlsUrl,
   sameHlsSession,
   sampleVideoPlaybackQuality,
+  sendHlsPresence,
   sendHlsTelemetryBatch,
   setHlsPlaybackStats,
   type HlsTelemetryQueue,
@@ -1207,6 +1209,44 @@ export function HlsWatchPlayer({
       setAttempt((n) => n + 1);
     }
   }, [hlsMode]);
+
+  // "Still watching" for the party's viewer counts (`createHlsPresenceBeat`).
+  // Every live viewer, not a sample, and only while the picture plays. Keyed
+  // on the viewer token the attached URL carries, so a session change (a new
+  // token) starts a fresh beat and a URL with no token (unsigned config) sends
+  // nothing. Never for a replay.
+  const presenceToken = isVod ? null : hlsViewerTokenFromUrl(activeSrc);
+  useEffect(() => {
+    if (!presenceToken) {
+      return;
+    }
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    let cancelled = false;
+    const presence = createHlsPresenceBeat({
+      sessionToken: presenceToken,
+      isPlaying: () => !video.paused && !video.ended,
+      send: (sessionToken) => {
+        void getAuthToken().then((token) => {
+          if (!cancelled) {
+            sendHlsPresence(sessionToken, token);
+          }
+        });
+      },
+    });
+    const onPlaying = () => presence.beat();
+    video.addEventListener("playing", onPlaying);
+    const timer = window.setInterval(() => presence.beat(), 10_000);
+    presence.beat();
+    return () => {
+      cancelled = true;
+      presence.stop();
+      window.clearInterval(timer);
+      video.removeEventListener("playing", onPlaying);
+    };
+  }, [getVideo, presenceToken]);
 
   // The replay's own transport. Not wired at all outside `mode: "vod"`: a
   // live element's `duration` is `Infinity` and nothing here should read it.

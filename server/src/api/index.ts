@@ -134,6 +134,7 @@ import {
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
   liveHlsTelemetryBatchSchema,
+  liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
 } from "@pqp/shared";
 import { z } from "zod";
@@ -271,6 +272,7 @@ import {
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
 import { summarizeHlsTelemetryBatch } from "../voice/hls-telemetry-summary.js";
+import { noteHlsViewer } from "../voice/hls-viewer-counts.js";
 import { logEvent } from "../lib/log.js";
 import {
   clientAddress,
@@ -852,6 +854,14 @@ const feedbackLimiter = createRateLimiter({
 const liveHlsTelemetryLimiter = createRateLimiter({
   capacity: 10,
   refillPerSecond: 0.2,
+});
+/**
+ * `POST /api/live-hls/presence`: one every 30 s per player, and a person may
+ * have the film and the host's camera open in two players, or two tabs.
+ */
+const liveHlsPresenceLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.25,
 });
 /**
  * The same budget as `liveHlsTelemetryLimiter` above, keyed by SESSION
@@ -2529,6 +2539,7 @@ async function hlsPlaylistResponse(
       token: options.token,
     });
     if (master !== null) {
+      noteHlsViewer(channelId, parsedStartedAt, userId, "playlist");
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Vary", "Authorization");
       return new RawResponse(master, "application/vnd.apple.mpegurl");
@@ -2545,6 +2556,10 @@ async function hlsPlaylistResponse(
     }
     throw error;
   }
+  // Counted as a viewer (a map write, `hls-viewer-counts.ts`): the poll
+  // itself is authenticated, and this catches players that predate the
+  // presence heartbeat.
+  noteHlsViewer(channelId, parsedStartedAt, userId, "playlist");
   // Not even one second. `AVPlayer` treats `max-age` as permission to replay
   // a live playlist it already has, and a ten second window replayed is a
   // playhead sitting on segments the bucket has already deleted. hls.js
@@ -8798,6 +8813,32 @@ function feedbackIdParam(value: string | undefined): string {
 }
 
 /**
+ * "I am still watching": every playing web viewer sends this every
+ * `LIVE_HLS_PRESENCE_INTERVAL_MS`, and it is what a party's viewer counts are
+ * built from (`voice/hls-viewer-counts.ts`). It covers the viewers the edge
+ * Worker serves entirely, which this API otherwise never sees.
+ *
+ * The session comes from the signed `?t=` viewer token and the viewer from
+ * the authenticated caller, and the two have to agree, so an account can only
+ * ever count itself, once, per broadcast. No query: one HMAC and a map write.
+ * The response carries nothing, so the count never reaches a client.
+ */
+router.post("/api/live-hls/presence", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!liveHlsPresenceLimiter.take(key)) {
+    res.setHeader("Retry-After", String(liveHlsPresenceLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = liveHlsPresenceSchema.parse(await readJsonBody(req));
+  const claims = decodeHlsViewerToken(body.sessionToken);
+  if (!claims || claims.userId !== user.id) {
+    throw new HttpError(400, "Invalid session token");
+  }
+  noteHlsViewer(claims.channelId, claims.startedAt, user.id, "presence");
+  return { ok: true };
+});
+
+/**
  * BROADCAST_PIPELINE B0.5: sampled, batched, droppable client playback
  * telemetry for a live watch party. Authenticated (the normal Bearer flow,
  * CLAUDE.md pitfall #8) and rate-limited, but deliberately NOT gated on
@@ -8875,6 +8916,9 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     const compositeKey = `${claims.channelId}:${claims.startedAt}`;
     sessionVerified = true;
     sessionId = compositeKey;
+    // A verified batch is also proof this person is watching: a map write
+    // (`hls-viewer-counts.ts`), never a query.
+    noteHlsViewer(claims.channelId, claims.startedAt, user.id, "telemetry");
 
     const sessionKey = `session:${compositeKey}`;
     if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {

@@ -51,6 +51,10 @@ function metaLine(
     parts.push(t("watchParty.history.inProgress"));
   }
   parts.push(entry.presenter?.displayName ?? t("watchParty.history.presenterUnknown"));
+  if (entry.viewers) {
+    parts.push(t("watchParty.history.viewersPeak", { count: entry.viewers.peak }));
+    parts.push(t("watchParty.history.viewersUnique", { count: entry.viewers.unique }));
+  }
   return parts.join(" · ");
 }
 
