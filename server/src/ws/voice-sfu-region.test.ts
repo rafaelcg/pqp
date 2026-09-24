@@ -320,6 +320,17 @@ describeDb("voice room SFU region", () => {
     expect(await storedRegion(channel)).toBe("sao");
   });
 
+  it("an override naming a region no longer configured still consults the server", async () => {
+    const channel = await serverChannel(["BR", "BR", "BR", "BR", "BR"]);
+    await getPool().query(
+      `INSERT INTO channels (id, server_id, name, type, position, sfu_region)
+       VALUES ($1, $2, 'voz', 'voice', 0, 'lon')`,
+      [channel, channelServers.get(channel)],
+    );
+    await join(client("US"), channel);
+    expect(await storedRegion(channel)).toBe("sao");
+  });
+
   it("too few known members: the first joiner's country, as before", async () => {
     const channel = await serverChannel(["BR", "BR"]);
     await join(client("US"), channel);

@@ -164,6 +164,17 @@ describeDb("region audience (real Postgres)", () => {
       expect((await row(user)).last_country_at).toEqual(first);
     });
 
+    it("an older observation never overwrites a newer one, whatever order the statements run in", async () => {
+      const user = await makeUser();
+      const now = Date.now();
+      // The newer connection (GB) lands first; the older one (BR), from
+      // another process, runs its statement afterwards.
+      expect(await recordUserCountry(user, "GB", now)).toBe(true);
+      resetRegionAudience();
+      expect(await recordUserCountry(user, "BR", now - 1_000)).toBe(false);
+      expect((await row(user)).last_country).toBe("GB");
+    });
+
     it("refreshes a stale row after the interval", async () => {
       const user = await makeUser();
       await getPool().query(

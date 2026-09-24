@@ -939,14 +939,18 @@ async function decideRoomRegion(
     }
   }
   // Where the server's people are. Read only where the policy would reach
-  // it (no override), cached per server for hours, and a failed read is "no
-  // data", which falls back to the first joiner's country as before.
+  // it (no override naming a configured region: a stale override is ignored
+  // by the policy, so the tally must still be there for it), cached per
+  // server for hours, and a failed read is "no data", which falls back to
+  // the first joiner's country as before.
+  const overrideApplies =
+    override !== null && regions.some((region) => region.id === override);
   let serverCountries: Map<string, number> | null = null;
   if (
     clientDeclaresRegions &&
     channel.kind === "server" &&
     !isWatchPartyChannelType(channel.type) &&
-    !override &&
+    !overrideApplies &&
     channel.server_id
   ) {
     try {

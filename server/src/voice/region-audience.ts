@@ -48,6 +48,12 @@ const lastWrites = new Map<string, { country: string; at: number }>();
  * the interval issues no query at all. In the database: the UPDATE's WHERE
  * skips the write when the row already says so and is fresh, which covers
  * the other replica and a restart that emptied the map.
+ *
+ * ORDERED BY OBSERVATION. `last_country_at` is the moment this process saw
+ * the connection, not the moment the statement ran, and a write only lands
+ * over an older observation. Two connections from two countries at once (a
+ * phone and a VPN'd laptop) cannot leave the older one stored because its
+ * statement happened to run second.
  */
 export async function recordUserCountry(
   userId: string,
@@ -65,24 +71,30 @@ export async function recordUserCountry(
   ) {
     return false;
   }
-  if (lastWrites.size >= MAX_REMEMBERED_WRITES) {
-    lastWrites.clear();
-  }
+  // Re-inserted so the Map's order is least recently written first, and
+  // only the oldest entry goes at the bound: clearing the whole map would
+  // send every remembered account back to the database at once.
+  lastWrites.delete(userId);
+  evictOldest(lastWrites, MAX_REMEMBERED_WRITES);
   lastWrites.set(userId, { country, at: now });
   try {
     const result = await getPool().query(
       `UPDATE users
-          SET last_country = $2, last_country_at = NOW()
+          SET last_country = $2, last_country_at = $4
         WHERE id = $1
+          AND (last_country_at IS NULL OR last_country_at < $4)
           AND (last_country IS DISTINCT FROM $2
                OR last_country_at IS NULL
-               OR last_country_at < NOW() - make_interval(secs => $3))`,
-      [userId, country, COUNTRY_WRITE_INTERVAL_MS / 1000],
+               OR last_country_at < $4 - make_interval(secs => $3))`,
+      [userId, country, COUNTRY_WRITE_INTERVAL_MS / 1000, new Date(now)],
     );
     return (result.rowCount ?? 0) > 0;
   } catch (error) {
-    // Forget the attempt so the next connection retries it.
-    lastWrites.delete(userId);
+    // Forget the attempt so the next connection retries it (unless a newer
+    // one already replaced it).
+    if (lastWrites.get(userId)?.at === now) {
+      lastWrites.delete(userId);
+    }
     console.error("[voice] recording the account's country failed:", error);
     return false;
   }
@@ -107,11 +119,13 @@ export function serverMemberCountries(
 ): Promise<Map<string, number>> {
   const cached = serverTallies.get(serverId);
   if (cached && now - cached.at < SERVER_COUNTRIES_TTL_MS) {
+    // Touched: moved to the back, so eviction takes the coldest server.
+    serverTallies.delete(serverId);
+    serverTallies.set(serverId, cached);
     return cached.countries;
   }
-  if (serverTallies.size >= MAX_CACHED_SERVERS) {
-    serverTallies.clear();
-  }
+  serverTallies.delete(serverId);
+  evictOldest(serverTallies, MAX_CACHED_SERVERS);
   const countries = readServerMemberCountries(serverId);
   serverTallies.set(serverId, { at: now, countries });
   countries.catch(() => {
@@ -138,6 +152,20 @@ async function readServerMemberCountries(
     [serverId, ACTIVE_WINDOW_DAYS],
   );
   return new Map(result.rows.map((row) => [row.country, row.members]));
+}
+
+/**
+ * Drop the oldest entries until there is room for one more. A Map iterates
+ * in insertion order and both callers re-insert on use, so this is LRU.
+ */
+function evictOldest(map: Map<string, unknown>, max: number): void {
+  while (map.size >= max) {
+    const oldest = map.keys().next();
+    if (oldest.done) {
+      return;
+    }
+    map.delete(oldest.value);
+  }
 }
 
 /** Test hook. */
