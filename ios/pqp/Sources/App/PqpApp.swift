@@ -98,6 +98,9 @@ struct RootView: View {
     /// came back "no APNs key configured".
     @State private var serverSupportsApns: Bool?
     @State private var showingPushExplainer = false
+    /// Shared by the welcome's big mark and the wizard's small one, so the
+    /// hand-off between them is one mark moving, not two views swapping.
+    @Namespace private var brand
 
     var body: some View {
         @Bindable var call = call
@@ -110,23 +113,34 @@ struct RootView: View {
                 SplashView()
                     .transition(.opacity)
             case .onboarding:
-                OnboardingView()
-                    .transition(.asymmetric(
-                        insertion: .opacity,
-                        removal: .opacity.combined(with: .scale(scale: 1.04))
-                    ))
-            case .ageGate:
-                AgeGateView()
+                OnboardingView(brand: brand)
                     .transition(.opacity)
             case .blocked:
                 AgeBlockedView()
                     .transition(.opacity)
-            case .ready:
-                HomeView()
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.98)),
-                        removal: .opacity
-                    ))
+            // ONE case for both, on purpose: the age gate and the rest of the
+            // wizard are one shell, and keeping them in the same branch is what
+            // keeps that shell (and its dots and mark) the same view when the
+            // gate passes, instead of tearing it down and building it again.
+            case .ageGate, .ready:
+                ZStack {
+                    if session.phase == .ready {
+                        HomeView()
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .scale(scale: 0.98)),
+                                removal: .opacity
+                            ))
+                    }
+                    if let run = session.firstRun {
+                        FirstRunFlowView(run: run, brand: brand)
+                            .transition(.asymmetric(
+                                insertion: .opacity,
+                                removal: .opacity.combined(with: .scale(scale: 1.03))
+                            ))
+                            .zIndex(1)
+                    }
+                }
+                .animation(Motion.gentle, value: session.firstRun == nil)
             }
         }
         // The ring floats above whatever is on screen. Only ever while signed
@@ -254,9 +268,31 @@ struct RootView: View {
         // Notifications are set up on arrival at `.ready` and nowhere earlier:
         // `/api/push/config` needs a token, and asking for permission before
         // somebody has seen the product is the prompt everybody declines.
+        //
+        // Not while the first-run wizard is up either: a permission sheet over
+        // "How should people see you?" is two questions at once. It waits for
+        // the wizard to close, and for the arrival moment to have been seen.
         .onChange(of: session.phase) { _, phase in
-            guard phase == .ready else { return }
+            guard phase == .ready, session.firstRun == nil else { return }
             Task { await setUpNotifications() }
+        }
+        .onChange(of: session.firstRun == nil) { _, closed in
+            guard closed, session.phase == .ready else { return }
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                await setUpNotifications()
+            }
+        }
+        // The invitee's arrival: confetti and "You're in {server}" over the room
+        // they just walked into. The organizer had theirs on the ready step.
+        .overlay(alignment: .top) {
+            if session.phase == .ready, let celebration = session.arrivalCelebration {
+                ArrivalToast(celebration: celebration) {
+                    withAnimation(Motion.standard) { session.arrivalCelebration = nil }
+                }
+                .transition(.opacity)
+                .zIndex(2)
+            }
         }
     }
 

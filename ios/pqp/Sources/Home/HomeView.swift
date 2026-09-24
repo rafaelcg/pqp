@@ -441,6 +441,8 @@ struct HubView: View {
     /// The directory, over everything. A sheet rather than a push because
     /// browsing is a different mode from talking — see `CommunitiesView`.
     @State private var showingCommunities = false
+    /// The checklist's Discord door.
+    @State private var showingDiscordImport = false
     /// Non-nil pushes the Friends screen with its handle search already open.
     @State private var addingFriend: FriendsDestination?
 
@@ -474,6 +476,8 @@ struct HubView: View {
                                 state: FirstRun.state(firstRunInputs),
                                 tag: session.currentUser?.tag,
                                 onCreateServer: { showingCreateServer = true },
+                                onImportDiscord: { showingDiscordImport = true },
+                                onJoinInvite: { showingJoinInvite = true },
                                 onAddFriend: { addingFriend = FriendsDestination() },
                                 onPickAvatar: { showingAccountSettings = true },
                                 onDismiss: { Task { await model.settleFirstRun() } }
@@ -576,6 +580,14 @@ struct HubView: View {
         // takes — `requestNavigation` is watched by `HomeView`, which resolves
         // the server (refreshing the list, since this membership is seconds old)
         // and pushes its channel list. One navigation, one place it is written.
+        .sheet(isPresented: $showingDiscordImport) {
+            DiscordImportSheet { server in
+                Task {
+                    await model.refresh()
+                    session.requestNavigation(.server(id: server.id))
+                }
+            }
+        }
         .sheet(isPresented: $showingCommunities) {
             CommunitiesView { serverId in
                 Task {

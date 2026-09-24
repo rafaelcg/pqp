@@ -18,7 +18,7 @@ final class OnboardingFlowUITests: XCTestCase {
 
     private func launchFresh() -> XCUIApplication {
         let app = XCUIApplication()
-        // Resets `hasCompletedOnboarding`, so every run starts at beat one.
+        // Resets `hasCompletedOnboarding`, so every run starts on the welcome.
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO"]
         // …and forgets where the last run was reading, so these tests land on
         // the hub rather than in whichever channel a previous test opened.
@@ -28,38 +28,20 @@ final class OnboardingFlowUITests: XCTestCase {
         return app
     }
 
-    func testOnboardingRunsThroughToTheHub() {
+    func testTheWelcomeSaysWhatThisIsAndSignsStraightIn() {
         let app = launchFresh()
 
         XCTAssertTrue(
-            app.staticTexts["Your friends.\nYour community.\nYour mess."].waitForExistence(timeout: 5),
-            "First onboarding beat should be visible on a fresh install"
+            app.descendants(matching: .any)["Voice, screen share and chat. For your crew, on your terms."]
+                .waitForExistence(timeout: 5),
+            "The welcome should say what pqp is on a fresh install"
         )
-
-        // Two "Next" taps, then the final button changes label — which is
-        // itself the assertion that the last beat was reached.
-        app.buttons["Next"].tap()
-        app.buttons["Next"].tap()
-
-        let getStarted = app.buttons["Get started"]
-        XCTAssertTrue(getStarted.waitForExistence(timeout: 3),
-                      "Final beat should offer 'Get started' rather than 'Next'")
-        getStarted.tap()
+        XCTAssertTrue(app.buttons["welcome.signIn"].exists, "Somebody with an account needs a door too")
+        app.buttons["welcome.start"].tap()
 
         XCTAssertTrue(
             app.buttons["hub.profile"].waitForExistence(timeout: 10),
-            "Completing onboarding should land on the hub"
-        )
-    }
-
-    func testSkipShortCircuitsOnboarding() {
-        let app = launchFresh()
-        XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
-        app.buttons["Skip"].tap()
-
-        XCTAssertTrue(
-            app.buttons["hub.profile"].waitForExistence(timeout: 10),
-            "Skip should sign in immediately"
+            "An account that already answered first run should land on the hub"
         )
     }
 
@@ -71,7 +53,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
         let app = launchFresh()
-        app.buttons["Skip"].tap()
+        app.buttons["welcome.start"].tap()
 
         XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["hub.friends"].exists, "Friends keeps an entry point on the hub")
@@ -90,7 +72,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
         let app = launchFresh()
-        app.buttons["Skip"].tap()
+        app.buttons["welcome.start"].tap()
 
         app.openServerFromHub(server.id)
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
@@ -115,7 +97,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
         let app = launchFresh()
-        app.buttons["Skip"].tap()
+        app.buttons["welcome.start"].tap()
 
         app.openServerFromHub(server.id)
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
@@ -146,7 +128,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
         let app = launchFresh()
-        app.buttons["Skip"].tap()
+        app.buttons["welcome.start"].tap()
 
         XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 10))
         // If decoding broke, the rail is empty and this fails rather than
@@ -166,7 +148,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
         let app = launchFresh()
-        app.buttons["Skip"].tap()
+        app.buttons["welcome.start"].tap()
 
         app.openServerFromHub(server.id)
 
@@ -215,7 +197,7 @@ final class LaunchResilienceUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.buttons["Skip"].waitForExistence(timeout: 25),
+            app.buttons["welcome.start"].waitForExistence(timeout: 25),
             "An unreachable server must land on onboarding, never hang on the splash"
         )
 
@@ -267,8 +249,8 @@ final class MessageActionUITests: XCTestCase {
         // Start on the hub, not in whatever channel the last run restored.
         app.launchArguments += ["-pqp.lastVisited", "none"]
         app.launch()
-        XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
-        app.buttons["Skip"].tap()
+        XCTAssertTrue(app.buttons["welcome.start"].waitForExistence(timeout: 5))
+        app.buttons["welcome.start"].tap()
         app.openServerFromHub(serverId)
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
         app.staticTexts["general"].tap()

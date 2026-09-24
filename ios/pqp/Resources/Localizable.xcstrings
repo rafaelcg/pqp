@@ -5930,6 +5930,1176 @@
           }
         }
       }
+    },
+    "%@ is waiting for you" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tá te esperando"
+          }
+        }
+      }
+    },
+    "A name on your messages and an @ so people find you. Both can change whenever." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um nome nas mensagens, um @ pra te acharem. Os dois mudam quando você quiser."
+          }
+        }
+      }
+    },
+    "A voice call that is always open" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma call de voz sempre aberta"
+          }
+        }
+      }
+    },
+    "Bring it from Discord" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trazer do Discord"
+          }
+        }
+      }
+    },
+    "Bring the crew" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traz a galera"
+          }
+        }
+      }
+    },
+    "Came from your account. If that is not what people call you, change it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Veio da sua conta. Se não é como te chamam, troca."
+          }
+        }
+      }
+    },
+    "Change" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trocar"
+          }
+        }
+      }
+    },
+    "Chat that stays" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chat que fica salvo"
+          }
+        }
+      }
+    },
+    "Check it before you continue: this answer cannot be changed later, and a date under %lld closes the account on the spot." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confere antes de continuar: essa resposta não muda depois, e uma data de menor de %lld encerra a conta na hora."
+          }
+        }
+      }
+    },
+    "Come hang out on pqp: %@ #vemprapqp" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vem pra pqp: %@ #vemprapqp"
+          }
+        }
+      }
+    },
+    "Copy @" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar @"
+          }
+        }
+      }
+    },
+    "Copy Discord layout" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar estrutura do Discord"
+          }
+        }
+      }
+    },
+    "Could not copy that Discord layout" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra copiar essa estrutura do Discord"
+          }
+        }
+      }
+    },
+    "Could not read that Discord template" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ler esse template do Discord"
+          }
+        }
+      }
+    },
+    "Couldn't create that. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra criar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't make the link. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra gerar o link. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't save that. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra salvar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Create a template if you do not have one, then copy the link." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cria um modelo se ainda não tiver, e copia o link."
+          }
+        }
+      }
+    },
+    "Create account" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar conta"
+          }
+        }
+      }
+    },
+    "Create an account and you're in. Takes a minute." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cria a conta e já entra. Leva um minuto."
+          }
+        }
+      }
+    },
+    "Create this community" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar esta comunidade"
+          }
+        }
+      }
+    },
+    "Date of birth" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data de nascimento"
+          }
+        }
+      }
+    },
+    "DD" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DD"
+          }
+        }
+      }
+    },
+    "Discord itself was not changed. Send this invite to the people who should join here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Discord em si não mudou. Manda este convite pra quem deve entrar aqui."
+          }
+        }
+      }
+    },
+    "Discord layout" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estrutura do Discord"
+          }
+        }
+      }
+    },
+    "discord.new/… or a template code" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "discord.new/… ou o código do template"
+          }
+        }
+      }
+    },
+    "From the call, with sound. Phones watch too." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direto da call, com som. Quem tá no celular assiste também."
+          }
+        }
+      }
+    },
+    "Go in" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar"
+          }
+        }
+      }
+    },
+    "Go in anyway and ask whoever invited you for a fresh link." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entra assim mesmo e pede outro link pra quem te chamou."
+          }
+        }
+      }
+    },
+    "Go into %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar em %@"
+          }
+        }
+      }
+    },
+    "Go into the room" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar na sala"
+          }
+        }
+      }
+    },
+    "Going in…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrando…"
+          }
+        }
+      }
+    },
+    "Good for 7 days, unlimited uses. Change it under Invite people." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vale 7 dias, sem limite de usos. Dá pra mudar em Convidar pessoas."
+          }
+        }
+      }
+    },
+    "Got it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entendi"
+          }
+        }
+      }
+    },
+    "How should people see you?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como a galera vai te ver?"
+          }
+        }
+      }
+    },
+    "I already have a Discord server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já tenho um servidor no Discord"
+          }
+        }
+      }
+    },
+    "I copied %@'s layout into pqp (pqp.gg). Discord itself was not changed. Join: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiei a estrutura de %@ no pqp (pqp.gg). O Discord em si não mudou. Entra: %@"
+          }
+        }
+      }
+    },
+    "I have an account" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já tenho conta"
+          }
+        }
+      }
+    },
+    "I'll sort it later" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depois eu arrumo"
+          }
+        }
+      }
+    },
+    "In Discord, open Server Settings, then Templates." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Discord, abre Configurações do servidor e depois Modelos."
+          }
+        }
+      }
+    },
+    "Invite" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convite"
+          }
+        }
+      }
+    },
+    "Invite link" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link de convite"
+          }
+        }
+      }
+    },
+    "Just once" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma vez só"
+          }
+        }
+      }
+    },
+    "Keep" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manter"
+          }
+        }
+      }
+    },
+    "Later" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depois eu vejo"
+          }
+        }
+      }
+    },
+    "Long" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Longa"
+          }
+        }
+      }
+    },
+    "Lowercase, numbers and _ only, between 2 and 32 characters." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só minúscula, número e _, de 2 a 32 caracteres."
+          }
+        }
+      }
+    },
+    "Lowercase, numbers and _ only. The number after it comes free." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só minúscula, número e _. O número no fim vem de brinde."
+          }
+        }
+      }
+    },
+    "Make one" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar"
+          }
+        }
+      }
+    },
+    "Make one, bring it from Discord, or paste an invite." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cria uma, traz do Discord, ou cola um convite."
+          }
+        }
+      }
+    },
+    "Name it something stupid" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bota um nome ridículo"
+          }
+        }
+      }
+    },
+    "Now bring everyone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agora leva a galera"
+          }
+        }
+      }
+    },
+    "Open source · Free · No card required" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código aberto · De graça · Feito no Brasil"
+          }
+        }
+      }
+    },
+    "Opens in the browser. On a phone you can join voice and watch other people's screens." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre no navegador. No celular dá pra entrar na voz e assistir a tela dos outros."
+          }
+        }
+      }
+    },
+    "Opens this option" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre esta opção"
+          }
+        }
+      }
+    },
+    "Paste a Discord template link. This copies the sidebar, not the people or the messages." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola o link de um template do Discord. Isso copia a barra lateral, não as pessoas nem as mensagens."
+          }
+        }
+      }
+    },
+    "Paste a discord.new link or a Discord template code." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola um link discord.new ou o código de um template do Discord."
+          }
+        }
+      }
+    },
+    "Paste it in the group. Whoever opens it comes in through the browser, nothing to install." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola no grupo. Quem abrir entra pelo navegador, sem instalar nada."
+          }
+        }
+      }
+    },
+    "Paste that discord.new link here. Discord itself is not changed." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola o link discord.new aqui. O Discord em si não muda."
+          }
+        }
+      }
+    },
+    "Paste the discord.new link and the sidebar comes over as it is. Discord itself does not change." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola o link discord.new e a barra lateral vem igual. O Discord em si não muda."
+          }
+        }
+      }
+    },
+    "Paste the link or the code." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cola o link ou o código."
+          }
+        }
+      }
+    },
+    "People and messages stay on Discord." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pessoas e mensagens ficam no Discord."
+          }
+        }
+      }
+    },
+    "Photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto"
+          }
+        }
+      }
+    },
+    "Pick a channel and say oi. Nobody knows you're here until you do." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe um canal e dá um oi. Ninguém sabe que você chegou até você falar."
+          }
+        }
+      }
+    },
+    "Pick one. It takes a minute." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe um caminho. Leva um minuto."
+          }
+        }
+      }
+    },
+    "pqp is %lld+. We ask once and take your word for it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O pqp é pra maiores de %lld. A gente pergunta uma vez e acredita em você."
+          }
+        }
+      }
+    },
+    "Preview" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prévia"
+          }
+        }
+      }
+    },
+    "Private" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privado"
+          }
+        }
+      }
+    },
+    "Push-to-talk or voice activation, volume per person." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push-to-talk ou ativação por voz, volume por pessoa."
+          }
+        }
+      }
+    },
+    "Reading template…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lendo o template…"
+          }
+        }
+      }
+    },
+    "Replies, threads, GIFs and search." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resposta, thread, GIF e busca."
+          }
+        }
+      }
+    },
+    "roles" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cargos"
+          }
+        }
+      }
+    },
+    "Room name" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome da sala"
+          }
+        }
+      }
+    },
+    "Room's ready" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sala pronta"
+          }
+        }
+      }
+    },
+    "Same film, same second, one room." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mesmo filme, mesmo segundo, uma sala só."
+          }
+        }
+      }
+    },
+    "Saving you a seat…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando seu lugar…"
+          }
+        }
+      }
+    },
+    "Screen share with sound." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tela compartilhada com som."
+          }
+        }
+      }
+    },
+    "Short" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Curta"
+          }
+        }
+      }
+    },
+    "Slow down a little and try again in a minute." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vai com calma e tenta de novo daqui a um minuto."
+          }
+        }
+      }
+    },
+    "Somebody already had that one. You got %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse já tinha dono. Você ficou com %@."
+          }
+        }
+      }
+    },
+    "Somebody sent me an invite" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Me mandaram um convite"
+          }
+        }
+      }
+    },
+    "Somebody sent you an invite" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Te mandaram um convite"
+          }
+        }
+      }
+    },
+    "Start from scratch" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar do zero"
+          }
+        }
+      }
+    },
+    "Step %lld of %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passo %lld de %lld"
+          }
+        }
+      }
+    },
+    "Tap in, start talking. No scheduling." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entra e fala. Sem marcar hora."
+          }
+        }
+      }
+    },
+    "text" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "texto"
+          }
+        }
+      }
+    },
+    "Text and voice come ready. Name it and go." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto e voz já vêm prontos. Bota um nome e pronto."
+          }
+        }
+      }
+    },
+    "Text you can paste in Discord" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto pra colar no Discord"
+          }
+        }
+      }
+    },
+    "That invite did not work" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convite não funcionou"
+          }
+        }
+      }
+    },
+    "That invite doesn't work. Ask for another." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse convite não funciona. Pede outro."
+          }
+        }
+      }
+    },
+    "That name is full, every number behind it is taken. Pick another one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse nome lotou, não sobrou número nenhum. Escolhe outro."
+          }
+        }
+      }
+    },
+    "This is what will be created" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "É isso que vai ser criado"
+          }
+        }
+      }
+    },
+    "This template is behind the live Discord server. Sync it in Discord first if you want the latest layout." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este template está atrás do servidor ao vivo no Discord. Sincroniza lá primeiro se quiser a estrutura mais recente."
+          }
+        }
+      }
+    },
+    "Upload a photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar uma foto"
+          }
+        }
+      }
+    },
+    "Use an invite" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar convite"
+          }
+        }
+      }
+    },
+    "Use this avatar" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar este avatar"
+          }
+        }
+      }
+    },
+    "Username" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome de usuário"
+          }
+        }
+      }
+    },
+    "voice" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "voz"
+          }
+        }
+      }
+    },
+    "Voice that holds the whole room." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz que aguenta a sala inteira."
+          }
+        }
+      }
+    },
+    "Voice, screen share and chat. For your crew, on your terms." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz, tela compartilhada e chat. Pra sua galera, do seu jeito."
+          }
+        }
+      }
+    },
+    "Watch parties of 100+ people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watch party com mais de 100 pessoas"
+          }
+        }
+      }
+    },
+    "We moved to pqp. Opens in the browser, join the call and that's it: %@ #vemprapqp" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A gente mudou pra pqp. Abre no navegador, entra na call e já era: %@ #vemprapqp"
+          }
+        }
+      }
+    },
+    "What people call you" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como te chamam"
+          }
+        }
+      }
+    },
+    "What you can do in there" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que dá pra fazer lá dentro"
+          }
+        }
+      }
+    },
+    "Where does the crew hang out?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Onde a galera vai ficar?"
+          }
+        }
+      }
+    },
+    "Whoever is on the phone watches the same share." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem tá no celular assiste a mesma tela."
+          }
+        }
+      }
+    },
+    "You're in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você entrou em %@"
+          }
+        }
+      }
+    },
+    "You're invited to %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você foi convidado pra %@"
+          }
+        }
+      }
+    },
+    "Your @" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seu @"
+          }
+        }
+      }
+    },
+    "Your date of birth" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua data de nascimento"
+          }
+        }
+      }
+    },
+    "Your room" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua sala"
+          }
+        }
+      }
+    },
+    "YYYY" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AAAA"
+          }
+        }
+      }
+    },
+    "%lld people inside" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld person inside"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld people inside"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld pessoa lá dentro"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld pessoas lá dentro"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Welcome in" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tá dentro"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

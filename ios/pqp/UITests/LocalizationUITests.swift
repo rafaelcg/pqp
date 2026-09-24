@@ -30,14 +30,16 @@ final class LocalizationUITests: XCTestCase {
         ]
         app.launch()
 
-        // Onboarding first: if this is still "Skip" the bundle has no pt-BR at
-        // all and everything below would fail for a different reason.
-        let skip = app.buttons["Pular"]
-        XCTAssertTrue(
-            skip.waitForExistence(timeout: 15),
-            "Onboarding is in English, so the pt-BR catalogue is not in the bundle"
+        // The welcome first: if this is still "Create account" the bundle has
+        // no pt-BR at all and everything below would fail for a different
+        // reason.
+        let start = app.buttons["welcome.start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 15))
+        XCTAssertEqual(
+            start.label, "Criar conta",
+            "The welcome is in English, so the pt-BR catalogue is not in the bundle"
         )
-        skip.tap()
+        start.tap()
 
         // The newest copy in the app, and therefore the most likely to have been
         // added in English and left there.

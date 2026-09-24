@@ -2,17 +2,11 @@ import SwiftUI
 
 /// The three things a new account has not done yet, offered at the top of the hub.
 ///
-/// WHY IT IS HERE AND NOT A TOUR. iOS onboarding is three marketing beats and a
-/// sign-in — it never asks for a handle, a face, or a friend, and it ends by
-/// dropping somebody on a hub with two cards on it. Those two cards are good, but
-/// between them they cover one and a half of the three things that make the app
-/// work: `Create a server` is real, `Start a conversation` opens a sheet whose
-/// suggestions are friends-only and therefore opens on nothing, and the avatar is
-/// three taps behind a dock pill that says nothing about it.
-///
-/// So this is three errands with buttons, at the top of the screen the errands get
-/// done on, and one tap to be rid of forever — not a modal sequence over an app
-/// nobody has a reason to be in yet.
+/// WHERE IT SITS NEXT TO THE WIZARD. First run V2 (`FirstRunFlowView`) asks for
+/// the name, the face and the room up front, and it can be skipped from its
+/// first real screen. This card is where somebody who skipped picks up: the
+/// same three doors into a room (make one, bring it from Discord, use an
+/// invite), a friend, and a picture, one tap to be rid of forever.
 ///
 /// The done rows stay put and lose their buttons rather than vanishing: a row that
 /// disappears on completion re-lays the card out under the thumb that just tapped
@@ -22,6 +16,10 @@ struct FirstRunCard: View {
     let state: FirstRunState
     let tag: String?
     let onCreateServer: () -> Void
+    /// The Discord door, the same one the wizard's room step has.
+    var onImportDiscord: (() -> Void)?
+    /// "Use an invite": the hub's paste-a-code prompt.
+    var onJoinInvite: (() -> Void)?
     let onAddFriend: () -> Void
     let onPickAvatar: () -> Void
     let onDismiss: () -> Void
@@ -97,23 +95,19 @@ struct FirstRunCard: View {
                         .foregroundStyle(Palette.paperMuted)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button(action: action(for: task)) {
-                        Text(actionTitle(for: task))
-                            .font(Typography.caption)
-                            .foregroundStyle(Palette.inkDeep)
-                            .padding(.horizontal, 12)
-                            .frame(height: 32)
-                            .background(
-                                RoundedRectangle(
-                                    cornerRadius: Metrics.cornerRadiusSmall,
-                                    style: .continuous
-                                )
-                                .fill(Palette.signal)
-                            )
+                    if task == .server {
+                        // Three ways into a room, the wizard's three doors.
+                        // Wraps to a column when large text will not fit a row.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { serverActions }
+                            VStack(alignment: .leading, spacing: 8) { serverActions }
+                        }
+                        .padding(.top, 2)
+                    } else {
+                        actionButton(actionTitle(for: task), primary: true, action: action(for: task))
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("firstRun.action.\(task.rawValue)")
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 2)
-                    .accessibilityIdentifier("firstRun.action.\(task.rawValue)")
                 }
             }
 
@@ -121,6 +115,43 @@ struct FirstRunCard: View {
         }
         .accessibilityIdentifier("firstRun.task.\(task.rawValue)")
         .accessibilityValue(done ? Text("Done") : Text("Not done"))
+    }
+
+    @ViewBuilder
+    private var serverActions: some View {
+        actionButton("Make one", primary: true, action: onCreateServer)
+            .accessibilityIdentifier("firstRun.action.server")
+        if let onImportDiscord {
+            actionButton("Bring it from Discord", primary: false, action: onImportDiscord)
+                .accessibilityIdentifier("firstRun.action.discord")
+        }
+        if let onJoinInvite {
+            actionButton("Use an invite", primary: false, action: onJoinInvite)
+                .accessibilityIdentifier("firstRun.action.invite")
+        }
+    }
+
+    private func actionButton(
+        _ title: LocalizedStringKey,
+        primary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Typography.caption)
+                .foregroundStyle(primary ? Palette.inkDeep : Palette.paper)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: Metrics.cornerRadiusSmall,
+                        style: .continuous
+                    )
+                    .fill(primary ? Palette.signal : Palette.surfaceRaised)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func icon(for task: FirstRunTask) -> String {
@@ -145,7 +176,7 @@ struct FirstRunCard: View {
     private func body(for task: FirstRunTask) -> some View {
         switch task {
         case .server:
-            Text("Make one for your people. Invites open on this app too.")
+            Text("Make one, bring it from Discord, or paste an invite.")
         case .friend:
             // Prints the reader's own handle, because "add someone by their
             // handle" is useless advice until you know that you have one and

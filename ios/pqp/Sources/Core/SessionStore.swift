@@ -64,6 +64,24 @@ final class SessionStore {
     /// server's own refusal sentence, verbatim. Cleared by whoever shows it.
     var linkError: String?
 
+    /// The first-run wizard while it is up, nil otherwise. Created when an
+    /// account lands on the age gate or, past it, when `Onboarding.shouldRun`
+    /// says it has never answered. `RootView` draws it over the app.
+    private(set) var firstRun: FirstRunSession?
+
+    /// The invite stashed for after sign-in, observable so the welcome screen
+    /// can turn into "You're invited to {server}" the moment a link lands,
+    /// including one tapped while that screen is already up.
+    private(set) var pendingInviteCode: String? = PendingInvite.peek()
+
+    /// The invitee's arrival moment, shown once as the wizard hands over the
+    /// room. Cleared by the view that shows it.
+    var arrivalCelebration: ArrivalCelebration?
+
+    /// Whether this launch walked the account through the age gate, which is
+    /// what marks a brand-new account (see `Onboarding.shouldRun`).
+    private var answeredAgeGateThisLaunch = false
+
     /// The account's settings, as the server last stated them.
     ///
     /// COMPUTED off `currentUser` rather than stored beside it, so there is
@@ -252,6 +270,11 @@ final class SessionStore {
         currentUser = user
         switch user.ageGate {
         case "pending":
+            // The gate is screen one of the wizard: it draws the same dots, so
+            // the walk starts here rather than after it.
+            if firstRun == nil {
+                startFirstRun(startedAtGate: true)
+            }
             phase = .ageGate
         case "blocked":
             phase = .blocked
@@ -273,6 +296,9 @@ final class SessionStore {
     /// request nobody is listening for.
     private func becomeReady() async {
         await startRealtime()
+        // BEFORE `.ready`, so the hub never flashes between the gate and the
+        // wizard that is about to cover it.
+        await prepareFirstRun()
         phase = .ready
         await uploadPushToken()
         await consumePendingInvite()
@@ -289,6 +315,7 @@ final class SessionStore {
                 "/api/me/age-check", body: Body(dateOfBirth: dateOfBirth)
             )
             if response.ageGate == "passed" {
+                answeredAgeGateThisLaunch = true
                 await refreshCurrentUser()
                 await becomeReady()
             } else {
@@ -347,6 +374,7 @@ final class SessionStore {
         guard !normalized.isEmpty else { return }
         guard phase == .ready else {
             PendingInvite.stash(normalized)
+            pendingInviteCode = PendingInvite.peek()
             return
         }
         await redeemInvite(normalized)
@@ -354,6 +382,7 @@ final class SessionStore {
 
     private func consumePendingInvite() async {
         guard let code = PendingInvite.consume() else { return }
+        pendingInviteCode = nil
         await redeemInvite(code)
     }
 
@@ -365,15 +394,111 @@ final class SessionStore {
     /// you there. What does need handling is refusal (expired, revoked, no uses
     /// left, banned), and the server's sentence is shown verbatim because it is
     /// the only thing that knows which of those it was.
+    ///
+    /// DURING THE WIZARD the outcome is the wizard's to tell: a join behind it
+    /// marks the arrival (so "you" can say which room is waiting), and a refusal
+    /// switches its copy to "That invite did not work" instead of raising an
+    /// alert over a screen that is asking somebody their name.
     private func redeemInvite(_ code: String) async {
+        let run = firstRun.flatMap { $0.path == .invite && $0.inviteCode == code ? $0 : nil }
         do {
             let serverId = try await api.joinInvite(code: code)
             linkError = nil
+            run?.arrival = .joined(serverId: serverId)
             navigationRequest = .server(id: serverId)
         } catch let error as APIError {
-            linkError = error.errorDescription
+            if let run {
+                run.arrival = .failed
+            } else {
+                linkError = error.errorDescription
+            }
         } catch {
-            linkError = error.localizedDescription
+            if let run {
+                run.arrival = .failed
+            } else {
+                linkError = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - First run
+
+    private func startFirstRun(startedAtGate: Bool) {
+        let code = PendingInvite.peek()
+        let run = FirstRunSession(
+            path: code == nil ? .cold : .invite,
+            inviteCode: code,
+            startedAtGate: startedAtGate
+        )
+        firstRun = run
+        if let code {
+            Task { run.preview = await APIClient.publicInvitePreview(code: code) }
+        }
+    }
+
+    /// Decides, on the way into `.ready`, whether the wizard covers the app.
+    private func prepareFirstRun() async {
+        let preferences = currentUser?.preferences
+        var serverCount: Int?
+        // Only asked when the answer matters: a fresh gate already decides it,
+        // and a stamped account never runs it.
+        if !answeredAgeGateThisLaunch,
+           let preferences,
+           (preferences.onboardedAt ?? "").isEmpty {
+            serverCount = (try? await api.servers())?.count
+        }
+        guard Onboarding.shouldRun(
+            preferences: preferences,
+            answeredAgeGateThisLaunch: answeredAgeGateThisLaunch,
+            serverCount: serverCount
+        ) else {
+            firstRun = nil
+            return
+        }
+        if firstRun == nil {
+            startFirstRun(startedAtGate: false)
+        }
+    }
+
+    /// The wizard saved something about the account; reflect it everywhere.
+    ///
+    /// Keeps the preferences already held when the response leaves them out,
+    /// because a profile PATCH is about the profile, and an absent blob there
+    /// is not a statement that the settings were wiped.
+    func adoptUpdatedUser(_ user: CurrentUser) {
+        var next = user
+        if next.preferences == nil {
+            next.preferences = currentUser?.preferences
+        }
+        currentUser = next
+    }
+
+    /// Finished or skipped: close the wizard and stamp `onboardedAt`, on this
+    /// device and every other one.
+    ///
+    /// Optimistic, like `settleFirstRun`: the local copy is stamped first so the
+    /// wizard goes on the tap, and a failed write costs one more walk through a
+    /// wizard that can be skipped from its first screen.
+    func finishFirstRun() async {
+        guard let run = firstRun else { return }
+        firstRun = nil
+        let stamp = Onboarding.completedStamp()
+        var local = currentUser?.preferences ?? UserPreferences()
+        local.onboardedAt = stamp
+        currentUser?.preferences = local
+
+        if let serverId = run.joinedServerId {
+            var name = run.serverName
+            if name == nil {
+                name = (try? await api.servers())?.first { $0.id == serverId }?.name
+            }
+            if let name {
+                arrivalCelebration = ArrivalCelebration(serverName: name)
+            }
+        }
+
+        if let saved = try? await api.markOnboarded(at: stamp) {
+            currentUser?.preferences = saved
         }
     }
 
@@ -443,7 +568,11 @@ final class SessionStore {
         // A link tapped by the previous account is not the next one's to follow.
         navigationRequest = nil
         linkError = nil
+        firstRun = nil
+        arrivalCelebration = nil
+        answeredAgeGateThisLaunch = false
         PendingInvite.clear()
+        pendingInviteCode = nil
         visibleChannelId = nil
         // Deliberately also forgets onboarding: signing out is the only way
         // back to a first-run state, and on a dev build that is how the intro

@@ -36,7 +36,7 @@ Clerk key — see **Auth** below.
 | `Sources/App` | Entry point, root phase switch, splash |
 | `Sources/Design` | Palette, type scale, motion, shared components, the vector mark |
 | `Sources/Core` | Models, REST client, WebSocket client, session |
-| `Sources/Onboarding` | The three-beat intro |
+| `Sources/Onboarding` | Welcome (with the public invite preview), first-run wizard V2 (age, you, room doors, ready), hub checklist |
 | `Sources/Home` | Servers / conversations / profile tabs |
 | `Sources/Chat` | Channel list, transcript, composer |
 | `Sources/Voice` | Mesh WebRTC engine, room state, call UI |
@@ -137,6 +137,21 @@ restorable session does not mean the person has seen the product explained — a
 with the dev bypass a session *always* restores, which would have made
 onboarding unreachable and therefore untested. Signing out clears the flag,
 which is how to see the intro again.
+
+**First run V2 is the web's wizard, native** (`Sources/Onboarding`, web PR #786,
+`docs/ONBOARDING.md`). Before sign-in: one welcome screen, or, when a link
+stashed an invite, "You're invited to {server}" read from the unauthenticated
+`GET /api/public/invites/:code`. After sign-in: the age gate is screen one of
+the same shell (dots, mark), then "you" (name, photo presets or upload, the @
+chip), then for a cold start the three doors (create, Discord template import,
+invite) and "ready" with the invite link, share sheet and pastes
+(`?ref=onboarding`). An invitee's is two screens and ends in the room with
+confetti. Finishing or skipping stamps the shared `preferences.onboardedAt`, so
+the web never asks again. The wizard runs only for an unstamped account that
+just answered the age gate or has no server yet (iOS V1 never wrote the stamp,
+so settled members are not asked again by an update). Walked end to end by
+`FirstRunV2UITests` against a local server with fresh `PQP_DEV_USER` accounts;
+the rules are pinned by `OnboardingV2Tests`.
 
 ## Attachments
 
