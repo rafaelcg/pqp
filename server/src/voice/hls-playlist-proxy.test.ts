@@ -83,6 +83,8 @@ const {
   resolveHlsPlaylistViewer,
   HLS_PLAYLIST_CACHE_TTL_MS,
   STALE_ON_BREAKER_MAX_MS,
+  HLS_LIVENESS_WAIT_MS,
+  hlsPlaylistRendersWithoutDb,
   resetHlsPlaylistCacheForTests,
   segmentSigningTime,
   SEGMENT_URL_BUCKET_MAX_MS,
@@ -393,36 +395,127 @@ describe("playlist render cache", () => {
    * `HlsPlaylistNotFound` (the session actually ended) must still 404, or a
    * stale window would go on being served for a stream that is over.
    */
-  it("A3.1: the breaker being open serves the last cached body instead of failing", async () => {
+  /**
+   * THE 2026-09-23 BLIP. Postgres was unreachable for 61 s. A replayed body
+   * does not advance, so a live player sits on its last listed segment and
+   * stalls; what keeps it playing is a FRESH render from storage, which the
+   * egress goes on writing whatever the database is doing.
+   */
+  it("DB down: a session confirmed live keeps rendering FRESH from storage, so the window advances", async () => {
     const now = 1_800_000_000_000;
     const first = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first).not.toContain(`${STARTED_AT}_00002.ts`);
 
-    // Past the TTL, so a fresh render is attempted — and the pool rejects
-    // with the breaker's own error rather than a generic failure.
+    pool.query.mockImplementation(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    try {
+      fetchMock.mockImplementation(
+        async () =>
+          new Response(
+            [
+              PLAYLIST_BODY,
+              "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:43.718Z",
+              "#EXTINF:2.0,",
+              `${STARTED_AT}_00002.ts`,
+            ].join("\n"),
+            { status: 200 },
+          ),
+      );
+      const during = await buildSignedPlaylist(
+        CHANNEL,
+        STARTED_AT,
+        undefined,
+        now + 90_000,
+      );
+      expect(during).toContain(`${STARTED_AT}_00002.ts`);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(hlsPlaylistRendersWithoutDb()).toBe(1);
+    } finally {
+      pool.query.mockReset();
+      pool.query.mockImplementation(async () => ({
+        rowCount: pool.rowCount,
+        rows: [],
+      }));
+    }
+  });
+
+  it("DB down: a viewer's very first request is not served on trust nobody established", async () => {
     pool.query.mockImplementationOnce(async () => {
       throw new MockDatabaseUnavailableError();
     });
-    const stale = await buildSignedPlaylist(
-      CHANNEL,
-      STARTED_AT,
-      undefined,
-      now + HLS_PLAYLIST_CACHE_TTL_MS + 1,
+    await expect(buildSignedPlaylist(CHANNEL, STARTED_AT)).rejects.toThrow(
+      MockDatabaseUnavailableError,
     );
-    expect(stale).toBe(first);
-    // No new upstream fetch: the DB check failed before the fetch ever ran.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    // The fallback is not remembered as fresh: the very next poll tries
-    // again rather than being stuck on stale content once the DB recovers.
-    const recovered = await buildSignedPlaylist(
-      CHANNEL,
-      STARTED_AT,
-      undefined,
-      now + HLS_PLAYLIST_CACHE_TTL_MS + 2,
-    );
-    expect(recovered).toBe(first);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+  it("DB down: past STALE_ON_BREAKER_MAX_MS since the last confirmation, the outage is reported rather than ridden out", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    // Just inside the bound: still rendered.
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + STALE_ON_BREAKER_MAX_MS),
+    ).resolves.toContain("#EXTM3U");
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    // Past it (and past the render cache's own TTL): the error propagates.
+    await expect(
+      buildSignedPlaylist(
+        CHANNEL,
+        STARTED_AT,
+        undefined,
+        now + STALE_ON_BREAKER_MAX_MS + HLS_PLAYLIST_CACHE_TTL_MS + 1,
+      ),
+    ).rejects.toThrow(MockDatabaseUnavailableError);
+  });
+
+  it("any DB failure counts, not only the breaker's: the seconds before it opens arrive as connection timeouts", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    pool.query.mockImplementationOnce(async () => {
+      throw new Error("Connection terminated due to connection timeout");
+    });
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + 5_000),
+    ).resolves.toContain("#EXTM3U");
+  });
+
+  it("a SLOW database does not hold the playlist for query_timeout, and a late 'ended' still ends it", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let answer!: (value: { rowCount: number; rows: { id: string }[] }) => void;
+      pool.query.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }) as never,
+      );
+      const render = buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + 2_000);
+      await vi.advanceTimersByTimeAsync(HLS_LIVENESS_WAIT_MS);
+      await expect(render).resolves.toContain("#EXTM3U");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // The lookup was never abandoned: it lands late, and says "over".
+      answer({ rowCount: 0, rows: [] });
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    // With the confirmation gone, the next render asks and waits again, and
+    // a database that still cannot answer is now an error, not a free pass.
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + 4_000),
+    ).rejects.toThrow(MockDatabaseUnavailableError);
   });
 
   it("A3.1: a genuinely ended session still 404s even while the same error type is in play elsewhere", async () => {
@@ -433,29 +526,50 @@ describe("playlist render cache", () => {
     ).rejects.toThrow(HlsPlaylistNotFound);
   });
 
-  it("A3.1: the stale fallback stops after STALE_ON_BREAKER_MAX_MS, so a sustained outage degrades to database_unavailable rather than an indefinitely-served stream", async () => {
+  it("one rendition ending does not take its siblings' outage fallback away", async () => {
     const now = 1_800_000_000_000;
-    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
-    // Exactly two more renders are attempted below; `mockImplementationOnce`
-    // twice rather than a persistent `mockImplementation` so this test
-    // cannot leak an always-throwing `pool.query` into whichever test runs
-    // after it in this file.
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30", now);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now);
+    // 360p's row is ended (a ladder trimmed mid-party)...
+    pool.query.mockImplementationOnce(async () => ({ rowCount: 0, rows: [] }));
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now + 2_000),
+    ).rejects.toThrow(HlsPlaylistNotFound);
+    // ...then the database goes away: 720p still rides it out, 360p does not.
     pool.query.mockImplementationOnce(async () => {
       throw new MockDatabaseUnavailableError();
     });
-    // Just inside the bound: still falls back.
     await expect(
-      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + STALE_ON_BREAKER_MAX_MS),
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30", now + 4_000),
     ).resolves.toContain("#EXTM3U");
     pool.query.mockImplementationOnce(async () => {
       throw new MockDatabaseUnavailableError();
     });
-    // Past it: the security bound wins over availability, and the DB error
-    // that could not confirm the session either way propagates instead of
-    // a possibly-revoked session going on being served.
     await expect(
-      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + STALE_ON_BREAKER_MAX_MS + 1),
+      buildSignedPlaylist(CHANNEL, STARTED_AT, "360p30", now + 4_000),
     ).rejects.toThrow(MockDatabaseUnavailableError);
+  });
+
+  it("refreshes against a slow database share ONE outstanding liveness query per rendition", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      pool.query.mockImplementation(() => new Promise(() => {}) as never);
+      for (let i = 1; i <= 5; i += 1) {
+        const render = buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + i * 2_000);
+        await vi.advanceTimersByTimeAsync(HLS_LIVENESS_WAIT_MS);
+        await expect(render).resolves.toContain("#EXTM3U");
+      }
+      // Five refreshes, five fresh renders from storage, one query.
+      expect(pool.query).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+      pool.query.mockReset();
+      pool.query.mockImplementation(async () => ({ rowCount: pool.rowCount, rows: [] }));
+    }
   });
 
   it("the cached body still carries segment URLs that work for the viewer who gets it", async () => {
@@ -1001,6 +1115,36 @@ describe("buildMasterPlaylistFor", () => {
       clock + HLS_PLAYLIST_CACHE_TTL_MS + 2,
     );
     expect(recovered).toContain("/360p30");
+  });
+
+  it("a SLOW rung query does not hold the master behind a dead pool connection", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const first = await master(undefined, clock);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      pool.query.mockImplementation(() => new Promise(() => {}) as never);
+      const later = clock + HLS_PLAYLIST_CACHE_TTL_MS + 1;
+      const pending = master(undefined, later);
+      // A second viewer arriving while the first query hangs is not parked
+      // on it either.
+      const second = master(undefined, later + 10);
+      await vi.advanceTimersByTimeAsync(HLS_LIVENESS_WAIT_MS);
+      await expect(pending).resolves.toBe(first);
+      await expect(second).resolves.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a rung list older than STALE_ON_BREAKER_MAX_MS is not served through an outage", async () => {
+    rungRows(["720p30"]);
+    await master(undefined, clock);
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    await expect(
+      master(undefined, clock + STALE_ON_BREAKER_MAX_MS + 1),
+    ).rejects.toThrow(MockDatabaseUnavailableError);
   });
 });
 

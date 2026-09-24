@@ -287,10 +287,12 @@ safety are checked by two different endpoints instead of one overloaded one.
 roll back), probed on its own connection so the probe itself cannot occupy
 the pool capacity it is protecting; the HTTP chokepoints in `api/index.ts`
 turn that into a 503 with `Retry-After: 5` and `{ error: "database_unavailable" }`;
-the HLS playlist proxy and its rung list keep serving their last rendered
-body/list through an open breaker, bounded to `STALE_ON_BREAKER_MAX_MS` (30s)
-past the last confirmed-live render so a session that ended right as the
-breaker opened cannot go on being served for a whole outage; a chat send
+the HLS playlist proxy keeps rendering fresh from storage on a recent
+"session is live" confirmation, and its rung list is served from its last
+read, both bounded to `STALE_ON_BREAKER_MAX_MS` (3 minutes since 2026-09-23,
+when a 61 s blip showed that replaying the last body for 30 s was a stall;
+see CLAUDE.md pitfall 18) so a session that ended during an outage cannot
+go on being served for a whole outage; a chat send
 gets `message-rejected` with reason `database-unavailable` (retriable) when
 the failure is before creation, and still a real error afterward so a
 duplicate is never invited; `deploy-api-fly.yml`'s post-deploy verification

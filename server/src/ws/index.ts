@@ -396,6 +396,21 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // A throwing handler (e.g. transient DB error) must not become an
     // unhandled rejection — that kills the process and drops every client —
     // and must not wedge the chain for every later frame on this socket.
+    //
+    // EXCEPT THE KEEPALIVE. A `ping` orders against nothing, and queueing it
+    // behind a frame whose handler is waiting on Postgres (a `set-voice-state`
+    // awaiting its roster read while the pool times out, before the breaker
+    // has opened) is how a socket that is perfectly alive misses the pongs
+    // the client counts, and hangs itself up in the middle of a database
+    // blip. For an authenticated socket `onMessage` reaches the ping branch
+    // with no `await`, so running it outside the chain answers at once and
+    // still spends the same rate-limit tokens.
+    if (authenticated && isPingFrame(data)) {
+      void onMessage(data).catch((error) => {
+        console.error("[ws] ping handler failed:", error);
+      });
+      return;
+    }
     messageChain = messageChain
       .then(() => onMessage(data))
       .catch((error) => {
@@ -495,4 +510,26 @@ export function startHeartbeat(
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
+}
+
+/**
+ * A cheap test for the application keepalive frame, `{"type":"ping"}`, that
+ * never parses anything larger than the frame could possibly be.
+ */
+export function isPingFrame(data: unknown): boolean {
+  const text =
+    typeof data === "string"
+      ? data
+      : Buffer.isBuffer(data) && data.length <= 64
+        ? data.toString()
+        : null;
+  if (text === null || text.length > 64 || !text.includes("ping")) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(text) as { type?: unknown };
+    return typeof parsed === "object" && parsed !== null && parsed.type === "ping";
+  } catch {
+    return false;
+  }
 }

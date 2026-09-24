@@ -625,6 +625,46 @@ describeDb("voice across two instances", () => {
       );
     });
 
+    /**
+     * The rows cannot be read (the breaker is open on B). A roster B sends
+     * anyway, for a mute toggled on its own seat, used to be B's own peers
+     * alone, as a whole snapshot the client treats as authoritative: A's
+     * seat vanished from the call, and its offers and ICE were dropped.
+     */
+    it("with the rows unreadable, a roster B sends still carries the seat A holds", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+      const userB = randomUUID();
+      const peerB = await join(b, userB, channel);
+      const peerA = await join(a, randomUUID(), channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 2,
+        "both on B",
+      );
+      await settle();
+
+      b.db.forceDbBreakerStateForTests("open");
+      try {
+        await b.voice.handleVoiceMessage(
+          { socket: peerB.socket, user: asUser(userB) },
+          { type: "set-voice-state", muted: true, deafened: false },
+        );
+        await waitFor(
+          () =>
+            lastRoster(sidebarOnB, channel)?.participants.find(
+              (p) => p.peerId === peerB.peerId,
+            )?.muted === true,
+          "the toggle on B's roster",
+        );
+        const ids = lastRoster(sidebarOnB, channel)!.participants.map((p) => p.peerId);
+        expect(ids).toContain(peerA.peerId);
+      } finally {
+        b.db.resetDbBreakerForTests();
+      }
+    });
+
     it("a rename on A crosses as peer-updated and relabels B's own seat for the same person", async () => {
       const channel = randomUUID();
       const a = await bootInstance();
@@ -1326,6 +1366,70 @@ describeDb("voice across two instances", () => {
         [a.bus.INSTANCE_ID],
       );
       expect(leases.rowCount).toBe(0);
+    });
+
+    /**
+     * 2026-09-23: Postgres unreachable for 61 s, both machines. Nobody could
+     * beat, so on recovery each lease is a minute or two old, and the first
+     * machine to reconcile used to read its live twin as dead: orphan, then
+     * delete and retire every seat over there, `peer-left` to its own room.
+     */
+    it("a DB outage both machines sat through: the first to recover does not hang up the other's seats", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const seat = await join(a, randomUUID(), channel);
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 1,
+        "seat on B",
+      );
+      await settle();
+
+      // The outage: A's lease is two minutes old, and B's own beats failed
+      // through it and have just come back.
+      await ageLease(a, 120);
+      const now = Date.now();
+      b.registry.noteOwnHeartbeatForTests(false, now - 60_000);
+      b.registry.noteOwnHeartbeatForTests(true, now);
+      bystanderOnB.frames.length = 0;
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 0,
+        removed: 0,
+      });
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
+      expect((await peerRow(seat.peerId))?.orphaned_at).toBeNull();
+
+      // A beats again, as a live twin does within one interval; once B has
+      // been beating for a full TTL it reconciles normally and finds nothing.
+      await a.registry.heartbeatVoiceInstance();
+      b.registry.noteOwnHeartbeatForTests(false, now - 200_000);
+      b.registry.noteOwnHeartbeatForTests(true, now - 100_000);
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 0,
+        removed: 0,
+      });
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
+    });
+
+    it("back from an outage, an instance re-asserts its seats, clearing a stray orphan stamp", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      const seat = await join(a, randomUUID(), channel);
+      await settle();
+      // What another machine's pass (or a lost write) left behind.
+      await ageOrphan(seat.peerId, 30);
+      expect((await peerRow(seat.peerId))?.orphaned_at).not.toBeNull();
+
+      const now = Date.now();
+      a.registry.noteOwnHeartbeatForTests(false, now - 60_000);
+      a.registry.noteOwnHeartbeatForTests(true, now);
+      await a.voice.runVoiceReconcile();
+      await settle();
+      expect((await peerRow(seat.peerId))?.orphaned_at).toBeNull();
     });
 
     it("sweeps a room row nobody is in, once it is old enough", async () => {

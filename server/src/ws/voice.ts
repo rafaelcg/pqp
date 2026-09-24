@@ -157,6 +157,8 @@ import {
   readMusicWithAnchor,
   readWatchParty,
   reconcileVoiceRegistry,
+  otherLeasesTrustworthy,
+  consumeOwnHeartbeatRecovery,
   retireVoicePeerId,
   setVoiceRaisedHand as setVoiceRaisedHandRow,
   setVoiceServerMute,
@@ -491,6 +493,15 @@ let idleAloneDisconnected = 0;
 let staleRowWritesRefused = 0;
 let ghostSeatsSwept = 0;
 let meshHoldsRefused = 0;
+/** How many seats one step of the post-outage re-assertion writes at once. */
+const REASSERT_CHUNK = 50;
+
+/** Seats re-written to their rows on the first beat after a DB outage. */
+let seatsReassertedAfterOutage = 0;
+/** Reconcile passes skipped because this instance's own lease had just lapsed. */
+let reconcilesDeferredAfterOutage = 0;
+/** Rosters built from memory because the rows could not be read. */
+let rostersSentWithoutRows = 0;
 
 /**
  * Registry writes, under TWO keys, because the two guarantees they carry are
@@ -1737,6 +1748,15 @@ export interface VoiceActivitySnapshot {
     staleRowWritesRefused: number;
     ghostsSwept: number;
     meshHoldsRefused: number;
+    /**
+     * After a database outage: seats this instance re-wrote to their rows,
+     * and reconcile passes it held back while other instances' leases were
+     * stale for the same reason its own was (`otherLeasesTrustworthy`). Zero
+     * outside an incident.
+     */
+    seatsReassertedAfterOutage: number;
+    reconcilesDeferredAfterOutage: number;
+    rostersSentWithoutRows: number;
     /** Idle hangups since boot: warnings sent, and seats actually released. */
     idleAloneWarned: number;
     idleAloneDisconnected: number;
@@ -1890,6 +1910,9 @@ async function readSeatHealth(): Promise<VoiceActivitySnapshot["seats"]> {
         staleRowWritesRefused + voiceRegistryBatchMetrics().staleDropped,
       ghostsSwept: ghostSeatsSwept,
       meshHoldsRefused,
+      seatsReassertedAfterOutage,
+      reconcilesDeferredAfterOutage,
+      rostersSentWithoutRows,
       idleAloneWarned,
       idleAloneDisconnected,
       meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
@@ -3874,9 +3897,9 @@ function sameParticipant(a: VoiceParticipant, b: VoiceParticipant): boolean {
  * synchronous step, the replacement of that memory with what is about to go
  * out. Null when there is nothing to diff against, which is a whole roster.
  *
- * `rowsRead` false means the read failed and `participants` is this
- * instance's own peers: sent whole, exactly as before, and the memory is
- * dropped so the next successful read is also sent whole. An empty room
+ * `rowsRead` false means the read failed and `participants` is
+ * `rosterWithoutRows`'s best picture: sent whole, and kept as the memory,
+ * because it is what the receivers now hold. An empty room
  * drops it too, so a channel costs nothing once its call is over.
  *
  * The lists are ABSOLUTE statements about one peer each, the same contract
@@ -3892,7 +3915,11 @@ function diffSentRoster(
 ): RosterDelta | null {
   const previous = rowsRead ? sentRosters.get(voiceChannelId) : undefined;
   const current = new Map(participants.map((peer) => [peer.peerId, peer]));
-  if (current.size === 0 || !rowsRead) {
+  // Kept even when the rows could not be read: `participants` is then
+  // `rosterWithoutRows`, what every receiver is about to hold, and the next
+  // window's fallback (or the first good read's diff) starts from it. It is
+  // still sent whole (`previous` is undefined above).
+  if (current.size === 0) {
     sentRosters.delete(voiceChannelId);
   } else {
     sentRosters.set(voiceChannelId, current);
@@ -3917,6 +3944,60 @@ function diffSentRoster(
     }
   }
   return { joined, updated, left };
+}
+
+/**
+ * THE ROSTER TO SEND WHEN THE ROWS CANNOT BE READ (registry on, Postgres
+ * down). It used to be this instance's own peers alone, sent as a whole
+ * `voice-roster`, which a client treats as authoritative: everybody seated
+ * on the OTHER machine vanished from the call for the length of the outage,
+ * the client forgot their peer ids and dropped their offers and ICE, and a
+ * mesh leg that failed in that window was pruned as a ghost. Any local mute
+ * or camera toggle during the outage was enough to send it.
+ *
+ * What this process knows instead is what it last told its clients
+ * (`sentRosters`, written from the rows), plus everything that happened
+ * since (`events`, this window's queue: local changes, and the joins,
+ * updates and leaves the bus delivered from other machines). So: the last
+ * roster sent, with those events replayed in order, and this instance's own
+ * peers laid over it by id. `diffSentRoster` keeps THIS as the memory for the next window,
+ * because it is what the receivers now hold, so a leave in one window stays
+ * applied in the next. A remote
+ * peer who left while the bus was also down stays listed until the rows can
+ * be read again, which is the cheap mistake; the one this replaces hung up
+ * people who were still there. With nothing sent before, this is the local
+ * picture, as it always was.
+ */
+/** Replay a window's room events, in order, onto a roster keyed by peer id. */
+function applyRoomEvents(
+  roster: Map<string, VoiceParticipant>,
+  events: readonly VoiceRoomEvent[],
+): void {
+  for (const event of events) {
+    if (event.kind === "left") {
+      roster.delete(event.peerId);
+    } else if (event.kind === "joined" || event.kind === "updated") {
+      roster.set(event.peer.peerId, event.peer);
+    }
+  }
+}
+
+function rosterWithoutRows(
+  voiceChannelId: string,
+  local: readonly VoiceParticipant[],
+  events: readonly VoiceRoomEvent[],
+): VoiceParticipant[] {
+  const lastSent = sentRosters.get(voiceChannelId);
+  if (!lastSent) {
+    return [...local];
+  }
+  const merged = new Map(lastSent);
+  applyRoomEvents(merged, events);
+  for (const peer of local) {
+    merged.set(peer.peerId, peer);
+  }
+  rostersSentWithoutRows += 1;
+  return [...merged.values()];
 }
 
 /**
@@ -4015,16 +4096,17 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     );
 
     // --- one synchronous stretch: snapshot, queue, sequence ---------------
-    const participants =
-      room?.participants ??
-      collapseOrphanedDuplicates(
-        getRoomPeers(voiceChannelId),
-        (peer) => peer.userId,
-        (peer) => peer.orphanedAt !== undefined,
-      ).map(toParticipant);
-    noteMusicListenerCount(voiceChannelId, participants);
     events = pendingRoomEvents.get(voiceChannelId) ?? [];
     pendingRoomEvents.delete(voiceChannelId);
+    const local = collapseOrphanedDuplicates(
+      getRoomPeers(voiceChannelId),
+      (peer) => peer.userId,
+      (peer) => peer.orphanedAt !== undefined,
+    ).map(toParticipant);
+    const participants =
+      room?.participants ??
+      (registryOn() ? rosterWithoutRows(voiceChannelId, local, events) : local);
+    noteMusicListenerCount(voiceChannelId, participants);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
 
     // Whether this window CAN be described incrementally at all, decided
@@ -4653,7 +4735,41 @@ export async function runVoiceReconcile(): Promise<{
   if (!registryOn()) {
     return { orphaned: 0, removed: 0, roomsSwept: 0, ghosts: 0 };
   }
-  const result = await reconcileVoiceRegistry();
+  // BACK FROM A DATABASE OUTAGE: put every seat this instance holds back in
+  // its row before anything else reads the table. Writes made during the
+  // outage were dropped, and another instance's reconcile may have stamped
+  // `orphaned_at` on seats that never left. Orphans held for the resume
+  // window are rewritten as orphans (their own `orphanedAt`), so this changes
+  // no seat's state, it only makes the rows say what the map already knows.
+  if (consumeOwnHeartbeatRecovery()) {
+    const reasserted = peers.size;
+    // In chunks, each landed before the next starts and all of them before
+    // anything below reads the table: a database that has just come back is
+    // not handed one statement per seat at once. The writes go through the
+    // same per-peer chain as every other (and through the batcher when
+    // `VOICE_REGISTRY_BATCH` is on, which folds a chunk into a few statements).
+    const seats = [...peers.values()];
+    for (let i = 0; i < seats.length; i += REASSERT_CHUNK) {
+      const channels = new Set<string>();
+      for (const peer of seats.slice(i, i + REASSERT_CHUNK)) {
+        writePeerRow(peer);
+        channels.add(peer.voiceChannelId);
+      }
+      await Promise.all([...channels].map((channelId) => settledRowWrites(channelId)));
+    }
+    seatsReassertedAfterOutage += reasserted;
+    logEvent("voice.registryReasserted", { seats: reasserted });
+  }
+  // See `otherLeasesTrustworthy`: a lease that went stale while this instance
+  // could not reach the database either is not a dead instance, and treating
+  // it as one hangs up every seat on the other machine.
+  let result: Awaited<ReturnType<typeof reconcileVoiceRegistry>>;
+  if (otherLeasesTrustworthy()) {
+    result = await reconcileVoiceRegistry();
+  } else {
+    reconcilesDeferredAfterOutage += 1;
+    result = { orphaned: [], removed: [], roomsSwept: 0, instancesSwept: 0 };
+  }
   // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
   // instance ticks, and only the rows this tick won are swept.
   await tickSfuResweeps();
@@ -5490,6 +5606,30 @@ export function voiceChannelAccessCacheStats(): {
  * Send current voice occupancy to a newly authenticated socket — but only for
  * the rooms this user is allowed to see.
  */
+/**
+ * Every room's roster from this process's memory (`sentRosters`, with the
+ * events queued since replayed, not consumed: the coalesced run still owns
+ * the queue), for a socket that connects while the rows cannot be read.
+ * Built once a second at most and shared: a reconnect burst during an outage
+ * must not rebuild every room once per socket.
+ */
+let memoryRosters: { at: number; rooms: Map<string, VoiceParticipant[]> } | null = null;
+const MEMORY_ROSTERS_TTL_MS = 1_000;
+
+function rostersFromMemory(now = Date.now()): Map<string, VoiceParticipant[]> {
+  if (memoryRosters && now - memoryRosters.at < MEMORY_ROSTERS_TTL_MS) {
+    return memoryRosters.rooms;
+  }
+  const rooms = new Map<string, VoiceParticipant[]>();
+  for (const [voiceChannelId, sent] of sentRosters) {
+    const current = new Map(sent);
+    applyRoomEvents(current, pendingRoomEvents.get(voiceChannelId) ?? []);
+    rooms.set(voiceChannelId, [...current.values()]);
+  }
+  memoryRosters = { at: now, rooms };
+  return rooms;
+}
+
 export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   const rooms = new Map<
     string,
@@ -5528,6 +5668,17 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         op: "rosters",
         error: error instanceof Error ? error.message : String(error),
       });
+      // Rows unreadable: what this process last sent for each room, not an
+      // empty cluster (see `rosterWithoutRows`). A socket that reconnected
+      // during a database outage must not be told the other machine's
+      // seats are empty.
+      for (const [voiceChannelId, participants] of rostersFromMemory()) {
+        const room = roomOf(voiceChannelId);
+        for (const participant of participants) {
+          room.participants.set(participant.peerId, participant);
+          room.orphaned.set(participant.peerId, false);
+        }
+      }
     }
   }
   for (const peer of peers.values()) {

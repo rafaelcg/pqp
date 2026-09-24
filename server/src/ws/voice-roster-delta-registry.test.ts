@@ -477,7 +477,7 @@ describeDb("voice roster deltas with the registry on", () => {
     );
   });
 
-  it("describes the room whole again after forgetting what it sent, and after a registry read fails", async () => {
+  it("describes the room whole again after forgetting what it sent, and the whole room when a registry read fails", async () => {
     const channel = randomUUID();
     const watcher = client(channel);
     const a = client(channel);
@@ -507,16 +507,24 @@ describeDb("voice roster deltas with the registry on", () => {
     expect(fourth?.size).toBe(4);
     expect(userIds(fourth?.joined)).toEqual([d.user.id]);
 
-    // The rows could not be read for one run. That run is served from this
-    // instance's own peers, whole, and the memory is dropped with it, so the
-    // run after (the first successful read) is whole as well rather than a
-    // diff against a picture that may have been half the room.
+    // The rows could not be read for one run (a database outage). That run
+    // is whole, and it is the WHOLE ROOM: the last roster this process sent
+    // with the local change laid over it, not this instance's own peers
+    // alone, which on a two-machine cluster read as everybody on the other
+    // machine leaving. It is also what the receivers now hold, so it stays
+    // the memory, and the first successful read after it diffs against it.
     registryFault.failNextRosterRead = true;
     await setMuted(a, true, watcher);
     expect(registryFault.failNextRosterRead).toBe(false);
-    expect(watcher.frameWithSeq(5)?.type).toBe("voice-roster");
+    const fifth = watcher.frameWithSeq(5);
+    expect(fifth?.type).toBe("voice-roster");
+    expect(userIds(fifth?.participants).sort()).toEqual(
+      [a.user.id, b.user.id, c.user.id, d.user.id].sort(),
+    );
     await setMuted(b, true, watcher);
-    expect(watcher.frameWithSeq(6)?.type).toBe("voice-roster");
+    const sixth = watcher.frameWithSeq(6);
+    expect(sixth?.type).toBe("voice-roster-delta");
+    expect(userIds(sixth?.updated)).toEqual([b.user.id]);
     await setMuted(c, true, watcher);
     const seventh = watcher.frameWithSeq(7);
     expect(seventh?.type).toBe("voice-roster-delta");

@@ -76,6 +76,11 @@ vi.mock("./voice.js", () => ({
     if (payload.type === "join-voice-room") {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    if (payload.type === "set-voice-state") {
+      // A handler stuck on Postgres before the breaker opens: pool timeouts
+      // run to seconds. Long enough that a queued pong would be missed.
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
     if (payload.type === "leave-voice-room") {
       throw new Error("simulated transient handler failure");
     }
@@ -91,7 +96,7 @@ vi.mock("./status.js", () => ({
   unregisterStatusSocket: () => {},
 }));
 
-const { handleWsConnection } = await import("./index.js");
+const { handleWsConnection, isPingFrame } = await import("./index.js");
 
 function fakeSocket() {
   const handlers = new Map<string, (...args: never[]) => void>();
@@ -171,5 +176,41 @@ describe("websocket per-socket message ordering", () => {
     await vi.waitFor(() => {
       expect(seen.map((s) => s.type)).toContain("set-raised-hand");
     });
+  });
+});
+
+/**
+ * THE KEEPALIVE DOES NOT QUEUE. A `ping` behind a frame whose handler is
+ * waiting on a database that is not answering used to wait with it, and the
+ * client, which hangs up after two missed pongs, read a live socket as dead
+ * in the middle of a database blip.
+ */
+describe("the application ping", () => {
+  it("is answered while an earlier frame on the same socket is still stuck", async () => {
+    const fake = await connected();
+    fake.deliver({ type: "set-voice-state", muted: true, deafened: false });
+    fake.deliver({ type: "ping" });
+    await vi.waitFor(
+      () => {
+        expect(fake.sent.some((raw) => raw.includes('"pong"'))).toBe(true);
+      },
+      { timeout: 500 },
+    );
+    // And the stuck frame still completes, in order, afterwards.
+    await vi.waitFor(
+      () => {
+        expect(seen.map((s) => s.type)).toContain("set-voice-state");
+      },
+      { timeout: 3_000 },
+    );
+  });
+
+  it("recognises only the ping frame", () => {
+    expect(isPingFrame('{"type":"ping"}')).toBe(true);
+    expect(isPingFrame(Buffer.from('{"type":"ping"}'))).toBe(true);
+    expect(isPingFrame('{"type":"pingx"}')).toBe(false);
+    expect(isPingFrame('{"type":"set-voice-state","note":"ping"}')).toBe(false);
+    expect(isPingFrame("ping")).toBe(false);
+    expect(isPingFrame(Buffer.alloc(4096, 32))).toBe(false);
   });
 });

@@ -36,6 +36,7 @@ import { HlsWatchPlayer } from "./hls-watch-player";
 type ErrorHandler = (event: string, data: Record<string, unknown>) => void;
 
 const loadSource = vi.fn();
+const startLoad = vi.fn();
 const errorHandlers: ErrorHandler[] = [];
 
 vi.mock("hls.js", async () => {
@@ -65,7 +66,9 @@ vi.mock("hls.js", async () => {
     }
     attachMedia() {}
     stopLoad() {}
-    startLoad() {}
+    startLoad(position?: number) {
+      startLoad(position);
+    }
     recoverMediaError() {}
     destroy() {}
   }
@@ -103,6 +106,7 @@ describe("a watch player on the edge host whose session died", () => {
 
   beforeEach(() => {
     loadSource.mockClear();
+    startLoad.mockClear();
     fetchChannelLive.mockClear();
     errorHandlers.length = 0;
     // The next party is already live: a different session at a fresh URL.
@@ -242,6 +246,34 @@ describe("a watch player on the edge host whose session died", () => {
     });
     expect(fetchChannelLive).not.toHaveBeenCalled();
     expect(loadSource).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE 2026-09-23 SHAPE: the failures were the API's (a database blip past
+   * the playlist proxy's grace answering 503), not the stream's. The hold
+   * stops the loader and asks what is live, and the server vouches for the
+   * SAME session. That answer used to change nothing: the loader stayed
+   * stopped, the hold only clears on an advancing playlist a stopped loader
+   * never fetches, and the viewer reached "A transmissão caiu" however soon
+   * the database came back.
+   */
+  it("resumes the SAME session in place when the server vouches for it after a hold", async () => {
+    const DEAD_STARTED_AT = 1789827233443;
+    liveAnswer.stream = {
+      // Same `startedAt`, fresher token: the restamp every live answer carries.
+      hlsUrl: `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${DEAD_STARTED_AT}?t=fresh`,
+      startedAt: DEAD_STARTED_AT,
+    };
+    await mount({ src: DEAD_SRC, mode: "live" });
+    emitError(levelLoadError(503));
+    emitError(levelLoadError(503));
+    await settleReconnect();
+
+    expect(fetchChannelLive).toHaveBeenCalledWith(CHANNEL);
+    // Loading again, in place: no re-attach, no new source.
+    expect(startLoad).toHaveBeenCalled();
+    expect(loadSource).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="hls-dead"]')).toBeNull();
   });
 
   it("bounds the re-fetch: one transient blip does not trigger discovery", async () => {

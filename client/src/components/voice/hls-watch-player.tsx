@@ -85,6 +85,7 @@ import {
   isPlaylistGoneError,
   isPlaylistUnavailableError,
   playlistErrorsWarrantDiscovery,
+  reloadHlsLevelPlaylist,
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
@@ -887,6 +888,33 @@ export function HlsWatchPlayer({
           return;
         }
         setSessionOver(null);
+      }
+      if (
+        !options.forceRebuild &&
+        next &&
+        watchRef.current.isHoldingForRestart &&
+        hlsRef.current
+      ) {
+        // THE SAME SESSION IS STILL LIVE, AND THE LOADER IS STOPPED. A run of
+        // playlist failures (`enterRestartHold`) calls `stopLoad` and asks the
+        // server what is live, expecting a NEW `startedAt`. But the failures
+        // may have been the API's, not the stream's: a database blip past
+        // the playlist proxy's grace answers 503 while the egress goes on
+        // writing the same session. The server then vouches for that same
+        // session, and nothing here used to start loading again: the hold
+        // only clears when the playlist advances, which a stopped loader
+        // never sees, so the viewer sat on "restarting" until the watchdog
+        // declared the stream dead and showed "A transmissão caiu", however
+        // long ago the database had come back.
+        //
+        // Resume in place, on the freshest token: no rebuild, the buffer and
+        // the element stay. A playlist that advances again clears the hold
+        // (`onMediaSequence`); one that is still failing re-enters it, and
+        // the watchdog's bounded reconnect budget decides from there.
+        freshPlaylistUrlRef.current = next;
+        reloadHlsLevelPlaylist(hlsRef.current);
+        setPhase("playing");
+        return;
       }
       if (options.forceRebuild) {
         // A person pressed "try again": always give them a visible restart,

@@ -64,12 +64,61 @@ export type WatchPartyDownloadsState =
       downloads: WatchPartyDownloads;
       /** Kinds being made right now (an LL film); the dialog asks again. */
       preparing?: WatchPartyDownloadKind[];
+      /** Polls that failed in a row since the last answer; drives the backoff. */
+      failedPolls?: number;
     };
 
 /** How often an open dialog asks again about a file that is being made. The
  * box re-encodes a two-hour show in a quarter of an hour or so; a short show
  * in well under a minute. */
 export const DOWNLOAD_PREPARING_POLL_MS = 20_000;
+
+/** First retry after a failed poll, doubling to `DOWNLOAD_POLL_RETRY_MAX_MS`. */
+export const DOWNLOAD_POLL_RETRY_MS = 5_000;
+export const DOWNLOAD_POLL_RETRY_MAX_MS = 60_000;
+
+/** How long to wait before asking again about a file being made. */
+export function preparingPollDelayMs(failedPolls: number): number {
+  if (failedPolls <= 0) {
+    return DOWNLOAD_PREPARING_POLL_MS;
+  }
+  return Math.min(
+    DOWNLOAD_POLL_RETRY_MS * 2 ** (failedPolls - 1),
+    DOWNLOAD_POLL_RETRY_MAX_MS,
+  );
+}
+
+/**
+ * What a row becomes when asking about its files FAILED.
+ *
+ * A row that was waiting on a film being made keeps waiting, and keeps
+ * asking with backoff, unless the failure is an answer rather than an
+ * outage: 409 is the replay being gone, and 401/403/404 will not change by
+ * asking again. It used to turn into an error on the first failure, and
+ * since only a "ready and preparing" row is polled, one 503 (a database blip
+ * during the rehearsal) ended the polling for good: the row said "sendo
+ * preparado" until somebody closed and reopened the dialog.
+ */
+export function downloadsAfterPollFailure(
+  previous: WatchPartyDownloadsState | undefined,
+  error: unknown,
+  message: string,
+): WatchPartyDownloadsState {
+  const final =
+    error instanceof ApiError &&
+    (error.status === 401 ||
+      error.status === 403 ||
+      error.status === 404 ||
+      error.status === 409);
+  if (
+    !final &&
+    previous?.status === "ready" &&
+    (previous.preparing?.length ?? 0) > 0
+  ) {
+    return { ...previous, failedPolls: (previous.failedPolls ?? 0) + 1 };
+  }
+  return { status: "error", message };
+}
 
 /** Literal keys rather than a template, so a grep for a key still finds it. */
 const DOWNLOAD_LABEL_KEYS: Record<WatchPartyDownloadKind, MessageKey> = {
@@ -489,15 +538,13 @@ export function WatchPartyHistoryDialog({
           if (!current()) {
             return;
           }
+          const message =
+            err instanceof ApiError && err.status === 409
+              ? t("watchParty.history.replayGone")
+              : messageOf(err, t("watchParty.history.download.failed"));
           setDownloads((next) => ({
             ...next,
-            [sessionId]: {
-              status: "error",
-              message:
-                err instanceof ApiError && err.status === 409
-                  ? t("watchParty.history.replayGone")
-                  : messageOf(err, t("watchParty.history.download.failed")),
-            },
+            [sessionId]: downloadsAfterPollFailure(next[sessionId], err, message),
           }));
         });
     },
@@ -506,24 +553,62 @@ export function WatchPartyHistoryDialog({
 
   // A file being made is asked about again until it exists, for as long as
   // the dialog is open (closing it clears `downloads`, which ends this).
+  //
+  // One timer per row, kept across renders and replaced only when THAT row's
+  // state changes: a row whose last poll failed asks again on its own
+  // backoff, and another row's answer arriving does not restart (and so
+  // postpone) this one's clock.
+  const pollTimers = useRef(
+    // `timer` is null once it has fired: the poll is in flight, and the entry
+    // stays so another row's change does not arm a second one for the same
+    // state. The answer replaces the state, which is what clears it.
+    new Map<
+      string,
+      { state: WatchPartyDownloadsState; timer: ReturnType<typeof setTimeout> | null }
+    >(),
+  );
   useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const waiting = Object.entries(downloads).filter(
-      ([, state]) =>
-        state?.status === "ready" && (state.preparing?.length ?? 0) > 0,
-    );
-    if (waiting.length === 0) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      for (const [sessionId] of waiting) {
-        fetchDownloads(sessionId);
+    const timers = pollTimers.current;
+    const wanted = open ? downloads : {};
+    for (const [sessionId, entry] of timers) {
+      if (wanted[sessionId] !== entry.state) {
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+        }
+        timers.delete(sessionId);
       }
-    }, DOWNLOAD_PREPARING_POLL_MS);
-    return () => clearTimeout(timer);
+    }
+    for (const [sessionId, state] of Object.entries(wanted)) {
+      if (
+        !state ||
+        state.status !== "ready" ||
+        (state.preparing?.length ?? 0) === 0 ||
+        timers.has(sessionId)
+      ) {
+        continue;
+      }
+      const entry: {
+        state: WatchPartyDownloadsState;
+        timer: ReturnType<typeof setTimeout> | null;
+      } = { state, timer: null };
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        fetchDownloads(sessionId);
+      }, preparingPollDelayMs(state.failedPolls ?? 0));
+      timers.set(sessionId, entry);
+    }
   }, [open, downloads, fetchDownloads]);
+  useEffect(
+    () => () => {
+      for (const { timer } of pollTimers.current.values()) {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+      pollTimers.current.clear();
+    },
+    [],
+  );
 
   const requestDownloads = useCallback(
     (entry: WatchPartyHistoryEntry) => {

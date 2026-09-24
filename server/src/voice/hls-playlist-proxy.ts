@@ -1,4 +1,4 @@
-import { getPool, DatabaseUnavailableError } from "../db.js";
+import { getPool } from "../db.js";
 import { signRequest } from "../lib/s3.js";
 import {
   mintHlsPartyPass,
@@ -201,26 +201,25 @@ function segmentMemoFor(key: string): Map<string, MemoisedSegmentUrl> {
 export const HLS_PLAYLIST_CACHE_TTL_MS = 1_000;
 
 /**
- * A3.1's stale-while-the-breaker-is-open fallback (`renderCachedPlaylist`,
- * `sessionRungs` below) is bounded to this long past the last render that
- * actually confirmed the session live, and it exists for exactly one
- * security reason: `DatabaseUnavailableError` means the `ended_at IS NULL`
- * liveness/authorization check could not run, not that it ran and passed. A
- * session can legitimately end (the write commits, `renderSignedPlaylist`
- * would now 404) and the breaker can then open for an unrelated reason on
- * the very next poll; without a bound, that poll would keep re-serving the
- * pre-end body forever, and a viewer who should have lost access the moment
- * the session ended keeps a working stream for as long as the outage lasts
- * and their presigned segment URLs remain valid — minutes, on this
- * deployment's own TTLs. Bounding it to 30s (this codebase's own live-window
- * size — see `EGRESS_LIVE_WINDOW_SEGMENTS`/`hls-live-window.ts`) rides out
- * the pool-queue and single-slow-probe blips this breaker is tuned to
- * recover from within its own grace/cooldown windows, while a real,
- * sustained outage degrades to the honest `database_unavailable` response
- * within half a minute rather than serving a possibly-revoked stream
- * indefinitely.
+ * How long a session this process last saw confirmed live may go on being
+ * served while Postgres cannot answer: the breaker is open, or the pool is
+ * timing out in the seconds before it opens. See `confirmSessionLive` for what
+ * is served in that window (a FRESH render from storage, not a replay) and
+ * `sessionRungs` for the master's rung list.
+ *
+ * It is bounded for one reason. A failed check means the `ended_at IS NULL`
+ * question could not be asked, not that it was asked and passed, so a
+ * session that ended during the outage is still rendered until the bound
+ * runs out. What it renders is its own final playlist from the bucket, which
+ * stops advancing when the egress stops, and access is still checked (the
+ * viewer token, and in-memory revocation), so the cost of a longer bound is
+ * small. It was 30 s, measured from a production blip it would not have
+ * covered: 2026-09-23 21:42:46Z to 21:43:47Z, 61 s. Three minutes covers a
+ * two-minute blip with the breaker's own cooldown and half-open trials on
+ * top, and a sustained outage still degrades to the honest
+ * `database_unavailable` after that.
  */
-export const STALE_ON_BREAKER_MAX_MS = 30_000;
+export const STALE_ON_BREAKER_MAX_MS = 3 * 60_000;
 
 interface CachedPlaylist {
   /** Resolved body, once the render finished. */
@@ -250,6 +249,12 @@ export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
   rungCache.clear();
   windowHistory.clear();
+  liveConfirmed.clear();
+  endedRungs.clear();
+  endedRungsPruneAt = 1024;
+  livenessInflight.clear();
+  rungSessionIds.clear();
+  rendersWithoutDb = 0;
   segmentUrlMemo.clear();
   stopAllKeepWarmLoops();
   keepWarmOwnership.clear();
@@ -381,30 +386,11 @@ async function renderCachedPlaylist(
       return body;
     })
     .catch((error: unknown) => {
-      // A3.1 (docs/plans/ALWAYS_ON.md): the DB breaker is open, so the
-      // `ended_at IS NULL` liveness check inside `renderSignedPlaylist`
-      // fast-rejected instead of confirming the session either way. Rather
-      // than fail every viewer's next poll, keep answering with the last
-      // body this session actually rendered — the party survives a DB blip
-      // on whatever window it already had, same as `perf/read-cache`'s
-      // stale-while-revalidate for everything else. Scoped to exactly this
-      // error: a real `HlsPlaylistNotFound` (the session legitimately
-      // ended) must still 404, or a stale window would go on being served
-      // for a stream that is actually over — the one behaviour the comment
-      // on `buildSignedPlaylist` above promises callers.
-      if (
-        error instanceof DatabaseUnavailableError &&
-        cached?.body !== undefined &&
-        now - cached.at <= STALE_ON_BREAKER_MAX_MS
-      ) {
-        // Left at the cached `at`, not refreshed to `now`: the entry still
-        // reads as stale, so the very next poll tries a fresh render rather
-        // than being stuck on this fallback until the TTL logic forgets it
-        // was ever a fallback, and the `STALE_ON_BREAKER_MAX_MS` bound above
-        // still measures from the same, real last-confirmed-live instant.
-        playlistCache.set(key, { body: cached.body, at: cached.at });
-        return cached.body;
-      }
+      // No replayed body on a database failure any more: a live playlist
+      // that stops advancing is a stall, not a fallback. A DB outage is
+      // handled one level down, in `confirmSessionLive`, which renders FRESH
+      // from storage on a recent confirmation and only throws when there is
+      // none to lean on.
       // A failed render is not cached: the next viewer should retry rather
       // than inherit a 404 from a session that was mid-cleanup.
       playlistCache.delete(key);
@@ -893,6 +879,247 @@ subscribeToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, (data) => {
   stopKeepWarmLoop(key);
 });
 
+/**
+ * RIDING OUT A DATABASE OUTAGE WITHOUT FREEZING THE PICTURE.
+ *
+ * The only thing a rendition render asks Postgres is "is this session still
+ * live" (`ended_at IS NULL`). Everything a viewer actually plays comes from
+ * storage: the egress keeps writing segments and rewriting its playlist in
+ * the bucket whether or not the API can reach its database. So when the
+ * database cannot answer, the right move is to keep rendering FRESH from
+ * storage on the strength of a recent "yes", not to replay the last body.
+ *
+ * What this replaced, and why it mattered on 2026-09-23. The first cut of
+ * A3.1 (`renderCachedPlaylist`'s fallback) served the last RENDERED BODY
+ * while the breaker was open, for at most 30 s. A live playlist that stops
+ * advancing is a stall with extra steps: the player sits on the last listed
+ * segment, drains its buffer, and after 30 s gets `database_unavailable`
+ * anyway. The production blip that day lasted 61 s, so every viewer of a
+ * conventional party would have frozen at about the 12 s mark and errored at
+ * 30. And before the breaker even opens (5 s of failing probes), each render
+ * sat on a dead pool connection for up to `query_timeout` (16 s) with every
+ * viewer's poll coalesced behind it.
+ *
+ * So, per session:
+ *  - a successful check stamps `liveConfirmed` (and a non-empty rung list
+ *    from `sessionRungs` does too: the same `ended_at IS NULL` question);
+ *  - a check that FAILS for any reason, or does not answer within
+ *    `HLS_LIVENESS_WAIT_MS`, is ridden out when that stamp is younger than
+ *    `STALE_ON_BREAKER_MAX_MS`: the render proceeds from storage;
+ *  - a slow check keeps running, and a late "not live" still ends it: the
+ *    stamp is cleared and the next render asks again, now with no stamp to
+ *    lean on;
+ *  - past the bound, or with no stamp at all, the error propagates exactly as
+ *    before (a viewer's very first request during an outage is not served on
+ *    trust nobody ever established).
+ *
+ * WHAT IS GIVEN UP, and why it is small. The check is there so a session that
+ * ENDED 404s and the client follows the current one. During an outage an
+ * ended session keeps being rendered for at most the bound, and what it
+ * renders is its own final playlist from the bucket, which stops advancing
+ * the moment the egress stops. Access is untouched: the viewer token was
+ * minted after a real access check, and revocation (`isHlsAccessRevoked`) is
+ * an in-memory lookup that works with the database down. A viewer loses
+ * nothing they could not already see, for at most three minutes, and only
+ * while the database is down.
+ */
+export const HLS_LIVENESS_WAIT_MS = 1_500;
+
+/**
+ * Last time Postgres said this is live, keyed two ways: by RENDITION
+ * (`cacheKey`, from that rung's own check) and by SESSION
+ * (`keepWarmSessionKey`, from any rung's check or a non-empty rung list). A
+ * rendition may ride out an outage on either, unless it is itself known to
+ * have ended: one rung ending (a ladder trimmed mid-party) says nothing about
+ * its siblings, and must not take their fallback away.
+ */
+const liveConfirmed = new Map<string, number>();
+
+/**
+ * Renditions a check found ended, with the session each belongs to. Never
+ * ridden out, whatever the session says. Pruned only once the session has no
+ * fresh confirmation left, because until then a forgotten marker would let
+ * the ended rung ride on its live siblings' stamp.
+ */
+const endedRungs = new Map<string, string>();
+let endedRungsPruneAt = 1024;
+
+/**
+ * The liveness check in flight per rendition, shared. A render that stops
+ * waiting for a slow check does not abandon it, and the next render (a
+ * second later) joins it instead of starting another: on a database that is
+ * slow rather than gone, one outstanding query per rendition, not one per
+ * refresh piling onto the pool the fallback exists to spare.
+ */
+const livenessInflight = new Map<string, Promise<string | null>>();
+
+/** The `hls_sessions.id` each rendition's last successful check returned. */
+const rungSessionIds = new Map<string, string | null>();
+
+/** Renders served from storage on a recent confirmation because the check failed or was slow. */
+let rendersWithoutDb = 0;
+
+/** For metrics: belongs at zero outside a database incident. */
+export function hlsPlaylistRendersWithoutDb(): number {
+  return rendersWithoutDb;
+}
+
+function stampLive(key: string, now: number): void {
+  const previous = liveConfirmed.get(key) ?? 0;
+  if (now > previous) {
+    liveConfirmed.set(key, now);
+  }
+  // Bounded without a timer: a stamp older than the bound can no longer
+  // excuse anything, so it is only memory.
+  if (liveConfirmed.size > 512) {
+    for (const [other, at] of liveConfirmed) {
+      if (now - at > STALE_ON_BREAKER_MAX_MS) {
+        liveConfirmed.delete(other);
+      }
+    }
+  }
+}
+
+function noteSessionLive(channelId: string, startedAt: number, now: number): void {
+  stampLive(keepWarmSessionKey(channelId, startedAt), now);
+}
+
+function freshStamp(key: string, now: number): boolean {
+  const at = liveConfirmed.get(key);
+  return at !== undefined && now - at <= STALE_ON_BREAKER_MAX_MS;
+}
+
+function canRideOutDbFailure(
+  channelId: string,
+  startedAt: number,
+  rungKey: string,
+  now: number,
+): boolean {
+  if (endedRungs.has(rungKey)) {
+    return false;
+  }
+  return (
+    freshStamp(rungKey, now) ||
+    freshStamp(keepWarmSessionKey(channelId, startedAt), now)
+  );
+}
+
+type DbRead<T> =
+  | { kind: "ok"; value: T }
+  | { kind: "failed"; error: unknown }
+  | { kind: "slow" };
+
+/** Wait at most `waitMs` for `lookup`; the lookup itself is never abandoned. */
+async function readWithin<T>(lookup: Promise<T>, waitMs: number): Promise<DbRead<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const slow = new Promise<DbRead<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "slow" }), waitMs);
+    timer.unref?.();
+  });
+  const settled = lookup.then(
+    (value): DbRead<T> => ({ kind: "ok", value }),
+    (error: unknown): DbRead<T> => ({ kind: "failed", error }),
+  );
+  try {
+    return await Promise.race([settled, slow]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * One rendition's `ended_at IS NULL` check, shared while in flight (see
+ * `livenessInflight`), recording its answer whoever is still waiting for
+ * it: a late "ended" still ends the rendition.
+ */
+function livenessCheck(
+  channelId: string,
+  startedAt: number,
+  objectPrefix: string,
+  rungKey: string,
+  now: number,
+): Promise<string | null> {
+  const existing = livenessInflight.get(rungKey);
+  if (existing) {
+    return existing;
+  }
+  const check = getPool()
+    .query<{ id: string }>(
+      `SELECT id FROM hls_sessions
+       WHERE channel_id = $1
+         AND object_prefix = $2
+         AND ended_at IS NULL
+         AND cleaned_at IS NULL`,
+      [channelId, objectPrefix],
+    )
+    .then((session) => {
+      if (!session.rowCount) {
+        // This rendition is over: forget its window and its segment-URL memo
+        // too, so neither map keeps one entry per session this process ever
+        // served, and make sure an outage cannot resurrect it. Its siblings'
+        // evidence is theirs and is left alone.
+        windowHistory.delete(rungKey);
+        segmentUrlMemo.delete(rungKey);
+        rungSessionIds.delete(rungKey);
+        liveConfirmed.delete(rungKey);
+        // Amortised: a pass that could not shrink the map raises the
+        // threshold, so a large, still-live set is not rescanned per insert.
+        if (endedRungs.size > endedRungsPruneAt) {
+          for (const [ended, session] of endedRungs) {
+            if (!freshStamp(session, now)) {
+              endedRungs.delete(ended);
+            }
+          }
+          endedRungsPruneAt = Math.max(1024, endedRungs.size * 2);
+        }
+        endedRungs.set(rungKey, keepWarmSessionKey(channelId, startedAt));
+        throw new HlsPlaylistNotFound(
+          `No live HLS session ${objectPrefix} for channel ${channelId}`,
+        );
+      }
+      const id = session.rows?.[0]?.id ?? null;
+      rungSessionIds.set(rungKey, id);
+      endedRungs.delete(rungKey);
+      stampLive(rungKey, now);
+      noteSessionLive(channelId, startedAt, now);
+      return id;
+    })
+    .finally(() => {
+      livenessInflight.delete(rungKey);
+    });
+  // Nobody may be waiting by the time it settles.
+  check.catch(() => {});
+  livenessInflight.set(rungKey, check);
+  return check;
+}
+
+/**
+ * The liveness check for one rendition, with the outage rules in the block
+ * above. Resolves to the rendition's `hls_sessions.id`, or throws
+ * `HlsPlaylistNotFound` when it is over.
+ */
+async function confirmSessionLive(
+  channelId: string,
+  startedAt: number,
+  objectPrefix: string,
+  rungKey: string,
+  now: number,
+): Promise<string | null> {
+  const check = livenessCheck(channelId, startedAt, objectPrefix, rungKey, now);
+  if (!canRideOutDbFailure(channelId, startedAt, rungKey, now)) {
+    return check;
+  }
+  const read = await readWithin(check, HLS_LIVENESS_WAIT_MS);
+  if (read.kind === "ok") {
+    return read.value;
+  }
+  if (read.kind === "failed" && read.error instanceof HlsPlaylistNotFound) {
+    throw read.error;
+  }
+  rendersWithoutDb += 1;
+  return rungSessionIds.get(rungKey) ?? null;
+}
+
 async function renderSignedPlaylist(
   channelId: string,
   startedAt: number,
@@ -923,24 +1150,14 @@ async function renderSignedPlaylist(
   // makes that true. A 404 is what the client's watchdog wants: it refetches
   // `GET /api/channels/:id/live` and follows the current session, which is
   // machinery that already exists and already works.
-  const session = await getPool().query<{ id: string }>(
-    `SELECT id FROM hls_sessions
-     WHERE channel_id = $1
-       AND object_prefix = $2
-       AND ended_at IS NULL
-       AND cleaned_at IS NULL`,
-    [channelId, objectPrefix],
+  const rungKey = cacheKey(channelId, startedAt, rung);
+  const sessionId = await confirmSessionLive(
+    channelId,
+    startedAt,
+    objectPrefix,
+    rungKey,
+    now,
   );
-  if (session.rowCount === 0) {
-    // The session is over: forget its window and its segment-URL memo too, so
-    // neither map keeps one entry per session this process ever served.
-    windowHistory.delete(cacheKey(channelId, startedAt, rung));
-    segmentUrlMemo.delete(cacheKey(channelId, startedAt, rung));
-    throw new HlsPlaylistNotFound(
-      `No live HLS session ${objectPrefix} for channel ${channelId}`,
-    );
-  }
-  const sessionId = session.rows?.[0]?.id ?? null;
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
   const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
@@ -1137,7 +1354,7 @@ async function sessionRungs(
     // "Loading the stream" while the media polls beside them answered in
     // 450 ms. One query per session per second, whoever asks.
     if (cached.inflight) {
-      return cached.inflight;
+      return rungsWithin(cached.inflight, cached.rungs, cached.at, now);
     }
   }
   const inflight = getPool()
@@ -1172,6 +1389,11 @@ async function sessionRungs(
         sessionId: byBitrate[0]?.id ?? null,
       };
       rungCache.set(key, { rungs: result, at: now });
+      // Non-empty is the same `ended_at IS NULL` answer a rendition check
+      // gives. Empty is NOT "ended": a pre-ladder session has no rung rows.
+      if (result.rungs.length > 0) {
+        noteSessionLive(channelId, startedAt, now);
+      }
       return result;
     })
     .catch((error: unknown) => {
@@ -1181,8 +1403,10 @@ async function sessionRungs(
       // keeps the master playlist (and therefore every rendition it points
       // at) answering through a DB blip instead of 503ing viewers who are
       // mid-ladder-switch.
+      //
+      // Any failure, not only the breaker's own error: in the seconds before
+      // the breaker opens, the same outage arrives as a connection timeout.
       if (
-        error instanceof DatabaseUnavailableError &&
         cached?.rungs !== undefined &&
         now - cached.at <= STALE_ON_BREAKER_MAX_MS
       ) {
@@ -1194,7 +1418,33 @@ async function sessionRungs(
       throw error;
     });
   rungCache.set(key, { ...cached, inflight, at: cached?.at ?? 0 });
-  return inflight;
+  return rungsWithin(inflight, cached?.rungs, cached?.at ?? 0, now);
+}
+
+/**
+ * A known rung list and a database that is slow to answer: do not hold a
+ * master request (a player recovering, a viewer switching) behind a dead pool
+ * connection for `query_timeout`. The query keeps running and refreshes the
+ * cache when it lands. Without a list young enough to trust, this is just
+ * `inflight`.
+ */
+async function rungsWithin(
+  inflight: Promise<SessionRungs>,
+  known: SessionRungs | undefined,
+  knownAt: number,
+  now: number,
+): Promise<SessionRungs> {
+  if (known === undefined || now - knownAt > STALE_ON_BREAKER_MAX_MS) {
+    return inflight;
+  }
+  const read = await readWithin(inflight, HLS_LIVENESS_WAIT_MS);
+  if (read.kind === "ok") {
+    return read.value;
+  }
+  if (read.kind === "slow") {
+    void inflight.catch(() => {});
+  }
+  return known;
 }
 
 /**

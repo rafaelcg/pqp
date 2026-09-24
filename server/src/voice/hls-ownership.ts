@@ -39,6 +39,7 @@ import { logEvent } from "../lib/log.js";
 import {
   heartbeatVoiceInstance,
   INSTANCE_TTL_MS,
+  otherLeasesTrustworthy,
   isVoiceRegistryEnabled,
 } from "./registry.js";
 
@@ -123,6 +124,24 @@ export function noteHlsSkippedOwnedElsewhere(detail: {
 }
 
 /**
+ * Every "owned by a live OTHER instance" answer below reads another
+ * instance's heartbeat, and right after this process's own database outage
+ * those heartbeats are stale for the same reason ours was
+ * (`otherLeasesTrustworthy` in `registry.ts`). Reading them then would call a
+ * live twin's party ours to adopt or stop. So until this instance has been
+ * beating again for a full TTL, the lookup answers the same thing a failed
+ * lookup does, which every caller already treats as "do not judge a row by
+ * this".
+ */
+function leasesUntrusted(scope: string): boolean {
+  if (otherLeasesTrustworthy()) {
+    return false;
+  }
+  logEvent("voice.hlsOwnerLookupDeferred", { scope });
+  return true;
+}
+
+/**
  * Instance ids OTHER THAN THIS ONE whose `voice_instances` heartbeat is still
  * inside the TTL. Empty (no round trip) with the registry off. `null` when
  * the read failed, which every caller must treat as "do not judge a row by
@@ -137,6 +156,9 @@ export async function liveOtherInstances(
 ): Promise<Set<string> | null> {
   if (!isVoiceRegistryEnabled()) {
     return new Set();
+  }
+  if (leasesUntrusted("instances")) {
+    return null;
   }
   const me = options.instanceId ?? hlsOwnerInstanceId();
   const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
@@ -184,6 +206,9 @@ export async function egressIdsOwnedElsewhere(
   if (!isVoiceRegistryEnabled() || egressIds.length === 0) {
     return new Set();
   }
+  if (leasesUntrusted("egress")) {
+    return null;
+  }
   const me = options.instanceId ?? hlsOwnerInstanceId();
   const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
   try {
@@ -226,6 +251,9 @@ export async function sessionIdsOwnedElsewhere(
   const ids = sessionIds.filter((id): id is string => Boolean(id));
   if (!isVoiceRegistryEnabled() || ids.length === 0) {
     return new Set();
+  }
+  if (leasesUntrusted("session")) {
+    return null;
   }
   const me = options.instanceId ?? hlsOwnerInstanceId();
   const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
@@ -649,6 +677,9 @@ export async function hlsSessionOwnedElsewhere(
 ): Promise<boolean | null> {
   if (!isVoiceRegistryEnabled()) {
     return false;
+  }
+  if (leasesUntrusted("keep-warm")) {
+    return null;
   }
   const me = options.instanceId ?? hlsOwnerInstanceId();
   const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
