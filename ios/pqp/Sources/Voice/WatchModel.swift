@@ -322,6 +322,10 @@ final class WatchModel {
     /// a stream that is genuinely still live does not read as "acabou".
     func playbackFailed(_ message: String) {
         phase = .failed(message)
+        // A stream that failed to play is not being watched, whatever the
+        // wire still says: stop counting this viewer rather than keep
+        // beating presence for a black screen (Farol, PR #804).
+        syncPresence()
     }
 
     /// A retry from the failed state: the freshest URL carries the freshest
@@ -329,9 +333,11 @@ final class WatchModel {
     func retry() {
         guard stream != nil else {
             phase = sawStream ? .ended : .idle
+            syncPresence()
             return
         }
         phase = .live
+        syncPresence()
     }
 
     // MARK: - The count
@@ -371,12 +377,20 @@ final class WatchModel {
      as a picture is actually attached, using the `?t=` this account's own
      `stream.hlsUrl` already carries (`hlsSessionToken`).
 
+     Gated on `phase == .live` rather than merely `stream != nil`: a
+     `playbackFailed` leaves `stream` set (deliberately, so a genuinely live
+     broadcast does not read as "acabou"), and a viewer staring at that
+     failure is not watching, whatever the wire still says. Counting them
+     would inflate the persisted peak/unique numbers for a black screen. Both
+     `playbackFailed` and `retry` call this so the beat stops and resumes
+     with the phase (Farol, PR #804).
+
      Fire-and-forget, like the web client's `sendHlsPresence`: a missed beat
      is one fewer sighting and the next one is 30 s away, never worth
      surfacing to the viewer.
      */
     private func syncPresence() {
-        let shouldRun = stream != nil && !isSeated
+        let shouldRun = phase == .live && !isSeated
         guard shouldRun else {
             presenceTask?.cancel()
             presenceTask = nil
