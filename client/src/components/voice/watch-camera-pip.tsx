@@ -4,11 +4,15 @@ import {
   hasHlsViewerToken,
   hlsSessionKey,
   isOwnHlsPlaylistProxyUrl,
+  nativeTokenRefreshDue,
   shouldAdoptHlsSource,
+  withFreshHlsToken,
 } from "@/lib/hls-playback";
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
 import {
+  CAMERA_RUN_REBUILD_JITTER_MS,
+  CAMERA_RUN_REBUILD_MIN_GAP_MS,
   CAMERA_STALL_POLL_MS,
   CameraStallWatch,
   cameraProgress,
@@ -177,54 +181,84 @@ export function WatchCameraPip({
   // `attachOnce`'s `attemptPlay`, so the nudge can restart a paused element
   // through the same "tap to hear" fallback.
   const attemptPlayRef = useRef<(() => void) | null>(null);
+  // When the last "new camera run under the same URL" rebuild happened, so a
+  // playlist that keeps failing that way falls back to the stall watch's
+  // backoff instead of rebuilding in a loop.
+  const runRestartRebuildAtRef = useRef(0);
 
   // The live hls.js instance, reachable outside the attach effect so a plain
   // token refresh (below) can hand it a fresh URL without tearing it down.
   const hlsPlayerRef = useRef<CameraHlsHandle | null>(null);
-  // The latest `src`, including its current token, for the same reason: the
-  // heavy attach effect only reruns on a genuine session change, but a
-  // same-session token refresh still needs the freshest URL on hand.
+  // The latest `src`, including its current token. The heavy attach effect
+  // only reruns on a genuine session change, so this is where a same-session
+  // restamp lives: `xhrSetup` rewrites every playlist request onto it, and a
+  // rebuild attaches with it.
   const latestSrcRef = useRef(src);
   latestSrcRef.current = src;
   // Set only in the native (non hls.js) branch of `attachOnce`, so the
-  // token-refresh effect below knows there is no `hlsPlayerRef` to hand the
-  // fresh URL to and must update the `<video>` element directly instead.
+  // token-refresh effect below knows there is no loader to rewrite and the
+  // element's own `src` is the only place a fresher token can go.
   const usingNativeRef = useRef(false);
+  // What the native element is playing, and since when: the token-refresh
+  // effect keeps it until its token is close to expiring
+  // (`nativeTokenRefreshDue`).
+  const nativeSrcRef = useRef<string | null>(null);
+  const nativeAttachedAtRef = useRef(0);
 
   /**
-   * TOKEN REFRESHES ARE APPLIED IN PLACE, NEVER BY REATTACHING. This runs
-   * BEFORE the session-adopt effect below (declaration order is commit
-   * order), so it reads `sessionRef.current` before that effect has a chance
-   * to move it: on a genuine session change both effects see the OLD session
-   * here, this one correctly does nothing, and the one below does the (one)
-   * real reattach. On a same-session token restamp this is the whole fix —
-   * the RUNNING instance still needs the fresh token before the old one
-   * expires (`HLS_VIEWER_TOKEN_TTL_MS` is an hour, comfortably shorter than a
-   * long party) — and `loadSource` reloads the manifest against the new URL
-   * without detaching the `<video>` or losing anything `onFrame` already
-   * reported, a world apart from destroying and recreating the whole player.
+   * A TOKEN RESTAMP NEVER TOUCHES THE PLAYER. The server restamps `?t=` on
+   * the audience keyframe, every thirty seconds, for a camera that has not
+   * moved at all.
    *
-   * NATIVE SAFARI GETS THE SAME TREATMENT, JUST APPLIED DIFFERENTLY: there is
-   * no `loadSource` to call, so a same-session token refresh is applied
-   * straight to the element's `src` in place — the same `<video>` node, not
-   * a fresh one, and no unmount of this component. Leaving it alone (as a
-   * previous revision did) meant a native viewer's camera silently stopped
-   * once the URL's `?t=` the element was still fetching against expired,
-   * even though the film's own player, playing on hls.js, kept refreshing
-   * fine right beside it.
+   * THE BUG THIS REPLACES (rehearsal E, 2026-09-25). A restamp used to be
+   * applied with `hls.loadSource(src)`, on the belief that it reloads the
+   * manifest in place. It does not: hls.js 1.7 compares the new URL with the
+   * one it loaded and, when they differ (and a restamp always differs, by its
+   * token), calls `detachMedia()` then `attachMedia()`, a brand-new
+   * MediaSource and blob URL with an empty buffer, on the SAME instance and
+   * with its live position state carried over. So the camera re-attached on
+   * every restamp, and half the time the re-attached instance started at a
+   * position it could not play past: it played exactly the listed window
+   * (597 frames, twenty seconds of a 30 fps camera) and froze there until the
+   * next restamp re-attached it again. Once restamps reached that viewer
+   * (after the presenter reloaded), the face froze for ten seconds every
+   * minute or so for the rest of the show. Reproduced against the real
+   * `LiveWindowHistory` render and hls.js 1.7.2: `loadSource` restamps swap
+   * the blob every 30 s and freeze at 597 frames; the loader rewrite below
+   * plays 150 s on one blob with no freeze.
+   *
+   * hls.js: NOTHING HERE. `latestSrcRef` already holds the fresh URL, and
+   * `xhrSetup` rewrites every playlist request against our proxy onto its
+   * token (`withFreshHlsToken`), the same loader-level swap the film's player
+   * has used since B1.3. The instance, the MediaSource and the buffer are
+   * never touched, so the token stays fresh (`HLS_VIEWER_TOKEN_TTL_MS` is an
+   * hour) with no cost to the picture.
+   *
+   * NATIVE (older iPhones, no MSE): no loader to rewrite, and a new `src` IS
+   * a reload, so it is applied only when the attached token is close to
+   * expiring (`nativeTokenRefreshDue`), once an hour rather than twice a
+   * minute. Never applying it at all (an older revision) let a native
+   * viewer's camera stop once its `?t=` expired.
+   *
+   * Runs BEFORE the session-adopt effect below (declaration order is commit
+   * order), so on a genuine session change it still sees the OLD session and
+   * does nothing, and that effect does the (one) real reattach.
    */
   useEffect(() => {
     if (shouldAdoptHlsSource(sessionRef.current, src)) {
-      // A genuine session change: the effect below does the (one) real
-      // reattach, so there is nothing for this one to apply in place.
       return;
     }
-    if (hlsPlayerRef.current) {
-      hlsPlayerRef.current.loadSource(src);
+    const video = videoRef.current;
+    if (!usingNativeRef.current || !video) {
       return;
     }
-    if (usingNativeRef.current && videoRef.current) {
-      videoRef.current.src = src;
+    const now = Date.now();
+    if (
+      nativeTokenRefreshDue(nativeSrcRef.current, src, nativeAttachedAtRef.current, now)
+    ) {
+      video.src = src;
+      nativeSrcRef.current = src;
+      nativeAttachedAtRef.current = now;
     }
   }, [src]);
 
@@ -272,6 +306,7 @@ export function WatchCameraPip({
     }
     let cancelled = false;
     usingNativeRef.current = false;
+    nativeSrcRef.current = null;
     hasPlayedRef.current = false;
     attemptPlayRef.current = null;
     onFrameRef.current(false);
@@ -367,6 +402,8 @@ export function WatchCameraPip({
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           usingNativeRef.current = true;
           video.src = latestSrcRef.current;
+          nativeSrcRef.current = latestSrcRef.current;
+          nativeAttachedAtRef.current = Date.now();
           attemptPlay();
         }
         return;
@@ -380,11 +417,29 @@ export function WatchCameraPip({
         // master, which is why this loads the rung path directly.
         manifestLoadingMaxRetry: 6,
         manifestLoadingRetryDelay: 1000,
+        // THE TOKEN RESTAMP, APPLIED IN THE LOADER (see the token-refresh
+        // effect above for why never through `loadSource`). hls.js opened
+        // this request against the URL it holds before calling here;
+        // re-opening it before `send()` is the only way to redirect it, and
+        // it is what the film's player does too. Only our own proxy's
+        // playlist carries a `?t=`: segment lines are presigned bucket or
+        // edge URLs, and `withFreshHlsToken` leaves alone anything that is
+        // not this session's playlist on the SAME ORIGIN as the URL the
+        // server handed us (it compares scheme, host and path, the whole URL
+        // before the query), so the token never goes to another host.
         xhrSetup: (xhr, url) => {
+          let effectiveUrl = url;
+          if (isOwnHlsPlaylistProxyUrl(url)) {
+            const fresh = withFreshHlsToken(url, latestSrcRef.current);
+            if (fresh !== url) {
+              xhr.open("GET", fresh, true);
+              effectiveUrl = fresh;
+            }
+          }
           if (
-            isOwnHlsPlaylistProxyUrl(url) &&
+            isOwnHlsPlaylistProxyUrl(effectiveUrl) &&
             authToken &&
-            !hasHlsViewerToken(url)
+            !hasHlsViewerToken(effectiveUrl)
           ) {
             xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
           }
@@ -394,10 +449,54 @@ export function WatchCameraPip({
       // The freshest URL on hand, not the value this effect closed over: a
       // token refresh that landed between mount and this async resolution
       // (the dynamic import is one microtask, but still one) must not attach
-      // with an already-stale one.
+      // with an already-stale one. The ONLY `loadSource` this component
+      // makes: one per attach, before `attachMedia`, never on a live player.
       player.loadSource(latestSrcRef.current);
       player.attachMedia(video);
       player.on(Hls.Events.ERROR, (_event, data) => {
+        // A NEW CAMERA RUN UNDER THE SAME URL. Every run of the camera writes
+        // the one shared live playlist (`cameraRunNames` on the server) and
+        // numbers its segments from 0 again, so after a restart (the
+        // presenter republished their camera: a reload, a device switch) the
+        // playlist this instance is polling can list a sequence number it
+        // already holds under a different segment. hls.js 1.7 calls that a
+        // media sequence mismatch (`levelParsingError`) and escalates it to
+        // fatal, and the instance is finished: it plays out its buffer and
+        // freezes, and only the stall watch's nudge got it going again,
+        // twenty-odd seconds later with the corner hidden in between
+        // (reproduced 2026-09-25 against the real proxy render). The fix is
+        // the one this instance cannot do for itself: a fresh one, at once,
+        // which reads the new run from its live edge. When the numbers do
+        // not collide (a run restarted long after the last), hls.js follows
+        // the new run on its own and this never fires.
+        //
+        // FATAL ONLY: a parsing error hls.js is still retrying stays its own
+        // (`data.fatal` is already final here, hls.js settles it before any
+        // listener added after construction runs). JITTERED: every viewer
+        // polls the same playlist and meets the new run within a few
+        // seconds of each other, so each waits up to
+        // `CAMERA_RUN_REBUILD_JITTER_MS` more before asking for it again.
+        if (
+          data.fatal &&
+          data.details === Hls.ErrorDetails.LEVEL_PARSING_ERROR &&
+          !cancelled &&
+          Date.now() - runRestartRebuildAtRef.current >= CAMERA_RUN_REBUILD_MIN_GAP_MS
+        ) {
+          runRestartRebuildAtRef.current = Date.now();
+          console.warn(
+            "[watch-camera-pip] camera playlist restarted under the same URL, rebuilding its player",
+          );
+          const timer = setTimeout(
+            () => {
+              if (!cancelled) {
+                setRebuildNonce((n) => n + 1);
+              }
+            },
+            Math.round(Math.random() * CAMERA_RUN_REBUILD_JITTER_MS),
+          );
+          retryTimers.push(timer);
+          return;
+        }
         if (data.fatal && !cancelled) {
           // The film's watchdog owns reconnecting to a restarted session. This
           // one does not chase it: the camera egress stopping is an ordinary
@@ -622,9 +721,12 @@ export function WatchCameraPip({
   );
 }
 
-/** The slice of hls.js this file drives. */
+/**
+ * The slice of hls.js this file drives once it is playing. No `loadSource`:
+ * on an attached player that is a full re-attach, never a refresh (see the
+ * token-refresh effect).
+ */
 interface CameraHlsHandle {
-  loadSource: (url: string) => void;
   destroy: () => void;
   startLoad?: (startPosition?: number) => void;
   liveSyncPosition?: number | null;

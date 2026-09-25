@@ -31,12 +31,16 @@
  *    restarts loading at the live edge (`startLoad(-1)`) and seeks there if
  *    the element sits behind it. That clears a buffer hole or a loader that
  *    gave up, without dropping anything.
- * 2. `"rebuild"`, `backoffMs[level]` after the previous action if the picture
- *    is still frozen: a fresh hls.js instance on the freshest URL. Each
- *    rebuild moves one step up the backoff and every delay carries jitter,
- *    because when the camera egress hiccups every viewer freezes in the same
- *    second, and five hundred rebuilds in the same second is a stampede on
- *    the playlist proxy.
+ * 2. `"rebuild"`, `nudgeCheckMs` after the nudge if the picture is not
+ *    moving by then: a fresh hls.js instance on the freshest URL. A nudge
+ *    that worked shows up within a segment and keeps moving, so waiting out
+ *    a whole stall and backoff step before admitting it did not is just a
+ *    longer frozen face (rehearsal E, 2026-09-25: the nudge ran, moved
+ *    nothing, and the camera sat frozen until something else reattached it). Each later rebuild waits
+ *    `backoffMs[level]` after the previous one and moves one step up, and
+ *    every delay carries jitter, because when the camera egress hiccups
+ *    every viewer freezes in the same second, and five hundred rebuilds in
+ *    the same second is a stampede on the playlist proxy.
  *
  * NEVER A TIGHT LOOP. Two rebuilds are always at least `backoffMs[0]` apart
  * (less the jitter), and at least `stallMs` of no movement has to come first
@@ -69,6 +73,8 @@ export interface CameraStallOptions {
   /** 0..1, jitter source. Injected so tests can pin it. */
   random?: () => number;
   stallMs?: number;
+  /** How long a nudge gets to move a frame before the first rebuild. */
+  nudgeCheckMs?: number;
   backoffMs?: readonly number[];
   healthyMs?: number;
   /** Fraction each backoff delay may move either way. */
@@ -83,10 +89,27 @@ export const CAMERA_STALL_POLL_MS = 2_000;
  * "someone noticed the face is frozen".
  */
 export const CAMERA_STALL_MS = 8_000;
-/** Delay after the previous action before each rebuild, in order. */
+/**
+ * How long a nudge gets to show a moving frame before it counts as having
+ * failed: two polls, one 4 s segment's worth of loading at the live edge.
+ */
+export const CAMERA_NUDGE_CHECK_MS = 4_000;
+/** Delay after the previous rebuild before each next one, in order. */
 export const CAMERA_REBUILD_BACKOFF_MS: readonly number[] = [
   8_000, 15_000, 30_000, 60_000, 120_000,
 ];
+/**
+ * The least time between two immediate rebuilds for a camera run restarted
+ * under the same URL (`WatchCameraPip`'s `levelParsingError` handler). A
+ * playlist that keeps failing that way is left to the stall watch's backoff.
+ */
+export const CAMERA_RUN_REBUILD_MIN_GAP_MS = 10_000;
+/**
+ * The spread on that rebuild: every viewer meets the new run within a
+ * playlist refresh of each other, and this keeps their fresh manifest
+ * requests from landing in the same second.
+ */
+export const CAMERA_RUN_REBUILD_JITTER_MS = 3_000;
 /** Forward play for this long means the camera is healthy again. */
 export const CAMERA_HEALTHY_MS = 10_000;
 export const CAMERA_REBUILD_JITTER = 0.25;
@@ -98,6 +121,7 @@ export class CameraStallWatch {
   private readonly now: () => number;
   private readonly random: () => number;
   private readonly stallMs: number;
+  private readonly nudgeCheckMs: number;
   private readonly backoffMs: readonly number[];
   private readonly healthyMs: number;
   private readonly jitter: number;
@@ -106,6 +130,13 @@ export class CameraStallWatch {
   private lastMovedAt = 0;
   private advancingSince: number | null = null;
   private nudged = false;
+  /**
+   * The nudge is waiting for its verdict: until `nudgeCheckMs` after it, and
+   * only then, one poll with nothing moving is enough to rebuild. Cleared by
+   * that rebuild, by the camera playing healthily again, and by the page
+   * going ineligible (coming back to a tab is a fresh stall clock).
+   */
+  private verifyingNudge = false;
   private level = 0;
   private actionAt = 0;
   private nextDelayMs = 0;
@@ -114,6 +145,7 @@ export class CameraStallWatch {
     this.now = options.now;
     this.random = options.random ?? Math.random;
     this.stallMs = options.stallMs ?? CAMERA_STALL_MS;
+    this.nudgeCheckMs = options.nudgeCheckMs ?? CAMERA_NUDGE_CHECK_MS;
     this.backoffMs = options.backoffMs ?? CAMERA_REBUILD_BACKOFF_MS;
     this.healthyMs = options.healthyMs ?? CAMERA_HEALTHY_MS;
     this.jitter = options.jitter ?? CAMERA_REBUILD_JITTER;
@@ -132,6 +164,7 @@ export class CameraStallWatch {
       // time spent away from it.
       this.lastTime = null;
       this.advancingSince = null;
+      this.verifyingNudge = false;
       return "none";
     }
     const previous = this.lastTime;
@@ -146,6 +179,7 @@ export class CameraStallWatch {
         this.advancingSince ??= now;
         if (now - this.advancingSince >= this.healthyMs) {
           this.nudged = false;
+          this.verifyingNudge = false;
           this.level = 0;
         }
       } else {
@@ -156,17 +190,36 @@ export class CameraStallWatch {
       return "none";
     }
     this.advancingSince = null;
+    // THE NUDGE'S VERDICT. Past `nudgeCheckMs`, a poll with nothing moving
+    // means the nudge did not take, and the full `stallMs` is not waited out
+    // a second time: the nudge's own seek to the live edge reads as one step
+    // of movement (a clock jump, or the one frame decoded where it landed),
+    // and that step alone must not buy the frozen face another eight
+    // seconds. A nudge that worked keeps the position moving on every poll,
+    // so it never gets here.
+    if (this.verifyingNudge) {
+      if (now - this.actionAt < this.nextDelayMs) {
+        return "none";
+      }
+      return this.rebuild(now);
+    }
     if (now - this.lastMovedAt < this.stallMs) {
       return "none";
     }
     if (!this.nudged) {
       this.nudged = true;
-      this.arm(now);
+      this.verifyingNudge = true;
+      this.arm(now, this.nudgeCheckMs);
       return "nudge";
     }
     if (now - this.actionAt < this.nextDelayMs) {
       return "none";
     }
+    return this.rebuild(now);
+  }
+
+  private rebuild(now: number): CameraStallAction {
+    this.verifyingNudge = false;
     this.level += 1;
     this.arm(now);
     // The caller tears the element down; its clock drops to 0, and
@@ -175,10 +228,12 @@ export class CameraStallWatch {
     return "rebuild";
   }
 
-  private arm(now: number): void {
+  private arm(now: number, baseMs?: number): void {
     this.actionAt = now;
     const base =
-      this.backoffMs[Math.min(this.level, this.backoffMs.length - 1)] ?? 0;
+      baseMs ??
+      this.backoffMs[Math.min(this.level, this.backoffMs.length - 1)] ??
+      0;
     const spread = (this.random() * 2 - 1) * this.jitter;
     this.nextDelayMs = Math.max(0, Math.round(base * (1 + spread)));
   }

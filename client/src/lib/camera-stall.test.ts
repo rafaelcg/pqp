@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CAMERA_HEALTHY_MS,
+  CAMERA_NUDGE_CHECK_MS,
   CAMERA_REBUILD_BACKOFF_MS,
   CAMERA_STALL_MS,
   CAMERA_STALL_POLL_MS,
@@ -44,7 +45,7 @@ describe("CameraStallWatch", () => {
     expect(r.actions).toEqual([]);
   });
 
-  it("nudges once after the stall threshold, then rebuilds after the first backoff", () => {
+  it("nudges once after the stall threshold, then rebuilds as soon as the nudge moved nothing", () => {
     const r = rig();
     r.run(20_000, { advance: true });
     const frozeAt = r.now();
@@ -55,10 +56,42 @@ describe("CameraStallWatch", () => {
     expect(r.actions[0]!.at - frozeAt).toBeLessThanOrEqual(
       CAMERA_STALL_MS + CAMERA_STALL_POLL_MS,
     );
-    // random 0.5 is zero jitter: the first rebuild is backoff[0] after it.
-    expect(r.actions[1]!.at - r.actions[0]!.at).toBeGreaterThanOrEqual(
-      CAMERA_REBUILD_BACKOFF_MS[0]!,
+    // random 0.5 is zero jitter. Rehearsal E (2026-09-25): the nudge ran,
+    // moved nothing, and the face stayed frozen for the whole first backoff
+    // step. A failed nudge now escalates after `CAMERA_NUDGE_CHECK_MS`.
+    const toRebuild = r.actions[1]!.at - r.actions[0]!.at;
+    expect(toRebuild).toBeGreaterThanOrEqual(CAMERA_NUDGE_CHECK_MS);
+    expect(toRebuild).toBeLessThanOrEqual(CAMERA_NUDGE_CHECK_MS + CAMERA_STALL_POLL_MS);
+    expect(toRebuild).toBeLessThan(CAMERA_REBUILD_BACKOFF_MS[0]!);
+    // The rebuild after that still waits out a backoff step.
+    expect(r.actions[2]!.at - r.actions[1]!.at).toBeGreaterThanOrEqual(
+      CAMERA_REBUILD_BACKOFF_MS[1]!,
     );
+  });
+
+  it("does not take the nudge's own seek to the live edge for recovery", () => {
+    const r = rig();
+    r.run(20_000, { advance: true });
+    r.run(CAMERA_STALL_MS + CAMERA_STALL_POLL_MS);
+    expect(r.actions.map((a) => a.action)).toEqual(["nudge"]);
+    const nudgedAt = r.actions[0]!.at;
+    // The seek lands 20 s ahead (one step of "movement"), then nothing.
+    r.sample({ time: 60 });
+    r.run(CAMERA_NUDGE_CHECK_MS + CAMERA_STALL_POLL_MS);
+    expect(r.actions.map((a) => a.action)).toEqual(["nudge", "rebuild"]);
+    expect(r.actions[1]!.at - nudgedAt).toBeLessThanOrEqual(
+      CAMERA_NUDGE_CHECK_MS + CAMERA_STALL_POLL_MS,
+    );
+  });
+
+  it("never rebuilds when the nudge got frames moving again", () => {
+    const r = rig();
+    r.run(20_000, { advance: true });
+    r.run(CAMERA_STALL_MS + CAMERA_STALL_POLL_MS);
+    expect(r.actions.map((a) => a.action)).toEqual(["nudge"]);
+    // The nudge worked: frames move from the very next poll on.
+    r.run(120_000, { advance: true });
+    expect(r.actions.map((a) => a.action)).toEqual(["nudge"]);
   });
 
   it("backs off between rebuilds and never loops tightly", () => {
