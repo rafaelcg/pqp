@@ -766,6 +766,17 @@ export class HlsStallWatch {
     // calls this.
   }
 
+  /**
+   * A `"rebuild"` this watch decided was never carried out: the player was
+   * still waiting out its jitter when the picture moved again on its own.
+   * Takes that decision back off the dead-window count. Without this, three
+   * self-healed stalls inside five minutes declared a playing stream dead
+   * on the fourth, having never rebuilt anything (rehearsal D, 2026-09-25).
+   */
+  cancelRebuild(): void {
+    this.rebuilds.pop();
+  }
+
   /** The person pressed "try again": a clean slate, including the dead-window. */
   reset(now: number): void {
     this.rebuilds = [];
