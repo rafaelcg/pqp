@@ -177,8 +177,13 @@ export function WatchPartyOptionsPanel({
    * self-host with `LIVE_HLS_LL` unset has nothing to offer, and a switch
    * that is there but greyed out would be a promise the deployment cannot
    * keep.
+   *
+   * `null` is "not answered yet", and THEN the row is drawn, disabled: a
+   * host must never start a party without having seen the option, and a row
+   * that pops in after the rest of the card is one a quick host (or a
+   * rehearsal script, production 2026-09-25) goes live without.
    */
-  lowLatencyAvailable?: boolean;
+  lowLatencyAvailable?: boolean | null;
   /**
    * Whether the party is live right now. The switch itself is always a
    * standing preference (`options.lowLatency`, saved the moment it is
@@ -257,8 +262,14 @@ export function WatchPartyOptionsPanel({
             read only when a sharer's egress starts, so flipping this while
             already live changes nothing until the next Ir ao vivo, which the
             hint below says in words. */}
-        {lowLatencyAvailable && isHost && (
-          <div data-watch-party-low-latency className="px-1 py-0.5">
+        {lowLatencyAvailable !== false && isHost && (
+          <div
+            data-watch-party-low-latency
+            data-watch-party-low-latency-pending={
+              lowLatencyAvailable === null ? "" : undefined
+            }
+            className="px-1 py-0.5"
+          >
             <Switch
               label={t("watchParty.options.lowLatency")}
               description={
@@ -269,7 +280,7 @@ export function WatchPartyOptionsPanel({
                   : t("watchParty.options.lowLatencyBody")
               }
               checked={options.lowLatency}
-              disabled={disabled}
+              disabled={disabled || lowLatencyAvailable === null}
               onCheckedChange={(checked) => onChange({ lowLatency: checked })}
             />
           </div>

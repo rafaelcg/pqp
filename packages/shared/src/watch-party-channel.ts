@@ -76,7 +76,15 @@ export const CHANNEL_NOT_LIVE: ChannelLiveState = Object.freeze({
 type RosterPeer = Pick<
   z.infer<typeof voiceParticipantSchema>,
   "peerId" | "sharingScreen"
->;
+> & {
+  /**
+   * Optional in this type only so callers that hold a narrower roster shape
+   * still compile; every real roster entry carries it, and it is what lets
+   * `liveStateFromStream` recognise a presenter who came back under a new
+   * peer id (`LiveHlsStream.presenterUserId`).
+   */
+  userId?: string;
+};
 
 /** Live state as the roster tells it: a sharing peer is the presenter. */
 export function liveStateFromRoster(
@@ -107,6 +115,13 @@ export function liveStateFromRoster(
  * `stream: null` is "nothing live", whatever the roster says: the egress is
  * gone, and a peer still flagged `sharingScreen` for a moment is the WebRTC
  * share winding down, not a watch party.
+ *
+ * THE PRESENTER IS A PERSON, NOT A SOCKET. A seat is the presenter's when it
+ * is the peer the stream names, or when it belongs to the user the stream
+ * names (`presenterUserId`): a presenter who reloaded is seated under a new
+ * peer id while the session, and this frame, still name the old one, and
+ * counting them as their own audience put a phantom viewer on the count and
+ * "+1 assistindo" lines in the host's feed (rehearsal C, 2026-09-25).
  */
 export function liveStateFromStream(
   stream: LiveHlsStream | null,
@@ -117,10 +132,13 @@ export function liveStateFromStream(
     return CHANNEL_NOT_LIVE;
   }
   const seated = participants ?? [];
-  const presenterSeated = seated.some(
-    (peer) => peer.peerId === stream.presenterPeerId,
-  );
-  const roomViewers = Math.max(0, seated.length - (presenterSeated ? 1 : 0));
+  const presenterUserId = stream.presenterUserId ?? null;
+  const presenterSeats = seated.filter(
+    (peer) =>
+      peer.peerId === stream.presenterPeerId ||
+      (presenterUserId !== null && peer.userId === presenterUserId),
+  ).length;
+  const roomViewers = Math.max(0, seated.length - presenterSeats);
   return {
     live: true,
     presenterPeerId: stream.presenterPeerId,

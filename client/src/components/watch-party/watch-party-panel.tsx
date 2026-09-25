@@ -286,9 +286,10 @@ export interface WatchPartyPanelProps {
    * (`useLiveHlsConfig(serverId)?.lowLatency?.available`), threaded down to
    * `WatchPartyOptionsPanel` so "Baixa latência (beta)" stays out of the
    * panel entirely on a deployment with `LIVE_HLS_LL` unset or this server
-   * off its allowlist.
+   * off its allowlist. `null` while the config has not answered: the row is
+   * drawn disabled rather than left out (see `WatchPartyOptionsPanel`).
    */
-  lowLatencyAvailable?: boolean;
+  lowLatencyAvailable?: boolean | null;
   /** Apply a mic-gain choice to the running mix at once. See `StreamMixControl`. */
   onMicGainChange?: (value: number) => void;
   /** Same as `onMicGainChange`, for the display (tab-audio) branch. */

@@ -146,6 +146,27 @@ describe("liveStateFromStream", () => {
     expect(liveStateFromStream(stream, [seat("a"), seat("b")], 0).viewerCount).toBe(2);
   });
 
+  it("does not count a presenter who came back under a new peer id as a viewer", () => {
+    // Rehearsal C, 2026-09-25: the presenter reloaded, the session continued
+    // (#817), and for the window before the server rebound it the frame
+    // still named the old peer while the presenter sat in the room under a
+    // new one. One real viewer read as "2 assistindo".
+    const HOST = "00000000-0000-4000-8000-00000000000a";
+    const VIEWER = "00000000-0000-4000-8000-00000000000b";
+    const held = { ...stream, presenterUserId: HOST };
+    const back = { peerId: "host-2", sharingScreen: false, userId: HOST };
+    expect(liveStateFromStream(held, [back], 1).viewerCount).toBe(1);
+    // Anybody else seated is still a viewer.
+    const other = { peerId: "v", sharingScreen: false, userId: VIEWER };
+    expect(liveStateFromStream(held, [back, other], 1).viewerCount).toBe(2);
+    // The old peer and the new one both seated (a resume hold overlapping
+    // the return): still one person, and not in the audience.
+    const old = { peerId: "host", sharingScreen: true, userId: HOST };
+    expect(liveStateFromStream(held, [old, back], 1).viewerCount).toBe(1);
+    // Without the field (an older server), the peer id alone decides, as before.
+    expect(liveStateFromStream(stream, [back], 1).viewerCount).toBe(2);
+  });
+
   it("is the watchers alone when nobody else is seated", () => {
     expect(liveStateFromStream(stream, undefined, 3).viewerCount).toBe(3);
     expect(liveStateFromStream(stream, [seat("host", true)], 0).viewerCount).toBe(0);

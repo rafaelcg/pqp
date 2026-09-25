@@ -41,10 +41,21 @@ export interface WatchPartiesState {
   /** Patch a party only while this cache still holds that exact session. */
   patch: (id: string, partial: Partial<WatchParty>) => void;
   refresh: () => void;
+  /**
+   * The party in a channel as of the LATEST render, for code that reads it
+   * after an await. `byChannel` is a render's snapshot, so a handler that
+   * `put` a party and then awaited something still sees the map from before
+   * its own `put` through the closure it started in: the go-live handoff
+   * read the draft it had just turned live and logged "party no longer
+   * live" on every go-live (production rehearsal C, 2026-09-25).
+   */
+  current: (channelId: string) => WatchParty | undefined;
 }
 
 export function useWatchParties(serverId: string | null): WatchPartiesState {
   const [byChannel, setByChannel] = useState<Record<string, WatchParty>>({});
+  const byChannelRef = useRef(byChannel);
+  byChannelRef.current = byChannel;
   const serverRef = useRef<string | null>(serverId);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -121,6 +132,11 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
+  const current = useCallback(
+    (channelId: string) => byChannelRef.current[channelId],
+    [],
+  );
+
   // One pass over the map for both readers: the sidebar block wants the
   // OPEN server's live parties, the rail wants every server with one.
   const allLive = useMemo(
@@ -141,7 +157,7 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
     [allLive],
   );
 
-  return { byChannel, live, liveServerIds, apply, put, patch, refresh };
+  return { byChannel, live, liveServerIds, apply, put, patch, refresh, current };
 }
 
 

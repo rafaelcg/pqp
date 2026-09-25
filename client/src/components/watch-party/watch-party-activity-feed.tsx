@@ -26,7 +26,8 @@ export function WatchPartyActivityFeed({
   className,
 }: {
   channelId: string;
-  audienceCount: number;
+  /** `null` until the channel's live state is known; see `useWatchPartyActivity`. */
+  audienceCount: number | null;
   hands: readonly ActivityPerson[];
   onInvite?: (userId: string) => void;
   /**
@@ -83,7 +84,7 @@ export function WatchPartyActivityFeed({
         )}
         <span className="ml-auto flex items-center gap-1 font-normal normal-case tracking-normal text-paper-muted">
           <Users className="h-3 w-3" aria-hidden />
-          {audienceCount}
+          {audienceCount ?? 0}
         </span>
       </h3>
       {expanded && (

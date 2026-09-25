@@ -2336,6 +2336,39 @@ function lastPresenterUserOf(channelId: string, peerId: string): string | null {
   return presenterPeopleByChannel.get(channelId)?.get(peerId) ?? null;
 }
 
+/**
+ * The stream with the PERSON presenting it (`LiveHlsStream.presenterUserId`)
+ * filled in when this process can name them: the peer is seated here, or it
+ * is a presenter this process saw share in this channel (which is what still
+ * names them after a reload took the peer away).
+ *
+ * Why the audience needs it: since the return grace a session outlives its
+ * presenter's socket, and until the reconcile rebinds it the frame names a
+ * peer that is gone while the same person sits in the room under a new one.
+ * Counted by peer id alone, the presenter was their own viewer (rehearsal C,
+ * 2026-09-25: "2 assistindo" with one viewer, and three "+1 assistindo"
+ * lines in the host's feed). An id already on the stream is kept: it came
+ * from the machine that saw them share, which knows better than this one.
+ */
+function withPresenterUser(channelId: string, stream: LiveHlsStream): LiveHlsStream {
+  if (stream.presenterUserId) {
+    return stream;
+  }
+  const userId =
+    peers.get(stream.presenterPeerId)?.userId ??
+    lastPresenterUserOf(channelId, stream.presenterPeerId);
+  return userId ? { ...stream, presenterUserId: userId } : stream;
+}
+
+/** Every stream a socket is handed: the person named, then the viewer's own token. */
+function viewerStreamFor(
+  channelId: string,
+  stream: LiveHlsStream,
+  userId: string,
+): LiveHlsStream {
+  return stampViewerStream(withPresenterUser(channelId, stream), userId);
+}
+
 /** Whether a return hold is running for this channel and presenter. */
 function presenterReturnHeld(channelId: string, presenterPeerId: string, now = Date.now()): boolean {
   const since = noSharerSince.get(channelId);
@@ -3149,15 +3182,19 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     // between and no way to tell why. It is a map read (see
     // `hlsServerIdFor`), so the lookup was never worth the ambiguity.
     const serverId = await hlsServerIdFor(voiceChannelId);
-    const next = await reconcileLiveHls(
+    const reconciled = await reconcileLiveHls(
       voiceChannelId,
       sharer?.id ?? null,
       serverId,
       sharer?.sourceHeight ?? null,
     );
-    if (!liveHlsFrameChanged(prev, next)) {
+    if (!liveHlsFrameChanged(prev, reconciled)) {
       return;
     }
+    // The person as well as the peer, on the copy every consumer below keeps
+    // (`hlsAudience`, the bus): the other machine has no record of who shared
+    // here, and it is the one serving most of the audience.
+    const next = reconciled ? withPresenterUser(voiceChannelId, reconciled) : null;
     // STAMPED HERE, BEFORE THE FAN-OUT'S AWAITS. `publishChannelLive` used to
     // read the clock when it ran, which is after this function has awaited
     // the audience: a start and a stop reconciling at once could then publish
@@ -3173,7 +3210,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       send(peer.socket, {
         type: "voice-stream",
         channelId: voiceChannelId,
-        stream: next ? stampViewerStream(next, peer.userId) : null,
+        stream: next ? viewerStreamFor(voiceChannelId, next, peer.userId) : null,
       });
       peersTold += 1;
     }
@@ -3738,7 +3775,7 @@ function channelLiveFrameWith(
   return {
     type: "channel-live",
     channelId,
-    stream: stream ? stampViewerStream(stream, userId) : null,
+    stream: stream ? viewerStreamFor(channelId, stream, userId) : null,
     watching: hlsAudience.count(channelId),
     ...(stream === null && known ? { ended: true } : {}),
   };
@@ -4676,7 +4713,7 @@ async function remintHlsAudienceTokens(
       send(socket, {
         type: "channel-live",
         channelId,
-        stream: stampViewerStream(stream, user.id),
+        stream: viewerStreamFor(channelId, stream, user.id),
         watching: hlsAudience.count(channelId),
       });
       hlsTokenRemint.tokens += 1;
@@ -7041,7 +7078,7 @@ async function welcomeVoicePeer(
     send(peer.socket, {
       type: "voice-stream",
       channelId: peer.voiceChannelId,
-      stream: stampViewerStream(liveStream, peer.userId),
+      stream: viewerStreamFor(peer.voiceChannelId, liveStream, peer.userId),
     });
   }
 
@@ -11111,7 +11148,9 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
     send(peer.socket, {
       type: "voice-stream",
       channelId: frame.channelId,
-      stream: frame.stream ? stampViewerStream(frame.stream, peer.userId) : null,
+      stream: frame.stream
+        ? viewerStreamFor(frame.channelId, frame.stream, peer.userId)
+        : null,
     });
     sent += 1;
   }
