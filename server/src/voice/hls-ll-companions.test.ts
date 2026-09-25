@@ -161,6 +161,7 @@ function fakeLiveKit() {
     startTrack,
     stop,
     isActive: (egressId: string) => statuses.get(egressId) === EgressStatus.EGRESS_ACTIVE,
+    kill: (egressId: string) => statuses.set(egressId, EgressStatus.EGRESS_FAILED),
   };
 }
 
@@ -268,6 +269,26 @@ describe("an LL broadcast's camera and mic archive", () => {
     expect(again?.cameraHlsUrl).toBe(
       `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
     );
+  });
+
+  it("takes a dead camera off the LL stream and asks for the push that says so", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.stream?.cameraHlsUrl).toBeTruthy();
+    const reasons: string[] = [];
+    setLiveHlsChangeListener((_channelId, reason) => {
+      reasons.push(reason);
+    });
+
+    const camera = lk.startComposite.mock.results[0]!.value as Promise<{ egressId: string }>;
+    lk.kill((await camera).egressId);
+    await checkLiveHlsHealth(Date.now() + 120_000);
+
+    expect(ll.stream?.cameraHlsUrl).toBeUndefined();
+    expect(reasons).toContain("camera-ended");
   });
 
   it("takes the camera off the LL stream when the presenter closes it", async () => {

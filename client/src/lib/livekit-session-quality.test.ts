@@ -1175,6 +1175,46 @@ describe("the presenter as a live ladder's source", () => {
     expect(released!.encodings.some((encoding) => encoding.priority !== undefined)).toBe(false);
   });
 
+  it("keeps the layer pin when the browser refuses the priority, and asks again later", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let refusePriority = 1;
+    publication.track.sender = {
+      // A fresh copy, as a real browser hands back: a refused write must not
+      // leave its edits behind on the live parameters.
+      getParameters: () => structuredClone(original.getParameters()),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (refusePriority > 0 && next.encodings?.some((e) => e.priority === "high")) {
+          refusePriority -= 1;
+          throw new Error("priority refused");
+        }
+        return original.setParameters(next);
+      },
+    };
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const pinned = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    // The pin landed; only the priority did not.
+    expect(pinned!.encodings[0]?.active).toBe(false);
+    expect(pinned!.encodings.some((e) => e.priority === "high")).toBe(false);
+
+    // A refusal is taken as transient: the next pin asks again, and gets it.
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const retried = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(retried!.encodings.every((e) => e.priority === "high")).toBe(true);
+    warn.mockRestore();
+  });
+
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const sfu = await session();

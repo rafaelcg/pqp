@@ -479,12 +479,15 @@ export async function connectLiveKit({
   /** See `setCameraPresenter`. */
   let cameraPresenter = false;
   /**
-   * The browser refused `priority` on a sender once; never ask again. Every
-   * engine we ship to accepts it (Chrome and Safari use it, Firefox ignores
-   * it), so this is belt and braces around the one write that must not fail:
-   * the watch party's layer pin (`setSourceMaxBitrate`).
+   * How many times a write that did nothing but raise the share's priority
+   * was refused. Every engine we ship to accepts `priority` (Chrome and
+   * Safari use it, Firefox ignores it), so a refusal is most likely
+   * transient and is asked again on the next pin; after
+   * `SENDER_PRIORITY_MAX_FAILURES` the browser is taken at its word. It is
+   * its own write, AFTER the layer pin, so it can never cost the pin.
    */
-  let senderPriorityUnsupported = false;
+  let senderPriorityFailures = 0;
+  const SENDER_PRIORITY_MAX_FAILURES = 3;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -1198,8 +1201,15 @@ export async function connectLiveKit({
         encodings
           .slice(0, -1)
           .some((encoding) => encoding.active !== false);
+      // The share's "high" bid (`raiseScreenPriority`) is part of the pin,
+      // retried on this tick until the browser has refused it enough times.
+      const priorityMissing =
+        feedingHls &&
+        senderPriorityFailures < SENDER_PRIORITY_MAX_FAILURES &&
+        encodings.some((encoding) => encoding.priority !== "high");
       return (
         subLayerAwake ||
+        priorityMissing ||
         params.degradationPreference !==
           screenShareDegradationPreference(hlsSource) ||
         top?.scaleResolutionDownBy !==
@@ -1286,35 +1296,23 @@ export async function connectLiveKit({
               encodings[i]!.active = !feedingHls;
             }
           }
-          // THE FILM FIRST, when the uplink cannot carry everything. While
-          // this share feeds a watch party it bids at "high" (4x the weight
-          // of the default "low" every other sender keeps, the presenter's
-          // camera included), so under congestion the camera is what gives
-          // way: its 480p layer pauses and its 360p one carries on
-          // (`presenterCameraSimulcastRungs`). Chrome reads the sender's
-          // priority off its first encoding, so every encoding says it.
-          if (!senderPriorityUnsupported) {
+          // Not feeding: whatever priority an earlier pin raised comes off,
+          // always, so an ordinary share never outbids the camera. (Raising
+          // it is its own write below.)
+          if (!feedingHls) {
             for (const encoding of encodings) {
-              if (feedingHls) {
-                encoding.priority = "high";
-                encoding.networkPriority = "high";
-              } else {
-                delete encoding.priority;
-                delete encoding.networkPriority;
-              }
+              delete encoding.priority;
+              delete encoding.networkPriority;
             }
           }
         }
-        try {
-          await sender.setParameters(params);
-        } catch (err) {
-          // Never let the priority cost the pin twice: the next attempt (the
-          // caller's retry, the 2 s repair tick) goes without it. A refusal
-          // for some other reason loses nothing but the priority.
-          if (source === Track.Source.ScreenShare && feedingHls) {
-            senderPriorityUnsupported = true;
-          }
-          throw err;
+        await sender.setParameters(params);
+        if (
+          source === Track.Source.ScreenShare &&
+          feedingHls &&
+          gen === senderApplyGen
+        ) {
+          await raiseScreenPriority(sender);
         }
         if (gen !== senderApplyGen) {
           return "skipped";
@@ -1330,6 +1328,46 @@ export async function connectLiveKit({
         err,
       );
       return gen !== senderApplyGen ? "skipped" : "rejected";
+    }
+  }
+
+  /**
+   * THE FILM FIRST, when the uplink cannot carry everything. While the share
+   * feeds a watch party it bids at "high" (4x the weight of the default "low"
+   * every other sender keeps, the presenter's camera included), so under
+   * congestion the camera is what gives way: its 480p layer pauses and its
+   * 360p one carries on (`presenterCameraSimulcastRungs`). Chrome reads the
+   * sender's priority off its first encoding, so every encoding says it.
+   *
+   * A SEPARATE WRITE, after the layer pin has landed, and it never throws:
+   * the pin is what keeps the egress fed, and a browser that refuses the
+   * priority must not take the pin down with it.
+   */
+  async function raiseScreenPriority(sender: RTCRtpSender): Promise<void> {
+    if (senderPriorityFailures >= SENDER_PRIORITY_MAX_FAILURES) {
+      return;
+    }
+    const params = sender.getParameters();
+    const encodings = params.encodings ?? [];
+    if (
+      encodings.length === 0 ||
+      encodings.every(
+        (encoding) =>
+          encoding.priority === "high" && encoding.networkPriority === "high",
+      )
+    ) {
+      return;
+    }
+    for (const encoding of encodings) {
+      encoding.priority = "high";
+      encoding.networkPriority = "high";
+    }
+    try {
+      await sender.setParameters(params);
+      senderPriorityFailures = 0;
+    } catch (err) {
+      senderPriorityFailures += 1;
+      console.warn("[pqp] SFU screen priority refused; the pin stands", err);
     }
   }
 
