@@ -390,15 +390,13 @@ test("LL rendition route (ll): a CHANNEL-WIDE revocation (not just a per-viewer 
 // ---------------------------------------------------------------------------
 
 /** `caches.default` is a Workers global with no Node counterpart; this is the smallest thing `safeCacheMatch`/`safeCachePut` accept. */
-function withFakeCaches(run) {
+function withFakeCaches(run, match = async () => undefined) {
   const had = Object.prototype.hasOwnProperty.call(globalThis, "caches");
   const previous = globalThis.caches;
   const puts = [];
   globalThis.caches = {
     default: {
-      async match() {
-        return undefined;
-      },
+      match,
       async put(key, response) {
         puts.push(key);
         // Read the body the way the real cache does, so a response that
@@ -472,4 +470,51 @@ test("the plain rendition path: a burst of concurrent viewers all settle on ONE 
     );
     await Promise.all(kept);
   });
+});
+
+test("a cache HIT tells the browser two seconds, never the zone's four-hour Browser Cache TTL", async () => {
+  // Production rehearsal G, 2026-09-25: `caches.default` handed back the
+  // stored playlist with `Cache-Control: public, max-age=14400` and a
+  // `Last-Modified`, the Worker passed them through, and the viewer's browser
+  // served hls.js the same stale live playlist from its own cache for six
+  // minutes: the film looped a second of video over and over.
+  const stale = () =>
+    new Response("#EXTM3U\n#EXT-X-TARGETDURATION:4\n", {
+      status: 200,
+      headers: {
+        "Cache-Control": "public, max-age=14400",
+        "Last-Modified": "Fri, 25 Sep 2026 19:52:13 GMT",
+        Expires: "Fri, 25 Sep 2026 23:52:13 GMT",
+        ETag: '"abc"',
+        "Content-Type": "application/vnd.apple.mpegurl",
+      },
+    });
+  await withFakeCaches(async () => {
+    const channelId = "chan-hit-headers";
+    const startedAt = "1726000000000";
+    const rung = "720p30";
+    const token = tokenFor("user-hit-headers", channelId, startedAt);
+    const origin = {
+      ready: true,
+      async fetchPlaylist() {
+        throw new Error("a cache hit must not reach the origin");
+      },
+    };
+    const response = await handlePlaylistRequest(
+      renditionRequestFor(channelId, startedAt, rung, token),
+      { api: origin, ll: { ready: false } },
+      { waitUntil() {} },
+      baseEnv({ ORIGIN_BASE: "https://api.example" }),
+      channelId,
+      startedAt,
+      rung,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-HLS-Edge-Cache"), "HIT");
+    assert.equal(response.headers.get("Cache-Control"), "public, max-age=2");
+    assert.equal(response.headers.get("Last-Modified"), null);
+    assert.equal(response.headers.get("Expires"), null);
+    assert.equal(response.headers.get("ETag"), null);
+    assert.equal(response.headers.get("Content-Type"), "application/vnd.apple.mpegurl");
+  }, async () => stale());
 });
