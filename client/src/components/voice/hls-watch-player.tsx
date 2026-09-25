@@ -65,6 +65,8 @@ import {
   LlLatencyGovernor,
   llPartsOptedIn,
   llSegmentsCatchUpRate,
+  hlsSessionStartedAtMs,
+  llStartDelayMs,
   type LlDelivery,
 } from "@/lib/hls-ll-latency";
 import {
@@ -1418,6 +1420,7 @@ export function HlsWatchPlayer({
     // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
     // own tick cadence (`STALL_TICK_MS`, unchanged below).
     let reconnectJitterTimer: number | null = null;
+    let startDelayTimer: number | null = null;
     const clearPendingReconnect = () => {
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
@@ -1433,6 +1436,7 @@ export function HlsWatchPlayer({
     let currentRung: string | null = null;
     /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
     let lastPartHoldBack: number | null = null;
+    let lastTargetDuration: number | null = null;
     // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
     // milliseconds, hole skips and visibility, per sample window
     // (`HlsStallMeter`); fatal hls.js details seen since the last sample.
@@ -2534,13 +2538,23 @@ export function HlsWatchPlayer({
           }
           // THE GOVERNOR HEARS WHAT THE MANIFEST ASKS FOR: a parts viewer
           // never sits closer than the manifest's own `PART-HOLD-BACK`, and
-          // never closer than its own floor either. Re-applied only when the
-          // value changes -- this event fires once per PART under the
-          // blocking reload.
+          // never closer than its own floor either; a segments viewer never
+          // sits closer than the longest segment plus a fetch
+          // (`LL_SEGMENTS_FETCH_MARGIN_SECONDS`), because it cannot load the
+          // one still being written. Re-applied only when a value changes --
+          // this event fires once per PART under the blocking reload.
           const holdBack = data.details.partHoldBack;
-          if (governor && holdBack !== lastPartHoldBack) {
+          const targetDuration = data.details.targetduration;
+          if (
+            governor &&
+            (holdBack !== lastPartHoldBack || targetDuration !== lastTargetDuration)
+          ) {
             lastPartHoldBack = holdBack;
-            governor.onManifest({ partHoldBackSeconds: holdBack });
+            lastTargetDuration = targetDuration;
+            governor.onManifest({
+              partHoldBackSeconds: holdBack,
+              targetDurationSeconds: targetDuration,
+            });
             applyGovernor();
           }
         }
@@ -2636,7 +2650,7 @@ export function HlsWatchPlayer({
     // issued, and nothing in the console but an unhandled rejection the
     // stall overlay then covers with "reconectando". Pitfall 16's rule --
     // something that refuses has to say why -- applied to our own attach.
-    void attach().catch((error) => {
+    const startAttach = () => void attach().catch((error) => {
       console.error("[hls] attach failed", error);
       if (cancelled) {
         return;
@@ -2654,6 +2668,32 @@ export function HlsWatchPlayer({
         now: Date.now(),
       });
     });
+    // A SEGMENTS VIEWER JOINING AT GO-LIVE WAITS ONCE (`llStartDelayMs`)
+    // behind the "starting" screen instead of freezing four times while its
+    // cushion builds. The watchdog's clocks start again when the attach
+    // really does, so the wait never reads as a stall or a stuck sequence.
+    const startDelayMs = governor
+      ? llStartDelayMs({
+          delivery: governor.state().delivery,
+          sessionStartedAtMs: hlsSessionStartedAtMs(activeSrc),
+          now: Date.now(),
+        })
+      : 0;
+    if (startDelayMs > 0) {
+      console.warn(
+        `[hls] LL session just went live, starting in ${(startDelayMs / 1000).toFixed(1)}s to build a cushion`,
+      );
+      startDelayTimer = window.setTimeout(() => {
+        startDelayTimer = null;
+        if (cancelled) {
+          return;
+        }
+        watch.onSourceChanged(Date.now());
+        startAttach();
+      }, startDelayMs);
+    } else {
+      startAttach();
+    }
     // `reconnect` lives on reconnectRef: listing it here re-created hls.js
     // on every restamp of the callback. `videoRef` is a parent object whose
     // identity must not tear the session down either; the element is always
@@ -2664,6 +2704,9 @@ export function HlsWatchPlayer({
       window.clearInterval(stallTimer);
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
+      }
+      if (startDelayTimer !== null) {
+        window.clearTimeout(startDelayTimer);
       }
       if (telemetrySampleTimer !== null) {
         window.clearInterval(telemetrySampleTimer);
