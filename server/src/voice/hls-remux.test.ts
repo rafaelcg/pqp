@@ -39,6 +39,7 @@ const {
   stopLlSession,
   adoptLlHlsSessions,
   setHlsRemuxTestHooks,
+  setLlCameraSlot,
   resetHlsRemuxForTests,
 } = await import("./hls-remux.js");
 
@@ -915,6 +916,36 @@ describe("starting a session (item 2: deterministic ids)", () => {
 
     expect(second).not.toBeNull();
     expect(llHasRoom(CHANNEL)).toBe(true);
+  });
+
+  it("carries the companion's camera slot on the stream an audience is handed", async () => {
+    // `llStreamFor` is what every audience reader reads. Until 2026-09-25 the
+    // camera lived only on the companion's private copy, so an LL viewer
+    // never learned it existed.
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    const slot = {
+      cameraHlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${stream!.startedAt}/cam360p30`,
+      cameraHasVideo: true,
+      cameraHasVoiceAudio: false,
+    };
+
+    // A slot for another session is refused rather than pinned on this one.
+    expect(setLlCameraSlot(CHANNEL, stream!.startedAt - 1, slot)).toBe(false);
+    expect(llStreamFor(CHANNEL)?.cameraHlsUrl).toBeUndefined();
+
+    expect(setLlCameraSlot(CHANNEL, stream!.startedAt, slot)).toBe(true);
+    expect(llStreamFor(CHANNEL)).toEqual({ ...stream, ...slot });
+    // Idempotent: the same slot again changes nothing.
+    expect(setLlCameraSlot(CHANNEL, stream!.startedAt, slot)).toBe(false);
+
+    expect(setLlCameraSlot(CHANNEL, stream!.startedAt, null)).toBe(true);
+    expect(llStreamFor(CHANNEL)).toEqual(stream);
+    expect(setLlCameraSlot(CHANNEL, stream!.startedAt, null)).toBe(false);
   });
 
   it("starts a session, records a row keyed by the derived id, and returns a stream", async () => {

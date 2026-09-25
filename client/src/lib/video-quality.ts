@@ -817,6 +817,56 @@ export function cameraBitrateFor(quality: VideoQuality): number {
 export const WATCH_PARTY_PRESENTER_CAMERA_QUALITY: VideoQuality = "360p";
 
 /**
+ * THE CAP IS 480p WHERE THE DEPLOYMENT SAYS SO (2026-09-25), and 360p where it
+ * does not.
+ *
+ * Rafael's ask: "480p tops, then if we can we bump down to 360p whilst keeping
+ * the stream as priority". The server states the ceiling as
+ * `GET /api/live-hls/config` -> `cameraHeight` (`LIVE_HLS_CAMERA_480`, on by
+ * default), because the same switch decides the size the camera's egress is
+ * encoded at; a browser publishing 480p to a server encoding 360p would spend
+ * uplink the audience never sees. Anything but a clear 480 (an older API
+ * with no field, a failed fetch) is the 360p above, today's behaviour.
+ *
+ * The "bump down" half is not a number here, it is how the camera is
+ * published while presenting (`presenterCameraSimulcastRungs`): a 360p layer
+ * under the 480p one, so the browser drops the top layer when the uplink
+ * cannot carry both, and the share's sender marked `priority: "high"` while
+ * it feeds the party (`livekit-session.ts`), so under pressure the
+ * congestion controller hands the camera what the film does not need rather
+ * than splitting it evenly.
+ */
+export const WATCH_PARTY_PRESENTER_CAMERA_QUALITY_480: VideoQuality = "480p";
+
+export function presenterCameraQualityFor(
+  cameraHeight: number | null | undefined,
+): VideoQuality {
+  return cameraHeight === 480
+    ? WATCH_PARTY_PRESENTER_CAMERA_QUALITY_480
+    : WATCH_PARTY_PRESENTER_CAMERA_QUALITY;
+}
+
+/**
+ * The camera's simulcast layers while presenting: ONE layer below the capture,
+ * the tallest of `CAMERA_SIMULCAST_RUNGS` that fits, so a 480p presenter
+ * camera publishes 360p under it (and a 360p one, 180p).
+ *
+ * Why not the ordinary ladder: `livekit-client` builds only two layers for a
+ * capture whose longer side is under 960 px (`computeVideoEncodings`), and it
+ * takes the SMALLEST rung it is handed as the bottom one. Handed the ordinary
+ * `[180, 360]` for an 854x480 capture it would publish 180p under 480p, so a
+ * squeezed uplink would drop the presenter's face straight to a thumbnail.
+ * Handed `[360]` it publishes 360p under 480p, which is the fallback Rafael
+ * asked for: the egress then transcodes whichever of the two is arriving.
+ */
+export function presenterCameraSimulcastRungs(
+  captureHeight: number,
+): readonly CameraLayer[] {
+  const below = cameraSimulcastRungs(captureHeight);
+  return below.length > 0 ? [below[below.length - 1]!] : [];
+}
+
+/**
  * The camera quality actually in force, given what the person chose and
  * whether this machine is the one feeding the watch party's transcode.
  *
@@ -829,11 +879,11 @@ export const WATCH_PARTY_PRESENTER_CAMERA_QUALITY: VideoQuality = "360p";
 export function effectiveCameraQuality(
   chosen: VideoQuality,
   isWatchPartyPresenter: boolean,
+  cap: VideoQuality = WATCH_PARTY_PRESENTER_CAMERA_QUALITY,
 ): VideoQuality {
   if (!isWatchPartyPresenter) {
     return chosen;
   }
-  const cap = WATCH_PARTY_PRESENTER_CAMERA_QUALITY;
   return cameraProfileFor(chosen).height <= cameraProfileFor(cap).height
     ? chosen
     : cap;

@@ -4,7 +4,7 @@
  * WHAT IT IS. A watch party's audience is seatless — nobody outside the room
  * holds a LiveKit seat — so a camera published into the room reaches the
  * seated participants and nobody on the playlist. The server therefore runs a
- * second, video-only 360p30 egress beside the ladder and states its playlist
+ * second, video-only egress (480p, or 360p) beside the ladder and states its playlist
  * as `LiveHlsStream.cameraHlsUrl`. This module is the viewer's half of that:
  * where the picture-in-picture sits, whether it is showing at all, and which
  * of the two pictures is on the stage. See `docs/WATCH_PARTY.md`, "The
@@ -17,8 +17,8 @@
  * tests cannot reach past the first render, so a rule that lives inside it is
  * a rule nothing checks.
  *
- * THE STAGE AND THE CORNER ARE BOXES, NOT PLAYERS. Swapping changes which
- * `<video>` gets which class, and nothing else: neither hls.js instance is
+ * THE STAGE AND THE CORNER ARE BOXES, NOT PLAYERS. A layout change moves
+ * which `<video>` gets which class, and nothing else: neither hls.js instance is
  * re-attached, so nobody rebuffers to look at a webcam, and the control bar
  * stays where it is because it belongs to the stage rather than to a picture.
  */
@@ -32,15 +32,32 @@ export const CAMERA_PIP_CORNERS = [
 
 export type CameraPipCorner = (typeof CAMERA_PIP_CORNERS)[number];
 
+/**
+ * HOW THE VIEWER WANTS THE TWO PICTURES (2026-09-25), Rafael's four:
+ *
+ *  - `pip`: the default. The film on the stage, the webcam small in a corner.
+ *  - `side`: the two next to each other; stacked, film on top, on a stage
+ *    narrower than a phone held sideways (`CAMERA_SIDE_*_CLASS`).
+ *  - `stream`: "hide webcam". The film alone. The camera's player is
+ *    UNMOUNTED, so its playlist stops downloading and nothing decodes it,
+ *    unless it is also carrying the presenter's voice ("separada"), which a
+ *    hidden webcam must not silence: then it stays, drawn as the voice-only
+ *    corner.
+ *  - `camera`: "hide stream". The webcam on the stage, alone. The film's
+ *    player keeps playing underneath, covered, because it is the one carrying
+ *    the audio (the party's sound is mixed into it), and detaching it would
+ *    be exactly the rebuffer this module exists to avoid: switching back has
+ *    to be instant. Covered, not `display: none`, so no browser treats it as
+ *    an offscreen video it may pause.
+ */
+export const CAMERA_LAYOUTS = ["pip", "side", "stream", "camera"] as const;
+
+export type CameraLayout = (typeof CAMERA_LAYOUTS)[number];
+
 export interface CameraPipPref {
   corner: CameraPipCorner;
-  /**
-   * The camera is the big picture and the film is the thumbnail.
-   *
-   * Remembered like the corner, because somebody who wants to watch the
-   * host's face wants it for the whole party, not for one render.
-   */
-  onStage: boolean;
+  /** Which of the four. Remembered like the corner: a whole-party choice. */
+  layout: CameraLayout;
 }
 
 /**
@@ -54,21 +71,29 @@ export interface CameraPipPref {
  */
 export const DEFAULT_CAMERA_PIP: CameraPipPref = {
   corner: "bottom-right",
-  onStage: false,
+  layout: "pip",
 };
 
 const STORAGE_KEY = "pqp:watch-camera-pip";
 
+/**
+ * A stored preference, defensively. An entry written before the layouts
+ * existed carried `onStage` (the old swap, camera big and film small); it is
+ * read as the default rather than as "hide stream", because opening a party
+ * to no film at all is not what that person asked for.
+ */
 export function parseCameraPipPref(raw: unknown): CameraPipPref {
   if (!raw || typeof raw !== "object") {
     return DEFAULT_CAMERA_PIP;
   }
-  const value = raw as Partial<CameraPipPref>;
+  const value = raw as Partial<Record<keyof CameraPipPref, unknown>>;
   return {
     corner: CAMERA_PIP_CORNERS.includes(value.corner as CameraPipCorner)
       ? (value.corner as CameraPipCorner)
       : DEFAULT_CAMERA_PIP.corner,
-    onStage: value.onStage === true,
+    layout: CAMERA_LAYOUTS.includes(value.layout as CameraLayout)
+      ? (value.layout as CameraLayout)
+      : DEFAULT_CAMERA_PIP.layout,
   };
 }
 
@@ -104,30 +129,77 @@ export function nextCameraPipCorner(corner: CameraPipCorner): CameraPipCorner {
 }
 
 /**
+ * Whether the viewer is offered the layout picker at all: only for a camera
+ * that is a picture. No camera playlist is today's stage exactly, and the
+ * audio-only "separada" shape (`cameraHasVideo` false) has nothing to lay out.
+ */
+export function cameraLayoutOffered(input: {
+  cameraSrc: string | null | undefined;
+  cameraHasVideo: boolean;
+  cinema: boolean;
+}): boolean {
+  return Boolean(input.cameraSrc) && input.cameraHasVideo && input.cinema;
+}
+
+/** The layout in force: the viewer's, when there is a picture to lay out. */
+export function effectiveCameraLayout(input: {
+  pref: CameraPipPref;
+  cameraHasVideo: boolean;
+}): CameraLayout {
+  return input.cameraHasVideo ? input.pref.layout : "pip";
+}
+
+/**
  * Whether the camera player exists on this stage at all.
- *
- * THREE CONDITIONS, AND THE LAST TWO ARE THE ONES WORTH ARGUING ABOUT.
  *
  *  - A `cameraHlsUrl`: the server is running a camera transcode. Absent for a
  *    host with no webcam on, for a box that refused it on budget, and for
  *    `LIVE_HLS_CAMERA=false`.
- *  - **Not fullscreen.** The product instruction as given: fullscreen is the
- *    film and nothing else. Unmounted rather than hidden, so a camera nobody
- *    can see never costs a decode.
  *  - Cinema layout only. A webcam inside a grid tile (`tile`) is a picture in
  *    a picture in a picture, and the docked mini player (`mini`) is a 240px
  *    box with room for the film and almost nothing else.
+ *  - **Not "hide webcam"**, unless the playlist carries the presenter's voice.
+ *    Unmounted rather than hidden, so a camera nobody asked to see costs no
+ *    download and no decode.
+ *
+ * FULLSCREEN NO LONGER UNMOUNTS IT (2026-09-25). It used to, when a corner
+ * was the only way to show a camera and fullscreen meant "the film and
+ * nothing else". With the picker, the viewer says what fullscreen shows:
+ * whatever layout they chose, including "hide webcam" for the film alone.
  */
 export function cameraPipMounted(input: {
   cameraSrc: string | null | undefined;
-  fullscreen: boolean;
   cinema: boolean;
+  layout: CameraLayout;
+  hasVoiceAudio: boolean;
 }): boolean {
-  return Boolean(input.cameraSrc) && !input.fullscreen && input.cinema;
+  if (!input.cameraSrc || !input.cinema) {
+    return false;
+  }
+  return input.layout !== "stream" || input.hasVoiceAudio;
 }
 
 /** The full-bleed picture. */
 export const CAMERA_PIP_STAGE_CLASS = "absolute inset-0 h-full w-full";
+
+/**
+ * The camera as the whole stage ("hide stream"): full bleed, opaque, above the
+ * film it covers and below the holding screens (`STAGE_LAYER.state`, z-10),
+ * so a film that stalls still says so over the face.
+ */
+export const CAMERA_STAGE_CLASS = "absolute inset-0 z-[5] h-full w-full bg-black";
+
+/**
+ * Side by side, halves of the stage. Measured against the PLAYER's width
+ * (`@container/watch` on its root), not the window's: the same stage is a
+ * full desktop pane, a split beside the chat and a phone, and it is the box
+ * that decides whether two 16:9 pictures fit next to each other. Under 36rem
+ * (a phone held upright) they stack, film on top.
+ */
+export const CAMERA_SIDE_FILM_CLASS =
+  "absolute inset-x-0 top-0 h-1/2 w-full @xl/watch:inset-y-0 @xl/watch:right-auto @xl/watch:h-full @xl/watch:w-1/2";
+export const CAMERA_SIDE_CAMERA_CLASS =
+  "absolute inset-x-0 bottom-0 h-1/2 w-full bg-black @xl/watch:inset-y-0 @xl/watch:left-auto @xl/watch:h-full @xl/watch:w-1/2";
 
 /**
  * The corner box.
@@ -144,8 +216,8 @@ const CAMERA_PIP_FRAME_CLASS =
  * The look, which only the picture wants and the click target must not have.
  *
  * `z-20` puts the picture over the film and under the chrome (z-50), so the
- * control bar is never behind a webcam. The click target is given z-30 by its
- * caller, between the two.
+ * control bar is never behind a webcam. The corner control is given z-30 by
+ * its caller, between the two.
  */
 const CAMERA_PIP_SKIN_CLASS =
   "z-20 overflow-hidden rounded-[var(--radius-card)] border border-paper/25 bg-black shadow-lg";
@@ -162,11 +234,10 @@ const CORNER_CLASS: Record<CameraPipCorner, string> = {
 /**
  * Where the corner is and how big, with no appearance of its own.
  *
- * Split from the skin because the click target sits in exactly this box and
- * must NOT carry the background, the border or the rounding: overriding
- * `bg-black` with `bg-transparent` further down a class string is not
- * something Tailwind guarantees, and a control that is sometimes opaque is a
- * control that sometimes hides the picture it is controlling.
+ * Split from the skin because the corner control sits in exactly this box
+ * and must NOT carry the background, the border or the rounding: a control
+ * that is sometimes opaque is a control that sometimes hides the picture it
+ * is controlling.
  */
 export function cameraPipFrameClass(corner: CameraPipCorner): string {
   return `${CAMERA_PIP_FRAME_CLASS} ${CORNER_CLASS[corner]}`;
@@ -179,49 +250,85 @@ export function cameraPipCornerClass(corner: CameraPipCorner): string {
 export interface CameraPipBoxes {
   /** Classes for the film's `<video>`. */
   film: string;
-  /** Classes for the camera's `<video>`, or null when it is not mounted. */
+  /** Classes for the camera's box, or null when it is not mounted. */
   camera: string | null;
-  /** Classes for the click target over whichever picture is in the corner. */
+  /**
+   * The box the corner control sits in, or null when there is no corner to
+   * move (no frame yet, or a layout with no corner in it).
+   */
   corner: string | null;
+  /**
+   * How the camera fills its box: `cover` in the corner (a face cropped to
+   * 16:9 is still a face, and a letterboxed thumbnail is mostly black),
+   * `contain` wherever it is one of the two main pictures.
+   */
+  cameraFit: "cover" | "contain";
+  /**
+   * The camera is mounted only for the presenter's voice ("hide webcam" in
+   * "separada"): draw it as the voice-only corner, not as a picture.
+   */
+  cameraVoiceOnly: boolean;
 }
 
 /**
  * Which picture gets which box.
  *
- * The whole of the swap, in one pure function, so all four states read at
- * once. `corner` is non-null exactly when there is something to click, which
- * is what stops a swap control existing with nothing to swap.
+ * All four layouts in one pure function, so every state reads at once, and
+ * every one of them is a CLASS change: neither hls.js instance is ever
+ * re-attached by a layout switch, so nobody rebuffers to look at a webcam and
+ * the control bar stays where it is because it belongs to the stage.
  *
  * `mounted` AND `hasFrame` ARE DIFFERENT QUESTIONS, and collapsing them is a
  * deadlock: a camera that is not rendered never decodes a frame, so gating the
  * element on having one means it never gets one. Mounted is "the player
  * exists and is loading"; a frame is what makes it worth looking at. Between
- * the two it is `invisible` rather than absent — one or two seconds, once.
- *
- * Fullscreen unmounts it outright rather than hiding it, so a hidden webcam
- * never costs a decode for a whole film.
+ * the two it is `invisible` in the corner and the film keeps the whole stage
+ * whatever the layout, so "side by side" or "hide stream" never opens on a
+ * black half or a black stage while the camera loads.
  */
 export function cameraPipBoxes(input: {
   mounted: boolean;
   hasFrame: boolean;
   pref: CameraPipPref;
+  layout: CameraLayout;
 }): CameraPipBoxes {
+  const none: CameraPipBoxes = {
+    film: CAMERA_PIP_STAGE_CLASS,
+    camera: null,
+    corner: null,
+    cameraFit: "cover",
+    cameraVoiceOnly: false,
+  };
   if (!input.mounted) {
-    return { film: CAMERA_PIP_STAGE_CLASS, camera: null, corner: null };
+    return none;
   }
   const corner = cameraPipCornerClass(input.pref.corner);
   const frame = cameraPipFrameClass(input.pref.corner);
+  if (input.layout === "stream") {
+    // Mounted here only for the voice: the corner, drawn as the voice.
+    return { ...none, camera: corner, cameraVoiceOnly: true };
+  }
   if (!input.hasFrame) {
     // Loading, and drawing nothing. A camera that never produces a frame must
     // cost the film nothing, not even a rectangle: a rectangle is exactly
     // what a viewer reads as the feature being broken.
-    return {
-      film: CAMERA_PIP_STAGE_CLASS,
-      camera: `${corner} invisible`,
-      corner: null,
-    };
+    return { ...none, camera: `${corner} invisible` };
   }
-  return input.pref.onStage
-    ? { film: corner, camera: CAMERA_PIP_STAGE_CLASS, corner: frame }
-    : { film: CAMERA_PIP_STAGE_CLASS, camera: corner, corner: frame };
+  switch (input.layout) {
+    case "side":
+      return {
+        ...none,
+        film: CAMERA_SIDE_FILM_CLASS,
+        camera: CAMERA_SIDE_CAMERA_CLASS,
+        cameraFit: "contain",
+      };
+    case "camera":
+      return {
+        ...none,
+        camera: CAMERA_STAGE_CLASS,
+        cameraFit: "contain",
+      };
+    default:
+      return { ...none, camera: corner, corner: frame };
+  }
 }

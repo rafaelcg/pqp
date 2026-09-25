@@ -2780,6 +2780,41 @@ export function liveHlsFrameChanged(
 }
 
 /**
+ * Whether the AUDIENCE is still owed the camera slot of the session it is
+ * watching: the stream it was last told (`hlsAudience.stream`) and the one
+ * the reconcile just answered are the same session and disagree about the
+ * camera.
+ *
+ * `liveHlsFrameChanged(prev, next)` alone cannot see this, and that is the
+ * bug this exists for. `prev` is read from the room's own map, and the camera
+ * reconcile mutates that map in the queue link AFTER the push that caused it
+ * has already sent its frame, so from the next push on, `prev` and `next`
+ * both carry the camera and nothing is ever sent. A viewer got the webcam
+ * only when an unrelated push happened to straddle the camera start: busy
+ * parties mostly, quiet ones never (2026-09-25 LL rehearsal, one viewer).
+ * The camera reconcile now asks for a push when the slot moves
+ * (`reconcileCameraEgress` in `hls-egress.ts`), and this is what makes that
+ * push actually say something.
+ *
+ * Same session only. A different `startedAt` is a new session, which
+ * `liveHlsFrameChanged` already sends; and a null on either side is a start
+ * or an end, likewise.
+ */
+export function liveHlsCameraUntold(
+  told: LiveHlsStream | null,
+  next: LiveHlsStream | null,
+): boolean {
+  if (!told || !next || told.startedAt !== next.startedAt) {
+    return false;
+  }
+  return (
+    (told.cameraHlsUrl ?? null) !== (next.cameraHlsUrl ?? null) ||
+    (told.cameraHasVideo ?? true) !== (next.cameraHasVideo ?? true) ||
+    (told.cameraHasVoiceAudio ?? false) !== (next.cameraHasVoiceAudio ?? false)
+  );
+}
+
+/**
  * THE CAMERA IS ANNOUNCED BEFORE IT IS PUBLISHED. Every client sends
  * `set-camera` first (so receivers can classify the video when it lands) and
  * publishes to LiveKit after, so the reconcile that frame triggers asks the
@@ -3155,7 +3190,10 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       serverId,
       sharer?.sourceHeight ?? null,
     );
-    if (!liveHlsFrameChanged(prev, next)) {
+    if (
+      !liveHlsFrameChanged(prev, next) &&
+      !liveHlsCameraUntold(hlsAudience.stream(voiceChannelId), next)
+    ) {
       return;
     }
     // STAMPED HERE, BEFORE THE FAN-OUT'S AWAITS. `publishChannelLive` used to

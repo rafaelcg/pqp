@@ -687,6 +687,24 @@ describe("the screen goes up as simulcast layers", () => {
     ).toEqual([180, 360]);
   });
 
+  it("publishes a watch-party presenter's 480p camera over one 360p fallback layer", async () => {
+    const sfu = await session();
+    expect(sfu.setCameraPresenter(true)).toBe(false);
+    await sfu.publishCamera(fakeStream("video", "cam", 480));
+
+    expect(
+      lastPublish(Track.Source.Camera)?.videoSimulcastLayers?.map((l) => l.height),
+    ).toEqual([360]);
+    expect(lastPublish(Track.Source.Camera)?.simulcast).toBe(true);
+
+    // The share ends: the call's ladder comes back on the next reconcile.
+    expect(sfu.setCameraPresenter(false)).toBe(true);
+    await sfu.reconcileCameraLadder();
+    expect(
+      lastPublish(Track.Source.Camera)?.videoSimulcastLayers?.map((l) => l.height),
+    ).toEqual([180, 360]);
+  });
+
   it("does not republish when the ladder is unchanged", async () => {
     const sfu = await session();
     await sfu.publishCamera(fakeStream("video", "cam", 720));
@@ -1137,6 +1155,24 @@ describe("the presenter as a live ladder's source", () => {
     expect(restored?.encodings[1]?.active).not.toBe(false);
     warn.mockRestore();
     vi.useRealTimers();
+  });
+
+  it("bids the share at high priority while it feeds the party, and stops after", async () => {
+    // Rafael's rule for the presenter's uplink: the film first. The camera
+    // keeps the default ("low"), so under pressure it is the one that yields.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const pinned = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(pinned!.encodings.every((encoding) => encoding.priority === "high")).toBe(true);
+
+    await sfu.setHlsSource(null);
+    const released = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(released!.encodings.some((encoding) => encoding.priority !== undefined)).toBe(false);
   });
 
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {

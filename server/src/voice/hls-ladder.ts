@@ -167,7 +167,16 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
  * 360p30 at 400 kbit/s is lockstep with the presenter's camera cap while
  * sharing: the egress transcodes from the published track, so a rung above
  * what the presenter publishes is an upscale that costs a core to invent
- * pixels.
+ * pixels. Since 2026-09-25 this is the FALLBACK size: `CAMERA_RUNG_480` is
+ * what a presenter publishing 480p gets (`cameraRungFor`).
+ *
+ * THE NAME IS AN IDENTIFIER, NOT A SIZE, and stays `cam360p30` whatever size
+ * the slot is encoded at. It is baked into every camera object prefix in the
+ * bucket (`<startedAt>-cam360p30`), every `hls_sessions.rung` row, the
+ * playlist path viewers are handed, the retention sweep, the history and
+ * download plans, and the edge Worker's route. Renaming it would mean every
+ * one of those reading two names for as long as an old recording exists, to
+ * change a string no viewer ever sees. So one slot, one name, two sizes.
  */
 export const CAMERA_RUNG_NAME = "cam360p30";
 
@@ -179,6 +188,32 @@ export const CAMERA_RUNG: LadderRung = {
   videoKbps: 400,
   audioKbps: 0,
   codecs: `${H264_MAIN_L30}`,
+};
+
+/**
+ * The presenter's camera at 480p: the size Rafael asked the recording and the
+ * picture-in-picture to have (2026-09-25), when the presenter can send it.
+ *
+ * 854x480 because that is the 16:9 width at 480 lines the ladder's own
+ * `480p30` already asks this egress image for, so it is a size the pinned
+ * encoder is known to take. 800 kbit/s is twice the 360p rung's 400 for 1.78
+ * times the pixels: a face is cheap to encode (a still background, one moving
+ * oval) and this is a ceiling, so a still presenter costs far less. H.264
+ * Main level 3.1, not 3.0: 854x480 is 1,620 macroblocks a frame, and 30 of
+ * them a second (48,600/s) is past 3.0's 40,500.
+ *
+ * ONLY WHEN THE PRESENTER PUBLISHES 480 LINES OR MORE (`cameraRungFor`), so
+ * the egress never upscales a camera to invent pixels, and only while
+ * `LIVE_HLS_CAMERA_480` is not switched off.
+ */
+export const CAMERA_RUNG_480: LadderRung = {
+  name: CAMERA_RUNG_NAME,
+  width: 854,
+  height: 480,
+  framerate: 30,
+  videoKbps: 800,
+  audioKbps: 0,
+  codecs: H264_MAIN_L31,
 };
 
 /**
@@ -202,6 +237,64 @@ export const CAMERA_RUNG_WITH_VOICE: LadderRung = {
   audioKbps: 64,
   codecs: `${H264_MAIN_L30},${AAC_LC}`,
 };
+
+/** `CAMERA_RUNG_480` with the presenter's microphone, as above. */
+export const CAMERA_RUNG_480_WITH_VOICE: LadderRung = {
+  ...CAMERA_RUNG_480,
+  audioKbps: 64,
+  codecs: `${H264_MAIN_L31},${AAC_LC}`,
+};
+
+/**
+ * How many picture lines a published camera must carry before the slot is
+ * encoded at 480p. A little under 480 so a capture a few lines short (a
+ * webcam answering 848x476 to an `ideal` of 854x480) still counts; anything
+ * nearer 360 does not, because that would be an upscale.
+ */
+export const CAMERA_480_MIN_SOURCE_LINES = 450;
+
+/**
+ * THE CAMERA SLOT'S SHAPE, from what is attached and what the presenter is
+ * actually publishing.
+ *
+ *  - No video: the presenter's voice alone (`VOICE_RUNG`).
+ *  - `allow480` off (`LIVE_HLS_CAMERA_480=false`): the 360p rung, exactly the
+ *    pre-2026-09-25 behaviour.
+ *  - A published camera of at least `CAMERA_480_MIN_SOURCE_LINES` lines (the
+ *    SHORTER side, so a phone held upright is measured by its width): 480p.
+ *  - Anything else, including a height LiveKit did not state: 360p. An
+ *    unknown size is treated as the small one because the cost of guessing
+ *    wrong the other way is an upscale on the media box for the whole party.
+ *
+ * PICKED ONCE, WHEN THE EGRESS STARTS, and deliberately not followed after.
+ * The publisher's 480p layer can pause under uplink pressure (that is the
+ * point of its 360p fallback, `WATCH_PARTY_PRESENTER_CAMERA_*` in the
+ * client), and the SFU then forwards the 360p layer to this egress, which
+ * scales it up to 480 for as long as the pressure lasts. Restarting the
+ * egress to follow the layer would cost a gap in the camera and a new run in
+ * the recording every time the presenter's Wi-Fi hiccups; a bilinear scale of
+ * a 360p face for a few seconds costs almost nothing, and the encode itself
+ * is the 480p price this slot was admitted at anyway.
+ */
+export function cameraRungFor(input: {
+  hasVideo: boolean;
+  hasAudio: boolean;
+  /** The published camera's shorter side in pixels, when LiveKit stated it. */
+  publishedLines?: number | null;
+  allow480: boolean;
+}): LadderRung {
+  if (!input.hasVideo) {
+    return VOICE_RUNG;
+  }
+  const big =
+    input.allow480 &&
+    typeof input.publishedLines === "number" &&
+    input.publishedLines >= CAMERA_480_MIN_SOURCE_LINES;
+  if (big) {
+    return input.hasAudio ? CAMERA_RUNG_480_WITH_VOICE : CAMERA_RUNG_480;
+  }
+  return input.hasAudio ? CAMERA_RUNG_WITH_VOICE : CAMERA_RUNG;
+}
 
 /**
  * The presenter's voice ALONE, no camera published.
@@ -576,6 +669,17 @@ export function decideLadder(input: LadderDecisionInput): RungDecision[] {
 export const HLS_CAMERA_MBPS = HLS_RUNG_MBPS * 0.3;
 
 /**
+ * The same estimate for the 480p camera (`CAMERA_RUNG_480`), and the same
+ * kind of number: 854x480 is 1.78 times 640x360's pixels, so it is charged
+ * 1.5 times the 360p camera (the encode is not the whole of an egress's
+ * cost: decoding the WebRTC input and muxing the segments do not scale with
+ * the output size). Still under half a rendition, which is what keeps a
+ * webcam from ever being priced like a rung of the film. Unmeasured, like
+ * `HLS_CAMERA_MBPS`; when somebody measures it, this is the line to change.
+ */
+export const HLS_CAMERA_480_MBPS = HLS_CAMERA_MBPS * 1.5;
+
+/**
  * What the presenter's VOICE ALONE costs the box, when `LIVE_HLS_VOICE_TRACK`
  * starts a Track Composite with no video track at all (`VOICE_RUNG`).
  *
@@ -586,6 +690,17 @@ export const HLS_CAMERA_MBPS = HLS_RUNG_MBPS * 0.3;
  * spending it on is exactly the part this rung skips.
  */
 export const HLS_VOICE_ONLY_MBPS = HLS_RUNG_MBPS * 0.03;
+
+/**
+ * What one camera slot costs the box, by the shape it was started with: the
+ * voice alone, the 360p camera, or the 480p one.
+ */
+export function cameraSlotMbps(rung: LadderRung): number {
+  if (rung.height === 0) {
+    return HLS_VOICE_ONLY_MBPS;
+  }
+  return rung.height >= CAMERA_RUNG_480.height ? HLS_CAMERA_480_MBPS : HLS_CAMERA_MBPS;
+}
 
 export interface CameraEgressDecision {
   start: boolean;
@@ -622,8 +737,16 @@ export function decideCameraEgress(input: {
    * `VOICE_RUNG`, which has no frame to encode.
    */
   hasVideo?: boolean;
+  /**
+   * The slot's own price when the caller already knows its shape
+   * (`cameraSlotMbps(cameraRungFor(...))`), which is how a 480p camera is
+   * charged as one. Absent: `hasVideo` decides between the voice-only and
+   * the 360p price, which is every caller before the 480p rung.
+   */
+  ownMbps?: number;
 }): CameraEgressDecision {
-  const ownCost = input.hasVideo === false ? HLS_VOICE_ONLY_MBPS : HLS_CAMERA_MBPS;
+  const ownCost =
+    input.ownMbps ?? (input.hasVideo === false ? HLS_VOICE_ONLY_MBPS : HLS_CAMERA_MBPS);
   const boxMbps = input.runningRungs * HLS_RUNG_MBPS + ownCost + input.sfuLoadMbps;
   return boxMbps > input.boxBudgetMbps
     ? { start: false, refusal: "box-budget", boxMbps }

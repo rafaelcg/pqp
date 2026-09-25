@@ -168,6 +168,7 @@ describe("live HLS egress", () => {
       voiceTrack: false,
       // `LIVE_HLS_LL` is unset too: the switch stays hidden.
       lowLatency: { available: false },
+      cameraHeight: 480,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -605,6 +606,7 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -614,6 +616,7 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -623,6 +626,7 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
       });
     });
 

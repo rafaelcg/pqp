@@ -43,6 +43,30 @@ vi.mock("./hls-remux.js", async (importOriginal) => {
     },
     sweepLlDemotions: async () => [],
     rebindLlForReplacedTrack: ll.rebind,
+    // The real one writes the LL room's stream; here that stream is `ll.stream`.
+    setLlCameraSlot: (
+      _channelId: string,
+      startedAt: number,
+      slot: { cameraHlsUrl: string; cameraHasVideo: boolean; cameraHasVoiceAudio: boolean } | null,
+    ) => {
+      const current = ll.stream;
+      if (!current || current.startedAt !== startedAt) {
+        return false;
+      }
+      if (slot) {
+        if (current.cameraHlsUrl === slot.cameraHlsUrl) {
+          return false;
+        }
+        ll.stream = { ...current, ...slot };
+        return true;
+      }
+      if (current.cameraHlsUrl === undefined) {
+        return false;
+      }
+      const { cameraHlsUrl: _u, cameraHasVideo: _v, cameraHasVoiceAudio: _a, ...rest } = current;
+      ll.stream = rest;
+      return true;
+    },
   };
 });
 
@@ -54,6 +78,7 @@ const {
   parkLlCompanion,
   reconcileLiveHls,
   resetLiveHlsForTests,
+  setLiveHlsChangeListener,
   setLiveHlsTestHooks,
   setVoiceTrackSeparated,
 } = await import("./hls-egress.js");
@@ -212,6 +237,60 @@ describe("an LL broadcast's camera and mic archive", () => {
     expect(liveHlsActivity()).toMatchObject({ sessions: 0, micArchives: 1, cameraSessions: 1 });
   });
 
+  it("states the camera on the LL stream the audience is handed, and asks for a push", async () => {
+    // THE 2026-09-25 REHEARSAL: 773 s of camera recorded, and the only viewer
+    // was shown the film alone, because the camera URL lived on the
+    // companion's private copy of the stream and `llStreamFor` never had it.
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    const reasons: string[] = [];
+    setLiveHlsChangeListener((_channelId, reason) => {
+      reasons.push(reason);
+    });
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(ll.stream?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+    );
+    expect(ll.stream?.cameraHasVideo).toBe(true);
+    expect(ll.stream?.cameraHasVoiceAudio).toBe(false);
+    // The LL film itself is untouched.
+    expect(ll.stream?.hlsUrl).toBe(llStream().hlsUrl);
+    expect(reasons).toEqual(["camera-started"]);
+
+    // A resume rebuilds the LL stream without the camera; the next reconcile
+    // states it again and hands back the stream that says so.
+    ll.stream = llStream();
+    const again = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(again?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+    );
+  });
+
+  it("takes the camera off the LL stream when the presenter closes it", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.stream?.cameraHlsUrl).toBeTruthy();
+
+    setLiveHlsTestHooks({
+      egress: lk.api,
+      findTracks: async () => ({
+        videoTrackId: "TR_SCREEN",
+        micArchiveTrackId: "TR_MIC_ARCHIVE",
+      }),
+    });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(ll.stream?.cameraHlsUrl).toBeUndefined();
+  });
+
   it("is idempotent across reconciles: one camera, one archive", async () => {
     enableHls();
     const lk = fakeLiveKit();
@@ -349,7 +428,9 @@ describe("an LL broadcast's companions across a presenter track change", () => {
     const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     await flush();
 
-    expect(stream).toEqual(llStream());
+    // The same LL session, still stating the camera that rode through.
+    expect(stream).toMatchObject(llStream());
+    expect(stream?.cameraHlsUrl).toContain("cam360p30");
     expect(ll.rebind).toHaveBeenCalledTimes(1);
     expect(ll.rebind).toHaveBeenCalledWith(CHANNEL, "peer-1", {
       videoFrom: "TR_SCREEN",

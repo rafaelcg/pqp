@@ -104,6 +104,15 @@ function currentFullscreenHost(): HTMLElement | null {
 }
 
 /**
+ * The element a floating surface must portal into to be seen: the one the
+ * browser is showing fullscreen, or null for `document.body`. For the other
+ * primitives that float (`Menu`), which have the same problem a tooltip does.
+ */
+export function useFullscreenPortalHost(): HTMLElement | null {
+  return useContext(TooltipContainerContext);
+}
+
+/**
  * Required ancestor for every `Tooltip`. Mounted once, at the root, so the
  * whole app shares one open-delay group; a per-tooltip provider would make
  * every button in a row wait its own 260ms.

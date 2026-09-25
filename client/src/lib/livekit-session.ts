@@ -20,6 +20,7 @@ import {
   cameraBitrateFor,
   cameraProfileFor,
   cameraSimulcastRungs,
+  presenterCameraSimulcastRungs,
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
   HLS_HELD_720_BITRATE,
@@ -245,6 +246,16 @@ export interface LiveKitSession {
    */
   reconcileCameraLadder(): Promise<void>;
   /**
+   * This machine's share is what a watch party is broadcasting, so the camera
+   * publishes the presenter's ladder (`presenterCameraSimulcastRungs`: one
+   * fallback layer directly under the capture) instead of the call's. Takes
+   * effect on the next publish or `reconcileCameraLadder`. Returns whether
+   * the camera on the wire now needs that reconcile (its ladder differs from
+   * the one this mode wants), so a caller with nothing else to change can
+   * skip a call that would be a no-op.
+   */
+  setCameraPresenter(on: boolean): boolean;
+  /**
    * Change the camera's bitrate ceiling on an already-published track.
    *
    * The SFU twin of the mesh manager's method of the same name, so the quality
@@ -465,6 +476,15 @@ export async function connectLiveKit({
   let publishedCameraTrack: MediaStreamTrack | null = null;
   /** The ladder the camera on the wire went up under. Null while off. */
   let publishedCameraRungs: readonly CameraLayer[] | null = null;
+  /** See `setCameraPresenter`. */
+  let cameraPresenter = false;
+  /**
+   * The browser refused `priority` on a sender once; never ask again. Every
+   * engine we ship to accepts it (Chrome and Safari use it, Firefox ignores
+   * it), so this is belt and braces around the one write that must not fail:
+   * the watch party's layer pin (`setSourceMaxBitrate`).
+   */
+  let senderPriorityUnsupported = false;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -1266,8 +1286,36 @@ export async function connectLiveKit({
               encodings[i]!.active = !feedingHls;
             }
           }
+          // THE FILM FIRST, when the uplink cannot carry everything. While
+          // this share feeds a watch party it bids at "high" (4x the weight
+          // of the default "low" every other sender keeps, the presenter's
+          // camera included), so under congestion the camera is what gives
+          // way: its 480p layer pauses and its 360p one carries on
+          // (`presenterCameraSimulcastRungs`). Chrome reads the sender's
+          // priority off its first encoding, so every encoding says it.
+          if (!senderPriorityUnsupported) {
+            for (const encoding of encodings) {
+              if (feedingHls) {
+                encoding.priority = "high";
+                encoding.networkPriority = "high";
+              } else {
+                delete encoding.priority;
+                delete encoding.networkPriority;
+              }
+            }
+          }
         }
-        await sender.setParameters(params);
+        try {
+          await sender.setParameters(params);
+        } catch (err) {
+          // Never let the priority cost the pin twice: the next attempt (the
+          // caller's retry, the 2 s repair tick) goes without it. A refusal
+          // for some other reason loses nothing but the priority.
+          if (source === Track.Source.ScreenShare && feedingHls) {
+            senderPriorityUnsupported = true;
+          }
+          throw err;
+        }
         if (gen !== senderApplyGen) {
           return "skipped";
         }
@@ -1809,8 +1857,15 @@ export async function connectLiveKit({
    * phones on 5 Sep 2026; the same mistake in this direction would put the
    * camera's ceiling in a field nothing reads.
    */
+  function cameraRungsFor(track: MediaStreamTrack): readonly CameraLayer[] {
+    const height = cameraCaptureHeight(track);
+    return cameraPresenter
+      ? presenterCameraSimulcastRungs(height)
+      : cameraSimulcastRungs(height);
+  }
+
   async function publishCameraVideo(track: MediaStreamTrack): Promise<void> {
-    const rungs = cameraSimulcastRungs(cameraCaptureHeight(track));
+    const rungs = cameraRungsFor(track);
     await room.localParticipant.publishTrack(track, {
       source: Track.Source.Camera,
       simulcast: true,
@@ -1859,7 +1914,7 @@ export async function connectLiveKit({
     if (!track) {
       return;
     }
-    const wanted = cameraSimulcastRungs(cameraCaptureHeight(track));
+    const wanted = cameraRungsFor(track);
     if (sameRungs(wanted, publishedCameraRungs)) {
       return;
     }
@@ -2330,6 +2385,12 @@ export async function connectLiveKit({
     },
 
     reconcileCameraLadder,
+
+    setCameraPresenter(on: boolean) {
+      cameraPresenter = on;
+      const track = publishedCameraTrack;
+      return track !== null && !sameRungs(cameraRungsFor(track), publishedCameraRungs);
+    },
 
     async setCameraMaxBitrate(maxBitrate: number) {
       cameraMaxBitrate = maxBitrate;

@@ -1,6 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { useFullscreenPortalHost } from "@/components/ui/tooltip";
 import {
   MenuItemRows,
   type MenuItemComponentProps,
@@ -46,6 +47,9 @@ export function Menu({
   onOpenChange,
   topContent,
 }: MenuProps): ReactElement {
+  // Inside a fullscreen element when there is one, or the menu opens where
+  // nothing can see it (the watch player's layout picker, 2026-09-25).
+  const portalHost = useFullscreenPortalHost();
   if (items.length === 0 || disabled) {
     return <>{children}</>;
   }
@@ -55,7 +59,7 @@ export function Menu({
       <DropdownMenuPrimitive.Trigger asChild>
         {children}
       </DropdownMenuPrimitive.Trigger>
-      <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.Portal container={portalHost ?? undefined}>
         <DropdownMenuPrimitive.Content
           align={align}
           side={side}
