@@ -18,12 +18,17 @@ import type { DbUser } from "../db.js";
  * flag, so the flag is what the test sets), and once with it off where the
  * off path is the point.
  *
- * What is pinned: the first joiner's country picks the box; everybody after
+ * What is pinned: a server's recently active members pick the box when
+ * they hold a clear majority, whoever opens the room, and the whole path
+ * runs with `CLUSTER_BUS=postgres` on too (a bus transport installed), as
+ * production does; with too few known members the first joiner's country picks the box; everybody after
  * goes to that box; a second API instance adopts the stored region instead of
  * deciding its own; a resume across a restart keeps the box, with the
- * registry (the row) and without it (the resume token); an old client and a
- * watch party keep the room home; and with `LIVEKIT_REGIONS` unset nothing
- * is written at all.
+ * registry (the row) and without it (the resume token); a phone-shaped
+ * client that never declared `sfu-region` opens rooms by the same policy,
+ * and keeps them home only under the rollback `LIVEKIT_REGION_REQUIRE_CAP`;
+ * a watch party keeps the room home; and with `LIVEKIT_REGIONS` unset
+ * nothing is written at all.
  *
  * TEST_DATABASE_URL wins, and the suite skips without a database.
  */
@@ -66,12 +71,14 @@ vi.mock("../services/dms.js", () => ({
 }));
 
 const channelTypes = vi.hoisted(() => new Map<string, string>());
+const channelServers = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async (id: string) => ({
     id,
     kind: "server",
     type: channelTypes.get(id) ?? "voice",
+    server_id: channelServers.get(id) ?? null,
   }),
   getChannelAudience: async () => null,
   // No server row: the transport policy answers `livekit` / `default`, so
@@ -97,6 +104,10 @@ const {
   resetVoiceRoomTransports,
 } = await import("./voice.js");
 const { settleVoiceRegistryWrites } = await import("../voice/registry.js");
+const { resetRegionAudience } = await import("../voice/region-audience.js");
+const { createMemoryHub, createMemoryTransport, setBusTransport } = await import(
+  "../lib/bus.js"
+);
 const { noteSocketCountry, pinnedRoomRegion, SFU_REGION_CAP } = await import(
   "../voice/regions.js"
 );
@@ -193,11 +204,13 @@ function restart(): void {
 
 const SAVED = [
   "VOICE_REGISTRY",
+  "CLUSTER_BUS",
   "LIVEKIT_URL",
   "LIVEKIT_API_KEY",
   "LIVEKIT_API_SECRET",
   "LIVEKIT_REGIONS",
   "LIVEKIT_REGION_COUNTRIES",
+  "LIVEKIT_REGION_REQUIRE_CAP",
   "CLERK_SECRET_KEY",
 ] as const;
 const saved = Object.fromEntries(SAVED.map((name) => [name, process.env[name]]));
@@ -220,13 +233,18 @@ describeDb("voice room SFU region", () => {
 
   beforeEach(async () => {
     process.env.VOICE_REGISTRY = "postgres";
+    process.env.CLUSTER_BUS = "postgres";
+    setBusTransport(createMemoryTransport(createMemoryHub()));
     process.env.LIVEKIT_URL = "wss://sfu.example.test";
     process.env.LIVEKIT_API_KEY = "key";
     process.env.LIVEKIT_API_SECRET = "secret";
     process.env.LIVEKIT_REGIONS = "mia:wss://sfu-mia.example.test";
     process.env.LIVEKIT_REGION_COUNTRIES = "US:mia,CA:mia";
+    delete process.env.LIVEKIT_REGION_REQUIRE_CAP;
     process.env.CLERK_SECRET_KEY ??= "sk_test_regions";
     channelTypes.clear();
+    channelServers.clear();
+    resetRegionAudience();
     restart();
     resetVoiceRateLimits();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -242,7 +260,102 @@ describeDb("voice room SFU region", () => {
     }
     opened.length = 0;
     restart();
+    setBusTransport(null);
     vi.restoreAllMocks();
+  });
+
+  /**
+   * A server whose members were last seen in these countries, with a voice
+   * channel in it. Real rows: the tally is the query under test.
+   */
+  async function serverChannel(countries: string[]): Promise<string> {
+    const pool = getPool();
+    const ids: string[] = [];
+    for (const country of countries) {
+      const user = await pool.query<{ id: string }>(
+        `INSERT INTO users (clerk_id, display_name, last_country, last_country_at)
+         VALUES ($1, 'Member', $2, NOW() - INTERVAL '1 day') RETURNING id`,
+        [`clerk_region_${randomUUID()}`, country],
+      );
+      ids.push(user.rows[0]!.id);
+    }
+    const server = await pool.query<{ id: string }>(
+      `INSERT INTO servers (name, owner_id) VALUES ('region', $1) RETURNING id`,
+      [ids[0]],
+    );
+    for (const id of ids) {
+      await pool.query(
+        `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+        [server.rows[0]!.id, id],
+      );
+    }
+    const channel = randomUUID();
+    channelServers.set(channel, server.rows[0]!.id);
+    return channel;
+  }
+
+  it("a Brazilian server stays home when a visitor from the US opens the room", async () => {
+    const log = vi.mocked(console.log);
+    const channel = await serverChannel(["BR", "BR", "BR", "BR", "BR", "US"]);
+    const visitor = await join(client("US"), channel);
+    const local = await join(client("BR"), channel);
+
+    expect(await storedRegion(channel)).toBe("sao");
+    expect(pinnedRoomRegion(channel)).toBe("sao");
+    expect(tokenClaims(welcome(visitor)!.resumeToken as string).r).toBe("sao");
+    expect(tokenClaims(welcome(local)!.resumeToken as string).r).toBe("sao");
+    const line = log.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("voice.regionPinned"));
+    expect(line).toContain("reason=server-majority");
+    expect(line).toContain("share=0.83");
+    expect(line).toContain("sample=6");
+  });
+
+  it("a North American server goes to Miami, even when a Brazilian opens it", async () => {
+    const channel = await serverChannel(["US", "US", "CA", "US", "BR"]);
+    await join(client("BR"), channel);
+    expect(await storedRegion(channel)).toBe("mia");
+  });
+
+  it("a split server stays home, whoever opens it", async () => {
+    const channel = await serverChannel(["US", "US", "US", "BR", "BR", "BR"]);
+    await join(client("US"), channel);
+    expect(await storedRegion(channel)).toBe("sao");
+  });
+
+  it("an override naming a region no longer configured still consults the server", async () => {
+    const channel = await serverChannel(["BR", "BR", "BR", "BR", "BR"]);
+    await getPool().query(
+      `INSERT INTO channels (id, server_id, name, type, position, sfu_region)
+       VALUES ($1, $2, 'voz', 'voice', 0, 'lon')`,
+      [channel, channelServers.get(channel)],
+    );
+    await join(client("US"), channel);
+    expect(await storedRegion(channel)).toBe("sao");
+  });
+
+  it("too few known members: the first joiner's country, as before", async () => {
+    const channel = await serverChannel(["BR", "BR"]);
+    await join(client("US"), channel);
+    expect(await storedRegion(channel)).toBe("mia");
+  });
+
+  it("the other replica adopts a server-majority pin rather than re-deciding", async () => {
+    const channel = await serverChannel(["US", "US", "US", "US", "US"]);
+    await join(client("BR"), channel);
+    expect(await storedRegion(channel)).toBe("mia");
+    restart();
+    resetRegionAudience();
+    // Replica B's tally has changed its mind (members moved); the room is
+    // still Miami while anybody is in it.
+    await getPool().query(
+      `UPDATE users SET last_country = 'BR'
+        WHERE id IN (SELECT user_id FROM server_members WHERE server_id = $1)`,
+      [channelServers.get(channel)],
+    );
+    const b = await join(client("BR"), channel);
+    expect(tokenClaims(welcome(b)!.resumeToken as string).r).toBe("mia");
   });
 
   it("writes no region and mints no region claim with LIVEKIT_REGIONS unset", async () => {
@@ -274,7 +387,30 @@ describeDb("voice room SFU region", () => {
     expect(await storedRegion(channel)).toBe("sao");
   });
 
-  it("keeps a room home when its first joiner is an old client without the cap", async () => {
+  it("a phone-shaped first joiner (no sfu-region cap) follows the region policy by default", async () => {
+    const channel = randomUUID();
+    const phone = await join(client("US", { caps: false }), channel);
+    const next = await join(client("BR"), channel);
+
+    expect(await storedRegion(channel)).toBe("mia");
+    expect(tokenClaims(welcome(phone)!.resumeToken as string).r).toBe("mia");
+    expect(tokenClaims(welcome(next)!.resumeToken as string).r).toBe("mia");
+  });
+
+  it("a phone opening a Brazilian server's room follows the server, not its own country", async () => {
+    const channel = await serverChannel(["BR", "BR", "BR", "BR", "BR"]);
+    await join(client("US", { caps: false }), channel);
+    expect(await storedRegion(channel)).toBe("sao");
+    const other = await serverChannel(["US", "US", "US", "US", "CA"]);
+    await join(client("BR", { caps: false }), other);
+    expect(await storedRegion(other)).toBe("mia");
+  });
+
+  it("LIVEKIT_REGION_REQUIRE_CAP=true keeps a room home when its first joiner lacks the cap", async () => {
+    process.env.LIVEKIT_REGION_REQUIRE_CAP = "true";
+    const majority = await serverChannel(["US", "US", "US", "US", "US"]);
+    await join(client("US", { caps: false }), majority);
+    expect(await storedRegion(majority)).toBe("sao");
     const channel = randomUUID();
     const old = await join(client("US", { caps: false }), channel);
     const next = await join(client("US"), channel);
@@ -329,6 +465,30 @@ describeDb("voice room SFU region", () => {
     // Same person, now seen from a Brazilian edge (a VPN, a phone that
     // roamed): the room stays where its media is.
     const again = await join(client("BR", { userId }), channel, {
+      peerId: hello.peerId as string,
+      token: hello.resumeToken as string,
+    });
+
+    expect(welcome(again)).toMatchObject({ peerId: hello.peerId, resumed: true });
+    expect(pinnedRoomRegion(channel)).toBe("mia");
+    expect(await storedRegion(channel)).toBe("mia");
+  });
+
+  it("a phone that opened a room off home resumes onto the same box after a restart", async () => {
+    // iOS in a LiveKit room keeps its media across an API restart and
+    // presents the claim; it never declared `sfu-region`. The resume token
+    // must name the box it is on, and the reconstructed pin must agree, or
+    // the next token minted for the room would point at another box.
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const first = await join(client("US", { userId, caps: false }), channel);
+    const hello = welcome(first)!;
+    expect(tokenClaims(hello.resumeToken as string).r).toBe("mia");
+    removeVoicePeerBySocket(first.socket);
+    await settleVoiceRegistryWrites();
+
+    restart();
+    const again = await join(client("US", { userId, caps: false }), channel, {
       peerId: hello.peerId as string,
       token: hello.resumeToken as string,
     });

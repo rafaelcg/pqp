@@ -4663,3 +4663,12 @@ CREATE TABLE IF NOT EXISTS hls_session_viewer_stats (
 
 CREATE INDEX IF NOT EXISTS idx_hls_session_viewer_stats_updated
   ON hls_session_viewer_stats (updated_at);
+
+-- Where an account was last seen, for picking a voice room's SFU region
+-- (`server/src/voice/region-audience.ts`). The two-letter CF-IPCountry of
+-- the WebSocket upgrade and nothing finer: never an IP, never a city. Written
+-- at WS auth, throttled, and only when LIVEKIT_REGIONS is set, so a
+-- self-host without regions leaves both NULL forever. Read by aggregating a
+-- server's members, never shown to anybody.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country_at TIMESTAMPTZ;

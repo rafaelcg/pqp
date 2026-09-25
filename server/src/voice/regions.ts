@@ -13,8 +13,11 @@ import { isWatchPartyChannelType, type ChannelKind } from "@pqp/shared";
  * uses. This module is that decision.
  *
  * THE RULE is the transport pin's rule, one level down. A room's region is
- * decided when its FIRST peer joins, from that peer's Cloudflare country
- * (`CF-IPCountry`), stored beside the transport pin (`voice_rooms.sfu_region`
+ * decided when its FIRST peer joins, from where the channel's SERVER keeps its
+ * people (the countries its recently active members were last seen in, see
+ * `voice/region-audience.ts`), falling back to that first peer's Cloudflare
+ * country (`CF-IPCountry`) only when the server has too few known members to
+ * say anything. Stored beside the transport pin (`voice_rooms.sfu_region`
  * with the registry on, `roomRegions` below always), and never changes while
  * anybody is in the room. Everybody in a room goes to that room's region:
  * LiveKit single nodes do not relay to each other, so a room split across two
@@ -221,11 +224,31 @@ export type SfuRegionReason =
    * the room that feeds them has to be there. Beats the operator override.
    */
   | "watch-party"
-  /** The first joiner did not declare `sfu-region`: kept home, where every client has always gone. */
+  /**
+   * The first joiner did not declare `sfu-region` AND the operator set
+   * `LIVEKIT_REGION_REQUIRE_CAP=true`: kept home. Only the rollback switch
+   * produces it; by default every client is trusted to follow the URL.
+   */
   | "old-client"
   /** `channels.sfu_region`, set by an operator. */
   | "override"
-  /** The first joiner's `CF-IPCountry`, through `LIVEKIT_REGION_COUNTRIES`. */
+  /**
+   * Where the SERVER's recently active members are: at least
+   * `SERVER_MAJORITY_MIN_SAMPLE` of them with a known country, and at least
+   * `SERVER_MAJORITY_SHARE` of those mapping to one region.
+   */
+  | "server-majority"
+  /**
+   * The server has enough members with a known country but no region holds
+   * a clear majority of them: `LIVEKIT_REGION_DEFAULT` (home unless set),
+   * never the first joiner's box.
+   */
+  | "server-mixed"
+  /**
+   * The first joiner's `CF-IPCountry`, through `LIVEKIT_REGION_COUNTRIES`.
+   * Only when the server has too few members with a known country to say
+   * anything (a new server, or the days right after the recording shipped).
+   */
   | "country"
   /** No country, or a country the map does not name: `LIVEKIT_REGION_DEFAULT`. */
   | "default";
@@ -233,7 +256,41 @@ export type SfuRegionReason =
 export interface SfuRegionDecision {
   region: string;
   reason: SfuRegionReason;
+  /**
+   * The server tally behind a `server-majority` or `server-mixed` answer,
+   * for the `voice.regionPinned` log line. Absent on every other reason.
+   */
+  sample?: SfuRegionSample;
 }
+
+export interface SfuRegionSample {
+  /** Recently active members with a known country. */
+  total: number;
+  /** The region with the most of them (ties: the earlier configured region). */
+  top: string;
+  /** `top`'s count over `total`, 0..1. */
+  share: number;
+  /** Members per region. */
+  byRegion: Record<string, number>;
+}
+
+/**
+ * Fewer members than this with a known country and the server says nothing:
+ * the first joiner's country decides, as it always did. Five is small enough
+ * that any server big enough to be on the SFU (ten members) reaches it once
+ * half its people have opened the app in the last month, and large enough
+ * that two travellers cannot outvote a server.
+ */
+export const SERVER_MAJORITY_MIN_SAMPLE = 5;
+
+/**
+ * The share one region needs to take a server's rooms off the default box.
+ * 60%, not 50%: a server split down the middle gains nothing from moving
+ * (measured 2026-09-24, UK to Sao Paulo: ~193 ms RTT via sao, ~199 via lhr,
+ * ~228 via mia, so a mixed call is fine on home), and a bare majority would
+ * flap between boxes as the month's actives drift. A tie never wins.
+ */
+export const SERVER_MAJORITY_SHARE = 0.6;
 
 export interface SfuRegionPolicyInput {
   /** Configured region ids, home first; null in single-region mode. */
@@ -249,8 +306,37 @@ export interface SfuRegionPolicyInput {
   };
   /** The first joiner's country (`CF-IPCountry`, normalised), or null. */
   country: string | null;
+  /**
+   * Recently active members of the channel's server per country
+   * (`users.last_country`, `voice/region-audience.ts`). Null or absent when
+   * unknown: not a server channel, the lookup failed, or it was skipped.
+   */
+  serverCountries?: ReadonlyMap<string, number> | null;
   /** The first joiner's socket declared `sfu-region`. */
   clientDeclaresRegions: boolean;
+  /**
+   * `LIVEKIT_REGION_REQUIRE_CAP`: only a joiner that declared `sfu-region`
+   * may open a room off home. Default false (`regionCapRequired()`).
+   */
+  requireRegionCap?: boolean;
+}
+
+/**
+ * `LIVEKIT_REGION_REQUIRE_CAP=true` restores the old caution: a room opened
+ * by a client that never declared `sfu-region` stays home. OFF by default,
+ * because every client build that can reach an SFU room dials the URL the
+ * server hands it and nothing else (audited 2026-09-24 across the whole
+ * history of web, Electron, iOS and Android: `Room.connect(session.url)`,
+ * `room.connect(url: info.url)` and `created.connect(credentials.url)`, each
+ * fed by a fresh `POST /api/voice/token` per connect attempt, never by
+ * `GET /api/voice/backend`, a cache or a hardcoded host). That is what lets
+ * phones already in people's hands, which do not send the cap, get regions
+ * without an app update. The switch is the rollback if a build turns out to
+ * disagree, without a code revert.
+ */
+export function regionCapRequired(): boolean {
+  const raw = (process.env.LIVEKIT_REGION_REQUIRE_CAP ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "on";
 }
 
 /**
@@ -262,13 +348,17 @@ export interface SfuRegionPolicyInput {
  * 2. conversations are home (they are mesh and never promoted);
  * 3. a watch party channel is home, whatever anybody set, because the
  *    transcode can only reach the home box;
- * 4. a first joiner that never said it dials the URL it is handed keeps the
- *    room home. Every shipped client does in fact dial that URL (web,
- *    Electron, iOS and Android all pass `session.url` straight to
- *    `Room.connect`), so this is caution, not a known break: the region is
- *    only moved by a client that has promised it can follow;
+ * 4. ONLY with `LIVEKIT_REGION_REQUIRE_CAP` on (the rollback, default off):
+ *    a first joiner that never declared `sfu-region` keeps the room home.
+ *    By default it is not consulted, because every shipped client dials the
+ *    URL it is handed (see `regionCapRequired`);
  * 5. the operator override;
- * 6. the country map, then the default.
+ * 6. the server's people: a clear majority of its recently active members
+ *    (by region) takes the room to their box, and a server with enough
+ *    members but no clear majority stays on the default. This is what stops
+ *    one visitor from London moving a Brazilian server's call to London;
+ * 7. only when the server has too few known members to say anything: the
+ *    first joiner's country through the map, then the default.
  */
 export function decideSfuRegion(input: SfuRegionPolicyInput): SfuRegionDecision {
   const home = input.regionIds?.[0];
@@ -281,21 +371,74 @@ export function decideSfuRegion(input: SfuRegionPolicyInput): SfuRegionDecision 
   if (isWatchPartyChannelType(input.channel.type)) {
     return { region: home, reason: "watch-party" };
   }
-  if (!input.clientDeclaresRegions) {
+  if (input.requireRegionCap && !input.clientDeclaresRegions) {
     return { region: home, reason: "old-client" };
   }
   const override = input.channel.sfuRegion;
   if (override && input.regionIds.includes(override)) {
     return { region: override, reason: "override" };
   }
+  const fallback = input.regionIds.includes(input.defaultRegion)
+    ? input.defaultRegion
+    : home;
+  const sample = tallyServerRegions(
+    input.serverCountries ?? null,
+    input.regionIds,
+    input.countryMap,
+    fallback,
+  );
+  if (sample && sample.total >= SERVER_MAJORITY_MIN_SAMPLE) {
+    if (sample.share >= SERVER_MAJORITY_SHARE) {
+      return { region: sample.top, reason: "server-majority", sample };
+    }
+    return { region: fallback, reason: "server-mixed", sample };
+  }
   const byCountry = input.country ? input.countryMap.get(input.country) : undefined;
   if (byCountry && input.regionIds.includes(byCountry)) {
     return { region: byCountry, reason: "country" };
   }
-  const fallback = input.regionIds.includes(input.defaultRegion)
-    ? input.defaultRegion
-    : home;
   return { region: fallback, reason: "default" };
+}
+
+/**
+ * Members per country folded into members per region, through the same map
+ * a first joiner goes through: an unmapped country counts for the default
+ * region. Null for no data. Deterministic: ties go to the region configured
+ * first (home first), so the same tally always gives the same answer.
+ */
+export function tallyServerRegions(
+  countries: ReadonlyMap<string, number> | null,
+  regionIds: readonly string[],
+  countryMap: ReadonlyMap<string, string>,
+  fallback: string,
+): SfuRegionSample | null {
+  if (!countries || countries.size === 0) {
+    return null;
+  }
+  const byRegion: Record<string, number> = {};
+  let total = 0;
+  for (const [country, count] of countries) {
+    if (!Number.isFinite(count) || count <= 0) {
+      continue;
+    }
+    const mapped = countryMap.get(country);
+    const region = mapped && regionIds.includes(mapped) ? mapped : fallback;
+    byRegion[region] = (byRegion[region] ?? 0) + count;
+    total += count;
+  }
+  if (total === 0) {
+    return null;
+  }
+  let top = fallback;
+  let best = -1;
+  for (const id of regionIds) {
+    const count = byRegion[id] ?? 0;
+    if (count > best) {
+      best = count;
+      top = id;
+    }
+  }
+  return { total, top, share: best / total, byRegion };
 }
 
 // --- the country signal -------------------------------------------------------

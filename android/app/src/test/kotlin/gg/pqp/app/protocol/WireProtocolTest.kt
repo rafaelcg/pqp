@@ -528,6 +528,17 @@ class WireProtocolTest {
             )
         }
 
+        // `sfu-region` is not a frame type, so it is pinned against the two
+        // other places that spell it instead of the signaling schema.
+        assertTrue(
+            "server/src/voice/regions.ts no longer names \"sfu-region\" (SFU_REGION_CAP).",
+            RepoSources.read("server/src/voice/regions.ts").contains("\"sfu-region\""),
+        )
+        assertTrue(
+            "client/src/lib/realtime.ts no longer declares \"sfu-region\".",
+            RepoSources.read("client/src/lib/realtime.ts").contains("\"sfu-region\""),
+        )
+
         assertTrue(
             "server/src/ws/index.ts no longer reads `caps` off the auth frame, so nothing " +
                 "this handshake declares is heard at all.",
@@ -537,7 +548,7 @@ class WireProtocolTest {
         assertEquals(
             "RealtimeClient.WIRE_CAPS is the promise this build makes about which frames " +
                 "it can apply. Add an entry only alongside its handler.",
-            caps,
+            caps + "sfu-region",
             RealtimeClient.WIRE_CAPS,
         )
     }

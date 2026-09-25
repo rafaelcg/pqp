@@ -403,8 +403,15 @@ actor RealtimeClient {
      delta: the viewer list this app reconstructs is byte for byte the one it
      was already being sent, and every phone on mobile data was paying for the
      whole of it every time anybody opened or closed a channel.
+
+     `sfu-region`: this build dials whatever `url` `POST /api/voice/token`
+     answers (`LiveKitVoiceClient.connect`, `room.connect(url: info.url)`), so
+     a room it opens may be placed on any SFU region. The server no longer
+     requires the declaration by default (every shipped build already keeps
+     this promise, audited 2026-09-24); it is sent so the promise is explicit
+     and survives the rollback switch `LIVEKIT_REGION_REQUIRE_CAP`.
      */
-    static let wireCaps = ["voice-roster-delta", "voice-transport-changed", "presence-delta"]
+    static let wireCaps = ["voice-roster-delta", "voice-transport-changed", "presence-delta", "sfu-region"]
 
     /**
      The handshake, as a value rather than as a side effect.

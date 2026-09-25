@@ -488,9 +488,11 @@ data class VoiceSessionResponse(
     /**
      * The SFU region the room is pinned to (`sao`, `mia`, ...), present only
      * when the deployment runs more than one. Informational: [url] already
-     * names the box, and that is what `LiveKitEngine` dials. This build does
-     * not declare the `sfu-region` capability, so rooms it opens stay in São
-     * Paulo; see `docs/plans/SFU_REGIONS.md`.
+     * names the box, and that is what `LiveKitEngine` dials, so a room this
+     * build opens follows the server's region policy like any other. It
+     * declares `sfu-region` in `RealtimeClient.WIRE_CAPS`, and builds that do
+     * not are trusted too unless the server sets `LIVEKIT_REGION_REQUIRE_CAP`;
+     * see `docs/plans/SFU_REGIONS.md`.
      */
     val region: String? = null,
 )

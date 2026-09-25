@@ -219,8 +219,9 @@ final class VoiceTransportTests: XCTestCase {
 
     /// `region` is optional and informational (`voiceSessionSchema`): present
     /// only on a multi-region deployment, and `url` is still what gets dialed.
-    /// This build never declares `sfu-region` in `wireCaps`, so it should not
-    /// need to act on this field, only carry it without crashing.
+    /// A room this build opens may be on any region (`sfu-region` is in
+    /// `wireCaps`), and `url` already names the box, so the field only has to
+    /// be carried without crashing.
     func testTokenResponseDecodesWithRegion() throws {
         let json = """
         {"backend":"livekit","url":"wss://sfu-mia.example.test","token":"jwt",
