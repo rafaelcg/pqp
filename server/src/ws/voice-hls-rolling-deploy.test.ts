@@ -177,6 +177,13 @@ const box = {
   cameraTracks: [] as string[],
   /** The sid of that publication: a republish (a resume, a re-pick) changes it. */
   screenTrack: "TR_SCREEN",
+  /**
+   * The presenter's `mic-archive` publication (`LIVE_HLS_MIC_ARCHIVE`), when
+   * they have one. A reloaded page publishes a new one under a new sid.
+   */
+  archiveTrack: null as string | null,
+  /** Every Track Egress output path the archive was started on, in order. */
+  archiveOutputs: [] as string[],
   next: 0,
   reset() {
     this.egresses.clear();
@@ -189,6 +196,8 @@ const box = {
     this.screenPublished = true;
     this.screenTrack = "TR_SCREEN";
     this.cameraTracks = [];
+    this.archiveTrack = null;
+    this.archiveOutputs = [];
     this.next = 0;
   },
 };
@@ -213,6 +222,26 @@ const fakeEgress = {
       videoTrackId: tracks?.videoTrackId,
     });
     box.starts.push(egressId);
+    return { egressId };
+  },
+  startTrackEgress: async (
+    roomName: string,
+    output: { filepath?: string },
+    trackId: string,
+  ) => {
+    box.next += 1;
+    const egressId = `EG_${box.next}`;
+    const match = /\/(\d+)-mic(?:-r\d+)?\.ogg$/.exec(output.filepath ?? "");
+    box.egresses.set(egressId, {
+      egressId,
+      room: roomName,
+      startedAt: Number(match?.[1] ?? 0),
+      rung: "mic",
+      startedMs: Date.now(),
+      stoppedMs: null,
+      videoTrackId: trackId,
+    });
+    box.archiveOutputs.push(output.filepath ?? "");
     return { egressId };
   },
   stopEgress: async (egressId: string) => {
@@ -356,6 +385,7 @@ async function bootInstance(name: string): Promise<Instance> {
             videoTrackId: box.screenTrack,
             audioTrackId: "TR_MUSIC",
             sourceHeight: 720,
+            ...(box.archiveTrack ? { micArchiveTrackId: box.archiveTrack } : {}),
             ...(box.cameraTracks.length > 0
               ? {
                   cameraTrackId: box.cameraTracks[0],
@@ -621,6 +651,7 @@ const ENV_KEYS = [
   "LIVE_HLS_REMUX_CONTROL_SECRET",
   "LIVE_HLS_REMUX_ORIGIN_URL",
   "LIVE_HLS_PLAYLIST_BASE_URL",
+  "LIVE_HLS_MIC_ARCHIVE",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
 
@@ -1218,6 +1249,76 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
   }, 30_000);
+
+  it("low-latency: the host's voice archive survives a reload onto the OTHER machine, and its row is closed at the end (rehearsal D)", async () => {
+    // Production rehearsal D, 2026-09-25: the same reload as above, with the
+    // voice archive on. The reload took the presenter out of LiveKit, so the
+    // archive's Track Egress ended; the session was handed to api-b, which
+    // skipped the open `mic` row (its egress no longer listed) without
+    // closing it, and never recorded the new page's archive either. The
+    // history only offers a row with `ended_at`, so the whole voice file was
+    // "gravação da voz desligada".
+    await enableLlParty();
+    process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+    // Long enough for the reload, short enough that the end below is quick.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "3000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    const userId = randomUUID();
+    box.archiveTrack = "TR_ARCHIVE_1";
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const live = a.remux.llStreamFor(channel)!;
+    await waitFor(() => box.archiveOutputs.length === 1, "the voice archive to start on api-a");
+    expect(box.archiveOutputs[0]).toMatch(new RegExp(`/${live.startedAt}-mic\\.ogg$`));
+
+    // The page reloads: a clean leave, and the presenter's tracks leave
+    // LiveKit with it, which ends the archive's Track Egress on the box.
+    await presenterLeaves(a, presenter);
+    box.archiveTrack = null;
+    for (const egress of box.egresses.values()) {
+      if (egress.rung === "mic" && egress.stoppedMs === null) {
+        egress.stoppedMs = Date.now();
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Back on api-b under a new peer id, publishing a new archive track.
+    box.archiveTrack = "TR_ARCHIVE_2";
+    const back = await presenterJoinsAndShares(b, userId, channel);
+    await b.registry.settleVoiceRegistryWrites();
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await waitFor(
+      () => box.archiveOutputs.length === 2,
+      "the voice archive to continue on api-b",
+    );
+    // The next run of the SAME file, never a first run over api-a's.
+    expect(box.archiveOutputs[1]).toMatch(new RegExp(`/${live.startedAt}-mic-r\\d+\\.ogg$`));
+    const recording = [...box.egresses.values()].filter(
+      (egress) => egress.rung === "mic" && egress.stoppedMs === null,
+    );
+    expect(recording.map((egress) => egress.videoTrackId)).toEqual(["TR_ARCHIVE_2"]);
+
+    // The host presses Encerrar: the share ends, and so does the broadcast.
+    await b.voice.handleVoiceMessage(
+      { socket: back.socket, user: asUser(userId) },
+      { type: "set-sharing-screen", sharing: false },
+    );
+    await presenterLeaves(b, back);
+    const micRow = async () =>
+      (
+        await pools[0]!.getPool().query<{ ended_at: Date | null; runs: unknown }>(
+          `SELECT ended_at, runs FROM hls_sessions WHERE object_prefix = $1`,
+          [`live/${channel}/${live.startedAt}-mic`],
+        )
+      ).rows[0];
+    await waitFor(async () => (await micRow())?.ended_at != null, "the voice row to be closed", 15_000);
+    const row = await micRow();
+    expect(row?.runs).toEqual([
+      { suffix: "", base: expect.any(Number) },
+      { suffix: expect.stringMatching(/^-r\d+$/), base: expect.any(Number) },
+    ]);
+  }, 60_000);
 
   it("a DIFFERENT person sharing inside the window is a new session, at once", async () => {
     await enableLlParty();
