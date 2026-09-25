@@ -404,10 +404,17 @@ final class HomeModel {
     }
 
 
+    /// One key per create attempt, reused across a retry of the same name so
+    /// a lost response never makes a second room.
+    private let createServerAttempt = IdempotencyAttempt()
+
     func createServer(named name: String) async {
         guard let session else { return }
         do {
-            let server = try await session.api.createServer(name: name)
+            let server = try await session.api.createServer(
+                name: name, idempotencyKey: createServerAttempt.keyFor(name)
+            )
+            createServerAttempt.reset()
             servers.append(server)
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription

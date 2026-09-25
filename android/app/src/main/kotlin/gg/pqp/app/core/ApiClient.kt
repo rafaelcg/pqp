@@ -59,9 +59,19 @@ class ApiClient(
     suspend fun servers(): List<ServerSummary> =
         get<ServersResponse>("/api/servers").servers
 
-    suspend fun createServer(name: String): CreateServerResponse {
+    /**
+     * `idempotencyKey`, when given, rides the `Idempotency-Key` header: a
+     * repeat with the same key inside its 24h window answers with the same
+     * room instead of making a second one, which is what lets the onboarding
+     * room step and the hub's create dialog retry a create whose response was
+     * lost without risking a duplicate. Omitted entirely, this call behaves
+     * exactly as it did before the header existed. See
+     * `server/src/services/idempotency-keys.ts`.
+     */
+    suspend fun createServer(name: String, idempotencyKey: String? = null): CreateServerResponse {
         val body = json.encodeToString(CreateServerRequest.serializer(), CreateServerRequest(name))
-        return post("/api/servers", body)
+        val headers = idempotencyKey?.let { mapOf("Idempotency-Key" to it) } ?: emptyMap()
+        return post("/api/servers", body, headers)
     }
 
     /**
@@ -339,10 +349,15 @@ class ApiClient(
         return decode(execute(request))
     }
 
-    private suspend inline fun <reified T> post(path: String, body: String): T {
+    private suspend inline fun <reified T> post(
+        path: String,
+        body: String,
+        headers: Map<String, String> = emptyMap(),
+    ): T {
         val request = Request.Builder()
             .url(url(path))
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
+        headers.forEach { (name, value) -> request.header(name, value) }
         return decode(execute(request))
     }
 

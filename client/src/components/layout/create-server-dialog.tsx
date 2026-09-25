@@ -10,6 +10,7 @@ import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl } from "@/lib/share-invite";
 import { useTranslation } from "@/lib/i18n";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
+import { IdempotencyAttempt } from "@/lib/idempotency";
 import {
   applyDiscordImport,
   createInvite,
@@ -84,6 +85,14 @@ export function CreateServerDialog({
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
+  /**
+   * One key per create attempt, reused across a retry of the same content
+   * so a lost response never makes a second room. Two separate holders: the
+   * name-based create and the Discord import are independent attempts. See
+   * `@/lib/idempotency`.
+   */
+  const createAttemptRef = useRef(new IdempotencyAttempt());
+  const importAttemptRef = useRef(new IdempotencyAttempt());
 
   useEffect(() => {
     if (open) {
@@ -97,6 +106,8 @@ export function CreateServerDialog({
     setBusy(false);
     setDone(null);
     setCopied(null);
+    createAttemptRef.current.reset();
+    importAttemptRef.current.reset();
   }, [open]);
 
   useEffect(
@@ -129,7 +140,16 @@ export function CreateServerDialog({
     setBusy(true);
     setError(null);
     try {
-      const created = await createServer(trimmed);
+      const created = await createServer(
+        trimmed,
+        createAttemptRef.current.keyFor(trimmed),
+      );
+      // The room now exists on the server. Both branches below already
+      // swallow their own errors, so nothing after this point can still
+      // report "create failed" and send a retry back through this key; only
+      // now does the key retire, so a failure before this line is safely
+      // retried with the room already made.
+      createAttemptRef.current.reset();
       const [invite] = await Promise.all([
         createInvite(created.server.id, { expiresInHours: 168 })
           .then((result) => result.invite)
@@ -201,11 +221,21 @@ export function CreateServerDialog({
     setBusy(true);
     setError(null);
     try {
-      const created = await applyDiscordImport(source.trim());
+      const trimmedSource = source.trim();
+      const created = await applyDiscordImport(
+        trimmedSource,
+        importAttemptRef.current.keyFor(trimmedSource),
+      );
       if (created.invite) {
         rememberInviteCode(created.server.id, created.invite.code);
       }
+      // `onCreated` is awaited directly and can still throw, unlike the
+      // create-by-name path above: keep the key alive until every step that
+      // could still land in the catch below has finished, so a failure here
+      // reports "import failed" but a retry replays the room this call
+      // already made instead of importing a second one.
       await onCreated({ server: created.server, channels: created.channels });
+      importAttemptRef.current.reset();
       setDone({
         serverName: created.server.name,
         serverId: created.server.id,

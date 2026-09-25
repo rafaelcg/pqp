@@ -75,4 +75,9 @@ describe("corsHeaders", () => {
     const headers = corsHeaders({ headers: {} } as IncomingMessage);
     expect(headers["Access-Control-Allow-Methods"]).toContain("PUT");
   });
+
+  it("allows Idempotency-Key, or a cross-origin create silently fails the preflight", () => {
+    const headers = corsHeaders({ headers: {} } as IncomingMessage);
+    expect(headers["Access-Control-Allow-Headers"]).toContain("Idempotency-Key");
+  });
 });

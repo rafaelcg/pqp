@@ -113,6 +113,7 @@ import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.Backend
+import gg.pqp.app.core.IdempotencyAttempt
 import gg.pqp.app.core.Landing
 import gg.pqp.app.core.Me
 import gg.pqp.app.core.ServerMember
@@ -1154,6 +1155,14 @@ private class RoomForm {
      * from "você") must not summon it again uninvited.
      */
     var focusPending by mutableStateOf(false)
+
+    /**
+     * One key per create attempt, reused across a retry of the same name so
+     * a lost response never makes a second room; an edited name starts a
+     * fresh attempt. Not observable state on purpose: nothing on screen
+     * reads it, it only needs to outlive a single `create()` call.
+     */
+    val idempotency = IdempotencyAttempt()
 }
 
 /** The room step 3 made, and its invite, for step 4. */
@@ -1211,7 +1220,7 @@ private fun RoomStep(
         scope.launch {
             val before = session.servers.value.map { it.id }.toSet()
             val server = try {
-                session.api.createServer(trimmed).server
+                session.api.createServer(trimmed, form.idempotency.keyFor(trimmed)).server
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
@@ -1219,6 +1228,7 @@ private fun RoomStep(
                 // A retry would then make a second room, so look first.
                 val made = madeSince(session, before, trimmed)
                 if (made != null) {
+                    form.idempotency.reset()
                     onMade(session, made, InviteRef.Onboarding, haptics, onCreated)
                     form.busy = false
                     return@launch
@@ -1228,6 +1238,7 @@ private fun RoomStep(
                 form.busy = false
                 return@launch
             }
+            form.idempotency.reset()
             // From here the room exists, so nothing below may send the person
             // back to a "Criar" that would make a second one. The invite runs
             // beside the list refresh; the ready step retries a failed invite.
