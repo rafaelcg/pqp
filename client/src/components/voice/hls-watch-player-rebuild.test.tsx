@@ -277,6 +277,39 @@ describe("a rebuild the stall ladder decides", { timeout: 30_000 }, () => {
     expect(dead()).toBe(false);
   });
 
+  it("backs the automatic retry off while it keeps failing", async () => {
+    await driveToDead();
+    let before = constructed;
+    for (let i = 0; i < 40 && constructed === before; i += 1) {
+      await tick(1);
+      await settle();
+    }
+    expect(constructed).toBe(before + 1);
+    // Still broken, and no frame ever painted since: dead again.
+    const video = container.querySelector("video")!;
+    for (let round = 0; round < 8 && !dead(); round += 1) {
+      await act(async () => {
+        video.dispatchEvent(new Event("waiting"));
+      });
+      const at = constructed;
+      for (let i = 0; i < 60 && constructed === at && !dead(); i += 1) {
+        await tick(1);
+      }
+      await settle();
+    }
+    expect(dead()).toBe(true);
+    before = constructed;
+    // The first wait tops out at 15 s; the second is 16 to 30 s.
+    await tick(15);
+    await settle();
+    expect(constructed).toBe(before);
+    for (let i = 0; i < 20 && constructed === before; i += 1) {
+      await tick(1);
+      await settle();
+    }
+    expect(constructed).toBe(before + 1);
+  });
+
   it("rebuilds on the same URL when the server hands back exactly the one playing", async () => {
     vi.mocked(fetchChannelLive).mockResolvedValue({
       stream: { hlsUrl: LL_SRC },

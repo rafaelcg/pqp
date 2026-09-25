@@ -256,9 +256,16 @@ const SESSION_OVER_POLL_MS = 20_000;
  * slow poll) instead of a rebuild, and one still live is rebuilt onto the
  * freshest URL. Jittered so a whole audience that went dead together does not
  * come back in the same second. Never for a replay.
+ *
+ * BACKED OFF while it keeps failing: each retry that lands on "dead" again
+ * doubles the wait, up to `DEAD_RETRY_MAX_DOUBLINGS` doublings (8 to 15 s,
+ * then 16 to 30 s, then 32 to 60 s), and a painted frame starts it over. A
+ * decoder the LL media-rebuild bound gave up on must not turn into a player
+ * that tears itself down every ten seconds for the rest of the party.
  */
 const DEAD_RETRY_MIN_MS = 8_000;
 const DEAD_RETRY_MAX_MS = 15_000;
+const DEAD_RETRY_MAX_DOUBLINGS = 2;
 
 /** hls.js instance shape this file actually touches. */
 interface HlsHandle {
@@ -1006,19 +1013,31 @@ export function HlsWatchPlayer({
   }, [reconnect]);
   const retryFromDeadRef = useRef(retryFromDead);
   retryFromDeadRef.current = retryFromDead;
+  // Automatic retries since the last painted frame (`DEAD_RETRY_MAX_DOUBLINGS`).
+  const deadRetriesRef = useRef(0);
 
   // See `DEAD_RETRY_MIN_MS`. Re-armed each time the player lands on "dead"
   // again, so a stream that keeps failing keeps being retried for as long as
-  // the server says it is live, at the watchdog's own bounded pace.
+  // the server says it is live, further apart each time.
   useEffect(() => {
     if (phase !== "dead" || isVod || sessionOver !== null) {
       return;
     }
-    const timer = window.setTimeout(() => {
-      retryFromDeadRef.current();
-    }, uniformJitterMs(DEAD_RETRY_MIN_MS, DEAD_RETRY_MAX_MS));
+    const doublings = Math.min(deadRetriesRef.current, DEAD_RETRY_MAX_DOUBLINGS);
+    const timer = window.setTimeout(
+      () => {
+        deadRetriesRef.current += 1;
+        retryFromDeadRef.current();
+      },
+      uniformJitterMs(DEAD_RETRY_MIN_MS, DEAD_RETRY_MAX_MS) * 2 ** doublings,
+    );
     return () => window.clearTimeout(timer);
   }, [phase, isVod, sessionOver]);
+  useEffect(() => {
+    if (hasFrame) {
+      deadRetriesRef.current = 0;
+    }
+  }, [hasFrame]);
 
   const getVideo = useCallback(
     () => videoRef?.current ?? innerRef.current,
