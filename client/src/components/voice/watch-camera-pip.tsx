@@ -8,6 +8,11 @@ import {
 } from "@/lib/hls-playback";
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
+import {
+  CAMERA_STALL_POLL_MS,
+  CameraStallWatch,
+  cameraProgress,
+} from "@/lib/camera-stall";
 import { useTranslation } from "@/lib/i18n";
 import {
   getVoicePipVolume,
@@ -24,7 +29,9 @@ import { cn } from "@/lib/utils";
  * session from the API, Media Session metadata and a Picture-in-Picture
  * affordance. The camera needs exactly none of it: one rendition, no sound, no
  * chrome, and a failure whose correct response is to disappear rather than to
- * tell anybody anything. Reusing the big player here would mean a webcam that
+ * tell anybody anything. It does carry one small, silent piece of recovery,
+ * `lib/camera-stall.ts`, because a camera that froze stayed frozen for the
+ * rest of rehearsal D (2026-09-25): see "A FROZEN FACE IS RECOVERED" below. Reusing the big player here would mean a webcam that
  * can claim someone's lock screen, fight the film for the volume preference
  * and put a second "reconnecting" overlay on the stage.
  *
@@ -62,6 +69,17 @@ import { cn } from "@/lib/utils";
  * is not what anybody came for, and the one thing it must never do is take
  * attention away from the film to report its own health. The element simply
  * never reports a frame, and the corner box stays invisible.
+ *
+ * A FROZEN FACE IS RECOVERED, SILENTLY TOO. While this component is mounted
+ * the camera is still announced (`cameraHlsUrl` on the stream) and the viewer
+ * has not hidden it ("Ocultar câmera" unmounts it, unless it carries the
+ * voice), so playback that stops moving on a visible page is a player
+ * problem, not an ended camera. "Moving" is decoded frames when there is a
+ * picture, because a voice track keeps `currentTime` advancing under a frozen
+ * face, and the clock otherwise (`cameraProgress`). `CameraStallWatch`
+ * answers it with one nudge to the live edge, then rebuilds of THIS hls.js
+ * instance on a jittered backoff. It never touches the film's player, its element or its audio, and
+ * it never asks the server anything.
  */
 export function WatchCameraPip({
   src,
@@ -101,6 +119,10 @@ export function WatchCameraPip({
   // what the NEXT attach starts with.
   const hasVoiceAudioRef = useRef(hasVoiceAudio);
   hasVoiceAudioRef.current = hasVoiceAudio;
+  // Read by the stall watch: with a picture expected it counts frames, not
+  // the clock a voice track keeps moving (`cameraProgress`).
+  const hasVideoRef = useRef(hasVideo);
+  hasVideoRef.current = hasVideo;
 
   /**
    * "Voz" volume, persisted per browser. Only reachable when `hasVoiceAudio`
@@ -137,14 +159,28 @@ export function WatchCameraPip({
    * drives a small "tap to hear" affordance in the corner instead.
    */
   const [blocked, setBlocked] = useState(false);
+  // Mirrors `blocked` for the stall watch's interval, which must not restart
+  // (and lose its episode) every time the state flips.
+  const blockedRef = useRef(false);
+  blockedRef.current = blocked;
   const sessionRef = useRef<string | null>(hlsSessionKey(src));
+  /**
+   * Bumped by the stall watch to tear this camera's hls.js down and attach a
+   * fresh one on the same session. A dependency of the attach effect only:
+   * the session, the token refresh and the film are untouched by it.
+   */
+  const [rebuildNonce, setRebuildNonce] = useState(0);
+  // Whether the element has played since the current attach. A pause AFTER
+  // that is the browser's (or a refused unmuted play), not a stall; a pause
+  // before it is the camera never starting, which is.
+  const hasPlayedRef = useRef(false);
+  // `attachOnce`'s `attemptPlay`, so the nudge can restart a paused element
+  // through the same "tap to hear" fallback.
+  const attemptPlayRef = useRef<(() => void) | null>(null);
 
   // The live hls.js instance, reachable outside the attach effect so a plain
   // token refresh (below) can hand it a fresh URL without tearing it down.
-  const hlsPlayerRef = useRef<{
-    loadSource: (url: string) => void;
-    destroy: () => void;
-  } | null>(null);
+  const hlsPlayerRef = useRef<CameraHlsHandle | null>(null);
   // The latest `src`, including its current token, for the same reason: the
   // heavy attach effect only reruns on a genuine session change, but a
   // same-session token refresh still needs the freshest URL on hand.
@@ -236,6 +272,8 @@ export function WatchCameraPip({
     }
     let cancelled = false;
     usingNativeRef.current = false;
+    hasPlayedRef.current = false;
+    attemptPlayRef.current = null;
     onFrameRef.current(false);
     setBlocked(false);
 
@@ -275,6 +313,7 @@ export function WatchCameraPip({
 
     const onPlaying = () => {
       if (!cancelled) {
+        hasPlayedRef.current = true;
         onFrameRef.current(true);
         setBlocked(false);
       }
@@ -320,6 +359,7 @@ export function WatchCameraPip({
           }
         });
       };
+      attemptPlayRef.current = attemptPlay;
       if (!Hls.isSupported()) {
         // Safari and iOS play MPEG-TS natively. No engine choice to make: a
         // browser with neither simply never produces a frame and the corner
@@ -350,10 +390,7 @@ export function WatchCameraPip({
           }
         },
       });
-      hlsPlayerRef.current = player as unknown as {
-        loadSource: (url: string) => void;
-        destroy: () => void;
-      };
+      hlsPlayerRef.current = player as unknown as CameraHlsHandle;
       // The freshest URL on hand, not the value this effect closed over: a
       // token refresh that landed between mount and this async resolution
       // (the dynamic import is one microtask, but still one) must not attach
@@ -363,9 +400,11 @@ export function WatchCameraPip({
       player.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal && !cancelled) {
           // The film's watchdog owns reconnecting to a restarted session. This
-          // one gives up: the camera egress stopping is an ordinary event (the
-          // host closed their webcam) and `cameraHlsUrl` disappearing off the
-          // next stream frame is what actually unmounts this.
+          // one does not chase it: the camera egress stopping is an ordinary
+          // event (the host closed their webcam) and `cameraHlsUrl`
+          // disappearing off the next stream frame is what actually unmounts
+          // this. If the URL is still announced, the stall watch below finds
+          // the frozen element and rebuilds it on its own backoff.
           onFrameRef.current(false);
         }
       });
@@ -421,10 +460,52 @@ export function WatchCameraPip({
       video.removeEventListener("emptied", onFailed);
       hlsPlayerRef.current?.destroy();
       hlsPlayerRef.current = null;
+      attemptPlayRef.current = null;
       video.removeAttribute("src");
       video.load();
       onFrameRef.current(false);
     };
+  }, [activeSrc, rebuildNonce]);
+
+  /**
+   * THE STALL WATCH. One per session (keyed on `activeSrc`, not on
+   * `rebuildNonce`), so the backoff it has climbed survives the rebuilds it
+   * asks for. See `lib/camera-stall.ts` for the policy and the file doc for
+   * why it exists.
+   */
+  useEffect(() => {
+    const watch = new CameraStallWatch({ now: () => Date.now() });
+    const timer = setInterval(() => {
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+      const visible =
+        typeof document === "undefined" ||
+        document.visibilityState !== "hidden";
+      const action = watch.observe({
+        position: cameraProgress(video, hasVideoRef.current),
+        eligible:
+          visible &&
+          !blockedRef.current &&
+          !(video.paused && hasPlayedRef.current),
+      });
+      if (action === "nudge") {
+        console.warn(
+          `[watch-camera-pip] camera stalled at t=${video.currentTime.toFixed(2)}, nudging to the live edge`,
+        );
+        nudgeToLiveEdge(video, hlsPlayerRef.current);
+        if (video.paused) {
+          attemptPlayRef.current?.();
+        }
+      } else if (action === "rebuild") {
+        console.warn(
+          `[watch-camera-pip] camera still stalled at t=${video.currentTime.toFixed(2)}, rebuilding its player (${watch.rebuilds})`,
+        );
+        setRebuildNonce((n) => n + 1);
+      }
+    }, CAMERA_STALL_POLL_MS);
+    return () => clearInterval(timer);
   }, [activeSrc]);
 
   /**
@@ -539,4 +620,41 @@ export function WatchCameraPip({
       ) : null}
     </div>
   );
+}
+
+/** The slice of hls.js this file drives. */
+interface CameraHlsHandle {
+  loadSource: (url: string) => void;
+  destroy: () => void;
+  startLoad?: (startPosition?: number) => void;
+  liveSyncPosition?: number | null;
+}
+
+/**
+ * The stall watch's first, non-destructive step: restart loading at the live
+ * edge and, when the element sits behind it (a buffer hole it will never play
+ * across), jump there. Native Safari has no loader to restart; its rebuild is
+ * the next step.
+ */
+function nudgeToLiveEdge(
+  video: HTMLVideoElement,
+  player: CameraHlsHandle | null,
+): void {
+  if (!player) {
+    return;
+  }
+  try {
+    player.startLoad?.(-1);
+    const edge = player.liveSyncPosition;
+    if (
+      typeof edge === "number" &&
+      Number.isFinite(edge) &&
+      edge > video.currentTime + 1
+    ) {
+      video.currentTime = edge;
+    }
+  } catch (error) {
+    // A player mid-teardown can throw here; the rebuild step is next anyway.
+    console.warn("[watch-camera-pip] nudge failed:", error);
+  }
 }
