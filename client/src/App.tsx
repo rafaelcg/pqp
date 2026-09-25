@@ -518,6 +518,7 @@ import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
 import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
+import { feedAudienceCount } from "@/lib/watch-party-activity";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
@@ -5300,7 +5301,12 @@ function MainAppContent({
     const decision = decideGoLiveMicPrompt({
       wentOut,
       requestedPartyId: partyId,
-      party: watchParties.byChannel[channelId],
+      // `current`, NOT `byChannel`: this runs after the go-live's awaits, and
+      // the closure it was called from holds the render from BEFORE that
+      // go-live's own `put`, where the party is still a draft. Read that way
+      // every immediate go-live was "party-gone" and the mic prompt never
+      // armed (production rehearsal C, 2026-09-25).
+      party: watchParties.current(channelId),
       isMuted: voice.getState().isMuted,
     });
     if (!decision.arm) {
@@ -8187,7 +8193,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8504,7 +8512,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8825,7 +8835,7 @@ function MainAppContent({
             collapsible
             className="shrink-0"
             channelId={selectedChannel.id}
-            audienceCount={watchAudienceCount(
+            audienceCount={feedAudienceCount(
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
