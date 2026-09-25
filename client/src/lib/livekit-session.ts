@@ -39,6 +39,11 @@ import {
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
 import {
+  decideScreenResolutionRecovery,
+  initialScreenResolutionRecovery,
+  readScreenEncodeSample,
+} from "./screen-resolution-recovery";
+import {
   qualityFromLiveKit,
   type LiveKitConnectionQuality,
   type VoiceLinkQuality,
@@ -57,6 +62,12 @@ import {
 } from "./voice-stats-probe";
 
 export const HLS_SOURCE_DROP_SAMPLES = 3;
+/**
+ * How often the stuck-resolution watchdog reads the share's sender. The
+ * `setHlsSource` tick is 2 s but other callers reconcile in between, and a
+ * send rate over a few hundred milliseconds is noise.
+ */
+export const SCREEN_RESOLUTION_SAMPLE_MS = 1_500;
 export const HLS_SOURCE_RAISE_SAMPLES = 3;
 /** After a capture-height change, ignore further height moves for this long. */
 export const HLS_SOURCE_HEIGHT_DWELL_MS = 30_000;
@@ -488,6 +499,12 @@ export async function connectLiveKit({
    */
   let senderPriorityFailures = 0;
   const SENDER_PRIORITY_MAX_FAILURES = 3;
+  /**
+   * The watch-party share's stuck-resolution watchdog. See
+   * `screen-resolution-recovery.ts`; reset with every new share.
+   */
+  let screenResolutionRecovery = initialScreenResolutionRecovery();
+  let screenResolutionSampledAt = 0;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -1203,10 +1220,12 @@ export async function connectLiveKit({
           .some((encoding) => encoding.active !== false);
       // The share's "high" bid (`raiseScreenPriority`) is part of the pin,
       // retried on this tick until the browser has refused it enough times.
+      // Only the FIRST encoding carries it: see `raiseScreenPriority`.
       const priorityMissing =
         feedingHls &&
         senderPriorityFailures < SENDER_PRIORITY_MAX_FAILURES &&
-        encodings.some((encoding) => encoding.priority !== "high");
+        encodings.length > 0 &&
+        encodings[0]!.priority !== "high";
       return (
         subLayerAwake ||
         priorityMissing ||
@@ -1219,6 +1238,103 @@ export async function connectLiveKit({
       // Sender teardown: do not treat a dead getParameters as a pin miss
       // or the 2 s tick will keep retrying a track that is already gone.
       return false;
+    }
+  }
+
+  function resetScreenResolutionRecovery(): void {
+    screenResolutionRecovery = initialScreenResolutionRecovery();
+    screenResolutionSampledAt = 0;
+  }
+
+  /**
+   * The height the share's top layer is meant to encode at: the capture's
+   * own height under the plan's ceiling. Read from what this session asked
+   * for, never from the track's `getSettings()`, which reports the wedged
+   * size once Chrome has pushed the encoder's restriction into the capturer.
+   */
+  function intendedScreenHeight(): number | null {
+    const planned =
+      appliedScreenCaptureHeight ?? publishedScreenPlan?.topHeight ?? null;
+    if (planned === null) {
+      return null;
+    }
+    return nativeScreenCaptureHeight === null
+      ? planned
+      : Math.min(planned, nativeScreenCaptureHeight);
+  }
+
+  /**
+   * Get a watch-party share that Chrome's adaptation has wedged at the floor
+   * back to full size, without giving up `maintain-framerate`. The whole
+   * mechanism, the evidence and the guards are in
+   * `screen-resolution-recovery.ts`. Rides the 2 s `setHlsSource` tick, runs
+   * inside the screen-op queue, and never throws.
+   */
+  async function recoverScreenResolution(
+    track: MediaStreamTrack,
+    epoch: number,
+  ): Promise<void> {
+    const sender = room.localParticipant.getTrackPublication(
+      Track.Source.ScreenShare,
+    )?.track?.sender;
+    if (!sender || typeof sender.getStats !== "function") {
+      return;
+    }
+    const now = Date.now();
+    if (now - screenResolutionSampledAt < SCREEN_RESOLUTION_SAMPLE_MS) {
+      return;
+    }
+    screenResolutionSampledAt = now;
+    let sample: ReturnType<typeof readScreenEncodeSample> = null;
+    try {
+      const encodings = sender.getParameters().encodings ?? [];
+      const topRid = encodings[encodings.length - 1]?.rid;
+      const report = await sender.getStats();
+      sample = readScreenEncodeSample(report.values(), topRid, now);
+    } catch {
+      return;
+    }
+    if (!sample || !screenShareStill(track, epoch)) {
+      return;
+    }
+    const intendedHeight = intendedScreenHeight();
+    const decision = decideScreenResolutionRecovery(
+      screenResolutionRecovery,
+      sample,
+      intendedHeight,
+    );
+    screenResolutionRecovery = decision.state;
+    if (!decision.kick) {
+      return;
+    }
+    try {
+      const params = sender.getParameters();
+      const keep =
+        params.degradationPreference ??
+        screenShareDegradationPreference(hlsSource);
+      // Into balanced and straight back: libwebrtc clears the adapter's
+      // restrictions on either switch, which is the whole point.
+      params.degradationPreference = "balanced";
+      await sender.setParameters(params);
+      const back = sender.getParameters();
+      back.degradationPreference = keep;
+      await sender.setParameters(back);
+      // A warning, not info: the share was wedged, which is worth seeing in
+      // a presenter's console on the night, and it is rate limited by the
+      // kick backoff to one line a minute at most.
+      console.warn("[pqp] screen share unstuck from its adapted size", {
+        height: sample.frameHeight,
+        intendedHeight,
+        targetKbps:
+          sample.targetBitrate === null
+            ? null
+            : Math.round(sample.targetBitrate / 1000),
+        kick: screenResolutionRecovery.kicks,
+      });
+    } catch (err) {
+      // A half-done toggle leaves `balanced` on the sender, which the pin
+      // check (`screenHlsEncoderUnpinned`) reads as drift and writes back.
+      console.warn("[pqp] screen share resolution recovery refused", err);
     }
   }
 
@@ -1336,8 +1452,18 @@ export async function connectLiveKit({
    * feeds a watch party it bids at "high" (4x the weight of the default "low"
    * every other sender keeps, the presenter's camera included), so under
    * congestion the camera is what gives way: its 480p layer pauses and its
-   * 360p one carries on (`presenterCameraSimulcastRungs`). Chrome reads the
-   * sender's priority off its first encoding, so every encoding says it.
+   * 360p one carries on (`presenterCameraSimulcastRungs`).
+   *
+   * ONLY THE FIRST ENCODING SAYS IT. Priority is per sender, and Chrome reads
+   * it off `encodings[0]`; on every later encoding libwebrtc requires the
+   * default, and refuses the whole write otherwise ("Attempted to set an
+   * unimplemented parameter of RtpParameters",
+   * `UnimplementedRtpParameterHasValue`). This used to write "high" on every
+   * encoding, which a single-encoding share accepted and every SIMULCAST
+   * share refused: measured in a real Chromium on 2026-09-25, and the reason
+   * production rehearsal F read `priority: low` on the share at go-live (the
+   * share goes up before the party does, so it is simulcast then) and only
+   * saw "high" after a reload.
    *
    * A SEPARATE WRITE, after the layer pin has landed, and it never throws:
    * the pin is what keeps the egress fed, and a browser that refuses the
@@ -1348,28 +1474,21 @@ export async function connectLiveKit({
       return;
     }
     const params = sender.getParameters();
-    const encodings = params.encodings ?? [];
+    const first = params.encodings?.[0];
     if (
-      encodings.length === 0 ||
-      encodings.every(
-        (encoding) =>
-          encoding.priority === "high" && encoding.networkPriority === "high",
-      )
+      !first ||
+      (first.priority === "high" && first.networkPriority === "high")
     ) {
       return;
     }
-    for (const encoding of encodings) {
-      encoding.priority = "high";
-      encoding.networkPriority = "high";
-    }
+    first.priority = "high";
+    first.networkPriority = "high";
     try {
       await sender.setParameters(params);
       // An engine that takes the write without keeping the field would
       // otherwise read as "missing" on every 2 s repair tick for the whole
       // party: a silent drop counts as a refusal too.
-      const kept = (sender.getParameters().encodings ?? []).every(
-        (encoding) => encoding.priority === "high",
-      );
+      const kept = sender.getParameters().encodings?.[0]?.priority === "high";
       senderPriorityFailures = kept ? 0 : senderPriorityFailures + 1;
     } catch (err) {
       senderPriorityFailures += 1;
@@ -1652,6 +1771,7 @@ export async function connectLiveKit({
     publishedScreenPlan = plan;
     appliedScreenCaptureHeight = plan.topHeight;
     screenShareEpoch += 1;
+    resetScreenResolutionRecovery();
     // If the ladder is already live (share restarted mid-party), pin now —
     // do not wait for the next setHlsSource tick. Farol caught the window
     // where a room-size change could still republish before that tick.
@@ -1807,6 +1927,9 @@ export async function connectLiveKit({
             ...liveAfterBitrate,
             topBitrate: livePlan.topBitrate,
           };
+        }
+        if (feedingHls) {
+          await recoverScreenResolution(track, epoch);
         }
         return;
       }
@@ -2413,6 +2536,7 @@ export async function connectLiveKit({
         hlsLayersTrimmed = false;
         hlsLayerRetries = 0;
         clearHlsLayerRetry();
+        resetScreenResolutionRecovery();
       });
     },
 

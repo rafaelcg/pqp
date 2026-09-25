@@ -2856,6 +2856,43 @@ in place. Raise the `WATCH_PARTY_MAX_PUBLISH_HEIGHT` default once the egress
 moves closer to the presenter (a regional media box) or an OBS/RTMP ingest path
 exists.
 
+### A share that shrank and never grew back (2026-09-25)
+
+Production rehearsal F: after the presenter reloaded, the share went out at
+280x180 and stayed there for the rest of the show, so the audience and the
+recording got 280x180 upscaled. `qualityLimitationReason` said `bandwidth`,
+the encoder had 891 kbit/s granted and sent about 390, and nothing on the page
+had asked for anything smaller.
+
+**It is not the ingest pin.** PR 475's `maintain-resolution` + divisor-1 pin
+was removed on purpose by PR 668 (under a real uplink dip it held the pixels
+and let the frame rate collapse to 1-3 fps), so a watch-party share is
+`maintain-framerate` with no divisor, and PR 827 only made the rest of the pin
+(layer trim, priority) re-apply after a reload.
+
+**What wedges it**, reproduced in a real Chromium against a local LiveKit with
+200 ms of RTT and read out of WebRTC's own verbose log: a fresh peer connection
+starts its estimate near 300 kbit/s, the quality scaler's initial frame dropper
+walks the share down a notch per dropped frame (every renegotiation, the camera
+going up included, re-arms it), and Chrome applies the restriction at the
+capturer, so the screen track itself reports the small size. When the scaler
+then asks for a notch back up, the capture never delivers a larger frame, and
+libwebrtc will not adapt again until one arrives: "Not adapting up because
+VideoStreamAdapter returned kAwaitingPreviousAdaptation", for as long as the
+share lasts. The bandwidth estimate cannot climb out on its own either, because
+a 280x180 encoder never sends enough for the estimator to see more room.
+
+**The fix** (`client/src/lib/screen-resolution-recovery.ts`) rides the 2 s
+`setHlsSource` tick while the share feeds a party. When the top layer is at
+80 % of its planned height or less, Chrome blames bandwidth, the encoder is
+sending under 80 % of its own target, and that has held for 6 s without
+climbing, the sender's `degradationPreference` goes to `balanced` and straight
+back: libwebrtc clears the adapter's restrictions on any switch into or out of
+balanced, and the capture returns to full size at once. A share that is
+spending its whole budget (a real squeeze) or limited by CPU is never touched,
+and repeated kicks back off to one a minute. Console:
+`[pqp] screen share unstuck from its adapted size`.
+
 ### The presenter's camera at 480p
 
 Rafael, 2026-09-25: "480p tops, then if we can we bump down to 360p whilst
@@ -2873,8 +2910,10 @@ off is exactly the 360p behaviour below, both halves, with no client rebuild.
   put 180p under 480p.
 - **"Bump down" is the browser's own congestion control**, not a measurement
   of ours. The share's sender bids at `priority: "high"` while it feeds the
-  party (`setSourceMaxBitrate` in `livekit-session.ts`, every encoding, since
-  Chrome reads the sender's priority off the first), four times the weight of
+  party (`raiseScreenPriority` in `livekit-session.ts`, on the FIRST encoding
+  only: priority is per sender, Chrome reads it off `encodings[0]`, and a
+  write that puts it on a later encoding is refused whole, which is why every
+  simulcast share kept `low` until 2026-09-25), four times the weight of
   the camera's default `low`. When the uplink cannot carry both, the camera
   gets what the film does not need, its 480p layer pauses, and 360p carries
   on. A browser that refuses `priority` once is never asked again, so the
