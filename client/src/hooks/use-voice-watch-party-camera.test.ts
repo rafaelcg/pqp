@@ -95,6 +95,8 @@ let ladderReconciles = 0;
  * `applyWatchPartyCameraCap`.
  */
 let cameraBitrateGate: Promise<void> | null = null;
+/** When set, the next `setCameraMaxBitrate` rejects with it (one-shot). */
+let cameraBitrateFailure: Error | null = null;
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
@@ -107,6 +109,11 @@ vi.mock("@/lib/livekit-session", () => ({
     publishCamera: async () => {},
     setCameraMaxBitrate: async (bitrate: number) => {
       cameraCeilings.push(bitrate);
+      const failure = cameraBitrateFailure;
+      cameraBitrateFailure = null;
+      if (failure) {
+        throw failure;
+      }
       // ONE-SHOT: only the very next call is held. A later, overlapping call
       // (the race the gate exists to construct) must run to completion.
       const gate = cameraBitrateGate;
@@ -361,6 +368,7 @@ beforeEach(() => {
   appliedConstraints.length = 0;
   ladderReconciles = 0;
   cameraBitrateGate = null;
+  cameraBitrateFailure = null;
   liveHlsConfig.cameraHeight = null;
   intervalCallbacks.length = 0;
   vi.mocked(connectLiveKit).mockClear();
@@ -747,5 +755,61 @@ describe("the presenter's screen pin after a page reload or a re-share", () => {
 
     expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
     expect(intervalCallbacks.length).toBeGreaterThan(0);
+  });
+
+  /** Joined, seated on the SFU, and told the LL stream names an old page. */
+  async function reloadedHost() {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => ({
+      backend: "livekit" as const,
+      url: "ws://sfu",
+      token: "t",
+      room: CHANNEL,
+      identity: PEER,
+    }));
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome());
+    voice.handleSignaling(llVoiceStream("peer-before-the-reload"));
+    await settle();
+    await settle();
+    return voice;
+  }
+
+  it("a share stopped while its first refresh is still pending ends with no source", async () => {
+    const voice = await reloadedHost();
+    let releaseGate: () => void = () => {};
+    // The share's refresh caps the camera first and hangs there.
+    cameraBitrateGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    await voice.startScreenShare();
+    await settle();
+    await voice.stopScreenShare();
+    await settle();
+
+    releaseGate();
+    await settle();
+    await settle();
+    await settle();
+
+    // The stale "sharing" answer must not be the last word.
+    expect(hlsSources.at(-1) ?? null).toBeNull();
+  });
+
+  it("a refresh that fails is asked again on the next emit, not left unpinned", async () => {
+    const voice = await reloadedHost();
+    cameraBitrateFailure = new Error("encoder said no");
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+    expect(hlsSources.filter((source) => source !== null)).toEqual([]);
+
+    // Any later state change: nothing about the share moved.
+    await voice.setMuted(true);
+    await settle();
+    await settle();
+
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
   });
 });

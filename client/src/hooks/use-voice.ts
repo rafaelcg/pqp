@@ -1234,6 +1234,8 @@ export function createVoiceController(transport: RealtimeTransport) {
    * stopped a moment after it started, say).
    */
   let hlsSourceGeneration = 0;
+  /** `refreshHlsSource` calls not yet settled. */
+  let hlsSourceRefreshesInFlight = 0;
   /**
    * Bumped at the start of every `applyWatchPartyCameraCap` call, so an
    * awaited call can tell whether a LATER one has already superseded it.
@@ -1354,9 +1356,34 @@ export function createVoiceController(transport: RealtimeTransport) {
         usingSfu: state.usingSfu,
         uplinkBps: null,
       }) !== null;
-    return wantedNow || hlsSourceTimer !== null || watchPartyCameraCapped;
+    // A refresh still in flight read the OLD inputs and may be about to act
+    // on them (arm the sampler, set a source for a share that has just
+    // stopped). A newer call supersedes it through `hlsSourceGeneration`, so
+    // an input change during one always asks again (Farol on #827).
+    return (
+      wantedNow ||
+      hlsSourceTimer !== null ||
+      watchPartyCameraCapped ||
+      hlsSourceRefreshesInFlight > 0
+    );
   }
+  /**
+   * Never rejects. A refresh that throws before the sampler is armed would
+   * otherwise leave its inputs marked as seen, and nothing would ask again
+   * until they changed: forgetting them makes the next `emit` retry.
+   */
   async function refreshHlsSource(): Promise<void> {
+    hlsSourceRefreshesInFlight += 1;
+    try {
+      await refreshHlsSourceOnce();
+    } catch (err) {
+      hlsSourceInputsSeen = null;
+      console.warn("[pqp] watch-party source refresh failed", err);
+    } finally {
+      hlsSourceRefreshesInFlight -= 1;
+    }
+  }
+  async function refreshHlsSourceOnce(): Promise<void> {
     hlsSourceInputsSeen = currentHlsSourceInputs();
     const generation = ++hlsSourceGeneration;
     const wanted = hlsSourceFor({
@@ -1416,6 +1443,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (generation !== hlsSourceGeneration) {
       return;
     }
+    // No await between the check above and the commit: `setHlsSource`
+    // stores the source synchronously before it awaits anything, so calls
+    // commit in the order they are made and a newer clear always lands last.
     await sfu?.setHlsSource({
       ...wanted,
       uplinkBps: feed.uplinkBps,
