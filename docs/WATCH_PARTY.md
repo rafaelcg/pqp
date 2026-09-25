@@ -1642,6 +1642,25 @@ a minute or two part-load errors in ten seconds switches to segments in
 place (no rebuild; this replaced §4's old "pin", which rebuilt the player at
 the conventional ~25 s cushion).
 
+**On segments, the manifest's segment length is a floor (2026-09-25).** A
+segments viewer can only load up to the end of the newest complete segment,
+and `pqp-remux` closes a segment only on a keyframe, so segments run 5 to
+12 s and `EXT-X-TARGETDURATION` (the longest so far) reads 7 to 12. The
+target is therefore never under `EXT-X-TARGETDURATION` + 3 s
+(`LL_SEGMENTS_FETCH_MARGIN_SECONDS`, capped at 20 s), and the force-seek
+ceiling sits a whole target duration above it, because latency is measured
+to the edge of the open segment. The rehearsal that found it (one UK
+viewer, `TARGETDURATION` 8 then 12, target 8) stalled every one to two
+minutes; the lab rig with the real player went from 0.46 to 0.13 s of
+stall per viewer-minute at ~5 s segments, and from 1.94 to 0.96 at ~8 to
+12 s segments, for about 1.5 to 4 s more latency. A viewer who presses
+"Assistir" in the first 12 s of a session (`llStartDelayMs`, read off the
+`startedAt` in the playlist path) waits behind the "starting" screen until
+the session is 12 s old instead of freezing four times while its cushion
+builds (rehearsal: 5.0, 9.1, 9.1 and 4.8 s in the first 30 s; lab go-live
+join, four viewers, first minute: 14 stalls and 37.8 s frozen down to none,
+for a first frame about 5 s later).
+
 Why, measured on the lab rig (`tools/ll-loss-harness`, the real remux, the
 real Worker playlist, the real player in headless Chrome behind jittery
 links): part loading froze a mobile viewer 11 to 33 times a minute, while
