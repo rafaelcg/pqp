@@ -11,6 +11,7 @@ import {
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
 import {
+  CAMERA_RUN_REBUILD_JITTER_MS,
   CAMERA_RUN_REBUILD_MIN_GAP_MS,
   CAMERA_STALL_POLL_MS,
   CameraStallWatch,
@@ -252,7 +253,9 @@ export function WatchCameraPip({
       return;
     }
     const now = Date.now();
-    if (nativeTokenRefreshDue(nativeSrcRef.current, nativeAttachedAtRef.current, now)) {
+    if (
+      nativeTokenRefreshDue(nativeSrcRef.current, src, nativeAttachedAtRef.current, now)
+    ) {
       video.src = src;
       nativeSrcRef.current = src;
       nativeAttachedAtRef.current = now;
@@ -420,8 +423,10 @@ export function WatchCameraPip({
         // re-opening it before `send()` is the only way to redirect it, and
         // it is what the film's player does too. Only our own proxy's
         // playlist carries a `?t=`: segment lines are presigned bucket or
-        // edge URLs and `withFreshHlsToken` leaves anything that is not this
-        // session's path alone.
+        // edge URLs, and `withFreshHlsToken` leaves alone anything that is
+        // not this session's playlist on the SAME ORIGIN as the URL the
+        // server handed us (it compares scheme, host and path, the whole URL
+        // before the query), so the token never goes to another host.
         xhrSetup: (xhr, url) => {
           let effectiveUrl = url;
           if (isOwnHlsPlaylistProxyUrl(url)) {
@@ -464,7 +469,15 @@ export function WatchCameraPip({
         // which reads the new run from its live edge. When the numbers do
         // not collide (a run restarted long after the last), hls.js follows
         // the new run on its own and this never fires.
+        //
+        // FATAL ONLY: a parsing error hls.js is still retrying stays its own
+        // (`data.fatal` is already final here, hls.js settles it before any
+        // listener added after construction runs). JITTERED: every viewer
+        // polls the same playlist and meets the new run within a few
+        // seconds of each other, so each waits up to
+        // `CAMERA_RUN_REBUILD_JITTER_MS` more before asking for it again.
         if (
+          data.fatal &&
           data.details === Hls.ErrorDetails.LEVEL_PARSING_ERROR &&
           !cancelled &&
           Date.now() - runRestartRebuildAtRef.current >= CAMERA_RUN_REBUILD_MIN_GAP_MS
@@ -473,7 +486,15 @@ export function WatchCameraPip({
           console.warn(
             "[watch-camera-pip] camera playlist restarted under the same URL, rebuilding its player",
           );
-          setRebuildNonce((n) => n + 1);
+          const timer = setTimeout(
+            () => {
+              if (!cancelled) {
+                setRebuildNonce((n) => n + 1);
+              }
+            },
+            Math.round(Math.random() * CAMERA_RUN_REBUILD_JITTER_MS),
+          );
+          retryTimers.push(timer);
           return;
         }
         if (data.fatal && !cancelled) {

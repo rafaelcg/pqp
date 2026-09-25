@@ -75,16 +75,21 @@ vi.mock("hls.js", () => {
 const SESSION =
   "https://hls.pqp.gg/api/voice/hls-playlist/ad99074f-a4d3-4919-a782-122b7150ed87/1790351729293/cam360p30";
 
-/** A token shaped like `mintHlsViewerToken`'s, expiring at `e`. */
+const HOUR = 60 * 60 * 1000;
+
+/**
+ * A token shaped like `mintHlsViewerToken`'s: minted at `i` on the server's
+ * clock, expiring an hour later. `n` only makes each restamp distinct.
+ */
 function token(e: number, n: number): string {
-  const claims = btoa(JSON.stringify({ v: 1, u: "viewer", c: "ch", s: 1, e, i: n }))
+  const claims = btoa(JSON.stringify({ v: 1, u: "viewer", c: "ch", s: 1, e, i: e - HOUR, n }))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
   return `${claims}.sig${n}`;
 }
 
-function stamped(n: number, e = Date.now() + 60 * 60 * 1000): string {
+function stamped(n: number, e = Date.now() + HOUR): string {
   return `${SESSION}?t=${token(e, n)}&pp=pass`;
 }
 
@@ -177,6 +182,12 @@ describe("WatchCameraPip: a restamped token", () => {
     // A segment line (presigned bucket or edge segment URL) is left alone.
     const segment = "https://hls.pqp.gg/api/voice/hls-segment/ch/1/seg_00001.ts?sig=x";
     expect(requested(segment)).toBe(segment);
+    // The same proxy path on ANOTHER host never gets the token (Farol, PR
+    // 828): a playlist line pointing elsewhere keeps exactly what it had.
+    const foreign = `https://evil.example${new URL(SESSION).pathname}?t=theirs`;
+    expect(requested(foreign)).toBe(foreign);
+    const foreignBare = `https://evil.example${new URL(SESSION).pathname}`;
+    expect(requested(foreignBare)).toBe(foreignBare);
   });
 
   it("still re-attaches once for a genuinely new camera session", async () => {
@@ -188,29 +199,44 @@ describe("WatchCameraPip: a restamped token", () => {
     expect(loads.at(-1)).toEqual({ id: 2, url: next, attached: false });
   });
 
+  async function afterJitter() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await settle();
+  }
+
   it("rebuilds at once when a new camera run collides with the sequence it holds, and not in a loop", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     await render(stamped(0));
     expect(constructed).toBe(1);
+    // A parsing error hls.js is still retrying is left to hls.js.
+    await act(async () => {
+      emitError!({ details: "levelParsingError", fatal: false });
+    });
+    await afterJitter();
+    expect(constructed).toBe(1);
     // The presenter republished the camera: the shared live playlist now
-    // lists the new run's segment 3 where this instance holds the old run's.
+    // lists the new run's segment 3 where this instance holds the old run's,
+    // and hls.js gave up on it (fatal).
     await act(async () => {
       emitError!({ details: "levelParsingError", fatal: true });
     });
-    await settle();
+    await afterJitter();
     expect(constructed).toBe(2);
     expect(destroyed).toEqual([1]);
     // The same failure again straight away is the stall watch's to handle.
     await act(async () => {
       emitError!({ details: "levelParsingError", fatal: true });
     });
-    await settle();
+    await afterJitter();
     expect(constructed).toBe(2);
     // Any other fatal error is not a new run: no immediate rebuild.
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
     await act(async () => {
       emitError!({ details: "manifestLoadError", fatal: true });
     });
-    await settle();
+    await afterJitter();
     expect(constructed).toBe(2);
   });
 
@@ -218,21 +244,22 @@ describe("WatchCameraPip: a restamped token", () => {
     supported = false;
     HTMLMediaElement.prototype.canPlayType = (() =>
       "maybe") as typeof HTMLMediaElement.prototype.canPlayType;
-    const hour = 60 * 60 * 1000;
-    const first = stamped(0, Date.now() + hour);
+    const minted = Date.now();
+    const first = stamped(0, minted + HOUR);
     await render(first);
     const video = container.querySelector("video")!;
     expect(video.getAttribute("src")).toBe(first);
 
-    // Restamps with an hour left on the attached token: the element keeps
-    // playing what it has (a new `src` is the element's whole load).
-    await render(stamped(1, Date.now() + hour));
-    await render(stamped(2, Date.now() + hour));
+    // Restamps thirty seconds and a minute later: the element keeps playing
+    // what it has (a new `src` is the element's whole load).
+    await render(stamped(1, minted + 30_000 + HOUR));
+    await render(stamped(2, minted + 60_000 + HOUR));
     expect(video.getAttribute("src")).toBe(first);
 
-    // The attached token is now within the refresh margin: take the fresh one.
-    const nearExpiry = stamped(3, Date.now() + hour);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 50 * 60 * 1000);
+    // The server's re-mint, fifty minutes in by ITS clock: the attached token
+    // is within the refresh margin, so the element takes the fresh one, even
+    // though this device's clock has barely moved.
+    const nearExpiry = stamped(3, minted + 50 * 60 * 1000 + HOUR);
     await render(nearExpiry);
     expect(video.getAttribute("src")).toBe(nearExpiry);
   });

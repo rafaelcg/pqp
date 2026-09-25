@@ -386,25 +386,41 @@ describe("nativeTokenRefreshDue", () => {
     `${btoa(JSON.stringify(claims)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}.sig`;
   const HOUR = 60 * 60 * 1000;
   const minted = 1_790_000_000_000;
-  const attached = `${PROXY}?t=${token({ v: 1, e: minted + HOUR })}`;
+  const attached = `${PROXY}?t=${token({ v: 1, e: minted + HOUR, i: minted })}`;
+  /** A restamp minted `at` on the server's clock. */
+  const fresh = (at: number) => `${PROXY}?t=${token({ v: 1, e: at + HOUR, i: at })}`;
 
   it("keeps the attached URL through the thirty-second restamps", () => {
     for (let at = minted; at < minted + HOUR - NATIVE_TOKEN_REFRESH_MARGIN_MS; at += 30_000) {
-      expect(nativeTokenRefreshDue(attached, minted, at)).toBe(false);
+      expect(nativeTokenRefreshDue(attached, fresh(at), minted, at)).toBe(false);
     }
   });
 
   it("takes the fresh one once the attached token is near its expiry, the server's own re-mint included", () => {
-    expect(nativeTokenRefreshDue(attached, minted, minted + HOUR - NATIVE_TOKEN_REFRESH_MARGIN_MS)).toBe(true);
+    const edge = minted + HOUR - NATIVE_TOKEN_REFRESH_MARGIN_MS;
+    expect(nativeTokenRefreshDue(attached, fresh(edge), minted, edge)).toBe(true);
     // `HLS_VIEWER_TOKEN_REMINT_MS`: fifty minutes into an hour.
-    expect(nativeTokenRefreshDue(attached, minted, minted + 50 * 60 * 1000)).toBe(true);
+    const remint = minted + 50 * 60 * 1000;
+    expect(nativeTokenRefreshDue(attached, fresh(remint), minted, remint)).toBe(true);
+  });
+
+  it("judges near-expiry on the server's clock, so a slow device clock cannot keep a dead token", () => {
+    const remint = minted + 50 * 60 * 1000;
+    // This phone's clock runs twenty minutes slow.
+    const slowDevice = remint - 20 * 60 * 1000;
+    expect(nativeTokenRefreshDue(attached, fresh(remint), minted, slowDevice)).toBe(true);
+    // And one running fast does not reload early.
+    const fastDevice = minted + 20 * 60 * 1000;
+    expect(nativeTokenRefreshDue(attached, fresh(minted + 60_000), minted, fastDevice + HOUR)).toBe(false);
   });
 
   it("falls back to age for a URL whose token it cannot read, and attaches when nothing is attached", () => {
     const opaque = `${PROXY}?t=opaque`;
-    expect(nativeTokenRefreshDue(opaque, minted, minted + 60_000)).toBe(false);
-    expect(nativeTokenRefreshDue(opaque, minted, minted + NATIVE_TOKEN_REFRESH_UNREADABLE_MS)).toBe(true);
-    expect(nativeTokenRefreshDue(null, minted, minted)).toBe(true);
+    expect(nativeTokenRefreshDue(opaque, opaque, minted, minted + 60_000)).toBe(false);
+    expect(
+      nativeTokenRefreshDue(opaque, opaque, minted, minted + NATIVE_TOKEN_REFRESH_UNREADABLE_MS),
+    ).toBe(true);
+    expect(nativeTokenRefreshDue(null, fresh(minted), minted, minted)).toBe(true);
   });
 });
 

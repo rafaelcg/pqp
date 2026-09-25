@@ -104,6 +104,12 @@ export const CAMERA_REBUILD_BACKOFF_MS: readonly number[] = [
  * playlist that keeps failing that way is left to the stall watch's backoff.
  */
 export const CAMERA_RUN_REBUILD_MIN_GAP_MS = 10_000;
+/**
+ * The spread on that rebuild: every viewer meets the new run within a
+ * playlist refresh of each other, and this keeps their fresh manifest
+ * requests from landing in the same second.
+ */
+export const CAMERA_RUN_REBUILD_JITTER_MS = 3_000;
 /** Forward play for this long means the camera is healthy again. */
 export const CAMERA_HEALTHY_MS = 10_000;
 export const CAMERA_REBUILD_JITTER = 0.25;

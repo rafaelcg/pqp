@@ -1997,13 +1997,14 @@ played exactly its twenty-second window (597 frames at 30 fps) and stopped.
 The camera now does what the film's player has done since B1.3: `xhrSetup`
 swaps the newest token into each playlist request (`withFreshHlsToken`) and
 the instance is never touched. The native player (no MSE) has no loader, so
-it takes a new `src` only when its token is within 15 minutes of expiring
-(`nativeTokenRefreshDue`). Separately, every camera run writes the one shared
+it takes a new `src` only when its token is within 15 minutes of expiring,
+judged on the server's clock (the fresh token's mint time against the
+attached one's expiry, `nativeTokenRefreshDue`). Separately, every camera run writes the one shared
 live playlist and numbers from 0 again, so a run restarted soon after the
 last can list a sequence number the player holds under a different segment;
 hls.js calls that a media sequence mismatch and goes fatal, and the camera now
-rebuilds at once on it (at most every 10 s) instead of freezing until the
-stall watch noticed.
+rebuilds on it within 3 s of jitter (fatal only, at most every 10 s) instead
+of freezing until the stall watch noticed.
 
 **The viewer picks the layout (2026-09-25).** Rafael's four, from one small
 control in the player's own bar (`watch-camera-layout`, a `Menu`), offered
