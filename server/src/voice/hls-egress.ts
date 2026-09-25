@@ -178,6 +178,13 @@ export const STAGE_MIX_TRACK_NAME = "stage-mix";
  * seconds for the length of a film.
  */
 const MIC_ARCHIVE_WAIT_MS = 60_000;
+/**
+ * How long a takeover keeps retrying the voice archive's recovery when the
+ * database would not answer (`RoomHls.micArchiveInherit`). Longer than the
+ * managed cluster's observed connectivity drops (about a minute), short
+ * enough that a party which really lost its database gives up quietly.
+ */
+const MIC_ARCHIVE_INHERIT_RETRY_MS = 5 * 60_000;
 
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
@@ -630,6 +637,13 @@ interface RoomHls {
    * second file nobody asked for.
    */
   micArchiveUntil: number;
+  /**
+   * A takeover whose voice-archive recovery did not land: closing the stale
+   * rows or reading the `mic` row failed. `tendMicArchive` tries again on
+   * every tick until `until`, so a database blip during the move costs the
+   * voice a few seconds, not the rest of the show.
+   */
+  micArchiveInherit?: { startedAt: number; staleRowIds: string[]; until: number };
   /**
    * THE LADDER IS BEING RESTARTED IN PLACE, and why. Set the moment its
    * egress is found dead (or is about to be replaced) and cleared when the
@@ -4135,7 +4149,7 @@ async function reconcileLlCompanions(
       tracks.micArchiveTrackId &&
       Date.now() < room.micArchiveUntil
     ) {
-      await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+      await startOrContinueMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
     }
   } else {
     // A reconnect that kept the media keeps the session under a new peer id
@@ -4242,6 +4256,19 @@ async function noteLlScreenTracks(
  * archive half of `adoptRunningLiveHlsSession`. Same refusals: a row a live
  * other machine owns is left alone, "could not ask" adopts nothing, and an
  * egress LiveKit no longer lists is not inherited.
+ *
+ * AND THE SAME REPAIR: a row of this session whose egress is gone is ENDED
+ * here, and an archive the session already recorded is continued as a new run
+ * (`inheritMicArchive`). Neither was true until 2026-09-25, and production
+ * rehearsal D lost its whole voice file to it: the presenter's page reloaded
+ * onto the other replica, the reload took them out of LiveKit (so the
+ * archive's Track Egress had ended), the session was handed over, and this
+ * function skipped the open `mic` row as "not listed" without closing it.
+ * Nothing else ever would: the history only serves a row with `ended_at`, so
+ * "gravação da voz desligada" for a show that recorded seven minutes of it.
+ * And "rows exist" was read as "never a second archive", so nothing after the
+ * reload was recorded either. That rule predates in-place runs (#816): a run
+ * writes its own `-r<ms>.ogg`, so continuing is not overwriting.
  */
 async function adoptLlCompanionRows(
   channelId: string,
@@ -4282,10 +4309,15 @@ async function adoptLlCompanionRows(
       : [];
   });
   if (candidates.length === 0) {
+    // Nothing open. An archive this session already recorded and CLOSED (the
+    // releasing machine's monitor saw its egress end before the handover
+    // reached it) is still this session's voice, and is continued.
+    await settleMicArchiveInheritance(channelId, room, startedAt, []);
     return;
   }
-  // Rows exist, so this session was inherited: never a second archive,
-  // whatever happens below.
+  // Rows exist, so this session was inherited: never a FIRST archive over
+  // the file they name, whatever happens below. A continuation is another
+  // matter (`inheritMicArchive`).
   room.micArchiveUntil = 0;
   const liveOthers = await liveOtherInstances();
   const active = liveOthers === null ? null : await listActiveEgresses();
@@ -4334,6 +4366,211 @@ async function adoptLlCompanionRows(
       sessionIds: adopted,
     });
   }
+  // END WHAT IS PROVABLY FINISHED, the rule the conventional adoption already
+  // follows: an open camera or archive row of THIS session that no live
+  // machine holds and whose egress LiveKit no longer lists has nobody left to
+  // close it. A camera that comes back reopens its row with a new run, and so
+  // does the archive (`inheritMicArchive` below).
+  const finished = candidates
+    .filter(
+      ({ row }) =>
+        !adopted.includes(row.id) &&
+        !ownedByLiveOtherInstance(row.instance_id, liveOthers) &&
+        (!row.egress_id || !listed.has(row.egress_id)),
+    )
+    .map(({ row }) => row.id);
+  const ended = await endStaleSessionRows(channelId, finished);
+  if (ended && finished.length > 0) {
+    logEvent("voice.hlsLlCompanionRowsEnded", {
+      channelId,
+      startedAt,
+      sessionIds: finished,
+    });
+  }
+  await settleMicArchiveInheritance(
+    channelId,
+    room,
+    startedAt,
+    ended ? [] : finished,
+  );
+}
+
+/**
+ * A SESSION THAT ALREADY RECORDED ITS HOST'S VOICE KEEPS RECORDING IT.
+ *
+ * Called by both adoption paths (a presenter who moved machines, conventional
+ * or LL) once they have taken back whatever was still running. When no archive
+ * egress came with the session but its `mic` row exists and is CLOSED, the
+ * archive died with the move (a page reload takes the presenter, and so the
+ * archive's track, out of LiveKit) and the voice before it is safely on file.
+ * The room is marked as having recorded (`micArchiveHad`), which is what lets
+ * the presenter's new `mic-archive` track start the NEXT run of the same file
+ * (`restartMicArchiveInPlace`, a `-r<ms>.ogg` of its own, `runs` appended to
+ * the row) rather than nothing at all, or a first run over `<startedAt>-mic.ogg`.
+ *
+ * `micArchiveUntil` opens again for a minute, because the browser publishes
+ * that track a beat after the share and publishing it is not an event the
+ * server hears about: the monitor looks for it (`tendMicArchive`) the same way
+ * it looks for a brand-new session's first one.
+ *
+ * An OPEN row is left alone: either a live machine is still recording it, or
+ * ending it above did not land, and in both cases continuing here would put
+ * two archives on one session.
+ */
+async function inheritMicArchive(
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+): Promise<boolean> {
+  if (room.micArchive || room.micArchiveHad || !micArchiveEnabled()) {
+    return true;
+  }
+  let row: { ended_at: Date | null; runs: unknown } | undefined;
+  try {
+    const result = await getPool().query<{
+      ended_at: Date | null;
+      instance_id: string | null;
+      runs: unknown;
+    }>(
+      `SELECT ended_at, instance_id, runs FROM hls_sessions
+        WHERE object_prefix = $1 AND cleaned_at IS NULL`,
+      [hlsObjectPrefix(channelId, startedAt, MIC_ARCHIVE_RUNG)],
+    );
+    row = result.rows[0];
+  } catch (error) {
+    logEvent("voice.hlsMicArchiveInheritFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+  if (!row || row.ended_at === null) {
+    return true;
+  }
+  if (room.micArchive || companionHost(channelId) !== room) {
+    return true;
+  }
+  const runs = parseHlsRuns(row.runs ?? null);
+  room.micArchiveHad = true;
+  room.micArchiveRuns = runs;
+  room.micArchiveUntil = Date.now() + MIC_ARCHIVE_WAIT_MS;
+  logEvent("voice.hlsMicArchiveInherited", {
+    channelId,
+    startedAt,
+    runs: runs.length,
+  });
+  return true;
+}
+
+/**
+ * Close rows a takeover found finished. False when the write did not land,
+ * which the caller turns into a retry rather than a shrug: an open `mic` row
+ * is exactly what `inheritMicArchive` refuses to continue.
+ */
+async function endStaleSessionRows(
+  channelId: string,
+  ids: string[],
+): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+  try {
+    await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+        WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
+      [ids],
+    );
+    return true;
+  } catch (error) {
+    logEvent("voice.hlsResumeStaleEndFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * The voice half of a takeover, retried until it lands. `staleRowIds` are the
+ * finished rows the takeover could NOT close; closing them is repeated first,
+ * because the `mic` row among them must be closed before it can be continued.
+ * Anything that fails leaves `RoomHls.micArchiveInherit` set for
+ * `tendMicArchive` to try again.
+ */
+async function settleMicArchiveInheritance(
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+  staleRowIds: string[],
+  now = Date.now(),
+): Promise<void> {
+  const settled =
+    (await endStaleSessionRows(channelId, staleRowIds)) &&
+    (await inheritMicArchive(channelId, room, startedAt));
+  if (settled) {
+    room.micArchiveInherit = undefined;
+    return;
+  }
+  room.micArchiveInherit = {
+    startedAt,
+    staleRowIds,
+    until: room.micArchiveInherit?.until ?? now + MIC_ARCHIVE_INHERIT_RETRY_MS,
+  };
+}
+
+async function retryMicArchiveInherit(
+  channelId: string,
+  room: RoomHls,
+  now: number,
+): Promise<void> {
+  const pending = room.micArchiveInherit;
+  if (!pending) {
+    return;
+  }
+  if (room.stream.startedAt !== pending.startedAt || room.micArchive) {
+    room.micArchiveInherit = undefined;
+    return;
+  }
+  if (now >= pending.until) {
+    room.micArchiveInherit = undefined;
+    logEvent("voice.hlsMicArchiveInheritGaveUp", {
+      channelId,
+      startedAt: pending.startedAt,
+    });
+    return;
+  }
+  await settleMicArchiveInheritance(
+    channelId,
+    room,
+    pending.startedAt,
+    pending.staleRowIds,
+    now,
+  );
+}
+
+/**
+ * The archive for a track that has just been found: a session's FIRST run,
+ * or, for a session that already recorded (`micArchiveHad`), its next run.
+ * Never a first run over a file that exists.
+ */
+async function startOrContinueMicArchive(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  trackId: string,
+): Promise<void> {
+  if (room.micArchiveHad) {
+    await restartMicArchiveInPlace(
+      egress,
+      channelId,
+      room,
+      trackId,
+      room.micArchiveRestart?.reason ?? "mic-track-returned",
+    );
+    return;
+  }
+  await startMicArchive(egress, channelId, room, trackId);
 }
 
 /**
@@ -5310,19 +5547,17 @@ export async function adoptRunningLiveHlsSession(
       return olderSession || !stillRunning(row);
     })
     .map((row) => row.id);
-  if (finished.length > 0) {
-    try {
-      await getPool().query(
-        `UPDATE hls_sessions SET ended_at = NOW()
-          WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
-        [finished],
-      );
-    } catch (error) {
-      logEvent("voice.hlsResumeStaleEndFailed", {
-        channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  const ended = await endStaleSessionRows(channelId, finished);
+  // An archive that did not survive the move is continued, not dropped: the
+  // conventional half of rehearsal D's lost voice (see `inheritMicArchive`).
+  const adoptedRoom = rooms.get(channelId);
+  if (adoptedRoom && adoptedRoom.stream.startedAt === startedAt) {
+    await settleMicArchiveInheritance(
+      channelId,
+      adoptedRoom,
+      startedAt,
+      ended ? [] : finished,
+    );
   }
 
   const stream = rooms.get(channelId)?.stream ?? null;
@@ -6453,6 +6688,9 @@ async function tendMicArchive(
     await stopMicArchive(channelId, room, "disabled");
     return;
   }
+  if (room.micArchiveInherit && !room.micArchive) {
+    await retryMicArchiveInherit(channelId, room, now);
+  }
   if (room.micArchive) {
     if (!egress.listEgress) {
       return;
@@ -6505,10 +6743,11 @@ async function tendMicArchive(
     return;
   }
   const tracks = await probeScreenTracks(channelId, room.stream.presenterPeerId);
-  if (!tracks?.micArchiveTrackId || companionHost(channelId) !== room) {
+  if (!tracks?.micArchiveTrackId || companionHost(channelId) !== room || room.micArchive) {
     return;
   }
-  await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+  // An inherited session's window is for its NEXT run (`inheritMicArchive`).
+  await startOrContinueMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
 }
 
 /**

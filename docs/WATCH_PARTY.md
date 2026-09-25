@@ -1863,6 +1863,23 @@ The row's `runs` records when each run started (`base`, ms after `startedAt`;
 nothing renders a `mic` row as a playlist). An inherited session still never
 starts a FIRST archive mid-film, and the flag going off stops it for good.
 
+**Nor does the presenter moving machines** (since 2026-09-25, after rehearsal D
+lost its whole voice file). A page reload that lands on the other API replica
+takes the presenter out of LiveKit, so the archive's egress has ended by the
+time the session is handed over and adopted there. The adopting machine used to
+skip the open `mic` row as "not listed" without closing it, and read "a row
+exists" as "never another archive": nothing after the reload was recorded, and
+since the history only offers a row with `ended_at`, the voice before it was
+never offered either ("gravação da voz desligada"). Both adoptions (the LL
+companion's `adoptLlCompanionRows` and the ladder's `adoptRunningLiveHlsSession`)
+now close a row of the session whose egress is gone, and `inheritMicArchive`
+marks a session whose `mic` row exists and is closed as one that recorded: the
+new page's `mic-archive` track starts the next run (`mic-track-returned`), and
+the monitor looks for that track for a minute because it lands a beat after the
+share. `voice.hlsLlCompanionRowsEnded` and `voice.hlsMicArchiveInherited` are
+the log lines. An open row a live machine still holds is never continued, so
+there is never a second archive on one session.
+
 **The download joins the runs into one file.** "Voz do apresentador" over more
 than one run is one Ogg Opus stream (`server/src/voice/ogg-stitch.ts`): later
 runs' pages rewritten into the first run's stream (serial, page sequence,
