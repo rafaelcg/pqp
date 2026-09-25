@@ -109,6 +109,40 @@ class WatchModelsTest {
     }
 
     @Test
+    fun `a camera rung decodes alongside the film`() {
+        val stream = decodeLiveStream(
+            frame(
+                """
+                {"type":"channel-live","channelId":"c1","watching":2,"stream":{
+                  "hlsUrl":"/api/voice/hls-playlist/c1/1?t=a",
+                  "startedAt":1,"presenterPeerId":"p1",
+                  "cameraHlsUrl":"/api/voice/hls-playlist/c1/1-cam360p30?t=a",
+                  "cameraHasVideo":false,
+                  "cameraHasVoiceAudio":true}}
+                """,
+            ),
+        )!!
+        assertEquals(
+            "${Backend.apiUrl}/api/voice/hls-playlist/c1/1-cam360p30?t=a",
+            stream.cameraHlsUrl,
+        )
+        assertEquals(false, stream.cameraHasVideo)
+        assertEquals(true, stream.cameraHasVoiceAudio)
+    }
+
+    /**
+     * Absent is the pre-camera-field default on every count: no rung, a face
+     * (not silence) once one exists, and no separated voice.
+     */
+    @Test
+    fun `no camera fields at all reads as no camera, defaults for the rest`() {
+        val stream = decodeLiveStream(frame(good))!!
+        assertNull(stream.cameraHlsUrl)
+        assertEquals(true, stream.cameraHasVideo)
+        assertEquals(false, stream.cameraHasVoiceAudio)
+    }
+
+    @Test
     fun `the HTTP seed resolves the same way the frame does`() {
         val payload = LiveStreamPayload(
             hlsUrl = "/api/voice/hls-playlist/c1/9?t=zz",
@@ -117,5 +151,24 @@ class WatchModelsTest {
         )
         assertEquals("${Backend.apiUrl}/api/voice/hls-playlist/c1/9?t=zz", payload.resolve()!!.hlsUrl)
         assertNull(payload.copy(hlsUrl = "").resolve())
+    }
+
+    @Test
+    fun `the seed resolves the camera rung the same way`() {
+        val payload = LiveStreamPayload(
+            hlsUrl = "/api/voice/hls-playlist/c1/9?t=zz",
+            startedAt = 9,
+            presenterPeerId = "p1",
+            cameraHlsUrl = "/api/voice/hls-playlist/c1/9-cam360p30?t=zz",
+            cameraHasVideo = false,
+            cameraHasVoiceAudio = true,
+        )
+        val resolved = payload.resolve()!!
+        assertEquals(
+            "${Backend.apiUrl}/api/voice/hls-playlist/c1/9-cam360p30?t=zz",
+            resolved.cameraHlsUrl,
+        )
+        assertEquals(false, resolved.cameraHasVideo)
+        assertEquals(true, resolved.cameraHasVoiceAudio)
     }
 }

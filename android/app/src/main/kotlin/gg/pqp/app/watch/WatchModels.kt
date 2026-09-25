@@ -4,6 +4,7 @@ import gg.pqp.app.core.Backend
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -55,6 +56,32 @@ data class LiveStream(
     val presenterPeerId: String,
     /** What the badge should claim, from the server that started the egress. */
     val delaySeconds: Int?,
+    /**
+     * A SECOND playlist, carrying the presenter's camera (or, with
+     * [cameraHasVoiceAudio], their separated microphone) and nothing else.
+     *
+     * Same session, deliberately: the camera starts and stops inside the
+     * running session and never mints a new `startedAt`, so a PiP re-attach
+     * must never be keyed on this URL alone (see [gg.pqp.app.watch.cameraPathKey]).
+     * Absent means no camera in this broadcast: the presenter has none on,
+     * the media box refused it on budget, or the server predates the field.
+     */
+    val cameraHlsUrl: String? = null,
+    /**
+     * Whether [cameraHlsUrl] actually carries a picture. Absent (the field's
+     * pre-2026-09-13 default) or true means the presenter's face is in it;
+     * false is the voice-only shape (`LIVE_HLS_VOICE_TRACK`), where the rung
+     * exists but there is nothing to paint.
+     */
+    val cameraHasVideo: Boolean = true,
+    /**
+     * Whether [cameraHlsUrl] carries the presenter's MICROPHONE separately
+     * from whatever [hlsUrl] (the film) carries. Off (the default): the
+     * corner is silent, same as always, and any voice the audience hears is
+     * mixed into the film. On: the corner unmutes at the viewer's own
+     * remembered level.
+     */
+    val cameraHasVoiceAudio: Boolean = false,
 )
 
 /** What one channel's audience looks like right now. */
@@ -91,6 +118,9 @@ data class LiveStreamPayload(
     val presenterPeerId: String,
     val delaySeconds: Int? = null,
     val topHeight: Int? = null,
+    val cameraHlsUrl: String? = null,
+    val cameraHasVideo: Boolean? = null,
+    val cameraHasVoiceAudio: Boolean? = null,
 )
 
 fun LiveStreamPayload.resolve(): LiveStream? {
@@ -100,6 +130,9 @@ fun LiveStreamPayload.resolve(): LiveStream? {
         startedAt = startedAt,
         presenterPeerId = presenterPeerId,
         delaySeconds = delaySeconds,
+        cameraHlsUrl = cameraHlsUrl?.let { Backend.absolute(it) },
+        cameraHasVideo = cameraHasVideo ?: true,
+        cameraHasVoiceAudio = cameraHasVoiceAudio ?: false,
     )
 }
 
@@ -121,6 +154,9 @@ fun decodeLiveStream(frame: JsonObject): LiveStream? {
         startedAt = startedAt,
         presenterPeerId = presenter,
         delaySeconds = stream.count("delaySeconds"),
+        cameraHlsUrl = stream.text("cameraHlsUrl")?.let { Backend.absolute(it) },
+        cameraHasVideo = stream.bool("cameraHasVideo") ?: true,
+        cameraHasVoiceAudio = stream.bool("cameraHasVoiceAudio") ?: false,
     )
 }
 
@@ -137,3 +173,6 @@ private fun JsonObject.number(key: String): Long? =
 
 private fun JsonObject.count(key: String): Int? =
     (this[key] as? JsonPrimitive)?.intOrNull
+
+private fun JsonObject.bool(key: String): Boolean? =
+    (this[key] as? JsonPrimitive)?.booleanOrNull

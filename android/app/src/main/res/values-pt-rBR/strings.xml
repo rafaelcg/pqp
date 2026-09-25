@@ -436,6 +436,14 @@
     <string name="watch_retry">Tentar de novo</string>
     <string name="watch_fullscreen">Tela cheia</string>
     <string name="watch_exit_fullscreen">Sair da tela cheia</string>
+    <string name="watch_idle_title">Ainda ninguém está transmitindo</string>
+    <string name="watch_idle_body">Quando o host entrar ao vivo, começa aqui.</string>
+    <string name="watch_camera_layout">Layout da câmera</string>
+    <string name="watch_camera_layout_pip">Padrão</string>
+    <string name="watch_camera_layout_side">Lado a lado</string>
+    <string name="watch_camera_layout_hide_camera">Ocultar câmera</string>
+    <string name="watch_camera_layout_hide_stream">Ocultar transmissão</string>
+    <string name="watch_camera_voice_only">Voz do apresentador</string>
 
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Passo %1$d de %2$d</string>

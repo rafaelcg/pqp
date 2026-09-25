@@ -1789,6 +1789,61 @@ into an immediate answer the day the server starts answering a cold join.
   session and a service, which is a different piece of work with its own
   battery argument.
 
+### The stage, not a voice room (2026-09-25)
+
+The first line above ("What it looks like") used to end with "the pane draws
+nothing on a voice channel with no watch party," stated as the whole answer.
+It still is, for a plain `voice` channel — but a `watch_party` channel got the
+same nothing while no party was running, and that was the report: "watch
+party shows as a regular voice channel," the identical complaint iOS's build
+22 fixed (see "The player was not enough" above) with nothing on Android to
+match. `ChatRoute.isWatchParty` (`channel.type == "watch_party"`, carried
+alongside `isVoiceChannel` at all three places a chat is opened) is what a
+plain voice channel and a watch party finally answer differently:
+
+- **Idle draws a card**, not silence — `WatchPane`'s `isWatchPartyChannel`
+  parameter, `false` everywhere a plain voice channel opens it, so that
+  channel is untouched byte for byte. `true` only for `route.isWatchParty`
+  draws "Ainda ninguém está transmitindo" / "Quando o host entrar ao vivo,
+  começa aqui" in place of the early return.
+- **"Entrar na call" moved onto the stage itself**, as its own secondary
+  button under the badge row, independent of whether anything is live — a
+  call can run before, during or after a broadcast. The app bar icon
+  (`chat.joinVoice`) is now drawn only for a plain voice room, which has no
+  stage to put a second one on; a watch party's is `route.isWatchParty &&
+  !inThisRoom && mayTakeWatchPartySeat(...)`, the same rule as before, just
+  relocated.
+- **The presenter's camera**, `LiveHlsStream.cameraHlsUrl` (`docs/WATCH_PARTY.md`,
+  "The presenter's camera, floating over the film"), reaches Android for the
+  first time: a second `ExoPlayer`, muted unless `cameraHasVoiceAudio`, drawn
+  over the film per the viewer's own choice of four layouts (`WatchCameraLayout`
+  — a corner PiP, side by side, hide camera, hide stream), a port of
+  `client/src/lib/watch-camera-pip.ts`'s pure placement function
+  (`watchStagePlacement` in `WatchCameraLayout.kt`, unit-tested the same way).
+  The corner is draggable to any of the stage's four corners and snaps on
+  release; the choice (corner + layout) is remembered per phone in a
+  DataStore (`WatchCameraPipPrefsStore`), not per channel — a whole-device
+  preference, same as web's one `localStorage` key. **The same restamp rule
+  the film already had** applies a second time: `watchCameraSourceChanged` in
+  `WatchSource.kt` reattaches the camera player only when the playlist's PATH
+  changes (a camera run or the session restarting), never on the query-string
+  token the audience keyframe rewrites every 30 s — unit-tested the same way
+  `watchSourceChanged` is. A failure here is silent by design, matching web's
+  `WatchCameraPip`: no retry banner, nothing that competes with the film for
+  attention.
+- **The channel list** draws `PqpIcons.WatchParty` (the clapperboard-shaped
+  `tv` glyph) instead of the plain speaker for `channel.type == "watch_party"`,
+  same rule as iOS's `ChannelListView`.
+
+Not done in this pass: system Android Picture-in-Picture (the OS-level kind,
+distinct from the camera corner above) and a dedicated create/host surface —
+both already tracked above. Verified on a Pixel 10 Pro emulator (API 37)
+against a public test HLS stream fed through the pane directly (a temporary
+harness, not shipped): idle card, live picture with the camera corner PiP,
+all four layouts including the layout picker menu, and both `en` and
+`pt-rBR` strings. Not verified against a real production watch party's own
+camera rung, or on a physical device.
+
 ## Cameras, receiving
 
 A phone in the 5 Sep watch party saw the film and not one face. Every other

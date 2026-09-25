@@ -461,6 +461,13 @@ private fun ChannelRow(
             Icon(
                 imageVector = when {
                     channel.isPrivate -> PqpIcons.PrivateChannel
+                    // A watch party is not an ordinary voice room, and the
+                    // channel list is one of the places a person can tell:
+                    // same speaker glyph as Voice was exactly the complaint
+                    // ("we still show watch parties as regular voice
+                    // channels"), one of the four the web and iOS both fixed
+                    // it in.
+                    channel.type == "watch_party" -> PqpIcons.WatchParty
                     channel.isVoice -> PqpIcons.VoiceChannel
                     else -> PqpIcons.TextChannel
                 },

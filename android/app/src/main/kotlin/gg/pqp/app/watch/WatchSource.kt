@@ -27,6 +27,32 @@ fun watchSourceChanged(current: LiveStream?, next: LiveStream?): Boolean =
     current?.startedAt != next?.startedAt
 
 /**
+ * The same rule as [watchSourceChanged], for the camera's own PiP player.
+ *
+ * The camera rides the SAME session as the film — it never mints its own
+ * `startedAt` — so [watchSourceChanged] cannot be reused here: it would never
+ * fire for a camera that started, stopped and started again inside one watch,
+ * and it WOULD fire every thirty seconds for nothing, since a camera URL is
+ * restamped by the same audience keyframe that restamps the film's.
+ *
+ * [cameraPathKey] is the URL with its query string stripped, so a token
+ * restamp (`?t=…` changing) is invisible here and only a genuinely different
+ * playlist path — the camera egress actually restarting under a new run, or
+ * the whole session moving to a new one — reattaches the PiP.
+ */
+fun watchCameraSourceChanged(current: String?, next: String?): Boolean =
+    cameraPathKey(current) != cameraPathKey(next)
+
+/** [String.substringBefore], defensively: a URL this cannot parse keys on itself. */
+fun cameraPathKey(url: String?): String? {
+    url ?: return null
+    return runCatching { java.net.URI(url) }
+        .getOrNull()
+        ?.let { "${it.scheme}://${it.authority}${it.path}" }
+        ?: url.substringBefore('?')
+}
+
+/**
  * The `?t=` viewer token, pulled back out of [LiveStream.hlsUrl].
  *
  * The same capability that authorises the playlist fetch is what

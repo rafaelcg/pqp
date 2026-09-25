@@ -37,6 +37,10 @@ fun WatchChannelPane(
     session: SessionStore,
     store: WatchLiveStore,
     channelId: String,
+    /** See [WatchPane]'s doc on the same name. */
+    isWatchPartyChannel: Boolean = false,
+    canJoinCall: Boolean = false,
+    onJoinCall: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val channels by store.channels.collectAsStateWithLifecycle()
@@ -81,6 +85,9 @@ fun WatchChannelPane(
             }
         },
         sendPresence = { sessionToken -> session.api.sendHlsPresence(sessionToken) },
+        isWatchPartyChannel = isWatchPartyChannel,
+        canJoinCall = canJoinCall,
+        onJoinCall = onJoinCall,
         modifier = modifier,
     )
 }
