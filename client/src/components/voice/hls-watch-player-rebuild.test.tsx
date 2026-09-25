@@ -310,6 +310,20 @@ describe("a rebuild the stall ladder decides", { timeout: 30_000 }, () => {
     expect(constructed).toBe(before + 1);
   });
 
+  it("still retries when the lookup itself fails (the API is what is down)", async () => {
+    await driveToDead();
+    vi.mocked(fetchChannelLive).mockRejectedValue(new Error("503"));
+    const before = constructed;
+    for (let i = 0; i < 40 && constructed === before; i += 1) {
+      await tick(1);
+      await settle();
+    }
+    // No fresher URL to adopt, so a rebuild on the one it has.
+    expect(constructed).toBe(before + 1);
+    expect(loaded.at(-1)).toBe(LL_SRC);
+    expect(dead()).toBe(false);
+  });
+
   it("rebuilds on the same URL when the server hands back exactly the one playing", async () => {
     vi.mocked(fetchChannelLive).mockResolvedValue({
       stream: { hlsUrl: LL_SRC },

@@ -1015,6 +1015,11 @@ export function HlsWatchPlayer({
   retryFromDeadRef.current = retryFromDead;
   // Automatic retries since the last painted frame (`DEAD_RETRY_MAX_DOUBLINGS`).
   const deadRetriesRef = useRef(0);
+  // Bumped by every automatic retry, so the effect below re-arms after each
+  // one whatever `phase` did in between. Today every retry passes through
+  // "reconnecting" (`reconnect` sets it before its first await), but the
+  // retry must not depend on that staying true (Farol, PR 824).
+  const [deadRetryNonce, setDeadRetryNonce] = useState(0);
 
   // See `DEAD_RETRY_MIN_MS`. Re-armed each time the player lands on "dead"
   // again, so a stream that keeps failing keeps being retried for as long as
@@ -1027,12 +1032,13 @@ export function HlsWatchPlayer({
     const timer = window.setTimeout(
       () => {
         deadRetriesRef.current += 1;
+        setDeadRetryNonce((n) => n + 1);
         retryFromDeadRef.current();
       },
       uniformJitterMs(DEAD_RETRY_MIN_MS, DEAD_RETRY_MAX_MS) * 2 ** doublings,
     );
     return () => window.clearTimeout(timer);
-  }, [phase, isVod, sessionOver]);
+  }, [phase, isVod, sessionOver, deadRetryNonce]);
   useEffect(() => {
     if (hasFrame) {
       deadRetriesRef.current = 0;
