@@ -68,6 +68,8 @@ import {
   REPORT_PAGE_MAX,
   REPORT_PAGE_SIZE,
   createFeedbackSchema,
+  ackWatchPartyWaitlistApprovalSchema,
+  joinWatchPartyWaitlistSchema,
   createReportSchema,
   FEEDBACK_PAGE_MAX,
   FEEDBACK_PAGE_SIZE,
@@ -610,6 +612,17 @@ import {
   setServerLiveHlsSchema,
 } from "../services/operator.js";
 import {
+  OPERATOR_WAITLIST_DECLINE_PATH,
+  OPERATOR_WAITLIST_PATH,
+  ackWatchPartyApproval,
+  declineWatchPartyWaitlist,
+  declineWatchPartyWaitlistSchema,
+  getWatchPartyWaitlistState,
+  joinWatchPartyWaitlist,
+  listUnseenWatchPartyApprovals,
+  listWatchPartyWaitlistForOperator,
+} from "../services/watch-party-waitlist.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -854,6 +867,16 @@ const webhookExecuteLimiter = createRateLimiter({
  * survives both a restart and a second replica. See the comment there.
  */
 const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
+/**
+ * Joining the watch party waitlist. A person edits their row a few times at
+ * most (a wrong audience range, a typo in the channel); a burst of five and
+ * one more every half minute covers that and keeps a script from walking
+ * every server it is in.
+ */
+const watchPartyWaitlistLimiter = createRateLimiter({
+  capacity: 5,
+  refillPerSecond: 1 / 30,
+});
 /** The settings feedback box — same shape of write as a report, same budget. */
 const feedbackLimiter = createRateLimiter({
   capacity: 5,
@@ -1032,6 +1055,7 @@ export function resetApiRateLimits(): void {
   accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
   reportLimiter.reset();
+  watchPartyWaitlistLimiter.reset();
   // Declared in the depoimentos section at the foot of this file. Safe to name
   // here: this function only ever runs after module evaluation, so the `const`
   // is out of its temporal dead zone by the time a test calls it.
@@ -2059,7 +2083,22 @@ router.put(OPERATOR_SERVER_LIVE_HLS_PATH, async ({ req, user }) => {
     throw new NotFound("Not found");
   }
   const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
-  return operatorSetServerLiveHls(body.serverId, body.enabled, user.id);
+  return operatorSetServerLiveHls(body.serverId, body, user.id);
+});
+
+router.get(OPERATOR_WAITLIST_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listWatchPartyWaitlistForOperator();
+});
+
+router.put(OPERATOR_WAITLIST_DECLINE_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = declineWatchPartyWaitlistSchema.parse(await readJsonBody(req));
+  return { declined: await declineWatchPartyWaitlist(body.serverId) };
 });
 
 router.put(OPERATOR_CHANNEL_TRANSPORT_PATH, async ({ req, user }) => {
@@ -2127,7 +2166,23 @@ const ADMIN_MACHINE_ROUTES: {
     path: OPERATOR_SERVER_LIVE_HLS_PATH,
     run: async (req) => {
       const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
-      return operatorSetServerLiveHls(body.serverId, body.enabled, null);
+      return operatorSetServerLiveHls(body.serverId, body, null);
+    },
+  },
+  // The waitlist: one read, and the one write that is not already the
+  // availability flip above ("Ativar" IS that flip, with low latency beside
+  // it, and approves the server's rows as a side effect of turning it on).
+  {
+    method: "GET",
+    path: OPERATOR_WAITLIST_PATH,
+    run: async () => listWatchPartyWaitlistForOperator(),
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_WAITLIST_DECLINE_PATH,
+    run: async (req) => {
+      const body = declineWatchPartyWaitlistSchema.parse(await readJsonBody(req));
+      return { declined: await declineWatchPartyWaitlist(body.serverId) };
     },
   },
   {
@@ -2188,11 +2243,15 @@ async function operatorChannels(serverId: string | null) {
 
 async function operatorSetServerLiveHls(
   serverId: string,
-  enabled: boolean | null,
+  change: { enabled?: boolean | null; lowLatency?: boolean | null },
   actorId: string | null,
 ) {
   try {
-    return await setServerLiveHls(serverId, enabled, actorId);
+    return await setServerLiveHls(
+      serverId,
+      { enabled: change.enabled, lowLatency: change.lowLatency },
+      actorId,
+    );
   } catch (error) {
     if (error instanceof OperatorTargetMissing) {
       throw new NotFound(error.message);
@@ -2765,6 +2824,42 @@ router.post(
     return { acknowledged: true };
   },
 );
+
+/**
+ * The watch party waitlist (`services/watch-party-waitlist.ts`). Every read
+ * answers only the caller's own row; nothing here can list anybody else.
+ */
+router.get("/api/watch-party/waitlist", async ({ url, user }) => {
+  const raw = url.searchParams.get("serverId");
+  const serverId = raw ? z.string().uuid().parse(raw) : null;
+  return getWatchPartyWaitlistState(user.id, serverId);
+});
+
+router.post("/api/watch-party/waitlist", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!watchPartyWaitlistLimiter.take(key)) {
+    res.setHeader("Retry-After", String(watchPartyWaitlistLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = joinWatchPartyWaitlistSchema.parse(await readJsonBody(req));
+  const entry = await joinWatchPartyWaitlist(user.id, {
+    serverId: body.serverId,
+    audienceBucket: body.audienceBucket ?? null,
+    note: body.note,
+    streamChannel: body.streamChannel,
+  });
+  return { entry };
+});
+
+router.get("/api/watch-party/waitlist/approvals", async ({ user }) => ({
+  approvals: await listUnseenWatchPartyApprovals(user.id),
+}));
+
+router.post("/api/watch-party/waitlist/approvals/ack", async ({ req, user }) => {
+  const body = ackWatchPartyWaitlistApprovalSchema.parse(await readJsonBody(req));
+  await ackWatchPartyApproval(user.id, body.serverId);
+  return { ok: true };
+});
 
 router.post("/api/voice/token", async ({ req, user }) => {
   if (!isLiveKitConfigured()) {

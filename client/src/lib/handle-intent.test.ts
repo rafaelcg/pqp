@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  rememberWaitlistIntentFromLocation,
+  stashWaitlistIntent,
+  takeWaitlistIntent,
+  waitlistIntentFromSearch,
+  WATCH_PARTY_WAITLIST_HREF,
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
@@ -353,5 +358,39 @@ describe("putting an invite ref back", () => {
     // Nothing to put back is a no-op.
     stashInviteRef(storage, "abc123", null);
     expect(storage.map.size).toBe(0);
+  });
+});
+
+describe("the watch party waitlist intent", () => {
+  function memory(): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
+    const map = new Map<string, string>();
+    return {
+      getItem: (key) => map.get(key) ?? null,
+      setItem: (key, value) => void map.set(key, value),
+      removeItem: (key) => void map.delete(key),
+    };
+  }
+
+  it("reads only the exact value off the URL", () => {
+    expect(waitlistIntentFromSearch("?intent=watch-party-waitlist")).toBe(true);
+    expect(waitlistIntentFromSearch("?intent=something-else")).toBe(false);
+    expect(waitlistIntentFromSearch("")).toBe(false);
+    expect(WATCH_PARTY_WAITLIST_HREF).toBe("/app?intent=watch-party-waitlist");
+  });
+
+  it("survives a sign-up through storage, once, and expires", () => {
+    const storage = memory();
+    rememberWaitlistIntentFromLocation(storage, { search: "?intent=watch-party-waitlist" }, 1000);
+    expect(takeWaitlistIntent(storage, 2000)).toBe(true);
+    expect(takeWaitlistIntent(storage, 2000)).toBe(false);
+
+    stashWaitlistIntent(storage, 0);
+    expect(takeWaitlistIntent(storage, 2 * 60 * 60 * 1000)).toBe(false);
+  });
+
+  it("stashes nothing for a URL that does not carry it", () => {
+    const storage = memory();
+    rememberWaitlistIntentFromLocation(storage, { search: "?import=discord" });
+    expect(takeWaitlistIntent(storage)).toBe(false);
   });
 });

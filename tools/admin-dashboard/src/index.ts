@@ -18,13 +18,15 @@
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Four `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Two reads (find a server, list its voice channels) and two PUTs
- *     (watch party availability per server, a channel's transport pin). They
- *     are in `OPERATOR_ROUTES` below, an exact (method, path) table for the
- *     same reason the API keeps one: the blast radius of the password plus
- *     the machine token should be readable in one glance, and a prefix is a
- *     thing somebody widens by accident. Everything else stays GET-only.
+ *     Seven `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Three reads (find a server, list its voice channels, the watch
+ *     party waitlist) and four PUTs (watch party availability and low
+ *     latency per server, a channel's transport pin, a channel's SFU region,
+ *     declining a server's waitlist). They are in `OPERATOR_ROUTES` below, an
+ *     exact (method, path) table for the same reason the API keeps one: the
+ *     blast radius of the password plus the machine token should be readable
+ *     in one glance, and a prefix is a thing somebody widens by accident.
+ *     Everything else stays GET-only.
  *  3. Serve. `/` is the static page from the assets binding, and
  *     `/insights.js` the one script it loads (the three verdicts on "agora",
  *     kept in their own file so they can be unit tested). Both sit behind the
@@ -325,6 +327,22 @@ const OPERATOR_ROUTES: {
     method: "PUT",
     path: "/operator/server-live-hls",
     forward: (_url, origin) => `${origin}/api/admin/server-live-hls`,
+  },
+  // The waitlist: one read (every server with a request, waiting or not,
+  // with its requests, its interest count and its bucket histogram) and one
+  // write (decline). The other write that touches a waitlist row is not
+  // here: turning a server on with `/operator/server-live-hls` approves its
+  // waiting rows and notifies those people as a side effect on the API, so
+  // "Ativar" in the waitlist table calls that same route, not a new one.
+  {
+    method: "GET",
+    path: "/operator/watch-party-waitlist",
+    forward: (_url, origin) => `${origin}/api/admin/watch-party-waitlist`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/watch-party-waitlist-decline",
+    forward: (_url, origin) => `${origin}/api/admin/watch-party-waitlist/decline`,
   },
   {
     method: "PUT",

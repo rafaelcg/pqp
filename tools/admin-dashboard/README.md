@@ -4,8 +4,9 @@ One static page (`site/index.html`) and one small Cloudflare Worker
 (`src/index.ts`) in front of it, deployed as the existing `pqp-admin` Worker at
 `https://pqp-admin.rafaelcg-a0a.workers.dev/`.
 
-A view of the hosted instance for the person running it, plus **two controls**
-that write. It is not part of the product and it is not linked from anywhere.
+A view of the hosted instance for the person running it, plus the **controles**
+section, the only part of the page that writes. It is not part of the product
+and it is not linked from anywhere.
 
 ## What it shows
 
@@ -136,19 +137,67 @@ read as nine equals.
 
 ### controles: the only part of this page that writes
 
-Two levers, and deliberately only two. Both existed before and neither could
-be reached by the person running the event: one was a Fly environment
+A handful of levers. The first two existed before this dashboard and neither
+could be reached by the person running the event: one was a Fly environment
 variable, the other was a column you changed with hand-written SQL against
 production.
 
 | Control | What it writes | When it takes effect |
 |---|---|---|
 | **watch party por servidor** | `servers.live_hls_enabled` | the next join, the next share, the next config read. No deploy, no restart, no socket closed |
+| **baixa latência por servidor** | `servers.live_hls_ll_enabled` | same as above: the next config read. A separate switch, because low latency and watch party availability are two different questions and a server can follow the environment on one while the operator decided the other |
 | **caminho de mídia por canal** | `channels.voice_transport` | the next room that opens in that channel. A call already running is not moved |
 
 Above them, **o que está no ar**: how many transcodes this process is running
-(from `/metrics`, so it moves on the 30-second poll), and how many servers
-have been decided either way (from `/operator/servers`).
+(from `/metrics`, so it moves on the 30-second poll), how many servers have
+been decided either way (from `/operator/servers`), and the waitlist headline
+(see below).
+
+### lista de espera: turning "somebody asked" into "somebody can now stream"
+
+First section in the pane, because opening **controles** during a launch is,
+in practice, opening this table before anything else. It is `GET
+/api/admin/watch-party-waitlist` (proxied as `/operator/watch-party-waitlist`,
+same machine token, no query forwarded), one row per server that has at least
+one waitlist row, waiting servers first and then biggest.
+
+Each row carries: the server's name and member count, a **comunidade** tag
+when it is one, every individual **pedido** (who asked, the audience bucket
+they picked, an optional note, an optional stream channel shown as a link
+when it names `twitch.tv/` or `kick.com/`, otherwise plain text), **interesse**
+(how many members said they would watch without asking to host), **público**
+(the audience-bucket histogram as one line, biggest group first), the
+server's **status** (`esperando` / `liberado` / `recusado`), and **desde**
+(when the first request landed). Above the table: totals for waiting,
+approved and declined, plus how many people expressed interest with no server
+at all (`serverless`).
+
+Two actions, both only on a waiting row:
+
+| Click | What it does | Confirmed |
+|---|---|---|
+| **Ativar** | `PUT /operator/server-live-hls` with `{ enabled: true, lowLatency: true }`, the exact same write **ligar** makes below, plus low latency. The API approves and notifies that server's waiting requests as a side effect of the write, not of this button | **yes**, names the server and says the list gets notified |
+| **Recusar** | `PUT /operator/watch-party-waitlist-decline` with `{ serverId }`. Marks that server's waiting rows `declined`. Nobody is notified | **yes**, names the server and says nobody is notified |
+
+**Ativar is not a separate lever.** It exists so an operator working the
+waitlist never has to leave this table to find the server again in **watch
+party por servidor**; the write it makes and the write **ligar** makes are the
+same route with the same body shape, so the two tables cannot drift into
+disagreeing about a server's state.
+
+Loaded when the section opens, after **Ativar** or **Recusar**, and on its own
+**atualizar** button (or the page's own, in the header, once the section has
+been opened at all), same rules as **watch party por servidor** below it: no
+30-second poll, a write disables its own row, and the row is redrawn from the
+API's reply. Server side: `server/src/services/watch-party-waitlist.ts`,
+`OPERATOR_WAITLIST_PATH` / `OPERATOR_WAITLIST_DECLINE_PATH`.
+
+`GET /api/admin/metrics` also carries `watchPartyWaitlist`
+(`joinsTotal` / `joins7d` / `requestsTotal` / `interestTotal` /
+`serversWaiting` / `approvedTotal`), null when an API is older than the field.
+**o que está no ar** shows the headline from it: how many requests are
+waiting, across how many servers, and how many people joined the waitlist in
+the last 7 days.
 
 **The three states of watch party availability**, and the sentence the row
 shows for each, are in `docs/WATCH_PARTY.md` §"Widening it is a click now".
@@ -165,9 +214,12 @@ master switch and it is a deploy either way.
 | **desligar** a server with no party live | the create control goes away on the next page load | no |
 | **desligar** a server **that is streaming right now** | the egress stops at the next reconcile and **the audience loses the picture** | **yes**, a confirmation naming the server. This is the only genuinely disruptive click here |
 | **seguir a variável** | back to whatever the environment said | no |
+| **LL ligar** / **LL desligar** / **LL seguir variável** | same three states, for low latency alone. Nothing here can stop a stream that is already live, because low latency changes how a rung is transcoded, not whether one runs | no |
 | pin a channel to **ponto a ponto** | the next room there is peer-to-peer | no, except: |
 | pin a **watch party** channel to **ponto a ponto** | the next party in that room has no stream at all, and nothing on the host's screen says why | **yes**, a confirmation |
 | pin a channel to **servidor de mídia** | the next room there is on the SFU | no |
+| **Ativar** on a waitlist row | same cost as **ligar**, plus low latency, plus the waiting requests for that server are approved and their people notified | **yes**, names the server and says the list gets notified |
+| **Recusar** on a waitlist row | that server's waiting requests become `declined`. Reversible only by asking again | **yes**, names the server and says nobody is notified |
 
 Nothing on this page deletes anything, and there is no account, ban or
 moderation action on it. That is not an oversight: the machine token that
@@ -176,14 +228,20 @@ password, and `DELETE /api/admin/users/:id` is deliberately absent from
 `ADMIN_MACHINE_ROUTES` (`server/src/api/index.ts`) for exactly that reason.
 Terminating an account stays something a signed-in instance moderator does.
 
-**Every write is audited.** `audit_log` is server-scoped and both of these
-writes are about one server, so they land in that server's own log as
-`server.live_hls_update` and `channel.voice_transport_update`, with the old
-value and the new one in `changes`. The actor is **NULL** when the write came
-from this dashboard (the machine token has no account, and the schema already
-means NULL as "the system did it"); an instance moderator writing with their
-own Clerk session is recorded by id. The server's owner sees the entry, which
-is the point: it is a change to their server made from outside their staff.
+**Every write is audited, except one.** `audit_log` is server-scoped, and
+`server.live_hls_update` / `channel.voice_transport_update` land in a
+server's own log with the old value and the new one in `changes`. The low
+latency switch rides the same `server.live_hls_update` action as watch party
+availability, as its own `liveHlsLowLatency` entry in `changes`, so **Ativar**
+on a waitlist row produces one audit entry naming both fields even though it
+is one write. The actor is **NULL** when the write came from this dashboard
+(the machine token has no account, and the schema already means NULL as "the
+system did it"); an instance moderator writing with their own Clerk session is
+recorded by id. The server's owner sees the entry, which is the point: it is a
+change to their server made from outside their staff. **Recusar** is the
+exception: declining a waitlist request changes rows that belong to the
+people who asked, not to the server, so it is not server-scoped and does not
+write `audit_log`.
 
 **How the section behaves.** It does not ride the 30-second poll, because a list
 that reshuffles under the cursor is how a wrong row gets clicked. It reads
@@ -451,8 +509,9 @@ and written back through `PUT /operator/server-live-hls`,
 
 - **servers**, searched by name (`?q=`, `ILIKE`, 25 at a time): member count,
   watch party channels, the `live_hls_enabled` row, the **effective** answer
-  and which of the three inputs produced it, and whether this process is
-  running an egress for that server right now
+  and which of the three inputs produced it, the same triple for low latency
+  (`live_hls_ll_enabled`, its own effective answer and source), and whether
+  this process is running an egress for that server right now
 - **a server's voice and watch party channels**: the `voice_transport`
   override, the transport this process has **pinned** for a room that is open,
   and what a room opening now **would** be pinned to plus the reason, computed
@@ -467,6 +526,26 @@ and written back through `PUT /operator/server-live-hls`,
   `docs/plans/SFU_REGIONS.md`
 - Server side: `server/src/services/operator.ts`, the route table in
   `server/src/api/index.ts`, tests in `server/src/api/operator.test.ts`
+
+Live, from `GET /api/admin/watch-party-waitlist` (proxied as
+`/operator/watch-party-waitlist`, no query forwarded), and written back
+through `PUT /operator/watch-party-waitlist-decline`:
+
+- **the waitlist**: every server with at least one request, waiting first and
+  then biggest, each with its individual requests (who asked, their audience
+  bucket, an optional note, an optional stream channel), how many members said
+  they would watch (`interest`), the bucket histogram, the server's status and
+  when its first request landed, plus totals across all servers and how many
+  people expressed interest with no server named at all
+- the one write here that is not the availability flip above: **decline**,
+  which marks a server's waiting rows `declined` and notifies nobody. The
+  other action the **lista de espera** table offers, **Ativar**, is not a new
+  write: it calls `PUT /operator/server-live-hls` with both `enabled` and
+  `lowLatency`, which is the same route "ligar" in **watch party por
+  servidor** uses, and the API approves and notifies the waiting requests as a
+  side effect of that write landing
+- Server side: `server/src/services/watch-party-waitlist.ts`, the same route
+  table as above
 
 Live, from this Worker (merged onto `/metrics`, never stored on the API):
 

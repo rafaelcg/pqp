@@ -65,6 +65,7 @@ import {
 } from "../lib/s3.js";
 import {
   liveHlsLLAvailable,
+  liveHlsLLServerOverride,
   llDelaySeconds,
   llHasRoom,
   llPlaylistFrontConfigured,
@@ -1899,7 +1900,12 @@ export async function liveHlsConfigForServer(
     // flag and its own allowlist, so a server with ordinary HLS on can still
     // be off the LL allowlist, and vice versa in a self-host that runs
     // `pqp-remux` everywhere.
-    lowLatency: { available: liveHlsLLAvailable(serverId) },
+    lowLatency: {
+      available: liveHlsLLAvailable(
+        serverId,
+        await liveHlsLLServerOverride(serverId),
+      ),
+    },
   };
 }
 

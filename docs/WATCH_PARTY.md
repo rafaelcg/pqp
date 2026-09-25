@@ -3599,6 +3599,55 @@ Turning a server **off while a party is streaming** stops the egress at the
 next reconcile and the audience loses the picture. That is the one control on
 that page with a confirmation.
 
+### Low latency is a click too (2026-09-25)
+
+`LIVE_HLS_LL_ALLOWLIST` had the same problem `LIVE_HLS_SERVER_ALLOWLIST` had
+before `live_hls_enabled`: adding a server meant an `.env` edit and a
+container recreate. And low latency is the mode that makes many small parties
+affordable: a conventional party transcodes and counts against
+`LIVE_HLS_MAX_SESSIONS` (3), while an LL party is a `pqp-remux` passthrough
+that only costs the camera rung and the voice archive (about 0.25 core
+measured). So the per-server decision is a column too:
+**`servers.live_hls_ll_enabled`**, the same tri-state, read the same way.
+
+| `live_hls_ll_enabled` | Answer |
+|---|---|
+| `TRUE` | low latency is available on this server |
+| `FALSE` | it is not, **even if `LIVE_HLS_LL_ALLOWLIST` names the server** |
+| `NULL` | `LIVE_HLS_LL_ALLOWLIST` decides, exactly as before the column existed |
+
+`LIVE_HLS_LL` and the edge playlist front (`LIVE_HLS_PLAYLIST_BASE_URL`) stay
+the master switches above all three: no row can turn on a deployment that
+cannot serve an LL playlist. Every existing row is NULL, so the deploy that
+adds the column changes nothing, including for the servers production already
+names in the variable.
+
+**Where it is read.** `liveHlsLLServerOverride` (`server/src/voice/hls-remux.ts`)
+reads the row per call, never cached, and a failed read answers NULL (the
+variable), the same rule `liveHlsServerOverride` follows. Two readers:
+`resolveHlsModeForChannel`, which reads it **only when the live party asked
+for low latency** (with nothing requested the answer is `conventional`
+whatever the row says, so the reconcile that runs on every roster event does
+not pay a query for it), and `liveHlsConfigForServer`, which is what gives the
+host the "Baixa latência (beta)" switch (`lowLatency.available`). A deployment
+with `LIVE_HLS_LL` off issues no query at all. Pinned by "the per-server low
+latency switch" in `server/src/voice/hls-ll-demotion.test.ts`, which runs with
+`VOICE_REGISTRY=postgres` and `CLUSTER_BUS=postgres` set, and by the pure
+matrix in `hls-remux.test.ts` ("NULL answers exactly what no override
+answers").
+
+**Where it is written.** The same operator route as availability:
+`PUT /api/admin/server-live-hls` takes `{ serverId, enabled?, lowLatency? }`,
+at least one of the two, and an omitted field is left as it is, so every body
+the dashboard sent before this change means what it meant. The controles table
+has a "baixa latência" column with its own three buttons, and the waitlist's
+"Ativar" sets both at once. Audited as `server.live_hls_update` with a
+`liveHlsLowLatency` change and logged as `operator.liveHlsLlServerSet`.
+
+Like availability, the host's switch is cached for the page's lifetime
+(`useLiveHlsConfig`), so a host who already has the channel open reloads
+before "Baixa latência (beta)" appears.
+
 ### The one real cost left: concurrent parties
 
 Measured on the same LiveKit and egress versions production runs (2026-09-09,
@@ -4094,6 +4143,110 @@ and the header avatars all live there. `App.tsx` also owns
 `voice.setWatchPartyGuests(mode, onAirUserIds)`, the one call that tells
 `use-voice.ts`'s mixer what to carry, fired from an effect keyed on whichever
 party this browser is presenting.
+
+## The waitlist
+
+Rafael, 2026-09-25: watch parties are gated per server because each one costs
+media-box CPU, so treat the gate as a campaign. Everybody sees the button, the
+button explains the feature and takes names, and the operator turns servers on
+by hand. That doubles as a measure of demand: sodtz ran a 61-person film night
+on a plain voice channel because his server did not have watch parties.
+
+**Nothing here touches a server that runs parties, or a party that is
+running.** The teaser is drawn only where `GET /api/live-hls/config?serverId=`
+has answered `enabled: false` (`shouldOfferWatchPartyTeaser`,
+`client/src/lib/watch-party-waitlist.ts`); `true` gets exactly the create
+control it had before and `null` (not answered yet) gets nothing. The client
+does not even ask the waitlist API for a server whose config said yes. On the
+server, joining refuses a server where `resolveLiveHlsForServer` already says
+yes (409). The one write that reaches the availability column is the
+operator's own flip, and the waitlist follows it, never the other way round.
+Pinned by "the waitlist teaser" in `live-party-block.test.tsx` (it never
+replaces the create control and never covers a live party) and by
+`client/e2e/watch-party.spec.ts` passing unchanged with the campaign on.
+
+### What a person sees
+
+- **The teaser.** In the sidebar slot where Criar watch party lives, for
+  everybody in a server that does not have watch parties: "Watch party" with
+  "Acesso antecipado" under it, or "Na lista" once they joined
+  (`LivePartyBlock.teaser`). Only in the branch with no live party and no
+  create control.
+- **The dialog** (`components/watch-party/waitlist/`): an illustration of a
+  party (`WatchPartyStageArt`: the landing's own hero painting as the film,
+  the real `LivePill`, the presenter's camera in the corner layout, the chat
+  column, reactions on the real `live-reaction-float` keyframe, which stop
+  under reduced motion), the five things a party is, why it is gated, and then
+  one of four endings, decided by the server:
+  - `request`: the owner, an admin, or anybody holding MANAGE_CHANNELS or
+    MANAGE_SERVER. Which server (defaults to the open one), roughly how many
+    would watch (five ranges, required), what they want to watch (140
+    characters, optional) and a Twitch or Kick channel (optional, normalised
+    to `twitch.tv/name` or `kick.com/name`).
+  - `member`: everybody else. "Peça para quem administra o servidor", and
+    "Eu também quero", which records `interest`: counted, never acted on.
+  - `serverless`: somebody with no server (typically arriving from the public
+    page). Their interest has `server_id` NULL.
+  - an existing row, shown as what it is: waiting ("Você está na lista",
+    with "Editar pedido"), declined, or approved.
+- **"Watch party liberada!"** when the operator turns a server on
+  (`WatchPartyApprovedToasts`): live over the socket, and from
+  `GET /api/watch-party/waitlist/approvals` at boot for anybody who was
+  offline, until they press a button. "Abrir servidor" is a full load of
+  `/app/server/<id>`, because the tab's live-hls answer is cached and still
+  says no.
+
+### The table, the routes, the notice
+
+`watch_party_waitlist` (`schema.sql`): one row per person per server (a
+partial unique index, plus one serverless row per person), `kind` request or
+interest, `audience_bucket`, `note`, `twitch_or_kick`, `status`
+waiting / approved / declined, `decided_at`, and `seen_at` for the card.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/watch-party/waitlist?serverId=` | a member (404 otherwise) | `{ campaign, canRequest, available, entry }`, the caller's own row only |
+| `POST /api/watch-party/waitlist` | a member, or anybody with `serverId: null` | join or edit; the server picks the kind; the status never moves from here |
+| `GET /api/watch-party/waitlist/approvals` | anybody | their unseen approvals, only for servers they are still in |
+| `POST /api/watch-party/waitlist/approvals/ack` | anybody | dismiss one |
+| `GET /api/admin/watch-party-waitlist` | operator (machine token or instance moderator) | per server: requests with name, range, note and channel; interest as a count; the range histogram |
+| `PUT /api/admin/watch-party-waitlist/decline` | operator | the server's waiting rows, declined, silently |
+
+Rate limited at five joins and then one every 30 seconds per account. Zod
+lives in `packages/shared/src/watch-party-waitlist.ts`.
+
+**Approving is by hand, and it is the availability flip.** Rafael's call:
+there is no auto-approve. `setServerLiveHls` (`services/operator.ts`) calls
+`approveWatchPartyWaitlist` whenever a write leaves `live_hls_enabled` TRUE:
+the dashboard's "Ativar" on the waitlist (which also sets
+`live_hls_ll_enabled`, see §"Low latency is a click too") and the plain
+"ligar" in controles. Every waiting row of that server becomes approved, and
+the people behind them get a `watch-party-waitlist-approved` frame on this
+machine's sockets, the same frame relayed over `CLUSTER_BUS` to the other
+machine (`watch-party.waitlist-approved`), and a push in their language. It
+runs after the column is written and its failure is logged, never thrown: a
+lost notice must not undo a flip.
+
+**The campaign switch.** `WATCH_PARTY_WAITLIST`: `on`, `off`, and unset
+follows `isLiveHlsEnabled()`, so a self-host that cannot run a watch party
+never teases one and the hosted deployment has it on until somebody sets
+`off`. It is read per request; the client never needs a rebuild. The teaser
+also sits behind the existing `VITE_WATCH_PARTY_CHANNELS` build flag, like
+everything else in the sidebar block.
+
+**Counters.** `watchPartyWaitlist` on `GET /api/admin/metrics`: `joinsTotal`,
+`joins7d`, `requestsTotal`, `interestTotal`, `serversWaiting`,
+`approvedTotal`.
+
+### The public page
+
+`pqp.gg/watch-party` (and `/watchparty`, canonical `/watch-party`): the same
+illustration and feature list, and a button that carries
+`?intent=watch-party-waitlist` through sign-up (`lib/handle-intent.ts`, stashed
+at boot and on the click, consumed after onboarding), so a new account lands
+with the dialog open. Open Graph copy comes from `marketing-meta.ts`, pinned
+to `watchPartyPage.seo.*` by its test; the card image is the default one.
+Both words are reserved handles.
 
 ## Native apps
 

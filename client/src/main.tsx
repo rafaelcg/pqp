@@ -28,6 +28,7 @@ import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
 import {
   rememberCreateIntentFromLocation,
+  rememberWaitlistIntentFromLocation,
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
@@ -81,6 +82,11 @@ const TelaPage = lazy(() =>
 );
 const VemPage = lazy(() =>
   import("./pages/vem-page").then((m) => ({ default: m.VemPage })),
+);
+const WatchPartyPage = lazy(() =>
+  import("./pages/watch-party-page").then((m) => ({
+    default: m.WatchPartyPage,
+  })),
 );
 const ApoieRoute = lazy(() =>
   import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
@@ -257,6 +263,14 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             URL people guess; Pages answers it with a 301 in `_redirects`, and
             this route covers every build served outside Pages. */}
         <Route path="/vem" element={<VemPage />} />
+        {/* `/watch-party`: the waitlist campaign's shareable page. Role
+            tokens only, so it follows the visitor's theme like `/vem`. Two
+            spellings, one page, canonical `/watch-party` (`Seo`), and both
+            words are in RESERVED_HANDLES so nobody can hold `@watchparty`.
+            "Watch party" is what the QG says in Portuguese too, so there is no
+            separate pt-BR path to guess. */}
+        <Route path="/watch-party" element={<WatchPartyPage />} />
+        <Route path="/watchparty" element={<WatchPartyPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}
@@ -423,6 +437,7 @@ rememberAcquisitionFromLocation(browserStorage(), window.location);
 // query string: `?import=discord` and an invite link's `?ref=` tag
 // (lib/handle-intent.ts).
 rememberCreateIntentFromLocation(browserStorage(), window.location);
+rememberWaitlistIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();

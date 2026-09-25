@@ -165,6 +165,11 @@ export default defineConfig({
         // chrome via the dev-bypass `?communityHome=0` override.
         COMMUNITY_HOME_ENABLED: "true",
         COMMUNITY_HOME_VIP_ENABLED: "true",
+        // The watch party waitlist campaign. Unset it follows
+        // LIVE_HLS_ENABLED, which CI does not have, so it would be off and
+        // `watch-party-waitlist.spec.ts` would test nothing. The flag-off
+        // answers are pinned in `server/src/api/watch-party-waitlist.test.ts`.
+        WATCH_PARTY_WAITLIST: "on",
         // Object storage, passed through rather than pinned.
         //
         // The webServer `env` REPLACES the environment rather than extending

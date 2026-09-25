@@ -494,6 +494,56 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
   });
 });
 
+describe("the per-server row beats the allowlist, and NULL is the allowlist", () => {
+  it("TRUE is ll and available for a server the variable does not name", () => {
+    enableMode();
+    process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true, override: true })).toBe("ll");
+    expect(liveHlsLLAvailable(SERVER, true)).toBe(true);
+  });
+
+  it("FALSE is conventional and unavailable even when the variable names it", () => {
+    enableMode();
+    process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true, override: false })).toBe(
+      "conventional",
+    );
+    expect(liveHlsLLAvailable(SERVER, false)).toBe(false);
+  });
+
+  it("NULL answers exactly what no override answers", () => {
+    enableMode();
+    for (const allowlist of [undefined, SERVER, OTHER_SERVER]) {
+      if (allowlist === undefined) {
+        delete process.env.LIVE_HLS_LL_ALLOWLIST;
+      } else {
+        process.env.LIVE_HLS_LL_ALLOWLIST = allowlist;
+      }
+      expect(resolveHlsMode({ serverId: SERVER, requestedMode: true, override: null })).toBe(
+        resolveHlsMode({ serverId: SERVER, requestedMode: true }),
+      );
+      expect(liveHlsLLAvailable(SERVER, null)).toBe(liveHlsLLAvailable(SERVER));
+    }
+  });
+
+  it("cannot turn on a deployment without the flag, nor a party that did not ask", () => {
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true, override: true })).toBe(
+      "conventional",
+    );
+    expect(liveHlsLLAvailable(SERVER, true)).toBe(false);
+    enableMode();
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: false, override: true })).toBe(
+      "conventional",
+    );
+  });
+
+  it("does not apply to the deployment-wide answer, which has no server", () => {
+    enableMode();
+    process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
+    expect(liveHlsLLAvailable(null, true)).toBe(false);
+  });
+});
+
 describe("the per-channel request field is durable, not process memory", () => {
   it("defaults to false for a channel with no live party row", async () => {
     expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({

@@ -1352,3 +1352,77 @@ export async function sendChannelSessionReminderPush(
     SESSION_REMINDER_DELIVERY,
   );
 }
+
+/**
+ * The watch party waitlist's "liberado": the operator switched a server on and
+ * these people were waiting for it (`services/watch-party-waitlist.ts`). Fixed
+ * copy in the recipient's language, the server's name as the title, and a tap
+ * opens that server. One per server per person (`tag`), so a second flip can
+ * never stack two.
+ */
+export interface WatchPartyWaitlistApprovedPush {
+  userIds: readonly string[];
+  serverId: string;
+  serverName: string;
+}
+
+const WAITLIST_APPROVED_BODY: Record<PushLocale, string> = {
+  "pt-BR": "Watch party liberada! Já dá pra criar a sua.",
+  en: "Watch parties are on. You can start one now.",
+};
+
+export function buildWatchPartyWaitlistApprovedPayload(
+  event: WatchPartyWaitlistApprovedPush,
+  locale: PushLocale,
+): PushPayload {
+  return {
+    title: truncateLabel(event.serverName),
+    body: WAITLIST_APPROVED_BODY[locale],
+    path: `/app/server/${event.serverId}`,
+    tag: `watch-party-waitlist:${event.serverId}`,
+  };
+}
+
+/** Fire-and-forget, same contract as `pushChannelSessionReminder`. */
+export function pushWatchPartyWaitlistApproved(
+  event: WatchPartyWaitlistApprovedPush,
+): void {
+  if (!isAnyPushEnabled() || event.userIds.length === 0) {
+    return;
+  }
+  void (async () => {
+    const transports = readTransports();
+    if (!transports) {
+      return;
+    }
+    const preferenceRows = await getPool().query<{
+      user_id: string;
+      settings: { locale?: unknown } | null;
+    }>(
+      `SELECT user_id, settings FROM user_preferences
+        WHERE user_id = ANY($1::uuid[])`,
+      [event.userIds],
+    );
+    const locales = new Map(
+      preferenceRows.rows.map((row) => [
+        row.user_id,
+        resolvePushLocale(row.settings?.locale),
+      ]),
+    );
+    await deliverToUsers(
+      event.userIds,
+      (userId) =>
+        buildWatchPartyWaitlistApprovedPayload(
+          event,
+          locales.get(userId) ?? resolvePushLocale(undefined),
+        ),
+      transports,
+      SESSION_REMINDER_DELIVERY,
+    );
+  })().catch((error: unknown) => {
+    console.error(
+      `[push] watch party waitlist fan-out failed for server ${event.serverId}:`,
+      error,
+    );
+  });
+}
