@@ -13,13 +13,16 @@ import { isLiveKitConfigured } from "./backends.js";
 import { promotionBudgetMbps } from "./promotion.js";
 import {
   CAMERA_RUNG,
+  CAMERA_RUNG_480,
+  CAMERA_RUNG_480_WITH_VOICE,
   CAMERA_RUNG_NAME,
   CAMERA_RUNG_WITH_VOICE,
   VOICE_RUNG,
+  cameraRungFor,
+  cameraSlotMbps,
   decideCameraEgress,
   decideLadder,
   hlsRungVideoKbps,
-  HLS_CAMERA_MBPS,
   HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
@@ -75,6 +78,7 @@ import {
   resetHlsRemuxForTests,
   resolveHlsModeForChannel,
   runBounded,
+  setLlCameraSlot,
   stopLlSession,
   sweepLlDemotions,
 } from "./hls-remux.js";
@@ -323,6 +327,13 @@ export interface LiveHlsScreenTracks {
    * `reconcileCameraEgress` chooses among these (`chooseCameraTrack`).
    */
   cameraTrackIds?: string[];
+  /**
+   * Each listed camera's published size, as its SHORTER side in pixels, when
+   * LiveKit stated one. What `cameraRungFor` reads to encode the slot at 480p
+   * only for a presenter actually sending 480 lines: a bigger rung than the
+   * publication is an upscale.
+   */
+  cameraTrackHeights?: Record<string, number>;
   /**
    * The sharer's `voice-track` publication (`VOICE_TRACK_NAME`), when they
    * have one. `LIVE_HLS_VOICE_TRACK`'s "separada" signal: the CLIENT only
@@ -1251,6 +1262,24 @@ export function liveHlsCameraEnabled(): boolean {
 }
 
 /**
+ * `LIVE_HLS_CAMERA_480`: **on by default**, `false` / `0` / `off` is the
+ * rollback to the 360p camera everywhere.
+ *
+ * Two halves, one switch. The server encodes the camera slot at 854x480 when
+ * the presenter publishes 480 lines or more (`cameraRungFor`), and
+ * `GET /api/live-hls/config` says `cameraHeight: 480`, which is what lets the
+ * presenter's browser publish its camera at 480p (with a 360p fallback layer)
+ * while their share is on air. Off, the config says 360 and the rung is 360p
+ * whatever is published: exactly the pre-2026-09-25 behaviour, with no client
+ * rebuild. Read per call, so it follows the environment of the running
+ * process; a camera already running keeps the size it started with.
+ */
+export function liveHlsCamera480Enabled(): boolean {
+  const raw = process.env.LIVE_HLS_CAMERA_480?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off";
+}
+
+/**
  * `LIVE_HLS_VOICE_TRACK`: **off by default**, and off is exactly the
  * pre-2026-09-13 behaviour — `cameraHlsUrl` (when there is one at all) is
  * silent, and a host's voice, if the audience hears it, arrives mixed into
@@ -1792,6 +1821,15 @@ export interface LiveHlsConfig {
    * `hls-remux.ts`.
    */
   lowLatency: { available: boolean };
+  /**
+   * The tallest camera a watch-party PRESENTER may publish while their share
+   * is on air: 480 while `LIVE_HLS_CAMERA_480` is on (the default), 360 when
+   * it is switched off. The browser reads it to size the camera cap, so the
+   * one switch moves both halves (what is published, and the size the camera
+   * slot is encoded at) with no client rebuild. A client that finds it absent
+   * (an older API) holds the presenter at 360, the old behaviour.
+   */
+  cameraHeight: 360 | 480;
 }
 
 /**
@@ -1808,6 +1846,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     micArchive: isLiveHlsEnabled() && micArchiveEnabled(),
     voiceTrack: isLiveHlsEnabled() && liveHlsVoiceTrackEnabled(),
     lowLatency: { available: liveHlsLLAvailable(null) },
+    cameraHeight: liveHlsCamera480Enabled() ? 480 : 360,
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -2774,7 +2813,9 @@ export function runningCameraMbps(): number {
     if (!room.camera) {
       continue;
     }
-    total += room.camera.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
+    total += room.camera.cameraTrackId
+      ? cameraSlotMbps(room.camera.rung)
+      : HLS_VOICE_ONLY_MBPS;
   }
   return total;
 }
@@ -3758,6 +3799,7 @@ async function tendCameraHealth(
       }
       await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
       room.stream = withoutCameraUrl(room.stream);
+      mirrorLlCameraSlot(channelId, room);
       const cooldownMs = startCameraCooldown(
         channelId,
         now,
@@ -4110,9 +4152,15 @@ async function reconcileLlCompanions(
     room.stream = { ...room.stream, presenterPeerId: stream.presenterPeerId };
   }
   await noteLlScreenTracks(channelId, stream, tracks);
+  // A resume or an adoption rebuilt the LL stream from scratch, without the
+  // camera this companion is still running: state it again, and hand back
+  // the stream that says so (`mirrorLlCameraSlot`).
+  if (llCompanions.get(channelId) === room && mirrorLlCameraSlot(channelId, room)) {
+    stream = llStreamFor(channelId) ?? stream;
+  }
   return {
     stream,
-    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds,
+    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, cameraTrackHeights: tracks.cameraTrackHeights,
     voiceTrackId: tracks.voiceTrackId ?? null,
     micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
@@ -4763,10 +4811,19 @@ function adoptCameraEgress(input: {
   // sids and the `cameraHasVideo`/`cameraHasVoiceAudio` flags a viewer's PiP
   // reads all match what was actually running before the restart.
   room.camera = {
+    // The row does not say which size the camera was started at, so an
+    // adopted camera is filed under the larger one while 480p is allowed:
+    // it is only ever read for its price, and over-charging a webcam for the
+    // rest of a party is the safe direction (under-charging would admit a
+    // rendition the box cannot carry).
     rung: hasVideo
-      ? hasAudio
-        ? CAMERA_RUNG_WITH_VOICE
-        : CAMERA_RUNG
+      ? liveHlsCamera480Enabled()
+        ? hasAudio
+          ? CAMERA_RUNG_480_WITH_VOICE
+          : CAMERA_RUNG_480
+        : hasAudio
+          ? CAMERA_RUNG_WITH_VOICE
+          : CAMERA_RUNG
       : VOICE_RUNG,
     egressId: input.egressId,
     startedAtMs: Date.now(),
@@ -4780,6 +4837,7 @@ function adoptCameraEgress(input: {
     hasVideo,
     hasVoiceAudio: hasAudio,
   });
+  mirrorLlCameraSlot(input.channelId, room);
   // "SEPARADA" CAME BACK WITH THE CAMERA. The presenter declared it on the
   // machine that started this egress (`set-voice-track-mode`), and a client
   // only says it again when its own mode changes, so the process adopting it
@@ -5353,6 +5411,7 @@ export function pickScreenTracks(
   let micArchiveTrackId: string | undefined;
   let cameraTrackId: string | undefined;
   const cameraTrackIds: string[] = [];
+  const cameraTrackHeights: Record<string, number> = {};
   let voiceTrackId: string | undefined;
   let stageMixTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
@@ -5384,6 +5443,12 @@ export function pickScreenTracks(
     if (isTrackSource(track.source, TrackSource.CAMERA)) {
       cameraTrackId ??= track.sid;
       cameraTrackIds.push(track.sid);
+      const sides = [track.width, track.height].filter(
+        (side): side is number => typeof side === "number" && side > 0,
+      );
+      if (sides.length > 0) {
+        cameraTrackHeights[track.sid] = Math.min(...sides);
+      }
     }
     // BY NAME, LIKE THE ARCHIVE, AND FOR A SECOND REASON ON TOP OF PITFALL
     // 14: the sharer's ORDINARY microphone (source `Microphone`, no special
@@ -5410,6 +5475,7 @@ export function pickScreenTracks(
         ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
         ...(cameraTrackId ? { cameraTrackId } : {}),
         ...(cameraTrackIds.length > 1 ? { cameraTrackIds } : {}),
+        ...(Object.keys(cameraTrackHeights).length > 0 ? { cameraTrackHeights } : {}),
         ...(stageMixTrackId || voiceTrackId
           ? { voiceTrackId: stageMixTrackId ?? voiceTrackId }
           : {}),
@@ -5706,6 +5772,42 @@ function withoutCameraUrl(stream: LiveHlsStream): LiveHlsStream {
     ...rest
   } = stream;
   return rest;
+}
+
+/**
+ * What a viewer's picture-in-picture keys on, as one comparable string.
+ * Changes exactly when an audience has to be told about the camera again.
+ */
+function cameraSlotKey(stream: LiveHlsStream | undefined): string {
+  if (!stream?.cameraHlsUrl) {
+    return "";
+  }
+  return `${stream.cameraHlsUrl}|${stream.cameraHasVideo !== false}|${stream.cameraHasVoiceAudio === true}`;
+}
+
+/**
+ * AN LL COMPANION'S CAMERA HAS TO BE STATED ON THE LL STREAM, which is the
+ * one an audience is handed (`llStreamFor`). The companion's own `stream` is
+ * a private copy nobody outside this file reads, so a camera advertised only
+ * there reached no viewer at all: the cause of the 2026-09-25 rehearsal's
+ * missing webcam. No-op for a ladder room, whose `stream` IS the audience's.
+ */
+function mirrorLlCameraSlot(channelId: string, room: RoomHls): boolean {
+  if (llCompanions.get(channelId) !== room) {
+    return false;
+  }
+  const stream = room.stream;
+  return setLlCameraSlot(
+    channelId,
+    stream.startedAt,
+    stream.cameraHlsUrl
+      ? {
+          cameraHlsUrl: stream.cameraHlsUrl,
+          cameraHasVideo: stream.cameraHasVideo !== false,
+          cameraHasVoiceAudio: stream.cameraHasVoiceAudio === true,
+        }
+      : null,
+  );
 }
 
 function segmentOutput(
@@ -6804,16 +6906,63 @@ function chooseCameraTrack(
   return candidates[0]!;
 }
 
+/**
+ * `reconcileCameraEgressNow`, plus TELLING THE AUDIENCE WHEN THE SLOT MOVED.
+ *
+ * The camera starts in the link AFTER the film's reconcile has already
+ * answered its push, so the push that caused it never carries it, and every
+ * later push compared the room's stream (camera already on it) with itself
+ * and saw nothing to send. The URL reached viewers only when some unrelated
+ * push happened to straddle the camera start: often in a busy party, never
+ * in a quiet one (the 2026-09-25 rehearsal: one viewer, no joins, no
+ * camera). So a changed slot asks for a push of its own here, and
+ * `pushLiveHls` compares against what the audience was last TOLD
+ * (`liveHlsCameraUntold` in `ws/voice.ts`), not against the room it just
+ * mutated. An LL companion's slot is mirrored onto the LL stream first,
+ * because that is the stream the push reads (`mirrorLlCameraSlot`).
+ */
 async function reconcileCameraEgress(
   channelId: string,
   cameraTrackId: string | null,
   voiceTrackId: string | null,
   cameraTrackIds?: readonly string[],
+  cameraTrackHeights?: Readonly<Record<string, number>>,
 ): Promise<void> {
   const room = companionHost(channelId);
   if (!room) {
     return;
   }
+  const before = cameraSlotKey(room.stream);
+  try {
+    await reconcileCameraEgressNow(
+      channelId,
+      room,
+      cameraTrackId,
+      voiceTrackId,
+      cameraTrackIds,
+      cameraTrackHeights,
+    );
+  } finally {
+    if (companionHost(channelId) === room) {
+      mirrorLlCameraSlot(channelId, room);
+      if (cameraSlotKey(room.stream) !== before) {
+        notifyChanged(
+          channelId,
+          room.stream.cameraHlsUrl ? "camera-started" : "camera-stopped",
+        );
+      }
+    }
+  }
+}
+
+async function reconcileCameraEgressNow(
+  channelId: string,
+  room: RoomHls,
+  cameraTrackId: string | null,
+  voiceTrackId: string | null,
+  cameraTrackIds?: readonly string[],
+  cameraTrackHeights?: Readonly<Record<string, number>>,
+): Promise<void> {
   const wantedVideo = liveHlsCameraEnabled()
     ? chooseCameraTrack(channelId, room, cameraTrackId, cameraTrackIds)
     : null;
@@ -6860,7 +7009,9 @@ async function reconcileCameraEgress(
     await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
     const confirmed = await stopRungs(channelId, [current]);
     if (!confirmed.has(current.egressId)) {
-      replacedMbps = current.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
+      replacedMbps = current.cameraTrackId
+        ? cameraSlotMbps(current.rung)
+        : HLS_VOICE_ONLY_MBPS;
     }
     logEvent("voice.hlsCameraStopped", {
       channelId,
@@ -6902,6 +7053,16 @@ async function reconcileCameraEgress(
   // below via `runningCameraMbps()`, at its own much smaller weight, and
   // `activeBoxEgressCount` cannot itself tell a camera egress from a ladder
   // rendition. Passing it directly would charge every existing camera twice.
+  // Which of the slot's shapes this attempt is, decided BEFORE the price so
+  // a 480p camera is charged as one. Same `CAMERA_RUNG_NAME` object prefix
+  // and playlist path for every shape -- see the `RoomHls.camera` doc -- so
+  // nothing downstream needs to know which one is running.
+  const rung = cameraRungFor({
+    hasVideo: Boolean(wantedVideo),
+    hasAudio: Boolean(wantedAudio),
+    publishedLines: wantedVideo ? (cameraTrackHeights?.[wantedVideo] ?? null) : null,
+    allow480: liveHlsCamera480Enabled(),
+  });
   const decision = decideCameraEgress({
     runningRungs: await activeLadderEgressCount({
       supersededEgressIds: replaced,
@@ -6910,6 +7071,7 @@ async function reconcileCameraEgress(
       (await currentSfuLoadMbps()) + runningCameraMbps() + replacedMbps,
     boxBudgetMbps: promotionBudgetMbps(),
     hasVideo: Boolean(wantedVideo),
+    ownMbps: cameraSlotMbps(rung),
   });
   if (!decision.start) {
     // THE SAME COOLDOWN, and it is what keeps this off the log. `pushLiveHls`
@@ -6925,18 +7087,11 @@ async function reconcileCameraEgress(
       boxMbps: Math.round(decision.boxMbps),
       boxBudgetMbps: promotionBudgetMbps(),
       retryInMs,
+      height: rung.height,
     });
     return;
   }
   const startedAt = room.stream.startedAt;
-  // Which of the three shapes this attempt is. Same `CAMERA_RUNG_NAME` object
-  // prefix and playlist path for all three — see the `RoomHls.camera` doc —
-  // so nothing downstream needs to know which one is running.
-  const rung = wantedVideo
-    ? wantedAudio
-      ? CAMERA_RUNG_WITH_VOICE
-      : CAMERA_RUNG
-    : VOICE_RUNG;
   let egressId: string | null = null;
   // EVERY CAMERA RUN WRITES UNDER ITS OWN NAMES. The camera is the one slot
   // that stops and starts inside a session, and a fresh egress numbers its
@@ -7052,6 +7207,10 @@ async function reconcileCameraEgress(
     cameraTrackId: wantedVideo,
     audioTrackId: wantedAudio,
     boxMbps: Math.round(decision.boxMbps),
+    // The size this run is encoded at, and what the presenter published:
+    // `publishedLines` null means LiveKit did not say, which is 360p.
+    height: rung.height,
+    publishedLines: wantedVideo ? (cameraTrackHeights?.[wantedVideo] ?? null) : null,
   });
 }
 
@@ -7112,6 +7271,8 @@ interface LiveHlsReconcileResult {
   cameraTrackId?: string | null;
   /** Every camera the sharer has listed; see `LiveHlsScreenTracks.cameraTrackIds`. */
   cameraTrackIds?: string[];
+  /** See `LiveHlsScreenTracks.cameraTrackHeights`. */
+  cameraTrackHeights?: Record<string, number>;
   /** Same optional-vs-null convention as `cameraTrackId`, for the mic. */
   voiceTrackId?: string | null;
   /** The presenter's `mic-archive` sid, for `reconcileMicArchive`. */
@@ -7492,7 +7653,7 @@ async function finishInPlaceRestart(input: {
   });
   return {
     stream: room.stream,
-    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds,
+    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, cameraTrackHeights: tracks.cameraTrackHeights,
     voiceTrackId: tracks.voiceTrackId ?? null,
     micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
@@ -7906,7 +8067,7 @@ async function startRoom(
   // for `reconcileLiveHls` to reconcile as the NEXT link of this channel's own
   // serialisation queue: chained, so it can never overlap a later push's own
   // camera work for this channel, but never awaited by the film path either.
-  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, cameraTrackHeights: tracks.cameraTrackHeights, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
 }
 
 /**
@@ -7954,6 +8115,7 @@ export function reconcileLiveHls(
             result.cameraTrackId,
             result.voiceTrackId ?? null,
             result.cameraTrackIds,
+            result.cameraTrackHeights,
           ),
     )
     .catch((error: unknown) => {
@@ -8122,7 +8284,7 @@ async function reconcileLiveHlsNow(
       // `listParticipants` call above, so it costs no extra RPC. The camera
       // itself is reconciled by the caller, as the next link of the queue —
       // never here.
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, cameraTrackHeights: tracks.cameraTrackHeights, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     // A NEW AUDIO SID WITH THE SAME VIDEO SID IS STILL A REPLACEMENT. Ticking
     // "share audio" on after the ladder was already running, losing the
@@ -8186,7 +8348,7 @@ async function reconcileLiveHlsNow(
       if (voiceTrackSeparatedByChannel.get(channelId) === from) {
         voiceTrackSeparatedByChannel.set(channelId, presenterPeerId);
       }
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, cameraTrackHeights: tracks.cameraTrackHeights, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     if (
       tracks &&

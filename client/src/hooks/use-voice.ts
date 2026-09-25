@@ -115,6 +115,8 @@ import {
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   effectiveCameraQuality,
+  presenterCameraQualityFor,
+  WATCH_PARTY_PRESENTER_CAMERA_QUALITY,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -1258,9 +1260,25 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (presenting === watchPartyCameraCapped) {
       return;
     }
-    const generation = ++cameraCapGeneration;
     const before = currentCameraQuality();
     watchPartyCameraCapped = presenting;
+    // The presenter's ladder (one fallback layer under the capture) goes with
+    // the cap, and the ladder reconcile below is what puts it on the wire.
+    const ladderMoved = sfu?.setCameraPresenter?.(presenting) ?? false;
+    await reapplyCameraCap(before, ladderMoved);
+  }
+  /**
+   * Move a live camera from `before` to whatever `currentCameraQuality()`
+   * says now: the encoder's ceiling, the capture size, and the simulcast
+   * ladder, in that order and with the generation guard below. Shared by the
+   * cap going on or off and by the cap's SIZE changing mid-party
+   * (`refreshPresenterCameraCap`).
+   */
+  async function reapplyCameraCap(
+    before: VideoQuality,
+    ladderMoved = false,
+  ): Promise<void> {
+    const generation = ++cameraCapGeneration;
     const applied = currentCameraQuality();
     // A FLAG THAT MOVED IS NOT A PICTURE THAT MOVED. Somebody who already
     // picked 360p is exactly where the cap wants them, and re-applying it
@@ -1268,6 +1286,12 @@ export function createVoiceController(transport: RealtimeTransport) {
     // possibly republish the simulcast ladder, which every viewer of that
     // camera sees as a stutter, for no change at all.
     if (applied === before) {
+      // The capture is already the right size, but the ladder may not be:
+      // the presenter's is one fallback layer, the call's is two. Only when
+      // it actually differs, since a republish is a blink for every viewer.
+      if (ladderMoved) {
+        await sfu?.reconcileCameraLadder();
+      }
       return;
     }
     const maxBitrate = cameraBitrateFor(applied);
@@ -1315,14 +1339,18 @@ export function createVoiceController(transport: RealtimeTransport) {
     // 3.1 s out of the presenter's camera recording for a two-second
     // re-share. The cap now comes off when the session does (`voice-stream`
     // null), not when the share blinks.
-    await applyWatchPartyCameraCap(
-      watchPartyCameraCapWanted({
-        hlsSourceWanted: wanted !== null,
-        usingSfu: state.usingSfu,
-        streamPresenterPeerId: state.liveStream?.presenterPeerId ?? null,
-        ownPeerId: state.peerId,
-      }),
-    );
+    const capWanted = watchPartyCameraCapWanted({
+      hlsSourceWanted: wanted !== null,
+      usingSfu: state.usingSfu,
+      streamPresenterPeerId: state.liveStream?.presenterPeerId ?? null,
+      ownPeerId: state.peerId,
+    });
+    if (capWanted) {
+      // How big the cap is (480p where the deployment says so). Not awaited:
+      // the cap applies at once with the size already known.
+      refreshPresenterCameraCap();
+    }
+    await applyWatchPartyCameraCap(capWanted);
     if (!wanted) {
       if (hlsSourceTimer !== null) {
         clearInterval(hlsSourceTimer);
@@ -1530,9 +1558,50 @@ export function createVoiceController(transport: RealtimeTransport) {
    * to move on its own.
    */
   let watchPartyCameraCapped = false;
+  /**
+   * How big the cap is: 480p when this deployment says so
+   * (`GET /api/live-hls/config` -> `cameraHeight`, `LIVE_HLS_CAMERA_480`),
+   * 360p until it has, and whenever it cannot be asked. See
+   * `presenterCameraQualityFor`.
+   */
+  let presenterCameraCap: VideoQuality = WATCH_PARTY_PRESENTER_CAMERA_QUALITY;
   /** The camera quality actually in force: the choice, under the cap. */
   function currentCameraQuality(): VideoQuality {
-    return effectiveCameraQuality(videoQuality, watchPartyCameraCapped);
+    return effectiveCameraQuality(
+      videoQuality,
+      watchPartyCameraCapped,
+      presenterCameraCap,
+    );
+  }
+  /**
+   * Ask the deployment how big a presenter's camera may be, and move a
+   * camera that is already capped if the answer changed.
+   *
+   * NEVER AWAITED BY THE CAP ITSELF. The cap going on is what protects the
+   * share, and it must not wait on a fetch: it applies at once with the size
+   * already known (360p until told), and this corrects it a moment later.
+   * The config is cached per page (`loadLiveHlsConfig`), so after the first
+   * answer this is a resolved promise. Asked when a share starts, which is
+   * seconds before any egress goes live, so the first cap is usually already
+   * the right size.
+   */
+  function refreshPresenterCameraCap(): void {
+    void loadLiveHlsConfig()
+      .then((config) => {
+        const next = presenterCameraQualityFor(config.cameraHeight);
+        if (next === presenterCameraCap) {
+          return;
+        }
+        const before = currentCameraQuality();
+        presenterCameraCap = next;
+        if (watchPartyCameraCapped && currentCameraQuality() !== before) {
+          return reapplyCameraCap(before);
+        }
+        return undefined;
+      })
+      .catch(() => {
+        // Could not ask: keep the size already in force.
+      });
   }
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
@@ -5664,6 +5733,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      // How big this presenter's camera may be once a watch party goes live
+      // on the share. Fired now, not awaited, so the answer is in hand before
+      // the egress is.
+      refreshPresenterCameraCap();
       // Measured before the check, not after: the whole point of the reading
       // is to decide this, and a stale one from the last room would answer for
       // a link that may have changed since.

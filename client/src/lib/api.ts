@@ -728,6 +728,13 @@ export interface LiveHlsConfig {
    * offers "Baixa latência (beta)" when this is true.
    */
   lowLatency?: { available: boolean };
+  /**
+   * The tallest camera a watch-party presenter may publish while their share
+   * is on air (`LIVE_HLS_CAMERA_480`: 480, or 360 when switched off). Absent
+   * on an older API, which reads as 360, the old behaviour. See
+   * `presenterCameraQualityFor` in `lib/video-quality.ts`.
+   */
+  cameraHeight?: number;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

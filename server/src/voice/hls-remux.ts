@@ -1705,6 +1705,64 @@ export function llStreamFor(channelId: string): LiveHlsStream | null {
   return llRooms.get(channelId)?.stream ?? null;
 }
 
+/** The camera fields an LL stream carries while its companion runs a camera. */
+export interface LlCameraSlot {
+  cameraHlsUrl: string;
+  cameraHasVideo: boolean;
+  cameraHasVoiceAudio: boolean;
+}
+
+/**
+ * STATE THE PRESENTER'S CAMERA ON THE LL STREAM ITSELF.
+ *
+ * An LL party's camera is a LiveKit egress run by the companion room in
+ * `hls-egress.ts` (`llCompanions`), and until 2026-09-25 its `cameraHlsUrl`
+ * was written onto the COMPANION's copy of the stream and nowhere else. Every
+ * reader that hands a stream to an audience (`pushLiveHls`, the keyframe,
+ * `GET /live`) reads this map through `llStreamFor`, so an LL viewer was
+ * never told a camera existed: the production rehearsal that morning
+ * recorded 773 s of `cam360p30` and showed its only viewer the film alone.
+ *
+ * `hls-egress.ts` calls this every time the companion's camera slot changes,
+ * and again after every LL reconcile (a resume or an adoption rebuilds the
+ * stream from scratch). Only for the session the slot belongs to: a slot for
+ * an older `startedAt` is dropped rather than pinned onto a new session.
+ * Returns whether the stream changed.
+ */
+export function setLlCameraSlot(
+  channelId: string,
+  startedAt: number,
+  slot: LlCameraSlot | null,
+): boolean {
+  const room = llRooms.get(channelId);
+  if (!room || room.stream.startedAt !== startedAt) {
+    return false;
+  }
+  const current = room.stream;
+  if (slot) {
+    if (
+      current.cameraHlsUrl === slot.cameraHlsUrl &&
+      current.cameraHasVideo === slot.cameraHasVideo &&
+      current.cameraHasVoiceAudio === slot.cameraHasVoiceAudio
+    ) {
+      return false;
+    }
+    room.stream = { ...current, ...slot };
+    return true;
+  }
+  if (current.cameraHlsUrl === undefined) {
+    return false;
+  }
+  const {
+    cameraHlsUrl: _url,
+    cameraHasVideo: _video,
+    cameraHasVoiceAudio: _audio,
+    ...rest
+  } = current;
+  room.stream = rest;
+  return true;
+}
+
 interface OpenLlRow {
   id: string;
   startedAtMs: number;

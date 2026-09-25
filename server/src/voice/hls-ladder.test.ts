@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMasterPlaylist,
   CAMERA_RUNG,
+  CAMERA_RUNG_480,
+  CAMERA_RUNG_480_WITH_VOICE,
   CAMERA_RUNG_NAME,
   CAMERA_RUNG_WITH_VOICE,
   VOICE_RUNG,
+  cameraRungFor,
+  cameraSlotMbps,
   decideCameraEgress,
+  HLS_CAMERA_480_MBPS,
   decideLadder,
   DEFAULT_MAX_LADDER_MBPS,
   HLS_CAMERA_MBPS,
@@ -642,5 +647,75 @@ describe("isKnownHlsRung / hlsRungVideoKbps", () => {
 
   it("empty string is not a known rung", () => {
     expect(isKnownHlsRung("")).toBe(false);
+  });
+});
+
+describe("the 480p camera slot (2026-09-25)", () => {
+  it("keeps the slot's name, so old recordings and new ones read the same way", () => {
+    expect(CAMERA_RUNG_480.name).toBe(CAMERA_RUNG_NAME);
+    expect(CAMERA_RUNG_480_WITH_VOICE.name).toBe(CAMERA_RUNG_NAME);
+    expect(CAMERA_RUNG_480).toMatchObject({ width: 854, height: 480, framerate: 30, audioKbps: 0 });
+    expect(CAMERA_RUNG_480_WITH_VOICE.audioKbps).toBe(64);
+    // Level 3.1: 854x480 at 30 fps is past level 3.0's macroblock rate.
+    expect(CAMERA_RUNG_480.codecs).toBe("avc1.4d001f");
+    expect(rungEncodingOptions(CAMERA_RUNG_480)).toMatchObject({
+      width: 854,
+      height: 480,
+      videoBitrate: 800,
+      audioBitrate: 0,
+    });
+  });
+
+  it("follows what the presenter publishes, and never upscales", () => {
+    const pick = (publishedLines: number | null, allow480 = true, hasAudio = false) =>
+      cameraRungFor({ hasVideo: true, hasAudio, publishedLines, allow480 });
+    expect(pick(480)).toBe(CAMERA_RUNG_480);
+    expect(pick(720)).toBe(CAMERA_RUNG_480);
+    // A webcam a few lines short of what it was asked for still counts.
+    expect(pick(476)).toBe(CAMERA_RUNG_480);
+    expect(pick(360)).toBe(CAMERA_RUNG);
+    // Unknown is the small one: guessing big is an upscale for a whole party.
+    expect(pick(null)).toBe(CAMERA_RUNG);
+    expect(pick(480, true, true)).toBe(CAMERA_RUNG_480_WITH_VOICE);
+    expect(pick(360, true, true)).toBe(CAMERA_RUNG_WITH_VOICE);
+  });
+
+  it("is today's 360p camera when the switch is off", () => {
+    expect(
+      cameraRungFor({ hasVideo: true, hasAudio: false, publishedLines: 1080, allow480: false }),
+    ).toBe(CAMERA_RUNG);
+    expect(
+      cameraRungFor({ hasVideo: true, hasAudio: true, publishedLines: 1080, allow480: false }),
+    ).toBe(CAMERA_RUNG_WITH_VOICE);
+  });
+
+  it("is the voice alone with no camera, whatever the switch says", () => {
+    expect(
+      cameraRungFor({ hasVideo: false, hasAudio: true, publishedLines: 480, allow480: true }),
+    ).toBe(VOICE_RUNG);
+  });
+
+  it("prices each shape at its own weight, all under half a rendition", () => {
+    expect(cameraSlotMbps(VOICE_RUNG)).toBe(HLS_VOICE_ONLY_MBPS);
+    expect(cameraSlotMbps(CAMERA_RUNG)).toBe(HLS_CAMERA_MBPS);
+    expect(cameraSlotMbps(CAMERA_RUNG_WITH_VOICE)).toBe(HLS_CAMERA_MBPS);
+    expect(cameraSlotMbps(CAMERA_RUNG_480)).toBe(HLS_CAMERA_480_MBPS);
+    expect(HLS_CAMERA_480_MBPS).toBeGreaterThan(HLS_CAMERA_MBPS);
+    expect(HLS_CAMERA_480_MBPS).toBeLessThan(HLS_RUNG_MBPS / 2);
+  });
+
+  it("refuses a 480p camera the box has room for only at 360p", () => {
+    const budget = HLS_RUNG_MBPS + HLS_CAMERA_MBPS + 1;
+    expect(
+      decideCameraEgress({ runningRungs: 1, sfuLoadMbps: 0, boxBudgetMbps: budget }).start,
+    ).toBe(true);
+    expect(
+      decideCameraEgress({
+        runningRungs: 1,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: budget,
+        ownMbps: cameraSlotMbps(CAMERA_RUNG_480),
+      }),
+    ).toMatchObject({ start: false, refusal: "box-budget" });
   });
 });

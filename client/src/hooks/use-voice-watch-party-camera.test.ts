@@ -33,6 +33,26 @@ vi.mock("@/lib/sounds", () => ({
   whenCueSettled: async () => {},
 }));
 
+/**
+ * What `GET /api/live-hls/config` says. Null is a fetch that fails, which is
+ * also what every test before the 480p cap ran against: the 360p cap.
+ */
+const liveHlsConfig = vi.hoisted(() => ({ cameraHeight: null as number | null }));
+vi.mock("@/hooks/use-live-hls-config", () => ({
+  loadLiveHlsConfig: async () => {
+    if (liveHlsConfig.cameraHeight === null) {
+      throw new Error("offline");
+    }
+    return {
+      enabled: true,
+      delaySeconds: 10,
+      voiceTrack: false,
+      micArchive: false,
+      cameraHeight: liveHlsConfig.cameraHeight,
+    };
+  },
+}));
+
 vi.mock("@/lib/voice-leave-beacon", () => ({
   beaconVoiceLeave: () => {},
 }));
@@ -341,6 +361,7 @@ beforeEach(() => {
   appliedConstraints.length = 0;
   ladderReconciles = 0;
   cameraBitrateGate = null;
+  liveHlsConfig.cameraHeight = null;
   intervalCallbacks.length = 0;
   vi.mocked(connectLiveKit).mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -373,6 +394,23 @@ describe("the presenter's camera while a watch party is transcoding", () => {
     expect(appliedConstraints.at(-1)).toMatchObject({
       height: { ideal: 720 },
     });
+  });
+
+  it("holds the camera at 480p instead where the deployment allows it", async () => {
+    // `LIVE_HLS_CAMERA_480` on (the default): the camera slot is encoded at
+    // 480p, so the presenter publishes 480p (700 kbit/s) rather than 360p.
+    liveHlsConfig.cameraHeight = 480;
+    const { voice } = await presentingHost();
+    await settle();
+    await voice.toggleCamera();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+
+    voice.handleSignaling(voiceStream(1080));
+    await settle();
+
+    expect(cameraCeilings.at(-1)).toBe(700_000);
+    expect(appliedConstraints.at(-1)).toMatchObject({ height: { ideal: 480 } });
   });
 
   it("treats a low-latency party as live even though it states no ladder top", async () => {
@@ -513,6 +551,37 @@ describe("the presenter's camera while a watch party is transcoding", () => {
     await settle();
     await settle();
     expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+  });
+
+  it("at 480p too: a quick re-share never republishes the camera", async () => {
+    // The same property with the 480p cap: the re-share's own
+    // `startScreenShare` asks the config again, and an answer that has not
+    // changed must move nothing.
+    liveHlsConfig.cameraHeight = 480;
+    const { voice } = await presentingHost();
+    await settle();
+    await voice.toggleCamera();
+    await settle();
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(700_000);
+    const republishes = ladderReconciles;
+    const ceilings = cameraCeilings.length;
+
+    await voice.stopScreenShare();
+    await settle();
+    for (const tick of intervalCallbacks.splice(0)) {
+      tick();
+    }
+    await settle();
+    await settle();
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+
+    expect(ladderReconciles).toBe(republishes);
+    expect(cameraCeilings.length).toBe(ceilings);
   });
 
   /**

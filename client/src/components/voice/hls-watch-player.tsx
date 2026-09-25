@@ -12,13 +12,16 @@ import {
 } from "react";
 import {
   Check,
+  Columns2,
   Crop,
   Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
+  Monitor,
   Move,
   Pause,
+  PictureInPicture,
   PictureInPicture2,
   Play,
   Radio,
@@ -27,6 +30,8 @@ import {
   Volume1,
   Volume2,
   VolumeX,
+  Webcam,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -103,6 +108,7 @@ import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Menu } from "@/components/ui/menu";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
@@ -143,11 +149,15 @@ import {
   useIdleChrome,
 } from "@/hooks/use-idle-chrome";
 import {
+  CAMERA_LAYOUTS,
+  cameraLayoutOffered,
   cameraPipBoxes,
   cameraPipMounted,
+  effectiveCameraLayout,
   nextCameraPipCorner,
   readCameraPipPref,
   writeCameraPipPref,
+  type CameraLayout,
   type CameraPipPref,
 } from "@/lib/watch-camera-pip";
 import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
@@ -2718,9 +2728,13 @@ export function HlsWatchPlayer({
   const reducedMotion = usePrefersReducedMotion();
   const [barHovered, setBarHovered] = useState(false);
   const [barFocused, setBarFocused] = useState(false);
+  // The layout picker's menu is portalled out of the bar, so neither hover
+  // nor focus inside it reaches the bar's own handlers: it holds the chrome
+  // up itself while it is open, the way the quality menu does.
+  const [cameraLayoutOpen, setCameraLayoutOpen] = useState(false);
   const chrome = useIdleChrome(
     layout === "cinema" && hasFrame,
-    qualityOpen || barHovered || barFocused,
+    qualityOpen || cameraLayoutOpen || barHovered || barFocused,
   );
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
@@ -2792,27 +2806,43 @@ export function HlsWatchPlayer({
         : undefined;
 
   /**
-   * THE PRESENTER'S CAMERA, FLOATING OVER THEIR FILM.
+   * THE PRESENTER'S CAMERA, BESIDE OR OVER THEIR FILM.
    *
-   * A second, muted hls.js on a second playlist (`WatchCameraPip`), and a pure
-   * module deciding which of the two pictures gets the stage and which gets
-   * the corner (`lib/watch-camera-pip.ts`). Swapping moves the CLASSES, never
-   * the players: neither instance is re-attached, so nobody rebuffers to look
-   * at a webcam, and the control bar stays where it is because it belongs to
-   * the stage rather than to a picture.
+   * A second hls.js on a second playlist (`WatchCameraPip`), and a pure
+   * module deciding which picture gets which box for the viewer's chosen
+   * layout (`lib/watch-camera-pip.ts`: the corner, side by side, the film
+   * alone, the camera alone). A layout change moves the CLASSES, never the
+   * players: neither instance is re-attached, so nobody rebuffers to look at
+   * a webcam, and the control bar stays where it is because it belongs to
+   * the stage rather than to a picture. The one exception is "hide webcam",
+   * which unmounts the camera's player outright so it stops downloading.
    */
   const [cameraPip, setCameraPip] = useState<CameraPipPref>(readCameraPipPref);
   const [cameraFrame, setCameraFrame] = useState(false);
+  const cameraLayout = effectiveCameraLayout({
+    pref: cameraPip,
+    cameraHasVideo,
+  });
   const cameraMounted = cameraPipMounted({
     cameraSrc,
-    fullscreen: Boolean(fullscreen?.active),
     cinema,
+    layout: cameraLayout,
+    hasVoiceAudio: cameraHasVoiceAudio,
   });
   const boxes = cameraPipBoxes({
     mounted: cameraMounted,
     hasFrame: cameraFrame,
     pref: cameraPip,
+    layout: cameraLayout,
   });
+  const layoutOffered = cameraLayoutOffered({ cameraSrc, cameraHasVideo, cinema });
+  const layoutIcon: Record<CameraLayout, LucideIcon> = {
+    pip: PictureInPicture,
+    side: Columns2,
+    stream: Monitor,
+    camera: Webcam,
+  };
+  const LayoutGlyph = layoutIcon[cameraLayout];
   const updateCameraPip = useCallback((next: CameraPipPref) => {
     setCameraPip(next);
     writeCameraPipPref(next);
@@ -2841,7 +2871,9 @@ export function HlsWatchPlayer({
   return (
     <div
       className={cn(
-        "relative h-full w-full bg-black",
+        // `@container/watch`: side by side stacks by the PLAYER's width, not
+        // the window's (`CAMERA_SIDE_*_CLASS`).
+        "@container/watch relative h-full w-full bg-black",
         cinema && fullscreen?.active && chrome.hidden && "cursor-none",
         !cinema && "group",
         className,
@@ -2895,39 +2927,44 @@ export function HlsWatchPlayer({
       {cameraMounted && cameraSrc ? (
         <WatchCameraPip
           src={cameraSrc}
-          hasVideo={cameraHasVideo}
+          hasVideo={cameraHasVideo && !boxes.cameraVoiceOnly}
           hasVoiceAudio={cameraHasVoiceAudio}
-          className={cn(boxes.camera ?? "", videoFitClass("cover"))}
+          className={boxes.camera ?? ""}
+          fit={boxes.cameraFit}
           onFrame={setCameraFrame}
         />
       ) : null}
-      {/* THE CONTROLS SIT OVER WHICHEVER PICTURE IS IN THE CORNER, which is
-          why there is one of them rather than one per player: the corner is a
-          box, and what is in it changes. `tileControls` in `lib/stage-layers.ts`
-          is above the pictures and below the chrome, so the control bar is never behind
-          webcam. */}
+      {/* THE CORNER CONTROL SITS OVER THE CORNER PICTURE, in the same box.
+          The box lets every press through (the picture underneath may carry
+          the presenter's voice slider, and a tap on the stage still wakes the
+          chrome); only the button takes one, and it comes and goes with the
+          player's own chrome. `tileControls` is above the pictures and below
+          the chrome, so the control bar is never behind a webcam. The old
+          click-to-swap is gone: "hide stream" in the layout picker is what
+          puts the camera on the stage now. */}
       {boxes.corner ? (
         <div
           data-testid="watch-camera-pip-controls"
-          data-camera-on-stage={cameraPip.onStage ? "" : undefined}
-          className={cn(boxes.corner, "group/pip", STAGE_LAYER.tileControls)}
+          className={cn(
+            boxes.corner,
+            "pointer-events-none",
+            STAGE_LAYER.tileControls,
+          )}
         >
-          <button
-            type="button"
-            data-testid="watch-camera-pip-swap"
-            aria-label={t("voice.hls.cameraSwap")}
-            title={t("voice.hls.cameraSwap")}
-            className="absolute inset-0 h-full w-full rounded-[var(--radius-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
-            onClick={() =>
-              updateCameraPip({ ...cameraPip, onStage: !cameraPip.onStage })
-            }
-          />
           <button
             type="button"
             data-testid="watch-camera-pip-corner"
             aria-label={t("voice.hls.cameraCorner")}
             title={t("voice.hls.cameraCorner")}
-            className="absolute right-1 top-1 rounded bg-black/60 p-1 text-paper opacity-0 transition-opacity hover:bg-black/85 focus-visible:opacity-100 motion-reduce:transition-none group-hover/pip:opacity-100"
+            className={cn(
+              "absolute right-1 top-1 rounded bg-black/60 p-1 text-paper transition-opacity hover:bg-black/85 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal motion-reduce:transition-none",
+              // Hidden with the chrome, and not pressable while hidden: the
+              // first tap on a resting player wakes it, it does not move a
+              // webcam nobody could see a button on.
+              chrome.hidden
+                ? "pointer-events-none opacity-0"
+                : "pointer-events-auto opacity-100",
+            )}
             onClick={() =>
               updateCameraPip({
                 ...cameraPip,
@@ -3208,6 +3245,38 @@ export function HlsWatchPlayer({
             )}
           </div>
           <div className="pointer-events-auto flex shrink-0 items-center gap-0.5">
+            {layoutOffered ? (
+              /* THE LAYOUT PICKER, only while the presenter's camera is on
+                 the stream. One small control in the chrome rather than a
+                 panel: the four layouts are a choice made once per party,
+                 remembered per browser, and a party with no webcam shows
+                 exactly the bar it always had. A plain `Menu`, so the
+                 keyboard, focus return and Escape are Radix's, and it
+                 portals into the fullscreen element when there is one. */
+              <Menu
+                align="end"
+                side="top"
+                onOpenChange={setCameraLayoutOpen}
+                items={CAMERA_LAYOUTS.map((option) => ({
+                  id: `camera-layout-${option}`,
+                  label: t(`voice.hls.cameraLayout.${option}`),
+                  icon: layoutIcon[option],
+                  checked: cameraLayout === option,
+                  onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+                }))}
+              >
+                <button
+                  type="button"
+                  data-testid="watch-camera-layout"
+                  data-camera-layout={cameraLayout}
+                  aria-label={t("voice.hls.cameraLayout")}
+                  title={t("voice.hls.cameraLayout")}
+                  className={iconBtn}
+                >
+                  <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Menu>
+            ) : null}
             {hasFrame ? (
               <Tooltip
                 label={whole ? t("call.fit.fill") : t("call.fit.whole")}

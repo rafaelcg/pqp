@@ -1921,17 +1921,34 @@ command with no deploy, and `liveHls.cameraSessions` on the operator dashboard
 says how many are running.
 
 **What the viewer gets.** A second, muted hls.js instance (`WatchCameraPip`)
-floated in a corner of the film, mounted only in the cinema layout —
-never inside a grid tile, which would be a picture in a picture in a picture,
-and never in the docked mini player, a 240px box with room for the film and
-almost nothing else. The stage and the corner are boxes rather than players
-(`lib/watch-camera-pip.ts`), so swapping (click the small picture) re-attaches
-neither hls.js instance and nobody rebuffers to look at a webcam; the control
-bar stays where it is because it belongs to the stage. The corner is one of
-four and is remembered per browser with the swap (`pqp:watch-camera-pip`).
-**Fullscreen unmounts it**, so a camera nobody can see costs no decode. A
-camera that never produces a frame draws nothing at all — no spinner, no
-placeholder, no error.
+beside or over the film, mounted only in the cinema layout: never inside a
+grid tile, which would be a picture in a picture in a picture, and never in
+the docked mini player, a 240px box with room for the film and almost nothing
+else. A camera that never produces a frame draws nothing at all (no spinner,
+no placeholder, no error), and until its first frame the film keeps the whole
+stage whatever the layout.
+
+**The viewer picks the layout (2026-09-25).** Rafael's four, from one small
+control in the player's own bar (`watch-camera-layout`, a `Menu`), offered
+only while the presenter's camera is on the stream, so a party with no webcam
+has exactly the bar it always had:
+
+| Layout | What it draws | What it costs |
+|---|---|---|
+| Padrão (default) | The film on the stage, the webcam in a corner (bottom right, movable with the corner button, which comes and goes with the chrome) | Both players |
+| Lado a lado | Halves of the stage; stacked, film on top, when the PLAYER is narrower than 36rem (`@container/watch`), which is a phone held upright | Both players |
+| Ocultar câmera | The film alone | The camera's player is **unmounted**: no download, no decode. Unless it carries the presenter's voice ("separada"), in which case it stays, drawn as the voice-only corner, because hiding a face must not silence the host |
+| Ocultar transmissão | The webcam alone, on the stage | The film keeps playing **underneath, covered**: it carries the party's sound, and detaching it would rebuffer the film on the way back |
+
+Every layout change is a class change on the two elements
+(`cameraPipBoxes` in `lib/watch-camera-pip.ts`); no hls.js instance is ever
+re-attached by it. The choice and the corner are remembered per browser
+(`pqp:watch-camera-pip`, every read and write in `try/catch`, default
+"Padrão"); a preference stored by the old click-to-swap reads as the default,
+never as "hide the film". **Fullscreen now keeps the chosen layout**: it used
+to unmount the camera outright, when a corner was the only way to show one;
+with the picker the viewer says what fullscreen shows, "Ocultar câmera"
+included. The menu portals into the fullscreen element so it opens there.
 
 **Audio stays on the main stream, always**, and the camera playlist has no
 audio track at all (`CAMERA_RUNG.audioKbps = 0`, proto3's "unset"). The two
@@ -1939,6 +1956,24 @@ egresses start seconds apart and run their own segment timers, so expect
 drift between the face and the film — bounded below by the segment length
 (`LIVE_HLS_SEGMENT_SECONDS`, 4 s in production) and not chased further: holding
 the film back to match a webcam would be a worse film.
+
+**Telling the audience, and the bug that hid it (2026-09-25).** The camera
+starts in the reconcile queue's link AFTER the film's reconcile has answered
+the push that found it, so that push never carried it; every later push read
+the room's stream, which by then carried the camera, compared it with the
+reconcile's answer (the same stream) and sent nothing. A viewer got
+`cameraHlsUrl` only when an unrelated push happened to straddle the camera
+start: often in a busy party, never in a quiet one. And an **LL** party never
+got it at all: its camera runs on the LL companion (`llCompanions`), whose
+copy of the stream nobody reads, while every audience reader reads the LL
+stream (`llStreamFor`). The production LL rehearsal that morning recorded
+773 s of `cam360p30` and showed its only viewer the film alone. Now the camera
+reconcile mirrors the slot onto the LL stream (`setLlCameraSlot`,
+`mirrorLlCameraSlot`), asks for a push whenever the slot moves
+(`camera-started` / `camera-stopped` on `voice.hlsChangeHeard`), and
+`pushLiveHls` compares against what the audience was last TOLD
+(`liveHlsCameraUntold`), not against the room it just mutated. Pinned for both
+modes on two instances by `server/src/ws/voice-live-cluster.test.ts`.
 
 **iOS and Android are out of scope.** `cameraHlsUrl` is optional on the shared
 schema, so they parse the frame and ignore the field.
@@ -2743,7 +2778,58 @@ in place. Raise the `WATCH_PARTY_MAX_PUBLISH_HEIGHT` default once the egress
 moves closer to the presenter (a regional media box) or an OBS/RTMP ingest path
 exists.
 
+### The presenter's camera at 480p
+
+Rafael, 2026-09-25: "480p tops, then if we can we bump down to 360p whilst
+keeping the stream as priority". **`LIVE_HLS_CAMERA_480`, on by default**, and
+off is exactly the 360p behaviour below, both halves, with no client rebuild.
+
+- **The browser** asks `GET /api/live-hls/config` for `cameraHeight` (480 while
+  the switch is on; absent or anything else reads as 360) and caps a
+  presenter's camera at that (`presenterCameraQualityFor`,
+  `effectiveCameraQuality`): 854x480, 700 kbit/s ceiling. While presenting the
+  camera publishes ONE fallback layer under the capture
+  (`presenterCameraSimulcastRungs`: 360p under 480p), because livekit-client
+  builds only two layers for a capture under 960 px and takes the smallest
+  rung it is handed as the bottom one, so the ordinary `[180, 360]` would have
+  put 180p under 480p.
+- **"Bump down" is the browser's own congestion control**, not a measurement
+  of ours. The share's sender bids at `priority: "high"` while it feeds the
+  party (`setSourceMaxBitrate` in `livekit-session.ts`, every encoding, since
+  Chrome reads the sender's priority off the first), four times the weight of
+  the camera's default `low`. When the uplink cannot carry both, the camera
+  gets what the film does not need, its 480p layer pauses, and 360p carries
+  on. A browser that refuses `priority` once is never asked again, so the
+  layer pin it rides on cannot fail twice over it.
+- **The server** encodes the camera slot at 854x480, 800 kbit/s, H.264 Main
+  3.1 (`CAMERA_RUNG_480`) only when LiveKit says the presenter's camera
+  publishes at least 450 lines on its shorter side (`cameraRungFor`); a 360p
+  publication (an older tab, a presenter who picked 360p, the switch off) or
+  an unknown size gets the 360p rung, so the egress never upscales. Picked
+  once, at egress start: when the 480p layer pauses under pressure, the SFU
+  forwards the 360p layer and the egress scales it up for as long as that
+  lasts, which is a cheap bilinear scale, rather than restarting the camera
+  (a gap and a new run in the recording) every time a presenter's Wi-Fi
+  hiccups.
+- **The price**: `HLS_CAMERA_480_MBPS` is 1.5 times the 360p camera's estimate
+  (1.78 times the pixels, and decode and mux do not grow with the output),
+  still under half a rendition; `decideCameraEgress` prices the slot by the
+  shape it is about to start, so a box with room for a 360p camera and not a
+  480p one refuses it (and retries on the cooldown) rather than overrunning.
+  An adopted camera is charged at the 480p price while the switch is on,
+  because its row does not say which size it was. The egress container's CPU
+  cap is untouched.
+- **The name stays `cam360p30`.** It is an identifier: object prefixes in the
+  bucket, `hls_sessions.rung`, the playlist path, the retention sweep, the
+  history and download plans and the edge Worker's route all key on it, and
+  old recordings carry it. Renaming would mean reading two names everywhere
+  for as long as an old recording exists, to change a string no viewer sees.
+  `voice.hlsCameraStarted` logs `height` and `publishedLines` for each run.
+
 ### The presenter's camera is held at 360p while the party is on air
+
+(With `LIVE_HLS_CAMERA_480` on, the default since 2026-09-25, the cap is
+480p; see the section above. This is what the switch off restores.)
 
 Measured on staging, 2026-09-12. A presenter turned their webcam on during a
 live party: VP8 720p with three simulcast layers up to 1.5 Mbit/s, beside a

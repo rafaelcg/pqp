@@ -687,6 +687,24 @@ describe("the screen goes up as simulcast layers", () => {
     ).toEqual([180, 360]);
   });
 
+  it("publishes a watch-party presenter's 480p camera over one 360p fallback layer", async () => {
+    const sfu = await session();
+    expect(sfu.setCameraPresenter(true)).toBe(false);
+    await sfu.publishCamera(fakeStream("video", "cam", 480));
+
+    expect(
+      lastPublish(Track.Source.Camera)?.videoSimulcastLayers?.map((l) => l.height),
+    ).toEqual([360]);
+    expect(lastPublish(Track.Source.Camera)?.simulcast).toBe(true);
+
+    // The share ends: the call's ladder comes back on the next reconcile.
+    expect(sfu.setCameraPresenter(false)).toBe(true);
+    await sfu.reconcileCameraLadder();
+    expect(
+      lastPublish(Track.Source.Camera)?.videoSimulcastLayers?.map((l) => l.height),
+    ).toEqual([180, 360]);
+  });
+
   it("does not republish when the ladder is unchanged", async () => {
     const sfu = await session();
     await sfu.publishCamera(fakeStream("video", "cam", 720));
@@ -1137,6 +1155,92 @@ describe("the presenter as a live ladder's source", () => {
     expect(restored?.encodings[1]?.active).not.toBe(false);
     warn.mockRestore();
     vi.useRealTimers();
+  });
+
+  it("bids the share at high priority while it feeds the party, and stops after", async () => {
+    // Rafael's rule for the presenter's uplink: the film first. The camera
+    // keeps the default ("low"), so under pressure it is the one that yields.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const pinned = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(pinned!.encodings.every((encoding) => encoding.priority === "high")).toBe(true);
+
+    await sfu.setHlsSource(null);
+    const released = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(released!.encodings.some((encoding) => encoding.priority !== undefined)).toBe(false);
+  });
+
+  it("keeps the layer pin when the browser refuses the priority, and asks again later", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let refusePriority = 1;
+    publication.track.sender = {
+      // A fresh copy, as a real browser hands back: a refused write must not
+      // leave its edits behind on the live parameters.
+      getParameters: () => structuredClone(original.getParameters()),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (refusePriority > 0 && next.encodings?.some((e) => e.priority === "high")) {
+          refusePriority -= 1;
+          throw new Error("priority refused");
+        }
+        return original.setParameters(next);
+      },
+    };
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const pinned = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    // The pin landed; only the priority did not.
+    expect(pinned!.encodings[0]?.active).toBe(false);
+    expect(pinned!.encodings.some((e) => e.priority === "high")).toBe(false);
+
+    // A refusal is taken as transient: the next pin asks again, and gets it.
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const retried = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(retried!.encodings.every((e) => e.priority === "high")).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("stops asking for a priority the browser silently drops", async () => {
+    // An engine that accepts the write but never keeps `priority` must not
+    // turn the 2 s repair tick into a full pin write for the whole party.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    publication.track.sender = {
+      getParameters: () => structuredClone(original.getParameters()),
+      setParameters: async (next: RTCRtpSendParameters) =>
+        original.setParameters({
+          ...next,
+          encodings: (next.encodings ?? []).map(
+            ({ priority: _p, networkPriority: _n, ...rest }) => rest,
+          ),
+        }),
+    };
+    for (let tick = 0; tick < 4; tick += 1) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    }
+    const before = senderWrites.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(senderWrites.length).toBe(before);
   });
 
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {

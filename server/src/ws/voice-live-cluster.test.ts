@@ -1263,6 +1263,60 @@ describeDb("watch party stream and state across two instances", () => {
       ).toHaveLength(0);
     });
 
+    for (const mode of ["ll", "conventional"] as const) {
+      it(`a camera that starts after the ${mode} stream reaches the audience (2026-09-25)`, async () => {
+        // THE REHEARSAL'S SHAPE. The camera starts in the queue link after
+        // the push that found it, so the room's own stream carries it before
+        // anybody is told: prev and next agree, and until this fix nothing
+        // was ever sent. One viewer, no joins, so no unrelated push rescued
+        // it either.
+        const channel = await plantChannel();
+        llControl.mode = mode;
+        llControl.startedAt = Date.now();
+        const a = await bootInstance();
+        const b = await bootInstance();
+        const sidebarOnA = watcher(a);
+        const sidebarOnB = watcher(b);
+
+        const host = await join(a, randomUUID(), channel);
+        await setSharing(a, host, true);
+        await waitFor(
+          () =>
+            frames(sidebarOnA, "channel-live").length === 1 &&
+            frames(sidebarOnB, "channel-live").length === 1,
+          "the stream on both machines",
+        );
+        const map = mode === "ll" ? a.ll : a.egress;
+        const live = map.get(channel)!;
+        const cameraHlsUrl = `/api/voice/hls-playlist/${channel}/${live.startedAt}/cam360p30`;
+        // What `reconcileCameraEgress` (conventional) and `mirrorLlCameraSlot`
+        // (LL) leave behind: the camera on the stream the maps answer with.
+        map.set(channel, { ...live, cameraHlsUrl, cameraHasVideo: true, cameraHasVoiceAudio: false });
+        for (const listener of a.changeListeners) {
+          listener(channel, "camera-started");
+        }
+
+        await waitFor(
+          () =>
+            frames(sidebarOnA, "channel-live").length === 2 &&
+            frames(sidebarOnB, "channel-live").length === 2,
+          "the camera on both machines",
+        );
+        for (const sidebar of [sidebarOnA, sidebarOnB]) {
+          const stream = frames(sidebar, "channel-live")[1]!.stream as LiveHlsStream;
+          expect(stream.startedAt).toBe(live.startedAt);
+          expect(stream.cameraHlsUrl).toContain(`/${live.startedAt}/cam360p30`);
+        }
+
+        // Told once: the next push with nothing new says nothing.
+        for (const listener of a.changeListeners) {
+          listener(channel, "camera-started");
+        }
+        await settle();
+        expect(frames(sidebarOnA, "channel-live")).toHaveLength(2);
+      });
+    }
+
     it("a demotion replaces the LL stream with the conventional one in one fan-out", async () => {
       const channel = await plantChannel();
       llControl.mode = "ll";

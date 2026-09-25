@@ -68,6 +68,7 @@ export function WatchCameraPip({
   hasVideo = true,
   hasVoiceAudio = false,
   className,
+  fit = "cover",
   onFrame,
 }: {
   /** The camera/voice playlist, already resolved against the API base. */
@@ -76,8 +77,14 @@ export function WatchCameraPip({
   hasVideo?: boolean;
   /** Whether this playlist carries the presenter's voice. See the file doc. */
   hasVoiceAudio?: boolean;
-  /** The box: a corner, the stage, or the corner plus `invisible`. */
+  /** The box: a corner, the stage, half of it, or the corner plus `invisible`. */
   className: string;
+  /**
+   * How the picture fills the box: `cover` in the corner, `contain` when it
+   * is one of the main pictures (`cameraPipBoxes`). On the `<video>` itself,
+   * because `object-fit` on the box does nothing to the element inside it.
+   */
+  fit?: "cover" | "contain";
   /** A frame arrived (or the source changed and there is none yet). */
   onFrame: (hasFrame: boolean) => void;
 }) {
@@ -470,7 +477,9 @@ export function WatchCameraPip({
         // never paused by the browser for being display:none.
         className={cn(
           "bg-black",
-          hasVideo ? "h-full w-full" : "sr-only",
+          hasVideo
+            ? cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")
+            : "sr-only",
         )}
         autoPlay
         muted={!hasVoiceAudio}

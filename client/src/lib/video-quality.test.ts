@@ -28,7 +28,10 @@ import {
   WATCH_PARTY_MAX_PUBLISH_HEIGHT,
   VIDEO_QUALITIES,
   effectiveCameraQuality,
+  presenterCameraQualityFor,
+  presenterCameraSimulcastRungs,
   WATCH_PARTY_PRESENTER_CAMERA_QUALITY,
+  WATCH_PARTY_PRESENTER_CAMERA_QUALITY_480,
   type ScreenSimulcastPlan,
 } from "./video-quality";
 
@@ -775,5 +778,36 @@ describe("effectiveCameraQuality", () => {
 
   it("caps to a rung the menu actually offers", () => {
     expect(VIDEO_QUALITIES).toContain(WATCH_PARTY_PRESENTER_CAMERA_QUALITY);
+  });
+});
+
+describe("the presenter's camera at 480p (2026-09-25)", () => {
+  it("is 480p only where the deployment says so, 360p otherwise", () => {
+    expect(presenterCameraQualityFor(480)).toBe("480p");
+    // An older API (no field), a failed fetch, or the switch off.
+    expect(presenterCameraQualityFor(undefined)).toBe("360p");
+    expect(presenterCameraQualityFor(null)).toBe("360p");
+    expect(presenterCameraQualityFor(360)).toBe("360p");
+    expect(presenterCameraQualityFor(720)).toBe("360p");
+    expect(VIDEO_QUALITIES).toContain(WATCH_PARTY_PRESENTER_CAMERA_QUALITY_480);
+  });
+
+  it("caps at 480p under the 480 cap, and still never raises", () => {
+    const cap = WATCH_PARTY_PRESENTER_CAMERA_QUALITY_480;
+    expect(effectiveCameraQuality("auto", true, cap)).toBe("480p");
+    expect(effectiveCameraQuality("1080p", true, cap)).toBe("480p");
+    expect(effectiveCameraQuality("480p", true, cap)).toBe("480p");
+    expect(effectiveCameraQuality("360p", true, cap)).toBe("360p");
+    expect(effectiveCameraQuality("720p", false, cap)).toBe("720p");
+    expect(cameraBitrateFor(effectiveCameraQuality("auto", true, cap))).toBe(700_000);
+  });
+
+  it("publishes one fallback layer, 360p, under a 480p camera", () => {
+    // livekit-client builds two layers for a capture under 960 px wide and
+    // takes the SMALLEST rung as the bottom one, so the ordinary [180, 360]
+    // would put 180p under 480p. The fallback Rafael asked for is 360p.
+    expect(presenterCameraSimulcastRungs(480).map((rung) => rung.height)).toEqual([360]);
+    expect(presenterCameraSimulcastRungs(360).map((rung) => rung.height)).toEqual([180]);
+    expect(presenterCameraSimulcastRungs(180)).toEqual([]);
   });
 });
