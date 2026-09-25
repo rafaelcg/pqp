@@ -178,6 +178,13 @@ export const STAGE_MIX_TRACK_NAME = "stage-mix";
  * seconds for the length of a film.
  */
 const MIC_ARCHIVE_WAIT_MS = 60_000;
+/**
+ * How long a takeover keeps retrying the voice archive's recovery when the
+ * database would not answer (`RoomHls.micArchiveInherit`). Longer than the
+ * managed cluster's observed connectivity drops (about a minute), short
+ * enough that a party which really lost its database gives up quietly.
+ */
+const MIC_ARCHIVE_INHERIT_RETRY_MS = 5 * 60_000;
 
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
@@ -630,6 +637,13 @@ interface RoomHls {
    * second file nobody asked for.
    */
   micArchiveUntil: number;
+  /**
+   * A takeover whose voice-archive recovery did not land: closing the stale
+   * rows or reading the `mic` row failed. `tendMicArchive` tries again on
+   * every tick until `until`, so a database blip during the move costs the
+   * voice a few seconds, not the rest of the show.
+   */
+  micArchiveInherit?: { startedAt: number; staleRowIds: string[]; until: number };
   /**
    * THE LADDER IS BEING RESTARTED IN PLACE, and why. Set the moment its
    * egress is found dead (or is about to be replaced) and cleared when the
@@ -4298,7 +4312,7 @@ async function adoptLlCompanionRows(
     // Nothing open. An archive this session already recorded and CLOSED (the
     // releasing machine's monitor saw its egress end before the handover
     // reached it) is still this session's voice, and is continued.
-    await inheritMicArchive(channelId, room, startedAt);
+    await settleMicArchiveInheritance(channelId, room, startedAt, []);
     return;
   }
   // Rows exist, so this session was inherited: never a FIRST archive over
@@ -4365,26 +4379,20 @@ async function adoptLlCompanionRows(
         (!row.egress_id || !listed.has(row.egress_id)),
     )
     .map(({ row }) => row.id);
-  if (finished.length > 0) {
-    try {
-      await getPool().query(
-        `UPDATE hls_sessions SET ended_at = NOW()
-          WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
-        [finished],
-      );
-      logEvent("voice.hlsLlCompanionRowsEnded", {
-        channelId,
-        startedAt,
-        sessionIds: finished,
-      });
-    } catch (error) {
-      logEvent("voice.hlsResumeStaleEndFailed", {
-        channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  const ended = await endStaleSessionRows(channelId, finished);
+  if (ended && finished.length > 0) {
+    logEvent("voice.hlsLlCompanionRowsEnded", {
+      channelId,
+      startedAt,
+      sessionIds: finished,
+    });
   }
-  await inheritMicArchive(channelId, room, startedAt);
+  await settleMicArchiveInheritance(
+    channelId,
+    room,
+    startedAt,
+    ended ? [] : finished,
+  );
 }
 
 /**
@@ -4413,9 +4421,9 @@ async function inheritMicArchive(
   channelId: string,
   room: RoomHls,
   startedAt: number,
-): Promise<void> {
+): Promise<boolean> {
   if (room.micArchive || room.micArchiveHad || !micArchiveEnabled()) {
-    return;
+    return true;
   }
   let row: { ended_at: Date | null; runs: unknown } | undefined;
   try {
@@ -4435,13 +4443,13 @@ async function inheritMicArchive(
       startedAt,
       error: error instanceof Error ? error.message : String(error),
     });
-    return;
+    return false;
   }
   if (!row || row.ended_at === null) {
-    return;
+    return true;
   }
   if (room.micArchive || companionHost(channelId) !== room) {
-    return;
+    return true;
   }
   const runs = parseHlsRuns(row.runs ?? null);
   room.micArchiveHad = true;
@@ -4452,6 +4460,93 @@ async function inheritMicArchive(
     startedAt,
     runs: runs.length,
   });
+  return true;
+}
+
+/**
+ * Close rows a takeover found finished. False when the write did not land,
+ * which the caller turns into a retry rather than a shrug: an open `mic` row
+ * is exactly what `inheritMicArchive` refuses to continue.
+ */
+async function endStaleSessionRows(
+  channelId: string,
+  ids: string[],
+): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+  try {
+    await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+        WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
+      [ids],
+    );
+    return true;
+  } catch (error) {
+    logEvent("voice.hlsResumeStaleEndFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * The voice half of a takeover, retried until it lands. `staleRowIds` are the
+ * finished rows the takeover could NOT close; closing them is repeated first,
+ * because the `mic` row among them must be closed before it can be continued.
+ * Anything that fails leaves `RoomHls.micArchiveInherit` set for
+ * `tendMicArchive` to try again.
+ */
+async function settleMicArchiveInheritance(
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+  staleRowIds: string[],
+  now = Date.now(),
+): Promise<void> {
+  const settled =
+    (await endStaleSessionRows(channelId, staleRowIds)) &&
+    (await inheritMicArchive(channelId, room, startedAt));
+  if (settled) {
+    room.micArchiveInherit = undefined;
+    return;
+  }
+  room.micArchiveInherit = {
+    startedAt,
+    staleRowIds,
+    until: room.micArchiveInherit?.until ?? now + MIC_ARCHIVE_INHERIT_RETRY_MS,
+  };
+}
+
+async function retryMicArchiveInherit(
+  channelId: string,
+  room: RoomHls,
+  now: number,
+): Promise<void> {
+  const pending = room.micArchiveInherit;
+  if (!pending) {
+    return;
+  }
+  if (room.stream.startedAt !== pending.startedAt || room.micArchive) {
+    room.micArchiveInherit = undefined;
+    return;
+  }
+  if (now >= pending.until) {
+    room.micArchiveInherit = undefined;
+    logEvent("voice.hlsMicArchiveInheritGaveUp", {
+      channelId,
+      startedAt: pending.startedAt,
+    });
+    return;
+  }
+  await settleMicArchiveInheritance(
+    channelId,
+    room,
+    pending.startedAt,
+    pending.staleRowIds,
+    now,
+  );
 }
 
 /**
@@ -5452,25 +5547,17 @@ export async function adoptRunningLiveHlsSession(
       return olderSession || !stillRunning(row);
     })
     .map((row) => row.id);
-  if (finished.length > 0) {
-    try {
-      await getPool().query(
-        `UPDATE hls_sessions SET ended_at = NOW()
-          WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
-        [finished],
-      );
-    } catch (error) {
-      logEvent("voice.hlsResumeStaleEndFailed", {
-        channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  const ended = await endStaleSessionRows(channelId, finished);
   // An archive that did not survive the move is continued, not dropped: the
   // conventional half of rehearsal D's lost voice (see `inheritMicArchive`).
   const adoptedRoom = rooms.get(channelId);
   if (adoptedRoom && adoptedRoom.stream.startedAt === startedAt) {
-    await inheritMicArchive(channelId, adoptedRoom, startedAt);
+    await settleMicArchiveInheritance(
+      channelId,
+      adoptedRoom,
+      startedAt,
+      ended ? [] : finished,
+    );
   }
 
   const stream = rooms.get(channelId)?.stream ?? null;
@@ -6600,6 +6687,9 @@ async function tendMicArchive(
     room.micArchiveHad = false;
     await stopMicArchive(channelId, room, "disabled");
     return;
+  }
+  if (room.micArchiveInherit && !room.micArchive) {
+    await retryMicArchiveInherit(channelId, room, now);
   }
   if (room.micArchive) {
     if (!egress.listEgress) {

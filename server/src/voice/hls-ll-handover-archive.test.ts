@@ -45,6 +45,8 @@ interface FakeRow {
 }
 
 const table = vi.hoisted(() => ({ rows: [] as FakeRow[], next: 0 }));
+/** Statements to fail once each, for the takeover's database blips. */
+const faults = vi.hoisted(() => ({ endMicRow: 0, readMicRow: 0 }));
 
 const query = vi.hoisted(() =>
   vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -96,6 +98,10 @@ const query = vi.hoisted(() =>
       return { rowCount: row ? 1 : 0, rows: row ? [{ runs: row.runs }] : [] };
     }
     if (text.includes("SELECT ended_at, instance_id, runs FROM hls_sessions")) {
+      if (faults.readMicRow > 0) {
+        faults.readMicRow -= 1;
+        throw new Error("postgres blinked");
+      }
       const row = byPrefix(params[0]);
       return {
         rowCount: row ? 1 : 0,
@@ -114,6 +120,11 @@ const query = vi.hoisted(() =>
     }
     if (text.startsWith("UPDATE hls_sessions SET ended_at = NOW() WHERE id = ANY")) {
       const ids = params[0] as string[];
+      const mic = table.rows.find((row) => row.rung === "mic");
+      if (faults.endMicRow > 0 && mic && ids.includes(mic.id)) {
+        faults.endMicRow -= 1;
+        throw new Error("postgres blinked");
+      }
       for (const row of table.rows) {
         if (ids.includes(row.id)) {
           row.ended = true;
@@ -357,6 +368,8 @@ beforeEach(() => {
   disableHls();
   table.rows = [];
   table.next = 0;
+  faults.endMicRow = 0;
+  faults.readMicRow = 0;
   STARTED_AT = Date.now();
   // The LL film's own row (pqp-remux's, written by `hls-remux.ts`): what a
   // handover moves the session BY.
@@ -469,5 +482,50 @@ describe("the voice archive across a presenter reload onto the other machine (re
     expect(lk.recordingTrack()).toEqual(["TR_ARCHIVE_2"]);
     const outputs = lk.startTrack.mock.calls.map(([, output]) => output.filepath);
     expect(outputs[1]).toMatch(new RegExp(`/${STARTED_AT}-mic-r\\d+\\.ogg$`));
+  });
+  it("a takeover whose closing of the voice row fails still recovers on the next tick", async () => {
+    // Farol on #825: the stale-row UPDATE failing left the `mic` row open,
+    // `inheritMicArchive` refuses an open row, and nothing tried again.
+    enableHls();
+    const lk = fakeLiveKit();
+    await goLiveOnA(lk);
+    // Twice: the takeover's own UPDATE and the immediate retry right after
+    // it, so it is the monitor's tick that has to land it.
+    faults.endMicRow = 2;
+
+    await reloadOntoB(lk);
+    expect(faults.endMicRow).toBe(0);
+    expect(lk.recordingTrack()).toEqual([]);
+
+    await checkLiveHlsHealth(Date.now() + 20_000);
+    await flush();
+
+    expect(lk.recordingTrack()).toEqual(["TR_ARCHIVE_2"]);
+    const outputs = lk.startTrack.mock.calls.map(([, output]) => output.filepath);
+    expect(outputs).toHaveLength(2);
+    expect(outputs[1]).toMatch(new RegExp(`/${STARTED_AT}-mic-r\\d+\\.ogg$`));
+  });
+
+  it("a takeover whose read of the voice row fails still recovers on the next tick", async () => {
+    // Farol on #825: the read failing returned without a retry window.
+    enableHls();
+    const lk = fakeLiveKit();
+    await goLiveOnA(lk);
+    faults.readMicRow = 1;
+
+    await reloadOntoB(lk);
+    expect(faults.readMicRow).toBe(0);
+    expect(lk.recordingTrack()).toEqual([]);
+
+    await checkLiveHlsHealth(Date.now() + 20_000);
+    await flush();
+
+    expect(lk.recordingTrack()).toEqual(["TR_ARCHIVE_2"]);
+    const outputs = lk.startTrack.mock.calls.map(([, output]) => output.filepath);
+    expect(outputs[1]).toMatch(new RegExp(`/${STARTED_AT}-mic-r\\d+\\.ogg$`));
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsMicArchiveInheritFailed",
+      expect.objectContaining({ channelId: CHANNEL }),
+    );
   });
 });
