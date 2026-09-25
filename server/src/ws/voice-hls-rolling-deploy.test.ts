@@ -488,6 +488,8 @@ interface Presenter {
   peerId: string;
   resumeToken: string;
   socket: WebSocket;
+  /** Every frame this presenter's socket was sent, in order. */
+  frames: Frame[];
 }
 
 async function presenterJoinsAndShares(
@@ -515,6 +517,7 @@ async function presenterJoinsAndShares(
     peerId: welcome.peerId as string,
     resumeToken: welcome.resumeToken as string,
     socket: rec.socket,
+    frames: rec.frames,
   };
 }
 
@@ -1139,6 +1142,47 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       expect.objectContaining({ reason: "presenter-reconnected", result: "bound" }),
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+  }, 30_000);
+
+  it("low-latency: the reloaded page itself is told the stream names it once it shares, on either machine", async () => {
+    // Production rehearsal E, 2026-09-25: after a presenter reload the new
+    // page's share was never given the ingest pin and went out at 280x180 for
+    // the rest of the show. The client half is `hlsSourceInputsKey` in the
+    // web client; this is the server half it no longer depends on but the
+    // camera cap and the audience count still read: the page that shares
+    // again is sent a `voice-stream` naming its NEW peer, same session.
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const live = a.remux.llStreamFor(channel)!;
+
+    const toldItself = (who: Presenter) => (): boolean =>
+      who.frames.some(
+        (frame) =>
+          frame.type === "voice-stream" &&
+          (frame.stream as LiveHlsStream | null)?.presenterPeerId === who.peerId &&
+          (frame.stream as LiveHlsStream | null)?.startedAt === live.startedAt,
+      );
+
+    // Reload 1, back on the same machine.
+    await presenterLeaves(a, presenter);
+    const again = await presenterJoinsAndShares(a, userId, channel);
+    expect(again.peerId).not.toBe(presenter.peerId);
+    await waitFor(toldItself(again), "the reloaded page on api-a to be told it presents");
+
+    // Reload 2, landing on the other machine.
+    await presenterLeaves(a, again);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const elsewhere = await presenterJoinsAndShares(b, userId, channel);
+    await b.registry.settleVoiceRegistryWrites();
+    await waitFor(toldItself(elsewhere), "the reloaded page on api-b to be told it presents");
+
+    expect(box.remuxStops).toEqual([]);
   }, 30_000);
 
   it("low-latency: a reloaded presenter back in the room is named as the presenter, not counted as a viewer", async () => {
