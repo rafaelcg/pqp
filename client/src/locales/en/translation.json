@@ -3395,6 +3395,8 @@
   "watchParty.waitlist.form.submitting": "Joining...",
   "watchParty.waitlist.form.update": "Update request",
   "watchParty.waitlist.form.error": "That did not work. Try again in a moment.",
+  "watchParty.waitlist.loadError": "Could not load the waitlist right now.",
+  "watchParty.waitlist.retry": "Try again",
   "watchParty.waitlist.member.title": "Ask whoever runs the server",
   "watchParty.waitlist.member.body": "Whoever manages the channels on {server} is the one who asks for it. If you want it too, say so here and your vote counts toward the request.",
   "watchParty.waitlist.member.submit": "I want it too",

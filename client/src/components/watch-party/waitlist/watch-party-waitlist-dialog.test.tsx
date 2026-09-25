@@ -3,7 +3,12 @@ import type { WatchPartyWaitlistState } from "@pqp/shared";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWatchPartyWaitlistStore } from "@/lib/watch-party-waitlist";
+import {
+  loadWatchPartyWaitlist,
+  peekWatchPartyWaitlist,
+  resetWatchPartyWaitlistStore,
+  setWatchPartyWaitlistOwner,
+} from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog, waitlistViewFor } from "./watch-party-waitlist-dialog";
 
 const apiFetch = vi.hoisted(() => vi.fn());
@@ -244,5 +249,41 @@ describe("WatchPartyWaitlistDialog", () => {
     await open([{ id: SERVER, name: "Sessão" }], SERVER);
     expect(view()).toBe("approved");
     expect(document.querySelector("form")).toBeNull();
+  });
+
+  it("says a failed read failed, and tries again when asked", async () => {
+    let fail = true;
+    apiFetch.mockImplementation(async () => {
+      if (fail) {
+        throw new Error("network");
+      }
+      return state();
+    });
+    await open([{ id: SERVER, name: "Sessão" }], SERVER);
+    expect(view()).toBe("loading");
+    const retry = document.querySelector("[data-watch-party-waitlist-retry]");
+    expect(retry).not.toBeNull();
+    fail = false;
+    await click(retry!);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(view()).toBe("request");
+  });
+});
+
+describe("the waitlist store", () => {
+  it("forgets one account's rows when another signs in, including a read still in flight", async () => {
+    setWatchPartyWaitlistOwner("user-a");
+    let release: (value: WatchPartyWaitlistState) => void = () => {};
+    apiFetch.mockImplementationOnce(
+      () => new Promise<WatchPartyWaitlistState>((resolve) => (release = resolve)),
+    );
+    const pending = loadWatchPartyWaitlist(SERVER);
+    setWatchPartyWaitlistOwner("user-b");
+    release(state({ entry: null, canRequest: true }));
+    await pending;
+    // Account A's answer landed after the switch and was dropped.
+    expect(peekWatchPartyWaitlist(SERVER)).toBeNull();
   });
 });

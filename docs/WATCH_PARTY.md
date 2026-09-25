@@ -4209,7 +4209,7 @@ waiting / approved / declined, `decided_at`, and `seen_at` for the card.
 | `POST /api/watch-party/waitlist` | a member, or anybody with `serverId: null` | join or edit; the server picks the kind; the status never moves from here |
 | `GET /api/watch-party/waitlist/approvals` | anybody | their unseen approvals, only for servers they are still in |
 | `POST /api/watch-party/waitlist/approvals/ack` | anybody | dismiss one |
-| `GET /api/admin/watch-party-waitlist` | operator (machine token or instance moderator) | per server: requests with name, range, note and channel; interest as a count; the range histogram |
+| `GET /api/admin/watch-party-waitlist` | operator (machine token or instance moderator) | per server (at most 200): the newest 20 requests with name, range, note and channel plus the total; interest, status counts and the range histogram aggregated in SQL |
 | `PUT /api/admin/watch-party-waitlist/decline` | operator | the server's waiting rows, declined, silently |
 
 Rate limited at five joins and then one every 30 seconds per account. Zod
@@ -4217,15 +4217,19 @@ lives in `packages/shared/src/watch-party-waitlist.ts`.
 
 **Approving is by hand, and it is the availability flip.** Rafael's call:
 there is no auto-approve. `setServerLiveHls` (`services/operator.ts`) calls
-`approveWatchPartyWaitlist` whenever a write leaves `live_hls_enabled` TRUE:
-the dashboard's "Ativar" on the waitlist (which also sets
-`live_hls_ll_enabled`, see §"Low latency is a click too") and the plain
+`approveWatchPartyWaitlist` whenever a write leaves the server effectively on
+(`resolveLiveHlsForServer`, so a TRUE row under a master switch that is off
+tells nobody "liberada"): the dashboard's "Ativar" on the waitlist (which also
+sets `live_hls_ll_enabled`, see §"Low latency is a click too") and the plain
 "ligar" in controles. Every waiting row of that server becomes approved, and
 the people behind them get a `watch-party-waitlist-approved` frame on this
 machine's sockets, the same frame relayed over `CLUSTER_BUS` to the other
-machine (`watch-party.waitlist-approved`), and a push in their language. It
-runs after the column is written and its failure is logged, never thrown: a
-lost notice must not undo a flip.
+machine (`watch-party.waitlist-approved`), and a push in their language, in
+batches of 150 people. It runs after the column is written, so nothing a
+party needs waits on it. The approval UPDATE may fail the request (the flip
+is idempotent, so the operator presses it again); the notices are best
+effort. A join that races the flip (checked "off", inserted after the sweep)
+asks again after its INSERT and approves itself.
 
 **The campaign switch.** `WATCH_PARTY_WAITLIST`: `on`, `off`, and unset
 follows `isLiveHlsEnabled()`, so a self-host that cannot run a watch party

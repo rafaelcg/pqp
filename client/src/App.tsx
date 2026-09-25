@@ -369,6 +369,7 @@ import {
   ackWatchPartyApproval,
   fetchWatchPartyApprovals,
   loadWatchPartyWaitlist,
+  setWatchPartyWaitlistOwner,
   shouldOfferWatchPartyTeaser,
   useWatchPartyWaitlist,
 } from "@/lib/watch-party-waitlist";
@@ -2109,6 +2110,11 @@ function MainAppContent({
    * makes no waitlist request at all, so nothing here can reach a server
    * where a party can run.
    */
+  // A different account gets an empty waitlist store (its rows are private).
+  const waitlistOwnerId = user?.id ?? null;
+  useEffect(() => {
+    setWatchPartyWaitlistOwner(waitlistOwnerId);
+  }, [waitlistOwnerId]);
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&
@@ -6640,18 +6646,20 @@ function MainAppContent({
     if (!bootstrapReady || needsOnboarding || !pendingWaitlist) {
       return;
     }
-    takeWaitlistIntent(browserStorage());
     setPendingWaitlist(false);
     // No cleanup cancelling this: clearing `pendingWaitlist` above re-runs
     // the effect, and a cancel there threw away the very answer it waited on.
+    // The stash is spent only once the answer is in, so a failed read leaves
+    // it for the next load instead of losing what the person came for.
     void loadWatchPartyWaitlist(selectedServerId)
       .then((answer) => {
+        takeWaitlistIntent(browserStorage());
         if (answer.campaign) {
           setWaitlistDialogOpen(true);
         }
       })
       .catch(() => {
-        // No answer, no dialog. The page's button can be pressed again.
+        // Still stashed: a reload within the hour tries again.
       });
   }, [bootstrapReady, needsOnboarding, pendingWaitlist, selectedServerId]);
 

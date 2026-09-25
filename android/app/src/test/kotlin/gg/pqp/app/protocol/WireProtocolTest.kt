@@ -237,6 +237,10 @@ class WireProtocolTest {
         // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
         // individually per subscriber. No reminders surface on the phone yet.
         "channel-session-reminder" to "no watch party scheduling surface on the phone",
+        // The watch party waitlist's "liberado" notice, sent per person when
+        // the operator turns on a server they waited for. The waitlist lives
+        // on the web; the push that goes out with it reaches the phone.
+        "watch-party-waitlist-approved" to "no waitlist surface on the phone; the push covers it",
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",

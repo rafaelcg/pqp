@@ -381,6 +381,7 @@ describeDb("the watch party waitlist", () => {
         memberCount: 3,
         status: "waiting",
         interest: 1,
+        requestCount: 1,
         buckets: { "50-150": 1, "20-50": 1 },
         liveHlsOverride: null,
         liveHlsLlOverride: null,
@@ -483,6 +484,55 @@ describeDb("the watch party waitlist", () => {
       busFrames.length = 0;
       await call("machine", "PUT", "/api/admin/server-live-hls", { serverId, enabled: true });
       expect(busFrames.filter((f) => f.topic === "watch-party.waitlist-approved")).toEqual([]);
+    });
+
+    it("approves nobody while the deployment cannot run a party, whatever the row says", async () => {
+      await join(owner, { serverId, audienceBucket: "50-150" });
+      delete process.env.LIVE_HLS_ENABLED;
+      const flip = await call<Record<string, unknown>>(
+        "machine",
+        "PUT",
+        "/api/admin/server-live-hls",
+        { serverId, enabled: true },
+      );
+      expect(flip.body).toMatchObject({ liveHlsOverride: true, liveHlsEffective: false });
+      const rows = await getPool().query<{ status: string }>(
+        `SELECT status FROM watch_party_waitlist WHERE server_id = $1`,
+        [serverId],
+      );
+      expect(rows.rows.map((row) => row.status)).toEqual(["waiting"]);
+      expect(busFrames.filter((f) => f.topic === "watch-party.waitlist-approved")).toEqual([]);
+
+      // The master comes on: the next flip approves them.
+      process.env.LIVE_HLS_ENABLED = "true";
+      await call("machine", "PUT", "/api/admin/server-live-hls", { serverId, enabled: true });
+      const after = await getPool().query<{ status: string }>(
+        `SELECT status FROM watch_party_waitlist WHERE server_id = $1`,
+        [serverId],
+      );
+      expect(after.rows.map((row) => row.status)).toEqual(["approved"]);
+    });
+
+    it("shows at most twenty requests per server and says how many there are", async () => {
+      const pool = getPool();
+      const extra: string[] = [];
+      for (let i = 0; i < 23; i += 1) {
+        const person = await upsertUser({ clerkId: `clerk-extra-${i}`, displayName: `E${i}`, avatarUrl: null });
+        extra.push(person.id);
+      }
+      await pool.query(
+        `INSERT INTO watch_party_waitlist (server_id, user_id, kind, audience_bucket)
+         SELECT $1, id, 'request', 'under-20' FROM unnest($2::uuid[]) AS id`,
+        [serverId, extra],
+      );
+      const list = await call<{ servers: { requests: unknown[]; requestCount: number; buckets: Record<string, number> }[] }>(
+        "machine",
+        "GET",
+        "/api/admin/watch-party-waitlist",
+      );
+      expect(list.body.servers[0]!.requests).toHaveLength(20);
+      expect(list.body.servers[0]!.requestCount).toBe(23);
+      expect(list.body.servers[0]!.buckets).toEqual({ "under-20": 23 });
     });
 
     it("moves low latency on its own without touching availability, and refuses an empty change", async () => {

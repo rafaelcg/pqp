@@ -3453,6 +3453,8 @@
   "watchParty.waitlist.form.submitting": "Entrando...",
   "watchParty.waitlist.form.update": "Actualizar pedido",
   "watchParty.waitlist.form.error": "No funcionó. Intenta de nuevo en un momento.",
+  "watchParty.waitlist.loadError": "No se pudo cargar la lista ahora.",
+  "watchParty.waitlist.retry": "Intentar de nuevo",
   "watchParty.waitlist.member.title": "Pídele a quien administra el servidor",
   "watchParty.waitlist.member.body": "Quien administra los canales de {server} es quien la pide. Si tú también la quieres, avísanos aquí y tu voto cuenta para el pedido.",
   "watchParty.waitlist.member.submit": "Yo también quiero",

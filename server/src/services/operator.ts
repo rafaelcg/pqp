@@ -531,14 +531,18 @@ export async function setServerLiveHls(
   }
 
   // THE WAITLIST FOLLOWS THE SWITCH, and never the other way round. A server
-  // the operator has just turned on has nobody left to wait for it, so its
-  // waiting rows are approved and those people told. After the column is
-  // written, best effort, and never awaited by anything the party needs: a
-  // failure here costs a notification, not a stream.
-  if (row.live_hls_enabled === true) {
-    await approveWatchPartyWaitlist(row.id).catch((error: unknown) => {
-      console.error("[operator] waitlist approval failed:", error);
-    });
+  // that can now actually run a party has nobody left to wait for it, so its
+  // waiting rows are approved and those people told. Gated on the EFFECTIVE
+  // answer, not the column: with the master switch off a TRUE row runs
+  // nothing, and telling people "liberada" then would be a lie.
+  //
+  // After the column is written, so nothing the party needs waits on it. The
+  // approval UPDATE is allowed to fail the request: the flip is idempotent,
+  // so an operator who sees an error presses it again and the rows are
+  // approved then, rather than a success that left them waiting forever.
+  // The notifications inside it are best effort on their own.
+  if (resolveLiveHlsForServer(row.id, row.live_hls_enabled)) {
+    await approveWatchPartyWaitlist(row.id);
   }
 
   const counts = await getPool().query<{

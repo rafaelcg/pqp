@@ -230,6 +230,19 @@ export async function joinWatchPartyWaitlist(
       audienceBucket: row.audience_bucket,
     });
   }
+  // THE RACE WITH THE OPERATOR'S FLIP. The availability check above and this
+  // INSERT are two statements, and "Ativar" can land between them: its
+  // approval sweep ran before this row existed, so the row would sit
+  // `waiting` on a server that is on. Asking again afterwards closes it: if
+  // the server is on now, approving is idempotent and tells this person the
+  // same way the sweep would have.
+  if (input.serverId && row.status === "waiting" && (await watchPartyAvailableFor(input.serverId))) {
+    await approveWatchPartyWaitlist(input.serverId);
+    const settled = await readEntry(userId, input.serverId);
+    if (settled) {
+      return settled;
+    }
+  }
   return toEntry(row);
 }
 
@@ -279,6 +292,13 @@ export async function ackWatchPartyApproval(
 // ------------------------------------------------------------ approval
 
 const APPROVED_TOPIC = "watch-party.waitlist-approved";
+
+/**
+ * People per bus frame and per push lookup. 150 uuids is about 5.6 KB of
+ * JSON, which keeps a frame under NOTIFY's 8000-byte payload with room for
+ * the envelope and a long server name.
+ */
+const APPROVAL_BATCH = 150;
 
 interface ApprovedEvent {
   serverId: string;
@@ -341,21 +361,35 @@ export async function approveWatchPartyWaitlist(
   if (result.rows.length === 0) {
     return 0;
   }
-  const event: ApprovedEvent = {
-    serverId,
-    serverName: result.rows[0]!.name,
-    userIds: result.rows.map((row) => row.user_id),
-  };
-  deliverApproved(event);
-  if (isBusEnabled()) {
-    publishToCluster(APPROVED_TOPIC, event);
+  const serverName = result.rows[0]!.name;
+  const userIds = result.rows.map((row) => row.user_id);
+  // In bounded batches: a big community's waitlist can be thousands of
+  // people, and one bus frame or one push lookup carrying all of them is an
+  // oversized frame (the Postgres bus spills anything past NOTIFY's 8000
+  // bytes to a table) and an unbounded `ANY($1)`. The durable half is already
+  // written above, so a batch that fails to deliver costs a live notice,
+  // never the approval.
+  for (let start = 0; start < userIds.length; start += APPROVAL_BATCH) {
+    const event: ApprovedEvent = {
+      serverId,
+      serverName,
+      userIds: userIds.slice(start, start + APPROVAL_BATCH),
+    };
+    try {
+      deliverApproved(event);
+      if (isBusEnabled()) {
+        publishToCluster(APPROVED_TOPIC, event);
+      }
+      pushWatchPartyWaitlistApproved(event);
+    } catch (error) {
+      console.error("[waitlist] approval notice failed:", error);
+    }
   }
-  pushWatchPartyWaitlistApproved(event);
   logEvent("watchParty.waitlistApproved", {
     serverId,
-    people: event.userIds.length,
+    people: userIds.length,
   });
-  return event.userIds.length;
+  return userIds.length;
 }
 
 /** The dashboard's "Recusar": the server's waiting rows, declined. Silent. */
@@ -401,7 +435,10 @@ export interface OperatorWaitlistServer {
   liveHlsLlOverride: boolean | null;
   /** The status most of its rows are in: waiting until somebody decided. */
   status: WatchPartyWaitlistStatus;
+  /** The newest requests, at most `OPERATOR_WAITLIST_REQUESTS_PER_SERVER`. */
   requests: OperatorWaitlistRequest[];
+  /** Every request this server has, which `requests` may be a slice of. */
+  requestCount: number;
   /** Members who said they would watch. A count, never a list of names. */
   interest: number;
   /** Every row's audience range, requests and interest together. */
@@ -417,15 +454,25 @@ export interface OperatorWaitlist {
   totals: { waiting: number; approved: number; declined: number };
 }
 
+/** Servers on the dashboard's list, and requests shown per server. */
+export const OPERATOR_WAITLIST_SERVER_LIMIT = 200;
+export const OPERATOR_WAITLIST_REQUESTS_PER_SERVER = 20;
+
 /**
- * The dashboard's "Lista de espera": one line per server, the biggest waiting
- * rooms first. Requests carry the requester's name, their note and their
- * channel, because the operator may want to look before switching a room on;
- * interest is only ever a count.
+ * The dashboard's "Lista de espera": one line per server, waiting rooms first,
+ * the biggest first within each.
+ *
+ * BOUNDED BY CONSTRUCTION. Interest, the status counts and the audience
+ * histogram are aggregated in SQL, so a community with thousands of members
+ * saying "eu também quero" is one row here, not thousands. Requests carry
+ * the requester's name, their note and their channel because the operator
+ * may want to look before switching a room on, and only the newest
+ * `OPERATOR_WAITLIST_REQUESTS_PER_SERVER` of them come back, with the full
+ * count beside them.
  */
 export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitlist> {
   const pool = getPool();
-  const [rows, serverless, totals] = await Promise.all([
+  const [aggregates, serverless, totals] = await Promise.all([
     pool.query<{
       server_id: string;
       name: string;
@@ -433,35 +480,46 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
       live_hls_enabled: boolean | null;
       live_hls_ll_enabled: boolean | null;
       member_count: string;
-      kind: WatchPartyWaitlistKind;
-      status: WatchPartyWaitlistStatus;
-      audience_bucket: WatchPartyAudienceBucket | null;
-      note: string | null;
-      twitch_or_kick: string | null;
-      created_at: Date;
-      username: string;
-      discriminator: string | null;
+      waiting: string;
+      approved: string;
+      interest: string;
+      requests: string;
+      buckets: Record<string, number> | null;
+      first_at: Date;
+      last_at: Date;
     }>(
-      `WITH listed AS (
-         SELECT DISTINCT server_id FROM watch_party_waitlist
+      `WITH per_server AS (
+         SELECT server_id,
+                COUNT(*) FILTER (WHERE status = 'waiting') AS waiting,
+                COUNT(*) FILTER (WHERE status = 'approved') AS approved,
+                COUNT(*) FILTER (WHERE kind = 'interest') AS interest,
+                COUNT(*) FILTER (WHERE kind = 'request') AS requests,
+                MIN(created_at) AS first_at,
+                MAX(created_at) AS last_at
+           FROM watch_party_waitlist
           WHERE server_id IS NOT NULL
-       ), ranked AS (
-         SELECT l.server_id,
-                (SELECT COUNT(*) FROM server_members m
-                  WHERE m.server_id = l.server_id) AS member_count
-           FROM listed l
-          ORDER BY member_count DESC
-          LIMIT 200
+          GROUP BY server_id
+       ), histogram AS (
+         SELECT server_id, jsonb_object_agg(audience_bucket, n) AS buckets
+           FROM (SELECT server_id, audience_bucket, COUNT(*)::int AS n
+                   FROM watch_party_waitlist
+                  WHERE server_id IS NOT NULL AND audience_bucket IS NOT NULL
+                  GROUP BY server_id, audience_bucket) b
+          GROUP BY server_id
        )
-       SELECT r.server_id, s.name, s.is_community, s.live_hls_enabled,
-              s.live_hls_ll_enabled, r.member_count::text AS member_count,
-              w.kind, w.status, w.audience_bucket, w.note, w.twitch_or_kick,
-              w.created_at, u.username, u.discriminator
-         FROM ranked r
-         JOIN servers s ON s.id = r.server_id
-         JOIN watch_party_waitlist w ON w.server_id = r.server_id
-         JOIN users u ON u.id = w.user_id
-        ORDER BY r.member_count DESC, s.name ASC, w.created_at ASC`,
+       SELECT p.server_id, s.name, s.is_community, s.live_hls_enabled,
+              s.live_hls_ll_enabled,
+              (SELECT COUNT(*) FROM server_members m WHERE m.server_id = p.server_id)::text
+                AS member_count,
+              p.waiting::text, p.approved::text, p.interest::text, p.requests::text,
+              h.buckets, p.first_at, p.last_at
+         FROM per_server p
+         JOIN servers s ON s.id = p.server_id
+         LEFT JOIN histogram h ON h.server_id = p.server_id
+        ORDER BY (p.waiting > 0) DESC,
+                 (SELECT COUNT(*) FROM server_members m WHERE m.server_id = p.server_id) DESC,
+                 s.name ASC
+        LIMIT ${OPERATOR_WAITLIST_SERVER_LIMIT}`,
     ),
     pool.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n FROM watch_party_waitlist WHERE server_id IS NULL`,
@@ -471,66 +529,68 @@ export async function listWatchPartyWaitlistForOperator(): Promise<OperatorWaitl
     ),
   ]);
 
-  const byServer = new Map<string, OperatorWaitlistServer>();
-  const statusCounts = new Map<string, Record<WatchPartyWaitlistStatus, number>>();
-  for (const row of rows.rows) {
-    let entry = byServer.get(row.server_id);
-    const at = row.created_at.toISOString();
-    if (!entry) {
-      entry = {
-        serverId: row.server_id,
-        name: row.name,
-        memberCount: Number(row.member_count),
-        isCommunity: row.is_community,
-        liveHlsOverride: row.live_hls_enabled,
-        liveHlsLlOverride: row.live_hls_ll_enabled,
-        status: "waiting",
-        requests: [],
-        interest: 0,
-        buckets: {},
-        firstAt: at,
-        lastAt: at,
-      };
-      byServer.set(row.server_id, entry);
-      statusCounts.set(row.server_id, { waiting: 0, approved: 0, declined: 0 });
-    }
-    statusCounts.get(row.server_id)![row.status] += 1;
-    if (row.kind === "request") {
-      entry.requests.push({
-        username: row.discriminator
-          ? `${row.username}#${row.discriminator}`
-          : row.username,
-        audienceBucket: row.audience_bucket,
-        note: row.note,
-        streamChannel: row.twitch_or_kick,
-        createdAt: at,
-      });
-    } else {
-      entry.interest += 1;
-    }
-    if (row.audience_bucket) {
-      entry.buckets[row.audience_bucket] =
-        (entry.buckets[row.audience_bucket] ?? 0) + 1;
-    }
-    if (at < entry.firstAt) {
-      entry.firstAt = at;
-    }
-    if (at > entry.lastAt) {
-      entry.lastAt = at;
-    }
-  }
-  for (const [serverId, counts] of statusCounts) {
-    const entry = byServer.get(serverId)!;
-    entry.status =
-      counts.waiting > 0 ? "waiting" : counts.approved > 0 ? "approved" : "declined";
+  const serverIds = aggregates.rows.map((row) => row.server_id);
+  const requests =
+    serverIds.length === 0
+      ? { rows: [] }
+      : await pool.query<{
+          server_id: string;
+          audience_bucket: WatchPartyAudienceBucket | null;
+          note: string | null;
+          twitch_or_kick: string | null;
+          created_at: Date;
+          username: string;
+          discriminator: string | null;
+        }>(
+          `SELECT r.server_id, r.audience_bucket, r.note, r.twitch_or_kick,
+                  r.created_at, u.username, u.discriminator
+             FROM (SELECT w.*,
+                          ROW_NUMBER() OVER (PARTITION BY w.server_id
+                                             ORDER BY w.created_at DESC) AS rn
+                     FROM watch_party_waitlist w
+                    WHERE w.server_id = ANY($1::uuid[]) AND w.kind = 'request') r
+             JOIN users u ON u.id = r.user_id
+            WHERE r.rn <= ${OPERATOR_WAITLIST_REQUESTS_PER_SERVER}
+            ORDER BY r.server_id, r.created_at ASC`,
+          [serverIds],
+        );
+  const requestsByServer = new Map<string, OperatorWaitlistRequest[]>();
+  for (const row of requests.rows) {
+    const list = requestsByServer.get(row.server_id) ?? [];
+    list.push({
+      username: row.discriminator
+        ? `${row.username}#${row.discriminator}`
+        : row.username,
+      audienceBucket: row.audience_bucket,
+      note: row.note,
+      streamChannel: row.twitch_or_kick,
+      createdAt: row.created_at.toISOString(),
+    });
+    requestsByServer.set(row.server_id, list);
   }
 
+  const servers: OperatorWaitlistServer[] = aggregates.rows.map((row) => ({
+    serverId: row.server_id,
+    name: row.name,
+    memberCount: Number(row.member_count),
+    isCommunity: row.is_community,
+    liveHlsOverride: row.live_hls_enabled,
+    liveHlsLlOverride: row.live_hls_ll_enabled,
+    status:
+      Number(row.waiting) > 0
+        ? "waiting"
+        : Number(row.approved) > 0
+          ? "approved"
+          : "declined",
+    requests: requestsByServer.get(row.server_id) ?? [],
+    requestCount: Number(row.requests),
+    interest: Number(row.interest),
+    buckets: (row.buckets ?? {}) as OperatorWaitlistServer["buckets"],
+    firstAt: row.first_at.toISOString(),
+    lastAt: row.last_at.toISOString(),
+  }));
+
   const totalMap = new Map(totals.rows.map((row) => [row.status, Number(row.n)]));
-  // Waiting rooms first, then the ones already decided, each biggest first.
-  const servers = [...byServer.values()].sort((a, b) => {
-    const rank = (s: OperatorWaitlistServer) => (s.status === "waiting" ? 0 : 1);
-    return rank(a) - rank(b) || b.memberCount - a.memberCount;
-  });
   return {
     servers,
     serverless: Number(serverless.rows[0]?.n ?? 0),

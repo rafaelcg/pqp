@@ -5028,13 +5028,17 @@
   /** "twitch.tv/foo" or "kick.com/foo" (with or without a scheme) becomes a
       clickable link; a bare name or anything else stays plain text, because
       this page has no business guessing what domain it lives on. */
+  /* A link ONLY for exactly one Twitch or Kick channel, rebuilt from its two
+     parts. The API already normalises the field to that shape, and this
+     refuses anything else anyway: "contains twitch.tv/" would have linked
+     "evil.example/twitch.tv/x" too. */
   function ctlWaitlistStreamHref(channel) {
-    var s = String(channel == null ? "" : channel);
-    if (s.indexOf("twitch.tv/") === -1 && s.indexOf("kick.com/") === -1) return null;
-    return "https://" + s.replace(/^https?:\/\//i, "");
+    var s = String(channel == null ? "" : channel).trim().toLowerCase();
+    var m = /^(?:https?:\/\/)?(?:www\.)?(twitch\.tv|kick\.com)\/([a-z0-9_]{2,25})\/?$/.exec(s);
+    return m ? "https://" + m[1] + "/" + m[2] : null;
   }
 
-  function ctlWaitlistRequestsCell(requests) {
+  function ctlWaitlistRequestsCell(requests, total) {
     if (!requests || !requests.length) return '<span class="muted">-</span>';
     var lines = requests.map(function (r) {
       var parts = ["<b>" + esc(r.username) + "</b>"];
@@ -5049,6 +5053,8 @@
       }
       return '<div class="ctl-why">' + parts.join(" · ") + "</div>";
     });
+    var more = (total || 0) - requests.length;
+    if (more > 0) lines.push('<div class="ctl-why muted">+' + fmt(more) + " pedido(s) mais antigos</div>");
     return '<span class="ctl-name">' + lines.join("") + "</span>";
   }
 
@@ -5085,7 +5091,7 @@
           (row.isCommunity ? '<span class="tag">comunidade</span>' : "") +
         "</span></td>" +
         '<td class="r num">' + fmt(row.memberCount) + "</td>" +
-        "<td>" + ctlWaitlistRequestsCell(row.requests) + "</td>" +
+        "<td>" + ctlWaitlistRequestsCell(row.requests, row.requestCount) + "</td>" +
         '<td class="r num">' + fmt(row.interest) + "</td>" +
         "<td>" + (histogram ? esc(histogram) : '<span class="muted">-</span>') + "</td>" +
         "<td><span class=\"" + statusTag + "\">" + esc(statusLabel) + "</span></td>" +
@@ -5114,11 +5120,14 @@
      server's waiting requests as a side effect of that write, not of this
      button, so the confirmation says so. */
   function ctlActivateWaitlistServer(serverId, name, tr) {
-    if (ctlWaitlistBusy) return;
+    // Shares the server table's lock too: an Ativar in flight and a
+    // "desligar" on the same server must not race to be the last write.
+    if (ctlWaitlistBusy || ctlBusy) return;
     if (!window.confirm(
       "Ativar watch party e baixa latência em " + name + "? Quem está na lista vai ser avisado."
     )) return;
     ctlWaitlistBusy = true;
+    ctlBusy = true;
     ctlSetButtonsDisabled(tr, true);
     ctlWaitlistMsg("");
     fetch("/operator/server-live-hls", {
@@ -5139,13 +5148,16 @@
     }).catch(function (e) {
       ctlWaitlistMsg("não deu pra ativar: " + (e && e.message ? e.message : "erro"), "bad");
       ctlSetButtonsDisabled(tr, false);
-    }).then(function () { ctlWaitlistBusy = false; });
+    }).then(function () { ctlWaitlistBusy = false; ctlBusy = false; });
   }
 
   function ctlDeclineWaitlistServer(serverId, name, tr) {
-    if (ctlWaitlistBusy) return;
+    // Shares the server table's lock too: an Ativar in flight and a
+    // "desligar" on the same server must not race to be the last write.
+    if (ctlWaitlistBusy || ctlBusy) return;
     if (!window.confirm("Recusar o pedido de " + name + "? Ninguém é avisado.")) return;
     ctlWaitlistBusy = true;
+    ctlBusy = true;
     ctlSetButtonsDisabled(tr, true);
     ctlWaitlistMsg("");
     fetch("/operator/watch-party-waitlist-decline", {
@@ -5163,7 +5175,7 @@
     }).catch(function (e) {
       ctlWaitlistMsg("não deu pra recusar: " + (e && e.message ? e.message : "erro"), "bad");
       ctlSetButtonsDisabled(tr, false);
-    }).then(function () { ctlWaitlistBusy = false; });
+    }).then(function () { ctlWaitlistBusy = false; ctlBusy = false; });
   }
 
   (function wireWaitlist() {

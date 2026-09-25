@@ -162,9 +162,10 @@ same machine token, no query forwarded), one row per server that has at least
 one waitlist row, waiting servers first and then biggest.
 
 Each row carries: the server's name and member count, a **comunidade** tag
-when it is one, every individual **pedido** (who asked, the audience bucket
-they picked, an optional note, an optional stream channel shown as a link
-when it names `twitch.tv/` or `kick.com/`, otherwise plain text), **interesse**
+when it is one, the newest twenty **pedidos** with a "+N mais antigos" line
+when there are more (who asked, the audience bucket they picked, an optional
+note, an optional stream channel shown as a link only when it is exactly one
+`twitch.tv/<name>` or `kick.com/<name>`, otherwise plain text), **interesse**
 (how many members said they would watch without asking to host), **público**
 (the audience-bucket histogram as one line, biggest group first), the
 server's **status** (`esperando` / `liberado` / `recusado`), and **desde**
@@ -178,6 +179,13 @@ Two actions, both only on a waiting row:
 |---|---|---|
 | **Ativar** | `PUT /operator/server-live-hls` with `{ enabled: true, lowLatency: true }`, the exact same write **ligar** makes below, plus low latency. The API approves and notifies that server's waiting requests as a side effect of the write, not of this button | **yes**, names the server and says the list gets notified |
 | **Recusar** | `PUT /operator/watch-party-waitlist-decline` with `{ serverId }`. Marks that server's waiting rows `declined`. Nobody is notified | **yes**, names the server and says nobody is notified |
+
+**Approval follows what the server can actually do.** The API approves the
+waiting rows only when the write leaves the server effectively on
+(`resolveLiveHlsForServer`): with `LIVE_HLS_ENABLED` off nobody is told
+"liberada", and the next flip after the master comes on approves them. Both
+waitlist buttons take the same lock as the server table's buttons, so an
+**Ativar** in flight and a **desligar** on the same server cannot race.
 
 **Ativar is not a separate lever.** It exists so an operator working the
 waitlist never has to leave this table to find the server again in **watch

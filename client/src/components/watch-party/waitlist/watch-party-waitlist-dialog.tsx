@@ -20,7 +20,9 @@ import {
   joinWatchPartyWaitlist,
   loadWatchPartyWaitlist,
   rememberWatchPartyWaitlistEntry,
+  retryWatchPartyWaitlist,
   useWatchPartyWaitlist,
+  watchPartyWaitlistFailed,
 } from "@/lib/watch-party-waitlist";
 
 /**
@@ -261,7 +263,23 @@ export function WatchPartyWaitlistDialog({
           aria-live="polite"
           className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-4"
         >
-          {view === "loading" && (
+          {view === "loading" && watchPartyWaitlistFailed(serverId) && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p role="alert" className="text-sm text-text-secondary">
+                {t("watchParty.waitlist.loadError")}
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                data-watch-party-waitlist-retry=""
+                onClick={() => retryWatchPartyWaitlist(serverId)}
+              >
+                {t("watchParty.waitlist.retry")}
+              </Button>
+            </div>
+          )}
+          {view === "loading" && !watchPartyWaitlistFailed(serverId) && (
             <div className="flex flex-col gap-2" aria-busy="true">
               <div className="h-4 w-1/3 animate-pulse rounded bg-surface-3/60" />
               <div className="h-10 w-full animate-pulse rounded bg-surface-3/40" />
