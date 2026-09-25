@@ -369,6 +369,15 @@ export async function approveWatchPartyWaitlist(
   // bytes to a table) and an unbounded `ANY($1)`. The durable half is already
   // written above, so a batch that fails to deliver costs a live notice,
   // never the approval.
+  //
+  // This machine's own sockets are walked ONCE, with every recipient: that is
+  // an in-memory set lookup per socket and has no payload to bound, while a
+  // walk per batch would be one full scan of the socket map per 150 people.
+  try {
+    deliverApproved({ serverId, serverName, userIds });
+  } catch (error) {
+    console.error("[waitlist] approval notice failed:", error);
+  }
   for (let start = 0; start < userIds.length; start += APPROVAL_BATCH) {
     const event: ApprovedEvent = {
       serverId,
@@ -376,7 +385,6 @@ export async function approveWatchPartyWaitlist(
       userIds: userIds.slice(start, start + APPROVAL_BATCH),
     };
     try {
-      deliverApproved(event);
       if (isBusEnabled()) {
         publishToCluster(APPROVED_TOPIC, event);
       }
