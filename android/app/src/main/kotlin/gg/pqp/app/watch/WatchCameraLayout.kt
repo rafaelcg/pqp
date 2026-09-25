@@ -104,9 +104,24 @@ data class WatchStagePlacement(
     val cameraVoiceOnly: Boolean,
 )
 
+/**
+ * [hasVideo] is [LiveStream.cameraHasVideo] — whether THIS mount has a
+ * picture at all, independent of [layout]. It matters here because
+ * [effectiveCameraLayout] forces [WatchCameraLayout.Pip] whenever a camera
+ * has no video (there is no layout to pick for a picture that does not
+ * exist), so a voice-only camera can reach this function with `layout ==
+ * Pip` exactly the way an ordinary, video-carrying default-layout camera
+ * does. Without this parameter the two were indistinguishable here, and the
+ * corner drew a video surface for a stream with no video track: a black
+ * tile where the muted mic glyph belonged. [WatchCameraLayout.Stream] does
+ * not need it read explicitly — mounted at all with that layout already
+ * means voice-only, by [cameraPipMounted]'s own rule — but every OTHER
+ * mounted-and-visible case now asks the same question the corner box does.
+ */
 fun watchStagePlacement(
     mounted: Boolean,
     hasFrame: Boolean,
+    hasVideo: Boolean,
     pref: CameraPipPref,
     layout: WatchCameraLayout,
 ): WatchStagePlacement {
@@ -123,7 +138,12 @@ fun watchStagePlacement(
         return none.copy(camera = StageSlot.Hidden, corner = pref.corner, cameraVoiceOnly = true)
     }
     if (!hasFrame) {
-        return none.copy(camera = StageSlot.Hidden, corner = pref.corner, cameraLoading = true)
+        return none.copy(
+            camera = StageSlot.Hidden,
+            corner = pref.corner,
+            cameraLoading = true,
+            cameraVoiceOnly = !hasVideo,
+        )
     }
     return when (layout) {
         WatchCameraLayout.Side -> WatchStagePlacement(
@@ -145,7 +165,13 @@ fun watchStagePlacement(
             camera = StageSlot.Hidden,
             cameraLoading = false,
             corner = pref.corner,
-            cameraVoiceOnly = false,
+            // The layout the viewer sees is forced to Pip whenever there is
+            // no video (`effectiveCameraLayout`), so this branch is also
+            // where a voice-only camera lands. Side/Camera above can only be
+            // reached with a real picture — reaching them at all requires
+            // `hasVideo`, since that is what keeps a viewer's stored Side or
+            // Camera choice from applying to a camera with nothing to show.
+            cameraVoiceOnly = !hasVideo,
         )
     }
 }

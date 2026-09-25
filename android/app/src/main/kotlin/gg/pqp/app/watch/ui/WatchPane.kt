@@ -639,51 +639,77 @@ fun WatchPane(
     val cameraHasVoiceAudio = attached?.cameraHasVoiceAudio ?: false
     val effectiveLayout = effectiveCameraLayout(cameraPref, cameraHasVideo)
     val cameraMounted = cameraPipMounted(cameraSrc, effectiveLayout, cameraHasVoiceAudio)
-    val placement = watchStagePlacement(cameraMounted, hasFrame = cameraHasFrame, pref = cameraPref, layout = effectiveLayout)
+    val placement = watchStagePlacement(
+        cameraMounted,
+        hasFrame = cameraHasFrame,
+        hasVideo = cameraHasVideo,
+        pref = cameraPref,
+        layout = effectiveLayout,
+    )
 
-    val cameraPlayer = remember {
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(
-                HlsMediaSource.Factory(DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)),
-            )
-            .build()
-            .apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build(),
-                    /* handleAudioFocus = */ false,
+    // Allocated the first time a camera actually exists, and kept for the
+    // rest of this pane's life once it is — never on every live watch,
+    // which is what most of them are: no camera at all. `everHadCamera`
+    // only ever moves false → true, so `remember` below runs its
+    // initialiser exactly once, the moment the camera first appears (this
+    // pass or a later one), and every recomposition after that reuses the
+    // same instance rather than rebuilding it each time the camera toggles
+    // on and off within one watch.
+    var everHadCamera by remember { mutableStateOf(false) }
+    if (cameraSrc != null) everHadCamera = true
+
+    val cameraPlayer: ExoPlayer? = if (everHadCamera) {
+        remember {
+            ExoPlayer.Builder(context)
+                .setMediaSourceFactory(
+                    HlsMediaSource.Factory(DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)),
                 )
-                // Silent by default (the film carries the sound this
-                // audience hears); see the `cameraHasVoiceAudio` effect below.
-                volume = 0f
-                playWhenReady = true
-            }
+                .build()
+                .apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .build(),
+                        /* handleAudioFocus = */ false,
+                    )
+                    // Silent by default (the film carries the sound this
+                    // audience hears); see the `cameraHasVoiceAudio` effect below.
+                    volume = 0f
+                    playWhenReady = true
+                }
+        }
+    } else {
+        null
     }
     DisposableEffect(cameraPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) cameraHasFrame = true
-            }
+        val player = cameraPlayer
+        if (player == null) {
+            onDispose {}
+        } else {
+            val listener = object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY) cameraHasFrame = true
+                }
 
-            override fun onPlayerError(error: PlaybackException) {
-                // Silent, deliberately: nobody came for the camera, and it
-                // must never do more than stop showing a picture. Media3's
-                // own retry handles a transient failure; a run that truly
-                // restarted is picked up by the path-keyed reattach below.
-                cameraHasFrame = false
+                override fun onPlayerError(error: PlaybackException) {
+                    // Silent, deliberately: nobody came for the camera, and it
+                    // must never do more than stop showing a picture. Media3's
+                    // own retry handles a transient failure; a run that truly
+                    // restarted is picked up by the path-keyed reattach below.
+                    cameraHasFrame = false
+                }
             }
-        }
-        cameraPlayer.addListener(listener)
-        onDispose {
-            cameraPlayer.removeListener(listener)
-            cameraPlayer.stop()
-            cameraPlayer.release()
+            player.addListener(listener)
+            onDispose {
+                player.removeListener(listener)
+                player.stop()
+                player.release()
+            }
         }
     }
-    LaunchedEffect(cameraHasVoiceAudio, cameraPref.layout) {
-        cameraPlayer.volume = if (cameraHasVoiceAudio && cameraMounted) 1f else 0f
+    LaunchedEffect(cameraPlayer, cameraHasVoiceAudio, cameraPref.layout) {
+        cameraPlayer?.volume = if (cameraHasVoiceAudio && cameraMounted) 1f else 0f
     }
 
     val newestCameraUrl by rememberUpdatedState(cameraSrc)
@@ -694,22 +720,32 @@ fun WatchPane(
     // `watchCameraSourceChanged` in `WatchSource.kt`, which states this same
     // rule as a pure, unit-tested function; keying this effect on the
     // query-stripped path is what makes the effect obey it.
-    LaunchedEffect(cameraMounted, cameraPathKey(cameraSrc), cameraAttempt) {
+    LaunchedEffect(cameraPlayer, cameraMounted, cameraPathKey(cameraSrc), cameraAttempt) {
+        val player = cameraPlayer ?: return@LaunchedEffect
         if (!cameraMounted) {
-            cameraPlayer.stop()
+            player.stop()
             cameraHasFrame = false
             return@LaunchedEffect
         }
         val url = newestCameraUrl ?: return@LaunchedEffect
         cameraHasFrame = false
-        cameraPlayer.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build())
-        cameraPlayer.prepare()
-        cameraPlayer.playWhenReady = true
+        player.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build())
+        player.prepare()
+        player.playWhenReady = true
     }
     // The token clock, at the same margin as the film's own (`WATCH_TOKEN_RENEWAL_MS`):
     // a session can outlast the viewer token's hour, and the camera has no
     // socket-restamp path of its own to lean on between renewals.
-    LaunchedEffect(cameraMounted, cameraPathKey(cameraSrc)) {
+    //
+    // KEYED ON `cameraAttempt` TOO, not only the mount and the path — the
+    // same trick the film's own renewal effect uses. Incrementing
+    // `cameraAttempt` is what makes the attach effect above reattach with a
+    // fresh URL, and because this effect is keyed on that same value, the
+    // increment also restarts ITS OWN delay: one `LaunchedEffect` that
+    // renews itself indefinitely rather than firing once and going quiet.
+    // Without this the camera renewed exactly once and then played on an
+    // aging token until it 401'd, with the film beside it unaffected.
+    LaunchedEffect(cameraMounted, cameraPathKey(cameraSrc), cameraAttempt) {
         if (!cameraMounted) return@LaunchedEffect
         delay(WATCH_TOKEN_RENEWAL_MS)
         cameraAttempt += 1
@@ -1036,7 +1072,15 @@ private fun FilmLayer(
 private fun BoxScope.StageContent(
     phase: WatchPhase,
     player: ExoPlayer,
-    cameraPlayer: ExoPlayer,
+    /**
+     * Null until a camera has ever appeared this watch — [WatchPane]
+     * allocates the second `ExoPlayer` lazily, so most watches (no camera
+     * at all) never pay for one. Every branch below that would draw it is
+     * already gated by [placement], which [WatchPane] can only produce a
+     * camera slot for once [cameraPlayer] exists, but the null check is
+     * kept explicit here rather than force-unwrapped.
+     */
+    cameraPlayer: ExoPlayer?,
     showPlayers: Boolean,
     placement: WatchStagePlacement,
     retry: () -> Unit,
@@ -1051,7 +1095,9 @@ private fun BoxScope.StageContent(
         Row(Modifier.fillMaxSize().onSizeChanged(onStageSizeChanged)) {
             FilmLayer(phase, player, showPlayers, retry, Modifier.weight(1f).fillMaxHeight())
             Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black)) {
-                if (showPlayers) CameraPlayerSurface(cameraPlayer, zoom = false, modifier = Modifier.fillMaxSize())
+                if (showPlayers) {
+                    cameraPlayer?.let { CameraPlayerSurface(it, zoom = false, modifier = Modifier.fillMaxSize()) }
+                }
             }
         }
         return
@@ -1070,11 +1116,13 @@ private fun BoxScope.StageContent(
             // (above, already composed) keeps playing underneath, covered
             // rather than unmounted, so switching back is instant.
             Box(Modifier.fillMaxSize().background(Color.Black)) {
-                if (showPlayers) CameraPlayerSurface(cameraPlayer, zoom = false, modifier = Modifier.fillMaxSize())
+                if (showPlayers) {
+                    cameraPlayer?.let { CameraPlayerSurface(it, zoom = false, modifier = Modifier.fillMaxSize()) }
+                }
             }
         }
 
-        placement.camera == StageSlot.Hidden && placement.corner != null -> {
+        placement.camera == StageSlot.Hidden && placement.corner != null && cameraPlayer != null -> {
             CameraPipCornerBox(
                 cameraPlayer = cameraPlayer,
                 showPlayer = showPlayers,

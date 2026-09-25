@@ -88,6 +88,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = false,
             hasFrame = false,
+            hasVideo = true,
             pref = CameraPipPref.DEFAULT,
             layout = WatchCameraLayout.Pip,
         )
@@ -101,6 +102,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = true,
             hasFrame = false,
+            hasVideo = true,
             pref = CameraPipPref.DEFAULT,
             layout = WatchCameraLayout.Pip,
         )
@@ -115,6 +117,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = true,
             hasFrame = true,
+            hasVideo = true,
             pref = CameraPipPref(CameraPipCorner.TopLeft, WatchCameraLayout.Pip),
             layout = WatchCameraLayout.Pip,
         )
@@ -129,6 +132,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = true,
             hasFrame = true,
+            hasVideo = true,
             pref = CameraPipPref.DEFAULT,
             layout = WatchCameraLayout.Side,
         )
@@ -142,6 +146,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = true,
             hasFrame = true,
+            hasVideo = true,
             pref = CameraPipPref.DEFAULT,
             layout = WatchCameraLayout.Camera,
         )
@@ -154,6 +159,7 @@ class WatchCameraLayoutTest {
         val placement = watchStagePlacement(
             mounted = true,
             hasFrame = true,
+            hasVideo = true,
             pref = CameraPipPref.DEFAULT,
             layout = WatchCameraLayout.Stream,
         )
@@ -161,5 +167,56 @@ class WatchCameraLayoutTest {
         assertEquals(StageSlot.Hidden, placement.camera)
         assertTrue(placement.cameraVoiceOnly)
         assertEquals(CameraPipPref.DEFAULT.corner, placement.corner)
+    }
+
+    // --- the voice-only camera, reached through the DEFAULT layout too ---
+    //
+    // `effectiveCameraLayout` forces `Pip` whenever `cameraHasVideo` is
+    // false, so a voice-only camera reaches this function with the exact
+    // same `layout` a default, video-carrying camera does. Without `hasVideo`
+    // read here too, `CameraPipCornerBox` drew a video surface for a stream
+    // with no video track: a black tile where the muted mic glyph belonged.
+
+    @Test
+    fun `a voice-only camera forced onto Pip still draws as the muted corner, not a black tile`() {
+        val placement = watchStagePlacement(
+            mounted = true,
+            hasFrame = true,
+            hasVideo = false,
+            pref = CameraPipPref.DEFAULT,
+            layout = WatchCameraLayout.Pip,
+        )
+        assertEquals(StageSlot.Hidden, placement.camera)
+        assertEquals(CameraPipPref.DEFAULT.corner, placement.corner)
+        assertTrue("a camera with no video must draw the mic glyph, not a video surface", placement.cameraVoiceOnly)
+    }
+
+    @Test
+    fun `a video camera in the same default corner is not drawn as voice-only`() {
+        val placement = watchStagePlacement(
+            mounted = true,
+            hasFrame = true,
+            hasVideo = true,
+            pref = CameraPipPref.DEFAULT,
+            layout = WatchCameraLayout.Pip,
+        )
+        assertFalse(placement.cameraVoiceOnly)
+    }
+
+    @Test
+    fun `a voice-only camera still loading is invisible, not voice-only yet`() {
+        // `cameraLoading` already hides the box; `cameraVoiceOnly` is also
+        // carried so the corner is ready to draw correctly the instant the
+        // audio-only player reaches STATE_READY, without a frame ever having
+        // to arrive first (an audio-only stream may never fire one).
+        val placement = watchStagePlacement(
+            mounted = true,
+            hasFrame = false,
+            hasVideo = false,
+            pref = CameraPipPref.DEFAULT,
+            layout = WatchCameraLayout.Pip,
+        )
+        assertTrue(placement.cameraLoading)
+        assertTrue(placement.cameraVoiceOnly)
     }
 }
