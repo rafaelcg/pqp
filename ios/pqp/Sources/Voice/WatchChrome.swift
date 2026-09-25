@@ -75,7 +75,7 @@ struct WatchAirPlayButton: UIViewRepresentable {
 /// builds of a presented theater failed to do. `isTheater` is that state: the
 /// stage is filling the screen, so the chrome clears the island and sits
 /// further in.
-struct WatchOverlay<Quality: View>: View {
+struct WatchOverlay<Quality: View, CameraMenu: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let chromeVisible: Bool
@@ -98,6 +98,11 @@ struct WatchOverlay<Quality: View>: View {
     let onStartPip: () -> Void
     let onCollapse: (() -> Void)?
     @ViewBuilder var qualityMenu: () -> Quality
+    /// The camera's own layout picker (`WatchStageView.cameraLayoutMenu`),
+    /// empty when nothing is running a camera worth laying out. Same slot in
+    /// the bottom bar as the quality menu, so a broadcast with no webcam
+    /// looks exactly like it did before this existed.
+    @ViewBuilder var cameraMenu: () -> CameraMenu
 
     private var showTransport: Bool { chromeVisible || !isPlaying }
 
@@ -253,6 +258,7 @@ struct WatchOverlay<Quality: View>: View {
         if showTransport {
             HStack(spacing: 6) {
                 qualityMenu()
+                cameraMenu()
                 Spacer(minLength: 8)
                 airPlayWell
                 if pipAvailable {

@@ -2053,8 +2053,18 @@ reconcile mirrors the slot onto the LL stream (`setLlCameraSlot`,
 (`liveHlsCameraUntold`), not against the room it just mutated. Pinned for both
 modes on two instances by `server/src/ws/voice-live-cluster.test.ts`.
 
-**iOS and Android are out of scope.** `cameraHlsUrl` is optional on the shared
-schema, so they parse the frame and ignore the field.
+**Android is still out of scope.** `cameraHlsUrl` is optional on the shared
+schema, so it parses the frame and ignores the field.
+
+**iOS draws it.** `WatchCameraPip.swift` runs a second, independent
+`AVPlayer` on `cameraHlsUrl`, muted unless `cameraHasVoiceAudio`, in whichever
+of the four layouts the web offers (`pip`, `side`, `stream`, `camera`;
+`voice.hls.cameraLayout` on the web is the same choice, remembered
+separately per platform). Same restamp rule as the film's own player
+(`WatchStreamSwap`): the corner's own swap keys on the playlist's path, not
+`LiveHlsStream.startedAt`, since the camera never mints an identity of its
+own on the wire. See `ios/pqp/Sources/Voice/WatchCameraPip.swift` and
+`ios/pqp/Tests/WatchCameraPipTests.swift`.
 
 **Recording.** The camera's segments live under the same session prefix as
 every other rendition, so the retention sweep and the superseded-session sweep
@@ -4307,11 +4317,24 @@ later, per app:
   than squashing it to zero height.
 
   Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`,
-  `ios/pqp/Tests/WatchPartyTests.swift`.
+  `ios/pqp/Tests/WatchPartyTests.swift`, `ios/pqp/Tests/WatchCameraPipTests.swift`.
+
+  The presenter's camera (`cameraHlsUrl`) draws too, as a draggable corner
+  PiP with the web's four layouts, remembered per phone
+  (`WatchCameraPip.swift`).
+
+  A plain voice channel with a share going out, and a watch party with
+  nobody eligible to speak on it, both deliberately have NO "join the call"
+  button anywhere on this stage: the web guards against exactly that third
+  join button reappearing on a watch party channel (pass 5 of this doc), and
+  iOS still has no stage/cohost/raise-hand surface that would make an
+  unconditional join button mean anything different from taking a seat that
+  cannot speak. Revisit once the party OBJECT below exists here.
 
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share
-  control unless `welcome.canStream`, and the create sheet offering the type.
+  control unless `welcome.canStream`, past broadcasts (the web's
+  `watch-party-history-dialog.tsx`), and the create sheet offering the type.
 - Android: a distinct icon and the create sheet are still missing. The share
   control follows `welcome.canStream` rather than the transport now, so a host
   can present on a LiveKit room, which is the transport every watch party runs

@@ -34,6 +34,31 @@ struct LiveHlsStream: Decodable, Equatable, Sendable {
     let topHeight: Int?
     /// Highest fps a started rung encodes. Presenter-side; ignored by the player.
     let topFramerate: Int?
+    /**
+     A SECOND playlist, carrying the presenter's camera and nothing else.
+     Mirrors `LiveHlsStream.cameraHlsUrl` (`packages/shared/src/live-hls.ts`).
+     Same session as `hlsUrl` for as long as the camera stays on: it never
+     mints its own identity, so `WatchCameraStreamSwap` keys on the URL's own
+     path rather than on `startedAt`. Absent means no camera is running right
+     now (off, refused for budget, or a server that predates this field).
+     */
+    let cameraHlsUrl: String?
+    /// Whether `cameraHlsUrl` actually carries a picture. Absent or true is
+    /// every camera before `LIVE_HLS_VOICE_TRACK` existed; false is the
+    /// audio-only "separada" shape, where the rung exists but has nothing to
+    /// paint.
+    let cameraHasVideo: Bool?
+    /// Whether `cameraHlsUrl` carries the presenter's MICROPHONE separately
+    /// from `hlsUrl`. Absent or false keeps a camera silent, exactly as it
+    /// always was.
+    let cameraHasVoiceAudio: Bool?
+
+    /// Whether `cameraHlsUrl` should be drawn with a picture. Defaults true
+    /// when the field is absent, same as the web reads it.
+    var resolvedCameraHasVideo: Bool { cameraHasVideo ?? true }
+    /// Whether `cameraHlsUrl` should be unmuted. Defaults false, same as the
+    /// web reads it.
+    var resolvedCameraHasVoiceAudio: Bool { cameraHasVoiceAudio ?? false }
 }
 
 /**
