@@ -437,6 +437,9 @@ describeDb("watch party stream and state across two instances", () => {
     process.env.VOICE_REGISTRY = "postgres";
     process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    // The old end-of-share timing is what this pins; the presenter return
+    // window (voice.ts presenterReturnGraceMs) has its own tests.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     hub = createMemoryHub();
     onTheWire = [];
     hub.listeners.add((frame) => onTheWire.push(frame));
@@ -468,6 +471,7 @@ describeDb("watch party stream and state across two instances", () => {
     process.env.VOICE_REGISTRY = previousFlag;
     delete process.env.VOICE_PROMOTION_ROOM_SIZE;
     delete process.env.HLS_NO_SHARER_GRACE_MS;
+    delete process.env.HLS_PRESENTER_RETURN_GRACE_MS;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

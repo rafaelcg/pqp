@@ -141,6 +141,8 @@ vi.mock("../voice/admin.js", () => ({
 interface BoxEgress {
   egressId: string;
   room: string;
+  /** The camera or screen track it was started on, as LiveKit was asked. */
+  videoTrackId?: string;
   /** `live/<channel>/<startedAt>-<rung>`, parsed back out of the output. */
   startedAt: number;
   rung: string;
@@ -166,6 +168,12 @@ const box = {
   remuxRebinds: [] as { sessionId: string; presenterIdentity: string }[],
   /** Whether the presenter's screen track is published on the SFU. */
   screenPublished: true,
+  /**
+   * The presenter's camera tracks as LiveKit lists them, in listing order
+   * (empty: no camera). A republished camera is listed beside the old one
+   * for a moment, which is the race these tests play.
+   */
+  cameraTracks: [] as string[],
   /** The sid of that publication: a republish (a resume, a re-pick) changes it. */
   screenTrack: "TR_SCREEN",
   next: 0,
@@ -179,6 +187,7 @@ const box = {
     this.remuxRebinds = [];
     this.screenPublished = true;
     this.screenTrack = "TR_SCREEN";
+    this.cameraTracks = [];
     this.next = 0;
   },
 };
@@ -187,6 +196,7 @@ const fakeEgress = {
   startTrackCompositeEgress: async (
     roomName: string,
     output: { filenamePrefix?: string },
+    tracks?: { videoTrackId?: string },
   ) => {
     box.next += 1;
     const egressId = `EG_${box.next}`;
@@ -199,6 +209,7 @@ const fakeEgress = {
       rung: match?.[2] ?? "?",
       startedMs: Date.now(),
       stoppedMs: null,
+      videoTrackId: tracks?.videoTrackId,
     });
     box.starts.push(egressId);
     return { egressId };
@@ -340,7 +351,19 @@ async function bootInstance(name: string): Promise<Instance> {
     egress: fakeEgress,
     findTracks: async () =>
       box.screenPublished
-        ? { videoTrackId: box.screenTrack, audioTrackId: "TR_MUSIC", sourceHeight: 720 }
+        ? {
+            videoTrackId: box.screenTrack,
+            audioTrackId: "TR_MUSIC",
+            sourceHeight: 720,
+            ...(box.cameraTracks.length > 0
+              ? {
+                  cameraTrackId: box.cameraTracks[0],
+                  ...(box.cameraTracks.length > 1
+                    ? { cameraTrackIds: [...box.cameraTracks] }
+                    : {}),
+                }
+              : {}),
+          }
         : null,
     playlistReady: true,
   });
@@ -584,6 +607,7 @@ async function sessionRows(channel: string) {
 const ENV_KEYS = [
   "VOICE_REGISTRY",
   "HLS_NO_SHARER_GRACE_MS",
+  "HLS_PRESENTER_RETURN_GRACE_MS",
   "LIVE_HLS_ENABLED",
   "LIVE_HLS_PUBLIC_BASE_URL",
   "LIVE_HLS_S3_BUCKET",
@@ -621,6 +645,10 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     // outlast it. At 300 ms the old behaviour ends the session inside every
     // single step below, so this file cannot pass by being quick.
     process.env.HLS_NO_SHARER_GRACE_MS = "300";
+    // Short for the same reason: the drill's genuine end of share has to end
+    // the broadcast within its bound, and the return window tests set their
+    // own.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "1000";
     process.env.LIVE_HLS_ENABLED = "true";
     process.env.LIVE_HLS_PUBLIC_BASE_URL = "https://live.example.test";
     process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
@@ -1000,6 +1028,281 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
   }, 30_000);
+
+  // -------------------------------------------------------------------------
+  // THE PRESENTER RELOADS THE PAGE. Production rehearsal B, 2026-09-24 ~17:15Z:
+  // a reload is a clean leave (the seat is gone, not held for resume), the
+  // five-second grace ended the LL session before the page was back, and the
+  // presenter's return under a new peer id started a new one. Now the party
+  // waits for its presenter (`HLS_PRESENTER_RETURN_GRACE_MS`).
+  // -------------------------------------------------------------------------
+
+  async function enableLlParty(): Promise<void> {
+    process.env.LIVE_HLS_LL = "true";
+    process.env.LIVE_HLS_REMUX_CONTROL_URL = REMUX_CONTROL;
+    process.env.LIVE_HLS_REMUX_CONTROL_SECRET = "test-remux-secret";
+    process.env.LIVE_HLS_REMUX_ORIGIN_URL = "https://hls-origin.example.test";
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    const pool = pools[0]!.getPool();
+    const host = await pool.query<{ owner_id: string }>(
+      `SELECT owner_id FROM servers WHERE id = $1`,
+      [fixture.serverId],
+    );
+    await pool.query(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Ensaio', 'live', $2, TRUE)`,
+      [fixture.channelId, host.rows[0]!.owner_id],
+    );
+  }
+
+  async function presenterLeaves(instance: Instance, presenter: Presenter): Promise<void> {
+    await instance.voice.handleVoiceMessage(
+      { socket: presenter.socket, user: asUser(presenter.userId) },
+      { type: "leave-voice-room" },
+    );
+    await instance.registry.settleVoiceRegistryWrites();
+  }
+
+  it("low-latency: a presenter page reload continues the SAME session (same machine)", async () => {
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const live = a.remux.llStreamFor(channel)!;
+    const [sessionId] = box.remuxStarts;
+
+    await presenterLeaves(a, presenter);
+    // Well past the five-second blink's 300 ms here: still live.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(a.remux.llStreamFor(channel)?.startedAt).toBe(live.startedAt);
+    expect(box.remuxStops).toEqual([]);
+
+    const back = await presenterJoinsAndShares(a, userId, channel);
+    expect(back.peerId).not.toBe(presenter.peerId);
+    await waitFor(
+      () => box.remuxRebinds.some((call) => call.presenterIdentity === back.peerId),
+      "the box to follow the reloaded page",
+    );
+
+    expect(box.remuxStarts).toEqual([sessionId]);
+    expect(box.remuxStops).toEqual([]);
+    expect(a.remux.llStreamFor(channel)).toEqual(
+      expect.objectContaining({ startedAt: live.startedAt, presenterPeerId: back.peerId }),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsPresenterReturnHeld",
+      expect.objectContaining({ channelId: channel, presenterPeerId: presenter.peerId }),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsPresenterReturned",
+      expect.objectContaining({ channelId: channel, samePerson: true, to: back.peerId }),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlRebound",
+      expect.objectContaining({ reason: "presenter-reconnected", result: "bound" }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+  }, 30_000);
+
+  it("low-latency: a presenter page reload landing on the OTHER machine continues the session there", async () => {
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const live = a.remux.llStreamFor(channel)!;
+    const [sessionId] = box.remuxStarts;
+    const viewer = startViewer(channel, "ll");
+
+    await presenterLeaves(a, presenter);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // The reloaded page lands on api-b: a fresh peer id, nothing left of the
+    // old seat anywhere.
+    const back = await presenterJoinsAndShares(b, userId, channel);
+    await b.registry.settleVoiceRegistryWrites();
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await waitFor(
+      () => box.remuxRebinds.some((call) => call.presenterIdentity === back.peerId),
+      "the box to follow the reloaded page",
+    );
+    viewer.stop();
+
+    expect(box.remuxStarts).toEqual([sessionId]);
+    expect(box.remuxStops).toEqual([]);
+    expect(viewer.samples.filter((sample) => sample.running !== 1)).toEqual([]);
+    expect(b.remux.llStreamFor(channel)).toEqual(
+      expect.objectContaining({ startedAt: live.startedAt, presenterPeerId: back.peerId }),
+    );
+    const rows = await pools[0]!.getPool().query<{
+      presenter_peer_id: string;
+      presenter_user_id: string | null;
+      ended_at: Date | null;
+    }>(
+      `SELECT presenter_peer_id, presenter_user_id, ended_at FROM hls_sessions
+        WHERE channel_id = $1 AND mode = 'll'`,
+      [channel],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({ presenter_peer_id: back.peerId, presenter_user_id: userId, ended_at: null }),
+    ]);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsHandedOver",
+      expect.objectContaining({ channelId: channel, mode: "ll" }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+  }, 30_000);
+
+  it("a DIFFERENT person sharing inside the window is a new session, at once", async () => {
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    await bootInstance("api-b");
+    const presenter = await presenterJoinsAndShares(a, randomUUID(), channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const live = a.remux.llStreamFor(channel)!;
+    await presenterLeaves(a, presenter);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await presenterJoinsAndShares(a, randomUUID(), channel);
+    await waitFor(
+      () => (a.remux.llStreamFor(channel)?.startedAt ?? live.startedAt) !== live.startedAt,
+      "a new session for the new presenter",
+    );
+    expect(box.remuxStarts).toHaveLength(2);
+    expect(box.remuxRebinds).toEqual([]);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsPresenterReturned",
+      expect.objectContaining({ channelId: channel, samePerson: false }),
+    );
+  }, 30_000);
+
+  it("nobody back by the end of the window ends the session, and says so", async () => {
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "900";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    await bootInstance("api-b");
+    const presenter = await presenterJoinsAndShares(a, randomUUID(), channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    const left = Date.now();
+    await presenterLeaves(a, presenter);
+    await waitFor(() => box.remuxStops.length === 1, "the session to end after the window");
+    expect(Date.now() - left).toBeGreaterThanOrEqual(850);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsPresenterReturnExpired",
+      expect.objectContaining({ channelId: channel }),
+    );
+  }, 30_000);
+
+  it("conventional ladder: a presenter page reload restarts the ladder IN PLACE, same session", async () => {
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    await waitFor(() => a.egress.liveHlsStreamFor(channel) !== null, "the ladder to announce");
+    const live = a.egress.liveHlsStreamFor(channel)!;
+
+    await presenterLeaves(a, presenter);
+    // The share went away with the page: its egress ends.
+    box.screenPublished = false;
+    for (const egress of box.egresses.values()) {
+      if (egress.stoppedMs === null && egress.rung !== "cam360p30") {
+        egress.stoppedMs = Date.now();
+      }
+    }
+    await a.egress.checkLiveHlsHealth(Date.now() + 20_000);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(owners(channel)).toEqual(["api-a"]);
+
+    // The page is back, sharing a new track.
+    box.screenPublished = true;
+    box.screenTrack = "TR_SCREEN_RELOADED";
+    const back = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(
+      () => a.egress.liveHlsStreamFor(channel)?.presenterPeerId === back.peerId,
+      "the ladder to follow the reloaded page",
+    );
+    expect(a.egress.liveHlsStreamFor(channel)?.startedAt).toBe(live.startedAt);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsStopped",
+      expect.objectContaining({ reason: "presenter-gone" }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsStopped",
+      expect.objectContaining({ reason: "no-share" }),
+    );
+  }, 30_000);
+
+  // -------------------------------------------------------------------------
+  // THE CAMERA ACROSS AN LL HANDOVER. Rehearsal B, 17:18:29Z: at the rolling
+  // restart's handover the camera recording died, was restarted onto the
+  // presenter's OLD camera track (LiveKit still listed it beside the new one),
+  // died again 31 s later with "track not found" and came back at 17:19:04:
+  // 52.8 s missing from the camera download.
+  // -------------------------------------------------------------------------
+
+  it("low-latency: the camera is adopted across a handover, and a restart goes to the CURRENT camera track", async () => {
+    await enableLlParty();
+    const channel = fixture.channelId;
+    box.cameraTracks = ["TR_CAM_1"];
+    const a1 = await bootInstance("api-a#1");
+    const b = await bootInstance("api-b");
+    const presenter = await presenterJoinsAndShares(a1, randomUUID(), channel);
+    await waitFor(() => owners(channel).join() === "api-a#1", "the show to go live");
+    await waitFor(
+      () => [...box.egresses.values()].some((e) => e.rung === "cam360p30" && e.stoppedMs === null),
+      "the camera recording to start",
+    );
+    const camStartsBefore = [...box.egresses.values()].filter((e) => e.rung === "cam360p30").length;
+
+    // A rolling restart of api-a: the presenter resumes on api-b, and the
+    // resumed client republished its camera, which LiveKit lists beside the
+    // old one (old first) until the old one's unpublish lands.
+    await drainAndKill(a1, [presenter.socket]);
+    await bootInstance("api-a#2");
+    box.cameraTracks = ["TR_CAM_1", "TR_CAM_2"];
+    await presenterResumes(b, presenter, channel);
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Adopted, not restarted: the camera it inherited is still listed.
+    const cams = () => [...box.egresses.values()].filter((e) => e.rung === "cam360p30");
+    expect(cams()).toHaveLength(camStartsBefore);
+    expect(cams().filter((e) => e.stoppedMs === null)).toHaveLength(1);
+
+    // The old camera track goes away and its egress dies with it. The clock
+    // moves past the monitor's start-up grace for everything at once (the
+    // death cooldown is measured on the same clock as the death).
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 20_000);
+    for (const cam of cams()) {
+      cam.stoppedMs ??= Date.now();
+    }
+    await b.egress.checkLiveHlsHealth();
+    await waitFor(
+      () => cams().some((e) => e.stoppedMs === null),
+      "the camera to be restarted",
+      10_000,
+    );
+    const restarted = cams().filter((e) => e.stoppedMs === null);
+    expect(restarted.map((e) => e.videoTrackId)).toEqual(["TR_CAM_2"]);
+    // Never back onto the dead track.
+    expect(cams().slice(camStartsBefore).every((e) => e.videoTrackId === "TR_CAM_2")).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraTrackStaleSkipped",
+      expect.objectContaining({ channelId: channel, stale: "TR_CAM_1", chosen: "TR_CAM_2" }),
+    );
+  }, 40_000);
 
   it("a session whose rows never landed is not handed over: it stays where it is monitored", async () => {
     const channel = fixture.channelId;

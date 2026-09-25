@@ -267,6 +267,9 @@ describeDb("voice.hlsReconcile: the owner machine runs the reconcile", () => {
     // grace exists for a presenter blinking out mid-party, and here it would
     // only make the assertion wait five seconds for the same answer.
     process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    // The old end-of-share timing is what this pins; the presenter return
+    // window (voice.ts presenterReturnGraceMs) has its own tests.
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "0";
     hub = createMemoryHub();
     logEvent.mockClear();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -285,6 +288,7 @@ describeDb("voice.hlsReconcile: the owner machine runs the reconcile", () => {
     booted.length = 0;
     process.env.VOICE_REGISTRY = previousRegistry;
     delete process.env.HLS_NO_SHARER_GRACE_MS;
+    delete process.env.HLS_PRESENTER_RETURN_GRACE_MS;
     vi.restoreAllMocks();
   });
 

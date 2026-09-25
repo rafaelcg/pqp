@@ -2080,6 +2080,51 @@ monitor reads that every tick, ends the `hls_sessions` row, counts
 party's `low_latency_requested` and reconciles the channel so the rungs start.
 See `docs/plans/LL_HLS.md` §5.
 
+**The party waits for its presenter (2026-09-24).** Production rehearsal B,
+~17:15Z: the presenter reloaded the page. A reload is a clean leave, so the
+seat is gone rather than held for resume, the five-second no-sharer grace ended
+the LL session before the page was back, and the return (a new peer id)
+started a new session with a new `startedAt`: every viewer re-attached and the
+recording split in two. Now a presenter who LEFT or STOPPED SHARING, in a party
+that is not over, is waited for `HLS_PRESENTER_RETURN_GRACE_MS` (default 60 s;
+`0` is the old behaviour and the rollback) while the audience keeps the frozen
+tail (`voice.hlsPresenterReturnHeld`).
+
+- **The same person back inside the window continues the SAME session**
+  (`voice.hlsPresenterReturned samePerson=true`): the LL box is rebound to the
+  new peer (`voice.hlsLlRebound reason=presenter-reconnected`), the ladder
+  restarts in place (#803), the camera and the voice archive stay with the
+  session. `ws/voice.ts` remembers who was presenting (`lastPresenterByChannel`),
+  because a reload leaves no seat anywhere that still names them, and the
+  media path's presenter check counts a presenter being waited for as present,
+  so a ladder whose egress died with the share is not ended as "presenter
+  gone" under the hold.
+- **On the other machine.** A reload that lands on the other replica is found
+  by the owner (the same user sharing on a live other instance) and the session
+  is handed there (#802); the receiving machine recognises the person from the
+  row's new `hls_sessions.presenter_user_id` and rebinds. LL only: a
+  conventional ladder between egress runs cannot be handed over (#803), so its
+  reload on the other replica still ends at the window's close and restarts
+  there. Same machine works for both.
+- **Anybody else sharing is a new session at once** (`samePerson=false`), and
+  nobody back by the end of the window ends it exactly as before
+  (`voice.hlsPresenterReturnExpired`, then `hlsStopped` / `hlsLlStopped reason=no-share`).
+- **The camera across a handover.** Rehearsal B, 17:18:29Z: at the rolling
+  restart's handover the camera recording died, was restarted onto the
+  presenter's OLD camera track (LiveKit lists a republished camera beside the
+  one it replaces for a moment, in no promised order), died again 31 s later
+  with "track not found", and came back at 17:19:04: 52.8 s missing from the
+  camera download. `chooseCameraTrack` keeps the camera the running egress is
+  bound to while it is still listed (an adoption no longer restarts it for a
+  listing race), and after a death or a replacement never goes back onto that
+  track while another camera is listed (`voice.hlsCameraTrackStaleSkipped`).
+
+Pinned by `server/src/ws/voice-hls-rolling-deploy.test.ts` (two replicas, real
+Postgres): a reload on the same machine and on the other one, a different
+person, the window expiring, the ladder's in-place restart, and the camera
+across an LL handover. All but the expiry and different-person cases fail
+without the change.
+
 **A low-latency party keeps its session when the presenter republishes or
 reconnects (2026-09-24).** The LL twin of the ladder's in-place restart
 (PR #803). Until now `pqp-remux`'s subscriber bound the FIRST screen-share

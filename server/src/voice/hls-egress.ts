@@ -313,6 +313,17 @@ export interface LiveHlsScreenTracks {
    */
   cameraTrackId?: string;
   /**
+   * EVERY camera publication the sharer has, when LiveKit lists more than
+   * one: a camera republished (a resume, a device change) is listed beside
+   * the one it replaces until the old one's unpublish lands, in no order the
+   * listing promises. `cameraTrackId` alone is whichever came first, which
+   * after a rolling restart on 2026-09-24 was the stale one: the camera
+   * restarted onto a track that no longer existed and died again 31 s later
+   * ("track not found"), 52.8 s of camera missing from the recording.
+   * `reconcileCameraEgress` chooses among these (`chooseCameraTrack`).
+   */
+  cameraTrackIds?: string[];
+  /**
    * The sharer's `voice-track` publication (`VOICE_TRACK_NAME`), when they
    * have one. `LIVE_HLS_VOICE_TRACK`'s "separada" signal: the CLIENT only
    * ever publishes this while it has chosen "separada", is sharing its mic
@@ -2457,6 +2468,7 @@ export function setLiveHlsTestHooks(hooks: {
 export function resetLiveHlsForTests(): void {
   rooms.clear();
   llCompanions.clear();
+  staleCameraTracks.clear();
   llScreenTracksSeen.clear();
   restartHistory.clear();
   failedUntil.clear();
@@ -3738,6 +3750,9 @@ async function tendCameraHealth(
       room.camera === camera
     ) {
       room.camera = null;
+      // The track a dead camera was bound to is the one not to restart onto
+      // while LiveKit still lists it (`chooseCameraTrack`).
+      markCameraTrackStale(channelId, camera.cameraTrackId, now);
       if (cameraHealth.stillRunning) {
         await stopRungs(channelId, [camera]);
       }
@@ -4097,7 +4112,7 @@ async function reconcileLlCompanions(
   await noteLlScreenTracks(channelId, stream, tracks);
   return {
     stream,
-    cameraTrackId: tracks.cameraTrackId ?? null,
+    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds,
     voiceTrackId: tracks.voiceTrackId ?? null,
     micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
@@ -5337,6 +5352,7 @@ export function pickScreenTracks(
   let sourceHeight: number | undefined;
   let micArchiveTrackId: string | undefined;
   let cameraTrackId: string | undefined;
+  const cameraTrackIds: string[] = [];
   let voiceTrackId: string | undefined;
   let stageMixTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
@@ -5367,6 +5383,7 @@ export function pickScreenTracks(
     // transcode, which is the capacity conversation this feature defers.
     if (isTrackSource(track.source, TrackSource.CAMERA)) {
       cameraTrackId ??= track.sid;
+      cameraTrackIds.push(track.sid);
     }
     // BY NAME, LIKE THE ARCHIVE, AND FOR A SECOND REASON ON TOP OF PITFALL
     // 14: the sharer's ORDINARY microphone (source `Microphone`, no special
@@ -5392,6 +5409,7 @@ export function pickScreenTracks(
         ...(sourceHeight ? { sourceHeight } : {}),
         ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
         ...(cameraTrackId ? { cameraTrackId } : {}),
+        ...(cameraTrackIds.length > 1 ? { cameraTrackIds } : {}),
         ...(stageMixTrackId || voiceTrackId
           ? { voiceTrackId: stageMixTrackId ?? voiceTrackId }
           : {}),
@@ -6683,16 +6701,122 @@ function cameraStillWanted(
   return current.camera === null;
 }
 
+/**
+ * Camera tracks recently seen die or be replaced, per channel, and until
+ * when: a restart must not go straight back onto one while LiveKit still
+ * lists it beside its successor. See `chooseCameraTrack`.
+ */
+const staleCameraTracks = new Map<string, Map<string, number>>();
+const STALE_CAMERA_TRACK_MS = 30_000;
+
+/**
+ * Every recently dead or replaced camera sid per channel, each with its own
+ * expiry (Farol review, PR #817: one slot per channel let a second death
+ * forget the first, and the first could then be chosen again).
+ */
+function markCameraTrackStale(channelId: string, sid: string | null, now = Date.now()): void {
+  if (!sid) {
+    return;
+  }
+  const entries = staleCameraTracks.get(channelId) ?? new Map<string, number>();
+  for (const [seen, until] of entries) {
+    if (until <= now) {
+      entries.delete(seen);
+    }
+  }
+  entries.set(sid, now + STALE_CAMERA_TRACK_MS);
+  staleCameraTracks.set(channelId, entries);
+}
+
+function staleCameraSids(channelId: string, now: number): Set<string> {
+  const entries = staleCameraTracks.get(channelId);
+  const out = new Set<string>();
+  if (!entries) {
+    return out;
+  }
+  for (const [sid, until] of entries) {
+    if (until > now) {
+      out.add(sid);
+    } else {
+      entries.delete(sid);
+    }
+  }
+  if (entries.size === 0) {
+    staleCameraTracks.delete(channelId);
+  }
+  return out;
+}
+
+/**
+ * WHICH CAMERA TRACK TO RECORD, out of what LiveKit lists for the presenter.
+ *
+ *  - The one the running camera egress is already bound to, while it is still
+ *    listed. An adoption (a handover, a boot) keeps the camera it inherited
+ *    rather than restarting it because the listing named another sid first:
+ *    that restart is what a handover used to cost the recording.
+ *  - Otherwise any listed camera that is not the one that just died or was
+ *    replaced (`staleCameraTracks`): a republished camera is listed beside the
+ *    old one for a moment, and picking the old one again is a restart onto a
+ *    track that is about to vanish ("track not found" 31 s later).
+ *  - The stale one itself when it is the only camera listed: an egress can die
+ *    with its track intact, and then that track is the right one.
+ */
+function chooseCameraTrack(
+  channelId: string,
+  room: RoomHls,
+  cameraTrackId: string | null,
+  cameraTrackIds: readonly string[] | undefined,
+  now = Date.now(),
+): string | null {
+  const candidates =
+    cameraTrackIds && cameraTrackIds.length > 0
+      ? cameraTrackIds
+      : cameraTrackId
+        ? [cameraTrackId]
+        : [];
+  if (candidates.length === 0) {
+    return null;
+  }
+  const running = room.camera?.cameraTrackId ?? null;
+  if (running && candidates.includes(running)) {
+    return running;
+  }
+  const stale = staleCameraSids(channelId, now);
+  if (stale.size === 0) {
+    return cameraTrackId && candidates.includes(cameraTrackId) ? cameraTrackId : candidates[0]!;
+  }
+  const fresh = candidates.filter((sid) => !stale.has(sid));
+  if (fresh.length > 0) {
+    const skipped = candidates.filter((sid) => stale.has(sid));
+    if (skipped.length > 0) {
+      logEvent("voice.hlsCameraTrackStaleSkipped", {
+        channelId,
+        stale: skipped.join(","),
+        chosen: fresh[0],
+      });
+    }
+    return fresh[0]!;
+  }
+  // The only camera listed is the one that just died. A camera egress also
+  // dies for reasons that leave its track perfectly good (the egress itself
+  // crashed), so it is used; a republish lists its successor beside it, and
+  // that case never reaches here.
+  return candidates[0]!;
+}
+
 async function reconcileCameraEgress(
   channelId: string,
   cameraTrackId: string | null,
   voiceTrackId: string | null,
+  cameraTrackIds?: readonly string[],
 ): Promise<void> {
   const room = companionHost(channelId);
   if (!room) {
     return;
   }
-  const wantedVideo = liveHlsCameraEnabled() ? cameraTrackId : null;
+  const wantedVideo = liveHlsCameraEnabled()
+    ? chooseCameraTrack(channelId, room, cameraTrackId, cameraTrackIds)
+    : null;
   // THREE THINGS HAVE TO AGREE before the mic is attached: the deployment
   // flag, the presenter's OWN word that they chose "separada"
   // (`presenterWantsSeparatedVoice` — see its doc), and the named `voice-
@@ -6728,6 +6852,9 @@ async function reconcileCameraEgress(
   let replacedMbps = 0;
   if (current) {
     replaced.add(current.egressId);
+    if (current.cameraTrackId && current.cameraTrackId !== wantedVideo) {
+      markCameraTrackStale(channelId, current.cameraTrackId);
+    }
     room.camera = null;
     room.stream = withoutCameraUrl(room.stream);
     await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
@@ -6983,6 +7110,8 @@ async function readSfuLoad(reader: LiveHlsSfuLoadReader): Promise<number> {
 interface LiveHlsReconcileResult {
   stream: LiveHlsStream | null;
   cameraTrackId?: string | null;
+  /** Every camera the sharer has listed; see `LiveHlsScreenTracks.cameraTrackIds`. */
+  cameraTrackIds?: string[];
   /** Same optional-vs-null convention as `cameraTrackId`, for the mic. */
   voiceTrackId?: string | null;
   /** The presenter's `mic-archive` sid, for `reconcileMicArchive`. */
@@ -7363,7 +7492,7 @@ async function finishInPlaceRestart(input: {
   });
   return {
     stream: room.stream,
-    cameraTrackId: tracks.cameraTrackId ?? null,
+    cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds,
     voiceTrackId: tracks.voiceTrackId ?? null,
     micArchiveTrackId: tracks.micArchiveTrackId ?? null,
   };
@@ -7777,7 +7906,7 @@ async function startRoom(
   // for `reconcileLiveHls` to reconcile as the NEXT link of this channel's own
   // serialisation queue: chained, so it can never overlap a later push's own
   // camera work for this channel, but never awaited by the film path either.
-  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
 }
 
 /**
@@ -7824,6 +7953,7 @@ export function reconcileLiveHls(
             channelId,
             result.cameraTrackId,
             result.voiceTrackId ?? null,
+            result.cameraTrackIds,
           ),
     )
     .catch((error: unknown) => {
@@ -7992,7 +8122,7 @@ async function reconcileLiveHlsNow(
       // `listParticipants` call above, so it costs no extra RPC. The camera
       // itself is reconciled by the caller, as the next link of the queue —
       // never here.
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     // A NEW AUDIO SID WITH THE SAME VIDEO SID IS STILL A REPLACEMENT. Ticking
     // "share audio" on after the ladder was already running, losing the
@@ -8056,7 +8186,7 @@ async function reconcileLiveHlsNow(
       if (voiceTrackSeparatedByChannel.get(channelId) === from) {
         voiceTrackSeparatedByChannel.set(channelId, presenterPeerId);
       }
-      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, cameraTrackIds: tracks.cameraTrackIds, voiceTrackId: tracks.voiceTrackId ?? null, micArchiveTrackId: tracks.micArchiveTrackId ?? null };
     }
     if (
       tracks &&

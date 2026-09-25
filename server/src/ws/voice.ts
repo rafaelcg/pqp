@@ -2274,6 +2274,78 @@ function noSharerGraceMs(): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : 5_000;
 }
 
+/**
+ * HOW LONG A WATCH PARTY WAITS FOR ITS PRESENTER TO COME BACK.
+ *
+ * Production rehearsal B, 2026-09-24 ~17:15Z: the presenter reloaded the page.
+ * A reload is a clean leave, so the seat is gone rather than held for resume,
+ * the five-second no-sharer grace ran out before the page was back, the LL
+ * session ended, and the presenter's return (a new peer id) started a NEW
+ * session: a new `startedAt`, every viewer re-attached, and the recording
+ * split in two. Now a presenter who left or stopped sharing, in a party that
+ * is not over, holds the broadcast this long (the audience keeps the frozen
+ * tail). The same PERSON sharing again inside it continues the same session
+ * (the LL box is rebound, the ladder restarts in place); anybody else sharing
+ * is a new session at once; nobody sharing by the end of it ends the session
+ * exactly as before. `HLS_PRESENTER_RETURN_GRACE_MS`, default 60 s; `0` is the
+ * old behaviour and the rollback.
+ */
+function presenterReturnGraceMs(): number {
+  const raw = Number(process.env.HLS_PRESENTER_RETURN_GRACE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
+}
+
+/**
+ * Who each channel's live session was last presented by, as a person: the
+ * peer id AND the user id, recorded whenever this process sees them sharing.
+ * A presenter who left cleanly has no seat left anywhere to name them, and
+ * the return hold needs to know who it is waiting for.
+ */
+const lastPresenterByChannel = new Map<string, { peerId: string; userId: string }>();
+/**
+ * Every presenter peer this process saw share per channel, peer id to user
+ * id, bounded. Separate from `lastPresenterByChannel` because the drivers ask
+ * about the OLD peer after the new one has already become "last" (Farol
+ * review, PR #817): the reconcile that decides "same person" runs after the
+ * returning peer is recorded.
+ */
+const presenterPeopleByChannel = new Map<string, Map<string, string>>();
+const PRESENTER_PEOPLE_MAX = 8;
+
+function rememberPresenter(channelId: string, peerId: string, userId: string): void {
+  lastPresenterByChannel.set(channelId, { peerId, userId });
+  const people = presenterPeopleByChannel.get(channelId) ?? new Map<string, string>();
+  people.delete(peerId);
+  people.set(peerId, userId);
+  while (people.size > PRESENTER_PEOPLE_MAX) {
+    const oldest = people.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    people.delete(oldest);
+  }
+  presenterPeopleByChannel.set(channelId, people);
+}
+
+/**
+ * The person behind a presenter peer id this process saw share in this
+ * channel, after the peer itself is gone (a reload leaves nothing else that
+ * names them). What lets the drivers recognise the same person coming back.
+ */
+function lastPresenterUserOf(channelId: string, peerId: string): string | null {
+  return presenterPeopleByChannel.get(channelId)?.get(peerId) ?? null;
+}
+
+/** Whether a return hold is running for this channel and presenter. */
+function presenterReturnHeld(channelId: string, presenterPeerId: string, now = Date.now()): boolean {
+  const since = noSharerSince.get(channelId);
+  const last = lastPresenterByChannel.get(channelId);
+  if (since === undefined || !last || last.peerId !== presenterPeerId) {
+    return false;
+  }
+  return now - since < presenterReturnGraceMs();
+}
+
 /** When each channel's sharer went missing, while a stream is still up. */
 const noSharerSince = new Map<string, number>();
 
@@ -2288,6 +2360,8 @@ const noSharerSince = new Map<string, number>();
  * every party at once).
  */
 const SHARER_RECHECK_MS = 10_000;
+/** The backstop look inside a presenter's return window (`presenterReturnGraceMs`). */
+const RETURN_RECHECK_MS = 20_000;
 /** After a handover that could not be made (the rows did not move). */
 const HANDOVER_RETRY_MS = 5_000;
 
@@ -2376,7 +2450,14 @@ function locateVanishedSharer(
   // its callers are fire-and-forget: a throw here would be an unhandled
   // rejection. Anything unexpected is "could not ask", which holds exactly
   // like a failed registry read does.
-  const answer = lookUpVanishedSharer(channelId, presenterPeerId, since, now).catch(
+  const last = lastPresenterByChannel.get(channelId);
+  const answer = lookUpVanishedSharer(
+    channelId,
+    presenterPeerId,
+    since,
+    now,
+    last && last.peerId === presenterPeerId ? last.userId : null,
+  ).catch(
     (error: unknown): VanishedSharer => {
       logEvent("voice.hlsSharerLookupFailed", {
         channelId,
@@ -2406,6 +2487,7 @@ async function lookUpVanishedSharer(
   presenterPeerId: string,
   since: number,
   now: number,
+  presenterUserId: string | null = null,
 ): Promise<VanishedSharer> {
   const hold = (
     reason: Extract<VanishedSharer, { kind: "held" }>["reason"],
@@ -2440,11 +2522,15 @@ async function lookUpVanishedSharer(
     // keeps the session (the LL remux is rebound in place). Without this the
     // old seat's resume hold froze the broadcast here for up to the whole
     // window, while the machine with the presenter stood down.
-    const sameUserElsewhere = seat
+    // The person comes from the old seat while it exists, and from this
+    // process's own record of who was presenting once it does not (a clean
+    // leave, a page reload: the seat is gone at once, not held).
+    const personId = seat?.userId ?? presenterUserId;
+    const sameUserElsewhere = personId
       ? rows.find(
           (row) =>
             row.peerId !== presenterPeerId &&
-            row.userId === seat.userId &&
+            row.userId === personId &&
             row.sharingScreen &&
             row.canStream &&
             !row.orphanedAt &&
@@ -2880,6 +2966,27 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     }
   }
   if (sharing) {
+    const wasAway = noSharerSince.get(voiceChannelId);
+    const last = lastPresenterByChannel.get(voiceChannelId);
+    if (
+      wasAway !== undefined &&
+      prev &&
+      last &&
+      last.peerId === prev.presenterPeerId &&
+      last.peerId !== sharing.id
+    ) {
+      // Narrated either way: the reconcile below decides what it means (the
+      // same person continues the session, anybody else starts a new one).
+      logEvent("voice.hlsPresenterReturned", {
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        from: last.peerId,
+        to: sharing.id,
+        samePerson: last.userId === sharing.userId,
+        awayMs: Date.now() - wasAway,
+      });
+    }
+    rememberPresenter(voiceChannelId, sharing.id, sharing.userId);
     noSharerSince.delete(voiceChannelId);
     clearSharerRecheck(voiceChannelId);
     sharerHeldReason.delete(voiceChannelId);
@@ -2979,13 +3086,50 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       );
       return;
     }
-    const grace = noSharerGraceMs();
+    // THE PRESENTER'S RETURN WINDOW (`presenterReturnGraceMs`): a presenter
+    // who left or stopped sharing in a party that is not over is waited for,
+    // not just the five-second blink. Known only for a presenter this
+    // process saw share; anything else keeps the short grace.
+    const last = lastPresenterByChannel.get(voiceChannelId);
+    const returnGrace =
+      last && last.peerId === prev.presenterPeerId ? presenterReturnGraceMs() : 0;
+    const grace = Math.max(noSharerGraceMs(), returnGrace);
     if (grace > 0 && now - since < grace) {
+      if (returnGrace > noSharerGraceMs() && sharerHeldReason.get(voiceChannelId) !== "presenter-return") {
+        sharerHeldReason.set(voiceChannelId, "presenter-return");
+        logEvent("voice.hlsPresenterReturnHeld", {
+          channelId: voiceChannelId,
+          startedAt: prev.startedAt,
+          presenterPeerId: prev.presenterPeerId,
+          graceMs: returnGrace,
+        });
+      }
       // Nothing else will look again: the sharer going away is the last event
       // this channel produces until somebody does something. So the grace has
-      // to wake itself up.
-      scheduleSharerRecheck(voiceChannelId, since + grace + 100 - now);
+      // to wake itself up. Looked at every few seconds inside a long return
+      // window, so a presenter who came back on the OTHER machine is found
+      // and handed the session well before the window closes.
+      // A presenter returning on the OTHER machine reaches this one at once
+      // (the machine holding them relays a reconcile to the owner), so the
+      // look inside a long window is only a backstop, and a sparse one: every
+      // RETURN_RECHECK_MS, not every few seconds for the whole minute
+      // (Farol review, PR #817).
+      scheduleSharerRecheck(
+        voiceChannelId,
+        Math.min(
+          since + grace + 100 - now,
+          returnGrace > noSharerGraceMs() ? RETURN_RECHECK_MS : SHARER_RECHECK_MS,
+        ),
+      );
       return;
+    }
+    if (returnGrace > noSharerGraceMs()) {
+      logEvent("voice.hlsPresenterReturnExpired", {
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        presenterPeerId: prev.presenterPeerId,
+        graceMs: returnGrace,
+      });
     }
     noSharerSince.delete(voiceChannelId);
     clearSharerRecheck(voiceChannelId);
@@ -3111,7 +3255,14 @@ setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
   if (watchPartyKnownOver(channelId)) {
     return false;
   }
-  return pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId;
+  // A presenter being waited for (`presenterReturnGraceMs`) is still this
+  // session's presenter: the media path must not end the session under the
+  // hold (a ladder whose egress died because the share went away would
+  // otherwise read "presenter gone" and stop).
+  return (
+    pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId ||
+    presenterReturnHeld(channelId, presenterPeerId)
+  );
 });
 
 // Which person a peer is, so a presenter who came back under a fresh peer id
@@ -3119,14 +3270,16 @@ setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
 // restarts in place instead of minting a new one (`samePresenterPerson`).
 // Only this process's own peers: a presenter the egress process is about to
 // restart for has to be seated here for it to be reconciling at all.
-setLiveHlsPresenterIdentity((_channelId, peerId) => peers.get(peerId)?.userId ?? null);
+setLiveHlsPresenterIdentity(
+  (channelId, peerId) => peers.get(peerId)?.userId ?? lastPresenterUserOf(channelId, peerId),
+);
 
 // Which person a peer is, so an LL presenter who came back under a fresh peer
 // id (a reconnect that could not resume) keeps their party's session: the
 // remux box is told to follow the new identity (`rebindLlSession` in
 // `hls-remux.ts`) instead of the session being replaced.
-setLlPresenterIdentity((_channelId, peerId) => {
-  const local = peers.get(peerId)?.userId;
+setLlPresenterIdentity((channelId, peerId) => {
+  const local = peers.get(peerId)?.userId ?? lastPresenterUserOf(channelId, peerId);
   if (local) {
     return local;
   }
@@ -6108,6 +6261,8 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
   reconnectLookupMissAt.clear();
+  lastPresenterByChannel.clear();
+  presenterPeopleByChannel.clear();
   resetRosterSequences();
   hlsAudience.reset();
   for (const peer of peers.values()) {
