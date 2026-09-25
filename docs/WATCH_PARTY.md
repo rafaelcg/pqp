@@ -1829,10 +1829,29 @@ the first tick. `voice.hlsMicArchiveStarted` / `voice.hlsMicArchiveStopped`
 zero with the flag on and `liveHls.sessions` above zero means the hosts'
 browsers have not picked up the bundle that publishes the track.
 
-A session records **once or not at all**: the file is named after the session's
-`startedAt`, so a second Track Egress would write to the same key and overwrite
-the half already recorded. Turning the flag back on mid-party therefore does
-not restart it; the next share gets its own name.
+**An archive that ends mid-show comes back in place** (since 2026-09-24, after
+a rehearsal's archive egress ended seven minutes into a fourteen-minute show and
+the voice download stopped there). Every run after the first writes under its
+own name, `<startedAt>-mic-r<its start, ms>.ogg`, never over `-mic.ogg`, and
+still under the `mic` row's `object_prefix`, so retention and `keep_replay`
+cover every run. What brings one back: its egress ended (a first death retries
+in 3 s, a second inside five minutes waits two minutes, the camera's cadence),
+the host's `mic-archive` track was replaced, or the presenter came back on a
+new peer. Each is `voice.hlsMicArchiveRestartedInPlace` with its `reason`
+(`egress-ended`, `mic-track-replaced`, `presenter-reconnected`,
+`mic-track-returned`); a death is `voice.hlsMicArchiveDied` with `retryInMs`.
+The row's `runs` records when each run started (`base`, ms after `startedAt`;
+nothing renders a `mic` row as a playlist). An inherited session still never
+starts a FIRST archive mid-film, and the flag going off stops it for good.
+
+**The download joins the runs into one file.** "Voz do apresentador" over more
+than one run is one Ogg Opus stream (`server/src/voice/ogg-stitch.ts`): later
+runs' pages rewritten into the first run's stream (serial, page sequence,
+granule, CRC; nothing changes length, so `Content-Length` is still exact) and
+Opus silence where the archive was down, so the voice after a restart plays at
+the moment it was spoken and still lines up with the film. A run is placed by
+its start (from its name, or the row for the first run), never earlier than the
+previous one ended. A single run is handed back byte for byte, as before.
 
 **Stitching it back together**, once both files are pulled out of the bucket:
 

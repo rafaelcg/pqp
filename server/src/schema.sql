@@ -385,6 +385,27 @@ CREATE TABLE IF NOT EXISTS servers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Idempotency for room creation: an optional client-supplied key on
+-- POST /api/servers and POST /api/import/discord/apply, scoped per caller.
+-- The first request with a key inserts this row with server_id still NULL
+-- and fills it in before committing; a concurrent request with the same key
+-- blocks on the unique index until that commit (ordinary Postgres MVCC, no
+-- advisory lock needed), then reads back the room the first request made
+-- instead of making a second one. Pruned after 24h by
+-- `pruneExpiredServerIdempotencyKeys` (server/src/jobs.ts); a client that
+-- never sends the header never touches this table. See
+-- server/src/services/idempotency-keys.ts.
+CREATE TABLE IF NOT EXISTS server_create_idempotency_keys (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS server_create_idempotency_keys_created_at_idx
+  ON server_create_idempotency_keys (created_at);
+
 CREATE TABLE IF NOT EXISTS server_members (
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -4651,3 +4672,12 @@ CREATE TABLE IF NOT EXISTS hls_session_viewer_stats (
 
 CREATE INDEX IF NOT EXISTS idx_hls_session_viewer_stats_updated
   ON hls_session_viewer_stats (updated_at);
+
+-- Where an account was last seen, for picking a voice room's SFU region
+-- (`server/src/voice/region-audience.ts`). The two-letter CF-IPCountry of
+-- the WebSocket upgrade and nothing finer: never an IP, never a city. Written
+-- at WS auth, throttled, and only when LIVEKIT_REGIONS is set, so a
+-- self-host without regions leaves both NULL forever. Read by aggregating a
+-- server's members, never shown to anybody.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country_at TIMESTAMPTZ;

@@ -72,10 +72,11 @@ struct VoiceSessionInfo: Decodable, Equatable, Sendable {
     let identity: String
     /// The SFU region the room is pinned to (`sao`, `mia`, ...), present only
     /// when the deployment runs more than one. Informational: `url` already
-    /// names the box, and that is what `Room.connect` dials. This build does
-    /// not declare the `sfu-region` capability, so a room it opens stays
-    /// home; see `wireCaps` in `RealtimeClient.swift` and
-    /// `docs/plans/SFU_REGIONS.md`.
+    /// names the box, and that is what `Room.connect` dials, so a room this
+    /// build opens follows the server's region policy like any other (it
+    /// declares `sfu-region` in `wireCaps` in `RealtimeClient.swift`, and
+    /// builds that do not are trusted too unless the server sets
+    /// `LIVEKIT_REGION_REQUIRE_CAP`); see `docs/plans/SFU_REGIONS.md`.
     let region: String?
 }
 

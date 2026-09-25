@@ -13,6 +13,10 @@ import {
 import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
 import { recordActivationStep } from "./activation.js";
+import {
+  claimServerIdempotencyKey,
+  recordServerIdempotencyKey,
+} from "./idempotency-keys.js";
 import { detachDeletedChannelsFromOutgoingWebhooks } from "./outgoing-webhooks.js";
 import {
   applyPrivateChannelOverwrites,
@@ -194,10 +198,52 @@ export async function listServersForUser(userId: string): Promise<DbServer[]> {
 export async function createServer(
   name: string,
   ownerId: string,
-): Promise<{ server: DbServer; channels: ChannelRow[] }> {
+  idempotencyKey?: string | null,
+): Promise<{ server: DbServer; channels: ChannelRow[]; replayed: boolean }> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+
+    if (idempotencyKey) {
+      const claim = await claimServerIdempotencyKey(client, ownerId, idempotencyKey);
+      if (!claim.claimed && claim.serverId) {
+        const existingServer = await client.query<DbServer>(
+          `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1`,
+          [claim.serverId],
+        );
+        const server = existingServer.rows[0];
+        // Also require the caller to still be a member: the key is scoped to
+        // this user, but a member can transfer ownership and leave, and
+        // handing back a stale room's name and channel list to someone who
+        // no longer belongs would leak that room to them. Falling through to
+        // create a new one is what would have happened anyway if this key
+        // did not exist.
+        let callerStillMember = false;
+        if (server) {
+          const membership = await client.query(
+            `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [claim.serverId, ownerId],
+          );
+          callerStillMember = membership.rows.length > 0;
+        }
+        if (server && callerStillMember) {
+          const existingChannels = await client.query<ChannelRow>(
+            `SELECT ${CHANNEL_COLUMNS} FROM channels
+              WHERE server_id = $1 AND type <> 'thread'
+              ORDER BY position ASC`,
+            [claim.serverId],
+          );
+          await client.query("COMMIT");
+          return { server, channels: existingChannels.rows, replayed: true };
+        }
+        // The claimed server id no longer resolves to a row (deleted between
+        // the original create and this replay), or the caller is no longer a
+        // member of it. Fall through and make a fresh one rather than
+        // answering with nothing or with a room the caller cannot see.
+      }
+      // claim.claimed, or a stale claim with no resolvable server: either way
+      // this call owns the key now and proceeds to create, below.
+    }
 
     const serverResult = await client.query<DbServer>(
       `INSERT INTO servers (name, owner_id) VALUES ($1, $2)
@@ -221,12 +267,16 @@ export async function createServer(
       [server.id],
     );
 
+    if (idempotencyKey) {
+      await recordServerIdempotencyKey(client, ownerId, idempotencyKey, server.id);
+    }
+
     await client.query("COMMIT");
     // Funnel step `first_join`: the owner now belongs to a server. Creating one
     // counts, so a user whose first act is making their own server is not a
     // hole in the funnel. On the pool, after the commit.
     await recordActivationStep(ownerId, "first_join");
-    return { server, channels: channelsResult.rows };
+    return { server, channels: channelsResult.rows, replayed: false };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

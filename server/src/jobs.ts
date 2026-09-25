@@ -34,6 +34,7 @@ import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
+import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
@@ -191,6 +192,14 @@ export function startColdJobs(): ColdJobs {
     // services/sanctions.ts filters on `expires_at > NOW()`, so a timeout ends
     // when it says it ends whether or not this timer ever fires. Disk only.
     every(DAILY_MS, "sanctions", pruneExpiredTimeouts),
+    // Idempotency keys for room creation: nothing depends on this running
+    // either. A key past 24h is simply available again, the same as an
+    // absent one; see services/idempotency-keys.ts.
+    every(
+      DAILY_MS,
+      "server-create-idempotency-keys",
+      pruneExpiredServerIdempotencyKeys,
+    ),
     every(DAILY_MS, "retention", sweepMessageRetention),
     // Spent slow-mode clocks. Nothing depends on this running: a stale row is
     // inert, because enforcement compares it against the channel's current

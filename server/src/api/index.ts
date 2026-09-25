@@ -458,7 +458,12 @@ import {
   DiscordTemplateTooLargeError,
   DiscordTemplateUnavailableError,
   fetchMappedDiscordTemplate,
+  replayImportedServer,
 } from "../services/discord-import.js";
+import {
+  normalizeIdempotencyKey,
+  peekServerIdempotencyKey,
+} from "../services/idempotency-keys.js";
 import {
   ChannelPinLimitError,
   deleteMessage,
@@ -3238,11 +3243,20 @@ router.post("/api/servers", async ({ req, user }) => {
     throw new Forbidden("Character accounts cannot create servers");
   }
   const body = createServerSchema.parse(await readJsonBody(req));
-  const { server, channels } = await createServer(body.name, user.id);
-  return created({
+  const idempotencyKey = normalizeIdempotencyKey(req.headers["idempotency-key"]);
+  const { server, channels, replayed } = await createServer(
+    body.name,
+    user.id,
+    idempotencyKey,
+  );
+  const payload = {
     server: { ...mapServer(server), role: "owner" as const },
     channels: channels.map(mapChannel),
-  });
+  };
+  // A repeat of an already-completed create answers 200 with the room made
+  // the first time, never a fresh 201: an old client that never sent the
+  // header always takes the `created()` branch, exactly as before.
+  return replayed ? payload : created(payload);
 });
 
 function throwDiscordImportHttp(
@@ -3325,11 +3339,32 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
       "Paste a discord.new link or a Discord template code.",
     );
   }
+  const idempotencyKey = normalizeIdempotencyKey(req.headers["idempotency-key"]);
+  if (idempotencyKey) {
+    // A cheap read ahead of the outbound Discord fetch and the rate-limit
+    // draw below: a retry that already succeeded gets its answer without
+    // spending either. Not itself race-safe, since a concurrent in-flight
+    // import can still miss it; `createServerFromImport`'s claim inside its
+    // own transaction is what actually prevents a second room.
+    const existingServerId = await peekServerIdempotencyKey(user.id, idempotencyKey);
+    if (existingServerId) {
+      const replay = await replayImportedServer(existingServerId, user.id);
+      if (replay) {
+        const { replayed: _replayed, ...replayBody } = replay;
+        return replayBody;
+      }
+    }
+  }
   takeDiscordImportLimiters(user.id, res);
   try {
     const { code, plan } = await fetchMappedDiscordTemplate(body.source);
-    const createdServer = await createServerFromImport(user.id, code, plan);
-    return created(createdServer);
+    const { replayed, ...createdServer } = await createServerFromImport(
+      user.id,
+      code,
+      plan,
+      idempotencyKey,
+    );
+    return replayed ? createdServer : created(createdServer);
   } catch (error) {
     throwDiscordImportHttp(error, res);
   }

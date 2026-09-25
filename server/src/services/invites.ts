@@ -5,7 +5,7 @@ import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
 import type { PublicInvitePreview } from "@pqp/shared";
 
-type Queryable = Pick<PoolClient, "query">;
+export type Queryable = Pick<PoolClient, "query">;
 
 function generateInviteCode(): string {
   return randomBytes(5).toString("base64url").slice(0, 8);
@@ -51,8 +51,13 @@ export async function createInvite(
   return createInviteWith(getPool(), serverId, createdBy, options);
 }
 
-export async function listInvites(serverId: string): Promise<DbInvite[]> {
-  const result = await getPool().query<DbInvite>(
+/** `db` defaults to the pool; pass an open transaction's client to read
+ * inside it instead of borrowing a second connection off the pool. */
+export async function listInvites(
+  serverId: string,
+  db: Queryable = getPool(),
+): Promise<DbInvite[]> {
+  const result = await db.query<DbInvite>(
     `SELECT id, server_id, code, created_by, max_uses, uses, expires_at, created_at
      FROM server_invites
      WHERE server_id = $1

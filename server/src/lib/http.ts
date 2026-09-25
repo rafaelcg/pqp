@@ -81,11 +81,18 @@ export function assertCorsConfig(): void {
 
 export function corsHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {
-    // `If-None-Match` has to be allowed explicitly or the preflight refuses the
-    // conditional GET outright — a browser will not send a request header the
-    // preflight did not name, and `Expose-Headers` is likewise the only way
-    // cross-origin JS can read the `ETag` back off the response.
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match",
+    // Every one of these has to be allowed explicitly or the preflight
+    // refuses the request outright: a browser will not send a request
+    // header the preflight did not name, and `Expose-Headers` is likewise
+    // the only way cross-origin JS can read the `ETag` back off the
+    // response. `Idempotency-Key` missing here is exactly the failure mode
+    // pitfall 9 already warns about elsewhere in this codebase: a header
+    // that works from same-origin curl and fails silently, as
+    // `net::ERR_FAILED` on the preflight, everywhere the client and API are
+    // on different origins (every hosted deploy, and any local setup where
+    // the client's dev server and the API are not the same port).
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, If-None-Match, Idempotency-Key",
     "Access-Control-Expose-Headers": "ETag",
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Max-Age": "600",

@@ -142,6 +142,7 @@ import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
   SFU_REGION_CAP,
   decideSfuRegion,
+  regionCapRequired,
   defaultRegionId,
   forgetRoomRegion,
   pinRoomRegion,
@@ -152,6 +153,7 @@ import {
   socketCountry,
   type SfuRegionDecision,
 } from "../voice/regions.js";
+import { serverMemberCountries } from "../voice/region-audience.js";
 import {
   adoptVoicePeer,
   clearMusicIfEmpty,
@@ -909,10 +911,13 @@ export function isRoomPinnedLocally(voiceChannelId: string): boolean {
  *
  * Null in single-region mode, which is every deployment without
  * `LIVEKIT_REGIONS`: nothing below reads a header, issues a query or writes a
- * column then. With regions on, it is decided from the FIRST joiner's
- * `CF-IPCountry` and `sfu-region` capability, whatever the room's transport:
- * a mesh room carries a region too, so a mid-call promotion onto the SFU has
- * a box to go to that the first joiner chose, not whoever clicked a camera.
+ * column then. With regions on, it is decided when the FIRST joiner opens the
+ * room (`decideSfuRegion`: the override, else the server's people, else that
+ * joiner's `CF-IPCountry`), whatever the room's transport: a mesh room
+ * carries a region too, so a mid-call promotion onto the SFU has a box to go
+ * to that was chosen when the room opened, not by whoever clicked a camera.
+ * The joiner's `sfu-region` capability is consulted only under the rollback
+ * `LIVEKIT_REGION_REQUIRE_CAP` (`regionCapRequired`).
  */
 async function decideRoomRegion(
   channel: ChannelRow,
@@ -923,10 +928,14 @@ async function decideRoomRegion(
     return null;
   }
   const clientDeclaresRegions = socketHasCap(socket, SFU_REGION_CAP);
+  const requireRegionCap = regionCapRequired();
+  // Whether this joiner may open the room off home at all. True for every
+  // client unless the rollback switch asks for the cap.
+  const clientMayMove = clientDeclaresRegions || !requireRegionCap;
   let override: string | null = null;
   // The override query is skipped wherever the policy answers without it.
   if (
-    clientDeclaresRegions &&
+    clientMayMove &&
     channel.kind === "server" &&
     !isWatchPartyChannelType(channel.type)
   ) {
@@ -937,6 +946,27 @@ async function decideRoomRegion(
       console.error("[voice] sfu region override lookup failed:", error);
     }
   }
+  // Where the server's people are. Read only where the policy would reach
+  // it (no override naming a configured region: a stale override is ignored
+  // by the policy, so the tally must still be there for it), cached per
+  // server for hours, and a failed read is "no data", which falls back to
+  // the first joiner's country as before.
+  const overrideApplies =
+    override !== null && regions.some((region) => region.id === override);
+  let serverCountries: Map<string, number> | null = null;
+  if (
+    clientMayMove &&
+    channel.kind === "server" &&
+    !isWatchPartyChannelType(channel.type) &&
+    !overrideApplies &&
+    channel.server_id
+  ) {
+    try {
+      serverCountries = await serverMemberCountries(channel.server_id);
+    } catch (error) {
+      console.error("[voice] sfu region member tally failed:", error);
+    }
+  }
   return decideSfuRegion({
     regionIds: regions.map((region) => region.id),
     defaultRegion: defaultRegionId(regions),
@@ -944,6 +974,8 @@ async function decideRoomRegion(
     channel: { kind: channel.kind, type: channel.type, sfuRegion: override },
     country: socketCountry(socket),
     clientDeclaresRegions,
+    requireRegionCap,
+    serverCountries,
   });
 }
 
@@ -8022,6 +8054,14 @@ export async function handleVoiceMessage(
             ? "resume"
             : (openingRegion?.reason ?? "adopted"),
         country: socketCountry(socket),
+        // The server tally behind `server-majority` / `server-mixed`.
+        ...(openingRegion?.sample && resume.kind === "cold"
+          ? {
+              share: Math.round(openingRegion.sample.share * 100) / 100,
+              sample: openingRegion.sample.total,
+              byRegion: openingRegion.sample.byRegion,
+            }
+          : {}),
       });
     }
     if (!wasPinned) {
