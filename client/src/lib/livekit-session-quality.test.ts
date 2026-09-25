@@ -1166,7 +1166,13 @@ describe("the presenter as a live ladder's source", () => {
     const pinned = [...senderWrites]
       .reverse()
       .find((write) => write.source === Track.Source.ScreenShare);
-    expect(pinned!.encodings.every((encoding) => encoding.priority === "high")).toBe(true);
+    // Priority is per sender and lives on the first encoding; a later one
+    // must keep the default or Chrome refuses the whole write.
+    expect(pinned!.encodings[0]?.priority).toBe("high");
+    expect(pinned!.encodings[0]?.networkPriority).toBe("high");
+    expect(
+      pinned!.encodings.slice(1).every((encoding) => encoding.priority === undefined),
+    ).toBe(true);
 
     await sfu.setHlsSource(null);
     const released = [...senderWrites]
@@ -1211,7 +1217,57 @@ describe("the presenter as a live ladder's source", () => {
     const retried = [...senderWrites]
       .reverse()
       .find((write) => write.source === Track.Source.ScreenShare);
-    expect(retried!.encodings.every((e) => e.priority === "high")).toBe(true);
+    expect(retried!.encodings[0]?.priority).toBe("high");
+    warn.mockRestore();
+  });
+
+  it("bids high on the first encoding only, the one write a simulcast sender takes", async () => {
+    // Chrome, measured 2026-09-25: `setParameters` on a simulcast sender with
+    // "high" on every encoding throws "Attempted to set an unimplemented
+    // parameter of RtpParameters" (libwebrtc `UnimplementedRtpParameterHasValue`
+    // requires the per-sender fields at their defaults past encodings[0]). A
+    // share that goes up before the party does is simulcast, so every go-live
+    // in production rehearsal F kept `priority: low`.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let refused = 0;
+    publication.track.sender = {
+      getParameters: () => structuredClone(original.getParameters()),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        const later = (next.encodings ?? []).slice(1);
+        if (
+          later.some(
+            (e) =>
+              (e.priority ?? "low") !== "low" ||
+              (e.networkPriority ?? "low") !== "low",
+          )
+        ) {
+          refused += 1;
+          throw new Error(
+            "Failed to execute 'setParameters' on 'RTCRtpSender': Attempted to set an unimplemented parameter of RtpParameters.",
+          );
+        }
+        return original.setParameters(next);
+      },
+    };
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+
+    const params = original.getParameters();
+    expect(params.encodings.length).toBeGreaterThan(1);
+    expect(params.encodings[0]?.priority).toBe("high");
+    expect(params.encodings[0]?.networkPriority).toBe("high");
+    expect(refused).toBe(0);
+    // And the repair tick reads it as held, so it does not rewrite every 2 s.
+    const writes = senderWrites.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(senderWrites.length).toBe(writes);
     warn.mockRestore();
   });
 
@@ -1241,6 +1297,115 @@ describe("the presenter as a live ladder's source", () => {
     const before = senderWrites.length;
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     expect(senderWrites.length).toBe(before);
+  });
+
+  describe("a share Chrome's adaptation wedged at the floor", () => {
+    /**
+     * Production rehearsal F, after the presenter's reload: 280x180 under a
+     * 720-line plan, `bandwidth`, 891 kbit/s granted and ~390 sent, for the
+     * rest of the show. The real-browser reproduction and the libwebrtc log
+     * that explains it are in `screen-resolution-recovery.ts`.
+     */
+    async function wedgedShare(frameHeight: number, sentBps: number) {
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const info = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const sfu = await session();
+      await sfu.setHlsSource({ ladderTopHeight: 720, uplinkBps: 9_000_000 });
+      await sfu.publishScreen(fakeStream("video", "screen", 720));
+      const sender = publications.get(Track.Source.ScreenShare)!.track
+        .sender as { getStats?: () => Promise<Map<string, unknown>> };
+      let bytesSent = 0;
+      sender.getStats = async () =>
+        new Map([
+          [
+            "out",
+            {
+              type: "outbound-rtp",
+              kind: "video",
+              frameHeight,
+              targetBitrate: 891_000,
+              bytesSent,
+              qualityLimitationReason: "bandwidth",
+            },
+          ],
+        ]);
+      const tick = async (count: number) => {
+        for (let i = 0; i < count; i += 1) {
+          clock += 2000;
+          bytesSent += (sentBps / 8) * 2;
+          await sfu.setHlsSource({ ladderTopHeight: 720, uplinkBps: 9_000_000 });
+        }
+      };
+      const restore = () => {
+        now.mockRestore();
+        info.mockRestore();
+      };
+      return { tick, info, restore };
+    }
+
+    function screenPreferences() {
+      return senderWrites
+        .filter((write) => write.source === Track.Source.ScreenShare)
+        .map((write) => write.degradationPreference);
+    }
+
+    it("toggles the sender through balanced and back, which clears the wedge", async () => {
+      const share = await wedgedShare(180, 390_000);
+      await share.tick(8);
+      const prefs = screenPreferences();
+      const at = prefs.indexOf("balanced");
+      expect(at).toBeGreaterThanOrEqual(0);
+      // Straight back: the share stays a framerate-first share (PR 668).
+      expect(prefs[at + 1]).toBe("maintain-framerate");
+      expect(prefs[prefs.length - 1]).toBe("maintain-framerate");
+      expect(share.info).toHaveBeenCalledWith(
+        "[pqp] screen share unstuck from its adapted size",
+        expect.objectContaining({ height: 180, intendedHeight: 720 }),
+      );
+      share.restore();
+    });
+
+    it("tries again on the next tick when the browser refuses the toggle", async () => {
+      const share = await wedgedShare(180, 390_000);
+      const sender = publications.get(Track.Source.ScreenShare)!.track
+        .sender as {
+        setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+      };
+      const original = sender.setParameters;
+      let refusals = 1;
+      sender.setParameters = async (next: RTCRtpSendParameters) => {
+        if (next.degradationPreference === "balanced" && refusals > 0) {
+          refusals -= 1;
+          throw new Error("refused");
+        }
+        return original(next);
+      };
+      // The first kick is due on the fifth 2 s tick; it is refused.
+      await share.tick(5);
+      expect(refusals).toBe(0);
+      expect(screenPreferences()).not.toContain("balanced");
+      // The refused attempt did not cost a 15 s backoff: the retry lands on
+      // the very next tick.
+      await share.tick(1);
+      expect(refusals).toBe(0);
+      expect(screenPreferences()).toContain("balanced");
+      share.restore();
+    });
+
+    it("leaves a share that spends its whole budget alone: that is a real squeeze", async () => {
+      const share = await wedgedShare(180, 891_000);
+      await share.tick(30);
+      expect(screenPreferences()).not.toContain("balanced");
+      share.restore();
+    });
+
+    it("leaves a share at its intended size alone", async () => {
+      const share = await wedgedShare(720, 390_000);
+      await share.tick(30);
+      expect(screenPreferences()).not.toContain("balanced");
+      share.restore();
+    });
   });
 
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {
