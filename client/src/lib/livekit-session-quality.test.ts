@@ -1366,6 +1366,33 @@ describe("the presenter as a live ladder's source", () => {
       share.restore();
     });
 
+    it("tries again on the next tick when the browser refuses the toggle", async () => {
+      const share = await wedgedShare(180, 390_000);
+      const sender = publications.get(Track.Source.ScreenShare)!.track
+        .sender as {
+        setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+      };
+      const original = sender.setParameters;
+      let refusals = 1;
+      sender.setParameters = async (next: RTCRtpSendParameters) => {
+        if (next.degradationPreference === "balanced" && refusals > 0) {
+          refusals -= 1;
+          throw new Error("refused");
+        }
+        return original(next);
+      };
+      // The first kick is due on the fifth 2 s tick; it is refused.
+      await share.tick(5);
+      expect(refusals).toBe(0);
+      expect(screenPreferences()).not.toContain("balanced");
+      // The refused attempt did not cost a 15 s backoff: the retry lands on
+      // the very next tick.
+      await share.tick(1);
+      expect(refusals).toBe(0);
+      expect(screenPreferences()).toContain("balanced");
+      share.restore();
+    });
+
     it("leaves a share that spends its whole budget alone: that is a real squeeze", async () => {
       const share = await wedgedShare(180, 891_000);
       await share.tick(30);

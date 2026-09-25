@@ -4,7 +4,9 @@ import {
   initialScreenResolutionRecovery,
   nextKickDelayMs,
   readScreenEncodeSample,
+  refundScreenResolutionKick,
   SCREEN_RESOLUTION_HEALTHY_MS,
+  SCREEN_RESOLUTION_REFUND_LIMIT,
   SCREEN_RESOLUTION_STUCK_MS,
   type ScreenEncodeSample,
   type ScreenResolutionRecoveryState,
@@ -165,6 +167,39 @@ describe("decideScreenResolutionRecovery", () => {
       state = decision.state;
       expect(decision.kick).toBe(false);
     }
+  });
+});
+
+describe("refundScreenResolutionKick", () => {
+  it("gives a refused kick back, so the next tick may try again at once", () => {
+    let state = initialScreenResolutionRecovery();
+    let before = state;
+    let kickedAt = -1;
+    for (let t = 0; kickedAt < 0; t += 2000) {
+      before = state;
+      const decision = decideScreenResolutionRecovery(state, wedged(t, t * 48.75), INTENDED);
+      state = decision.state;
+      if (decision.kick) {
+        kickedAt = t;
+      }
+    }
+    const refunded = refundScreenResolutionKick(before, state, 1);
+    expect(refunded.kicks).toBe(0);
+    expect(refunded.lastKickAt).toBeNull();
+    const next = decideScreenResolutionRecovery(
+      refunded,
+      wedged(kickedAt + 2000, (kickedAt + 2000) * 48.75),
+      INTENDED,
+    );
+    expect(next.kick).toBe(true);
+  });
+
+  it("stops refunding a browser that refuses every time", () => {
+    const before = initialScreenResolutionRecovery();
+    const attempted = { ...before, kicks: 1, lastKickAt: 10_000 };
+    expect(
+      refundScreenResolutionKick(before, attempted, SCREEN_RESOLUTION_REFUND_LIMIT + 1),
+    ).toBe(attempted);
   });
 });
 

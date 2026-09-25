@@ -42,6 +42,8 @@ import {
   decideScreenResolutionRecovery,
   initialScreenResolutionRecovery,
   readScreenEncodeSample,
+  refundScreenResolutionKick,
+  SCREEN_RESOLUTION_REFUND_LIMIT,
 } from "./screen-resolution-recovery";
 import {
   qualityFromLiveKit,
@@ -505,6 +507,8 @@ export async function connectLiveKit({
    */
   let screenResolutionRecovery = initialScreenResolutionRecovery();
   let screenResolutionSampledAt = 0;
+  /** Refused kicks in a row; see `refundScreenResolutionKick`. */
+  let screenResolutionRefunds = 0;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -1244,6 +1248,7 @@ export async function connectLiveKit({
   function resetScreenResolutionRecovery(): void {
     screenResolutionRecovery = initialScreenResolutionRecovery();
     screenResolutionSampledAt = 0;
+    screenResolutionRefunds = 0;
   }
 
   /**
@@ -1303,6 +1308,7 @@ export async function connectLiveKit({
       sample,
       intendedHeight,
     );
+    const beforeKick = screenResolutionRecovery;
     screenResolutionRecovery = decision.state;
     if (!decision.kick) {
       return;
@@ -1319,9 +1325,10 @@ export async function connectLiveKit({
       const back = sender.getParameters();
       back.degradationPreference = keep;
       await sender.setParameters(back);
+      screenResolutionRefunds = 0;
       // A warning, not info: the share was wedged, which is worth seeing in
-      // a presenter's console on the night, and it is rate limited by the
-      // kick backoff to one line a minute at most.
+      // a presenter's console on the night, and the kick backoff bounds it
+      // (0 s, 15 s, 30 s, then one a minute).
       console.warn("[pqp] screen share unstuck from its adapted size", {
         height: sample.frameHeight,
         intendedHeight,
@@ -1334,6 +1341,16 @@ export async function connectLiveKit({
     } catch (err) {
       // A half-done toggle leaves `balanced` on the sender, which the pin
       // check (`screenHlsEncoderUnpinned`) reads as drift and writes back.
+      // The kick did not happen, so it does not cost a backoff either.
+      screenResolutionRefunds += 1;
+      screenResolutionRecovery = refundScreenResolutionKick(
+        beforeKick,
+        screenResolutionRecovery,
+        screenResolutionRefunds,
+      );
+      if (screenResolutionRefunds > SCREEN_RESOLUTION_REFUND_LIMIT) {
+        screenResolutionRefunds = 0;
+      }
       console.warn("[pqp] screen share resolution recovery refused", err);
     }
   }

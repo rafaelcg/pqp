@@ -231,6 +231,32 @@ export function decideScreenResolutionRecovery(
   };
 }
 
+/**
+ * How many refused kicks in a row are handed back before one is allowed to
+ * cost its backoff. A browser that refuses the toggle every time must not be
+ * asked on every 2 s tick for the rest of the party.
+ */
+export const SCREEN_RESOLUTION_REFUND_LIMIT = 2;
+
+/**
+ * A kick whose writes the browser refused did not happen. Give it back: the
+ * state from before the kick, with the newer sample kept so the send rate
+ * stays measured, so the next tick may try again instead of leaving the
+ * share wedged for a backoff interval it never earned (Farol on PR 829).
+ * `refundsInARow` past `SCREEN_RESOLUTION_REFUND_LIMIT` keeps the attempt,
+ * backoff and all.
+ */
+export function refundScreenResolutionKick(
+  before: ScreenResolutionRecoveryState,
+  attempted: ScreenResolutionRecoveryState,
+  refundsInARow: number,
+): ScreenResolutionRecoveryState {
+  if (refundsInARow > SCREEN_RESOLUTION_REFUND_LIMIT) {
+    return attempted;
+  }
+  return { ...before, last: attempted.last };
+}
+
 /** The outbound-rtp fields this module reads, as `getStats()` reports them. */
 interface OutboundVideoLike {
   type?: string;
