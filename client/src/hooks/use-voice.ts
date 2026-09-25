@@ -1359,7 +1359,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     // A refresh still in flight read the OLD inputs and may be about to act
     // on them (arm the sampler, set a source for a share that has just
     // stopped). A newer call supersedes it through `hlsSourceGeneration`, so
-    // an input change during one always asks again (Farol on #827).
+    // an input change during one always asks again (Farol on PR 827).
     return (
       wantedNow ||
       hlsSourceTimer !== null ||
