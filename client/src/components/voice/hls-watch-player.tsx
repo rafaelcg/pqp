@@ -107,7 +107,7 @@ import {
   type HlsMode,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
-import { drainJitterMs } from "@/lib/reconnect-jitter";
+import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Menu } from "@/components/ui/menu";
@@ -244,6 +244,21 @@ type StreamPhase = "playing" | "reconnecting" | "dead";
  * playlist polling.
  */
 const SESSION_OVER_POLL_MS = 20_000;
+
+/**
+ * "A TRANSMISSÃO CAIU" TRIES AGAIN BY ITSELF (rehearsal D, 2026-09-25). The
+ * watchdog's `"dead"` is the end of ITS budget, not proof the party ended: a
+ * viewer sat on that screen for three minutes of a show that was still
+ * running, because the only way back was a button nobody watching a film is
+ * looking for. While the screen is up on a live stream, press it for them
+ * after a jittered wait: `reconnect({ forceRebuild: true })` asks the server
+ * first, so a party that did end turns into the over/awaiting screen (and its
+ * slow poll) instead of a rebuild, and one still live is rebuilt onto the
+ * freshest URL. Jittered so a whole audience that went dead together does not
+ * come back in the same second. Never for a replay.
+ */
+const DEAD_RETRY_MIN_MS = 8_000;
+const DEAD_RETRY_MAX_MS = 15_000;
 
 /** hls.js instance shape this file actually touches. */
 interface HlsHandle {
@@ -933,7 +948,10 @@ export function HlsWatchPlayer({
       if (options.forceRebuild) {
         // A person pressed "try again": always give them a visible restart,
         // on the freshest URL this check turned up (B1.3: "stays a rebuild").
-        if (next) {
+        // A URL identical to the one playing is no state change at all, so
+        // `setActiveSrc` alone would re-attach nothing and the button would
+        // do nothing; that case is a same-URL rebuild.
+        if (next && next !== activeSrc) {
           setActiveSrc(next);
         } else {
           setAttempt((n) => n + 1);
@@ -986,6 +1004,21 @@ export function HlsWatchPlayer({
     watchRef.current.reset(Date.now());
     void reconnect({ forceRebuild: true });
   }, [reconnect]);
+  const retryFromDeadRef = useRef(retryFromDead);
+  retryFromDeadRef.current = retryFromDead;
+
+  // See `DEAD_RETRY_MIN_MS`. Re-armed each time the player lands on "dead"
+  // again, so a stream that keeps failing keeps being retried for as long as
+  // the server says it is live, at the watchdog's own bounded pace.
+  useEffect(() => {
+    if (phase !== "dead" || isVod || sessionOver !== null) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      retryFromDeadRef.current();
+    }, uniformJitterMs(DEAD_RETRY_MIN_MS, DEAD_RETRY_MAX_MS));
+    return () => window.clearTimeout(timer);
+  }, [phase, isVod, sessionOver]);
 
   const getVideo = useCallback(
     () => videoRef?.current ?? innerRef.current,
@@ -1429,13 +1462,24 @@ export function HlsWatchPlayer({
     // a `/ws` deploy drain (CLAUDE.md pitfall 10/11), just against
     // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
     // own tick cadence (`STALL_TICK_MS`, unchanged below).
+    // Which decision `reconnectJitterTimer` is carrying out. A `"rebuild"` is
+    // COMMITTED once decided: the ladder behind it is spent, and the stall
+    // tick below does not walk that ladder again over it (see there).
+    let pendingJittered: "rebuild" | "reconnect" | null = null;
     let reconnectJitterTimer: number | null = null;
     let startDelayTimer: number | null = null;
     const clearPendingReconnect = () => {
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
         reconnectJitterTimer = null;
+        if (pendingJittered === "rebuild") {
+          // Only real recovery gets here now (the picture moved, or the
+          // restart hold ended): give the decision back, since no instance
+          // was ever torn down for it.
+          watchRef.current.cancelRebuild();
+        }
       }
+      pendingJittered = null;
     };
     // BROADCAST_PIPELINE B0.3/B0.5. Set on every `FRAG_CHANGED` so a later
     // periodic sample can turn "what media time is painted right now" into
@@ -1912,6 +1956,18 @@ export function HlsWatchPlayer({
         governor.tick(Date.now(), stallMeter.isStalled);
         applyGovernor();
       }
+      if (pendingJittered === "rebuild") {
+        // A REBUILD IS ON ITS WAY; DO NOT WALK THE LADDER OVER IT (rehearsal
+        // D, 2026-09-25). `gateRebuild` resets the ladder when it decides, so
+        // the very next tick used to come back `"start-load"`, and the
+        // in-place branch below clears any pending jittered work. The rebuild
+        // waits 0.5 to 4 s and the tick is 1 s, so it survived about one time
+        // in seven: a viewer froze for four minutes logging "rebuilding the
+        // player" every seven seconds with no new instance ever made, and
+        // each cancelled one still counted toward `"dead"`. Nudging a loader
+        // that is about to be thrown away buys nothing; wait for it.
+        return;
+      }
       let decision = watch.tick(Date.now());
       if (decision === "jump-live") {
         // A "stall" episode's first rung, on an attach that has never
@@ -2071,8 +2127,10 @@ export function HlsWatchPlayer({
           watch.describeContext(),
         ),
       );
+      pendingJittered = decision;
       reconnectJitterTimer = window.setTimeout(() => {
         reconnectJitterTimer = null;
+        pendingJittered = null;
         if (cancelled) {
           return;
         }

@@ -394,6 +394,42 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(now)).toBe("rebuild");
     });
 
+    it("does not count a rebuild the player took back (cancelRebuild)", () => {
+      const watch = new HlsStallWatch({ maxRebuilds: 1 });
+      watch.onSourceChanged(T0);
+      let now = T0;
+      let decision: HlsStallDecision = "none";
+      // Three episodes that each reach the gate and are each taken back
+      // (the picture moved inside the jitter): never "dead".
+      for (let episode = 0; episode < 3; episode += 1) {
+        watch.onError({ fatal: true });
+        for (let i = 0; i < 20 && decision !== "rebuild"; i += 1) {
+          now += 1_000;
+          decision = watch.tick(now);
+        }
+        expect(decision).toBe("rebuild");
+        watch.cancelRebuild();
+        watch.onPlaying();
+        decision = "none";
+      }
+      // One that is NOT taken back still counts, and the next is dead.
+      watch.onError({ fatal: true });
+      for (let i = 0; i < 20 && decision !== "rebuild"; i += 1) {
+        now += 1_000;
+        decision = watch.tick(now);
+      }
+      expect(decision).toBe("rebuild");
+      for (let i = 0; i < 20 && decision === "rebuild"; i += 1) {
+        now += 1_000;
+        decision = watch.tick(now);
+      }
+      for (let i = 0; i < 20 && decision !== "dead"; i += 1) {
+        now += 1_000;
+        decision = watch.tick(now);
+      }
+      expect(decision).toBe("dead");
+    });
+
     it("forgets a rebuild signal once it falls outside the window", () => {
       const watch = new HlsStallWatch({ windowMs: 20_000, maxRebuilds: 2 });
       watch.onSourceChanged(T0);
