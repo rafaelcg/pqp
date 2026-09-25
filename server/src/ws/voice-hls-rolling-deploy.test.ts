@@ -11,6 +11,7 @@ import {
 } from "vitest";
 import type { WebSocket } from "ws";
 import { EgressStatus } from "livekit-server-sdk";
+import { liveStateFromStream, type LiveHlsStream } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { createMemoryHub } from "../lib/bus.js";
 
@@ -1107,6 +1108,64 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       expect.objectContaining({ reason: "presenter-reconnected", result: "bound" }),
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
+  }, 30_000);
+
+  it("low-latency: a reloaded presenter back in the room is named as the presenter, not counted as a viewer", async () => {
+    // Rehearsal C, 2026-09-25: after the reload the stream still named the
+    // OLD peer until the server rebound it, the presenter sat in the room
+    // under a new one, and the audience count read them as a viewer: "2
+    // assistindo" with one real viewer, and three "+1 assistindo" lines in
+    // the host's feed. The frames now carry the person (`presenterUserId`),
+    // on this machine and on the other one the bus reaches.
+    await enableLlParty();
+    process.env.HLS_PRESENTER_RETURN_GRACE_MS = "30000";
+    const channel = fixture.channelId;
+    const a = await bootInstance("api-a");
+    const b = await bootInstance("api-b");
+    const userId = randomUUID();
+    const presenter = await presenterJoinsAndShares(a, userId, channel);
+    await waitFor(() => owners(channel).join() === "api-a", "the show to go live");
+    await presenterLeaves(a, presenter);
+
+    // The page is back and seated, and has not shared yet: the return hold is
+    // still the session, under the old peer id.
+    const rec = recorder();
+    const user = asUser(userId);
+    a.sockets.setAuthenticatedSocket(rec.socket, user);
+    await a.voice.handleVoiceMessage(
+      { socket: rec.socket, user },
+      { type: "join-voice-room", voiceChannelId: channel, resume: true },
+    );
+    const welcome = rec.frames.find((frame) => frame.type === "welcome");
+    expect(welcome?.peerId).not.toBe(presenter.peerId);
+    const onJoin = rec.frames.find((frame) => frame.type === "voice-stream") as unknown as
+      | { stream: LiveHlsStream | null }
+      | undefined;
+    expect(onJoin?.stream).toEqual(
+      expect.objectContaining({ presenterPeerId: presenter.peerId, presenterUserId: userId }),
+    );
+    // What the host's own count then reads: the room is the presenter alone.
+    const seats = [welcome!.self as { peerId: string; userId: string; sharingScreen: boolean }];
+    expect(liveStateFromStream(onJoin!.stream, seats, 0).viewerCount).toBe(0);
+
+    // A seatless watcher on the OTHER machine is told the same person.
+    const watcher = recorder();
+    const watcherUser = asUser(randomUUID());
+    b.sockets.setAuthenticatedSocket(watcher.socket, watcherUser);
+    await b.voice.handleVoiceMessage(
+      { socket: watcher.socket, user: watcherUser },
+      { type: "watch-live", channelId: channel, watching: true },
+    );
+    await waitFor(
+      () => watcher.frames.some((frame) => frame.type === "channel-live" && frame.stream),
+      "the watcher on api-b to be told the stream",
+    );
+    const told = watcher.frames.find(
+      (frame) => frame.type === "channel-live" && frame.stream,
+    ) as unknown as { stream: LiveHlsStream };
+    expect(told.stream).toEqual(
+      expect.objectContaining({ presenterPeerId: presenter.peerId, presenterUserId: userId }),
+    );
   }, 30_000);
 
   it("low-latency: a presenter page reload landing on the OTHER machine continues the session there", async () => {

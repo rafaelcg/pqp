@@ -1215,6 +1215,34 @@ describe("the presenter as a live ladder's source", () => {
     warn.mockRestore();
   });
 
+  it("stops asking for a priority the browser silently drops", async () => {
+    // An engine that accepts the write but never keeps `priority` must not
+    // turn the 2 s repair tick into a full pin write for the whole party.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    publication.track.sender = {
+      getParameters: () => structuredClone(original.getParameters()),
+      setParameters: async (next: RTCRtpSendParameters) =>
+        original.setParameters({
+          ...next,
+          encodings: (next.encodings ?? []).map(
+            ({ priority: _p, networkPriority: _n, ...rest }) => rest,
+          ),
+        }),
+    };
+    for (let tick = 0; tick < 4; tick += 1) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    }
+    const before = senderWrites.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(senderWrites.length).toBe(before);
+  });
+
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const sfu = await session();

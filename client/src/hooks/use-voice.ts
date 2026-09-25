@@ -122,6 +122,7 @@ import {
 import {
   hlsSourceFor,
   readPresenterHlsFeed,
+  watchPartyCameraCapWanted,
 } from "@/lib/hls-source-quality";
 import {
   readWatchPartyStreamQuality,
@@ -1327,10 +1328,29 @@ export function createVoiceController(transport: RealtimeTransport) {
     // The same three facts decide the camera cap: a live egress on this
     // channel, this machine sharing into it, and the SFU. Read from one
     // function so the two halves can never disagree about who is presenting.
-    if (wanted !== null) {
+    //
+    // PLUS ONE: a session the server is still holding for THIS peer. A
+    // presenter who stops the screen and shares again a moment later is
+    // still the party's presenter (the server waits for them,
+    // `HLS_PRESENTER_RETURN_GRACE_MS`, and says nothing until it gives up),
+    // and lifting the cap in between republished the camera twice, once up
+    // and once back down. Each republish is a new track, and each new track
+    // is a camera egress restart: production rehearsal C, 2026-09-25, cut
+    // 3.1 s out of the presenter's camera recording for a two-second
+    // re-share. The cap now comes off when the session does (`voice-stream`
+    // null), not when the share blinks.
+    const capWanted = watchPartyCameraCapWanted({
+      hlsSourceWanted: wanted !== null,
+      usingSfu: state.usingSfu,
+      streamPresenterPeerId: state.liveStream?.presenterPeerId ?? null,
+      ownPeerId: state.peerId,
+    });
+    if (capWanted) {
+      // How big the cap is (480p where the deployment says so). Not awaited:
+      // the cap applies at once with the size already known.
       refreshPresenterCameraCap();
     }
-    await applyWatchPartyCameraCap(wanted !== null);
+    await applyWatchPartyCameraCap(capWanted);
     if (!wanted) {
       if (hlsSourceTimer !== null) {
         clearInterval(hlsSourceTimer);

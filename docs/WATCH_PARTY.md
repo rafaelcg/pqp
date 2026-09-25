@@ -2160,6 +2160,23 @@ person, the window expiring, the ladder's in-place restart, and the camera
 across an LL handover. All but the expiry and different-person cases fail
 without the change.
 
+**The returning presenter is not their own audience (2026-09-25).** Rehearsal
+C: after a presenter reload the host's activity feed showed "+1 assistindo"
+three times inside a minute with one real viewer, and the header read "2
+assistindo". Two causes. The frame kept naming the OLD peer until the reconcile
+rebound the session, while the presenter sat in the room under a new one, and
+`liveStateFromStream` subtracted the presenter by peer id alone, so they
+counted as a viewer. Every stream a socket is handed now carries the person
+too (`LiveHlsStream.presenterUserId`, stamped in `ws/voice.ts` from what the
+process saw share, and on the copy the bus carries to the other machine), and
+the count subtracts every seat belonging to that person. And the reloaded
+feed took "no `channel-live` yet" as a count of 0, so the viewer already
+watching arrived as a fresh "+1"; an unknown count is `null` now and sets no
+baseline (`feedAudienceCount` in `client/src/lib/watch-party-activity.ts`).
+The recorded peak and unique counts were not affected (the history row read
+"pico de 1 pessoa · 1 única"): they come from the viewer presence, not from
+this sum.
+
 **A low-latency party keeps its session when the presenter republishes or
 reconnects (2026-09-24).** The LL twin of the ladder's in-place restart
 (PR #803). Until now `pqp-remux`'s subscriber bound the FIRST screen-share
@@ -2833,6 +2850,23 @@ is presenting. It is a cap, not a setting — the chosen quality is stored
 untouched and comes back the moment the session ends — and it never raises
 somebody who already picked smaller. Client-only: a tab that has not reloaded
 keeps the old behaviour.
+
+**The cap holds through a quick re-share (2026-09-25).** Production rehearsal
+C: the presenter stopped the SCREEN only and shared again two seconds later,
+and the camera recording lost 3.1 s. The 2 s sampler saw "not sharing" and
+lifted the cap, the camera was republished at full size, and the re-share
+capped it again: two republishes, two new camera tracks, and each new track is
+a camera egress restart on the server (the server itself leaves a running
+camera egress alone while its track is still listed). The cap now also holds
+while the room's live stream still names THIS peer as presenter
+(`watchPartyCameraCapWanted` in `client/src/lib/hls-source-quality.ts`),
+which is the server's return hold for a presenter who stopped sharing
+(`HLS_PRESENTER_RETURN_GRACE_MS`), and comes off when the session does
+(`voice-stream` null). A page reload still costs the camera its gap: the old
+page's camera track dies with it, and the new one only exists once the
+reloaded page has rejoined, published a camera and the egress has started on
+it (17.5 s in the rehearsal, most of it the page coming back and the camera
+being turned on again).
 
 ### The restart that should not happen at all: swapping the share in place
 

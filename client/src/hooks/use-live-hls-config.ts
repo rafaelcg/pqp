@@ -12,6 +12,14 @@ import { fetchLiveHlsConfig, type LiveHlsConfig } from "@/lib/api";
  * the server's word alone.
  */
 const cache = new Map<string, Promise<LiveHlsConfig>>();
+/**
+ * The same answers once they have ARRIVED, read synchronously. A promise can
+ * only be read on a later tick, so a surface that mounted after the answer
+ * was already here still drew one frame without it: the "Baixa latência
+ * (beta)" switch appeared after the rest of the setup card (production
+ * rehearsal C, 2026-09-25, where a scripted toggle ran before it existed).
+ */
+const settled = new Map<string, LiveHlsConfig>();
 
 /**
  * With no server id: the DEPLOYMENT-wide answer, which is what
@@ -23,10 +31,16 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
   const key = serverId ?? "";
   let pending = cache.get(key);
   if (!pending) {
-    pending = fetchLiveHlsConfig(serverId).catch((error: unknown) => {
-      cache.delete(key);
-      throw error;
-    });
+    pending = fetchLiveHlsConfig(serverId).then(
+      (answer) => {
+        settled.set(key, answer);
+        return answer;
+      },
+      (error: unknown) => {
+        cache.delete(key);
+        throw error;
+      },
+    );
     cache.set(key, pending);
   }
   return pending;
@@ -35,6 +49,12 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
 /** Test seam. */
 export function resetLiveHlsConfigCache(): void {
   cache.clear();
+  settled.clear();
+}
+
+/** An answer already in hand for this server, or null. Never fetches. */
+export function settledLiveHlsConfig(serverId: string | null): LiveHlsConfig | null {
+  return serverId ? (settled.get(serverId) ?? null) : null;
 }
 
 /**
@@ -42,9 +62,15 @@ export function resetLiveHlsConfigCache(): void {
  * call has no allowlist to consult). Refetches when the server changes.
  */
 export function useLiveHlsConfig(serverId: string | null): LiveHlsConfig | null {
-  const [config, setConfig] = useState<LiveHlsConfig | null>(null);
+  // AN ANSWER ALREADY IN HAND IS USED ON THE FIRST RENDER, and a server
+  // change never blanks it back to null for a frame when the new server's
+  // answer is in hand too. Both used to cost one render with no config,
+  // which is a render with no "Baixa latência (beta)" row.
+  const [config, setConfig] = useState<LiveHlsConfig | null>(() =>
+    settledLiveHlsConfig(serverId),
+  );
   useEffect(() => {
-    setConfig(null);
+    setConfig(settledLiveHlsConfig(serverId));
     if (!serverId) {
       return;
     }

@@ -137,6 +137,13 @@ const { connectLiveKit } = await import("@/lib/livekit-session");
 
 // ------------------------------------------------------------------ browser
 
+/**
+ * What was handed to `setInterval`, never run on its own: the 2 s
+ * `refreshHlsSource` sampler is the only one this suite cares about, and a
+ * test that needs a tick runs it by hand.
+ */
+const intervalCallbacks: (() => void)[] = [];
+
 /** What `getUserMedia` was asked for, so a capture size can be read back. */
 const cameraRequests: MediaTrackConstraints[] = [];
 /** What `applyConstraints` moved a live capture to, in order. */
@@ -176,7 +183,14 @@ function installBrowserStubs() {
   // The 2 s `setHlsSource` sampler would otherwise keep the suite awake. Every
   // assertion below drives the state change directly, which is the path a
   // `voice-stream` frame takes.
-  g.setInterval = () => 1;
+  g.setInterval = (fn: () => void, ms?: number) => {
+    // The HLS source sampler only (`HLS_SOURCE_SAMPLE_MS`); the screen
+    // publish watchdog runs on its own period and is not this suite's.
+    if (ms === 2_000) {
+      intervalCallbacks.push(fn);
+    }
+    return 1;
+  };
   g.clearInterval = () => {};
   g.window = {
     addEventListener: () => {},
@@ -246,7 +260,10 @@ function welcome(): VoiceSignalingMessage {
 }
 
 /** The server saying an egress is (or is no longer) transcoding this channel. */
-function voiceStream(topHeight: number | null): VoiceSignalingMessage {
+function voiceStream(
+  topHeight: number | null,
+  presenterPeerId: string = PEER,
+): VoiceSignalingMessage {
   return {
     type: "voice-stream",
     channelId: CHANNEL,
@@ -256,7 +273,7 @@ function voiceStream(topHeight: number | null): VoiceSignalingMessage {
         : {
             hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/1`,
             startedAt: 1,
-            presenterPeerId: PEER,
+            presenterPeerId,
             delaySeconds: 10,
             topHeight,
             topFramerate: 60,
@@ -345,6 +362,7 @@ beforeEach(() => {
   ladderReconciles = 0;
   cameraBitrateGate = null;
   liveHlsConfig.cameraHeight = null;
+  intervalCallbacks.length = 0;
   vi.mocked(connectLiveKit).mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -489,10 +507,81 @@ describe("the presenter's camera while a watch party is transcoding", () => {
 
     // Everyone in the room gets this frame. Only the machine whose share is
     // the ladder's source pays for it.
-    voice.handleSignaling(voiceStream(1080));
+    voice.handleSignaling(voiceStream(1080, "someone-else"));
     await settle();
 
     expect(cameraCeilings.slice(before)).toEqual([]);
+  });
+
+  it("keeps the camera capped through a quick screen re-share, and lifts it when the session ends", async () => {
+    // Production rehearsal C, 2026-09-25: the presenter stopped the screen
+    // and shared again two seconds later. The sampler saw "not sharing",
+    // lifted the cap, and the camera was republished at full size; the
+    // re-share capped it again, a second republish. Each republish is a new
+    // camera track and a camera egress restart: 3.1 s cut from the camera
+    // recording. The server holds the session for a presenter who stopped
+    // sharing (still naming this peer), so the cap holds with it.
+    const { voice } = await presentingHost();
+    await voice.toggleCamera();
+    await settle();
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(CAP_BPS);
+    const republishes = ladderReconciles;
+
+    await voice.stopScreenShare();
+    await settle();
+    // The 2 s sampler's tick, which is what used to lift the cap.
+    for (const tick of intervalCallbacks.splice(0)) {
+      tick();
+    }
+    await settle();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(CAP_BPS);
+    expect(ladderReconciles).toBe(republishes);
+
+    await voice.startScreenShare();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(CAP_BPS);
+    expect(ladderReconciles).toBe(republishes);
+
+    // The session really ended: the camera gets its size back.
+    await voice.stopScreenShare();
+    voice.handleSignaling(voiceStream(null));
+    await settle();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+  });
+
+  it("at 480p too: a quick re-share never republishes the camera", async () => {
+    // The same property with the 480p cap: the re-share's own
+    // `startScreenShare` asks the config again, and an answer that has not
+    // changed must move nothing.
+    liveHlsConfig.cameraHeight = 480;
+    const { voice } = await presentingHost();
+    await settle();
+    await voice.toggleCamera();
+    await settle();
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(700_000);
+    const republishes = ladderReconciles;
+    const ceilings = cameraCeilings.length;
+
+    await voice.stopScreenShare();
+    await settle();
+    for (const tick of intervalCallbacks.splice(0)) {
+      tick();
+    }
+    await settle();
+    await settle();
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+
+    expect(ladderReconciles).toBe(republishes);
+    expect(cameraCeilings.length).toBe(ceilings);
   });
 
   /**

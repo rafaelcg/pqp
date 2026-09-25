@@ -1364,7 +1364,13 @@ export async function connectLiveKit({
     }
     try {
       await sender.setParameters(params);
-      senderPriorityFailures = 0;
+      // An engine that takes the write without keeping the field would
+      // otherwise read as "missing" on every 2 s repair tick for the whole
+      // party: a silent drop counts as a refusal too.
+      const kept = (sender.getParameters().encodings ?? []).every(
+        (encoding) => encoding.priority === "high",
+      );
+      senderPriorityFailures = kept ? 0 : senderPriorityFailures + 1;
     } catch (err) {
       senderPriorityFailures += 1;
       console.warn("[pqp] SFU screen priority refused; the pin stands", err);
