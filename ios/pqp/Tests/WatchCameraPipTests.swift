@@ -148,6 +148,50 @@ final class WatchCameraPipTests: XCTestCase {
         )
     }
 
+    // MARK: - Whether a hidden camera is still worth streaming (Farol review, PR 833)
+
+    func testAHiddenCameraWithNoVoiceIsNotWorthStreaming() {
+        XCTAssertNil(cameraUrlWorthStreaming(
+            cameraHlsUrl: "/x?t=a", hasVoiceAudio: false,
+            layoutOffered: true, layout: .stream
+        ))
+    }
+
+    /// The corner still needs the connection even hidden, because it is
+    /// carrying the one thing that layout does not hide: the presenter's
+    /// voice.
+    func testAHiddenCameraThatCarriesVoiceKeepsStreaming() {
+        XCTAssertEqual(cameraUrlWorthStreaming(
+            cameraHlsUrl: "/x?t=a", hasVoiceAudio: true,
+            layoutOffered: true, layout: .stream
+        ), "/x?t=a")
+    }
+
+    func testEveryOtherLayoutKeepsStreamingRegardlessOfVoice() {
+        for layout in [CameraLayout.pip, .side, .camera] {
+            XCTAssertEqual(cameraUrlWorthStreaming(
+                cameraHlsUrl: "/x?t=a", hasVoiceAudio: false,
+                layoutOffered: true, layout: layout
+            ), "/x?t=a")
+        }
+    }
+
+    /// The layout picker is not even offered without a picture (the
+    /// audio-only "separada" shape); `.stream` cannot apply to it.
+    func testANotOfferedLayoutIsNeverTreatedAsHidden() {
+        XCTAssertEqual(cameraUrlWorthStreaming(
+            cameraHlsUrl: "/x?t=a", hasVoiceAudio: false,
+            layoutOffered: false, layout: .stream
+        ), "/x?t=a")
+    }
+
+    func testNoUrlStaysNilWhateverTheLayout() {
+        XCTAssertNil(cameraUrlWorthStreaming(
+            cameraHlsUrl: nil, hasVoiceAudio: true,
+            layoutOffered: true, layout: .pip
+        ))
+    }
+
     // MARK: - Persistence (`CameraPipPref` as `@AppStorage`'s `RawRepresentable`)
 
     func testAPreferenceRoundTripsThroughItsRawValue() {

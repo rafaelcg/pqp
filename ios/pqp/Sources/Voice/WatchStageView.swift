@@ -131,6 +131,14 @@ struct WatchStageView: View {
     /// camera egress is announced.
     @State private var cameraPlayer: AVPlayer?
     @State private var cameraAttached: CameraAttachedStream?
+    /// When this view last acted on a failed camera item. `nil` means either
+    /// nothing has failed, or the last failure was already handled and
+    /// cleared by a fresh attach (`attachCamera`). Debounces
+    /// `checkCameraHealth()`: a `force` reattach itself produces a fresh
+    /// `AVPlayerItem` that is briefly `.unknown` and never `.failed` again
+    /// the same tick, but the watchdog runs every second and must not fire a
+    /// second forced rebuild before the first one has had a chance to load.
+    @State private var cameraFailureHandledAt: Date?
     /// Corner, and which of the four layouts. Remembered per phone
     /// (`CameraPipPref`), same storage shape as `pinnedLines` above.
     @AppStorage("pqp.watchCameraPip") private var cameraPref: CameraPipPref = .default
@@ -178,6 +186,7 @@ struct WatchStageView: View {
             // 31 did.
             guard !isLandscape else { return }
             tearDown()
+            deadRetryAttempt = 0
             model.close()
             WatchOrientation.leaveTheater()
         }
@@ -204,6 +213,10 @@ struct WatchStageView: View {
         .onChange(of: model.stream?.resolvedCameraHasVoiceAudio) { _, hasVoice in
             cameraPlayer?.isMuted = !(hasVoice ?? false)
         }
+        // Picking "hide camera" with nothing to hear either should stop the
+        // stream right away, not wait for the next `channel-live` (up to 30s
+        // away) to notice (Farol review, PR 833).
+        .onChange(of: cameraPref.layout) { _, _ in reconcileCamera() }
         .onChange(of: model.phase) { _, phase in
             if phase != .live {
                 tearDown()
@@ -272,6 +285,7 @@ struct WatchStageView: View {
     private func watchdog() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1))
+            checkCameraHealth()
             guard let player, attached != nil else { continue }
             guard let item = player.currentItem else { continue }
             if item.status == .failed {
@@ -458,7 +472,13 @@ struct WatchStageView: View {
             recovery.reset()
             model.retry()
             reconcile(force: true)
-            reconcileCamera(force: true)
+            // NOT forced (Farol review, PR 833): `force` on the camera's own
+            // swap bypasses its same-session keep rule unconditionally, so a
+            // healthy camera would restart -- a fresh rebuffer -- every time
+            // the FILM alone needed a kick. The plain reconcile still picks
+            // up a genuinely fresh URL or session; only the camera's own
+            // failure (`cameraWatchdogTick`) has a reason to force it.
+            reconcileCamera()
         }
     }
 
@@ -1061,15 +1081,22 @@ struct WatchStageView: View {
     // MARK: - The camera
 
     /// Same reasoning as `reconcile()`, aimed at the camera's own player.
-    /// `force` is only ever true from the same two callers that force the
-    /// film: a manual retry and the auto-retry loop.
+    /// `force` is true from a manual retry, the film's auto-retry loop
+    /// picking up a fresh URL, and this view's own camera watchdog tick
+    /// recovering a failed camera item.
     private func reconcileCamera(force: Bool = false) {
         guard !isSeated else { return }
+        let hasVoice = model.stream?.resolvedCameraHasVoiceAudio ?? false
         let move = WatchCameraStreamSwap.next(
             attached: cameraAttached,
-            latestUrl: model.stream?.cameraHlsUrl,
+            latestUrl: cameraUrlWorthStreaming(
+                cameraHlsUrl: model.stream?.cameraHlsUrl,
+                hasVoiceAudio: hasVoice,
+                layoutOffered: cameraLayoutIsOffered,
+                layout: cameraPref.layout
+            ),
             hasVideo: model.stream?.resolvedCameraHasVideo ?? true,
-            hasVoiceAudio: model.stream?.resolvedCameraHasVoiceAudio ?? false,
+            hasVoiceAudio: hasVoice,
             failed: force,
             now: Date()
         )
@@ -1101,6 +1128,7 @@ struct WatchStageView: View {
             sessionKey: cameraSessionKey(url), attachedAt: Date()
         )
         cameraPlayer = player
+        cameraFailureHandledAt = nil
         player.play()
     }
 
@@ -1108,6 +1136,34 @@ struct WatchStageView: View {
         cameraPlayer?.pause()
         cameraPlayer = nil
         cameraAttached = nil
+        cameraFailureHandledAt = nil
+    }
+
+    /**
+     THE CAMERA GETS RECOVERY TOO (Farol review, PR 833).
+
+     Silent, like every other camera failure on this stage: no card, no
+     retry button, the corner just comes back on its own once this reattach
+     lands. Unlike the film, a hard `AVPlayerItem` failure here has no
+     server to ask -- the camera never mints its own session, so there is no
+     fresher URL to fetch, only the one `reconcileCamera` already knows.
+     `force: true` on an unchanged session still reattaches (see
+     `WatchCameraStreamSwap`), which is exactly what a stuck item needs: a
+     brand new `AVPlayerItem` on the same playlist, past whatever segment
+     killed the last one.
+
+     Debounced by `cameraFailureHandledAt`: a fresh attach is briefly
+     `.unknown`, not `.failed`, so this fires once per genuine failure and
+     not once per second while the replacement is still loading.
+     */
+    private func checkCameraHealth() {
+        guard cameraPlayer?.currentItem?.status == .failed else { return }
+        let now = Date()
+        if let handledAt = cameraFailureHandledAt, now.timeIntervalSince(handledAt) < 5 {
+            return
+        }
+        cameraFailureHandledAt = now
+        reconcileCamera(force: true)
     }
 
     /// Re-tune the item that is already playing.
@@ -1322,6 +1378,14 @@ struct WatchStageView: View {
         WatchNowPlaying.end()
         WatchAudioSession.deactivate()
         tearDownCamera()
-        deadRetryAttempt = 0
+        // NOT `deadRetryAttempt = 0` HERE (Farol review, PR 833). This runs
+        // on every `.failed` entry too (`.onChange(of: model.phase)` calls
+        // `tearDown()` for any non-`.live` phase), so resetting it here
+        // rewound the backoff to its first step on every single automatic
+        // retry -- the counter never grew past 8-15s no matter how many
+        // times the stream kept failing. The only two places that may
+        // legitimately call this a fresh episode are a confirmed healthy
+        // attach (`watchdog()`, once `healthyPlaybackTicks` proves it) and
+        // actually leaving the screen (`onDisappear`, below).
     }
 }

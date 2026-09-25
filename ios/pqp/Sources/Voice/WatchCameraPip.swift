@@ -145,6 +145,27 @@ func effectiveCameraLayout(pref: CameraPipPref, cameraHasVideo: Bool) -> CameraL
     cameraHasVideo ? pref.layout : .pip
 }
 
+/**
+ THE URL WORTH A LIVE CONNECTION FOR, GIVEN WHAT THE VIEWER CAN ACTUALLY SEE
+ OR HEAR RIGHT NOW.
+
+ "Hide camera" (`.stream`) with nothing to hear either is nothing worth
+ streaming: `nil` here is what makes `WatchCameraStreamSwap` detach a camera
+ the viewer explicitly hid, instead of leaving it running invisibly for as
+ long as that layout stays picked (Farol review, PR 833). A camera that DOES
+ carry the presenter's voice keeps streaming even hidden -- the corner still
+ shows the voice-only indicator for it, in every layout but this one.
+ */
+func cameraUrlWorthStreaming(
+    cameraHlsUrl: String?,
+    hasVoiceAudio: Bool,
+    layoutOffered: Bool,
+    layout: CameraLayout
+) -> String? {
+    let hiddenAndSilent = layoutOffered && layout == .stream && !hasVoiceAudio
+    return hiddenAndSilent ? nil : cameraHlsUrl
+}
+
 // MARK: - The swap rule
 
 /// What the camera player currently holds, so the swap rule can tell a
