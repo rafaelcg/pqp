@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WatchCameraPip } from "./watch-camera-pip";
 import {
+  CAMERA_NUDGE_CHECK_MS,
   CAMERA_REBUILD_BACKOFF_MS,
   CAMERA_STALL_MS,
   CAMERA_STALL_POLL_MS,
@@ -196,13 +197,14 @@ describe("WatchCameraPip: a frozen camera recovers", { timeout: 30_000 }, () => 
     expect(clock).toBe(60);
     expect(constructed).toBe(1);
 
-    // Still frozen at the edge it jumped to: a rebuild, on the freshest URL,
-    // backoff[0] after the nudge (Math.random 0.5 is zero jitter).
+    // Still frozen at the edge it jumped to: the nudge moved nothing, so a
+    // rebuild on the freshest URL follows `CAMERA_NUDGE_CHECK_MS` after it
+    // rather than a whole backoff step (Math.random 0.5 is zero jitter).
     const toNudgeRebuild = await runUntilConstructed(2);
-    expect(toNudgeRebuild).toBeGreaterThanOrEqual(CAMERA_REBUILD_BACKOFF_MS[0]!);
     expect(toNudgeRebuild).toBeLessThanOrEqual(
-      CAMERA_REBUILD_BACKOFF_MS[0]! + CAMERA_STALL_POLL_MS,
+      CAMERA_NUDGE_CHECK_MS + CAMERA_STALL_POLL_MS,
     );
+    expect(toNudgeRebuild).toBeLessThan(CAMERA_REBUILD_BACKOFF_MS[0]!);
     expect(destroyed).toEqual([1]);
     expect(loaded.at(-1)).toBe(CAM_SRC);
 

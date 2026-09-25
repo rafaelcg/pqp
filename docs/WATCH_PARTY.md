@@ -1974,12 +1974,36 @@ hidden but carrying the voice) and the page is visible, playback that has not
 moved for 8 s gets one nudge. "Moved" is decoded frames when there is a
 picture, because in "separada" the voice keeps `currentTime` advancing under a
 frozen face, and the clock for the voice-only shape (`cameraProgress`). The
-nudge is `startLoad(-1)` and a seek to the live edge; after it come rebuilds of the camera's own hls.js instance 8, 15, 30, 60 and
-then every 120 s, each with 25 % jitter so a camera egress hiccup does not
-become five hundred simultaneous rebuilds. Ten seconds of forward play resets
-the backoff. It never asks the server anything, never draws anything, and
-never touches the film's player or its audio. A rebuild hides the corner until
-the fresh instance paints, which is better than a frozen face.
+nudge is `startLoad(-1)` and a seek to the live edge. If the picture is not
+moving 4 s after it (`CAMERA_NUDGE_CHECK_MS`; the nudge's own seek does not
+count as movement) the camera's own hls.js instance is rebuilt, and further
+rebuilds follow 15, 30, 60 and then every 120 s, each with 25 % jitter so a
+camera egress hiccup does not become five hundred simultaneous rebuilds. Ten
+seconds of forward play resets the backoff. It never asks the server anything,
+never draws anything, and never touches the film's player or its audio. A
+rebuild hides the corner until the fresh instance paints, which is better
+than a frozen face.
+
+**A token restamp never touches the camera's player (2026-09-25).** In
+rehearsal E, after the presenter reloaded, the viewer's webcam swapped to a
+new blob every 30 s on the wall clock and froze for ~10 s every minute or so,
+always at exactly 597 frames. The server restamps `cameraHlsUrl`'s `?t=` on the
+audience keyframe, and the camera applied each restamp with
+`hls.loadSource(url)`, believing it reloaded the manifest in place. In hls.js
+1.7 it does not: a different URL (and a restamp always differs, by its token)
+is `detachMedia()` + `attachMedia()` on the same instance, a new MediaSource
+with an empty buffer and the old live position state, which half the time
+played exactly its twenty-second window (597 frames at 30 fps) and stopped.
+The camera now does what the film's player has done since B1.3: `xhrSetup`
+swaps the newest token into each playlist request (`withFreshHlsToken`) and
+the instance is never touched. The native player (no MSE) has no loader, so
+it takes a new `src` only when its token is within 15 minutes of expiring
+(`nativeTokenRefreshDue`). Separately, every camera run writes the one shared
+live playlist and numbers from 0 again, so a run restarted soon after the
+last can list a sequence number the player holds under a different segment;
+hls.js calls that a media sequence mismatch and goes fatal, and the camera now
+rebuilds at once on it (at most every 10 s) instead of freezing until the
+stall watch noticed.
 
 **The viewer picks the layout (2026-09-25).** Rafael's four, from one small
 control in the player's own bar (`watch-camera-layout`, a `Menu`), offered

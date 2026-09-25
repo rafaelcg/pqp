@@ -211,6 +211,74 @@ export function hlsViewerTokenFromUrl(url: string): string | null {
 }
 
 /**
+ * When the `?t=` viewer token a playlist URL carries expires, epoch ms, or
+ * null when there is no token or its claims cannot be read.
+ *
+ * READ UNVERIFIED, and only ever used to decide WHEN to hand the element a
+ * fresher URL (the native camera player, `watch-camera-pip.tsx`), never
+ * whether anybody may watch: the server checks the signature on every
+ * request. The token is `<base64url JSON claims>.<signature>` and `e` is its
+ * expiry (`mintHlsViewerToken` in `server/src/voice/hls-viewer-token.ts`).
+ */
+export function hlsViewerTokenExpiresAt(url: string): number | null {
+  const token = hlsViewerTokenFromUrl(url);
+  if (!token) {
+    return null;
+  }
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) {
+    return null;
+  }
+  try {
+    const base64 = token.slice(0, dot).replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(base64)) as { e?: unknown };
+    return typeof claims.e === "number" && Number.isFinite(claims.e)
+      ? claims.e
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How close to its expiry the native camera player's token may get before a
+ * restamped URL is worth reloading the element for. Wider than the gap the
+ * server leaves when it re-mints on its own clock (fifty minutes into an
+ * hour-long token, `HLS_VIEWER_TOKEN_REMINT_MS`), so that re-mint is always
+ * applied even when it is the only restamp that arrives.
+ */
+export const NATIVE_TOKEN_REFRESH_MARGIN_MS = 15 * 60 * 1000;
+/** Same decision for a token whose expiry cannot be read: by age alone. */
+export const NATIVE_TOKEN_REFRESH_UNREADABLE_MS = 30 * 60 * 1000;
+
+/**
+ * Whether a native `<video>` playing `attachedUrl` since `attachedAtMs`
+ * should be handed a restamped URL now.
+ *
+ * THE NATIVE PLAYER HAS NO LOADER TO REWRITE, so the only way a fresher `?t=`
+ * reaches it is a new `src`, and a new `src` is the element's whole load
+ * algorithm: the picture blanks, the buffer is gone, playback starts over.
+ * The server restamps every thirty seconds, and paying that twice a minute
+ * is the same bug the hls.js path had (rehearsal E, 2026-09-25). So the
+ * element keeps the URL it has until that URL's token is close to expiring,
+ * which is once an hour instead of a hundred and twenty times.
+ */
+export function nativeTokenRefreshDue(
+  attachedUrl: string | null,
+  attachedAtMs: number,
+  now: number,
+): boolean {
+  if (attachedUrl === null) {
+    return true;
+  }
+  const expiresAt = hlsViewerTokenExpiresAt(attachedUrl);
+  if (expiresAt !== null) {
+    return expiresAt - now <= NATIVE_TOKEN_REFRESH_MARGIN_MS;
+  }
+  return now - attachedAtMs >= NATIVE_TOKEN_REFRESH_UNREADABLE_MS;
+}
+
+/**
  * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
  * the one request in the whole HLS pipeline that needs a Bearer header. Every
  * segment/media URL the proxy hands back is already an absolute, presigned

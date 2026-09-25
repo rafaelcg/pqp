@@ -10,8 +10,12 @@ import {
   hlsSessionKey,
   hlsTelemetryIdentityFromToken,
   hlsTelemetrySessionKey,
+  hlsViewerTokenExpiresAt,
   hlsViewerTokenFromUrl,
   isAutoplayRefusal,
+  NATIVE_TOKEN_REFRESH_MARGIN_MS,
+  NATIVE_TOKEN_REFRESH_UNREADABLE_MS,
+  nativeTokenRefreshDue,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
   recordHlsRebuild,
@@ -353,6 +357,54 @@ describe("hlsViewerTokenFromUrl", () => {
     expect(hlsViewerTokenFromUrl(PROXY)).toBeNull();
     expect(hlsViewerTokenFromUrl(`${PROXY}?x=1`)).toBeNull();
     expect(hlsViewerTokenFromUrl(`${PROXY}?token=abc`)).toBeNull();
+  });
+});
+
+describe("hlsViewerTokenExpiresAt", () => {
+  const PROXY = "https://hls.example.test/api/voice/hls-playlist/ch-1/17889/cam360p30";
+  // The shape `mintHlsViewerToken` writes: base64url JSON claims, a dot, a
+  // signature this side never checks.
+  const token = (claims: object) =>
+    `${btoa(JSON.stringify(claims)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}.sig`;
+
+  it("reads the expiry claim, beside a party pass", () => {
+    const t = token({ v: 1, u: "u", c: "ch-1", s: 17889, e: 1_790_000_000_000, i: 1 });
+    expect(hlsViewerTokenExpiresAt(`${PROXY}?t=${t}&pp=pass`)).toBe(1_790_000_000_000);
+  });
+
+  it("is null with no token, an unreadable one, or no expiry in it", () => {
+    expect(hlsViewerTokenExpiresAt(PROXY)).toBeNull();
+    expect(hlsViewerTokenExpiresAt(`${PROXY}?t=nodot`)).toBeNull();
+    expect(hlsViewerTokenExpiresAt(`${PROXY}?t=%%%.sig`)).toBeNull();
+    expect(hlsViewerTokenExpiresAt(`${PROXY}?t=${token({ v: 1 })}`)).toBeNull();
+  });
+});
+
+describe("nativeTokenRefreshDue", () => {
+  const PROXY = "https://hls.example.test/api/voice/hls-playlist/ch-1/17889/cam360p30";
+  const token = (claims: object) =>
+    `${btoa(JSON.stringify(claims)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}.sig`;
+  const HOUR = 60 * 60 * 1000;
+  const minted = 1_790_000_000_000;
+  const attached = `${PROXY}?t=${token({ v: 1, e: minted + HOUR })}`;
+
+  it("keeps the attached URL through the thirty-second restamps", () => {
+    for (let at = minted; at < minted + HOUR - NATIVE_TOKEN_REFRESH_MARGIN_MS; at += 30_000) {
+      expect(nativeTokenRefreshDue(attached, minted, at)).toBe(false);
+    }
+  });
+
+  it("takes the fresh one once the attached token is near its expiry, the server's own re-mint included", () => {
+    expect(nativeTokenRefreshDue(attached, minted, minted + HOUR - NATIVE_TOKEN_REFRESH_MARGIN_MS)).toBe(true);
+    // `HLS_VIEWER_TOKEN_REMINT_MS`: fifty minutes into an hour.
+    expect(nativeTokenRefreshDue(attached, minted, minted + 50 * 60 * 1000)).toBe(true);
+  });
+
+  it("falls back to age for a URL whose token it cannot read, and attaches when nothing is attached", () => {
+    const opaque = `${PROXY}?t=opaque`;
+    expect(nativeTokenRefreshDue(opaque, minted, minted + 60_000)).toBe(false);
+    expect(nativeTokenRefreshDue(opaque, minted, minted + NATIVE_TOKEN_REFRESH_UNREADABLE_MS)).toBe(true);
+    expect(nativeTokenRefreshDue(null, minted, minted)).toBe(true);
   });
 });
 
