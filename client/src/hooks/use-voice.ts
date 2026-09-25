@@ -121,6 +121,7 @@ import {
 } from "@/lib/video-quality";
 import {
   hlsSourceFor,
+  hlsSourceInputsKey,
   readPresenterHlsFeed,
   watchPartyCameraCapWanted,
 } from "@/lib/hls-source-quality";
@@ -1222,6 +1223,20 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   let hlsSourceTimer: ReturnType<typeof setInterval> | null = null;
   /**
+   * `hlsSourceInputsKey` as `refreshHlsSource` last read it. `emit` compares
+   * the live state against it and asks again when they differ, so the pin
+   * follows the share and the SFU coming up, not only the stream frame.
+   */
+  let hlsSourceInputsSeen: string | null = null;
+  /**
+   * Bumped by every `refreshHlsSource`, so an older call still awaiting the
+   * uplink sample cannot land its answer on top of a newer one (a share that
+   * stopped a moment after it started, say).
+   */
+  let hlsSourceGeneration = 0;
+  /** `refreshHlsSource` calls not yet settled. */
+  let hlsSourceRefreshesInFlight = 0;
+  /**
    * Bumped at the start of every `applyWatchPartyCameraCap` call, so an
    * awaited call can tell whether a LATER one has already superseded it.
    *
@@ -1314,7 +1329,63 @@ export function createVoiceController(transport: RealtimeTransport) {
     // ladder was solved against the size it used to be.
     await sfu?.reconcileCameraLadder();
   }
+  function currentHlsSourceInputs(): string {
+    return hlsSourceInputsKey({
+      stream: state.liveStream,
+      isSharingScreen: state.isSharingScreen,
+      usingSfu: state.usingSfu,
+    });
+  }
+  /**
+   * Whether `emit` owes a `refreshHlsSource`: its inputs moved since it last
+   * ran, AND the answer can matter. An ordinary call (nothing to feed, no
+   * sampler armed, no camera cap to lift) has nothing to be told, so it is
+   * not handed a `setHlsSource(null)` every time the SFU comes up.
+   */
+  function hlsSourceRefreshOwed(): boolean {
+    const inputs = currentHlsSourceInputs();
+    if (inputs === hlsSourceInputsSeen) {
+      return false;
+    }
+    hlsSourceInputsSeen = inputs;
+    const wantedNow =
+      hlsSourceFor({
+        streamTopHeight: state.liveStream?.topHeight,
+        streamMode: state.liveStream?.mode,
+        isSharingScreen: state.isSharingScreen,
+        usingSfu: state.usingSfu,
+        uplinkBps: null,
+      }) !== null;
+    // A refresh still in flight read the OLD inputs and may be about to act
+    // on them (arm the sampler, set a source for a share that has just
+    // stopped). A newer call supersedes it through `hlsSourceGeneration`, so
+    // an input change during one always asks again (Farol on PR 827).
+    return (
+      wantedNow ||
+      hlsSourceTimer !== null ||
+      watchPartyCameraCapped ||
+      hlsSourceRefreshesInFlight > 0
+    );
+  }
+  /**
+   * Never rejects. A refresh that throws before the sampler is armed would
+   * otherwise leave its inputs marked as seen, and nothing would ask again
+   * until they changed: forgetting them makes the next `emit` retry.
+   */
   async function refreshHlsSource(): Promise<void> {
+    hlsSourceRefreshesInFlight += 1;
+    try {
+      await refreshHlsSourceOnce();
+    } catch (err) {
+      hlsSourceInputsSeen = null;
+      console.warn("[pqp] watch-party source refresh failed", err);
+    } finally {
+      hlsSourceRefreshesInFlight -= 1;
+    }
+  }
+  async function refreshHlsSourceOnce(): Promise<void> {
+    hlsSourceInputsSeen = currentHlsSourceInputs();
+    const generation = ++hlsSourceGeneration;
     const wanted = hlsSourceFor({
       streamTopHeight: state.liveStream?.topHeight,
       // An LL session never states a top: the remux forwards the top layer
@@ -1351,6 +1422,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       refreshPresenterCameraCap();
     }
     await applyWatchPartyCameraCap(capWanted);
+    if (generation !== hlsSourceGeneration) {
+      // A later call read newer inputs and answers for them.
+      return;
+    }
     if (!wanted) {
       if (hlsSourceTimer !== null) {
         clearInterval(hlsSourceTimer);
@@ -1365,6 +1440,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       }, HLS_SOURCE_SAMPLE_MS);
     }
     const feed = await readPresenterHlsFeed();
+    if (generation !== hlsSourceGeneration) {
+      return;
+    }
+    // No await between the check above and the commit: `setHlsSource`
+    // stores the source synchronously before it awaits anything, so calls
+    // commit in the order they are made and a newer clear always lands last.
     await sfu?.setHlsSource({
       ...wanted,
       uplinkBps: feed.uplinkBps,
@@ -1974,6 +2055,13 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function emit() {
     pushAudioDelivery();
+    // THE PIN FOLLOWS THE SHARE, NOT ONLY THE FRAME. A share that goes up
+    // after the stream frame (a reloaded presenter, a re-share on the same
+    // page) or an SFU that comes up after it changes what `refreshHlsSource`
+    // answers with no frame to ask it. See `hlsSourceInputsKey`.
+    if (hlsSourceRefreshOwed()) {
+      void refreshHlsSource();
+    }
     listener?.(snapshot());
   }
 

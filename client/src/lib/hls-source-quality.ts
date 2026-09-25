@@ -126,6 +126,36 @@ export function hlsSourceFor(input: {
 }
 
 /**
+ * The inputs `hlsSourceFor` reads off the voice state, as one comparable
+ * value. `use-voice.ts` asks `refreshHlsSource` again whenever this changes,
+ * whatever changed it.
+ *
+ * WHY A LEVEL AND NOT AN EVENT. The answer depends on three facts and only
+ * one of them arrives as a `voice-stream` frame; the other two (this machine
+ * sharing, this machine on the SFU) change on this page with no frame at all.
+ * It used to be asked on the frame and on the 2 s sampler the frame arms, so
+ * a share that went up AFTER the frame was never pinned: a reloaded presenter
+ * is told the stream when it joins, before it shares, and a presenter who
+ * re-shares on the same page is told nothing, because the server's stream did
+ * not change. Production rehearsal E, 2026-09-25: after a reload the share
+ * went out on `maintain-framerate` with no `scaleResolutionDownBy`, and the
+ * whole party watched it at 280x180 for the rest of the show.
+ */
+export function hlsSourceInputsKey(input: {
+  stream: {
+    topHeight?: number | null;
+    mode?: "conventional" | "ll";
+  } | null;
+  isSharingScreen: boolean;
+  usingSfu: boolean;
+}): string {
+  const stream = input.stream
+    ? `${input.stream.topHeight ?? ""}:${input.stream.mode ?? ""}`
+    : "none";
+  return `${input.usingSfu ? 1 : 0}|${input.isSharingScreen ? 1 : 0}|${stream}`;
+}
+
+/**
  * Whether the presenter's camera is held at the watch-party cap
  * (`applyWatchPartyCameraCap` in `use-voice.ts`).
  *

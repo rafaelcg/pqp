@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hlsSourceFor } from "./hls-source-quality";
+import { hlsSourceFor, hlsSourceInputsKey } from "./hls-source-quality";
 import { SCREEN_CAPTURE_HEIGHT } from "./video-quality";
 
 describe("hlsSourceFor", () => {
@@ -100,5 +100,40 @@ describe("hlsSourceFor", () => {
         usingSfu: false,
       }),
     ).toBeNull();
+  });
+});
+
+describe("hlsSourceInputsKey", () => {
+  const ll = { mode: "ll" as const };
+  const base = { stream: ll, isSharingScreen: false, usingSfu: true };
+
+  it("moves when the share starts, with the stream frame unchanged", () => {
+    // A reloaded presenter is told the stream before sharing; the share is
+    // what has to ask again.
+    expect(hlsSourceInputsKey({ ...base, isSharingScreen: true })).not.toBe(
+      hlsSourceInputsKey(base),
+    );
+  });
+
+  it("moves when the SFU comes up", () => {
+    expect(hlsSourceInputsKey({ ...base, usingSfu: false })).not.toBe(
+      hlsSourceInputsKey(base),
+    );
+  });
+
+  it("moves when the stream starts, ends or changes shape", () => {
+    const keys = new Set([
+      hlsSourceInputsKey(base),
+      hlsSourceInputsKey({ ...base, stream: null }),
+      hlsSourceInputsKey({ ...base, stream: { topHeight: 1080 } }),
+      hlsSourceInputsKey({ ...base, stream: { topHeight: 720 } }),
+    ]);
+    expect(keys.size).toBe(4);
+  });
+
+  it("does not move for the same inputs, so an emit does not re-ask for nothing", () => {
+    expect(hlsSourceInputsKey({ ...base, stream: { mode: "ll" } })).toBe(
+      hlsSourceInputsKey(base),
+    );
   });
 });

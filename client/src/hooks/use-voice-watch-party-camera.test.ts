@@ -95,6 +95,8 @@ let ladderReconciles = 0;
  * `applyWatchPartyCameraCap`.
  */
 let cameraBitrateGate: Promise<void> | null = null;
+/** When set, the next `setCameraMaxBitrate` rejects with it (one-shot). */
+let cameraBitrateFailure: Error | null = null;
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
@@ -107,6 +109,11 @@ vi.mock("@/lib/livekit-session", () => ({
     publishCamera: async () => {},
     setCameraMaxBitrate: async (bitrate: number) => {
       cameraCeilings.push(bitrate);
+      const failure = cameraBitrateFailure;
+      cameraBitrateFailure = null;
+      if (failure) {
+        throw failure;
+      }
       // ONE-SHOT: only the very next call is held. A later, overlapping call
       // (the race the gate exists to construct) must run to completion.
       const gate = cameraBitrateGate;
@@ -288,14 +295,14 @@ function voiceStream(
  * (`server/src/voice/hls-remux.ts` builds the stream with `mode` and
  * `partTargetMs` and nothing about size).
  */
-function llVoiceStream(): VoiceSignalingMessage {
+function llVoiceStream(presenterPeerId: string = PEER): VoiceSignalingMessage {
   return {
     type: "voice-stream",
     channelId: CHANNEL,
     stream: {
       hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/1?mode=ll`,
       startedAt: 1,
-      presenterPeerId: PEER,
+      presenterPeerId,
       delaySeconds: 4,
       mode: "ll",
       partTargetMs: 500,
@@ -361,6 +368,7 @@ beforeEach(() => {
   appliedConstraints.length = 0;
   ladderReconciles = 0;
   cameraBitrateGate = null;
+  cameraBitrateFailure = null;
   liveHlsConfig.cameraHeight = null;
   intervalCallbacks.length = 0;
   vi.mocked(connectLiveKit).mockClear();
@@ -636,5 +644,172 @@ describe("the presenter's camera while a watch party is transcoding", () => {
     // The stuck call must not have republished the simulcast ladder either:
     // that read the STALE 360p capture, which no longer exists.
     expect(ladderReconciles).toBe(1);
+  });
+});
+
+describe("the presenter's screen pin after a page reload or a re-share", () => {
+  /**
+   * PRODUCTION REHEARSAL E, 2026-09-25. Before the presenter reloaded, the LL
+   * share went out at 1120x720 with no quality limitation. After the reload
+   * it went out at 280x180 for the rest of the show: the screen sender was
+   * back on `maintain-framerate` with no `scaleResolutionDownBy`, so the
+   * ingest pin (#475) was never applied to the new page's share.
+   *
+   * The pin follows `setHlsSource`, and `setHlsSource` was only ever called
+   * from the `voice-stream` handler and from the 2 s sampler that handler
+   * arms. A reloaded page is told the stream when it JOINS, before it shares,
+   * so that one call answered "not sharing" and armed nothing; and nothing
+   * the share itself does (or the SFU coming up) asked again. A re-share on
+   * the same page was the same hole with no frame at all: the server's
+   * stream has not changed, so it sends nothing.
+   */
+  it("a reloaded presenter told the stream before sharing still feeds the egress once the share is up", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => ({
+      backend: "livekit" as const,
+      url: "ws://sfu",
+      token: "t",
+      room: CHANNEL,
+      identity: PEER,
+    }));
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome());
+    // What the server hands a joiner: the live session, still naming the
+    // page that was reloaded away (the return hold, #817).
+    voice.handleSignaling(llVoiceStream("peer-before-the-reload"));
+    await settle();
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+    expect(hlsSources.filter((source) => source !== null)).toEqual([]);
+
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
+    // And the sampler is armed, which is what repairs the pin every 2 s.
+    expect(intervalCallbacks.length).toBeGreaterThan(0);
+  });
+
+  it("the stream frame landing before the SFU is up still pins the share once it is", async () => {
+    // The other order a reload can take: the frame is handled while this
+    // page is not on the SFU yet, so it answers "no egress to feed", and
+    // the SFU coming up is not a frame.
+    let releaseSfu: () => void = () => {};
+    const sfuGate = new Promise<void>((resolve) => {
+      releaseSfu = resolve;
+    });
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => {
+      await sfuGate;
+      return {
+        backend: "livekit" as const,
+        url: "ws://sfu",
+        token: "t",
+        room: CHANNEL,
+        identity: PEER,
+      };
+    });
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome());
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+    expect(voice.getState().usingSfu).toBe(false);
+
+    releaseSfu();
+    await settle();
+    await settle();
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
+  });
+
+  it("a re-share on the same page is pinned again with no frame from the server", async () => {
+    const { voice } = await presentingHost();
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+    await settle();
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
+
+    await voice.stopScreenShare();
+    await settle();
+    // The sampler's tick while nothing is shared: the source comes off.
+    for (const tick of intervalCallbacks.splice(0)) {
+      tick();
+    }
+    await settle();
+    await settle();
+    expect(hlsSources.at(-1)).toBeNull();
+
+    // Same peer, same session: the server has nothing new to say.
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
+    expect(intervalCallbacks.length).toBeGreaterThan(0);
+  });
+
+  /** Joined, seated on the SFU, and told the LL stream names an old page. */
+  async function reloadedHost() {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => ({
+      backend: "livekit" as const,
+      url: "ws://sfu",
+      token: "t",
+      room: CHANNEL,
+      identity: PEER,
+    }));
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome());
+    voice.handleSignaling(llVoiceStream("peer-before-the-reload"));
+    await settle();
+    await settle();
+    return voice;
+  }
+
+  it("a share stopped while its first refresh is still pending ends with no source", async () => {
+    const voice = await reloadedHost();
+    let releaseGate: () => void = () => {};
+    // The share's refresh caps the camera first and hangs there.
+    cameraBitrateGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    await voice.startScreenShare();
+    await settle();
+    await voice.stopScreenShare();
+    await settle();
+
+    releaseGate();
+    await settle();
+    await settle();
+    await settle();
+
+    // The stale "sharing" answer must not be the last word.
+    expect(hlsSources.at(-1) ?? null).toBeNull();
+  });
+
+  it("a refresh that fails is asked again on the next emit, not left unpinned", async () => {
+    const voice = await reloadedHost();
+    cameraBitrateFailure = new Error("encoder said no");
+    await voice.startScreenShare();
+    await settle();
+    await settle();
+    expect(hlsSources.filter((source) => source !== null)).toEqual([]);
+
+    // Any later state change: nothing about the share moved.
+    await voice.setMuted(true);
+    await settle();
+    await settle();
+
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
   });
 });
