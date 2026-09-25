@@ -1947,6 +1947,21 @@ else. A camera that never produces a frame draws nothing at all (no spinner,
 no placeholder, no error), and until its first frame the film keeps the whole
 stage whatever the layout.
 
+**A frozen camera recovers by itself (2026-09-25).** In rehearsal D the webcam
+froze at 13:48:22Z and stayed on that frame for the rest of the show, while
+its playlist kept advancing on the server: hls.js never went fatal, and the
+camera had no watchdog at all. It now has a small one of its own
+(`lib/camera-stall.ts`, `CameraStallWatch`), separate from the film's and much
+smaller. While the camera is mounted (still announced, and not hidden, or
+hidden but carrying the voice) and the page is visible, a `currentTime` that
+has not moved for 8 s gets one nudge (`startLoad(-1)` and a seek to the live
+edge), then rebuilds of the camera's own hls.js instance 8, 15, 30, 60 and
+then every 120 s, each with 25 % jitter so a camera egress hiccup does not
+become five hundred simultaneous rebuilds. Ten seconds of forward play resets
+the backoff. It never asks the server anything, never draws anything, and
+never touches the film's player or its audio. A rebuild hides the corner until
+the fresh instance paints, which is better than a frozen face.
+
 **The viewer picks the layout (2026-09-25).** Rafael's four, from one small
 control in the player's own bar (`watch-camera-layout`, a `Menu`), offered
 only while the presenter's camera is on the stream, so a party with no webcam
