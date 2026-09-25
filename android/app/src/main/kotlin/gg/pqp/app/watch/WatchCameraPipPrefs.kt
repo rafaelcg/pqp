@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retry
 import java.io.IOException
 
 private val Context.watchCameraPipDataStore by preferencesDataStore(name = "watch_camera_pip")
@@ -27,15 +28,25 @@ private val LAYOUT_KEY = stringPreferencesKey("layout")
  * own `readCameraPipPref`/`writeCameraPipPref` state about `localStorage`,
  * and for the same reason here: a corrupted store, a full disk, or any other
  * `IOException` DataStore can throw must lose the remembered corner, never
- * the watch party itself. Reads fall back to an empty (so, default)
- * preference rather than cancelling the collecting flow; writes are
- * fire-and-forget from the caller's own `rememberCoroutineScope`, so a
- * failure there is swallowed here rather than left to crash whatever
- * launched the coroutine.
+ * the watch party itself. Writes are fire-and-forget from the caller's own
+ * `rememberCoroutineScope`, so a failure there is swallowed here rather than
+ * left to crash whatever launched the coroutine.
+ *
+ * READS RETRY BEFORE THEY GIVE UP. [Flow.catch] only intercepts the
+ * exception that ends the upstream flow; simply emitting a fallback value
+ * from inside it does not resume collecting `.data`, it ends this flow too,
+ * one emission after the fallback. A collector (`WatchPane`'s
+ * `collectAsState`) would then never learn about a later, successful write
+ * for the rest of that composition — a transient hiccup (a momentary lock,
+ * a slow disk) would look identical to a permanently broken store. [retry]
+ * re-subscribes to `.data` itself, which is what actually recovers from a
+ * transient failure; only once retries are exhausted does [catch] fall back
+ * to the default and let the flow end.
  */
 class WatchCameraPipPrefsStore(private val context: Context) {
 
     val pref: Flow<CameraPipPref> = context.watchCameraPipDataStore.data
+        .retry(retries = 3) { error -> error is IOException }
         .catch { error ->
             if (error is IOException) emit(emptyPreferences()) else throw error
         }
