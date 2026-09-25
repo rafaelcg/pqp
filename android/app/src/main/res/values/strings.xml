@@ -443,6 +443,14 @@
     <string name="watch_retry">Try again</string>
     <string name="watch_fullscreen">Fullscreen</string>
     <string name="watch_exit_fullscreen">Exit fullscreen</string>
+    <string name="watch_idle_title">Nobody is streaming yet</string>
+    <string name="watch_idle_body">When the host goes live, it starts here.</string>
+    <string name="watch_camera_layout">Camera layout</string>
+    <string name="watch_camera_layout_pip">Default</string>
+    <string name="watch_camera_layout_side">Side by side</string>
+    <string name="watch_camera_layout_hide_camera">Hide camera</string>
+    <string name="watch_camera_layout_hide_stream">Hide stream</string>
+    <string name="watch_camera_voice_only">Presenter\'s voice</string>
 
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Step %1$d of %2$d</string>

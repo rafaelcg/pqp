@@ -108,6 +108,14 @@ import kotlinx.serialization.Serializable
     val serverId: String? = null,
     /** A server voice room's text transcript. Media remains opt-in in its header. */
     val isVoiceChannel: Boolean = false,
+    /**
+     * `channel.type == "watch_party"`, as opposed to an ordinary voice room.
+     * Both answer [isVoiceChannel] true, so this is what tells the chat
+     * header to draw the watch-party stage — with its idle card and its own
+     * "Entrar na call" — rather than the bare HLS pane an ordinary voice
+     * room gets (which draws nothing at all while no party is running).
+     */
+    val isWatchParty: Boolean = false,
 )
 
 @Serializable object YouRoute
@@ -391,6 +399,7 @@ private fun SignedInNav(
                                     channel.slowmodeSeconds,
                                     serverId = route.serverId,
                                     isVoiceChannel = channel.isVoice,
+                                    isWatchParty = channel.type == "watch_party",
                                 ),
                             )
                         },
@@ -410,6 +419,36 @@ private fun SignedInNav(
                 }
                 composable<ChatRoute> { entry ->
                     val route = entry.toRoute<ChatRoute>()
+
+                    // Offered only while this room is not already the call.
+                    // Once joining or connected, the call bar above the
+                    // NavHost owns every voice control, and a second `join`
+                    // mid-connect would tear the session down and rebuild it.
+                    val inThisRoom = voiceState.channelId == route.channelId && voiceState.isActive
+                    // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
+                    //
+                    // `Channel.isVoice` answers true for `watch_party` as well
+                    // as `voice`, so a blanket join button would be offered to
+                    // a watch party's audience: five hundred people invited
+                    // onto the media box for something the pane right below
+                    // them plays for free. Watching is already the whole offer
+                    // on this screen, and it is one tap and no seat, so a
+                    // viewer who is not shown this loses nothing and is not
+                    // sent anywhere else.
+                    //
+                    // The rule is the one the server refuses the join with,
+                    // and it answers TRUE for a channel with no active party,
+                    // so an ordinary voice room is untouched. See
+                    // `WatchPartySeat.kt`.
+                    val seats by watch.seats.collectAsStateWithLifecycle()
+                    val maySit = mayTakeWatchPartySeat(
+                        canStartWatchParty = false,
+                        party = seats[route.channelId],
+                    )
+                    val onJoinVoice: () -> Unit = {
+                        withMicrophone { voice.join(route.channelId, route.channelName) }
+                    }
+
                     ChatScreen(
                         session = session,
                         channelId = route.channelId,
@@ -418,53 +457,34 @@ private fun SignedInNav(
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
                         // The watch party, above the transcript, for anybody
-                        // who may see the channel. It draws nothing at all
-                        // unless the server says a stream is live, so an
-                        // ordinary voice channel is untouched.
+                        // who may see the channel. A `watch_party` channel
+                        // gets the full stage — a card even while nothing is
+                        // live, and "Entrar na call" on the stage itself
+                        // rather than only in the app bar. An ordinary voice
+                        // channel gets the bare pane, which draws nothing at
+                        // all unless the server says a stream is live (it
+                        // never will, off `watch_party`) and is therefore
+                        // untouched.
                         header = {
                             if (route.isVoiceChannel) {
                                 WatchChannelPane(
                                     session = session,
                                     store = watch,
                                     channelId = route.channelId,
+                                    isWatchPartyChannel = route.isWatchParty,
+                                    canJoinCall = route.isWatchParty && !inThisRoom && maySit,
+                                    onJoinCall = onJoinVoice,
                                 )
                             }
                         },
                         actions = {
-                            // Offered only while this room is not already the
-                            // call. Once joining or connected, the call bar
-                            // above the NavHost owns every voice control, and a
-                            // second `join` mid-connect would tear the session
-                            // down and rebuild it.
-                            val inThisRoom =
-                                voiceState.channelId == route.channelId && voiceState.isActive
-                            // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
-                            //
-                            // `Channel.isVoice` answers true for `watch_party`
-                            // as well as `voice`, so this button was offered to
-                            // a watch party's audience: five hundred people
-                            // invited onto the media box for something the pane
-                            // right below them plays for free. Watching is
-                            // already the whole offer on this screen, and it is
-                            // one tap and no seat, so a viewer who is not shown
-                            // this loses nothing and is not sent anywhere else.
-                            //
-                            // The rule is the one the server refuses the join
-                            // with, and it answers TRUE for a channel with no
-                            // active party, so an ordinary voice room is
-                            // untouched. See `WatchPartySeat.kt`.
-                            val seats by watch.seats.collectAsStateWithLifecycle()
-                            val maySit = mayTakeWatchPartySeat(
-                                canStartWatchParty = false,
-                                party = seats[route.channelId],
-                            )
-                            if (route.isVoiceChannel && !inThisRoom && maySit) {
+                            // A watch party's join lives on the stage now (see
+                            // above); the app bar icon stays only for an
+                            // ordinary voice room, which has no stage to put
+                            // it on.
+                            if (route.isVoiceChannel && !route.isWatchParty && !inThisRoom && maySit) {
                                 IconButton(
-                                    onClick = {
-                                        withMicrophone {
-                                            voice.join(route.channelId, route.channelName)
-                                        }
-                                    },
+                                    onClick = onJoinVoice,
                                     modifier = Modifier.testTag("chat.joinVoice"),
                                 ) {
                                     Icon(
@@ -495,6 +515,7 @@ private fun SignedInNav(
                                 channel.slowmodeSeconds,
                                 serverId = landing.serverId,
                                 isVoiceChannel = channel.isVoice,
+                                isWatchParty = channel.type == "watch_party",
                             ),
                         )
                     },
@@ -543,6 +564,7 @@ private suspend fun navigateToPush(
                     channel?.name.orEmpty(),
                     serverId = target.serverId,
                     isVoiceChannel = channel?.isVoice == true,
+                    isWatchParty = channel?.type == "watch_party",
                 ),
             )
         }

@@ -3,18 +3,26 @@ package gg.pqp.app.watch.ui
 import android.view.ViewGroup
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,21 +31,30 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -60,20 +77,32 @@ import gg.pqp.app.R
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
+import gg.pqp.app.watch.CameraPipCorner
+import gg.pqp.app.watch.CameraPipPref
 import gg.pqp.app.watch.ChannelLive
 import gg.pqp.app.watch.HlsLiveEdge
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
+import gg.pqp.app.watch.StageSlot
+import gg.pqp.app.watch.WatchCameraLayout
+import gg.pqp.app.watch.WatchCameraPipPrefsStore
+import gg.pqp.app.watch.WatchStagePlacement
 import gg.pqp.app.watch.hlsSessionToken
 import gg.pqp.app.watch.WatchPhase
 import gg.pqp.app.watch.WATCH_TOKEN_RENEWAL_MS
 import gg.pqp.app.watch.WatchdogDecision
+import gg.pqp.app.watch.cameraLayoutOffered
+import gg.pqp.app.watch.cameraPathKey
+import gg.pqp.app.watch.cameraPipMounted
+import gg.pqp.app.watch.effectiveCameraLayout
 import gg.pqp.app.watch.reconnectAttachment
 import gg.pqp.app.watch.watchPhaseOf
 import gg.pqp.app.watch.watchSourceChanged
+import gg.pqp.app.watch.watchStagePlacement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private const val TICK_MS = 1_000L
 
@@ -149,9 +178,29 @@ fun WatchPane(
      * (previews, tests) exactly as they were.
      */
     sendPresence: suspend (String) -> Unit = {},
+    /**
+     * Draw a card instead of nothing while nothing is live.
+     *
+     * `false` (the default) keeps the pane's oldest promise: it draws
+     * **nothing** on a voice channel with no watch party, not a placeholder
+     * for a stream that was never running (`docs/ANDROID.md`, "What it looks
+     * like"). `true` is for a `watch_party`-typed channel specifically — the
+     * one place a person needs to be told this is not an ordinary voice room
+     * even before anybody has gone live in it.
+     */
+    isWatchPartyChannel: Boolean = false,
+    /**
+     * Whether "Entrar na call" belongs on the stage at all — the seat rule
+     * ([gg.pqp.app.watch.mayTakeWatchPartySeat]), resolved by the caller.
+     * Independent of [isWatchPartyChannel] and of the phase: a call can be
+     * running before, during or after a broadcast.
+     */
+    canJoinCall: Boolean = false,
+    onJoinCall: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var everPlayed by remember { mutableStateOf(false) }
     var hasFrame by remember { mutableStateOf(false) }
@@ -159,6 +208,7 @@ fun WatchPane(
     var reconnecting by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
     var fullscreen by remember { mutableStateOf(false) }
+    var cameraHasFrame by remember { mutableStateOf(false) }
 
     // The stream the player is attached to, as opposed to the one the server
     // last mentioned. They differ for thirty seconds at a time, every time the
@@ -232,7 +282,20 @@ fun WatchPane(
         dead = dead,
         reconnecting = reconnecting,
     )
-    if (phase == WatchPhase.Idle) return
+    if (phase == WatchPhase.Idle) {
+        // The oldest promise this pane makes (`docs/ANDROID.md`, "What it
+        // looks like"): nothing at all on a plain voice channel. A
+        // `watch_party` channel is the one exception, and it is the founder's
+        // own complaint this exists to close — "we still show watch parties
+        // as regular voice channels" — so it gets a card instead of silence,
+        // even before anybody has gone live in it.
+        if (!isWatchPartyChannel) return
+        Column(modifier.fillMaxWidth().testTag("watch.pane")) {
+            IdleCard()
+            JoinCallRow(canJoinCall = canJoinCall, onJoinCall = onJoinCall)
+        }
+        return
+    }
 
     val watchdog = remember { HlsWatchdog() }
     val player = remember {
@@ -563,6 +626,98 @@ fun WatchPane(
         attempt += 1
     }
 
+    // ---- The presenter's camera, a second playlist riding the same session ----
+    //
+    // Everything below is the PiP's own small lifecycle, deliberately apart
+    // from the watchdog above: a camera failure is silent (see
+    // `watch/ui/WatchCameraPip.kt`'s file doc on the corner composable further
+    // down) and never touches the film's recovery.
+    val cameraPrefsStore = remember(context) { WatchCameraPipPrefsStore(context.applicationContext) }
+    val cameraPref by cameraPrefsStore.pref.collectAsState(initial = CameraPipPref.DEFAULT)
+    val cameraSrc = attached?.cameraHlsUrl
+    val cameraHasVideo = attached?.cameraHasVideo ?: true
+    val cameraHasVoiceAudio = attached?.cameraHasVoiceAudio ?: false
+    val effectiveLayout = effectiveCameraLayout(cameraPref, cameraHasVideo)
+    val cameraMounted = cameraPipMounted(cameraSrc, effectiveLayout, cameraHasVoiceAudio)
+    val placement = watchStagePlacement(cameraMounted, hasFrame = cameraHasFrame, pref = cameraPref, layout = effectiveLayout)
+
+    val cameraPlayer = remember {
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(
+                HlsMediaSource.Factory(DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)),
+            )
+            .build()
+            .apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus = */ false,
+                )
+                // Silent by default (the film carries the sound this
+                // audience hears); see the `cameraHasVoiceAudio` effect below.
+                volume = 0f
+                playWhenReady = true
+            }
+    }
+    DisposableEffect(cameraPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) cameraHasFrame = true
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                // Silent, deliberately: nobody came for the camera, and it
+                // must never do more than stop showing a picture. Media3's
+                // own retry handles a transient failure; a run that truly
+                // restarted is picked up by the path-keyed reattach below.
+                cameraHasFrame = false
+            }
+        }
+        cameraPlayer.addListener(listener)
+        onDispose {
+            cameraPlayer.removeListener(listener)
+            cameraPlayer.stop()
+            cameraPlayer.release()
+        }
+    }
+    LaunchedEffect(cameraHasVoiceAudio, cameraPref.layout) {
+        cameraPlayer.volume = if (cameraHasVoiceAudio && cameraMounted) 1f else 0f
+    }
+
+    val newestCameraUrl by rememberUpdatedState(cameraSrc)
+    var cameraAttempt by remember { mutableIntStateOf(0) }
+    // Reattached only on a genuine path change (a camera run, or the whole
+    // session, actually restarting) or a scheduled renewal — NEVER on the
+    // query-string-only restamp the audience keyframe sends every 30 s. See
+    // `watchCameraSourceChanged` in `WatchSource.kt`, which states this same
+    // rule as a pure, unit-tested function; keying this effect on the
+    // query-stripped path is what makes the effect obey it.
+    LaunchedEffect(cameraMounted, cameraPathKey(cameraSrc), cameraAttempt) {
+        if (!cameraMounted) {
+            cameraPlayer.stop()
+            cameraHasFrame = false
+            return@LaunchedEffect
+        }
+        val url = newestCameraUrl ?: return@LaunchedEffect
+        cameraHasFrame = false
+        cameraPlayer.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build())
+        cameraPlayer.prepare()
+        cameraPlayer.playWhenReady = true
+    }
+    // The token clock, at the same margin as the film's own (`WATCH_TOKEN_RENEWAL_MS`):
+    // a session can outlast the viewer token's hour, and the camera has no
+    // socket-restamp path of its own to lean on between renewals.
+    LaunchedEffect(cameraMounted, cameraPathKey(cameraSrc)) {
+        if (!cameraMounted) return@LaunchedEffect
+        delay(WATCH_TOKEN_RENEWAL_MS)
+        cameraAttempt += 1
+    }
+
+    var stageSizePx by remember { mutableStateOf(IntSize.Zero) }
+    val showCameraLayoutMenu = cameraLayoutOffered(cameraSrc, cameraHasVideo)
+
     if (fullscreen) {
         Dialog(
             onDismissRequest = { fullscreen = false },
@@ -574,10 +729,20 @@ fun WatchPane(
                     .background(Color.Black)
                     .testTag("watch.fullscreen"),
             ) {
-                // Only one `PlayerView` may hold the player at a time, so the
-                // inline surface below is replaced by a placeholder while this
-                // is up rather than both being composed.
-                PlayerSurface(player, Modifier.fillMaxSize())
+                // Only one `PlayerView` may hold a given player at a time, so
+                // the inline surfaces below are replaced by placeholders
+                // while this is up rather than both being composed.
+                StageContent(
+                    phase = phase,
+                    player = player,
+                    cameraPlayer = cameraPlayer,
+                    showPlayers = true,
+                    placement = placement,
+                    retry = retry,
+                    stageSizePx = stageSizePx,
+                    onStageSizeChanged = { stageSizePx = it },
+                    onCornerChange = { corner -> scope.launch { cameraPrefsStore.setCorner(corner) } },
+                )
                 IconButton(
                     onClick = { fullscreen = false },
                     modifier = Modifier
@@ -606,31 +771,17 @@ fun WatchPane(
                 // a grey rectangle with a film floating in it.
                 .background(Color.Black),
         ) {
-            when (phase) {
-                WatchPhase.Playing, WatchPhase.Opening -> {
-                    if (!fullscreen) PlayerSurface(player, Modifier.fillMaxSize())
-                    if (phase == WatchPhase.Opening) {
-                        Waiting(stringResource(R.string.watch_opening))
-                    }
-                }
-
-                WatchPhase.Reconnecting -> Waiting(stringResource(R.string.watch_reconnecting))
-
-                WatchPhase.Dead -> Trouble(
-                    text = stringResource(R.string.watch_dead),
-                    action = stringResource(R.string.watch_retry),
-                    onAction = retry,
-                    tag = "watch.dead",
-                )
-
-                WatchPhase.Ended -> Trouble(
-                    text = stringResource(R.string.watch_ended),
-                    hint = stringResource(R.string.watch_ended_hint),
-                    tag = "watch.ended",
-                )
-
-                WatchPhase.Idle -> Unit
-            }
+            StageContent(
+                phase = phase,
+                player = player,
+                cameraPlayer = cameraPlayer,
+                showPlayers = !fullscreen,
+                placement = placement,
+                retry = retry,
+                stageSizePx = stageSizePx,
+                onStageSizeChanged = { stageSizePx = it },
+                onCornerChange = { corner -> scope.launch { cameraPrefsStore.setCorner(corner) } },
+            )
 
             if (phase == WatchPhase.Playing || phase == WatchPhase.Opening) {
                 IconButton(
@@ -695,7 +846,16 @@ fun WatchPane(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (showCameraLayoutMenu) {
+                Spacer(Modifier.weight(1f))
+                CameraLayoutMenu(
+                    layout = cameraPref.layout,
+                    onLayoutChange = { next -> scope.launch { cameraPrefsStore.setLayout(next) } },
+                )
+            }
         }
+
+        JoinCallRow(canJoinCall = canJoinCall, onJoinCall = onJoinCall)
     }
 }
 
@@ -812,5 +972,393 @@ private fun Trouble(
                 Text(text = action, modifier = Modifier.padding(start = Spacing.xs))
             }
         }
+    }
+}
+
+/**
+ * The film, on its own — the phase-driven content [WatchPane] already drew
+ * before the camera existed. Pulled out so it can be sized two different
+ * ways (the whole stage; half of it, beside the camera, in [WatchCameraLayout.Side])
+ * without duplicating the `when (phase)` it reads.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun FilmLayer(
+    phase: WatchPhase,
+    player: ExoPlayer,
+    showPlayer: Boolean,
+    retry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier) {
+        when (phase) {
+            WatchPhase.Playing, WatchPhase.Opening -> {
+                if (showPlayer) PlayerSurface(player, Modifier.fillMaxSize())
+                if (phase == WatchPhase.Opening) {
+                    Waiting(stringResource(R.string.watch_opening))
+                }
+            }
+
+            WatchPhase.Reconnecting -> Waiting(stringResource(R.string.watch_reconnecting))
+
+            WatchPhase.Dead -> Trouble(
+                text = stringResource(R.string.watch_dead),
+                action = stringResource(R.string.watch_retry),
+                onAction = retry,
+                tag = "watch.dead",
+            )
+
+            WatchPhase.Ended -> Trouble(
+                text = stringResource(R.string.watch_ended),
+                hint = stringResource(R.string.watch_ended_hint),
+                tag = "watch.ended",
+            )
+
+            WatchPhase.Idle -> Unit
+        }
+    }
+}
+
+/**
+ * The film and the camera, laid out per [WatchStagePlacement] — the one
+ * function both the inline pane and the fullscreen dialog call, so the two
+ * can never draw the two pictures differently. An extension on [BoxScope]
+ * because the corner PiP positions itself with [Modifier.align], which only
+ * exists inside a `Box`.
+ *
+ * [showPlayers] is the same exclusivity the film's own player already
+ * needed: only one `PlayerView` may hold a given `ExoPlayer` at a time, so
+ * whichever of the inline pane and the fullscreen dialog is NOT currently
+ * shown composes everything except the actual video surfaces.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun BoxScope.StageContent(
+    phase: WatchPhase,
+    player: ExoPlayer,
+    cameraPlayer: ExoPlayer,
+    showPlayers: Boolean,
+    placement: WatchStagePlacement,
+    retry: () -> Unit,
+    stageSizePx: IntSize,
+    onStageSizeChanged: (IntSize) -> Unit,
+    onCornerChange: (CameraPipCorner) -> Unit,
+) {
+    if (placement.film == StageSlot.TopHalf) {
+        // "Side by side": the two pictures split the stage evenly, film
+        // first. Always a row — this stage is never wide enough for the
+        // web's stacked-below-@xl fallback to matter on a phone.
+        Row(Modifier.fillMaxSize().onSizeChanged(onStageSizeChanged)) {
+            FilmLayer(phase, player, showPlayers, retry, Modifier.weight(1f).fillMaxHeight())
+            Box(Modifier.weight(1f).fillMaxHeight().background(Color.Black)) {
+                if (showPlayers) CameraPlayerSurface(cameraPlayer, zoom = false, modifier = Modifier.fillMaxSize())
+            }
+        }
+        return
+    }
+
+    FilmLayer(
+        phase = phase,
+        player = player,
+        showPlayer = showPlayers,
+        retry = retry,
+        modifier = Modifier.fillMaxSize().onSizeChanged(onStageSizeChanged),
+    )
+    when {
+        placement.camera == StageSlot.Full -> {
+            // "Hide stream": the camera takes the whole stage; the film
+            // (above, already composed) keeps playing underneath, covered
+            // rather than unmounted, so switching back is instant.
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                if (showPlayers) CameraPlayerSurface(cameraPlayer, zoom = false, modifier = Modifier.fillMaxSize())
+            }
+        }
+
+        placement.camera == StageSlot.Hidden && placement.corner != null -> {
+            CameraPipCornerBox(
+                cameraPlayer = cameraPlayer,
+                showPlayer = showPlayers,
+                stageSizePx = stageSizePx,
+                corner = placement.corner,
+                loading = placement.cameraLoading,
+                voiceOnly = placement.cameraVoiceOnly,
+                onCornerChange = onCornerChange,
+            )
+        }
+
+        else -> Unit
+    }
+}
+
+private val CAMERA_PIP_WIDTH = 96.dp
+private val CAMERA_PIP_HEIGHT = 54.dp
+
+/**
+ * The corner PiP: a small box the viewer can drag to any of the stage's four
+ * corners, which snaps and remembers itself the moment the finger lifts.
+ *
+ * A FAILURE HERE IS SILENT, same rule as web's `WatchCameraPip`: no retry
+ * banner, no "loading" text. While [loading] (mounted but no frame has
+ * arrived yet) the box is present — so the drag target and the layout do not
+ * jump the instant a frame lands — but fully transparent, because a visible
+ * rectangle with nothing in it is exactly what a viewer reads as the feature
+ * being broken.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun BoxScope.CameraPipCornerBox(
+    cameraPlayer: ExoPlayer,
+    showPlayer: Boolean,
+    stageSizePx: IntSize,
+    corner: CameraPipCorner,
+    loading: Boolean,
+    voiceOnly: Boolean,
+    onCornerChange: (CameraPipCorner) -> Unit,
+) {
+    val density = LocalDensity.current
+    // Reset the instant the persisted corner changes: the new corner's own
+    // alignment already IS the drag's result, so carrying the old delta
+    // forward would apply it twice.
+    var dragPx by remember(corner) { mutableStateOf(Offset.Zero) }
+    val marginPx = with(density) { Spacing.sm.toPx() }
+    val boxWidthPx = with(density) { CAMERA_PIP_WIDTH.toPx() }
+    val boxHeightPx = with(density) { CAMERA_PIP_HEIGHT.toPx() }
+
+    val alignment = when (corner) {
+        CameraPipCorner.TopLeft -> Alignment.TopStart
+        CameraPipCorner.TopRight -> Alignment.TopEnd
+        CameraPipCorner.BottomLeft -> Alignment.BottomStart
+        CameraPipCorner.BottomRight -> Alignment.BottomEnd
+    }
+
+    Box(
+        modifier = Modifier
+            .align(alignment)
+            .padding(Spacing.sm)
+            .size(CAMERA_PIP_WIDTH, CAMERA_PIP_HEIGHT)
+            .offset { IntOffset(dragPx.x.roundToInt(), dragPx.y.roundToInt()) }
+            .alpha(if (loading) 0f else 1f)
+            .clip(RoundedCornerShape(Spacing.xs))
+            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(Spacing.xs))
+            .background(Color.Black)
+            .then(
+                if (stageSizePx.width > 0 && stageSizePx.height > 0) {
+                    Modifier.pointerInput(corner, stageSizePx) {
+                        detectDragGestures(
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragPx += amount
+                            },
+                            onDragEnd = {
+                                // Where this box's centre landed, in the
+                                // stage's own coordinates — its resting
+                                // position for [corner] plus the drag.
+                                val baseX = if (
+                                    corner == CameraPipCorner.TopLeft || corner == CameraPipCorner.BottomLeft
+                                ) {
+                                    marginPx
+                                } else {
+                                    stageSizePx.width - marginPx - boxWidthPx
+                                }
+                                val baseY = if (
+                                    corner == CameraPipCorner.TopLeft || corner == CameraPipCorner.TopRight
+                                ) {
+                                    marginPx
+                                } else {
+                                    stageSizePx.height - marginPx - boxHeightPx
+                                }
+                                val centerX = baseX + dragPx.x + boxWidthPx / 2f
+                                val centerY = baseY + dragPx.y + boxHeightPx / 2f
+                                val next = when {
+                                    centerX < stageSizePx.width / 2f && centerY < stageSizePx.height / 2f ->
+                                        CameraPipCorner.TopLeft
+                                    centerX >= stageSizePx.width / 2f && centerY < stageSizePx.height / 2f ->
+                                        CameraPipCorner.TopRight
+                                    centerX < stageSizePx.width / 2f && centerY >= stageSizePx.height / 2f ->
+                                        CameraPipCorner.BottomLeft
+                                    else -> CameraPipCorner.BottomRight
+                                }
+                                dragPx = Offset.Zero
+                                if (next != corner) onCornerChange(next)
+                            },
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            )
+            .testTag("watch.cameraPip"),
+    ) {
+        when {
+            voiceOnly -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = PqpIcons.Mic,
+                    contentDescription = stringResource(R.string.watch_camera_voice_only),
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(Sizes.iconInline),
+                )
+            }
+
+            showPlayer -> CameraPlayerSurface(cameraPlayer, zoom = true, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * The camera's own `PlayerView`, deliberately smaller than [PlayerSurface]:
+ * no controller, no buffering spinner, nothing to draw when it fails. The
+ * camera is not what anybody came for.
+ *
+ * [zoom] is web's `cameraFit`: `cover` in the corner (a face cropped to
+ * 16:9 is still a face) and `contain` wherever it is one of the two main
+ * pictures (side by side, or the whole stage in "hide stream").
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun CameraPlayerSurface(player: ExoPlayer, zoom: Boolean, modifier: Modifier) {
+    AndroidView(
+        factory = { context ->
+            PlayerView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                useController = false
+                resizeMode = if (zoom) {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+            }
+        },
+        update = { view -> view.player = player },
+        onRelease = { view -> view.player = null },
+        modifier = modifier,
+    )
+}
+
+/** The layout picker: which of the four the viewer wants, remembered. */
+@Composable
+private fun CameraLayoutMenu(layout: WatchCameraLayout, onLayoutChange: (WatchCameraLayout) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.size(Sizes.iconAction).testTag("watch.cameraLayoutButton"),
+        ) {
+            Icon(
+                imageVector = PqpIcons.Layout,
+                contentDescription = stringResource(R.string.watch_camera_layout),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Sizes.iconInline),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            CameraLayoutOption(WatchCameraLayout.Pip, R.string.watch_camera_layout_pip, layout, onLayoutChange) {
+                expanded = false
+            }
+            CameraLayoutOption(WatchCameraLayout.Side, R.string.watch_camera_layout_side, layout, onLayoutChange) {
+                expanded = false
+            }
+            CameraLayoutOption(
+                WatchCameraLayout.Stream,
+                R.string.watch_camera_layout_hide_camera,
+                layout,
+                onLayoutChange,
+            ) { expanded = false }
+            CameraLayoutOption(
+                WatchCameraLayout.Camera,
+                R.string.watch_camera_layout_hide_stream,
+                layout,
+                onLayoutChange,
+            ) { expanded = false }
+        }
+    }
+}
+
+@Composable
+private fun CameraLayoutOption(
+    value: WatchCameraLayout,
+    labelRes: Int,
+    current: WatchCameraLayout,
+    onLayoutChange: (WatchCameraLayout) -> Unit,
+    onPicked: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(stringResource(labelRes)) },
+        leadingIcon = if (value == current) {
+            { Icon(PqpIcons.Confirm, contentDescription = null, modifier = Modifier.size(Sizes.iconInline)) }
+        } else {
+            null
+        },
+        onClick = {
+            onLayoutChange(value)
+            onPicked()
+        },
+    )
+}
+
+/**
+ * The card a `watch_party` channel shows instead of silence while nothing is
+ * live — the exact gap the founder's own complaint named: "we still show
+ * watch parties as regular voice channels". See [WatchPane]'s
+ * `isWatchPartyChannel` doc.
+ */
+@Composable
+private fun IdleCard() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(Spacing.sm))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(Spacing.lg)
+            .testTag("watch.idle"),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = PqpIcons.WatchParty,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+        Text(
+            text = stringResource(R.string.watch_idle_title),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = Spacing.sm),
+        )
+        Text(
+            text = stringResource(R.string.watch_idle_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = Spacing.xs),
+        )
+    }
+}
+
+/**
+ * "Entrar na call", the secondary way into this channel's room. Independent
+ * of whether anything is live: a call can be running before, during or after
+ * a broadcast, and watching never costs a seat, so this is never the only
+ * way to reach one, only ever a second one.
+ */
+@Composable
+private fun JoinCallRow(canJoinCall: Boolean, onJoinCall: (() -> Unit)?) {
+    if (!canJoinCall || onJoinCall == null) return
+    TextButton(
+        onClick = onJoinCall,
+        modifier = Modifier
+            .padding(horizontal = Spacing.xs)
+            .testTag("watch.joinCall"),
+    ) {
+        Icon(
+            imageVector = PqpIcons.Call,
+            contentDescription = null,
+            modifier = Modifier.size(Sizes.iconInline),
+        )
+        Text(text = stringResource(R.string.voice_join), modifier = Modifier.padding(start = Spacing.xs))
     }
 }
