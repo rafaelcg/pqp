@@ -281,6 +281,27 @@ describe("WatchCameraPip: a frozen camera recovers", { timeout: 30_000 }, () => 
     expect(el.muted).toBe(false);
   });
 
+  it("rebuilds a frozen face even while the voice keeps the clock moving", async () => {
+    // "Separada" with a camera: audio advances `currentTime`, the picture is
+    // stuck on one frame (Farol, PR 826).
+    let frames = 0;
+    await mount({ hasVoiceAudio: true });
+    Object.defineProperty(video(), "getVideoPlaybackQuality", {
+      configurable: true,
+      value: () => ({ totalVideoFrames: frames }),
+    });
+    for (let i = 0; i < 3; i += 1) {
+      frames += 60;
+      await run(CAMERA_STALL_POLL_MS, true);
+    }
+    expect(calls).toEqual([]);
+    // Frozen picture, voice still playing.
+    await run(CAMERA_STALL_MS + CAMERA_STALL_POLL_MS * 2, true);
+    expect(calls).toEqual(["startLoad(-1) on #1"]);
+    await runUntilConstructed(2);
+    expect(video().muted).toBe(false);
+  });
+
   it("stops watching once the camera is unmounted (hidden, or no longer announced)", async () => {
     await mount();
     await run(4_000, true);

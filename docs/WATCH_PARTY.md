@@ -1953,9 +1953,11 @@ its playlist kept advancing on the server: hls.js never went fatal, and the
 camera had no watchdog at all. It now has a small one of its own
 (`lib/camera-stall.ts`, `CameraStallWatch`), separate from the film's and much
 smaller. While the camera is mounted (still announced, and not hidden, or
-hidden but carrying the voice) and the page is visible, a `currentTime` that
-has not moved for 8 s gets one nudge (`startLoad(-1)` and a seek to the live
-edge), then rebuilds of the camera's own hls.js instance 8, 15, 30, 60 and
+hidden but carrying the voice) and the page is visible, playback that has not
+moved for 8 s gets one nudge. "Moved" is decoded frames when there is a
+picture, because in "separada" the voice keeps `currentTime` advancing under a
+frozen face, and the clock for the voice-only shape (`cameraProgress`). The
+nudge is `startLoad(-1)` and a seek to the live edge; after it come rebuilds of the camera's own hls.js instance 8, 15, 30, 60 and
 then every 120 s, each with 25 % jitter so a camera egress hiccup does not
 become five hundred simultaneous rebuilds. Ten seconds of forward play resets
 the backoff. It never asks the server anything, never draws anything, and

@@ -15,8 +15,17 @@
  * WHAT THIS IS, AND IS NOT. It never asks the server anything and never
  * decides the camera is gone: `cameraHlsUrl` disappearing off the next stream
  * frame is what unmounts the camera, and that stays the only way it ends. All
- * this does is notice that `currentTime` stopped moving while the camera is
- * still announced, and answer with the two cheapest things that work:
+ * this does is notice that playback stopped moving while the camera is still
+ * announced, and answer with the two cheapest things that work.
+ *
+ * WHAT "MOVING" MEANS. Decoded video frames when a picture is expected, the
+ * media clock (`currentTime`) otherwise. The clock alone is not enough once
+ * the playlist carries the presenter's voice ("separada"): audio keeps
+ * `currentTime` advancing while the picture is frozen (Farol, PR 826), which
+ * is exactly the face that needs recovering. The frame counter falls back to
+ * the clock where `getVideoPlaybackQuality` does not exist, and the voice-only
+ * shape has no picture to count, so it uses the clock too.
+ *
  *
  * 1. `"nudge"` once per episode, after `stallMs` with no movement: the caller
  *    restarts loading at the live edge (`startLoad(-1)`) and seeks there if
@@ -46,8 +55,11 @@
 export type CameraStallAction = "none" | "nudge" | "rebuild";
 
 export interface CameraStallSample {
-  /** `video.currentTime`. */
-  currentTime: number;
+  /**
+   * A clock that moves while the camera plays: decoded frames, or
+   * `currentTime` in seconds. Only its movement matters, never its unit.
+   */
+  position: number;
   /** Whether a stall right now should count. See the file doc. */
   eligible: boolean;
 }
@@ -114,7 +126,7 @@ export class CameraStallWatch {
 
   observe(sample: CameraStallSample): CameraStallAction {
     const now = this.now();
-    if (!sample.eligible || !Number.isFinite(sample.currentTime)) {
+    if (!sample.eligible || !Number.isFinite(sample.position)) {
       // Forget the baseline, keep the episode: the next eligible sample
       // starts a fresh stall clock, so coming back to the tab never fires on
       // time spent away from it.
@@ -123,14 +135,14 @@ export class CameraStallWatch {
       return "none";
     }
     const previous = this.lastTime;
-    this.lastTime = sample.currentTime;
+    this.lastTime = sample.position;
     if (previous === null) {
       this.lastMovedAt = now;
       return "none";
     }
-    if (Math.abs(sample.currentTime - previous) > MOVED_EPSILON_S) {
+    if (Math.abs(sample.position - previous) > MOVED_EPSILON_S) {
       this.lastMovedAt = now;
-      if (sample.currentTime > previous) {
+      if (sample.position > previous) {
         this.advancingSince ??= now;
         if (now - this.advancingSince >= this.healthyMs) {
           this.nudged = false;
@@ -157,7 +169,7 @@ export class CameraStallWatch {
     }
     this.level += 1;
     this.arm(now);
-    // The caller tears the element down; its `currentTime` drops to 0, and
+    // The caller tears the element down; its clock drops to 0, and
     // that must not read as the camera moving.
     this.lastTime = null;
     return "rebuild";
@@ -170,4 +182,28 @@ export class CameraStallWatch {
     const spread = (this.random() * 2 - 1) * this.jitter;
     this.nextDelayMs = Math.max(0, Math.round(base * (1 + spread)));
   }
+}
+
+/**
+ * The progress clock to sample. See "WHAT MOVING MEANS" in the file doc.
+ * `totalVideoFrames` is reset by the element's load algorithm, so a rebuild
+ * reads as a drop to 0, which `observe` already treats as a new baseline.
+ */
+export function cameraProgress(
+  video: Pick<HTMLVideoElement, "currentTime"> & {
+    getVideoPlaybackQuality?: () => { totalVideoFrames: number };
+  },
+  expectPicture: boolean,
+): number {
+  if (expectPicture && typeof video.getVideoPlaybackQuality === "function") {
+    try {
+      const frames = video.getVideoPlaybackQuality().totalVideoFrames;
+      if (Number.isFinite(frames)) {
+        return frames;
+      }
+    } catch {
+      // Fall through to the clock.
+    }
+  }
+  return video.currentTime;
 }

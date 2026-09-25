@@ -5,6 +5,7 @@ import {
   CAMERA_STALL_MS,
   CAMERA_STALL_POLL_MS,
   CameraStallWatch,
+  cameraProgress,
   type CameraStallAction,
 } from "./camera-stall";
 
@@ -21,7 +22,7 @@ function rig(random = () => 0.5) {
     } else if (opts.advance) {
       t += CAMERA_STALL_POLL_MS / 1000;
     }
-    const action = watch.observe({ currentTime: t, eligible: opts.eligible ?? true });
+    const action = watch.observe({ position: t, eligible: opts.eligible ?? true });
     if (action !== "none") {
       actions.push({ at: now, action });
     }
@@ -141,5 +142,35 @@ describe("CameraStallWatch", () => {
     expect(firstRebuild(late) - firstRebuild(early)).toBeGreaterThanOrEqual(
       CAMERA_STALL_POLL_MS,
     );
+  });
+});
+
+describe("cameraProgress", () => {
+  const withFrames = (frames: number, currentTime: number) => ({
+    currentTime,
+    getVideoPlaybackQuality: () => ({ totalVideoFrames: frames }),
+  });
+
+  it("counts frames when a picture is expected, so a voice track cannot hide a frozen face", () => {
+    expect(cameraProgress(withFrames(537, 42.5), true)).toBe(537);
+  });
+
+  it("uses the clock for the voice-only shape, which has no picture", () => {
+    expect(cameraProgress(withFrames(0, 42.5), false)).toBe(42.5);
+  });
+
+  it("falls back to the clock where frame counts do not exist", () => {
+    expect(cameraProgress({ currentTime: 7 }, true)).toBe(7);
+    expect(
+      cameraProgress(
+        {
+          currentTime: 7,
+          getVideoPlaybackQuality: () => {
+            throw new Error("nope");
+          },
+        },
+        true,
+      ),
+    ).toBe(7);
   });
 });

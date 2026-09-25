@@ -8,7 +8,11 @@ import {
 } from "@/lib/hls-playback";
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
-import { CAMERA_STALL_POLL_MS, CameraStallWatch } from "@/lib/camera-stall";
+import {
+  CAMERA_STALL_POLL_MS,
+  CameraStallWatch,
+  cameraProgress,
+} from "@/lib/camera-stall";
 import { useTranslation } from "@/lib/i18n";
 import {
   getVoicePipVolume,
@@ -69,10 +73,12 @@ import { cn } from "@/lib/utils";
  * A FROZEN FACE IS RECOVERED, SILENTLY TOO. While this component is mounted
  * the camera is still announced (`cameraHlsUrl` on the stream) and the viewer
  * has not hidden it ("Ocultar câmera" unmounts it, unless it carries the
- * voice), so a `currentTime` that stops moving on a visible page is a player
- * problem, not an ended camera. `CameraStallWatch` answers it with one nudge
- * to the live edge, then rebuilds of THIS hls.js instance on a jittered
- * backoff. It never touches the film's player, its element or its audio, and
+ * voice), so playback that stops moving on a visible page is a player
+ * problem, not an ended camera. "Moving" is decoded frames when there is a
+ * picture, because a voice track keeps `currentTime` advancing under a frozen
+ * face, and the clock otherwise (`cameraProgress`). `CameraStallWatch`
+ * answers it with one nudge to the live edge, then rebuilds of THIS hls.js
+ * instance on a jittered backoff. It never touches the film's player, its element or its audio, and
  * it never asks the server anything.
  */
 export function WatchCameraPip({
@@ -113,6 +119,10 @@ export function WatchCameraPip({
   // what the NEXT attach starts with.
   const hasVoiceAudioRef = useRef(hasVoiceAudio);
   hasVoiceAudioRef.current = hasVoiceAudio;
+  // Read by the stall watch: with a picture expected it counts frames, not
+  // the clock a voice track keeps moving (`cameraProgress`).
+  const hasVideoRef = useRef(hasVideo);
+  hasVideoRef.current = hasVideo;
 
   /**
    * "Voz" volume, persisted per browser. Only reachable when `hasVoiceAudio`
@@ -474,7 +484,7 @@ export function WatchCameraPip({
         typeof document === "undefined" ||
         document.visibilityState !== "hidden";
       const action = watch.observe({
-        currentTime: video.currentTime,
+        position: cameraProgress(video, hasVideoRef.current),
         eligible:
           visible &&
           !blockedRef.current &&
