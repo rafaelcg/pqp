@@ -441,7 +441,13 @@ enum WatchOrientation {
             .compactMap({ $0 as? UIWindowScene })
             .first
         else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: allowed)) { _ in }
+        // No error handler, on purpose. UIKit calls it on a background
+        // queue, and a closure written inside this @MainActor enum is
+        // main-actor isolated, so Swift 6's runtime isolation check trapped
+        // (EXC_BREAKPOINT in `closure #2 in WatchOrientation.apply()`,
+        // TestFlight 1.0 (101001), 2026-09-26: leaving a call for the
+        // channel list crashed the app). The handler did nothing anyway.
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: allowed))
         scene.windows.first { $0.isKeyWindow }?
             .rootViewController?
             .setNeedsUpdateOfSupportedInterfaceOrientations()
