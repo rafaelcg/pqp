@@ -63,7 +63,20 @@ private suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {
 /**
  * Ir ao vivo, in the order the hosting review calls out explicitly: state
  * first. `POST /api/watch-parties/:id/state {state:"live"}`, THEN
- * `join-voice-room`, THEN the screen capture/publish.
+ * `join-voice-room`, THEN [muteMicrophone], THEN the screen capture/publish.
+ *
+ * [muteMicrophone] IS NOT OPTIONAL AND RUNS EVERY TIME THE ROOM IS ENTERED,
+ * whatever this phone's standing mute preference is. A watch party is a
+ * broadcast: "Ir ao vivo" is the audience arriving, not a request to speak,
+ * and a host who was unmuted on a call five minutes ago must not have that
+ * carry into a stage five hundred people can now hear. This is the same
+ * reason the web's `handleWatchPartyGoLive` forces `startMuted: true`
+ * unconditionally rather than reading a mute-on-join preference -- "Ir ao
+ * vivo should not blast the host's mic into the party, whatever mute-on-join
+ * is set to". It runs even when this phone was ALREADY in the room (a host
+ * who joined ahead of time to talk to a co-host before going live): silencing
+ * an existing, live track the instant the broadcast starts is exactly the
+ * case the web comment is about, not just a fresh join's default.
  *
  * TWO FAROL FINDINGS ON THE FIRST CUT OF THIS FUNCTION, both about what a
  * plain `if (!setLive()) return false` glossed over:
@@ -101,6 +114,13 @@ suspend fun <C> performWatchPartyGoLive(
      */
     checkLive: suspend () -> Boolean,
     joinVoice: () -> Unit,
+    /**
+     * Forces this phone's own mic silent in the room -- see this function's
+     * own doc for why it is unconditional. Called right after [joinVoice]
+     * succeeds and before [startScreenShare], never on a refusal or a failed
+     * join: there is no room to silence anything in yet.
+     */
+    muteMicrophone: () -> Unit,
     /** Best-effort only; its own failure is folded into [GoLiveResult.JoinFailed]'s `ended`. */
     endParty: suspend () -> Boolean,
     startScreenShare: (C) -> Unit,
@@ -118,6 +138,7 @@ suspend fun <C> performWatchPartyGoLive(
         return GoLiveResult.JoinFailed(ended = ended)
     }
 
+    muteMicrophone()
     startScreenShare(consent)
     return GoLiveResult.Live
 }

@@ -516,7 +516,23 @@ class LiveKitEngine(
             }
 
             seedParticipants(created)
-            if (canPublishAudio) publishMicrophone(created)
+            // A microphone that will not come up -- RECORD_AUDIO revoked
+            // between the gate and here, the device busy, the SDK's own
+            // internals -- must never take the rest of the room down with
+            // it. This used to be an ordinary call inside this `try`, so any
+            // throw here was caught by the block below as "the connect
+            // failed" and retried the whole attempt: for a watch party's
+            // host that is a broadcast never starting because a microphone
+            // would not open, which is exactly the failure mode a stream has
+            // no business inheriting from a call. `publishMicrophone` itself
+            // already leaves the room usable with no mic track at all when
+            // it throws (nothing here half-publishes), the same shape
+            // `setCanPublishAudio` already tolerates for the mid-call grant
+            // case just below.
+            if (canPublishAudio) {
+                runCatching { publishMicrophone(created) }
+                    .onFailure { Log.w(TAG, "could not publish the microphone", it) }
+            }
             onConnected()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             // `stop` already owns this room: it read `room` before cancelling

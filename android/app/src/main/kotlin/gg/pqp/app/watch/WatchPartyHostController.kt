@@ -96,6 +96,10 @@ class WatchPartyHostController(
                 setLive = { session.api.setWatchPartyState(partyId, "live", lowLatency) != null },
                 checkLive = { session.api.fetchChannelWatchParty(channelId)?.let { it.id == partyId && it.isLive } == true },
                 joinVoice = { voice.join(channelId, channelName) },
+                // Ir ao vivo should not blast the host's mic into the party,
+                // whatever this phone's standing mute preference is -- see
+                // `performWatchPartyGoLive`'s own doc.
+                muteMicrophone = { voice.setMuted(true) },
                 endParty = { session.api.setWatchPartyState(partyId, "ended") != null },
                 startScreenShare = { data: Intent -> voice.startScreenShare(data) },
                 consent = consent,
