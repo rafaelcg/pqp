@@ -77,6 +77,7 @@ import {
 } from "./voice/hls-egress.js";
 import { hlsViewerCounter } from "./voice/hls-viewer-counts.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
+import { startFeatureFlags } from "./lib/flags.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -715,6 +716,13 @@ async function main() {
   // Same ordering reason: the heartbeat writes a `voice_instances` row that
   // initDb just created.
   stopVoiceHeartbeat = startVoiceRegistry();
+
+  // Runtime feature flags (`lib/flags.ts`): one load now, so the first
+  // request is answered from the operator's rows rather than from the
+  // environment. After initDb (the tables) and after the bus (a flip that
+  // lands during boot is already a reload). A failed load is not fatal: the
+  // environment answers until a later read gets through.
+  await startFeatureFlags();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a

@@ -16,6 +16,8 @@ import { expect, test, type Page } from "@playwright/test";
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
+/** `ADMIN_METRICS_TOKEN` of the suite's server, see `playwright.config.ts`. */
+const ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
 const DEV_TOKEN = "dev-local-token";
 
 function headersFor(suffix: string) {
@@ -148,6 +150,35 @@ test.describe("watch party waitlist", () => {
     ).toBeVisible();
     // The intent is spent: it is gone from the address bar.
     await expect(page).not.toHaveURL(/intent=/);
+  });
+
+  test("the operator turns the campaign off for a server and an open tab drops the teaser", async ({
+    page,
+  }) => {
+    // Runtime flag `watch_party_waitlist`, per server, flipped the way the
+    // dashboard flips it. The tab is never reloaded: it re-asks on focus
+    // (`lib/config-refresh.ts`), at most once per two minutes, so the page's
+    // clock is moved past that gap rather than the test waiting it out.
+    const owner = `wl-flag-${Date.now()}`;
+    const serverId = await seed(owner);
+    await asAccount(page, owner);
+    await page.clock.install();
+    await page.goto(`/app/server/${serverId}?watchParty=1`);
+    const teaser = page.locator("[data-live-party-teaser]");
+    await expect(teaser).toHaveAttribute("data-live-party-teaser", "open");
+
+    const flip = await fetch(`${API}/api/admin/flag-overrides`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ key: "watch_party_waitlist", serverId, enabled: false }),
+    });
+    expect(flip.status).toBe(200);
+
+    // Still drawn: nothing has asked yet.
+    await expect(teaser).toHaveCount(1);
+    await page.clock.setSystemTime(Date.now() + 3 * 60_000);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(teaser).toHaveCount(0);
   });
 
   test("the public page explains it and points at the app with the intent", async ({ page }) => {

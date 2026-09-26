@@ -6,6 +6,7 @@ import type {
   WatchPartyWaitlistState,
 } from "@pqp/shared";
 import { apiFetch } from "@/lib/api";
+import { onConfigRefresh } from "@/lib/config-refresh";
 
 /**
  * The watch party waitlist, client side. See `docs/WATCH_PARTY.md`
@@ -68,9 +69,15 @@ export function shouldOfferWatchPartyTeaser({
 // ------------------------------------------------------------ the store
 
 /**
- * One answer per server for the page's lifetime, shared by the sidebar and
- * the dialog, so joining in the dialog turns the sidebar's badge into "Na
- * lista" without a refetch. Key `""` is the serverless row.
+ * One answer per server, shared by the sidebar and the dialog, so joining in
+ * the dialog turns the sidebar's badge into "Na lista" without a refetch.
+ * Key `""` is the serverless row.
+ *
+ * Re-asked on focus and on a slow timer (`lib/config-refresh.ts`): `campaign`
+ * is the runtime flag `watch_party_waitlist` and `available` is the operator's
+ * per-server switch, both flipped from the dashboard with no deploy, and a
+ * teaser that outlived the operator turning it off would be the one thing
+ * here that could be wrong in front of everybody.
  */
 const answers = new Map<string, WatchPartyWaitlistState>();
 const inflight = new Map<string, Promise<WatchPartyWaitlistState>>();
@@ -177,6 +184,40 @@ export function forgetWatchPartyWaitlist(serverId: string | null): void {
   answers.delete(keyOf(serverId));
   notify();
 }
+
+/**
+ * Re-ask for every answer already held and swap in the ones that changed. A
+ * failure keeps what was there; an answer that lands after an account change
+ * is dropped, the same generation rule `loadWatchPartyWaitlist` follows.
+ */
+export function revalidateWatchPartyWaitlist(): Promise<void> {
+  const started = generation;
+  const keys = [...answers.keys()].filter((key) => !inflight.has(key));
+  return Promise.all(
+    keys.map((key) =>
+      fetchWatchPartyWaitlist(key === "" ? null : key).then(
+        (answer) => {
+          if (started !== generation) {
+            return;
+          }
+          const before = answers.get(key);
+          if (before && JSON.stringify(before) === JSON.stringify(answer)) {
+            return;
+          }
+          answers.set(key, answer);
+          notify();
+        },
+        () => {
+          // Stale beats blank.
+        },
+      ),
+    ),
+  ).then(() => undefined);
+}
+
+onConfigRefresh(() => {
+  void revalidateWatchPartyWaitlist();
+});
 
 /** Test seam. */
 export function resetWatchPartyWaitlistStore(): void {
