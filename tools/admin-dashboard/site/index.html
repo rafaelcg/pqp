@@ -2135,8 +2135,8 @@
         <b>ligar</b> e <b>desligar</b> gravam a decisão no servidor e valem na próxima leitura: quem entrar na
         call, quem começar a compartilhar, quem abrir o canal. <b>seguir a variável</b> apaga a decisão e devolve
         a resposta pro <span class="mono">LIVE_HLS_SERVER_ALLOWLIST</span>.
-        Quem já está com a aba aberta só vê o botão de transmitir aparecer depois de recarregar: o cliente
-        guarda essa resposta até o fim da sessão. Ligue antes do host abrir o canal, ou peça pra ele dar F5.
+        Quem já está com a aba aberta vê a mudança quando a aba volta pro foco (no máximo a cada 2 min) ou em
+        até 10 min; o app de celular, na próxima vez que pedir a configuração. Com pressa, peça pro host dar F5.
       </p>
     </div>
   </section>
@@ -2167,6 +2167,59 @@
         O caminho de mídia é lido <b>uma vez</b>, quando a primeira pessoa entra na sala. Mudar aqui não move
         ninguém que já está em call: vale pra próxima sala que abrir. <b>automático</b> deixa o tamanho do
         servidor, a comunidade e o watch party decidirem, que é o certo quase sempre.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ INTERRUPTORES (feature flags) ============ -->
+  <!-- Runtime feature flags (`server/src/lib/flags.ts`, docs/FEATURE_FLAGS.md).
+       Every switch that used to be an env var and a container recreate. -->
+  <section aria-label="interruptores">
+    <div class="sec-head">
+      <h2>interruptores</h2>
+      <span class="rule"></span>
+      <span class="note">feature flags · valem na hora, nas duas instâncias, sem deploy</span>
+    </div>
+    <div class="card pad">
+      <div class="ctl-search">
+        <span class="note" id="ctlFlagsSummary">carregando</span>
+        <button type="button" class="ctl-btn" id="ctlFlagsRefreshBtn" style="margin-left:auto">atualizar</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>interruptor</th>
+              <th>agora</th>
+              <th>sem decisão (env)</th>
+              <th class="r">ação</th>
+            </tr>
+          </thead>
+          <tbody id="ctlFlagsBody"><!-- injected --></tbody>
+        </table>
+      </div>
+      <p class="ctl-msg" id="ctlFlagsMsg" hidden></p>
+      <p class="subtle-title" style="margin-top:18px">quem mexeu, e quando</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>quando</th>
+              <th>interruptor</th>
+              <th>onde</th>
+              <th>de → para</th>
+              <th>quem</th>
+            </tr>
+          </thead>
+          <tbody id="ctlFlagsAuditBody"><!-- injected --></tbody>
+        </table>
+      </div>
+      <p class="ctl-caveat">
+        <b>ligar</b> e <b>desligar</b> gravam a decisão e valem na próxima leitura, nas duas instâncias da api
+        (o bus avisa a outra na hora; sem bus, em até 10 s). <b>seguir a variável</b> apaga a decisão e devolve a
+        resposta pra variável de ambiente, e dela pro padrão do código: é exatamente como era antes de existir este painel.
+        Onde diz <b>por servidor</b>, uma decisão para um servidor vale acima da global. Aba aberta vê a mudança quando
+        volta pro foco (no máximo a cada 2 min).
       </p>
     </div>
   </section>
@@ -5259,12 +5312,264 @@
     }
   })();
 
+  /* ================= interruptores: runtime feature flags =================
+     Same rules as the rest of controles: no poll, a write disables its own
+     row until it answers, and the row is redrawn from the API's reply. The
+     one confirmation is turning a watch-party switch OFF while something is
+     on air, the same reasoning as ctlConfirmFor. */
+
+  var ctlFlags = [];
+  var ctlFlagsPayload = null;
+  var ctlFlagsLoaded = false;
+  var ctlFlagsBusy = false;
+  /* key -> the last server search for that flag's override form. */
+  var ctlFlagMatches = {};
+
+  function ctlFlagOnOff(v) {
+    return v ? "ligado" : "desligado";
+  }
+
+  function ctlFlagSourceLabel(flag) {
+    if (flag.source === "global") {
+      return "decidido aqui" + (flag.stored && flag.stored.updatedAt ? " " + fmtRelative(flag.stored.updatedAt) : "") +
+        (flag.stored && flag.stored.updatedBy ? " por " + flag.stored.updatedBy : "");
+    }
+    if (flag.source === "env") return "pela variável " + flag.env;
+    return "padrão do código";
+  }
+
+  function ctlRenderFlags(payload) {
+    var body = $("ctlFlagsBody");
+    if (!body) return;
+    payload = payload || ctlFlagsPayload;
+    ctlFlagsPayload = payload;
+    ctlFlags = (payload && payload.flags) || [];
+    var decided = 0, overrides = 0;
+    ctlFlags.forEach(function (f) {
+      if (f.stored) decided += 1;
+      overrides += (f.overrides || []).length;
+    });
+    var cache = payload && payload.cache;
+    setText("ctlFlagsSummary",
+      ctlFlags.length + " interruptor(es) · " + decided + " decidido(s) aqui · " + overrides + " decisão(ões) por servidor" +
+      (cache ? " · cache " + Math.round(cache.ttlMs / 1000) + " s" + (cache.bus ? ", bus ligado" : ", sem bus") +
+        (cache.loadFailures ? " · " + cache.loadFailures + " leitura(s) falharam" : "") : ""));
+
+    if (!ctlFlags.length) {
+      body.innerHTML = '<tr><td colspan="4" class="muted">esta api não tem interruptores</td></tr>';
+    } else {
+      body.innerHTML = "";
+      ctlFlags.forEach(function (f) {
+        var tr = el("tr", "ctl-row");
+        tr.setAttribute("data-key", f.key);
+        var envCell =
+          '<span class="tag">' + ctlFlagOnOff(f.envDefault) + "</span>" +
+          '<div class="ctl-why" style="margin-top:2px">' +
+            (f.envSet
+              ? '<span class="mono">' + esc(f.env) + "</span> definida"
+              : '<span class="mono">' + esc(f.env) + "</span> não definida · padrão " +
+                esc(f.codeDefaultLabel || ctlFlagOnOff(f.codeDefault))) +
+          "</div>";
+        var overridesHtml = "";
+        if (f.perServer) {
+          var list = (f.overrides || []).map(function (o) {
+            return '<div class="ctl-actions" style="justify-content:flex-start;margin-top:4px">' +
+              '<span class="tag' + (o.enabled ? " accent" : "") + '">' + esc(o.serverName || o.serverId) + ": " +
+                ctlFlagOnOff(o.enabled) + "</span>" +
+              '<button type="button" class="ctl-btn" data-fov="clear" data-key="' + esc(f.key) +
+                '" data-server="' + esc(o.serverId) + '" title="apagar a decisão deste servidor">remover</button>' +
+            "</div>";
+          }).join("");
+          var matches = (ctlFlagMatches[f.key] || []).map(function (m) {
+            return '<div class="ctl-actions" style="justify-content:flex-start;margin-top:4px">' +
+              "<span>" + esc(m.name) + ' <span class="ctl-why">' + fmt(m.memberCount) + " membros</span></span>" +
+              '<button type="button" class="ctl-btn" data-fov="on" data-key="' + esc(f.key) +
+                '" data-server="' + esc(m.id) + '">ligar aqui</button>' +
+              '<button type="button" class="ctl-btn" data-fov="off" data-key="' + esc(f.key) +
+                '" data-server="' + esc(m.id) + '">desligar aqui</button>' +
+            "</div>";
+          }).join("");
+          overridesHtml =
+            '<div style="margin-top:8px"><span class="ctl-why">por servidor</span>' + list +
+            '<div class="ctl-search" style="margin:6px 0 0">' +
+              '<input class="ctl-input" type="search" placeholder="servidor pelo nome" aria-label="servidor para ' +
+                esc(f.key) + '" data-fq="' + esc(f.key) + '" autocomplete="off">' +
+              '<button type="button" class="ctl-btn" data-fsearch="' + esc(f.key) + '">procurar</button>' +
+            "</div>" + matches + "</div>";
+        }
+        tr.innerHTML =
+          '<td><span class="ctl-name"><b class="mono" style="color:var(--text)">' + esc(f.key) + "</b>" +
+            '<span class="ctl-why">' + esc(f.description) +
+            (f.clientVia ? " · cliente: " + esc(f.clientVia) : "") + "</span></span>" + overridesHtml + "</td>" +
+          '<td><span class="tag' + (f.effective ? " accent" : "") + '">' + ctlFlagOnOff(f.effective) + "</span>" +
+            '<div class="ctl-why" style="margin-top:2px">' + esc(ctlFlagSourceLabel(f)) + "</div></td>" +
+          "<td>" + envCell + "</td>" +
+          '<td class="r"><span class="ctl-actions">' +
+            '<button type="button" class="ctl-btn' + (f.stored && f.stored.enabled === true ? " on" : "") +
+              '" data-fact="on" data-key="' + esc(f.key) + '">ligar</button>' +
+            '<button type="button" class="ctl-btn' + (f.stored && f.stored.enabled === false ? " on" : "") +
+              '" data-fact="off" data-key="' + esc(f.key) + '">desligar</button>' +
+            '<button type="button" class="ctl-btn" data-fact="clear" data-key="' + esc(f.key) +
+              '"' + (f.stored ? "" : " disabled") + ' title="apagar a decisão e voltar a seguir ' + esc(f.env) +
+              '">seguir a variável</button>' +
+          "</span></td>";
+        body.appendChild(tr);
+      });
+    }
+
+    var audit = $("ctlFlagsAuditBody");
+    if (audit) {
+      var rows = (payload && payload.audit) || [];
+      if (!rows.length) {
+        audit.innerHTML = '<tr><td colspan="5" class="muted">ninguém mexeu em nada ainda</td></tr>';
+      } else {
+        var word = function (v) { return v === null ? "variável" : ctlFlagOnOff(v); };
+        audit.innerHTML = rows.map(function (a) {
+          return "<tr>" +
+            '<td title="' + esc(a.at) + '">' + esc(fmtRelative(a.at)) + "</td>" +
+            '<td class="mono">' + esc(a.key) + "</td>" +
+            "<td>" + (a.serverId ? esc(a.serverName || a.serverId) : "global") + "</td>" +
+            "<td>" + esc(word(a.previous)) + " → " + esc(word(a.next)) + "</td>" +
+            "<td>" + (a.actorKind === "dashboard" ? "painel" : esc(a.actorName || "moderador")) + "</td>" +
+          "</tr>";
+        }).join("");
+      }
+    }
+  }
+
+  function ctlLoadFlags() {
+    ctlMsg("ctlFlagsMsg", "");
+    return fetchJson("/operator/flags")
+      .then(function (payload) {
+        ctlFlagsLoaded = true;
+        ctlRenderFlags(payload);
+        return true;
+      })
+      .catch(function (e) {
+        ctlMsg("ctlFlagsMsg", "não deu pra ler os interruptores: " + (e && e.message ? e.message : "erro"), "bad");
+        return false;
+      });
+  }
+
+  function ctlFlagConfirm(key, enabled) {
+    if (enabled !== false) return true;
+    if (!/^(live_hls|hls_)/.test(key)) return true;
+    var live = Number(($("ctlSessions") || {}).textContent);
+    if (!(live > 0)) return true;
+    return window.confirm(
+      "Tem transmissão no ar agora.\n\nDesligar " + key + " muda o que ela está fazendo na próxima reconciliação. Desligar mesmo assim?"
+    );
+  }
+
+  function ctlWriteFlag(path, body, tr, said) {
+    if (ctlFlagsBusy) return;
+    ctlFlagsBusy = true;
+    if (tr) ctlSetButtonsDisabled(tr, true);
+    ctlMsg("ctlFlagsMsg", "");
+    fetch(path, {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          throw new Error("http " + r.status + (j && j.error ? " · " + j.error : ""));
+        });
+      }
+      return r.json();
+    }).then(function (flag) {
+      var sentence = said(flag);
+      // Saved, but this API instance could not reload its own copy: the
+      // other instance and this one both catch up within the cache window.
+      var pending = flag && flag.applied === false;
+      if (pending) sentence += " · gravado, mas esta instância ainda não recarregou (vale em até 10 s)";
+      return ctlLoadFlags().then(function (ok) {
+        if (ok) {
+          ctlMsg("ctlFlagsMsg", sentence, pending ? "bad" : "ok");
+          return;
+        }
+        // The write landed; only the re-read failed. Redraw from what we had
+        // so the buttons come back, and say both halves.
+        ctlRenderFlags(null);
+        ctlMsg("ctlFlagsMsg", sentence + " · a lista não recarregou, use atualizar", "bad");
+      });
+    }).catch(function (e) {
+      ctlMsg("ctlFlagsMsg", "não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
+      if (tr) ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlFlagsBusy = false; });
+  }
+
+  function ctlSearchFlagServers(key) {
+    var input = document.querySelector('input[data-fq="' + key + '"]');
+    var query = input && input.value ? input.value.trim() : "";
+    if (!query) return;
+    fetchJson("/operator/servers?q=" + encodeURIComponent(query))
+      .then(function (payload) {
+        ctlFlagMatches[key] = ((payload && payload.servers) || []).slice(0, 5);
+        if (!ctlFlagMatches[key].length) {
+          ctlMsg("ctlFlagsMsg", "nenhum servidor com esse nome", "bad");
+        }
+        ctlRenderFlags(null);
+      })
+      .catch(function (e) {
+        ctlMsg("ctlFlagsMsg", "não deu pra procurar: " + (e && e.message ? e.message : "erro"), "bad");
+      });
+  }
+
+  (function wireFlags() {
+    var body = $("ctlFlagsBody");
+    if (body) {
+      body.addEventListener("click", function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest(".ctl-btn") : null;
+        if (!btn || btn.disabled) return;
+        var key = btn.getAttribute("data-key") || btn.getAttribute("data-fsearch");
+        var fact = btn.getAttribute("data-fact");
+        var fov = btn.getAttribute("data-fov");
+        if (btn.getAttribute("data-fsearch")) {
+          ctlSearchFlagServers(key);
+          return;
+        }
+        if (fact) {
+          var enabled = fact === "on" ? true : fact === "off" ? false : null;
+          if (!ctlFlagConfirm(key, enabled)) return;
+          ctlWriteFlag("/operator/flags", { key: key, enabled: enabled }, btn.closest("tr"), function (f) {
+            return f.key + ": " + (enabled === null
+              ? "voltou a seguir a variável, e agora está " + ctlFlagOnOff(f.effective)
+              : ctlFlagOnOff(f.effective));
+          });
+          return;
+        }
+        if (fov) {
+          var serverId = btn.getAttribute("data-server");
+          var value = fov === "on" ? true : fov === "off" ? false : null;
+          if (!ctlFlagConfirm(key, value)) return;
+          ctlWriteFlag("/operator/flag-overrides", { key: key, serverId: serverId, enabled: value }, btn.closest("tr"),
+            function (f) {
+              return f.key + ": " + (value === null ? "decisão do servidor removida" : ctlFlagOnOff(value) + " nesse servidor");
+            });
+        }
+      });
+      body.addEventListener("keydown", function (ev) {
+        var t = ev.target;
+        if (ev.key === "Enter" && t && t.getAttribute && t.getAttribute("data-fq")) {
+          ev.preventDefault();
+          ctlSearchFlagServers(t.getAttribute("data-fq"));
+        }
+      });
+    }
+    var refresh = $("ctlFlagsRefreshBtn");
+    if (refresh) refresh.addEventListener("click", function () { ctlLoadFlags(); });
+  })();
+
   /* Opening the section is what reads it, once. Re-reading on every visit
      would fight the operator's own scroll position mid-event; "atualizar" in
      the header and every write already re-read it. */
   function ctlOnShown() {
     if (!ctlWaitlistLoaded) ctlLoadWaitlist();
     if (!ctlLoaded) ctlLoadServers();
+    if (!ctlFlagsLoaded) ctlLoadFlags();
   }
 
   function showTab(name, opts) {

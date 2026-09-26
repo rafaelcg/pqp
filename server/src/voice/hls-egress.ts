@@ -10,6 +10,7 @@ import {
 } from "livekit-server-sdk";
 import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
+import { isEnabled } from "../lib/flags.js";
 import { promotionBudgetMbps } from "./promotion.js";
 import {
   CAMERA_RUNG,
@@ -1231,8 +1232,8 @@ export function maxLiveHlsSessions(): number {
  * stays at zero because nothing is looking.
  */
 export function reapOrphansEnabled(): boolean {
-  const raw = process.env.LIVE_HLS_REAP_ORPHANS?.trim().toLowerCase();
-  return raw !== "false" && raw !== "0" && raw !== "off";
+  // Runtime flag `live_hls_reap_orphans`; the variable is its default.
+  return isEnabled("live_hls_reap_orphans");
 }
 
 /**
@@ -1253,7 +1254,8 @@ export function reapOrphansEnabled(): boolean {
  * next monitor tick and leaves the party alone.
  */
 export function micArchiveEnabled(): boolean {
-  return process.env.LIVE_HLS_MIC_ARCHIVE === "true";
+  // Runtime flag `live_hls_mic_archive`; the variable is its default.
+  return isEnabled("live_hls_mic_archive");
 }
 
 /**
@@ -1272,8 +1274,8 @@ export function micArchiveEnabled(): boolean {
  * SFU and the TURN relay.
  */
 export function liveHlsCameraEnabled(): boolean {
-  const raw = process.env.LIVE_HLS_CAMERA?.trim().toLowerCase();
-  return raw !== "false" && raw !== "0" && raw !== "off";
+  // Runtime flag `live_hls_camera`; the variable is its default.
+  return isEnabled("live_hls_camera");
 }
 
 /**
@@ -1290,8 +1292,8 @@ export function liveHlsCameraEnabled(): boolean {
  * process; a camera already running keeps the size it started with.
  */
 export function liveHlsCamera480Enabled(): boolean {
-  const raw = process.env.LIVE_HLS_CAMERA_480?.trim().toLowerCase();
-  return raw !== "false" && raw !== "0" && raw !== "off";
+  // Runtime flag `live_hls_camera_480`; the variable is its default.
+  return isEnabled("live_hls_camera_480");
 }
 
 /**
@@ -1312,7 +1314,8 @@ export function liveHlsCamera480Enabled(): boolean {
  * camera), the same rollback shape every other switch in this file has.
  */
 export function liveHlsVoiceTrackEnabled(): boolean {
-  return process.env.LIVE_HLS_VOICE_TRACK === "true";
+  // Runtime flag `live_hls_voice_track`; the variable is its default.
+  return isEnabled("live_hls_voice_track");
 }
 
 /**

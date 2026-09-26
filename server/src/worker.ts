@@ -19,6 +19,7 @@ import { closeApnsSessions } from "./services/apns.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { createWorkerHealthServer } from "./worker-health.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
+import { startFeatureFlags } from "./lib/flags.js";
 import {
   createPostgresBusTransport,
   type PostgresBusTransport,
@@ -155,6 +156,10 @@ async function startJobsWhenBusIsReady(): Promise<void> {
   if (shuttingDown) {
     return;
   }
+  // Runtime feature flags, for any job that reads one. Not awaited: this
+  // process only publishes on the bus and never listens, so it follows a
+  // flip by the TTL alone, and a slow first load must not hold the jobs.
+  void startFeatureFlags();
   jobs = startColdJobs();
   console.log(
     `pqp worker: ${jobs.count} job(s) scheduled, ` +

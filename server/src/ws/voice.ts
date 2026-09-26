@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import { isEnabled } from "../lib/flags.js";
 import {
   markChannelShareStarted,
   markChannelShareStopped,
@@ -2416,8 +2417,8 @@ const ADOPTED_SHARER_HOLD_MS = 30_000;
  * never ends anything.
  */
 function sharerResumeHoldEnabled(): boolean {
-  const raw = (process.env.HLS_SHARER_RESUME_HOLD ?? "").trim().toLowerCase();
-  return !(raw === "off" || raw === "false" || raw === "0");
+  // Runtime flag `hls_sharer_resume_hold`; the variable is its default.
+  return isEnabled("hls_sharer_resume_hold");
 }
 
 type VanishedSharer =
@@ -5895,10 +5896,11 @@ export async function runVoiceReconcile(): Promise<{
  * read), and from that moment every phone build already in the field stops
  * leaving mesh ghosts, with no app update and no client deploy.
  *
- * Read per call, never cached: a restart is the only other way it changes.
+ * Runtime flag `voice_mesh_resume_requires_cap` (`lib/flags.ts`), with the
+ * variable as its default: flipping it is a dashboard click, no restart.
  */
 function meshResumeRequiresCap(): boolean {
-  return process.env.VOICE_MESH_RESUME_REQUIRES_CAP === "true";
+  return isEnabled("voice_mesh_resume_requires_cap");
 }
 
 /**

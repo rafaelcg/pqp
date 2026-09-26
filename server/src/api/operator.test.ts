@@ -115,7 +115,7 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the nine routes, and account deletion is not one of them", () => {
+  it("is exactly the twelve routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
@@ -126,6 +126,9 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/channel-sfu-region"],
       ["GET", "/api/admin/watch-party-waitlist"],
       ["PUT", "/api/admin/watch-party-waitlist/decline"],
+      ["GET", "/api/admin/flags"],
+      ["PUT", "/api/admin/flags"],
+      ["PUT", "/api/admin/flag-overrides"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -145,6 +148,11 @@ describe("matchAdminMachineRoute", () => {
       ["POST", "/api/admin/watch-party-waitlist"],
       ["GET", "/api/admin/watch-party-waitlist/decline"],
       ["GET", "/api/watch-party/waitlist"],
+      ["POST", "/api/admin/flags"],
+      ["DELETE", "/api/admin/flags"],
+      ["GET", "/api/admin/flag-overrides"],
+      ["DELETE", "/api/admin/flag-overrides"],
+      ["PUT", "/api/admin/flags/watch_party_waitlist"],
     ] as const;
     for (const [method, path] of refused) {
       expect(matchAdminMachineRoute(method, path)).toBeNull();
@@ -696,6 +704,123 @@ describeDb("the operator's two levers", () => {
       // which is how the two are told apart from the outside.
       const { status } = await asMachine("GET", "/api/admin/servers");
       expect(status).toBe(404);
+    });
+  });
+
+  describe("runtime feature flags", () => {
+    afterEach(async () => {
+      // Neither the rows nor the snapshot a write loaded may answer for a
+      // later case, or for another suite on the same database.
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+      const { resetFeatureFlagsForTests } = await import("../lib/flags.js");
+      resetFeatureFlagsForTests();
+    });
+
+    beforeEach(async () => {
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+    });
+
+    it("the machine token lists, sets and clears, and the next read follows", async () => {
+      const list = await asMachine<{ flags: { key: string; effective: boolean }[] }>(
+        "GET",
+        "/api/admin/flags",
+      );
+      expect(list.status).toBe(200);
+      expect(list.body.flags.map((flag) => flag.key)).toContain("live_hls_camera_480");
+
+      const config = async () =>
+        (await asUser<{ cameraHeight: number }>(ana, "GET", "/api/live-hls/config")).body
+          .cameraHeight;
+      expect(await config()).toBe(480);
+      const off = await asMachine<{ effective: boolean; source: string }>(
+        "PUT",
+        "/api/admin/flags",
+        { key: "live_hls_camera_480", enabled: false },
+      );
+      expect(off.status).toBe(200);
+      expect(off.body).toMatchObject({ effective: false, source: "global" });
+      expect(await config()).toBe(360);
+      await asMachine("PUT", "/api/admin/flags", { key: "live_hls_camera_480", enabled: null });
+      expect(await config()).toBe(480);
+
+      const audit = await getPool().query<{ actor_kind: string; actor_id: string | null }>(
+        `SELECT actor_kind, actor_id FROM feature_flag_audit ORDER BY id`,
+      );
+      expect(audit.rows).toEqual([
+        { actor_kind: "dashboard", actor_id: null },
+        { actor_kind: "dashboard", actor_id: null },
+      ]);
+    });
+
+    it("a per-server override reaches that server's waitlist answer only", async () => {
+      process.env.WATCH_PARTY_WAITLIST = "on";
+      try {
+        const override = await asMachine("PUT", "/api/admin/flag-overrides", {
+          key: "watch_party_waitlist",
+          serverId,
+          enabled: false,
+        });
+        expect(override.status).toBe(200);
+        const here = await asUser<{ campaign: boolean }>(
+          ana,
+          "GET",
+          `/api/watch-party/waitlist?serverId=${serverId}`,
+        );
+        expect(here.body.campaign).toBe(false);
+        const nowhere = await asUser<{ campaign: boolean }>(
+          ana,
+          "GET",
+          "/api/watch-party/waitlist",
+        );
+        expect(nowhere.body.campaign).toBe(true);
+      } finally {
+        delete process.env.WATCH_PARTY_WAITLIST;
+      }
+    });
+
+    it("refuses an unknown key, a flag with no overrides, and a server that does not exist", async () => {
+      expect(
+        (await asMachine("PUT", "/api/admin/flags", { key: "made_up", enabled: true })).status,
+      ).toBe(400);
+      expect(
+        (
+          await asMachine("PUT", "/api/admin/flag-overrides", {
+            key: "live_hls_camera_480",
+            serverId,
+            enabled: true,
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await asMachine("PUT", "/api/admin/flag-overrides", {
+            key: "watch_party_waitlist",
+            serverId: "00000000-0000-4000-8000-000000000009",
+            enabled: true,
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("a moderator's session writes as that moderator; anybody else gets a 404", async () => {
+      expect(
+        (await asUser(ana, "PUT", "/api/admin/flags", { key: "community_home", enabled: true }))
+          .status,
+      ).toBe(404);
+      expect((await asUser(ana, "GET", "/api/admin/flags")).status).toBe(404);
+      const write = await asUser(operator, "PUT", "/api/admin/flags", {
+        key: "community_home",
+        enabled: true,
+      });
+      expect(write.status).toBe(200);
+      const audit = await getPool().query<{ actor_kind: string; actor_id: string | null }>(
+        `SELECT actor_kind, actor_id FROM feature_flag_audit`,
+      );
+      expect(audit.rows).toEqual([{ actor_kind: "moderator", actor_id: operator.id }]);
     });
   });
 });

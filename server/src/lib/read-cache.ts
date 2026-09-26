@@ -1,3 +1,4 @@
+import { isEnabled } from "./flags.js";
 /**
  * A small, generic read-through cache for the "identical query, 500 callers"
  * shape a reload storm produces — the reason this exists is the
@@ -149,8 +150,17 @@ function removeEntry(key: string): void {
 /**
  * `READ_CACHE=off` (or `false`/`0`) disables it. Anything else, including
  * unset, leaves it on — same convention as `WS_COMPRESSION`.
+ *
+ * Runtime flag `read_cache` (`lib/flags.ts`) with the variable as its
+ * default, so the rollback is a dashboard click. Safe to flip live: turning
+ * it off only makes `coalesce` call its loader, invalidations keep running
+ * either way, and entries are short-lived. Passing an `env` reads that object
+ * alone (the parser's own unit test).
  */
-export function readCacheEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+export function readCacheEnabled(env?: NodeJS.ProcessEnv): boolean {
+  if (env === undefined) {
+    return isEnabled("read_cache");
+  }
   const raw = env.READ_CACHE?.trim().toLowerCase();
   return raw !== "off" && raw !== "false" && raw !== "0";
 }
