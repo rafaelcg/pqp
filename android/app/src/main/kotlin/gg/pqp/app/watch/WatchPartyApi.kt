@@ -39,6 +39,16 @@ suspend fun ApiClient.createWatchParty(channelId: String, name: String): WatchPa
     ).party
 
 /**
+ * `GET /api/channels/:channelId/watch-party`, this channel's current party
+ * (any state), or null. Used by [WatchPartyHostController] to disambiguate
+ * an unclear `setWatchPartyState` response: a thrown/lost response does not
+ * say whether the server committed the transition before it was lost, and
+ * this is the re-read that answers it directly rather than guessing.
+ */
+suspend fun ApiClient.fetchChannelWatchParty(channelId: String): WatchPartyPayload? =
+    getJson<WatchPartyResponse>("/api/channels/$channelId/watch-party").party
+
+/**
  * `POST /api/watch-parties/:id/state`. The target state, never a verb -- the
  * server owns the transition table (`canTransitionWatchParty`) and refuses a
  * move that is not in it. `lowLatency` only means anything alongside

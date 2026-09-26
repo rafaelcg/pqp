@@ -463,6 +463,8 @@
     <string name="watch_party_host_end">End</string>
     <string name="watch_party_host_retry_share">Share your screen</string>
     <string name="watch_party_host_go_live_failed">Could not go live. The server never confirmed it — try again.</string>
+    <string name="watch_party_host_join_failed_ended">Couldn\'t start the broadcast; the party was ended. Try again.</string>
+    <string name="watch_party_host_join_failed_not_ended">Couldn\'t start the broadcast, and the party could not be ended either. It may still show as live — try again in a moment.</string>
     <string name="watch_party_host_end_failed">Left the call, but the server did not confirm the party ended. It may still show as live.</string>
     <string name="watch_party_host_generic_error">Something went wrong. Try again.</string>
     <string name="watch_party_host_ack_title">Before you go live</string>

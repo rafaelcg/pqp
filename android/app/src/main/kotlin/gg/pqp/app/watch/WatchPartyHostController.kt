@@ -83,21 +83,37 @@ class WatchPartyHostController(
     }
 
     /**
-     * "Ir ao vivo". See [performWatchPartyGoLive] for the ordering this
-     * wires up: the state transition, then the room join, then the capture
-     * -- in that order, on purpose. A refused state transition is reported
-     * as a failure here (it used to reset silently to "not busy, no error",
-     * which is indistinguishable from success -- a Farol finding).
+     * "Ir ao vivo". See [performWatchPartyGoLive] for the ordering and the
+     * two Farol findings it exists to close: an ambiguous `setLive` failure
+     * is re-checked against the party's real state rather than assumed
+     * refused, and a join that fails on an already-live party is reported
+     * as such (best-effort ended, honestly, whichever way that lands) rather
+     * than as an unqualified success.
      */
     fun goLive(channelId: String, channelName: String?, partyId: String, lowLatency: Boolean, consent: Intent) {
         run(WatchPartyHostBusy.GoingLive) {
-            val went = performWatchPartyGoLive(
+            val result = performWatchPartyGoLive(
                 setLive = { session.api.setWatchPartyState(partyId, "live", lowLatency) != null },
+                checkLive = { session.api.fetchChannelWatchParty(channelId)?.let { it.id == partyId && it.isLive } == true },
                 joinVoice = { voice.join(channelId, channelName) },
+                endParty = { session.api.setWatchPartyState(partyId, "ended") != null },
                 startScreenShare = { data: Intent -> voice.startScreenShare(data) },
                 consent = consent,
             )
-            if (!went) throw IllegalStateException(context.getString(R.string.watch_party_host_go_live_failed))
+            when (result) {
+                GoLiveResult.Live -> Unit
+                GoLiveResult.Refused ->
+                    throw IllegalStateException(context.getString(R.string.watch_party_host_go_live_failed))
+                is GoLiveResult.JoinFailed -> throw IllegalStateException(
+                    context.getString(
+                        if (result.ended) {
+                            R.string.watch_party_host_join_failed_ended
+                        } else {
+                            R.string.watch_party_host_join_failed_not_ended
+                        },
+                    ),
+                )
+            }
         }
     }
 
@@ -122,7 +138,7 @@ class WatchPartyHostController(
     fun end(partyId: String) {
         run(WatchPartyHostBusy.Ending) {
             val ended = performWatchPartyEnd(
-                setEnded = { session.api.setWatchPartyState(partyId, "ended") },
+                setEnded = { session.api.setWatchPartyState(partyId, "ended") != null },
                 leaveVoice = { voice.leave() },
             )
             if (!ended) throw IllegalStateException(context.getString(R.string.watch_party_host_end_failed))

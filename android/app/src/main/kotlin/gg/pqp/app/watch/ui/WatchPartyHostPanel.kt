@@ -45,6 +45,9 @@ import gg.pqp.app.watch.canEndParty
 import gg.pqp.app.watch.canGoLiveWith
 import kotlinx.coroutines.launch
 
+/** Which capture flow the streaming-responsibility ack sheet is standing in front of. */
+private enum class PendingCaptureAction { GoLive, RetryShare }
+
 /**
  * The host's own controls on a `watch_party` channel's stage -- "Criar watch
  * party", the setup card's "Ir ao vivo", and the live card's "Encerrar".
@@ -78,6 +81,13 @@ fun WatchPartyHostControls(
     var showCreateDialog by remember { mutableStateOf(false) }
     var showAckSheet by remember { mutableStateOf(false) }
     var ackFailed by remember { mutableStateOf(false) }
+    // WHICH consent flow the ack sheet is standing in front of. A Farol
+    // finding on the first cut: "Compartilhar tela" on the live card
+    // (retry-share) called `requestScreenCapture` straight through, with no
+    // ack check at all -- the one disclosure this whole sheet exists to
+    // guarantee was reachable only via Ir ao vivo's path, not this one. Both
+    // now go through [startWithAckGate] below.
+    var pendingAction by remember { mutableStateOf<PendingCaptureAction?>(null) }
     var lowLatency by remember(party?.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -111,6 +121,29 @@ fun WatchPartyHostControls(
 
     fun requestGoLive() = requestScreenCapture(consentLauncher)
     fun requestRetryShare() = requestScreenCapture(retryLauncher)
+
+    /**
+     * The one door both capture flows go through: ask whether the
+     * once-per-host-per-server disclosure is still owed, show it if so, and
+     * only reach the system consent picker once it has been shown (or was
+     * already acknowledged). Ir ao vivo and Compartilhar tela (the live-card
+     * retry) are otherwise unrelated user actions, but they are both "this
+     * phone's mic/screen is about to reach an audience", which is exactly
+     * what the disclosure is about -- so both are gated the same way.
+     */
+    fun startWithAckGate(action: PendingCaptureAction) {
+        scope.launch {
+            if (checkNeedsAck()) {
+                pendingAction = action
+                showAckSheet = true
+            } else {
+                when (action) {
+                    PendingCaptureAction.GoLive -> requestGoLive()
+                    PendingCaptureAction.RetryShare -> requestRetryShare()
+                }
+            }
+        }
+    }
 
     // Go-live mic prompt: once a share has just gone out and the mic is off,
     // offer to turn it on. Keyed on the busy transition rather than on
@@ -156,22 +189,14 @@ fun WatchPartyHostControls(
                 lowLatencyAvailable = lowLatencyAvailable,
                 lowLatency = lowLatency,
                 onLowLatencyChange = { lowLatency = it },
-                onGoLive = {
-                    scope.launch {
-                        if (checkNeedsAck()) {
-                            showAckSheet = true
-                        } else {
-                            requestGoLive()
-                        }
-                    }
-                },
+                onGoLive = { startWithAckGate(PendingCaptureAction.GoLive) },
             )
         } else if (canEndParty(party)) {
             LiveRow(
                 busy = hostState.busy == WatchPartyHostBusy.Ending,
                 sharingScreen = sharingScreen,
                 onEnd = onEnd,
-                onRetryShare = ::requestRetryShare,
+                onRetryShare = { startWithAckGate(PendingCaptureAction.RetryShare) },
             )
         }
     }
@@ -211,13 +236,18 @@ fun WatchPartyHostControls(
                     val confirmed = runCatching { confirmAck() }.isSuccess
                     if (confirmed) {
                         showAckSheet = false
-                        requestGoLive()
+                        when (pendingAction) {
+                            PendingCaptureAction.GoLive -> requestGoLive()
+                            PendingCaptureAction.RetryShare -> requestRetryShare()
+                            null -> Unit
+                        }
+                        pendingAction = null
                     } else {
                         ackFailed = true
                     }
                 }
             },
-            onDismiss = { showAckSheet = false },
+            onDismiss = { showAckSheet = false; pendingAction = null },
         )
     }
 

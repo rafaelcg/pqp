@@ -456,6 +456,8 @@
     <string name="watch_party_host_end">Encerrar</string>
     <string name="watch_party_host_retry_share">Compartilhar sua tela</string>
     <string name="watch_party_host_go_live_failed">Não foi possível ir ao vivo. O servidor não confirmou — tente de novo.</string>
+    <string name="watch_party_host_join_failed_ended">Não foi possível iniciar a transmissão; a watch party foi encerrada. Tente de novo.</string>
+    <string name="watch_party_host_join_failed_not_ended">Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo — tente de novo daqui a pouco.</string>
     <string name="watch_party_host_end_failed">Você saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo.</string>
     <string name="watch_party_host_generic_error">Algo deu errado. Tente de novo.</string>
     <string name="watch_party_host_ack_title">Antes de transmitir</string>
