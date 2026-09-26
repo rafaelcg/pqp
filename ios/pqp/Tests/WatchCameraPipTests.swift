@@ -271,6 +271,55 @@ final class WatchCameraPipTests: XCTestCase {
         XCTAssertEqual(bottomRight.y, stage.height - 10 - box.height / 2)
     }
 
+    // MARK: - The camera's own failure backoff (`WatchCameraFailureBackoff`)
+
+    func testTheFirstFailureIsAlwaysDue() {
+        XCTAssertTrue(WatchCameraFailureBackoff.isDue(nextRetryAt: nil, now: Date()))
+    }
+
+    /**
+     THE ONE FAROL FLAGGED. A replacement `AVPlayerItem` that fails again
+     immediately -- a genuinely broken camera egress, not a one-off blip --
+     must not be rebuilt again on the very next ~1s watchdog tick. Without a
+     real backoff between failures, that is a tight loop hammering the same
+     HLS endpoint roughly once a second for as long as it stays broken.
+     */
+    func testAReplacementFailingImmediatelyWaitsForTheNextBackoffStepInsteadOfRebuildingEveryTick() {
+        let now = Date()
+        let wait = WatchCameraFailureBackoff.delay(attempt: 0, jitter: { 0 })
+        let nextRetryAt = now.addingTimeInterval(wait)
+        // One second later (the watchdog's own tick), still inside the
+        // backoff: not due.
+        XCTAssertFalse(
+            WatchCameraFailureBackoff.isDue(nextRetryAt: nextRetryAt, now: now.addingTimeInterval(1))
+        )
+        // Once the scheduled wait has actually elapsed: due again.
+        XCTAssertTrue(
+            WatchCameraFailureBackoff.isDue(nextRetryAt: nextRetryAt, now: now.addingTimeInterval(wait))
+        )
+    }
+
+    func testTheBackoffStartsAtTheBaseAndDoublesEachAttempt() {
+        let first = WatchCameraFailureBackoff.delay(attempt: 0, jitter: { 0.5 })
+        let second = WatchCameraFailureBackoff.delay(attempt: 1, jitter: { 0.5 })
+        let third = WatchCameraFailureBackoff.delay(attempt: 2, jitter: { 0.5 })
+        XCTAssertEqual(first, WatchCameraFailureBackoff.baseSeconds, accuracy: 0.001)
+        XCTAssertEqual(second, first * 2, accuracy: 0.001)
+        XCTAssertEqual(third, first * 4, accuracy: 0.001)
+    }
+
+    func testTheBackoffIsCappedAtTheMax() {
+        let atManyAttempts = WatchCameraFailureBackoff.delay(attempt: 20, jitter: { 0.5 })
+        XCTAssertLessThanOrEqual(atManyAttempts, WatchCameraFailureBackoff.maxSeconds)
+    }
+
+    func testJitterStaysWithinPlusOrMinusTwentyPercent() {
+        let low = WatchCameraFailureBackoff.delay(attempt: 0, jitter: { 0 })
+        let high = WatchCameraFailureBackoff.delay(attempt: 0, jitter: { 1 })
+        XCTAssertEqual(low, WatchCameraFailureBackoff.baseSeconds * 0.8, accuracy: 0.001)
+        XCTAssertEqual(high, WatchCameraFailureBackoff.baseSeconds * 1.2, accuracy: 0.001)
+    }
+
     // MARK: - Automatic recovery from "the picture stopped" (`WatchDeadRetry`)
 
     func testTheFirstRetryStaysInsideTheBaseWindow() {

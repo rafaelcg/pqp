@@ -231,6 +231,57 @@ enum WatchCameraStreamSwap {
     }
 }
 
+// MARK: - Recovering from a failed camera item
+
+/**
+ HOW LONG TO WAIT BEFORE REBUILDING A CAMERA THAT KEEPS FAILING (Farol
+ review, PR 833, second pass).
+
+ `WatchStageView.checkCameraHealth()` force-reattaches a camera whose
+ `AVPlayerItem` reports `.failed`, on the theory that a fresh item past
+ whatever segment killed the last one is the whole fix. That is true for a
+ one-off blip and false for a genuinely broken egress, where the
+ replacement fails again immediately: without a real backoff, that reattach
+ happens again on the very next ~1s watchdog tick, and the one after that,
+ hammering the same HLS endpoint roughly once a second for as long as it
+ stays broken. This is the schedule that stops that: doubling from
+ `baseSeconds`, capped at `maxSeconds`, jittered so a run of viewers whose
+ cameras failed together do not all retry in the same instant.
+
+ Pure and `Date`-free (`isDue`) or randomness-injected (`delay`), same shape
+ as `WatchDeadRetry`, so both can be asserted on without a running player or
+ a real clock.
+ */
+enum WatchCameraFailureBackoff {
+    static let baseSeconds: TimeInterval = 2
+    static let maxSeconds: TimeInterval = 60
+    /// Consecutive ~1s watchdog ticks of confirmed ADVANCING playback (not
+    /// merely a non-failed status -- a decoder can wedge while still
+    /// reporting one) before a run of failures counts as over and the
+    /// attempt counter resets.
+    static let healthyTicksToReset = 10
+
+    /// The wait before acting on failure number `attempt` (0-based).
+    /// `jitter` returns a value in `0...1`; production passes
+    /// `Double.random(in: 0...1)`, a test passes a fixed one.
+    static func delay(attempt: Int, jitter: () -> Double) -> TimeInterval {
+        let raw = baseSeconds * pow(2, Double(max(attempt, 0)))
+        let capped = min(raw, maxSeconds)
+        // +/- 20%: enough to spread a synchronized failure across viewers,
+        // not enough to make the schedule unrecognisable in a test.
+        return capped * (0.8 + jitter() * 0.4)
+    }
+
+    /// Whether a failed item observed at `now` is due for another forced
+    /// reattach. `nil` means nothing has been acted on yet -- always due,
+    /// same as the very first failure always was before this backoff
+    /// existed.
+    static func isDue(nextRetryAt: Date?, now: Date) -> Bool {
+        guard let nextRetryAt else { return true }
+        return now >= nextRetryAt
+    }
+}
+
 // MARK: - The surface
 
 /// One `AVPlayerLayer`, drawn plain. No PiP hookup, no fullscreen, no

@@ -131,14 +131,25 @@ struct WatchStageView: View {
     /// camera egress is announced.
     @State private var cameraPlayer: AVPlayer?
     @State private var cameraAttached: CameraAttachedStream?
-    /// When this view last acted on a failed camera item. `nil` means either
-    /// nothing has failed, or the last failure was already handled and
-    /// cleared by a fresh attach (`attachCamera`). Debounces
-    /// `checkCameraHealth()`: a `force` reattach itself produces a fresh
-    /// `AVPlayerItem` that is briefly `.unknown` and never `.failed` again
-    /// the same tick, but the watchdog runs every second and must not fire a
-    /// second forced rebuild before the first one has had a chance to load.
-    @State private var cameraFailureHandledAt: Date?
+    /// How many camera failures in a row `checkCameraHealth()` has acted on
+    /// without a confirmed healthy stretch in between. Drives
+    /// `WatchCameraFailureBackoff.delay`; survives attach on purpose (see
+    /// that function's comment) and resets only once `cameraHealthyTicks`
+    /// proves the latest attach is actually holding.
+    @State private var cameraFailureAttempt = 0
+    /// The earliest moment `checkCameraHealth()` may act on another failed
+    /// item. `nil` means no failure has been acted on yet -- the first one
+    /// is handled immediately, same as before this backoff existed.
+    @State private var cameraFailureNextRetryAt: Date?
+    /// Consecutive watchdog ticks (~1/s) the camera has spent confirmed
+    /// advancing since the last failure. Only counted once a failure has
+    /// actually happened (`cameraFailureAttempt > 0`); a camera that has
+    /// never failed has nothing to earn back.
+    @State private var cameraHealthyTicks = 0
+    /// The camera's playhead on the previous tick, so this tick can tell
+    /// "reported playing" from "actually advancing" -- the same distinction
+    /// `lastHealthCheckPosition` makes for the film.
+    @State private var cameraLastPosition: Double?
     /// Corner, and which of the four layouts. Remembered per phone
     /// (`CameraPipPref`), same storage shape as `pinnedLines` above.
     @AppStorage("pqp.watchCameraPip") private var cameraPref: CameraPipPref = .default
@@ -1128,7 +1139,14 @@ struct WatchStageView: View {
             sessionKey: cameraSessionKey(url), attachedAt: Date()
         )
         cameraPlayer = player
-        cameraFailureHandledAt = nil
+        // NOT `cameraFailureAttempt = 0` HERE (Farol review, PR 833, second
+        // pass). A rebuild triggered BY a failure is itself an attach, and
+        // resetting the backoff on every attach is exactly what made a
+        // replacement that fails again land back at attempt zero -- a tight
+        // loop bounded only by the 1s watchdog tick, hammering the same HLS
+        // endpoint every second instead of backing off. The attempt counter
+        // only resets once `checkCameraHealth` has seen this attach actually
+        // hold for a while; `cameraHealthyTicks` below is what proves that.
         player.play()
     }
 
@@ -1136,14 +1154,22 @@ struct WatchStageView: View {
         cameraPlayer?.pause()
         cameraPlayer = nil
         cameraAttached = nil
-        cameraFailureHandledAt = nil
+        // A deliberate teardown (hidden by the viewer, the stage leaving the
+        // screen) is a clean slate, unlike an attach: there is no camera
+        // running for a backoff to apply to, and if one starts again later
+        // it deserves a fresh attempt at the fast end of the schedule.
+        cameraFailureAttempt = 0
+        cameraFailureNextRetryAt = nil
+        cameraHealthyTicks = 0
+        cameraLastPosition = nil
     }
 
     /**
-     THE CAMERA GETS RECOVERY TOO (Farol review, PR 833).
+     THE CAMERA GETS RECOVERY TOO (Farol review, PR 833), ON A REAL BACKOFF
+     (Farol review, PR 833, second pass).
 
      Silent, like every other camera failure on this stage: no card, no
-     retry button, the corner just comes back on its own once this reattach
+     retry button, the corner just comes back on its own once a reattach
      lands. Unlike the film, a hard `AVPlayerItem` failure here has no
      server to ask -- the camera never mints its own session, so there is no
      fresher URL to fetch, only the one `reconcileCamera` already knows.
@@ -1152,18 +1178,63 @@ struct WatchStageView: View {
      brand new `AVPlayerItem` on the same playlist, past whatever segment
      killed the last one.
 
-     Debounced by `cameraFailureHandledAt`: a fresh attach is briefly
-     `.unknown`, not `.failed`, so this fires once per genuine failure and
-     not once per second while the replacement is still loading.
+     THE BUG THE FIRST VERSION OF THIS HAD. It debounced on a timestamp that
+     `attachCamera` cleared on every attach -- including the very reattach
+     this function had just triggered. A replacement that failed again
+     immediately (a genuinely broken camera egress, not a one-off blip) was
+     therefore rebuilt again on the very next 1s watchdog tick, and the tick
+     after that, for as long as it kept failing: a tight loop hammering the
+     same HLS endpoint roughly once a second instead of backing off from it.
+
+     THE FIX. `cameraFailureAttempt` and `cameraFailureNextRetryAt` survive
+     attach on purpose (see the comment in `attachCamera`) and only grow
+     while failures keep happening: `WatchCameraFailureBackoff.delay` is
+     2s, 4s, 8s... doubling up to a minute, jittered so a run of viewers
+     whose cameras failed together do not all retry in the same instant.
+     They reset to zero only once THIS attach has proven itself --
+     `cameraHealthyTicks` counting `WatchCameraFailureBackoff.healthyTicksToReset`
+     straight seconds of a genuinely advancing playhead, the same "confirmed,
+     not merely reported" standard the film's own `recoveryConfirmTicks`
+     uses and for the same reason: a decoder can sit at a non-failed status
+     while wedged.
      */
     private func checkCameraHealth() {
-        guard cameraPlayer?.currentItem?.status == .failed else { return }
-        let now = Date()
-        if let handledAt = cameraFailureHandledAt, now.timeIntervalSince(handledAt) < 5 {
+        guard let item = cameraPlayer?.currentItem else {
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
             return
         }
-        cameraFailureHandledAt = now
-        reconcileCamera(force: true)
+        let now = Date()
+        if item.status == .failed {
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
+            guard WatchCameraFailureBackoff.isDue(
+                nextRetryAt: cameraFailureNextRetryAt, now: now
+            ) else { return }
+            let wait = WatchCameraFailureBackoff.delay(
+                attempt: cameraFailureAttempt, jitter: { Double.random(in: 0...1) }
+            )
+            cameraFailureNextRetryAt = now.addingTimeInterval(wait)
+            cameraFailureAttempt += 1
+            reconcileCamera(force: true)
+            return
+        }
+        guard cameraFailureAttempt > 0 || cameraFailureNextRetryAt != nil else {
+            // Nothing has failed this camera yet; no backoff to earn back.
+            return
+        }
+        let position = cameraPlayer?.currentTime().seconds ?? 0
+        let advanced = cameraLastPosition.map { position > $0 } ?? false
+        cameraLastPosition = position
+        guard advanced else {
+            cameraHealthyTicks = 0
+            return
+        }
+        cameraHealthyTicks += 1
+        if cameraHealthyTicks >= WatchCameraFailureBackoff.healthyTicksToReset {
+            cameraFailureAttempt = 0
+            cameraFailureNextRetryAt = nil
+        }
     }
 
     /// Re-tune the item that is already playing.
