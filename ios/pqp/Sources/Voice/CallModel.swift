@@ -1180,11 +1180,11 @@ final class CallModel {
         case .granted: return true
         case .denied: return false
         default:
-            return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
+            // The async form, not the completion-handler one: AVFoundation
+            // calls that handler on a background queue, and a closure written
+            // in this main-actor type would trip Swift 6's isolation check
+            // there, the way WatchOrientation's geometry handler did.
+            return await AVAudioApplication.requestRecordPermission()
         }
     }
 
