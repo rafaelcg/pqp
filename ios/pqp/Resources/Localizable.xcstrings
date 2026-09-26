@@ -7100,6 +7100,76 @@
           }
         }
       }
+    },
+    "Camera layout" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Layout da câmera"
+          }
+        }
+      }
+    },
+    "Side by side" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lado a lado"
+          }
+        }
+      }
+    },
+    "Hide camera" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar câmera"
+          }
+        }
+      }
+    },
+    "Hide stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar transmissão"
+          }
+        }
+      }
+    },
+    "Move the camera to another corner" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mudar a câmera de canto"
+          }
+        }
+      }
+    },
+    "Your camera" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua câmera"
+          }
+        }
+      }
+    },
+    "Presenter's voice" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz de quem apresenta"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

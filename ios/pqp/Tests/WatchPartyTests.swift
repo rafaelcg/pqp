@@ -148,7 +148,8 @@ final class WatchPartyTests: XCTestCase {
         LiveHlsStream(
             hlsUrl: "/api/voice/hls-playlist/c1/\(startedAt)?t=\(token)",
             startedAt: startedAt, presenterPeerId: "p1",
-            delaySeconds: nil, topHeight: nil, topFramerate: nil
+            delaySeconds: nil, topHeight: nil, topFramerate: nil,
+            cameraHlsUrl: nil, cameraHasVideo: nil, cameraHasVoiceAudio: nil
         )
     }
 
