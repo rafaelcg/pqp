@@ -202,5 +202,27 @@ class WatchPartyHostSequenceTest {
         assertFalse(ended)
     }
 
+    /**
+     * Cancelled while the end request is in flight (the screen was left, the
+     * scope torn down): the cancellation still propagates, but the phone
+     * leaves voice first, so its screen never keeps broadcasting after the
+     * host pressed Encerrar. A third Farol finding.
+     */
+    @Test
+    fun `end still leaves voice when cancelled mid-request, and rethrows the cancellation`() = runTest {
+        val calls = mutableListOf<String>()
+        var rethrown = false
+        try {
+            performWatchPartyEnd(
+                setEnded = { calls += "setEnded"; throw CancellationException("scope gone") },
+                leaveVoice = { calls += "leaveVoice" },
+            )
+        } catch (e: CancellationException) {
+            rethrown = true
+        }
+        assertTrue(rethrown)
+        assertEquals(listOf("setEnded", "leaveVoice"), calls)
+    }
+
     private fun fail(message: String): Nothing = throw AssertionError(message)
 }

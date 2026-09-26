@@ -44,6 +44,7 @@ import gg.pqp.app.watch.WatchPartyPayload
 import gg.pqp.app.watch.canEndParty
 import gg.pqp.app.watch.canGoLiveWith
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 /** Which capture flow the streaming-responsibility ack sheet is standing in front of. */
 private enum class PendingCaptureAction { GoLive, RetryShare }
@@ -133,7 +134,16 @@ fun WatchPartyHostControls(
      */
     fun startWithAckGate(action: PendingCaptureAction) {
         scope.launch {
-            if (checkNeedsAck()) {
+            // Fail CLOSED here too: a lookup that throws shows the notice
+            // rather than escaping this launch (a Farol finding).
+            val needsAck = try {
+                checkNeedsAck()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                true
+            }
+            if (needsAck) {
                 pendingAction = action
                 showAckSheet = true
             } else {
@@ -233,7 +243,14 @@ fun WatchPartyHostControls(
                     // disclosure this whole dialog exists to guarantee is
                     // shown would have been silently skipped from the
                     // host's saved state's point of view.
-                    val confirmed = runCatching { confirmAck() }.isSuccess
+                    val confirmed = try {
+                        confirmAck()
+                        true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        false
+                    }
                     if (confirmed) {
                         showAckSheet = false
                         when (pendingAction) {

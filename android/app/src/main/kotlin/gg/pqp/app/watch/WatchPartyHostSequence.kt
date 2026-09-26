@@ -147,7 +147,12 @@ suspend fun <C> performWatchPartyGoLive(
  * the body.
  */
 suspend fun performWatchPartyEnd(setEnded: suspend () -> Boolean, leaveVoice: () -> Unit): Boolean {
-    val ended = attempt { setEnded() }.getOrDefault(false)
-    leaveVoice()
-    return ended
+    // `finally`, not a plain call after: a cancellation while [setEnded] is in
+    // flight rethrows out of [attempt], and the phone must still stop
+    // broadcasting because the host pressed Encerrar (a Farol finding).
+    try {
+        return attempt { setEnded() }.getOrDefault(false)
+    } finally {
+        leaveVoice()
+    }
 }
