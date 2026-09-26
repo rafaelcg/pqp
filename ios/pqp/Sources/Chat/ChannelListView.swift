@@ -155,7 +155,9 @@ struct ChannelListView: View {
     private var textChannels: [Channel] { looseText }
     private var voiceChannels: [Channel] { looseVoice }
 
-    var body: some View {
+    /// Split out of `body` in three parts because the single chain was
+    /// past what the type checker would finish on CI's runners.
+    private var channelScroll: some View {
         ZStack {
             Palette.ink.ignoresSafeArea()
 
@@ -272,6 +274,10 @@ struct ChannelListView: View {
                 .refreshable { await load() }
             }
         }
+    }
+
+    private var navigatedList: some View {
+        channelScroll
         .navigationTitle(current.name)
         // The banner already says the name, in type twice the size. Leaving the
         // large title on would print it twice, one under the other.
@@ -342,6 +348,10 @@ struct ChannelListView: View {
             ChannelMembersView(channel: channel, server: current)
         }
         .sheet(item: $threadsFor) { channel in ThreadListView(channel: channel) }
+    }
+
+    var body: some View {
+        navigatedList
         .alert("New channel", isPresented: $showingNewChannel) {
             TextField("Channel name", text: $newChannelName)
             Button("Cancel", role: .cancel) { newChannelName = "" }
