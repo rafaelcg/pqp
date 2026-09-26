@@ -41,7 +41,6 @@ class WatchLiveStoreTest {
     private var seated: String? = null
     private var seedResponse: ChannelLiveResponse? = null
     private var seedCalls = 0
-    private var self: String? = ME
 
     private fun store(scope: TestScope) = WatchLiveStore(
         frames = frames,
@@ -49,7 +48,6 @@ class WatchLiveStoreTest {
         send = { sent += it },
         seatedChannelId = { seated },
         seed = { seedCalls += 1; seedResponse },
-        selfUserId = { self },
         scope = scope,
     )
 
@@ -341,6 +339,61 @@ class WatchLiveStoreTest {
         frames.emit(partyFrame("c1", role = "viewer", voiceEnabled = false))
         assertEquals(emptyList<String?>(), types())
         assertEquals(false, store.mayTakeSeat("c1"))
+    }
+
+    /** A party object exactly as a server that predates `voiceEnabled` sends it: no `options` key at all. */
+    private fun legacyPartyFrame(channelId: String, role: String, state: String = "live") = frame(
+        """
+        {"type":"watch-party-update","channelId":"$channelId",
+         "party":{"id":"p1","channelId":"$channelId","name":"Sessao","state":"$state",
+                  "hostUserId":"h1","hostDisplayName":"Host","viewerRole":"$role"}}
+        """,
+    )
+
+    /**
+     * THE BUG THIS FIX CLOSES. An old party's row carries no
+     * `options.voiceEnabled` key at all -- the deprecated `mayTakeWatchPartySeat`
+     * read a missing key as "voice on" for backward compatibility and let an
+     * ordinary viewer in, past a join button the server's real rule
+     * (`mayGoOnAir`, which has no `voiceEnabled` concept) then refused. A
+     * viewer of that same legacy party must be refused here too.
+     */
+    @Test
+    fun `a viewer of a legacy party with no voiceEnabled key at all is still refused`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(legacyPartyFrame("c1", role = "viewer"))
+        assertTrue(store.seats.value.containsKey("c1"))
+        assertEquals(false, store.mayTakeSeat("c1"))
+    }
+
+    @Test
+    fun `the host of that same legacy party still gets in`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(legacyPartyFrame("c1", role = "host"))
+        assertTrue(store.mayTakeSeat("c1"))
+    }
+
+    /**
+     * A party that has ended or been cancelled is not a closed room, even
+     * when the frame still names a `viewerRole` for it: nothing is running
+     * any more, so the channel is an ordinary voice room again.
+     */
+    @Test
+    fun `an ended party gives the channel back even with a role still on it`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(legacyPartyFrame("c1", role = "viewer", state = "ended"))
+        assertTrue(store.mayTakeSeat("c1"))
+    }
+
+    @Test
+    fun `a cancelled party gives the channel back too`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(legacyPartyFrame("c1", role = "viewer", state = "cancelled"))
+        assertTrue(store.mayTakeSeat("c1"))
     }
 
     /**

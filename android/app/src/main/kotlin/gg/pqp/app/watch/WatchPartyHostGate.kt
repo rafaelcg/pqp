@@ -20,7 +20,7 @@ package gg.pqp.app.watch
  * AND the server told this seat it may stream", and it is `false` before
  * that join. The cost is one extra tap for the actual host -- who was always
  * going to join the room to speak anyway -- and nothing at all for anyone
- * else, which is the same trade [mayTakeWatchPartySeat]'s own doc already
+ * else, which is the same trade [mayJoinWatchPartyRoom]'s own doc already
  * makes for staff who are neither host nor co-host of a running party.
  *
  * ## Where [serverWatchPartyEnabled] comes from

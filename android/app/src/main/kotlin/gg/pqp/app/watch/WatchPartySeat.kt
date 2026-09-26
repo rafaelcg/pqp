@@ -2,9 +2,7 @@ package gg.pqp.app.watch
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -25,93 +23,83 @@ import kotlinx.serialization.json.jsonObject
  * were about to watch for free. The web stopped offering that (#436); this
  * client had not followed.
  *
- * ## Why this could not simply be deleted
+ * ## A conservative port, not the server's full rule
  *
- * A blanket "no join button on a watch party" would also take it from the
- * host, and a host presenting from Android is the reason the screen-share work
- * exists at all. This client could not tell a host from a viewer before
- * joining, because `welcome.canStream` is the answer and `welcome` only
- * arrives once the seat is already taken.
+ * The server's real authority is `mayGoOnAir` in
+ * `packages/shared/src/watch-party-session.ts`, fed by
+ * `fetchWatchPartySeatSnapshot`: the channel's `START_WATCH_PARTY` holder,
+ * the party's host, its co-hosts, and any ACCEPTED Convidados guest. This
+ * file used to port an older, now-`@deprecated` sibling of that function,
+ * `mayTakeWatchPartySeat` (voice-on-at-all, host, co-host, or an invited-but-
+ * not-yet-accepted guest), which `join-voice-room` no longer calls at all.
+ * That mismatch was a real bug: an old party carries no `options.voiceEnabled`
+ * key at all, the deprecated rule read a missing key as "voice on" for
+ * backward compatibility, and an ordinary viewer of that party saw a join
+ * button the server then refused.
  *
- * `watch-party-update` is the answer, and it was on the deliberately-ignored
- * list. It carries `viewerRole`, resolved per recipient by the server, and it
- * arrives at socket auth for every active party this account may see
- * (`catchUpWatchParties`) as well as on every change. So the role is known
- * before anybody taps anything.
- *
- * ## One rule, not a second implementation of it
- *
- * [mayTakeWatchPartySeat] is a port of the function of the same name in
- * `packages/shared/src/watch-party-session.ts`, which is what the server
- * refuses `join-voice-room` with and what the web panel draws from. Three
- * implementations of a permission rule is how they drift, so this one is a
- * transcription and is meant to read as one: same name, same terms, same
- * order.
+ * Convidados (guests) is out of scope for this fix on every platform (see
+ * iOS's `watchPartyMayJoinRoom` in `WatchPartyHostGate.swift`, #835, which
+ * this mirrors), and this build has no reliable signal for "an accepted
+ * guest" without building that feature. So [mayJoinWatchPartyRoom] reads only
+ * `viewerRole`: the host and any co-host may always rejoin the room (to
+ * manage the party, or because the web or another client promoted them), and
+ * everyone else, once a party is running, sees no seat to take. That is
+ * NEVER WIDER than what the server actually allows, which is the property
+ * that matters -- a host or co-host this build fails to recognise loses a
+ * join button; a viewer this build wrongly admits reaches a room the server
+ * refuses, which is the bug being fixed.
  */
 
 /**
  * This account's standing in one channel's active party, as the party's own
- * row describes it. Mirrors the `party` argument of the shared function.
+ * row describes it.
  */
 data class WatchPartySeatRule(
-    /**
-     * Whether the host turned voice on at all.
-     *
-     * ABSENT ON THE WIRE READS AS ON, which is [LEGACY_VOICE_ENABLED] below
-     * and matters more than it looks. `voiceEnabled` is a new option; every
-     * server that predates it ran watch parties as ordinary voice rooms and
-     * will happily admit anybody who asks. Reading a missing key as `false`
-     * would hide the button on exactly those servers, which is a control
-     * withheld for a join that would have succeeded.
-     */
-    val voiceEnabled: Boolean,
     val isHost: Boolean,
     val isCohost: Boolean,
-    val isInvited: Boolean,
+    /**
+     * `state` is one of `WATCH_PARTY_TERMINAL_PHASES` (`ended` or
+     * `cancelled`). A terminal party reads the same as no active party at
+     * all in [mayJoinWatchPartyRoom]: nothing is running any more, so the
+     * channel is an ordinary voice room again, exactly as
+     * `WatchPartyKnowledge.active` treats it on iOS.
+     */
+    val isTerminal: Boolean,
 )
 
 /**
- * A party whose options carry no `voiceEnabled` key at all.
- *
- * The same reading as `withLegacyWatchPartyVoice` in the shared package, and
- * for the same reason: a row written before the option existed was set up when
- * every watch party was a voice room. Here it also covers the whole of an
- * older *server*, which sends no such key on any party.
- */
-const val LEGACY_VOICE_ENABLED = true
-
-/**
- * The rule, transcribed from `mayTakeWatchPartySeat` in
- * `packages/shared/src/watch-party-session.ts`.
+ * Whether the channel's ordinary voice room ("Entrar" in the app bar) belongs
+ * to this account right now.
  *
  * WHO IS ALWAYS LET IN: anyone who may start a watch party in this channel,
- * the host and co-hosts by name, anyone invited up to speak, and everybody
- * once a host turns voice on.
+ * and the host and co-hosts of the party currently running, by name.
  *
- * A CHANNEL WITH NO ACTIVE PARTY IS NOT A CLOSED ROOM. It joins like the
- * ordinary voice room it is, which is what a build with no watch party chrome
- * at all already promises.
+ * A CHANNEL WITH NO ACTIVE PARTY IS NOT A CLOSED ROOM, and neither is one
+ * whose party has ended or been cancelled. Both join like the ordinary voice
+ * room the channel is, which is what a build with no watch party chrome at
+ * all already promises, and it is the door a future host walks through to
+ * discover `canStartWatchParty` in the first place.
  *
- * [canStartWatchParty] IS ALWAYS FALSE ON THIS CLIENT, and that is stated
- * rather than hidden: the phone models no permission bits, so it cannot answer
- * "may this person start a party here" before a `welcome` tells it. The people
- * this costs are staff who hold START_WATCH_PARTY and are neither the host nor
- * a co-host of the party currently running: they see no join button while it
- * runs, and a tap they never get is a smaller failure than a seat sold to five
- * hundred viewers. The parameter is kept so the shape matches the shared
- * function exactly and wiring a real answer in later is one line.
+ * [canStartWatchParty] IS ALWAYS FALSE ON THIS CLIENT unless the caller has
+ * already joined the channel's room and been told it may stream, because the
+ * phone models no permission bits and cannot answer "may this person start a
+ * party here" before a `welcome` tells it. The people this costs are staff
+ * who hold START_WATCH_PARTY and are neither the host nor a co-host of the
+ * party currently running: they see no join button while it runs, and a tap
+ * they never get is a smaller failure than a seat sold to five hundred
+ * viewers.
  */
-fun mayTakeWatchPartySeat(
+fun mayJoinWatchPartyRoom(
     canStartWatchParty: Boolean,
     party: WatchPartySeatRule?,
 ): Boolean {
     if (canStartWatchParty) {
         return true
     }
-    if (party == null) {
+    if (party == null || party.isTerminal) {
         return true
     }
-    return party.voiceEnabled || party.isHost || party.isCohost || party.isInvited
+    return party.isHost || party.isCohost
 }
 
 /**
@@ -120,34 +108,20 @@ fun mayTakeWatchPartySeat(
  * Null means "this channel has no party you are part of any more", which is
  * what `party: null` on the frame says and also what a frame this client
  * cannot make sense of has to mean: the safe direction here is the ordinary
- * voice room, because [mayTakeWatchPartySeat] answers true for a null party
+ * voice room, because [mayJoinWatchPartyRoom] answers true for a null party
  * and the server is still the enforcement.
  *
  * Every field is read defensively and nothing throws, the same rule
  * [decodeLiveStream] follows: a server that grew a field must not turn into a
  * channel nobody can join.
- *
- * `stage.invited` is public on the wire (who is UP is public, who is ASKING is
- * not), so an invited guest recognises themselves here without a second
- * request. [selfUserId] null means the session has not resolved yet, and an
- * account that does not know its own id cannot be on that list.
  */
-fun decodeWatchPartySeat(frame: JsonObject, selfUserId: String?): WatchPartySeatRule? {
+fun decodeWatchPartySeat(frame: JsonObject): WatchPartySeatRule? {
     val party = runCatching { frame["party"]?.jsonObject }.getOrNull() ?: return null
     val role = (party["viewerRole"] as? JsonPrimitive)?.contentOrNull
-    val options = runCatching { party["options"]?.jsonObject }.getOrNull()
-    val voiceEnabled =
-        (options?.get("voiceEnabled") as? JsonPrimitive)?.booleanOrNull ?: LEGACY_VOICE_ENABLED
-    val invited = selfUserId != null && runCatching {
-        val list = party["stage"]?.jsonObject?.get("invited")?.jsonArray ?: return@runCatching false
-        list.any { entry ->
-            (entry.jsonObject["userId"] as? JsonPrimitive)?.contentOrNull == selfUserId
-        }
-    }.getOrDefault(false)
+    val state = (party["state"] as? JsonPrimitive)?.contentOrNull
     return WatchPartySeatRule(
-        voiceEnabled = voiceEnabled,
         isHost = role == "host",
         isCohost = role == "cohost",
-        isInvited = invited,
+        isTerminal = state == "ended" || state == "cancelled",
     )
 }
