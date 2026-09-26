@@ -41,9 +41,9 @@ import gg.pqp.app.watch.WatchPartyListEntry
  *
  * [onOpen] and [onHost] both just open the channel -- there is no separate
  * "start hosting" navigation. `PqpApp.kt`'s `ChatRoute` widens its own host
- * gate for a server's owner with no active party, so landing there from
- * [onHost] shows the create control immediately rather than the bare idle
- * stage a plain viewer would see.
+ * gate with the same `START_WATCH_PARTY` check whenever there is no active
+ * party, so landing there from [onHost] shows the create control immediately
+ * rather than the bare idle stage a plain viewer would see.
  */
 @Composable
 fun WatchPartyListBlockView(

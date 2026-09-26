@@ -54,7 +54,12 @@ import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.bauUnread
 import gg.pqp.app.core.Channel
+import gg.pqp.app.core.Permission
+import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.channelBits
+import gg.pqp.app.core.hasPermission
+import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.social.ui.CountBadge
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
@@ -141,11 +146,16 @@ fun ChannelsScreen(
         liveHlsEnabled = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()?.enabled == true
     }
 
-    // The one signal this client has for "may start a watch party" without
-    // having joined a room first -- see `watchPartyListEntry`'s doc for why
-    // server ownership, and not the full `START_WATCH_PARTY` bit, is the
-    // floor the list uses.
-    val isOwner = ServerActions.isOwner(servers.firstOrNull { it.id == serverId }?.role)
+    // This account's resolved permission bits for the server and every
+    // channel on it -- `GET /api/servers/:serverId/permissions`, the exact
+    // route and shape `usePermissions` reads on web. This is what the list
+    // checks `Permission.START_WATCH_PARTY` against, so "may I host" is
+    // answered before anybody has opened anything, not only once a room is
+    // joined (`gg.pqp.app.core.Permissions.kt`).
+    var permissions by remember(serverId) { mutableStateOf(PermissionsSnapshot()) }
+    LaunchedEffect(serverId) {
+        permissions = runCatching { session.api.serverPermissions(serverId) }.getOrDefault(PermissionsSnapshot())
+    }
 
     LaunchedEffect(serverId) {
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
@@ -252,7 +262,7 @@ fun ChannelsScreen(
                 // party appears in this list now. `sectionsOf` already drops
                 // these from the ordinary rows below, matching the web
                 // sidebar's own `listed` filter (`channel-list.tsx`).
-                val watchPartyBlock = remember(list, parties, liveChannels, isOwner, liveHlsEnabled) {
+                val watchPartyBlock = remember(list, parties, liveChannels, permissions, liveHlsEnabled) {
                     watchPartyListBlock(
                         list.filter { it.type == "watch_party" }.map { channel ->
                             watchPartyListEntry(
@@ -260,7 +270,8 @@ fun ChannelsScreen(
                                 channelName = channel.name,
                                 party = parties[channel.id],
                                 watching = liveChannels[channel.id]?.watching,
-                                isOwner = isOwner && liveHlsEnabled,
+                                canHost = liveHlsEnabled &&
+                                    hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
                             )
                         },
                     )

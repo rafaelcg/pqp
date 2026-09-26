@@ -37,7 +37,7 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = party(state = "live", role = "viewer"),
             watching = 12,
-            isOwner = false,
+            canHost = false,
         )
         assertTrue(entry is WatchPartyListEntry.Live)
         entry as WatchPartyListEntry.Live
@@ -53,7 +53,7 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = party(state = "live"),
             watching = null,
-            isOwner = false,
+            canHost = false,
         )
         assertEquals(null, (entry as WatchPartyListEntry.Live).watching)
     }
@@ -67,7 +67,7 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = party(state = "draft", role = "host"),
             watching = null,
-            isOwner = false,
+            canHost = false,
         )
         assertTrue(entry is WatchPartyListEntry.Pending)
         assertEquals(false, (entry as WatchPartyListEntry.Pending).scheduled)
@@ -80,7 +80,7 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = party(state = "scheduled", role = "host"),
             watching = null,
-            isOwner = false,
+            canHost = false,
         )
         assertTrue((entry as WatchPartyListEntry.Pending).scheduled)
     }
@@ -92,23 +92,23 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = party(state = "draft", role = "cohost"),
             watching = null,
-            isOwner = false,
+            canHost = false,
         )
         assertTrue(entry is WatchPartyListEntry.Pending)
     }
 
     @Test
-    fun `somebody else's draft is nobody's business here, even the owner's`() {
-        // Mirrors the web: `pendingParty` is resolved per viewer, and an
-        // owner overseeing another host's draft does not get a create
-        // button drawn over it -- the create endpoint's own supersede rule
-        // decides what happens if they still tap Host.
+    fun `somebody else's draft is nobody's business here, even for a host-eligible viewer`() {
+        // Mirrors the web: `pendingParty` is resolved per viewer, and
+        // somebody who could start their OWN party does not get a create
+        // button drawn over somebody else's draft -- the create endpoint's
+        // own supersede rule decides what happens if they still tap Host.
         val entry = watchPartyListEntry(
             channelId = "c1",
             channelName = "cinema",
             party = party(state = "draft", role = "viewer"),
             watching = null,
-            isOwner = true,
+            canHost = true,
         )
         assertNull(entry)
     }
@@ -116,13 +116,13 @@ class WatchPartyListStateTest {
     // ----------------------------------------------------------------- Host
 
     @Test
-    fun `no party and this account owns the server offers Host`() {
+    fun `no party and this account holds START_WATCH_PARTY offers Host`() {
         val entry = watchPartyListEntry(
             channelId = "c1",
             channelName = "cinema",
             party = null,
             watching = null,
-            isOwner = true,
+            canHost = true,
         )
         assertTrue(entry is WatchPartyListEntry.Host)
     }
@@ -134,7 +134,7 @@ class WatchPartyListStateTest {
             channelName = "cinema",
             party = null,
             watching = null,
-            isOwner = false,
+            canHost = false,
         )
         assertNull(entry)
     }
@@ -143,7 +143,7 @@ class WatchPartyListStateTest {
     fun `a terminal party is not offered as Host until the clearing frame arrives`() {
         // Same deliberate gap as `watchPartyHostGate`'s "an ended party
         // frees the host to create the next one" test: the row stays absent
-        // until `watch-party-update` sends `party: null`, even for the owner
+        // until `watch-party-update` sends `party: null`, even for the host
         // who just ended it.
         for (state in listOf("ended", "cancelled")) {
             val entry = watchPartyListEntry(
@@ -151,7 +151,7 @@ class WatchPartyListStateTest {
                 channelName = "cinema",
                 party = party(state = state, role = "host"),
                 watching = null,
-                isOwner = true,
+                canHost = true,
             )
             assertNull("state=$state", entry)
         }

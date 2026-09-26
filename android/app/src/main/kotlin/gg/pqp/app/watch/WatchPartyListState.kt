@@ -18,7 +18,7 @@ package gg.pqp.app.watch
  * 3. No party at all, and this account may start one: [Host], a single
  *    button-looking row that opens the channel straight onto its own
  *    hosting controls (see [gg.pqp.app.ui.PqpApp]'s `ChatRoute` handling of
- *    `isServerOwner`).
+ *    `canStartWatchParty`).
  * 4. No party and no permission: `null`. The channel draws nothing at all --
  *    no heading, no row, no placeholder.
  */
@@ -51,20 +51,15 @@ sealed interface WatchPartyListEntry {
 /**
  * [WatchPartyListEntry] for one `watch_party` channel, or null for state 4.
  *
- * [isOwner]: the one signal this client has for "may start a watch party"
- * that does not require having already joined the channel's room first. The
- * web asks `Permission.START_WATCH_PARTY`, a bit this app has never modelled
- * outside of `welcome.canStream`, itself only known once a room is actually
- * joined (`WatchPartyHostGate.kt`'s own doc explains why). Server ownership
- * is a safe floor here: an owner always holds every permission, so this
- * never offers the row to somebody the server would refuse, and it is the
- * literal case Rafael asked for -- "as an owner to host one". A non-owner
- * holding START_WATCH_PARTY through a role still gets the on-stage create
- * button the moment they open the channel and join its room; only this list
- * row is narrower than the web's, until Android carries real permission
- * bits. Callers pass `isOwner && serverWatchPartyEnabled` (the same
- * `GET /api/live-hls/config` answer `WatchPartyHostGate.kt` reads), so a
- * server with the feature off never draws a button that goes nowhere.
+ * [canHost]: this account holds `Permission.START_WATCH_PARTY` on this
+ * channel (falling back to the server-wide bitfield when the channel has no
+ * overwrite of its own, exactly `usePermissions.can` on web -- see
+ * `gg.pqp.app.core.Permissions.kt`) AND the server's own answer to
+ * `GET /api/live-hls/config` says this server may run a watch party at all,
+ * the same two facts `canOfferWatchPartyCreate` ANDs on web. Both live in the
+ * caller (`ChannelsScreen.kt`), not here, because resolving a bitfield needs
+ * the server's whole permission snapshot and this file stays a pure decision
+ * over already-resolved booleans.
  *
  * A [party] that is `ended` or `cancelled` reads the same as [Host] would,
  * EXCEPT it does not offer one: it is still the row until the next
@@ -80,7 +75,7 @@ fun watchPartyListEntry(
     channelName: String,
     party: WatchPartyPayload?,
     watching: Int?,
-    isOwner: Boolean,
+    canHost: Boolean,
 ): WatchPartyListEntry? {
     if (party != null) {
         if (party.isLive) {
@@ -104,7 +99,7 @@ fun watchPartyListEntry(
             null
         }
     }
-    return if (isOwner) WatchPartyListEntry.Host(channelId, channelName) else null
+    return if (canHost) WatchPartyListEntry.Host(channelId, channelName) else null
 }
 
 /**
