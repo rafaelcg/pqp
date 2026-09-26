@@ -67,6 +67,11 @@ import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.WatchPartyListBlock
+import gg.pqp.app.watch.liveHlsConfig
+import gg.pqp.app.watch.watchPartyListBlock
+import gg.pqp.app.watch.watchPartyListEntry
+import gg.pqp.app.watch.ui.WatchPartyListBlockView
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -117,9 +122,30 @@ fun ChannelsScreen(
     // for every live channel this person may see at socket auth, so this is
     // usually already answered before the list is drawn.
     val liveChannels by watch.channels.collectAsStateWithLifecycle()
+    // The party running (or drafted) in every `watch_party` channel this
+    // account may see, same socket knowledge `WatchChannelPane` already
+    // reads once a channel is open -- here it drives the block above the
+    // categories instead. See `WatchPartyListState.kt`.
+    val parties by watch.parties.collectAsStateWithLifecycle()
     // Voice refusals and moderation notices are shown by `PqpApp`, not here:
     // a join now starts from the chat screen, and a screen share from the call
     // bar, so this screen is usually not the one on top when the answer lands.
+
+    // Whether THIS server may run a watch party at all
+    // (`GET /api/live-hls/config`, the same route and field the web reads
+    // for the identical question). Fetched here too, alongside the one
+    // `ChatRoute` already does once a channel is open, because the list has
+    // to answer "may I host" before anybody has opened anything.
+    var liveHlsEnabled by remember(serverId) { mutableStateOf(false) }
+    LaunchedEffect(serverId) {
+        liveHlsEnabled = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()?.enabled == true
+    }
+
+    // The one signal this client has for "may start a watch party" without
+    // having joined a room first -- see `watchPartyListEntry`'s doc for why
+    // server ownership, and not the full `START_WATCH_PARTY` bit, is the
+    // floor the list uses.
+    val isOwner = ServerActions.isOwner(servers.firstOrNull { it.id == serverId }?.role)
 
     LaunchedEffect(serverId) {
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
@@ -221,10 +247,42 @@ fun ChannelsScreen(
 
             else -> {
                 val sections = remember(list) { sectionsOf(list) }
+                // Every `watch_party` channel this server has, folded into
+                // ONE block above everything else -- the only place a watch
+                // party appears in this list now. `sectionsOf` already drops
+                // these from the ordinary rows below, matching the web
+                // sidebar's own `listed` filter (`channel-list.tsx`).
+                val watchPartyBlock = remember(list, parties, liveChannels, isOwner, liveHlsEnabled) {
+                    watchPartyListBlock(
+                        list.filter { it.type == "watch_party" }.map { channel ->
+                            watchPartyListEntry(
+                                channelId = channel.id,
+                                channelName = channel.name,
+                                party = parties[channel.id],
+                                watching = liveChannels[channel.id]?.watching,
+                                isOwner = isOwner && liveHlsEnabled,
+                            )
+                        },
+                    )
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentPadding = PaddingValues(bottom = Spacing.xl),
                 ) {
+                    if (watchPartyBlock != WatchPartyListBlock.None) {
+                        item(key = "watchParty") {
+                            Spacer(Modifier.height(Spacing.sm))
+                            WatchPartyListBlockView(
+                                block = watchPartyBlock,
+                                onOpen = { channelId ->
+                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
+                                },
+                                onHost = { channelId ->
+                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
+                                },
+                            )
+                        }
+                    }
                     // Above TEXT, where the web sidebar puts it. It is not a
                     // channel and is not drawn as one: it carries its own hint
                     // so nobody opens it expecting to type.
@@ -349,6 +407,12 @@ private data class Section(val key: String, val title: String, val channels: Lis
  *
  * A category is a channel row with `type == "category"`, not a separate object,
  * and its children point at it through `parentId`.
+ *
+ * A `watch_party` channel is never in here. `Channel.isVoice` answers true
+ * for it too, but it no longer gets an ordinary row: `WatchPartyListBlock`
+ * above the categories is the only place it appears now, live, pending or a
+ * host button, and NOTHING at all otherwise -- matching the web sidebar's
+ * own `listed` filter in `channel-list.tsx`.
  */
 private fun sectionsOf(all: List<Channel>): List<Section> {
     val categories = all.filter { it.isCategory }.sortedBy { it.position }
@@ -362,12 +426,12 @@ private fun sectionsOf(all: List<Channel>): List<Section> {
 
     val topLevel = byParent[null].orEmpty()
     add("top-text", "", topLevel.filter { it.isText })
-    add("top-voice", "", topLevel.filter { it.isVoice })
+    add("top-voice", "", topLevel.filter { it.isVoice && it.type != "watch_party" })
 
     categories.forEach { category ->
         val children = byParent[category.id].orEmpty()
         add("cat-${category.id}-text", category.name, children.filter { it.isText })
-        add("cat-${category.id}-voice", category.name, children.filter { it.isVoice })
+        add("cat-${category.id}-voice", category.name, children.filter { it.isVoice && it.type != "watch_party" })
     }
 
     return sections

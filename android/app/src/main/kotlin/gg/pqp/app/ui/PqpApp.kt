@@ -62,6 +62,7 @@ import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
 import gg.pqp.app.ui.components.FailedScreen
+import gg.pqp.app.ui.screens.ServerActions
 import gg.pqp.app.ui.screens.SignInScreen
 import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.ui.theme.PqpIcons
@@ -493,10 +494,28 @@ private fun SignedInNav(
                         liveHlsEnabled = config?.enabled == true
                         lowLatencyAvailable = config?.lowLatency?.available == true
                     }
+                    // The channel list offers "Host a watch party" to a
+                    // server's owner without making them join the room
+                    // first (`WatchPartyListState.kt`'s doc on why ownership
+                    // is the one signal it has). Landing here from that row
+                    // must show the create control right away rather than
+                    // the bare idle stage a plain viewer gets, so the same
+                    // owner floor widens `canCreate` here too -- ONLY while
+                    // there is no active party, so it never touches
+                    // `canManage` (which requires `party.isHost` regardless)
+                    // and never widens `canStartWatchParty` itself, which
+                    // `maySit` above still reads unchanged: an owner is not
+                    // handed a seat in somebody else's already-running party
+                    // by this.
+                    val servers by session.servers.collectAsStateWithLifecycle()
+                    val isServerOwner = ServerActions.isOwner(
+                        servers.firstOrNull { it.id == route.serverId }?.role,
+                    )
                     val hostGate = watchPartyHostGate(
                         isWatchPartyChannel = route.isWatchParty,
                         serverWatchPartyEnabled = liveHlsEnabled,
-                        canStartWatchParty = canStartWatchParty,
+                        canStartWatchParty = canStartWatchParty ||
+                            (isServerOwner && activeParty == null),
                         party = activeParty,
                     )
                     // `hostState` itself is collected once, above, at

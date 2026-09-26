@@ -475,6 +475,13 @@
     <string name="watch_party_host_mic_prompt_confirm">Turn on mic</string>
     <string name="watch_party_host_mic_prompt_dismiss">Stay muted</string>
 
+    <!-- Watch party in the channel list. Mirrors client/src/components/watch-party/live-party-block.tsx. -->
+    <string name="watch_party_list_label">Watch party</string>
+    <string name="watch_party_list_hosted_by">with %1$s</string>
+    <string name="watch_party_list_pending_draft">Being set up. Tap to continue.</string>
+    <string name="watch_party_list_pending_scheduled">Scheduled. Tap to open.</string>
+    <string name="watch_party_list_host">Host a watch party</string>
+
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Step %1$d of %2$d</string>
     <string name="onboarding_saving">Saving…</string>
