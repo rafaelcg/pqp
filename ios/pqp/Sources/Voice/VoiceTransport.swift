@@ -193,6 +193,10 @@ enum SfuJoinError: Error, Equatable, Sendable {
     case connect(String)
     /// `sfuJoinTimeout` elapsed with no connected room.
     case timedOut
+    /// The room connected and the microphone would not publish. Only
+    /// `CallModel` ends a call on this; `VoiceModel` keeps the seat and says so
+    /// instead (`sfuMicrophoneFailureNotice`).
+    case microphone(String)
     /// The join was abandoned by a leave (or a displacement) that landed while
     /// the token or the connect was in flight. Not a failure to show.
     case superseded
@@ -200,15 +204,74 @@ enum SfuJoinError: Error, Equatable, Sendable {
 
 /// The one sentence the user sees for every `SfuJoinError` worth showing.
 ///
-/// Identical to the web's `voice.error.transportUnreachable`, on purpose:
-/// the two clients meet in the same call and should describe the same failure
-/// the same way. `superseded` has no copy because nothing went wrong.
-func sfuFailureMessage(_ error: SfuJoinError) -> String? {
+/// The unreachable sentence is identical to the web's
+/// `voice.error.transportUnreachable`, on purpose: the two clients meet in the
+/// same call and should describe the same failure the same way. It is ONLY for
+/// what fails before the room is up. `microphone` fails after, once the server
+/// has been reached and has accepted us, and blaming the network for it sends
+/// somebody off to check a connection that worked. `superseded` has no copy
+/// because nothing went wrong.
+///
+/// `promoted` is a call somebody was already in, which "you have not joined
+/// this call" is false about; see `sfuPromotionFailureMessage`.
+func sfuFailureMessage(_ error: SfuJoinError, promoted: Bool = false) -> String? {
     switch error {
     case .superseded:
         nil
+    case .microphone:
+        String(localized: "Your microphone could not start on the voice server, so the call ended. Try again.")
     case .token, .connect, .timedOut:
-        String(localized: "Could not reach the voice server, so you have not joined this call. Check your network and try again.")
+        promoted
+            ? sfuPromotionFailureMessage()
+            : String(localized: "Could not reach the voice server, so you have not joined this call. Check your network and try again.")
+    }
+}
+
+/**
+ What became of the microphone once the LiveKit room itself was up.
+
+ Its own step with its own outcome, separate from the connect, because the two
+ fail for different reasons and mean different things. A connect that fails
+ means nobody can hear or see anybody. A microphone that fails to publish means
+ the room is fine and only this phone's voice is missing from it.
+
+ And the SDK has a way of failing that is exactly the second kind:
+ `LocalParticipant._publish` waits for the first captured audio frame
+ (`LocalAudioTrack.startWaitingForFrames`, whose `AudioFrameWatcher` gives up
+ after 5 seconds) AFTER the server has already accepted the track. Folded into
+ `SfuJoinError.connect`, that told a host who was connected, published and seen
+ by the server that the voice server could not be reached, then walked them out
+ of a room that was working.
+ */
+enum SfuMicrophoneOutcome: Equatable, Sendable {
+    /// On the wire, muted or not as asked.
+    case published
+    /// Deliberately not published: a listen-only seat (`welcome.canSpeak`).
+    case withheld
+    /// The publish threw. The room is still connected.
+    case failed(String)
+}
+
+/// The line a seated person reads when their microphone would not publish and
+/// the room kept them anyway. What is true (the room is fine, their voice is
+/// not in it) and what to do (unmute, which publishes again).
+func sfuMicrophoneFailureNotice() -> String {
+    String(localized: "Your microphone could not start, so nobody can hear you. You can still listen. Tap unmute to try again.")
+}
+
+/// What a seat keeps after the microphone step: whether it must now read as
+/// muted, and the notice to show. A failed publish forces mute, so the control
+/// agrees with the wire and the roster says "muted" rather than leaving the
+/// room to wonder why somebody went quiet. Pure, so the rule can be pinned
+/// without a LiveKit room.
+func sfuMicrophoneAftermath(
+    _ outcome: SfuMicrophoneOutcome, wasMuted: Bool
+) -> (muted: Bool, notice: String?) {
+    switch outcome {
+    case .published, .withheld:
+        (wasMuted, nil)
+    case .failed:
+        (true, sfuMicrophoneFailureNotice())
     }
 }
 

@@ -84,26 +84,20 @@ actor LiveKitVoiceClient {
         emit()
     }
 
-    /// Connects the room and publishes the microphone.
+    /// Connects the room. The microphone is `publishMicrophone(muted:)`, a
+    /// second step with its own outcome; see `SfuMicrophoneOutcome` for why the
+    /// two must never share one error.
     ///
     /// The caller wraps this in `withSfuTimeout`; nothing here waits on its
-    /// own clock. `muted` is the state to publish *in*: a mute-on-join or a
-    /// deafen decided before the room existed has to be true from the first
-    /// packet, not applied a beat after.
-    ///
-    /// `publishMicrophone` false is a listen-only seat (`welcome.canSpeak`).
-    /// No track is created and nothing is published: the server has already
-    /// withheld the LiveKit publish grant, and asking anyway is a refused
-    /// publish in the log for every listener in a stage. A later
-    /// `setMuted(false)`, which only happens once the rule flips to true,
-    /// publishes the track through `setMicrophone(enabled:)`.
+    /// own clock. `muted` is recorded here so a `setMuted` that lands between
+    /// the two steps is not lost.
     ///
     /// `iceServers` is the list `/api/ice-servers` gave this join, the same one
     /// the mesh path configures its peer connections with. It reaches the SDK
     /// only when it carries a relay; see `SfuIceServers` for why, and for what
     /// the SDK does with it (replaces the join response's list).
     func connect(
-        _ info: VoiceSessionInfo, muted: Bool, speaker: Bool, publishMicrophone: Bool = true,
+        _ info: VoiceSessionInfo, muted: Bool, speaker: Bool,
         iceServers: [IceServerConfig] = []
     ) async throws {
         await disconnect()
@@ -138,30 +132,58 @@ actor LiveKitVoiceClient {
         } catch {
             throw SfuJoinError.connect(String(describing: error))
         }
-        if !publishMicrophone {
-            adoptExistingTracks()
-            emit()
-            return
+        // Everybody already in the room has tracks we may have subscribed to
+        // during connect, before the delegate was listening for them.
+        adoptExistingTracks()
+        emit()
+    }
+
+    /// Publishes the microphone into the connected room. Never throws: a
+    /// failure here is a room that works without this phone's voice in it, and
+    /// the caller decides what that means (`SfuMicrophoneOutcome`).
+    ///
+    /// Published rather than captured-and-muted: the microphone is a track on
+    /// the room from the start, and mute toggles that track. DTX and RED to
+    /// match the web publisher, so a quiet room costs nothing and a lossy one
+    /// still sounds like speech. `muted` is the state to publish *in*: a
+    /// mute-on-join or a deafen decided before the room existed has to be true
+    /// from the first packet, not applied a beat after. The mute is read back
+    /// from `isMuted` after the publish rather than from the parameter, so a
+    /// mute that landed while the publish was in flight still holds.
+    ///
+    /// Not called at all for a listen-only seat (`welcome.canSpeak` false): the
+    /// server has already withheld the publish grant, and asking anyway is a
+    /// refused publish in the log for every listener in a stage. A later
+    /// `setMuted(false)`, which only happens once the rule flips to true, comes
+    /// back through here.
+    func publishMicrophone(muted: Bool) async -> SfuMicrophoneOutcome {
+        isMuted = muted
+        guard let room, room.connectionState == .connected else {
+            return .failed("the room is not connected")
         }
-        // Published rather than captured-and-muted: the microphone is a track
-        // on the room from the start, and mute toggles that track. DTX and RED
-        // to match the web publisher, so a quiet room costs nothing and a
-        // lossy one still sounds like speech.
         do {
             _ = try await room.localParticipant.setMicrophone(
                 enabled: true,
                 publishOptions: AudioPublishOptions(dtx: true, red: true)
             )
-            if muted {
+            if isMuted {
                 try await room.localParticipant.setMicrophone(enabled: false)
             }
+            return .published
         } catch {
-            throw SfuJoinError.connect(String(describing: error))
+            // A publish that landed and a mute that did not would leave a
+            // microphone open that the person asked to be closed. Taking the
+            // track down is the only safe reading of "we do not know".
+            if let microphone = microphonePublication(in: room) {
+                try? await room.localParticipant.unpublish(publication: microphone)
+            }
+            return .failed(String(describing: error))
         }
-        // Everybody already in the room has tracks we may have subscribed to
-        // during connect, before the delegate was listening for them.
-        adoptExistingTracks()
-        emit()
+    }
+
+    private func microphonePublication(in room: Room) -> LocalTrackPublication? {
+        room.localParticipant.trackPublications.values
+            .first { $0.source == .microphone } as? LocalTrackPublication
     }
 
     var isConnected: Bool {
@@ -171,10 +193,20 @@ actor LiveKitVoiceClient {
     /// Mutes the *published* track rather than stopping capture, which is what
     /// keeps unmute instant and what the far end sees as a muted participant
     /// rather than one whose audio vanished.
-    func setMuted(_ muted: Bool) async {
+    ///
+    /// An unmute with no microphone on the room (a listen-only seat that has
+    /// just been given SPEAK, or a publish that failed at join) publishes one,
+    /// and that is the one case that answers `false`: the person asked to be
+    /// heard and cannot be. Everything else answers `true`.
+    @discardableResult
+    func setMuted(_ muted: Bool) async -> Bool {
         isMuted = muted
-        guard let room, room.connectionState == .connected else { return }
+        guard let room, room.connectionState == .connected else { return true }
+        if !muted, microphonePublication(in: room) == nil {
+            return await publishMicrophone(muted: false) == .published
+        }
         _ = try? await room.localParticipant.setMicrophone(enabled: !muted)
+        return true
     }
 
     /// Silences everyone else. The mic is the caller's to mute alongside, and

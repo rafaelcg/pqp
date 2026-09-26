@@ -108,6 +108,11 @@ final class VoiceModel {
     /// SFU room is up, so there is a second or so of quiet. A line explaining
     /// it is the difference between a call that grew and a call that glitched.
     private(set) var transportNotice: String?
+    /// The room is up and this phone's microphone is not in it: the publish
+    /// failed at join, or an unmute that had to publish again failed. Cleared
+    /// by the next unmute that gets through, and on leave. See
+    /// `SfuMicrophoneOutcome` for why this is a notice and not a failed call.
+    private(set) var microphoneNotice: String?
 
     /// Whether to draw the share control at all.
     var offersScreenShare: Bool {
@@ -130,7 +135,18 @@ final class VoiceModel {
                 // both is what keeps a mute decided before `welcome` true on
                 // whichever one the room turns out to be.
                 await voice.setMuted(isMuted)
-                await sfu.setMuted(isMuted)
+                let heard = await sfu.setMuted(isMuted)
+                // Re-read after the await: a mute that landed meanwhile wins.
+                if !isMuted {
+                    if heard {
+                        microphoneNotice = nil
+                    } else {
+                        // The unmute had to publish the microphone again and
+                        // could not. The button goes back to what is true.
+                        microphoneNotice = sfuMicrophoneFailureNotice()
+                        isMuted = true
+                    }
+                }
                 await reportVoiceState()
             }
         }
@@ -606,6 +622,7 @@ final class VoiceModel {
         canSpeak = true
         canStream = true
         transportNotice = nil
+        microphoneNotice = nil
     }
 
     // MARK: - CallKit
@@ -1274,12 +1291,15 @@ final class VoiceModel {
         sfuJoin?.cancel()
         sfuJoin = Task { [weak self] in
             guard let self else { return }
-            let outcome: Result<Void, SfuJoinError>
+            let outcome: Result<SfuMicrophoneOutcome, SfuJoinError>
             do {
                 try await withSfuTimeout {
                     try await self.connectSfu(peerId: peerId, channelId: channelId)
                 }
-                outcome = .success(())
+                // After the join clock, not under it: the room is up, so
+                // nothing that happens to the microphone may be reported as a
+                // voice server that could not be reached.
+                outcome = .success(await self.publishSfuMicrophone())
             } catch let error as SfuJoinError {
                 outcome = .failure(error)
             } catch {
@@ -1292,9 +1312,15 @@ final class VoiceModel {
                 return
             }
             switch outcome {
-            case .success:
+            case .success(let microphone):
                 self.sfuIsConnected = true
                 self.status = .connected
+                // A microphone that would not publish keeps the seat: the room
+                // works, the person can listen and host, and unmute publishes
+                // again. Muted through the property, so the roster says so.
+                let aftermath = sfuMicrophoneAftermath(microphone, wasMuted: self.isMuted)
+                self.microphoneNotice = aftermath.notice
+                if aftermath.muted != self.isMuted { self.isMuted = aftermath.muted }
                 // Media is up, so a share now has a room to land in. A no-op
                 // on the promoted path: the bridge was armed for the mesh and
                 // `arm()` is idempotent, which is exactly what keeps a live
@@ -1319,7 +1345,7 @@ final class VoiceModel {
                     await self.enableCamera()
                 }
             case .failure(let error):
-                guard let message = sfuFailureMessage(error) else { return }
+                guard let message = sfuFailureMessage(error, promoted: promoted) else { return }
                 // EXACTLY THE BEHAVIOUR THIS APP HAD BEFORE IT FOLLOWED
                 // PROMOTIONS, which is the point: leave, and say so. The rest
                 // of the room is on the voice server and would neither hear a
@@ -1330,7 +1356,7 @@ final class VoiceModel {
                 self.transportNotice = nil
                 self.intendedChannel = nil
                 self.resumeClaim = nil
-                self.status = .failed(promoted ? sfuPromotionFailureMessage() : message)
+                self.status = .failed(message)
                 await self.session?.realtime.leaveVoice()
                 await self.sfu.disconnect()
                 self.sfuIsConnected = false
@@ -1414,10 +1440,17 @@ final class VoiceModel {
         }
         try Task.checkCancellation()
         try await sfu.connect(
-            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak,
-            iceServers: iceServers
+            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, iceServers: iceServers
         )
         if isDeafened { await sfu.setDeafened(true) }
+    }
+
+    /// The second half of an SFU join, once the room is up. `canSpeak` is read
+    /// now rather than when the join started, so a rule that flipped during the
+    /// connect is the rule that decides.
+    private func publishSfuMicrophone() async -> SfuMicrophoneOutcome {
+        guard canSpeak else { return .withheld }
+        return await sfu.publishMicrophone(muted: isMuted || isDeafened)
     }
 }
 

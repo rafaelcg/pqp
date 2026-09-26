@@ -1008,7 +1008,14 @@ final class CallModel {
                 try await withSfuTimeout {
                     try await self.connectSfu(peerId: peerId, channelId: channelId)
                 }
-                outcome = .success(())
+                // After the join clock, and with its own error: the room is up,
+                // so a microphone that will not publish is not a voice server
+                // that could not be reached. See `SfuMicrophoneOutcome`.
+                if case .failed(let reason) = await self.sfu.publishMicrophone(muted: self.isMuted) {
+                    outcome = .failure(.microphone(reason))
+                } else {
+                    outcome = .success(())
+                }
             } catch let error as SfuJoinError {
                 outcome = .failure(error)
             } catch {
@@ -1043,13 +1050,13 @@ final class CallModel {
                     await self.enableCamera()
                 }
             case .failure(let error):
-                guard let message = sfuFailureMessage(error) else { return }
+                guard let message = sfuFailureMessage(error, promoted: promoted) else { return }
                 // The behaviour this app had before it followed promotions:
                 // the call ends rather than falling back to a mesh the rest of
                 // the room has left.
                 self.sfuIsConnected = false
                 self.transportNotice = nil
-                self.fail(promoted ? sfuPromotionFailureMessage() : message)
+                self.fail(message)
             }
         }
     }

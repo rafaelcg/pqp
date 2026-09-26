@@ -111,3 +111,34 @@ private func newestLiveParty(in parties: [WatchPartyPayload]) -> WatchPartyPaylo
         .filter(\.isLive)
         .max { ($0.wentLiveAt ?? "") < ($1.wentLiveAt ?? "") }
 }
+
+/// What tapping a watch-party card in the channel list does.
+enum WatchPartyCardTap: Equatable {
+    /// Open the channel and watch, with no seat: the audience's path.
+    case watch
+    /// Take the seat and put the call stage up, where
+    /// `WatchPartyHostControls` lives.
+    case host
+}
+
+/**
+ Decide what a watch-party card tap does, from the party the card draws.
+
+ THE HOST'S CONTROLS ONLY EXIST ON THE CALL STAGE. `WatchPartyHostControls`
+ is drawn by `VoiceView`, which is up only while this phone holds a seat, so
+ a host whose tap merely pushed the transcript landed on the old text channel
+ with a phone button and no setup card at all (TestFlight 1.0.5, "Being set
+ up. Tap to continue." continued nowhere). A host or co-host tap therefore
+ joins and presents the stage. Everybody else keeps the seatless path: a
+ seat costs a participant on the media box and a microphone prompt, and on
+ the default `hosts_only` stage it buys an ordinary viewer nothing (see
+ `ChatView`'s toolbar for the same rule).
+
+ Keyed on `viewerRole` alone, not on the card's state: a pending card is
+ always the host's or a co-host's (`resolveServerWatchPartyListState` never
+ builds one otherwise), and a live card that belongs to this account is
+ where its End control is.
+ */
+func watchPartyCardTap(for party: WatchPartyPayload) -> WatchPartyCardTap {
+    party.isHost || party.isCohost ? .host : .watch
+}
