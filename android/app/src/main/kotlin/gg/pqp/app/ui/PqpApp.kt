@@ -72,7 +72,7 @@ import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
 import gg.pqp.app.watch.WatchPartyHostController
 import gg.pqp.app.watch.liveHlsConfig
-import gg.pqp.app.watch.mayTakeWatchPartySeat
+import gg.pqp.app.watch.mayJoinWatchPartyRoom
 import gg.pqp.app.watch.needsHlsHostAck
 import gg.pqp.app.watch.confirmHlsHostAck
 import gg.pqp.app.watch.watchPartyHostGate
@@ -471,7 +471,7 @@ private fun SignedInNav(
                     // `WatchPartyHostGate.kt`'s doc for why that is the honest
                     // answer rather than a gap.
                     val canStartWatchParty = inThisRoom && voiceState.screenShareSupported
-                    val maySit = mayTakeWatchPartySeat(
+                    val maySit = mayJoinWatchPartyRoom(
                         canStartWatchParty = canStartWatchParty,
                         party = seats[route.channelId],
                     )

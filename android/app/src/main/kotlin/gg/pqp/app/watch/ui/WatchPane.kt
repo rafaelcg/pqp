@@ -191,7 +191,7 @@ fun WatchPane(
     isWatchPartyChannel: Boolean = false,
     /**
      * Whether "Entrar na call" belongs on the stage at all — the seat rule
-     * ([gg.pqp.app.watch.mayTakeWatchPartySeat]), resolved by the caller.
+     * ([gg.pqp.app.watch.mayJoinWatchPartyRoom]), resolved by the caller.
      * Independent of [isWatchPartyChannel] and of the phase: a call can be
      * running before, during or after a broadcast.
      */
