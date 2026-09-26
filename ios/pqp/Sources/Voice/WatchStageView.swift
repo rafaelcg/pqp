@@ -157,6 +157,8 @@ struct WatchStageView: View {
     /// "reported playing" from "actually advancing" -- the same distinction
     /// `lastHealthCheckPosition` makes for the film.
     @State private var cameraLastPosition: Double?
+    /// A camera that froze without failing. See `WatchCameraStallWatch`.
+    @State private var cameraStall = WatchCameraStallWatch()
     /// Corner, and which of the four layouts. Remembered per phone
     /// (`CameraPipPref`), same storage shape as `pinnedLines` above.
     @AppStorage("pqp.watchCameraPip") private var cameraPref: CameraPipPref = .default
@@ -1152,6 +1154,7 @@ struct WatchStageView: View {
             sessionKey: cameraSessionKey(url), attachedAt: Date()
         )
         cameraPlayer = player
+        cameraStall.forgetPosition()
         // NOT `cameraFailureAttempt = 0` HERE (Farol review, PR 833, second
         // pass). A rebuild triggered BY a failure is itself an attach, and
         // resetting the backoff on every attach is exactly what made a
@@ -1175,6 +1178,7 @@ struct WatchStageView: View {
         cameraFailureNextRetryAt = nil
         cameraHealthyTicks = 0
         cameraLastPosition = nil
+        cameraStall = WatchCameraStallWatch()
     }
 
     /**
@@ -1221,15 +1225,25 @@ struct WatchStageView: View {
         if item.status == .failed {
             cameraHealthyTicks = 0
             cameraLastPosition = nil
-            guard WatchCameraFailureBackoff.isDue(
-                nextRetryAt: cameraFailureNextRetryAt, now: now
-            ) else { return }
-            let wait = WatchCameraFailureBackoff.delay(
-                attempt: cameraFailureAttempt, jitter: { Double.random(in: 0...1) }
-            )
-            cameraFailureNextRetryAt = now.addingTimeInterval(wait)
-            cameraFailureAttempt += 1
-            reconcileCamera(force: true)
+            rebuildCamera(now: now)
+            return
+        }
+        // A frozen camera is not a failed one: the item stays ready while the
+        // picture sits on one frame. See `WatchCameraStallWatch`.
+        let stallAction = cameraStall.observe(
+            position: cameraPlayer?.currentTime().seconds ?? .nan,
+            eligible: UIApplication.shared.applicationState == .active,
+            now: now
+        )
+        switch stallAction {
+        case .none:
+            break
+        case .nudge:
+            nudgeCamera(item)
+        case .rebuild:
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
+            rebuildCamera(now: now)
             return
         }
         guard cameraFailureAttempt > 0 || cameraFailureNextRetryAt != nil else {
@@ -1248,6 +1262,36 @@ struct WatchStageView: View {
             cameraFailureAttempt = 0
             cameraFailureNextRetryAt = nil
         }
+    }
+
+    /// A fresh item on the freshest URL, on the failure backoff: a failed
+    /// item and a frozen one spend from the same schedule, so neither can
+    /// become a loop against the playlist proxy.
+    private func rebuildCamera(now: Date) {
+        guard WatchCameraFailureBackoff.isDue(
+            nextRetryAt: cameraFailureNextRetryAt, now: now
+        ) else { return }
+        let wait = WatchCameraFailureBackoff.delay(
+            attempt: cameraFailureAttempt, jitter: { Double.random(in: 0...1) }
+        )
+        cameraFailureNextRetryAt = now.addingTimeInterval(wait)
+        cameraFailureAttempt += 1
+        reconcileCamera(force: true)
+    }
+
+    /// The cheap first move on a frozen camera: back into the live window,
+    /// and play. Nothing is dropped, so a camera that only fell behind or
+    /// paused on its own is moving again within a segment.
+    private func nudgeCamera(_ item: AVPlayerItem) {
+        guard let cameraPlayer else { return }
+        if let window = Self.liveWindow(of: item) {
+            cameraPlayer.seek(
+                to: CMTime(seconds: WatchLiveEdge.jumpTarget(in: window), preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: CMTime(seconds: 2, preferredTimescale: 600)
+            )
+        }
+        cameraPlayer.play()
     }
 
     /// Re-tune the item that is already playing.
