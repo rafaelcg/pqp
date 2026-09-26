@@ -83,6 +83,8 @@ import gg.pqp.app.watch.confirmHlsHostAck
 import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
 import gg.pqp.app.watch.ui.WatchPartyHostControls
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -495,11 +497,23 @@ private fun SignedInNav(
                     LaunchedEffect(route.serverId, route.isWatchParty) {
                         val serverId = route.serverId
                         if (!route.isWatchParty || serverId == null) return@LaunchedEffect
-                        val config = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
-                        liveHlsEnabled = config?.enabled == true
-                        lowLatencyAvailable = config?.lowLatency?.available == true
-                        permissions = runCatching { session.api.serverPermissions(serverId) }
-                            .getOrDefault(PermissionsSnapshot())
+                        // Two independent GETs, run concurrently rather than
+                        // one after the other: neither reads the other's
+                        // answer, and awaiting them in sequence would make
+                        // landing on a watch_party channel wait for both
+                        // round trips added together for no reason.
+                        coroutineScope {
+                            val configDeferred = async {
+                                runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+                            }
+                            val permissionsDeferred = async {
+                                runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+                            }
+                            val config = configDeferred.await()
+                            liveHlsEnabled = config?.enabled == true
+                            lowLatencyAvailable = config?.lowLatency?.available == true
+                            permissions = permissionsDeferred.await() ?: PermissionsSnapshot()
+                        }
                     }
                     // The channel list offers "Host a watch party" from
                     // `Permission.START_WATCH_PARTY` alone, without making

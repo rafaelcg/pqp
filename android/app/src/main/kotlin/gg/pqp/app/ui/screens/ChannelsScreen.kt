@@ -33,6 +33,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +57,8 @@ import gg.pqp.app.bau.bauUnread
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
+import gg.pqp.app.core.RealtimeClient
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.channelBits
 import gg.pqp.app.core.hasPermission
@@ -77,6 +80,7 @@ import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.watchPartyListBlock
 import gg.pqp.app.watch.watchPartyListEntry
 import gg.pqp.app.watch.ui.WatchPartyListBlockView
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -136,25 +140,71 @@ fun ChannelsScreen(
     // a join now starts from the chat screen, and a screen share from the call
     // bar, so this screen is usually not the one on top when the answer lands.
 
-    // Whether THIS server may run a watch party at all
+    // Watch-party eligibility: the server's live-hls config
     // (`GET /api/live-hls/config`, the same route and field the web reads
-    // for the identical question). Fetched here too, alongside the one
-    // `ChatRoute` already does once a channel is open, because the list has
-    // to answer "may I host" before anybody has opened anything.
+    // for "may this server run one at all") and this account's permission
+    // bits (`GET /api/servers/:serverId/permissions`, the exact route and
+    // shape `usePermissions` reads on web, resolved against
+    // `Permission.START_WATCH_PARTY` in `gg.pqp.app.core.Permissions.kt`).
+    // Both fetched here, before anybody has opened a channel, because that
+    // is what "may I host" on the list itself needs.
+    //
+    // A FAILED LOOKUP MUST NOT READ AS A CONFIRMED NO. The first cut of this
+    // stored a failure as the same `false` / empty default a real "off"
+    // answer gets, for the rest of this screen's life -- a single dropped
+    // request during a real host's visit hid the only "Host a watch party"
+    // row they were ever going to see, with nothing that ever tried again.
+    // [liveHlsConfirmed] / [permissionsConfirmed] tell the two apart: they
+    // flip to `true` only on an actual answer (`enabled: false` from a
+    // healthy request is confirmed and correctly never retried; a thrown
+    // exception is not), and the defaults stay in force -- fail CLOSED,
+    // never offering Host on a value this phone does not actually know --
+    // for as long as they are `false`. [retryTick] gives an unconfirmed
+    // fetch two reasons to try again sooner than its own backoff: the
+    // screen returning to the foreground, and the socket reconnecting, the
+    // same two "the network may be back" signals `RealtimeClient`'s own
+    // reconnect loop already treats as worth an immediate retry.
     var liveHlsEnabled by remember(serverId) { mutableStateOf(false) }
+    var liveHlsConfirmed by remember(serverId) { mutableStateOf(false) }
+    var permissions by remember(serverId) { mutableStateOf(PermissionsSnapshot()) }
+    var permissionsConfirmed by remember(serverId) { mutableStateOf(false) }
+    var retryTick by remember(serverId) { mutableIntStateOf(0) }
+
+    LifecycleResumeEffect(serverId) {
+        retryTick++
+        onPauseOrDispose { }
+    }
     LaunchedEffect(serverId) {
-        liveHlsEnabled = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()?.enabled == true
+        session.realtime.state.collect { state ->
+            if (state == RealtimeState.Ready) retryTick++
+        }
     }
 
-    // This account's resolved permission bits for the server and every
-    // channel on it -- `GET /api/servers/:serverId/permissions`, the exact
-    // route and shape `usePermissions` reads on web. This is what the list
-    // checks `Permission.START_WATCH_PARTY` against, so "may I host" is
-    // answered before anybody has opened anything, not only once a room is
-    // joined (`gg.pqp.app.core.Permissions.kt`).
-    var permissions by remember(serverId) { mutableStateOf(PermissionsSnapshot()) }
-    LaunchedEffect(serverId) {
-        permissions = runCatching { session.api.serverPermissions(serverId) }.getOrDefault(PermissionsSnapshot())
+    LaunchedEffect(serverId, retryTick) {
+        var attempt = 0
+        while (!liveHlsConfirmed) {
+            attempt++
+            val config = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+            if (config != null) {
+                liveHlsEnabled = config.enabled
+                liveHlsConfirmed = true
+            } else {
+                delay(RealtimeClient.backoffMillis(attempt))
+            }
+        }
+    }
+    LaunchedEffect(serverId, retryTick) {
+        var attempt = 0
+        while (!permissionsConfirmed) {
+            attempt++
+            val snapshot = runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+            if (snapshot != null) {
+                permissions = snapshot
+                permissionsConfirmed = true
+            } else {
+                delay(RealtimeClient.backoffMillis(attempt))
+            }
+        }
     }
 
     LaunchedEffect(serverId) {
