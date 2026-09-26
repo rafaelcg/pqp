@@ -38,9 +38,10 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
   const key = serverId ?? "";
   let pending = cache.get(key);
   if (!pending) {
+    const versionAt = versionOf(key);
     pending = fetchLiveHlsConfig(serverId).then(
       (answer) => {
-        settled.set(key, answer);
+        apply(key, answer, versionAt);
         return answer;
       },
       (error: unknown) => {
@@ -53,35 +54,99 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
   return pending;
 }
 
-/** Hooks to tell when a re-ask brought back a different answer. */
-const listeners = new Set<(key: string) => void>();
+/**
+ * Bumped every time an answer for the key lands, and by a reset. A response
+ * is applied only if nothing else landed for its key since it was asked for,
+ * so a slow older request can never overwrite a newer answer.
+ */
+const versions = new Map<string, number>();
+let epoch = 0;
+
+function versionOf(key: string): string {
+  return `${epoch}:${versions.get(key) ?? 0}`;
+}
+
+/** Store an answer if it is still the newest one asked for. Returns whether it changed anything. */
+function apply(key: string, answer: LiveHlsConfig, versionAt: string): boolean {
+  if (versionOf(key) !== versionAt) {
+    return false;
+  }
+  versions.set(key, (versions.get(key) ?? 0) + 1);
+  const before = settled.get(key);
+  settled.set(key, answer);
+  cache.set(key, Promise.resolve(answer));
+  return before === undefined || JSON.stringify(before) !== JSON.stringify(answer);
+}
+
+/** Hooks currently showing a server, by server id: the keys worth re-asking. */
+const listeners = new Map<string, Set<() => void>>();
+/**
+ * Something on screen shows this server's answer: the refresh pass re-asks
+ * it and calls `onChange` when it comes back different. Returns the release.
+ */
+export function watchLiveHlsConfig(serverId: string, onChange: () => void): () => void {
+  let forKey = listeners.get(serverId);
+  if (!forKey) {
+    forKey = new Set();
+    listeners.set(serverId, forKey);
+  }
+  const set = forKey;
+  set.add(onChange);
+  return () => {
+    set.delete(onChange);
+    if (set.size === 0 && listeners.get(serverId) === set) {
+      listeners.delete(serverId);
+    }
+  };
+}
+
+/** Keys with a re-ask in flight: one at a time per key. */
+const revalidating = new Set<string>();
 
 /**
- * Re-ask for every answer already held, and swap in the ones that changed.
- * A failure keeps what was there. Exported for tests; `config-refresh.ts`
- * is what calls it in the app.
+ * Re-ask for the answers somebody is looking at right now (every mounted
+ * hook's server, plus the deployment-wide answer the voice controller reads)
+ * and swap in the ones that changed. Answers for servers nobody is showing
+ * are not re-asked; their cached promise is dropped instead, so the next
+ * visit asks afresh while still drawing the old answer on its first frame.
+ * Bounded by what is on screen, never by browsing history. A failure keeps
+ * what was there. `config-refresh.ts` is what calls it in the app.
  */
 export function revalidateLiveHlsConfig(): Promise<void> {
-  const keys = [...settled.keys()];
+  const keys: string[] = [];
+  for (const key of settled.keys()) {
+    if (key === "" || listeners.has(key)) {
+      keys.push(key);
+    } else {
+      cache.delete(key);
+    }
+  }
   return Promise.all(
-    keys.map((key) =>
-      fetchLiveHlsConfig(key === "" ? undefined : key).then(
-        (answer) => {
-          const before = settled.get(key);
-          if (before !== undefined && JSON.stringify(before) === JSON.stringify(answer)) {
-            return;
-          }
-          settled.set(key, answer);
-          cache.set(key, Promise.resolve(answer));
-          for (const listener of listeners) {
-            listener(key);
-          }
-        },
-        () => {
-          // Stale beats blank.
-        },
-      ),
-    ),
+    keys
+      .filter((key) => !revalidating.has(key))
+      .map((key) => {
+        revalidating.add(key);
+        const versionAt = versionOf(key);
+        const startedEpoch = epoch;
+        return fetchLiveHlsConfig(key === "" ? undefined : key)
+          .then(
+            (answer) => {
+              if (apply(key, answer, versionAt)) {
+                for (const listener of listeners.get(key) ?? []) {
+                  listener();
+                }
+              }
+            },
+            () => {
+              // Stale beats blank.
+            },
+          )
+          .finally(() => {
+            if (startedEpoch === epoch) {
+              revalidating.delete(key);
+            }
+          });
+      }),
   ).then(() => undefined);
 }
 
@@ -91,8 +156,11 @@ onConfigRefresh(() => {
 
 /** Test seam. */
 export function resetLiveHlsConfigCache(): void {
+  epoch += 1;
   cache.clear();
   settled.clear();
+  versions.clear();
+  revalidating.clear();
 }
 
 /** An answer already in hand for this server, or null. Never fetches. */
@@ -116,15 +184,9 @@ export function useLiveHlsConfig(serverId: string | null): LiveHlsConfig | null 
     if (!serverId) {
       return;
     }
-    const listener = (key: string) => {
-      if (key === serverId) {
-        setConfig(settledLiveHlsConfig(serverId));
-      }
-    };
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
+    return watchLiveHlsConfig(serverId, () =>
+      setConfig(settledLiveHlsConfig(serverId)),
+    );
   }, [serverId]);
   useEffect(() => {
     setConfig(settledLiveHlsConfig(serverId));
@@ -135,7 +197,9 @@ export function useLiveHlsConfig(serverId: string | null): LiveHlsConfig | null 
     loadLiveHlsConfig(serverId)
       .then((answer) => {
         if (!cancelled) {
-          setConfig(answer);
+          // The stored answer, not this response: a newer re-ask may have
+          // landed while this one was out.
+          setConfig(settledLiveHlsConfig(serverId) ?? answer);
         }
       })
       .catch(() => {

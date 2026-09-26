@@ -97,6 +97,66 @@ function keyOf(serverId: string | null): string {
   return serverId ?? "";
 }
 
+/**
+ * Per key, bumped by every change to that key's answer (a read landing, a
+ * join the dialog remembered, a forget after an approval). A background
+ * re-ask applies its response only if the key has not moved since it asked,
+ * so it can never undo a join or resurrect a forgotten answer.
+ */
+const versions = new Map<string, number>();
+
+function bump(key: string): void {
+  versions.set(key, (versions.get(key) ?? 0) + 1);
+}
+
+/** Keys a mounted, active hook is showing: the only ones worth re-asking. */
+const watched = new Map<string, number>();
+/** Keys whose answer is older than the last refresh pass and nobody showed. */
+const stale = new Set<string>();
+/** One background re-ask per key at a time. */
+const revalidating = new Set<string>();
+
+/**
+ * Ask again in the background and swap the answer in if nothing about the
+ * key changed meanwhile (or the account did). One at a time per key.
+ */
+function reask(key: string): Promise<void> {
+  if (revalidating.has(key) || inflight.has(key)) {
+    return Promise.resolve();
+  }
+  revalidating.add(key);
+  const started = generation;
+  const versionAt = versions.get(key) ?? 0;
+  return fetchWatchPartyWaitlist(key === "" ? null : key)
+    .then(
+      (answer) => {
+        if (
+          started !== generation ||
+          (versions.get(key) ?? 0) !== versionAt ||
+          !answers.has(key)
+        ) {
+          return;
+        }
+        stale.delete(key);
+        const before = answers.get(key);
+        if (before && JSON.stringify(before) === JSON.stringify(answer)) {
+          return;
+        }
+        answers.set(key, answer);
+        bump(key);
+        notify();
+      },
+      () => {
+        // Stale beats blank.
+      },
+    )
+    .finally(() => {
+      if (started === generation) {
+        revalidating.delete(key);
+      }
+    });
+}
+
 function notify(): void {
   for (const listener of listeners) {
     listener();
@@ -109,6 +169,11 @@ export function loadWatchPartyWaitlist(
   const key = keyOf(serverId);
   const cached = answers.get(key);
   if (cached) {
+    // An answer nobody was looking at during the last refresh pass: hand it
+    // over now and re-ask behind it (stale-while-revalidate).
+    if (stale.has(key)) {
+      void reask(key);
+    }
     return Promise.resolve(cached);
   }
   let pending = inflight.get(key);
@@ -118,6 +183,8 @@ export function loadWatchPartyWaitlist(
       (answer) => {
         if (started === generation) {
           answers.set(key, answer);
+          bump(key);
+          stale.delete(key);
           failures.delete(key);
           inflight.delete(key);
           notify();
@@ -170,6 +237,7 @@ export function rememberWatchPartyWaitlistEntry(
 ): void {
   const key = keyOf(serverId);
   const current = answers.get(key);
+  bump(key);
   answers.set(key, {
     campaign: current?.campaign ?? true,
     canRequest: current?.canRequest ?? false,
@@ -181,38 +249,51 @@ export function rememberWatchPartyWaitlistEntry(
 
 /** Forget a server's answer, so the next read asks again (an approval landed). */
 export function forgetWatchPartyWaitlist(serverId: string | null): void {
+  bump(keyOf(serverId));
   answers.delete(keyOf(serverId));
   notify();
 }
 
 /**
- * Re-ask for every answer already held and swap in the ones that changed. A
- * failure keeps what was there; an answer that lands after an account change
- * is dropped, the same generation rule `loadWatchPartyWaitlist` follows.
+ * Something on screen is showing this server's answer, so the refresh pass
+ * re-asks it. Returns the release. Counted, so two surfaces on one server
+ * keep it watched until both let go.
+ */
+export function watchWatchPartyWaitlist(serverId: string | null): () => void {
+  const key = keyOf(serverId);
+  watched.set(key, (watched.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const left = (watched.get(key) ?? 1) - 1;
+    if (left <= 0) {
+      watched.delete(key);
+    } else {
+      watched.set(key, left);
+    }
+  };
+}
+
+/**
+ * The refresh pass: re-ask for the answers an active hook is showing, and
+ * mark every other held answer stale so its next read re-asks behind it.
+ * Bounded by what is on screen, never by how many servers the tab visited.
+ * A failure keeps what was there; see `reask` for why a slow response can
+ * never undo a join or an approval.
  */
 export function revalidateWatchPartyWaitlist(): Promise<void> {
-  const started = generation;
-  const keys = [...answers.keys()].filter((key) => !inflight.has(key));
-  return Promise.all(
-    keys.map((key) =>
-      fetchWatchPartyWaitlist(key === "" ? null : key).then(
-        (answer) => {
-          if (started !== generation) {
-            return;
-          }
-          const before = answers.get(key);
-          if (before && JSON.stringify(before) === JSON.stringify(answer)) {
-            return;
-          }
-          answers.set(key, answer);
-          notify();
-        },
-        () => {
-          // Stale beats blank.
-        },
-      ),
-    ),
-  ).then(() => undefined);
+  const keys: string[] = [];
+  for (const key of answers.keys()) {
+    if (watched.has(key)) {
+      keys.push(key);
+    } else {
+      stale.add(key);
+    }
+  }
+  return Promise.all(keys.map((key) => reask(key))).then(() => undefined);
 }
 
 onConfigRefresh(() => {
@@ -223,6 +304,9 @@ onConfigRefresh(() => {
 export function resetWatchPartyWaitlistStore(): void {
   generation += 1;
   answers.clear();
+  versions.clear();
+  stale.clear();
+  revalidating.clear();
   inflight.clear();
   failures.clear();
   notify();
@@ -254,6 +338,12 @@ export function useWatchPartyWaitlist(
   // The generation is a dependency so a reset (another account signed in)
   // asks again instead of leaving an empty store empty.
   const currentGeneration = generation;
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    return watchWatchPartyWaitlist(serverId);
+  }, [serverId, active]);
   useEffect(() => {
     if (!active) {
       return;

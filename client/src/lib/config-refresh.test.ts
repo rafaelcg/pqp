@@ -59,15 +59,29 @@ describe("requestConfigRefresh", () => {
   });
 });
 
-describe("the stores re-ask what they hold", () => {
+describe("the stores re-ask what is on screen", () => {
+  const releases: (() => void)[] = [];
+
   beforeEach(() => {
+    while (releases.length > 0) {
+      releases.pop()!();
+    }
     apiFetchMock.mockReset();
     fetchLiveHlsConfigMock.mockReset();
     waitlist.resetWatchPartyWaitlistStore();
     liveHls.resetLiveHlsConfigCache();
   });
 
+  function deferred<T>() {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  }
+
   it("the waitlist teaser goes away when the campaign flag is turned off", async () => {
+    releases.push(waitlist.watchWatchPartyWaitlist("s1"));
     apiFetchMock.mockResolvedValueOnce(STATE);
     await waitlist.loadWatchPartyWaitlist("s1");
     expect(
@@ -88,31 +102,86 @@ describe("the stores re-ask what they hold", () => {
     ).toBe(false);
   });
 
-  it("a failed re-ask keeps the answer it had", async () => {
-    apiFetchMock.mockResolvedValueOnce(STATE);
-    await waitlist.loadWatchPartyWaitlist(null);
-    apiFetchMock.mockRejectedValueOnce(new Error("offline"));
+  it("re-asks only what is watched; the rest is re-asked on its next read", async () => {
+    for (let i = 0; i < 20; i += 1) {
+      apiFetchMock.mockResolvedValueOnce(STATE);
+      await waitlist.loadWatchPartyWaitlist(`old-${i}`);
+    }
+    releases.push(waitlist.watchWatchPartyWaitlist("old-3"));
+    apiFetchMock.mockClear();
+    apiFetchMock.mockResolvedValue(STATE);
     await waitlist.revalidateWatchPartyWaitlist();
-    expect(waitlist.peekWatchPartyWaitlist(null)).toEqual(STATE);
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+
+    // A server visited earlier: its answer is handed over at once and
+    // re-asked behind it, exactly once.
+    apiFetchMock.mockClear();
+    apiFetchMock.mockResolvedValueOnce({ ...STATE, campaign: false });
+    expect(await waitlist.loadWatchPartyWaitlist("old-7")).toEqual(STATE);
+    await vi.waitFor(() =>
+      expect(waitlist.peekWatchPartyWaitlist("old-7")?.campaign).toBe(false),
+    );
+    await waitlist.loadWatchPartyWaitlist("old-7");
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("an answer that lands after an account change is dropped", async () => {
+  it("a failed re-ask keeps the answer it had", async () => {
+    releases.push(waitlist.watchWatchPartyWaitlist("s1"));
     apiFetchMock.mockResolvedValueOnce(STATE);
     await waitlist.loadWatchPartyWaitlist("s1");
-    let release: (value: WatchPartyWaitlistState) => void = () => {};
-    apiFetchMock.mockReturnValueOnce(
-      new Promise<WatchPartyWaitlistState>((resolve) => {
-        release = resolve;
-      }),
-    );
-    const pending = waitlist.revalidateWatchPartyWaitlist();
+    apiFetchMock.mockRejectedValueOnce(new Error("offline"));
+    await waitlist.revalidateWatchPartyWaitlist();
+    expect(waitlist.peekWatchPartyWaitlist("s1")).toEqual(STATE);
+  });
+
+  it("a re-ask that lands after a join, a forget or an account change is dropped", async () => {
+    releases.push(waitlist.watchWatchPartyWaitlist("s1"));
+    apiFetchMock.mockResolvedValueOnce(STATE);
+    await waitlist.loadWatchPartyWaitlist("s1");
+
+    // A join lands while the re-ask is out.
+    let slow = deferred<WatchPartyWaitlistState>();
+    apiFetchMock.mockReturnValueOnce(slow.promise);
+    let pending = waitlist.revalidateWatchPartyWaitlist();
+    const entry = {
+      serverId: "s1",
+      kind: "request",
+      status: "waiting",
+      audienceBucket: null,
+      note: null,
+      streamChannel: null,
+      createdAt: "2026-09-26T00:00:00.000Z",
+      decidedAt: null,
+    } as const;
+    waitlist.rememberWatchPartyWaitlistEntry("s1", entry);
+    slow.resolve(STATE);
+    await pending;
+    expect(waitlist.peekWatchPartyWaitlist("s1")?.entry).toEqual(entry);
+
+    // An approval acknowledged (forget) while the re-ask is out.
+    slow = deferred<WatchPartyWaitlistState>();
+    apiFetchMock.mockReturnValueOnce(slow.promise);
+    pending = waitlist.revalidateWatchPartyWaitlist();
+    waitlist.forgetWatchPartyWaitlist("s1");
+    slow.resolve(STATE);
+    await pending;
+    expect(waitlist.peekWatchPartyWaitlist("s1")).toBeNull();
+
+    // Another account signs in while the re-ask is out.
+    apiFetchMock.mockResolvedValueOnce(STATE);
+    await waitlist.loadWatchPartyWaitlist("s1");
+    slow = deferred<WatchPartyWaitlistState>();
+    apiFetchMock.mockReturnValueOnce(slow.promise);
+    pending = waitlist.revalidateWatchPartyWaitlist();
     waitlist.setWatchPartyWaitlistOwner("somebody-else");
-    release({ ...STATE, campaign: false });
+    slow.resolve({ ...STATE, campaign: false });
     await pending;
     expect(waitlist.peekWatchPartyWaitlist("s1")).toBeNull();
   });
 
   it("the live-hls config swaps in a changed camera size and tells its hooks", async () => {
+    const onChange = vi.fn();
+    releases.push(liveHls.watchLiveHlsConfig("s1", onChange));
     fetchLiveHlsConfigMock.mockResolvedValueOnce({ enabled: true, cameraHeight: 480 });
     await liveHls.loadLiveHlsConfig("s1");
     fetchLiveHlsConfigMock.mockResolvedValueOnce({ enabled: true, delaySeconds: 1 });
@@ -126,10 +195,37 @@ describe("the stores re-ask what they hold", () => {
     await liveHls.revalidateLiveHlsConfig();
     expect(fetchLiveHlsConfigMock.mock.calls.slice(-2).sort()).toEqual([[undefined], ["s1"]]);
     expect(liveHls.settledLiveHlsConfig("s1")).toEqual({ enabled: true, cameraHeight: 360 });
+    expect(onChange).toHaveBeenCalledTimes(1);
     // The cached promise moved too, so a later load does not resurrect 480.
     await expect(liveHls.loadLiveHlsConfig("s1")).resolves.toEqual({
       enabled: true,
       cameraHeight: 360,
     });
+  });
+
+  it("live-hls: only watched servers are re-asked, and one request per key at a time, so an older pass can never land last", async () => {
+    for (let i = 0; i < 20; i += 1) {
+      fetchLiveHlsConfigMock.mockResolvedValueOnce({ enabled: false });
+      await liveHls.loadLiveHlsConfig(`old-${i}`);
+    }
+    releases.push(liveHls.watchLiveHlsConfig("old-3", () => {}));
+    fetchLiveHlsConfigMock.mockClear();
+
+    const first = deferred<{ enabled: boolean }>();
+    fetchLiveHlsConfigMock.mockReturnValueOnce(first.promise);
+    const a = liveHls.revalidateLiveHlsConfig();
+    // A second pass while the first is out asks nothing for that key.
+    const b = liveHls.revalidateLiveHlsConfig();
+    expect(fetchLiveHlsConfigMock).toHaveBeenCalledTimes(1);
+    first.resolve({ enabled: true });
+    await Promise.all([a, b]);
+    expect(liveHls.settledLiveHlsConfig("old-3")).toEqual({ enabled: true });
+
+
+    // An unwatched server's old answer still draws the first frame, and its
+    // next load asks again rather than trusting it.
+    expect(liveHls.settledLiveHlsConfig("old-7")).toEqual({ enabled: false });
+    fetchLiveHlsConfigMock.mockResolvedValueOnce({ enabled: true });
+    await expect(liveHls.loadLiveHlsConfig("old-7")).resolves.toEqual({ enabled: true });
   });
 });

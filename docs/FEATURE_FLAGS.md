@@ -54,7 +54,17 @@ Reads are synchronous: the whole table sits in one in-process snapshot.
   (proved with two real API processes in `flags-two-process.test.ts`).
 - If the bus is off, the frame was dropped, or the process only publishes (the
   worker), a read that finds the snapshot older than `FEATURE_FLAGS_TTL_MS`
-  (default 10 000) reloads in the background. A flip is then up to one TTL late.
+  (default 10 000) checks in the background. A flip is then up to one TTL late.
+  That check is one index-only `MAX(id)` over `feature_flag_audit`, and the full
+  reload (every row, overrides included) only runs when that number moved, when
+  the bus said so, or every 5 minutes as a backstop. Every write through the API
+  adds an audit row in the same transaction, which is what makes this exact.
+  **A row changed by hand in SQL without an audit row is picked up by the
+  5-minute backstop, not the TTL.** Use the dashboard or the API.
+- Two writes to the same flag are serialised with a transaction-scoped advisory
+  lock, so the audit's `previous` is always what the row really held.
+- A write answers `applied: false` if the row committed but this process could
+  not reload its own copy. The dashboard shows that instead of the old value.
 - **Database down:** the last snapshot keeps answering, and reloads back off for
   a TTL. Before any snapshot has loaded, the environment answers.
 - Before `startFeatureFlags()` (called at boot after `initDb`) nothing touches

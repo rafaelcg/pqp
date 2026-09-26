@@ -318,9 +318,25 @@ describeDb("runtime flags against Postgres", () => {
     await flags.startFeatureFlags();
     expect(isEnabled("live_hls_mic_archive")).toBe(false);
 
-    // Written behind this process's back, as a sibling with no bus would.
+    // A raw row with no audit entry is NOT noticed by a TTL check: the check
+    // is one `MAX(id)` over the audit trail, and only moves the full reload
+    // when that number moved (or on the five-minute backstop).
     await getPool().query(
       `INSERT INTO feature_flags (key, enabled) VALUES ('live_hls_mic_archive', TRUE)`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    isEnabled("live_hls_mic_archive");
+    await vi.waitFor(() =>
+      expect(flags.featureFlagCacheStats().unchangedChecks).toBeGreaterThan(0),
+    );
+    expect(isEnabled("live_hls_mic_archive")).toBe(false);
+    const loadsBefore = flags.featureFlagCacheStats().loads;
+
+    // Written behind this process's back the way a sibling with no bus
+    // writes: the row and its audit entry.
+    await getPool().query(
+      `INSERT INTO feature_flag_audit (key, previous, next, actor_kind)
+       VALUES ('live_hls_mic_archive', NULL, TRUE, 'dashboard')`,
     );
     expect(isEnabled("live_hls_mic_archive")).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -329,6 +345,38 @@ describeDb("runtime flags against Postgres", () => {
     await vi.waitFor(() => expect(isEnabled("live_hls_mic_archive")).toBe(true), {
       timeout: 2_000,
     });
+    expect(flags.featureFlagCacheStats().loads).toBe(loadsBefore + 1);
+  });
+
+  it("serialises two first writes to one flag, so the audit's `previous` is true to what happened", async () => {
+    await flags.startFeatureFlags();
+    await Promise.all([
+      flags.setGlobalFlag("live_hls_voice_track", true, { kind: "dashboard" }),
+      flags.setGlobalFlag("live_hls_voice_track", false, { kind: "dashboard" }),
+    ]);
+    const { rows } = await getPool().query<{ previous: boolean | null; next: boolean | null }>(
+      `SELECT previous, next FROM feature_flag_audit ORDER BY id`,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.previous).toBeNull();
+    expect(rows[1]!.previous).toBe(rows[0]!.next);
+  });
+
+  it("a committed write still answers when this process cannot reload, and says so", async () => {
+    await flags.startFeatureFlags();
+    const pool = getPool();
+    const realQuery = pool.query.bind(pool);
+    // Everything the write's own transaction does goes through `connect()`,
+    // so failing `pool.query` fails exactly the reload and the view after it.
+    vi.spyOn(pool, "query").mockImplementation(((...args: Parameters<typeof realQuery>) => {
+      void args;
+      return Promise.reject(new Error("connection refused"));
+    }) as never);
+    const result = await flags.setGlobalFlag("community_home", true, { kind: "dashboard" });
+    expect(result).toMatchObject({ key: "community_home", changed: true, applied: false });
+    vi.restoreAllMocks();
+    const stored = await realQuery(`SELECT enabled FROM feature_flags WHERE key = 'community_home'`);
+    expect(stored.rows[0]).toEqual({ enabled: true });
   });
 
   it("database down: keeps the last known answer, and backs off instead of querying on every read", async () => {

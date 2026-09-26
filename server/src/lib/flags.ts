@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { getPool } from "../db.js";
 import {
@@ -295,15 +296,34 @@ let loadedAt = 0;
 let retryAfter = 0;
 let inflight: Promise<boolean> | null = null;
 let lastFailureLoggedAt = 0;
+/**
+ * The newest `feature_flag_audit.id` the snapshot reflects. Every write this
+ * module makes adds an audit row in the same transaction, so a TTL check is
+ * one index-only `MAX(id)` and the full reload (every override row) only
+ * happens when that number moved, when a sibling said so on the bus, or once
+ * per `FULL_RELOAD_MS` as a backstop for rows written by hand in SQL.
+ */
+let loadedVersion: string | null = null;
+let fullLoadedAt = 0;
+const FULL_RELOAD_MS = 5 * 60_000;
 
 const stats = {
   loads: 0,
+  /** TTL checks that found nothing new and skipped the full reload. */
+  unchangedChecks: 0,
   loadFailures: 0,
   busInvalidations: 0,
   /** Writes this process took that changed something. */
   flips: 0,
   lastLoadError: null as string | null,
 };
+
+async function currentVersion(): Promise<string> {
+  const { rows } = await getPool().query<{ version: string }>(
+    `SELECT COALESCE(MAX(id), 0)::text AS version FROM feature_flag_audit`,
+  );
+  return rows[0]?.version ?? "0";
+}
 
 async function loadSnapshot(): Promise<Snapshot> {
   const { rows } = await getPool().query<{
@@ -347,13 +367,30 @@ function refresh(): Promise<boolean> {
     return inflight;
   }
   const generation = wantedGeneration;
-  const attempt = loadSnapshot().then(
-    (next) => {
-      snapshot = next;
+  // An invalidation (a write here, a frame from a sibling) always reloads in
+  // full. A plain TTL expiry asks for the version first.
+  const invalidated = loadedGeneration < generation || snapshot === null;
+  const attempt = (async () => {
+    const version = await currentVersion();
+    const backstopDue = Date.now() - fullLoadedAt >= FULL_RELOAD_MS;
+    if (!invalidated && !backstopDue && version === loadedVersion) {
+      stats.unchangedChecks += 1;
+      return null;
+    }
+    // Version read BEFORE the rows: a write landing in between leaves the
+    // version behind the rows, which costs one extra reload, never a miss.
+    return { version, next: await loadSnapshot() };
+  })().then(
+    (loaded) => {
+      if (loaded) {
+        snapshot = loaded.next;
+        loadedVersion = loaded.version;
+        fullLoadedAt = Date.now();
+        stats.loads += 1;
+      }
       loadedGeneration = generation;
       loadedAt = Date.now();
       retryAfter = 0;
-      stats.loads += 1;
       stats.lastLoadError = null;
       return true;
     },
@@ -454,7 +491,10 @@ export function resetFeatureFlagsForTests(): void {
   loadedAt = 0;
   retryAfter = 0;
   inflight = null;
+  loadedVersion = null;
+  fullLoadedAt = 0;
   stats.loads = 0;
+  stats.unchangedChecks = 0;
   stats.loadFailures = 0;
   stats.busInvalidations = 0;
   stats.flips = 0;
@@ -535,23 +575,105 @@ function actorId(actor: FlagActor): string | null {
 /**
  * After a write commits: this process reloads before the request answers, and
  * then tells its siblings. Publishing AFTER the commit is the ordering that
- * matters: a sibling that reloads on the frame must read the new row.
+ * matters: a sibling that reloads on the frame must read the new row. The
+ * frame goes out even when the local reload failed: the siblings' databases
+ * connections are their own. Returns whether THIS process now answers with
+ * the new row.
  */
-async function afterWrite(key: FlagKey, serverId: string | null): Promise<void> {
+async function afterWrite(key: FlagKey, serverId: string | null): Promise<boolean> {
   stats.flips += 1;
-  await reloadFeatureFlags();
+  const applied = await reloadFeatureFlags();
   publishToCluster(FLAGS_BUS_TOPIC, { key, serverId });
+  return applied;
+}
+
+/**
+ * One writer per flag at a time. `SELECT ... FOR UPDATE` locks nothing when
+ * the row does not exist yet, so two first writes to the same key would both
+ * read "no decision" and audit the wrong `previous`. A transaction-scoped
+ * advisory lock on the key serialises them.
+ */
+async function lockFlag(client: PoolClient, key: FlagKey): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+    `feature_flag:${key}`,
+  ]);
+}
+
+/**
+ * What a write answers. The row is already committed when this runs, so a
+ * failed follow-up read must not turn the answer into an error: it falls back
+ * to the snapshot (server names and the audit are what go missing). `applied`
+ * is false when this process could not reload, which the dashboard says out
+ * loud rather than showing the old value as if the click had not taken.
+ */
+export type FeatureFlagWriteResult = FeatureFlagView & {
+  applied: boolean;
+  changed: boolean;
+};
+
+async function writeResult(
+  key: FlagKey,
+  applied: boolean,
+  changed: boolean,
+): Promise<FeatureFlagWriteResult> {
+  let view: FeatureFlagView | undefined;
+  try {
+    view = (await listFeatureFlags({ reload: false })).flags.find(
+      (flag) => flag.key === key,
+    );
+  } catch (error) {
+    logEvent("flags.writeViewFailed", {
+      key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return { ...(view ?? snapshotView(key)), applied, changed };
+}
+
+/** A view built from this process's snapshot alone, for when the DB is not answering. */
+function snapshotView(key: FlagKey): FeatureFlagView {
+  const def = definitionOf(key);
+  const envValue = envDecision(key);
+  const codeDefault = codeDefaultOf(key);
+  const resolved = resolveFlag(key);
+  const global = snapshot?.global.get(key);
+  return {
+    key,
+    description: def.description,
+    env: def.env,
+    envSet: envValue !== null,
+    envValue,
+    codeDefault,
+    codeDefaultLabel: def.codeDefaultLabel ?? null,
+    envDefault: envValue ?? codeDefault,
+    perServer: def.perServer,
+    clientVia: def.clientVia ?? null,
+    stored:
+      global === undefined ? null : { enabled: global, updatedAt: "", updatedBy: null },
+    effective: resolved.value,
+    source: resolved.source === "server" ? "global" : resolved.source,
+    overrides: [...(snapshot?.servers.get(key) ?? new Map<string, boolean>())].map(
+      ([serverId, enabled]) => ({
+        serverId,
+        serverName: null,
+        enabled,
+        updatedAt: "",
+        updatedBy: null,
+      }),
+    ),
+  };
 }
 
 export async function setGlobalFlag(
   key: FlagKey,
   enabled: boolean | null,
   actor: FlagActor,
-): Promise<FeatureFlagView> {
+): Promise<FeatureFlagWriteResult> {
   const client = await getPool().connect();
   let changed = false;
   try {
     await client.query("BEGIN");
+    await lockFlag(client, key);
     const previous = await client.query<{ enabled: boolean | null }>(
       `SELECT enabled FROM feature_flags WHERE key = $1 FOR UPDATE`,
       [key],
@@ -582,13 +704,12 @@ export async function setGlobalFlag(
   } finally {
     client.release();
   }
+  let applied = true;
   if (changed) {
     logEvent("flags.set", { key, enabled, actor: actor.kind });
-    await afterWrite(key, null);
+    applied = await afterWrite(key, null);
   }
-  return (await listFeatureFlags({ reload: false })).flags.find(
-    (flag) => flag.key === key,
-  )!;
+  return writeResult(key, applied, changed);
 }
 
 export async function setServerFlagOverride(
@@ -596,7 +717,7 @@ export async function setServerFlagOverride(
   serverId: string,
   enabled: boolean | null,
   actor: FlagActor,
-): Promise<FeatureFlagView> {
+): Promise<FeatureFlagWriteResult> {
   if (!definitionOf(key).perServer) {
     throw new HttpError(400, `${key} has no per-server overrides`);
   }
@@ -604,6 +725,7 @@ export async function setServerFlagOverride(
   let changed = false;
   try {
     await client.query("BEGIN");
+    await lockFlag(client, key);
     const server = await client.query(`SELECT 1 FROM servers WHERE id = $1`, [
       serverId,
     ]);
@@ -649,13 +771,12 @@ export async function setServerFlagOverride(
   } finally {
     client.release();
   }
+  let applied = true;
   if (changed) {
     logEvent("flags.override", { key, serverId, enabled, actor: actor.kind });
-    await afterWrite(key, serverId);
+    applied = await afterWrite(key, serverId);
   }
-  return (await listFeatureFlags({ reload: false })).flags.find(
-    (flag) => flag.key === key,
-  )!;
+  return writeResult(key, applied, changed);
 }
 
 // ------------------------------------------------------------ operator view
@@ -712,9 +833,12 @@ export interface FeatureFlagCacheStats {
   started: boolean;
   ttlMs: number;
   bus: boolean;
-  /** Milliseconds since the snapshot last loaded; null when it never has. */
+  /** Milliseconds since the snapshot was last confirmed current; null when it never loaded. */
   ageMs: number | null;
+  /** Full reloads (every row). */
   loads: number;
+  /** TTL checks where the audit version had not moved, so nothing was reloaded. */
+  unchangedChecks: number;
   loadFailures: number;
   busInvalidations: number;
   lastLoadError: string | null;
@@ -727,6 +851,7 @@ export function featureFlagCacheStats(): FeatureFlagCacheStats {
     bus: isBusEnabled(),
     ageMs: snapshot ? Date.now() - loadedAt : null,
     loads: stats.loads,
+    unchangedChecks: stats.unchangedChecks,
     loadFailures: stats.loadFailures,
     busInvalidations: stats.busInvalidations,
     lastLoadError: stats.lastLoadError,
@@ -881,29 +1006,28 @@ export async function featureFlagMetrics(): Promise<FeatureFlagMetrics> {
   let flips24hByKey: Record<string, number> | null = null;
   let lastFlipAt: string | null = null;
   try {
-    const { rows } = await getPool().query<{
-      key: string;
-      flips: string;
-      last_at: Date;
-    }>(
-      `SELECT key, COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS flips,
-              MAX(created_at) AS last_at
-         FROM feature_flag_audit
-        GROUP BY key`,
-    );
+    // Both bounded by `idx_feature_flag_audit_created`: the window scan
+    // touches one day of rows, and the newest flip is one index probe.
+    const pool = getPool();
+    const [window, last] = await Promise.all([
+      pool.query<{ key: string; flips: string }>(
+        `SELECT key, COUNT(*)::text AS flips
+           FROM feature_flag_audit
+          WHERE created_at > NOW() - INTERVAL '24 hours'
+          GROUP BY key`,
+      ),
+      pool.query<{ created_at: Date }>(
+        `SELECT created_at FROM feature_flag_audit ORDER BY created_at DESC LIMIT 1`,
+      ),
+    ]);
     flips24h = 0;
     flips24hByKey = {};
-    for (const row of rows) {
+    for (const row of window.rows) {
       const count = Number(row.flips);
       flips24h += count;
-      if (count > 0) {
-        flips24hByKey[row.key] = count;
-      }
-      const at = row.last_at.toISOString();
-      if (!lastFlipAt || at > lastFlipAt) {
-        lastFlipAt = at;
-      }
+      flips24hByKey[row.key] = count;
     }
+    lastFlipAt = last.rows[0]?.created_at.toISOString() ?? null;
   } catch {
     // Decoration. The values above are still right.
   }

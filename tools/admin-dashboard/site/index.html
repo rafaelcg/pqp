@@ -5443,9 +5443,11 @@
       .then(function (payload) {
         ctlFlagsLoaded = true;
         ctlRenderFlags(payload);
+        return true;
       })
       .catch(function (e) {
         ctlMsg("ctlFlagsMsg", "não deu pra ler os interruptores: " + (e && e.message ? e.message : "erro"), "bad");
+        return false;
       });
   }
 
@@ -5479,7 +5481,20 @@
       return r.json();
     }).then(function (flag) {
       var sentence = said(flag);
-      return ctlLoadFlags().then(function () { ctlMsg("ctlFlagsMsg", sentence, "ok"); });
+      // Saved, but this API instance could not reload its own copy: the
+      // other instance and this one both catch up within the cache window.
+      var pending = flag && flag.applied === false;
+      if (pending) sentence += " · gravado, mas esta instância ainda não recarregou (vale em até 10 s)";
+      return ctlLoadFlags().then(function (ok) {
+        if (ok) {
+          ctlMsg("ctlFlagsMsg", sentence, pending ? "bad" : "ok");
+          return;
+        }
+        // The write landed; only the re-read failed. Redraw from what we had
+        // so the buttons come back, and say both halves.
+        ctlRenderFlags(null);
+        ctlMsg("ctlFlagsMsg", sentence + " · a lista não recarregou, use atualizar", "bad");
+      });
     }).catch(function (e) {
       ctlMsg("ctlFlagsMsg", "não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
       if (tr) ctlSetButtonsDisabled(tr, false);
