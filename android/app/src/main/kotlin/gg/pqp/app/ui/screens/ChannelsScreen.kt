@@ -33,6 +33,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,7 +55,14 @@ import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.bauUnread
 import gg.pqp.app.core.Channel
+import gg.pqp.app.core.Permission
+import gg.pqp.app.core.PermissionsSnapshot
+import gg.pqp.app.core.RealtimeClient
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.channelBits
+import gg.pqp.app.core.hasPermission
+import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.social.ui.CountBadge
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
@@ -67,6 +75,12 @@ import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.WatchPartyListBlock
+import gg.pqp.app.watch.liveHlsConfig
+import gg.pqp.app.watch.watchPartyListBlock
+import gg.pqp.app.watch.watchPartyListEntry
+import gg.pqp.app.watch.ui.WatchPartyListBlockView
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -117,9 +131,81 @@ fun ChannelsScreen(
     // for every live channel this person may see at socket auth, so this is
     // usually already answered before the list is drawn.
     val liveChannels by watch.channels.collectAsStateWithLifecycle()
+    // The party running (or drafted) in every `watch_party` channel this
+    // account may see, same socket knowledge `WatchChannelPane` already
+    // reads once a channel is open -- here it drives the block above the
+    // categories instead. See `WatchPartyListState.kt`.
+    val parties by watch.parties.collectAsStateWithLifecycle()
     // Voice refusals and moderation notices are shown by `PqpApp`, not here:
     // a join now starts from the chat screen, and a screen share from the call
     // bar, so this screen is usually not the one on top when the answer lands.
+
+    // Watch-party eligibility: the server's live-hls config
+    // (`GET /api/live-hls/config`, the same route and field the web reads
+    // for "may this server run one at all") and this account's permission
+    // bits (`GET /api/servers/:serverId/permissions`, the exact route and
+    // shape `usePermissions` reads on web, resolved against
+    // `Permission.START_WATCH_PARTY` in `gg.pqp.app.core.Permissions.kt`).
+    // Both fetched here, before anybody has opened a channel, because that
+    // is what "may I host" on the list itself needs.
+    //
+    // A FAILED LOOKUP MUST NOT READ AS A CONFIRMED NO. The first cut of this
+    // stored a failure as the same `false` / empty default a real "off"
+    // answer gets, for the rest of this screen's life -- a single dropped
+    // request during a real host's visit hid the only "Host a watch party"
+    // row they were ever going to see, with nothing that ever tried again.
+    // [liveHlsConfirmed] / [permissionsConfirmed] tell the two apart: they
+    // flip to `true` only on an actual answer (`enabled: false` from a
+    // healthy request is confirmed and correctly never retried; a thrown
+    // exception is not), and the defaults stay in force -- fail CLOSED,
+    // never offering Host on a value this phone does not actually know --
+    // for as long as they are `false`. [retryTick] gives an unconfirmed
+    // fetch two reasons to try again sooner than its own backoff: the
+    // screen returning to the foreground, and the socket reconnecting, the
+    // same two "the network may be back" signals `RealtimeClient`'s own
+    // reconnect loop already treats as worth an immediate retry.
+    var liveHlsEnabled by remember(serverId) { mutableStateOf(false) }
+    var liveHlsConfirmed by remember(serverId) { mutableStateOf(false) }
+    var permissions by remember(serverId) { mutableStateOf(PermissionsSnapshot()) }
+    var permissionsConfirmed by remember(serverId) { mutableStateOf(false) }
+    var retryTick by remember(serverId) { mutableIntStateOf(0) }
+
+    LifecycleResumeEffect(serverId) {
+        retryTick++
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(serverId) {
+        session.realtime.state.collect { state ->
+            if (state == RealtimeState.Ready) retryTick++
+        }
+    }
+
+    LaunchedEffect(serverId, retryTick) {
+        var attempt = 0
+        while (!liveHlsConfirmed) {
+            attempt++
+            val config = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+            if (config != null) {
+                liveHlsEnabled = config.enabled
+                liveHlsConfirmed = true
+            } else {
+                delay(RealtimeClient.backoffMillis(attempt))
+            }
+        }
+    }
+    LaunchedEffect(serverId, retryTick) {
+        var attempt = 0
+        while (!permissionsConfirmed) {
+            attempt++
+            val snapshot = runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+            if (snapshot != null) {
+                permissions = snapshot
+                permissionsConfirmed = true
+            } else {
+                delay(RealtimeClient.backoffMillis(attempt))
+            }
+        }
+    }
 
     LaunchedEffect(serverId) {
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
@@ -221,10 +307,43 @@ fun ChannelsScreen(
 
             else -> {
                 val sections = remember(list) { sectionsOf(list) }
+                // Every `watch_party` channel this server has, folded into
+                // ONE block above everything else -- the only place a watch
+                // party appears in this list now. `sectionsOf` already drops
+                // these from the ordinary rows below, matching the web
+                // sidebar's own `listed` filter (`channel-list.tsx`).
+                val watchPartyBlock = remember(list, parties, liveChannels, permissions, liveHlsEnabled) {
+                    watchPartyListBlock(
+                        list.filter { it.type == "watch_party" }.map { channel ->
+                            watchPartyListEntry(
+                                channelId = channel.id,
+                                channelName = channel.name,
+                                party = parties[channel.id],
+                                watching = liveChannels[channel.id]?.watching,
+                                canHost = liveHlsEnabled &&
+                                    hasPermission(permissions.channelBits(channel.id), Permission.START_WATCH_PARTY),
+                            )
+                        },
+                    )
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentPadding = PaddingValues(bottom = Spacing.xl),
                 ) {
+                    if (watchPartyBlock != WatchPartyListBlock.None) {
+                        item(key = "watchParty") {
+                            Spacer(Modifier.height(Spacing.sm))
+                            WatchPartyListBlockView(
+                                block = watchPartyBlock,
+                                onOpen = { channelId ->
+                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
+                                },
+                                onHost = { channelId ->
+                                    list.firstOrNull { it.id == channelId }?.let(onOpenChannel)
+                                },
+                            )
+                        }
+                    }
                     // Above TEXT, where the web sidebar puts it. It is not a
                     // channel and is not drawn as one: it carries its own hint
                     // so nobody opens it expecting to type.
@@ -349,6 +468,12 @@ private data class Section(val key: String, val title: String, val channels: Lis
  *
  * A category is a channel row with `type == "category"`, not a separate object,
  * and its children point at it through `parentId`.
+ *
+ * A `watch_party` channel is never in here. `Channel.isVoice` answers true
+ * for it too, but it no longer gets an ordinary row: `WatchPartyListBlock`
+ * above the categories is the only place it appears now, live, pending or a
+ * host button, and NOTHING at all otherwise -- matching the web sidebar's
+ * own `listed` filter in `channel-list.tsx`.
  */
 private fun sectionsOf(all: List<Channel>): List<Section> {
     val categories = all.filter { it.isCategory }.sortedBy { it.position }
@@ -362,12 +487,12 @@ private fun sectionsOf(all: List<Channel>): List<Section> {
 
     val topLevel = byParent[null].orEmpty()
     add("top-text", "", topLevel.filter { it.isText })
-    add("top-voice", "", topLevel.filter { it.isVoice })
+    add("top-voice", "", topLevel.filter { it.isVoice && it.type != "watch_party" })
 
     categories.forEach { category ->
         val children = byParent[category.id].orEmpty()
         add("cat-${category.id}-text", category.name, children.filter { it.isText })
-        add("cat-${category.id}-voice", category.name, children.filter { it.isVoice })
+        add("cat-${category.id}-voice", category.name, children.filter { it.isVoice && it.type != "watch_party" })
     }
 
     return sections

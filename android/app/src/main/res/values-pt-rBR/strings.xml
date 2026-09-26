@@ -468,6 +468,13 @@
     <string name="watch_party_host_mic_prompt_confirm">Ligar microfone</string>
     <string name="watch_party_host_mic_prompt_dismiss">Continuar mudo</string>
 
+    <!-- Watch party in the channel list. Mirrors client/src/components/watch-party/live-party-block.tsx. -->
+    <string name="watch_party_list_label">Watch party</string>
+    <string name="watch_party_list_hosted_by">com %1$s</string>
+    <string name="watch_party_list_pending_draft">Montando. Toca pra continuar.</string>
+    <string name="watch_party_list_pending_scheduled">Marcada. Toca pra abrir.</string>
+    <string name="watch_party_list_host">Hospedar uma watch party</string>
+
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Passo %1$d de %2$d</string>
     <string name="onboarding_saving">Salvando…</string>

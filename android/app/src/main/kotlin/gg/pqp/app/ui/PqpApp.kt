@@ -38,10 +38,15 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
 import gg.pqp.app.bau.ui.BauScreen
+import gg.pqp.app.core.Permission
+import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.RealtimeClient
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.channelBits
+import gg.pqp.app.core.hasPermission
+import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.push.DeepLinkTarget
 import gg.pqp.app.core.Landing
 import gg.pqp.app.onboarding.shouldRunOnboarding
@@ -78,6 +83,8 @@ import gg.pqp.app.watch.confirmHlsHostAck
 import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
 import gg.pqp.app.watch.ui.WatchPartyHostControls
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -486,17 +493,47 @@ private fun SignedInNav(
                     // here defaults to.
                     var liveHlsEnabled by remember(route.serverId) { mutableStateOf(false) }
                     var lowLatencyAvailable by remember(route.serverId) { mutableStateOf(false) }
+                    var permissions by remember(route.serverId) { mutableStateOf(PermissionsSnapshot()) }
                     LaunchedEffect(route.serverId, route.isWatchParty) {
                         val serverId = route.serverId
                         if (!route.isWatchParty || serverId == null) return@LaunchedEffect
-                        val config = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
-                        liveHlsEnabled = config?.enabled == true
-                        lowLatencyAvailable = config?.lowLatency?.available == true
+                        // Two independent GETs, run concurrently rather than
+                        // one after the other: neither reads the other's
+                        // answer, and awaiting them in sequence would make
+                        // landing on a watch_party channel wait for both
+                        // round trips added together for no reason.
+                        coroutineScope {
+                            val configDeferred = async {
+                                runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+                            }
+                            val permissionsDeferred = async {
+                                runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+                            }
+                            val config = configDeferred.await()
+                            liveHlsEnabled = config?.enabled == true
+                            lowLatencyAvailable = config?.lowLatency?.available == true
+                            permissions = permissionsDeferred.await() ?: PermissionsSnapshot()
+                        }
                     }
+                    // The channel list offers "Host a watch party" from
+                    // `Permission.START_WATCH_PARTY` alone, without making
+                    // that account join the room first
+                    // (`gg.pqp.app.core.Permissions.kt`). Landing here from
+                    // that row must show the create control right away
+                    // rather than the bare idle stage a plain viewer gets, so
+                    // the same bit widens `canCreate` here too -- ONLY while
+                    // there is no active party, so it never touches
+                    // `canManage` (which requires `party.isHost` regardless)
+                    // and never widens `canStartWatchParty` itself, which
+                    // `maySit` above still reads unchanged: holding the bit
+                    // is not a seat in somebody else's already-running party.
+                    val mayStartWatchParty = route.isWatchParty &&
+                        hasPermission(permissions.channelBits(route.channelId), Permission.START_WATCH_PARTY)
                     val hostGate = watchPartyHostGate(
                         isWatchPartyChannel = route.isWatchParty,
                         serverWatchPartyEnabled = liveHlsEnabled,
-                        canStartWatchParty = canStartWatchParty,
+                        canStartWatchParty = canStartWatchParty ||
+                            (mayStartWatchParty && activeParty == null),
                         party = activeParty,
                     )
                     // `hostState` itself is collected once, above, at
