@@ -16,8 +16,9 @@ import SwiftUI
    into the one already started.
 
  WHAT A TAP DOES IS NOT DECIDED HERE. `onOpen` hands the whole party up and
- the caller asks `watchPartyCardTap`: a host or co-host lands on the call
- stage with the setup card, everybody else on the seatless picture.
+ the caller asks `watchPartyCardTap`: a host or co-host lands on the channel
+ with the setup card on its stage, everybody else on the seatless picture.
+ Neither takes a seat.
  - `.canHost`: a single row that reads as an action, not a channel type --
    the whole reason build 21's bug ("watch party shows as a regular voice
    channel", see `ChannelListView`'s own doc) is not simply un-fixed by

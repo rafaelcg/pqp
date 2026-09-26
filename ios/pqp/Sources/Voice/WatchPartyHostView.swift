@@ -4,6 +4,11 @@ import SwiftUI
  The host's own controls on a `watch_party` channel's call screen -- "Criar
  watch party", the setup card's "Ir ao vivo", and the live card's "Encerrar".
 
+ THE SEATED HALF. Before a seat, the host's card is on the stage above the
+ transcript (`WatchPartyStageHostView`, decided by `watchPartyStageHostCard`):
+ Create, the setup card and Go live all work there with no seat, and going
+ live is what takes one. This view is what the host has once seated.
+
  LIVES IN `VoiceView`, NOT `WatchStageView`. `WatchStageView` (the audience
  picture above the transcript) draws nothing at all once this account is
  seated (`if !isSeated { stage }`) -- exactly the moment a host needs
@@ -205,9 +210,14 @@ struct WatchPartyHostControls: View {
                 .font(Typography.caption)
                 .foregroundStyle(Palette.paperMuted)
             Button {
+                // Already seated here, so the join inside is a reopen and the
+                // microphone is whatever this seat already has; passed anyway
+                // so both doors to Go live ask the same question.
                 host.goLive(
                     channel: channel, serverName: nil, partyId: party.id,
-                    lowLatency: lowLatency, session: session, voice: voice, ratings: ratings
+                    lowLatency: lowLatency,
+                    microphone: watchPartyHostSeatMicrophone(voiceEnabled: party.voiceEnabled),
+                    session: session, voice: voice, ratings: ratings
                 )
             } label: {
                 if host.busy == .goingLive {

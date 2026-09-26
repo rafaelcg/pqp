@@ -116,23 +116,25 @@ private func newestLiveParty(in parties: [WatchPartyPayload]) -> WatchPartyPaylo
 enum WatchPartyCardTap: Equatable {
     /// Open the channel and watch, with no seat: the audience's path.
     case watch
-    /// Take the seat and put the call stage up, where
-    /// `WatchPartyHostControls` lives.
+    /// Open the channel too, with no seat: the stage above the transcript
+    /// draws the host's setup card there (`WatchPartyStageHostView`). If
+    /// this phone already holds a seat in that room, the call screen comes
+    /// back instead, where the live controls are.
     case host
 }
 
 /**
  Decide what a watch-party card tap does, from the party the card draws.
 
- THE HOST'S CONTROLS ONLY EXIST ON THE CALL STAGE. `WatchPartyHostControls`
- is drawn by `VoiceView`, which is up only while this phone holds a seat, so
- a host whose tap merely pushed the transcript landed on the old text channel
- with a phone button and no setup card at all (TestFlight 1.0.5, "Being set
- up. Tap to continue." continued nowhere). A host or co-host tap therefore
- joins and presents the stage. Everybody else keeps the seatless path: a
- seat costs a participant on the media box and a microphone prompt, and on
- the default `hosts_only` stage it buys an ordinary viewer nothing (see
- `ChatView`'s toolbar for the same rule).
+ NEITHER PATH TAKES A SEAT. The host's setup card used to exist only on the
+ call screen, so a host tap joined the room to reach it, and a seat asked for
+ the microphone and published it (TestFlight 1.0.5 then blamed the "voice
+ server" for a microphone the party never needed). The card is on the stage
+ now and going live is the moment a seat is taken, so the two paths differ
+ only in what an existing seat does: brought back for a host, irrelevant for
+ the audience, whose seat would cost a participant on the media box and buy
+ them nothing on the default `hosts_only` stage (see `ChatView`'s toolbar for
+ the same rule).
 
  Keyed on `viewerRole` alone, not on the card's state: a pending card is
  always the host's or a co-host's (`resolveServerWatchPartyListState` never

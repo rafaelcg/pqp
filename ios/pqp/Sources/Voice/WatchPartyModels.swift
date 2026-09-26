@@ -36,11 +36,17 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
     /// newest-first, mirroring `sortNewestFirst` in the web's
     /// `use-watch-parties.ts` -- this build still draws only the newest.
     let wentLiveAt: String?
+    /// The one part of `options` this build reads: whether the party has
+    /// voice, which decides whether going live takes a microphone
+    /// (`watchPartyHostSeatMicrophone`). Nil for a payload with no options,
+    /// which reads as voice off, the server's own default.
+    let options: WatchPartyOptionsPayload?
 
     init(
         id: String, channelId: String, name: String, state: String,
         hostUserId: String, hostDisplayName: String, viewerRole: String,
-        hostAvatarUrl: String? = nil, wentLiveAt: String? = nil
+        hostAvatarUrl: String? = nil, wentLiveAt: String? = nil,
+        options: WatchPartyOptionsPayload? = nil
     ) {
         self.id = id
         self.channelId = channelId
@@ -51,7 +57,12 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
         self.viewerRole = viewerRole
         self.hostAvatarUrl = hostAvatarUrl
         self.wentLiveAt = wentLiveAt
+        self.options = options
     }
+
+    /// Whether this party has voice at all. Off unless a host turned it on
+    /// (`docs/WATCH_PARTY.md`, "A watch party has no voice by default").
+    var voiceEnabled: Bool { options?.voiceEnabled ?? false }
 
     var isHost: Bool { viewerRole == "host" }
     var isCohost: Bool { viewerRole == "cohost" }
@@ -64,6 +75,45 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
     /// same as "no active party" everywhere a caller asks "is one running":
     /// see `WatchPartyHostGate.swift`.
     var isTerminal: Bool { state == "ended" || state == "cancelled" }
+}
+
+/**
+ `party.options`, trimmed to whether the party has voice.
+
+ `voiceEnabled` is the key the server's own seat gate reads
+ (`mayTakeWatchPartySeat`), and the wire still carries it beside `guests`
+ for the compatibility release (`deriveLegacyWatchPartyVoiceTriple` in
+ `packages/shared/src/watch-party-session.ts`). A payload with only `guests`
+ reads it the way that table does: `off` is no voice, and every other mode
+ brings people up to speak. Missing or unreadable is voice off, the default,
+ which is also the direction that asks nobody for a microphone.
+ */
+struct WatchPartyOptionsPayload: Codable, Equatable, Sendable {
+    let voiceEnabled: Bool
+
+    init(voiceEnabled: Bool) {
+        self.voiceEnabled = voiceEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case voiceEnabled, guests
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let explicit = try? container.decodeIfPresent(Bool.self, forKey: .voiceEnabled) {
+            voiceEnabled = explicit
+        } else if let guests = try? container.decodeIfPresent(String.self, forKey: .guests) {
+            voiceEnabled = guests != "off"
+        } else {
+            voiceEnabled = false
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(voiceEnabled, forKey: .voiceEnabled)
+    }
 }
 
 /// `{party: ...}`, the envelope every mutation route and the

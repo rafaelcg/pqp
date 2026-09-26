@@ -26,6 +26,11 @@ import Foundation
  all for anyone else -- the same trade `watchPartyMayJoinRoom` makes for
  letting an idle channel's room be joined by anybody.
 
+ That is still what `VoiceView`'s controls pass. The stage above the
+ transcript (`watchPartyStageHostCard`, below) passes the real bit instead,
+ read from `GET /api/servers/:id/permissions` (`PermissionsSnapshot`), which
+ is what lets a host set up and go live without a seat first.
+
  ## Where `serverWatchPartyEnabled` comes from
 
  `GET /api/live-hls/config?serverId=`.`enabled` -- the exact route and field
@@ -153,4 +158,68 @@ func watchPartyMayJoinRoom(canStartWatchParty: Bool, party: WatchPartyKnowledge)
     guard case .resolved(let active) = party.active else { return false }
     guard let active else { return true }
     return active.isHost || active.isCohost
+}
+
+// MARK: - The stage, before any seat
+
+/**
+ What the watch-party stage above the transcript offers this account as a
+ host, while it holds no seat in the room.
+
+ A WATCH PARTY IS A BROADCAST, NOT A CALL. Setting one up used to need a seat
+ first, because `canStartWatchParty` was only knowable once `welcome` had
+ answered, and a seat on iOS asked for the microphone and published it. That
+ is how a host with voice off was told the "voice server" could not be
+ reached over a microphone the party never needed. The bit is now read from
+ `GET /api/servers/:id/permissions` (`PermissionsSnapshot`) and the party
+ from `WatchPartyHostController`, so the setup card needs nothing from the
+ room, the way the web's stage draws it. Going live is the moment a seat is
+ taken, and only then.
+
+ The same `watchPartyHostGate` decides it, so the stage and `VoiceView`'s
+ controls cannot disagree about who hosts. Seated, this is `hidden`: the call
+ screen owns the controls then, and two sets of the same buttons would be
+ two answers to one question.
+ */
+enum WatchPartyStageHostCard: Equatable {
+    case hidden
+    /// "Create watch party": nothing is running, and this account may start one.
+    case create
+    /// The draft or scheduled party this account runs: its name and Go live.
+    case setup(WatchPartyPayload)
+    /// The live party this account runs, with no seat behind it (the app was
+    /// closed, or the call was left): back into the room, or End.
+    case live(WatchPartyPayload)
+
+    /// Whether this card is the host's way into the room, which the
+    /// toolbar's Join must then not also be: the host is seated by going
+    /// live, never by a call button (the web's `mayEnterPalco` in
+    /// `watch-party-panel.tsx`).
+    var isTheWayIn: Bool {
+        switch self {
+        case .setup, .live: true
+        case .hidden, .create: false
+        }
+    }
+}
+
+func watchPartyStageHostCard(
+    isWatchPartyChannel: Bool,
+    serverWatchPartyEnabled: Bool,
+    canStartWatchParty: Bool,
+    party: WatchPartyKnowledge,
+    isSeated: Bool
+) -> WatchPartyStageHostCard {
+    guard !isSeated else { return .hidden }
+    let gate = watchPartyHostGate(
+        isWatchPartyChannel: isWatchPartyChannel,
+        serverWatchPartyEnabled: serverWatchPartyEnabled,
+        canStartWatchParty: canStartWatchParty,
+        party: party
+    )
+    if gate.canCreate { return .create }
+    guard gate.canManage, case .known(let known) = party, let known else { return .hidden }
+    if canGoLiveWith(known) { return .setup(known) }
+    if canEndParty(known) { return .live(known) }
+    return .hidden
 }

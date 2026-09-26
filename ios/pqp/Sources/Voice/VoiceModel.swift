@@ -54,6 +54,10 @@ final class VoiceModel {
     /// Whether there is a session worth a surface: joining, connected, or a
     /// failure that has not been dismissed yet.
     var isLive: Bool { status != .idle }
+    /// Joining or in the room: a seat, as opposed to a failure still on
+    /// screen. The watch-party stage offers its host Go live and Rejoin again
+    /// after a failure, which is how somebody tries again.
+    var holdsSeat: Bool { status == .joining || status == .connected }
     private(set) var peers: [VoicePeerState] = [] {
         didSet { noteCallProgress() }
     }
@@ -113,6 +117,18 @@ final class VoiceModel {
     /// by the next unmute that gets through, and on leave. See
     /// `SfuMicrophoneOutcome` for why this is a notice and not a failed call.
     private(set) var microphoneNotice: String?
+    /// What this seat does about the microphone; see `SeatMicrophone`. Set by
+    /// `join`, turned from `.none` into a publishing seat by the first unmute
+    /// that is granted the permission, and reset by `leave`.
+    @ObservationIgnored private var seatMicrophone: SeatMicrophone = .standard
+    /// The words a failure here is described in: a watch party is a stream,
+    /// never a call. See `SfuRoomKind`.
+    private var roomKind: SfuRoomKind {
+        sfuRoomKind(isWatchPartyChannel: channel?.isWatchParty == true)
+    }
+    private static var microphoneAccessOff: String {
+        String(localized: "Microphone access is off. Enable it in Settings to talk.")
+    }
 
     /// Whether to draw the share control at all.
     var offersScreenShare: Bool {
@@ -131,6 +147,25 @@ final class VoiceModel {
             }
             let ticket = muteRequests.begin()
             Task {
+                // A seat that joined with no microphone gets one only now,
+                // because somebody decided to speak: the one moment the
+                // prompt is honest. Refused, the control goes back to muted
+                // and says why; granted, the seat publishes from here on.
+                // The prompt can stay up for as long as the person takes to
+                // answer it, so the session is checked again afterwards: a
+                // leave or a new join meanwhile owns the state now.
+                if !isMuted, seatMicrophone == .none, status != .idle {
+                    let generation = callGeneration
+                    let granted = await requestMicrophone()
+                    guard generation == callGeneration, status != .idle else { return }
+                    guard granted else {
+                        guard muteRequests.isCurrent(ticket) else { return }
+                        microphoneNotice = Self.microphoneAccessOff
+                        isMuted = true
+                        return
+                    }
+                    seatMicrophone = .startMuted
+                }
                 // Both transports, unconditionally: the one this room is not
                 // on holds no track and the call is a no-op, and forwarding to
                 // both is what keeps a mute decided before `welcome` true on
@@ -465,15 +500,22 @@ final class VoiceModel {
         }
     }
 
+    /// `microphone` is `.standard` for every voice channel. A watch party's
+    /// host going live passes `watchPartyHostSeatMicrophone(...)`, which with
+    /// voice off is `.none`: no permission prompt, no capture, nothing
+    /// published. See `SeatMicrophone`.
     func join(
         channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil,
-        serverName: String? = nil
+        serverName: String? = nil, microphone: SeatMicrophone = .standard
     ) async {
         // One session per app, so a join from another room is a move, and the
         // room being left must hear about it before this one is entered. The
         // same room is a no-op: the stage was reopened, not rejoined.
         if status != .idle {
-            if channelId == channel.id { return }
+            if channelId == channel.id {
+                await reconcileReopenedSeat(with: microphone)
+                return
+            }
             await leave()
         }
         callGeneration += 1
@@ -485,14 +527,23 @@ final class VoiceModel {
         channelName = channel.name
         self.serverName = serverName
         intendedChannel = channel
+        seatMicrophone = microphone
         status = .joining
 
         // Asked for before joining rather than after: joining a room you cannot
         // speak in, then discovering the mic is refused, is a worse first
-        // experience than being asked plainly up front.
-        guard await requestMicrophone() else {
-            status = .failed(String(localized: "Microphone access is off. Enable it in Settings to talk."))
-            return
+        // experience than being asked plainly up front. Only for a seat that
+        // will publish one: a broadcast seat with voice off asks nobody.
+        if seatAsksForMicrophone(microphone) {
+            let granted = await requestMicrophone()
+            switch seatMicrophoneAfterPermission(microphone, granted: granted) {
+            case .refuseJoin:
+                status = .failed(Self.microphoneAccessOff)
+                return
+            case .proceed(let seat):
+                seatMicrophone = seat
+                if !granted { microphoneNotice = Self.microphoneAccessOff }
+            }
         }
 
         session.eventHandlers[handlerKey] = { [weak self] event in
@@ -511,7 +562,13 @@ final class VoiceModel {
             // cannot resume.
             let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
             deploymentRunsLiveKit = backend?.runsLiveKit ?? false
-            try await voice.startAudio()
+            // The mesh's microphone track. Not for a seat with none: creating
+            // it starts a capture, and a capture is the prompt this seat
+            // exists to avoid. A mesh `welcome` for such a seat catches up
+            // there (`startMeshAudioForSeatWithoutMicrophone`).
+            if seatMicrophone != .none {
+                try await voice.startAudio()
+            }
             // "Mute microphone when joining voice", which Settings has been
             // writing since the screen existed and nothing has ever read.
             //
@@ -524,7 +581,9 @@ final class VoiceModel {
             // Awaited directly as well as set, because the property's `didSet`
             // hands its work to an unstructured Task that need not have run by
             // the time `joinVoice` below returns a peer to connect to.
-            isMuted = session.preferences.muteOnJoin ?? false
+            isMuted = seatStartsMuted(
+                seatMicrophone, muteOnJoinPreference: session.preferences.muteOnJoin ?? false
+            )
             await voice.setMuted(isMuted)
             await voice.configure(
                 selfPeerId: "",
@@ -611,6 +670,10 @@ final class VoiceModel {
         selfPeerId = nil
         canSpeak = true
         speakNotice = nil
+        // Before `isMuted` goes back to false: an unmute on a seat with no
+        // microphone asks for one, and a leave is not somebody deciding to
+        // speak.
+        seatMicrophone = .standard
         isMuted = false
         isDeafened = false
         isServerMuted = false
@@ -854,7 +917,9 @@ final class VoiceModel {
                 self.cameraWatchdog = nil
                 self.localCamera = nil
                 self.isCameraOn = false
-                try? await voice.startAudio()
+                if self.seatMicrophone != .none {
+                    try? await voice.startAudio()
+                }
                 await session?.realtime.joinVoice(
                     channelId: intendedChannel.id, declaresResume: declaresResume
                 )
@@ -966,6 +1031,9 @@ final class VoiceModel {
                 // politeness rule is derived from it — so it is set here rather
                 // than at configure time.
                 await voice.setSelfPeerId(peerId)
+                if self.seatMicrophone == .none {
+                    await self.startMeshAudioForSeatWithoutMicrophone()
+                }
                 for participant in existing {
                     await voice.connect(to: participant)
                     // Without this every arriving video track classifies as a
@@ -1303,7 +1371,7 @@ final class VoiceModel {
                 // a session to end; see `sfuMicrophoneDisposition`.
                 let microphone = await self.publishSfuMicrophone()
                 if case .end(let error) = sfuMicrophoneDisposition(
-                    microphone, wasMuted: self.isMuted, keepsSeat: true
+                    microphone, wasMuted: self.isMuted, keepsSeat: true, room: self.roomKind
                 ) {
                     outcome = .failure(error)
                 } else {
@@ -1329,11 +1397,19 @@ final class VoiceModel {
                 // A microphone that would not publish keeps the seat: the room
                 // works, the person can listen and host, and unmute publishes
                 // again. Muted through the property, so the roster says so.
-                if case .keep(let muted, let notice) = sfuMicrophoneDisposition(
-                    microphone, wasMuted: self.isMuted, keepsSeat: true
-                ) {
-                    self.microphoneNotice = notice
-                    if muted != self.isMuted { self.isMuted = muted }
+                // Nothing to apply for a microphone deliberately not
+                // published, and applying it would clear the line a seat that
+                // was refused the permission at join is showing.
+                if microphone != .withheld {
+                    let kept = await self.applyKeptMicrophone(
+                        sfuMicrophoneDisposition(
+                            microphone, wasMuted: self.isMuted, keepsSeat: true, room: self.roomKind
+                        ),
+                        promoted: promoted
+                    )
+                    // A microphone that could not be silenced ended the
+                    // session; nothing below has a room to act on.
+                    guard kept else { return }
                 }
                 // Media is up, so a share now has a room to land in. A no-op
                 // on the promoted path: the bridge was armed for the mesh and
@@ -1381,7 +1457,7 @@ final class VoiceModel {
      lines are no-ops.
      */
     private func endSfuSession(_ error: SfuJoinError, promoted: Bool) async {
-        guard let message = sfuFailureMessage(error, promoted: promoted) else { return }
+        guard let message = sfuFailureMessage(error, promoted: promoted, room: roomKind) else { return }
         transportNotice = nil
         microphoneNotice = nil
         intendedChannel = nil
@@ -1402,17 +1478,102 @@ final class VoiceModel {
 
     /// The outcome of an unmute that had to publish the microphone again. A
     /// clean failure keeps the seat, muted, with the notice; a room that went
-    /// or a microphone in an unknown state ends the session. Only called for
-    /// the latest mute request (`MuteRequestLedger`).
+    /// or a microphone in an unknown state ends the session (in a watch party
+    /// it is silenced instead; see `sfuMicrophoneDisposition`). Only called
+    /// for the latest mute request (`MuteRequestLedger`).
     private func applyMicrophoneRepublish(_ outcome: SfuMicrophoneOutcome) async {
         guard status == .connected, transport == .livekit else { return }
-        switch sfuMicrophoneDisposition(outcome, wasMuted: isMuted, keepsSeat: true) {
+        await applyKeptMicrophone(
+            sfuMicrophoneDisposition(outcome, wasMuted: isMuted, keepsSeat: true, room: roomKind),
+            promoted: true
+        )
+    }
+
+    /**
+     Carry out what the microphone step decided. Answers whether the seat was
+     kept.
+
+     `keep`: the notice, and the mute control brought into line with the wire.
+     `silence` (a watch party whose microphone is in an unknown state): take
+     the microphone down FIRST and only then claim it is muted. If that is not
+     confirmed (`LiveKitVoiceClient.silenceMicrophone`), a control reading
+     muted over a microphone that may be sending is the one outcome worse
+     than ending the broadcast, so it ends (`sfuMicrophoneAfterSilence`).
+     `end`: the ordinary SFU failure path.
+     */
+    @discardableResult
+    private func applyKeptMicrophone(
+        _ disposition: SfuMicrophoneDisposition, promoted: Bool
+    ) async -> Bool {
+        switch disposition {
         case .keep(let muted, let notice):
             microphoneNotice = notice
             if muted != isMuted { isMuted = muted }
+            return true
+        case .silence(let notice):
+            let confirmed = await sfu.silenceMicrophone().isConfirmed
+            return await applyKeptMicrophone(
+                sfuMicrophoneAfterSilence(notice: notice, confirmed: confirmed), promoted: promoted
+            )
         case .end(let error):
+            await endSfuSession(error, promoted: promoted)
+            return false
+        }
+    }
+
+    /**
+     A join for the room this phone is already in is a reopen, not a new seat,
+     but the microphone it asked for still has to hold.
+
+     The case: a host took an ordinary seat through Join while the room had
+     no party, created one on the call screen, and went live with voice off.
+     The seat takes the policy it asked for (`reopenedSeatMicrophone`):
+     voice off takes the SFU microphone off the room and the seat becomes one
+     with none, so the next unmute is the deliberate act that publishes it
+     again; voice on mutes it in place. An ordinary reopen (`.standard`)
+     changes nothing, as before.
+
+     THE WIRE FIRST, AND CONFIRMED. The property's `didSet` mutes both
+     transports too, but in a detached task whose result nobody reads. Here
+     the mesh track is disabled directly (it cannot fail), and on the SFU the
+     published track is taken down through `silenceMicrophone`, whose answer
+     decides: not confirmed means a control saying muted over a microphone
+     that may still be sending, and the session ends instead
+     (`sfuMicrophoneAfterSilence`), the same rule as a microphone in an
+     unknown state. A room still joining publishes from `isMuted` when it
+     comes up, so there is nothing on the wire yet to take down.
+     */
+    private func reconcileReopenedSeat(with microphone: SeatMicrophone) async {
+        let next = reopenedSeatMicrophone(current: seatMicrophone, requested: microphone)
+        seatMicrophone = next.seat
+        guard next.mute else { return }
+        if !isMuted { isMuted = true }
+        await voice.setMuted(true)
+        guard transport == .livekit, status == .connected else { return }
+        let result = await sfu.silenceMicrophone(remove: next.seat == .none)
+        // Removal can fall back to a mute; the seat says which it got.
+        seatMicrophone = seatMicrophoneAfterSilence(requested: next.seat, result: result)
+        // Nothing went wrong with a microphone that did go quiet, so there is
+        // no notice to show; only the unconfirmed case acts.
+        if case .end(let error) = sfuMicrophoneAfterSilence(notice: "", confirmed: result.isConfirmed) {
             await endSfuSession(error, promoted: true)
         }
+    }
+
+    /**
+     A mesh room for a seat that joined with no microphone.
+
+     Not a watch party's normal path: live HLS pins every party room to the
+     SFU (`liveHlsForcesSfu` on the server), and that is the only kind of room
+     the stage's Go live is offered for. But a room's transport is the server's
+     to decide, and the mesh cannot play a room at all without the audio
+     session its microphone track brings up, so here the seat takes a muted
+     one like every other mesh seat rather than joining a room it cannot hear.
+     */
+    private func startMeshAudioForSeatWithoutMicrophone() async {
+        seatMicrophone = .startMuted
+        try? await voice.startAudio()
+        await voice.setMuted(isMuted)
     }
 
     /**
@@ -1495,9 +1656,12 @@ final class VoiceModel {
 
     /// The second half of an SFU join, once the room is up. `canSpeak` is read
     /// now rather than when the join started, so a rule that flipped during the
-    /// connect is the rule that decides.
+    /// connect is the rule that decides. A seat that joined with no microphone
+    /// publishes none (`sfuJoinPublishesMicrophone`).
     private func publishSfuMicrophone() async -> SfuMicrophoneOutcome {
-        guard canSpeak else { return .withheld }
+        guard sfuJoinPublishesMicrophone(seat: seatMicrophone, canSpeak: canSpeak) else {
+            return .withheld
+        }
         return await sfu.publishMicrophone(muted: isMuted || isDeafened)
     }
 }

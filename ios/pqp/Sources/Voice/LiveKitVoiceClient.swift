@@ -189,6 +189,39 @@ actor LiveKitVoiceClient {
         }
     }
 
+    /**
+     Makes sure no microphone is sending, and says whether that is CONFIRMED.
+
+     For a microphone whose state is unknown (`SfuMicrophoneOutcome.unknownState`)
+     in a room that is kept anyway (a watch party's broadcast), and for a seat
+     that goes live with no microphone while it already has one. `remove`
+     takes the track off the room (the seat then has no microphone, and the
+     next unmute publishes one again); otherwise it is muted in place. Either
+     way the other operation is the fallback when the first throws. The answer
+     says which one landed (`MicrophoneSilence`), so a caller that asked for
+     removal knows whether the seat really has no microphone now or a muted
+     one. `failed` means the microphone may still be on the wire, and the
+     caller must not keep a seat that claims to be muted over it.
+     */
+    func silenceMicrophone(remove: Bool = false) async -> MicrophoneSilence {
+        isMuted = true
+        guard let room, room.connectionState == .connected else { return .failed }
+        guard let microphone = microphonePublication(in: room) else { return .removed }
+        let unpublish: () async throws -> Void = {
+            try await room.localParticipant.unpublish(publication: microphone)
+        }
+        let mute: () async throws -> Void = {
+            try await room.localParticipant.setMicrophone(enabled: false)
+        }
+        let order: [(MicrophoneSilence, () async throws -> Void)] = remove
+            ? [(.removed, unpublish), (.muted, mute)]
+            : [(.muted, mute), (.removed, unpublish)]
+        for (result, attempt) in order where (try? await attempt()) != nil {
+            return result
+        }
+        return .failed
+    }
+
     private func microphonePublication(in room: Room) -> LocalTrackPublication? {
         room.localParticipant.trackPublications.values
             .first { $0.source == .microphone } as? LocalTrackPublication

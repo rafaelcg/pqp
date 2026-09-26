@@ -317,16 +317,27 @@ final class WatchPartyHostController {
     /// "Ir ao vivo". See `performWatchPartyGoLive` for the ordering and
     /// `joinVoiceAndGuardSettle` for why a timed-out join is left rather
     /// than abandoned in place.
+    ///
+    /// This is the moment media starts: nothing before it took a seat, and
+    /// the seat it takes carries `microphone`
+    /// (`watchPartyHostSeatMicrophone`), which for a party with voice off is
+    /// no microphone at all.
     func goLive(
         channel: Channel,
         serverName: String?,
         partyId: String,
         lowLatency: Bool,
+        microphone: SeatMicrophone,
         session: SessionStore,
         voice: VoiceModel,
         ratings: CallRatingModel?
     ) {
         run(.goingLive) {
+            // What the room itself said when the join failed, if it said
+            // anything (`VoiceModel.status`'s failure, in the stream's words
+            // for a watch party). The seat is left on the way out, which
+            // clears that status, so it is kept here for the sentence below.
+            var joinFailure: String?
             let result = try await performWatchPartyGoLive(
                 setLive: {
                     // `nil` here is a refused/unconfirmed transition, not a
@@ -351,8 +362,26 @@ final class WatchPartyHostController {
                 },
                 joinVoice: {
                     try await joinVoiceAndGuardSettle(
-                        join: { await voice.join(channel: channel, session: session, ratings: ratings, serverName: serverName) },
-                        waitForSettle: { try await Self.waitForVoiceJoin(voice, channelId: channel.id) },
+                        join: {
+                            voice.isCollapsed = false
+                            // A failed session for this room would read as a
+                            // reopen and never try again; see `VoiceModel.join`.
+                            if case .failed = voice.status, voice.channelId == channel.id {
+                                await voice.leave()
+                            }
+                            await voice.join(
+                                channel: channel, session: session, ratings: ratings,
+                                serverName: serverName, microphone: microphone
+                            )
+                        },
+                        waitForSettle: {
+                            do {
+                                try await Self.waitForVoiceJoin(voice, channelId: channel.id)
+                            } catch {
+                                if case .failed(let message) = voice.status { joinFailure = message }
+                                throw error
+                            }
+                        },
                         leaveOnFailure: { await voice.leave() }
                     )
                 },
@@ -370,14 +399,15 @@ final class WatchPartyHostController {
                     String(localized: "Could not go live. The server never confirmed it. Try again.")
                 )
             case .joinFailed(let ended):
+                let outcome = ended
+                    ? String(
+                        localized: "The broadcast could not start. The party was ended. Try again."
+                    )
+                    : String(
+                        localized: "The broadcast could not start, and the party could not be ended either. It may still show as live. Try again in a moment."
+                    )
                 throw WatchPartyHostError.message(
-                    ended
-                        ? String(
-                            localized: "The broadcast could not start. The party was ended. Try again."
-                        )
-                        : String(
-                            localized: "The broadcast could not start, and the party could not be ended either. It may still show as live. Try again in a moment."
-                        )
+                    [joinFailure, outcome].compactMap { $0 }.joined(separator: "\n\n")
                 )
             }
         }
@@ -400,12 +430,17 @@ final class WatchPartyHostController {
                     if let updated, self.channelId == channelId { self.partyState.applyAuthoritative(updated) }
                     return updated != nil
                 },
-                leaveVoice: { await voice.leave() }
+                // Only this party's room. Encerrar from the stage runs with no
+                // seat here, and the phone may be in an unrelated call that
+                // ending a party has no business hanging up.
+                leaveVoice: {
+                    if voice.channelId == channelId { await voice.leave() }
+                }
             )
             if !ended {
                 throw WatchPartyHostError.message(
                     String(
-                        localized: "You left the call, but the server did not confirm the party ended. It may still show as live."
+                        localized: "Your broadcast stopped, but the server did not confirm the party ended. It may still show as live."
                     )
                 )
             }

@@ -745,8 +745,10 @@ final class WatchPartyTests: XCTestCase {
             source.contains("case .unknown, .idle:"),
             "waiting and nothing-yet are one card, not two sentences half a second apart"
         )
+        // Still gated on the type first; the host's own card above the stage
+        // (`hostCardShown`) is the only other thing the notice steps aside for.
         XCTAssertTrue(
-            source.contains("if channel.isWatchParty {"),
+            source.contains("if channel.isWatchParty, !hostCardShown {"),
             "an ordinary voice channel must stay inert"
         )
         XCTAssertTrue(
@@ -905,7 +907,7 @@ final class WatchPartyTests: XCTestCase {
             "the system chevron has to step aside for the overlay's own, or there are two"
         )
         XCTAssertTrue(
-            chat.contains("WatchStageView(channel: voiceChannel, canHost: canHostWatchParty, onBack: { dismiss() })"),
+            chat.contains("WatchStageView(channel: voiceChannel, hostCardShown: card != .hidden, onBack: { dismiss() })"),
             "the overlay's chevron needs a real dismiss action to call"
         )
     }
