@@ -22,8 +22,7 @@ import Foundation
     after being added still needs the way back into a party already
     running.
  3. **`canHost` alone.** One "Create watch party" row -- see `canHost`'s own
-    doc for what it means on this build, and why it is coarser than the
-    server's real rule.
+    doc for exactly what fact it is.
  4. **Nothing.** No heading, no row, no placeholder -- exactly `live-party-
     block.tsx`'s "NOTHING, OR ONE BUTTON" comment, mirrored down to the
     absence.
@@ -51,21 +50,22 @@ enum ServerWatchPartyListState: Equatable {
    - canHost: Whether the "Create watch party" row belongs on this server at
      all.
 
-     THE COARSE STAND-IN, NOT THE SERVER'S REAL RULE. The web's
-     `canOfferWatchPartyCreate` is `START_WATCH_PARTY` (a genuine per-role
-     permission bit) AND the server's own live-hls availability. iOS models
-     no per-channel permission tree -- see `WatchPartyHostGate.swift`'s own
-     doc for why `canStartWatchParty` there is only knowable once a seat is
-     already taken -- so callers pass `Moderation.isManager(server.role)`
-     (owner/admin) alongside the live-hls answer instead, the same
-     approximation `ChannelListView` already uses for "New channel" and
-     "Community settings". It is a narrower answer than the server's: a
-     Moderator role holding `START_WATCH_PARTY` without being owner/admin
-     sees no row here and has to reach hosting through an existing
-     `watch_party` channel's own call screen instead, same as before this
-     change. It is never a WIDER one -- the create call itself still asks
-     the server, which is what actually enforces the bit, so a wrong `true`
-     here costs a refusal alert, never an unauthorised party.
+     THE SAME FACT THE WEB CHECKS, not an approximation of it.
+     `canOfferWatchPartyCreate` (`client/src/lib/watch-party-channels.ts`) is
+     `hlsEnabled === true && hasPermission`, where `hasPermission` is
+     `perms.can(Permission.START_WATCH_PARTY)` with NO channel id
+     (`client/src/App.tsx`'s sidebar wiring) -- the server-wide bits alone,
+     because the create button may be making a channel that does not exist
+     yet, so there is nothing to check a channel override against. Callers
+     here pass exactly that: `PermissionsSnapshot.can(PermissionBit.
+     startWatchParty)`, no `channelId`, ANDed with the live-hls answer --
+     see `PermissionBits.swift` for where the snapshot comes from and why
+     an owner or an ADMINISTRATOR role already reads as holding the bit
+     with no special-casing (the server resolves both to every bit before
+     this ever reaches the wire). `ChatView`'s own `canHostWatchParty`,
+     which only ever names a channel that already exists, passes a
+     `channelId` and gets the more precise, channel-overridden answer this
+     function's `canHost` intentionally does not ask for.
  */
 func resolveServerWatchPartyListState(
     parties: [WatchPartyPayload],

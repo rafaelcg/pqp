@@ -57,6 +57,12 @@ struct ChannelListView: View {
     /// self-host with nothing configured must not draw a Create row that
     /// cannot go anywhere.
     @State private var liveHlsConfig: LiveHlsConfigPayload = .off
+    /// This account's own resolved permission bitfields for this server --
+    /// `GET /api/servers/:serverId/permissions`. Nil until the first answer
+    /// lands; `canHostWatchParty` reads that as "not yet knowable", which is
+    /// what `PermissionsSnapshot.can` returning `false` by way of `?? false`
+    /// gives it for free -- see that property's own doc.
+    @State private var watchPartyPermissions: PermissionsSnapshot?
     @State private var creatingWatchParty = false
     @State private var watchPartyCreateError: String?
     @State private var showingCreateWatchParty = false
@@ -98,16 +104,17 @@ struct ChannelListView: View {
 
     /**
      Whether the "Create watch party" row belongs on this server at all --
-     the coarse stand-in for `START_WATCH_PARTY` `resolveServerWatchPartyListState`
-     itself documents, `AND` the server's own broadcast switch. The same
-     `Moderation.isManager` reading already gates "New channel" and
-     "Community settings" a few lines down, so this offers the row to
-     exactly the accounts already trusted with the rest of this menu -- no
-     wider, and, for a Moderator role holding the real bit without being
-     owner/admin, narrower than the web. See `ServerWatchPartyListState.swift`.
+     `START_WATCH_PARTY`, server-wide (no channel to check an override
+     against: the row may be about to make the channel), AND the server's
+     own broadcast switch. Exactly `canOfferWatchPartyCreate`'s own two
+     inputs on the web (`client/src/lib/watch-party-channels.ts`) -- see
+     `resolveServerWatchPartyListState`'s `canHost` doc for the precise
+     mirroring, and `PermissionBits.swift` for why an owner or an
+     ADMINISTRATOR role needs no special case here.
      */
     private var canHostWatchParty: Bool {
-        liveHlsConfig.enabled && Moderation.isManager(current.role)
+        liveHlsConfig.enabled
+            && (watchPartyPermissions?.can(PermissionBit.startWatchParty) ?? false)
     }
 
     private var watchPartyListState: ServerWatchPartyListState {
@@ -529,12 +536,12 @@ struct ChannelListView: View {
      server-scoped route (`createServerWatchParty`), which finds or makes
      the server's one hidden room and opens an immediate `draft` in it.
 
-     THE SERVER STAYS THE REAL GATE. `canHostWatchParty` only decided
-     whether to draw the row (see that property's doc on why it is a
-     coarser reading of START_WATCH_PARTY than the web's); this call is
-     what the server actually checks the bit against, so an account this
-     view guessed wrong about sees a refusal here, never an unauthorised
-     party.
+     THE SERVER STAYS THE REAL GATE, EVEN THOUGH `canHostWatchParty` READS
+     THE REAL BIT. `PermissionsSnapshot` can be a request behind the truth
+     (a role just changed, the fetch failed and left a stale answer) --
+     this call is what the server actually checks the bit against at the
+     moment it matters, so a client reading gone stale sees a refusal here,
+     never an unauthorised party.
 
      On success the returned channel is appended to `channels` (it may be
      brand new to this client) and opened directly, landing the host on the
@@ -665,6 +672,15 @@ struct ChannelListView: View {
         // above: `canHostWatchParty` needs it to draw the Create row the
         // instant the parties answer comes back with none.
         liveHlsConfig = await session.api.liveHlsConfig(serverId: server.id)
+        // Same reasoning, and the other half of `canHostWatchParty`: this
+        // account's own role can differ server to server, so the bitfield is
+        // re-asked on every load rather than cached across servers. A
+        // failure leaves whatever this screen already knew (`try?`) rather
+        // than wiping the Create row on a blip that has nothing to do with
+        // whether the account may still host.
+        if let permissions = try? await session.api.fetchMemberPermissions(serverId: server.id) {
+            watchPartyPermissions = permissions
+        }
         do {
             channels = try await session.api.channels(serverId: server.id)
             // Unread is a separate call and failing it must not blank the
@@ -692,12 +708,21 @@ struct ChannelListView: View {
     /// is still the last thing the server actually said, and replacing it with
     /// an error would be a worse answer than a slightly stale one. The next
     /// `permissions-update` or a pull-to-refresh tries again.
+    ///
+    /// Also the reload that keeps `canHostWatchParty` honest: the frame that
+    /// calls this means this account's OWN bits may just have changed (a
+    /// role edit, a channel overwrite), which is exactly the moment a stale
+    /// `watchPartyPermissions` would show -- or hide -- the Create row for
+    /// a beat after the truth changed.
     private func reloadAfterPermissionsChange() async {
         guard let fresh = try? await session.api.channels(serverId: server.id) else { return }
         channels = fresh
         // A channel that is gone must not keep a badge behind in the dictionary.
         let visible = Set(fresh.map(\.id))
         unread = unread.filter { visible.contains($0.key) }
+        if let permissions = try? await session.api.fetchMemberPermissions(serverId: server.id) {
+            watchPartyPermissions = permissions
+        }
     }
 }
 

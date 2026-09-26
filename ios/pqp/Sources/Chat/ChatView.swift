@@ -94,20 +94,32 @@ struct ChatView: View {
     /// `WatchStageView`'s idle card -- see `canHostWatchParty`'s own doc for
     /// why this is fetched here rather than trusted to `voiceChannel`.
     @State private var watchPartyLiveHlsConfig: LiveHlsConfigPayload = .off
+    /// This account's own resolved permission bitfields for `voiceChannel`'s
+    /// server, the same snapshot `ChannelListView` reads. See
+    /// `canHostWatchParty`.
+    @State private var watchPartyPermissions: PermissionsSnapshot?
 
     /**
-     The coarse "this account can probably host here" reading
-     `WatchStageView`'s idle card uses to choose its copy -- see
-     `ServerWatchPartyListState.swift`'s `canHost` doc on `ChannelListView`
-     for the identical approximation and why a full permission read is not
-     available on this build. Deliberately not wired to anything that GATES
-     an action (the toolbar's Join button already decides that on its own,
-     via `watchPartyMayJoinRoom`): getting this wrong only costs a sentence,
+     Whether `WatchStageView`'s idle card should point at the toolbar's Join
+     button instead of saying nothing is running. `START_WATCH_PARTY`, WITH
+     `voiceChannel.id` as the channel id (unlike `ChannelListView`'s own
+     `canHostWatchParty`, which asks with none): this screen, unlike the
+     sidebar's Create row, always names a channel that already exists, so
+     the more precise question -- does a channel-specific overwrite change
+     the answer for THIS room -- is the one to ask. See
+     `PermissionsSnapshot.can`'s own doc for the override-falls-back-to-
+     server-bits rule this mirrors from `use-permissions.ts`.
+
+     Deliberately not wired to anything that GATES an action (the toolbar's
+     Join button already decides that on its own, via
+     `watchPartyMayJoinRoom`): getting this wrong only costs a sentence,
      never an unauthorised party, because the actual host controls inside
      `VoiceView` still ask the server through `WatchPartyHostGate`.
      */
     private var canHostWatchParty: Bool {
-        watchPartyLiveHlsConfig.enabled && Moderation.isManager(server?.role)
+        guard let voiceChannel else { return false }
+        return watchPartyLiveHlsConfig.enabled
+            && (watchPartyPermissions?.can(PermissionBit.startWatchParty, channelId: voiceChannel.id) ?? false)
     }
 
     var body: some View {
@@ -308,6 +320,9 @@ struct ChatView: View {
         .task(id: voiceChannel?.serverId) {
             guard let serverId = voiceChannel?.serverId else { return }
             watchPartyLiveHlsConfig = await session.api.liveHlsConfig(serverId: serverId)
+            if let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId) {
+                watchPartyPermissions = permissions
+            }
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
