@@ -392,6 +392,11 @@ struct WatchCameraStallWatch: Equatable, Sendable {
             if position > previous {
                 let since = advancingSince ?? now
                 advancingSince = since
+                // Two forward samples in a row is playback, not the one step
+                // the nudge's own seek reads as: the nudge took, so its
+                // verdict is over and a later freeze waits the full stall
+                // window again from this movement (Farol, PR 845).
+                if now > since { verifyingSince = nil }
                 if now.timeIntervalSince(since) >= Self.healthySeconds {
                     nudged = false
                     verifyingSince = nil
@@ -426,6 +431,9 @@ struct WatchCameraStallWatch: Equatable, Sendable {
     mutating func forgetPosition() {
         lastPosition = nil
         advancingSince = nil
+        // A new player earns its own stall window; a nudge verdict aimed at
+        // the old one must not rebuild it before it has had time to start.
+        verifyingSince = nil
     }
 }
 

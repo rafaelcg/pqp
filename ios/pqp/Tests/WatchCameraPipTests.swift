@@ -401,6 +401,49 @@ final class WatchCameraPipTests: XCTestCase {
         XCTAssertEqual(Array(next.values), [.nudge])
     }
 
+    /// Farol on #845: a nudge that got the camera PLAYING ends its own
+    /// verdict, so a freeze a few seconds later waits the full stall window
+    /// from the last movement instead of rebuilding at the old deadline.
+    func testANudgeThatGotItPlayingDoesNotRebuildOnItsOldDeadline() {
+        var watch = WatchCameraStallWatch()
+        let stall = Int(WatchCameraStallWatch.stallSeconds)
+        // Moves to 2, freezes until the nudge at second 2 + stall.
+        var positions: [Double] = [0, 1, 2] + Array(repeating: 2.0, count: stall)
+        // Plays for three seconds, then freezes again.
+        positions += [3, 4, 5]
+        let lastMove = positions.count - 1
+        positions += Array(repeating: 5.0, count: stall + 2)
+        let actions = run(&watch, positions: positions)
+        XCTAssertEqual(actions[2 + stall], .nudge)
+        let rebuilds = actions.filter { $0.value == .rebuild }.keys.sorted()
+        XCTAssertEqual(rebuilds.first, lastMove + stall, "the second freeze gets its full window")
+    }
+
+    /// The nudge's own seek is one step of movement, not playback: the
+    /// verdict still lands one check later.
+    func testTheNudgesOwnSeekStepDoesNotEndItsVerdict() {
+        var watch = WatchCameraStallWatch()
+        let stall = Int(WatchCameraStallWatch.stallSeconds)
+        let check = Int(WatchCameraStallWatch.nudgeCheckSeconds)
+        var positions: [Double] = [0, 1, 2] + Array(repeating: 2.0, count: stall)
+        positions += [9] + Array(repeating: 9.0, count: check + 1)
+        let actions = run(&watch, positions: positions)
+        XCTAssertEqual(actions[2 + stall], .nudge)
+        XCTAssertEqual(actions[2 + stall + check], .rebuild)
+    }
+
+    /// A rebuilt player never inherits the old player's nudge deadline.
+    func testANewPlayerDropsTheOldNudgeVerdict() {
+        var watch = WatchCameraStallWatch()
+        let stall = Int(WatchCameraStallWatch.stallSeconds)
+        let positions: [Double] = [0, 1, 2] + Array(repeating: 2.0, count: stall)
+        XCTAssertEqual(run(&watch, positions: positions)[2 + stall], .nudge)
+        watch.forgetPosition()
+        let start = positions.count
+        let after = run(&watch, positions: Array(repeating: 0.0, count: stall), from: start)
+        XCTAssertTrue(after.isEmpty, "a new player gets a full stall window before anything fires")
+    }
+
     /// Past the one nudge an episode gets, every further stall goes straight
     /// to a rebuild (spent on the failure backoff by the caller), and never
     /// faster than one stall's worth of stillness apart.
