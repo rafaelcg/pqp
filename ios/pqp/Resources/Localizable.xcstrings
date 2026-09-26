@@ -7370,6 +7370,46 @@
           }
         }
       }
+    },
+    "with %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "com %@"
+          }
+        }
+      }
+    },
+    "Being set up. Tap to continue." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Montando. Toca pra continuar."
+          }
+        }
+      }
+    },
+    "Scheduled. Tap to open." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcada. Toca pra abrir."
+          }
+        }
+      }
+    },
+    "Nobody is streaming yet. Tap Join above to set one up." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém começou a transmitir ainda. Toca em Entrar pra montar uma."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

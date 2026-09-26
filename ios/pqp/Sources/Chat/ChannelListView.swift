@@ -42,6 +42,25 @@ struct ChannelListView: View {
      an option this view has.
      */
     @State private var liveChannels: Set<String> = []
+    /// Viewers watching without a seat, by channel id -- the other half of
+    /// `channel-live`'s payload, read alongside `liveChannels` above.
+    /// `WatchPartySidebarSlot`'s only use for it: a cheap viewer count on
+    /// the live card that costs no request of its own.
+    @State private var watchingByChannel: [String: Int] = [:]
+    /// Every party this account may see in THIS server -- live, plus any
+    /// draft/scheduled one it hosts or co-hosts -- from
+    /// `GET /api/servers/:serverId/watch-parties` and kept current by
+    /// `watch-party-update` frames. See `resolveServerWatchPartyListState`.
+    @State private var serverWatchParties: [WatchPartyPayload] = []
+    /// Whether this server may broadcast at all (`GET /api/live-hls/config`).
+    /// Off on any failure, matching `WatchPartyHostGate`'s own reasoning: a
+    /// self-host with nothing configured must not draw a Create row that
+    /// cannot go anywhere.
+    @State private var liveHlsConfig: LiveHlsConfigPayload = .off
+    @State private var creatingWatchParty = false
+    @State private var watchPartyCreateError: String?
+    @State private var showingCreateWatchParty = false
+    @State private var watchPartyDraftName = ""
     private var showsBau: Bool { (communityHome?.enabled ?? false) && current.communityHomeEnabled }
     @State private var showingInvites = false
     @State private var showingSearch = false
@@ -76,6 +95,24 @@ struct ChannelListView: View {
         channels.filter(\.isWatchParty).sorted { $0.position < $1.position }
     }
     private var listed: [Channel] { channels.filter { !$0.isWatchParty } }
+
+    /**
+     Whether the "Create watch party" row belongs on this server at all --
+     the coarse stand-in for `START_WATCH_PARTY` `resolveServerWatchPartyListState`
+     itself documents, `AND` the server's own broadcast switch. The same
+     `Moderation.isManager` reading already gates "New channel" and
+     "Community settings" a few lines down, so this offers the row to
+     exactly the accounts already trusted with the rest of this menu -- no
+     wider, and, for a Moderator role holding the real bit without being
+     owner/admin, narrower than the web. See `ServerWatchPartyListState.swift`.
+     */
+    private var canHostWatchParty: Bool {
+        liveHlsConfig.enabled && Moderation.isManager(current.role)
+    }
+
+    private var watchPartyListState: ServerWatchPartyListState {
+        resolveServerWatchPartyListState(parties: serverWatchParties, canHost: canHostWatchParty)
+    }
 
     private var categories: [Channel] {
         listed.filter(\.isCategory).sorted { $0.position < $1.position }
@@ -119,28 +156,33 @@ struct ChannelListView: View {
                     }
 
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        // ABOVE EVERYTHING, which is where the web puts it: a
-                        // party is an event, and on the one evening it matters
-                        // it is the reason the app is open. Its own heading
-                        // rather than a row in Voice, because "watch party
-                        // shows as a regular voice channel" was the whole bug.
-                        if !parties.isEmpty {
-                            SectionLabel(text: String(localized: "Watch party"))
-                                .padding(.horizontal, 4)
-                                .padding(.top, 4)
-                            ForEach(parties) { channel in
-                                NavigationLink { chat(for: channel) } label: {
-                                    ChannelRow(
-                                        channel: channel,
-                                        unread: unread[channel.id],
-                                        isLive: liveChannels.contains(channel.id)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("channels.watchParty")
-                                .contextMenu { channelActions(for: channel) }
+                        // ABOVE EVERYTHING, which is where the web's own
+                        // `LivePartyBlock` puts it: a party is an event, and
+                        // on the one evening it matters it is the reason the
+                        // app is open. NOT a row under a heading any more
+                        // (build 21's "watch party shows as a regular voice
+                        // channel" bug, and its build-22 fix, a `ForEach`
+                        // under a static "Watch party" label whenever ANY
+                        // watch_party channel existed): a member with no
+                        // party running and no permission to start one saw
+                        // an idle row that opened onto a "Nobody is
+                        // streaming yet" card, which is neither of the two
+                        // things a party in the list is supposed to mean.
+                        // `resolveServerWatchPartyListState` decides between
+                        // a live card, this account's own pending card, a
+                        // single Create row, or nothing at all -- see that
+                        // function's doc, and `WatchPartySidebarSlot`'s.
+                        WatchPartySidebarSlot(
+                            state: watchPartyListState,
+                            watching: watchingByChannel,
+                            isCreating: creatingWatchParty,
+                            onOpen: { channelId in openWatchPartyChannel(channelId) },
+                            onCreate: {
+                                watchPartyDraftName = ""
+                                showingCreateWatchParty = true
                             }
-                        }
+                        )
+                        .padding(.bottom, watchPartyListState == .none ? 0 : 4)
 
                         // Above TEXT, where the web sidebar puts it. Not a
                         // channel and not drawn as one: the row carries its own
@@ -302,6 +344,32 @@ struct ChannelListView: View {
         } message: {
             Text("You'll need a new invite to get back in.")
         }
+        // Name-only, like the web's own first step (`CreateWatchPartyDialog`):
+        // everything else a host might want (slow mode, who talks, what is
+        // on screen) is decided on the setup card once they have joined the
+        // room and can actually see a preview, not in a form ahead of it.
+        // No `startsAt` -- this build, like the existing channel-scoped
+        // `WatchPartyHostControls.createDialog`, always creates an immediate
+        // `draft`, never a `scheduled` party.
+        .alert("Name your watch party", isPresented: $showingCreateWatchParty) {
+            TextField("Saturday session", text: $watchPartyDraftName)
+                .accessibilityIdentifier("channels.watchPartyCreateName")
+            Button("Cancel", role: .cancel) { watchPartyDraftName = "" }
+            Button("Create") { Task { await createWatchParty() } }
+                .disabled(watchPartyDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("channels.watchPartyCreateSubmit")
+        }
+        .alert(
+            "Watch party",
+            isPresented: Binding(
+                get: { watchPartyCreateError != nil },
+                set: { if !$0 { watchPartyCreateError = nil } }
+            )
+        ) {
+            Button("Got it") { watchPartyCreateError = nil }
+        } message: {
+            Text(watchPartyCreateError ?? "")
+        }
         .task {
             await load()
             // Live badge updates. `channel-activity` is broadcast to every
@@ -334,12 +402,38 @@ struct ChannelListView: View {
                 // A broadcast started or stopped in a channel this account may
                 // see. `stream == nil` is a stop, and it has to remove the
                 // pill: a badge that survives the end of the show sends people
-                // into an empty room.
-                case .channelLive(let channelId, let stream, _):
+                // into an empty room. `watching` rides the same frame, and is
+                // the live card's own count -- dropped along with the pill on
+                // a stop, so a stale number never outlives the badge it sits
+                // beside.
+                case .channelLive(let channelId, let stream, let watching):
                     if stream == nil {
                         liveChannels.remove(channelId)
+                        watchingByChannel.removeValue(forKey: channelId)
                     } else {
                         liveChannels.insert(channelId)
+                        watchingByChannel[channelId] = watching
+                    }
+                // This server's watch-party slot. Applied the same way the
+                // web's `applyWatchPartyFrame` reads a `watch-party-update`
+                // frame: a party the frame names replaces (or removes, for a
+                // channel this account no longer sees a party on) the one
+                // entry with that channel id, never the whole list -- a
+                // server can run more than one `watch_party` room. `party`
+                // itself does not carry a `serverId` this build decodes
+                // (`WatchPartyPayload`'s deliberately trimmed field set), so
+                // this checks the frame's channel against the list already
+                // known for THIS server -- the same guard `permissionsUpdate`
+                // and `.activity` above make with the id the frame actually
+                // carries. A frame for a channel this device has not loaded
+                // yet (this server's very first party, created elsewhere
+                // while this list was already open) is dropped rather than
+                // guessed at; pull-to-refresh's full reload picks it up.
+                case .watchPartyUpdate(let channelId, let party)
+                    where channels.contains(where: { $0.id == channelId }):
+                    serverWatchParties.removeAll { $0.channelId == channelId }
+                    if let party, !party.isTerminal {
+                        serverWatchParties.append(party)
                     }
                 default:
                     return
@@ -410,6 +504,65 @@ struct ChannelListView: View {
             channels.append(channel)
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Opens the channel a live or pending watch-party card names. A plain
+    /// push, same as any other row in this list -- `ChatView` and
+    /// `WatchStageView` already do the rest (mount the picture, or for a
+    /// pending party this account hosts, offer the toolbar's Join button
+    /// straight into the setup card, see `WatchPartyHostControls`). Looked
+    /// up in `parties` rather than the full `channels` list: a
+    /// `WatchPartyPayload.channelId` always names a `watch_party` channel,
+    /// and searching the narrower, already-filtered list is what that type
+    /// is for.
+    private func openWatchPartyChannel(_ channelId: String) {
+        guard let channel = parties.first(where: { $0.id == channelId }) else { return }
+        openedChannel = channel
+    }
+
+    /**
+     "Create watch party" from the channel list, with no `watch_party`
+     channel picked ahead of time -- this may be the very first party this
+     server has ever run, so it cannot depend on one already being in
+     `channels`. Mirrors the web's `handleCreateWatchParty`: always the
+     server-scoped route (`createServerWatchParty`), which finds or makes
+     the server's one hidden room and opens an immediate `draft` in it.
+
+     THE SERVER STAYS THE REAL GATE. `canHostWatchParty` only decided
+     whether to draw the row (see that property's doc on why it is a
+     coarser reading of START_WATCH_PARTY than the web's); this call is
+     what the server actually checks the bit against, so an account this
+     view guessed wrong about sees a refusal here, never an unauthorised
+     party.
+
+     On success the returned channel is appended to `channels` (it may be
+     brand new to this client) and opened directly, landing the host on the
+     toolbar's Join button and, once seated, `WatchPartyHostControls`'
+     already-built setup card -- exactly the "immediately show the host
+     setup" this PR asks for, reusing that flow rather than duplicating it.
+     */
+    private func createWatchParty() async {
+        let name = watchPartyDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        watchPartyDraftName = ""
+        guard !name.isEmpty, !creatingWatchParty else { return }
+        creatingWatchParty = true
+        defer { creatingWatchParty = false }
+        do {
+            let response = try await session.api.createServerWatchParty(serverId: server.id, name: name)
+            if let channel = response.channel,
+               !channels.contains(where: { $0.id == channel.id }) {
+                channels.append(channel)
+            }
+            if let party = response.party {
+                serverWatchParties.removeAll { $0.channelId == party.channelId }
+                serverWatchParties.append(party)
+            }
+            if let channel = response.channel {
+                openedChannel = channel
+            }
+        } catch {
+            watchPartyCreateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -503,6 +656,15 @@ struct ChannelListView: View {
         if communityHome == nil {
             communityHome = await session.api.communityHomeConfig()
         }
+        // Not memoised the way `communityHome` is: unlike the instance-wide
+        // Baú switch, a server's own live-hls answer can differ server to
+        // server (`servers.live_hls_enabled`, see `CLAUDE.md`'s "Watch party
+        // availability is data, not configuration"), so it is re-asked
+        // every time this screen loads a *different* server. Asked before
+        // `serverWatchParties` for the same reason as `communityHome`
+        // above: `canHostWatchParty` needs it to draw the Create row the
+        // instant the parties answer comes back with none.
+        liveHlsConfig = await session.api.liveHlsConfig(serverId: server.id)
         do {
             channels = try await session.api.channels(serverId: server.id)
             // Unread is a separate call and failing it must not blank the
@@ -511,6 +673,11 @@ struct ChannelListView: View {
                 unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
             }
             await refreshBauUnread()
+            // Same "no answer reads as no parties" posture the web's
+            // `useWatchParties` documents for its own fetch: a failed read
+            // must not leave a stale live/pending card on screen, so a
+            // throw here clears rather than keeps what was last known.
+            serverWatchParties = (try? await session.api.fetchServerWatchParties(serverId: server.id)) ?? []
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

@@ -90,6 +90,25 @@ struct ChatView: View {
     /// title, pulls the pin button back to portrait, and hands the back
     /// chevron to the overlay's own autohiding one.
     @State private var watchTheater = false
+    /// Whether this server may broadcast at all, read only for
+    /// `WatchStageView`'s idle card -- see `canHostWatchParty`'s own doc for
+    /// why this is fetched here rather than trusted to `voiceChannel`.
+    @State private var watchPartyLiveHlsConfig: LiveHlsConfigPayload = .off
+
+    /**
+     The coarse "this account can probably host here" reading
+     `WatchStageView`'s idle card uses to choose its copy -- see
+     `ServerWatchPartyListState.swift`'s `canHost` doc on `ChannelListView`
+     for the identical approximation and why a full permission read is not
+     available on this build. Deliberately not wired to anything that GATES
+     an action (the toolbar's Join button already decides that on its own,
+     via `watchPartyMayJoinRoom`): getting this wrong only costs a sentence,
+     never an unauthorised party, because the actual host controls inside
+     `VoiceView` still ask the server through `WatchPartyHostGate`.
+     */
+    private var canHostWatchParty: Bool {
+        watchPartyLiveHlsConfig.enabled && Moderation.isManager(server?.role)
+    }
 
     var body: some View {
         ZStack {
@@ -277,9 +296,18 @@ struct ChatView: View {
         // channel and on every text one.
         .safeAreaInset(edge: .top, spacing: 0) {
             if let voiceChannel {
-                WatchStageView(channel: voiceChannel, onBack: { dismiss() })
+                WatchStageView(channel: voiceChannel, canHost: canHostWatchParty, onBack: { dismiss() })
                     .ignoresSafeArea(edges: .horizontal)
             }
+        }
+        // Only for `WatchStageView`'s idle-card copy, see `canHostWatchParty`.
+        // Fetched off the channel's own server, not the currently open one --
+        // `voiceChannel` and `server` name the same server on every call site
+        // today, but `voiceChannel` is what actually determines whether this
+        // card draws at all.
+        .task(id: voiceChannel?.serverId) {
+            guard let serverId = voiceChannel?.serverId else { return }
+            watchPartyLiveHlsConfig = await session.api.liveHlsConfig(serverId: serverId)
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)

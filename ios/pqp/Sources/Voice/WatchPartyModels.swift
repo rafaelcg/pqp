@@ -24,6 +24,34 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
     /// This account's own standing, resolved server side: `host`, `cohost`,
     /// `manager` or `viewer`.
     let viewerRole: String
+    /// The host's face for the channel list's live/pending card
+    /// (`ChannelListWatchPartyCard.swift`). Nil for a host with no avatar, or
+    /// when a test constructs a payload without it -- defaulted rather than
+    /// required so `WatchPartyHostGateTests`'s and
+    /// `WatchPartyHostControllerTests`'s existing memberwise calls, which
+    /// predate the channel-list card, keep compiling unchanged.
+    let hostAvatarUrl: String?
+    /// ISO 8601, set once the party actually goes live; null for anything
+    /// still `draft`/`scheduled`. Read only to sort more than one live party
+    /// newest-first, mirroring `sortNewestFirst` in the web's
+    /// `use-watch-parties.ts` -- this build still draws only the newest.
+    let wentLiveAt: String?
+
+    init(
+        id: String, channelId: String, name: String, state: String,
+        hostUserId: String, hostDisplayName: String, viewerRole: String,
+        hostAvatarUrl: String? = nil, wentLiveAt: String? = nil
+    ) {
+        self.id = id
+        self.channelId = channelId
+        self.name = name
+        self.state = state
+        self.hostUserId = hostUserId
+        self.hostDisplayName = hostDisplayName
+        self.viewerRole = viewerRole
+        self.hostAvatarUrl = hostAvatarUrl
+        self.wentLiveAt = wentLiveAt
+    }
 
     var isHost: Bool { viewerRole == "host" }
     var isCohost: Bool { viewerRole == "cohost" }
@@ -42,6 +70,24 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
 /// `watch-party-update` frame answer with.
 struct WatchPartyResponse: Decodable, Sendable {
     let party: WatchPartyPayload?
+}
+
+/// `{parties: [...]}`, `GET /api/servers/:serverId/watch-parties` -- every
+/// party in the server this person may see (live, and any draft/scheduled
+/// one they host or co-host), in one request. Mirrors
+/// `fetchServerWatchParties` in `client/src/lib/watch-parties-api.ts`.
+struct WatchPartyListResponse: Decodable, Sendable {
+    let parties: [WatchPartyPayload]
+}
+
+/// `{party, channel}`, `POST /api/servers/:serverId/watch-parties` -- starts
+/// a party with no channel picked ahead of time: the server finds or makes
+/// the server's one hidden watch-party room and opens a draft in it
+/// (`findOrCreateWatchPartyRoom`). `channel` is what makes that room
+/// reachable from a client that has never seen it before this call.
+struct WatchPartyCreatedResponse: Decodable, Sendable {
+    let party: WatchPartyPayload?
+    let channel: Channel?
 }
 
 /**
