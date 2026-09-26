@@ -319,6 +319,116 @@ enum WatchCameraFailureBackoff {
     }
 }
 
+// MARK: - A frozen camera that never failed
+
+/**
+ THE CAMERA FREEZES WITHOUT FAILING, SO FAILURE IS NOT ENOUGH TO WATCH FOR.
+
+ TestFlight 1.0.6: side by side, the film played and the webcam sat on one
+ frame, while the camera egress ran clean on the server for the whole party.
+ `checkCameraHealth` only ever acted on `AVPlayerItem.status == .failed`, and a
+ live playlist that stops advancing under the player is not a failure: the
+ item stays `.readyToPlay`, waiting at a position the window has moved past,
+ forever. The film has `WatchStallWatch` and `WatchLiveEdge` for exactly that;
+ the camera had nothing. The web met the same thing in rehearsal D and fixed it
+ with `CameraStallWatch` (`client/src/lib/camera-stall.ts`, #826). This is that
+ rule, on the watchdog's one second tick:
+
+ 1. `nudge` once per episode after `stallSeconds` with the playhead still: seek
+    back into the live window and play. Clears a player that fell out of the
+    window or paused on its own, without dropping anything.
+ 2. `rebuild` if the nudge has not got it moving `nudgeCheckSeconds` later,
+    and for every later stall until the camera has played `healthySeconds`
+    straight. The caller spends these on `WatchCameraFailureBackoff`, the same
+    schedule a failed item uses, so a camera that will not play costs one
+    rebuild per backoff step and never a tight loop.
+
+ Measured on the playhead, which is what AVFoundation offers. A camera that
+ carries the presenter's voice can keep the clock moving over a frozen
+ picture; the web counts decoded frames for that shape and this does not.
+
+ Pure and clock-injected, like `WatchCameraFailureBackoff`.
+ */
+struct WatchCameraStallWatch: Equatable, Sendable {
+    enum Action: Equatable, Sendable {
+        case none
+        case nudge
+        case rebuild
+    }
+
+    /// Two camera segments of silence. Mirrors `CAMERA_STALL_MS`.
+    static let stallSeconds: TimeInterval = 8
+    /// One segment's worth of loading at the live edge. `CAMERA_NUDGE_CHECK_MS`.
+    static let nudgeCheckSeconds: TimeInterval = 4
+    /// Forward play for this long ends the episode. `CAMERA_HEALTHY_MS`.
+    static let healthySeconds: TimeInterval = 10
+    /// Smaller than any real frame step, larger than float noise.
+    static let movedEpsilon = 0.01
+
+    private var lastPosition: Double?
+    private var lastMovedAt = Date.distantPast
+    private var advancingSince: Date?
+    private var nudged = false
+    private var verifyingSince: Date?
+
+    /// One watchdog sample. `eligible` is false while nothing should be
+    /// moving (no camera, the app in the background): the stall clock starts
+    /// over from the next eligible sample, the episode is kept.
+    mutating func observe(position: Double, eligible: Bool, now: Date) -> Action {
+        guard eligible, position.isFinite else {
+            lastPosition = nil
+            advancingSince = nil
+            verifyingSince = nil
+            return .none
+        }
+        guard let previous = lastPosition else {
+            lastPosition = position
+            lastMovedAt = now
+            return .none
+        }
+        lastPosition = position
+        if abs(position - previous) > Self.movedEpsilon {
+            lastMovedAt = now
+            if position > previous {
+                let since = advancingSince ?? now
+                advancingSince = since
+                if now.timeIntervalSince(since) >= Self.healthySeconds {
+                    nudged = false
+                    verifyingSince = nil
+                }
+            } else {
+                // Backwards: a rebuilt player's fresh timeline, or a seek.
+                // Movement, not proof of health.
+                advancingSince = nil
+            }
+            return .none
+        }
+        advancingSince = nil
+        // The nudge's verdict. Its own seek reads as one step of movement,
+        // and that step must not buy a frozen face another full stall.
+        if let verifyingSince {
+            guard now.timeIntervalSince(verifyingSince) >= Self.nudgeCheckSeconds else { return .none }
+            self.verifyingSince = nil
+            lastMovedAt = now
+            return .rebuild
+        }
+        guard now.timeIntervalSince(lastMovedAt) >= Self.stallSeconds else { return .none }
+        if !nudged {
+            nudged = true
+            verifyingSince = now
+            return .nudge
+        }
+        lastMovedAt = now
+        return .rebuild
+    }
+
+    /// A new player: its timeline is not comparable with the last one's.
+    mutating func forgetPosition() {
+        lastPosition = nil
+        advancingSince = nil
+    }
+}
+
 // MARK: - The surface
 
 /// One `AVPlayerLayer`, drawn plain. No PiP hookup, no fullscreen, no
@@ -353,5 +463,14 @@ struct WatchCameraSurface: UIViewRepresentable {
     func updateUIView(_ canvas: CameraPlayerCanvas, context: Context) {
         canvas.playerLayer.videoGravity = fit
         if canvas.player !== player { canvas.player = player }
+    }
+
+    /// Let go of the player on the way out. Every layout switch (corner to
+    /// side by side and back) makes a new box for the same `AVPlayer`, and a
+    /// box SwiftUI has dropped but not yet freed must not stay a second
+    /// render target for it: an `AVPlayer` shown on two layers can leave the
+    /// visible one on a still frame (see `WatchPicture`).
+    static func dismantleUIView(_ canvas: CameraPlayerCanvas, coordinator: ()) {
+        canvas.player = nil
     }
 }

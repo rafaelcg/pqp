@@ -626,16 +626,120 @@ final class WatchPartyTests: XCTestCase {
         picture.show(player, pip: WatchPictureInPicture())
 
         let strip = UIView()
-        picture.mount(in: strip)
+        picture.claim(strip)
         XCTAssertIdentical(picture.canvas.superview, strip)
 
         let full = UIView()
-        picture.mount(in: full)
+        picture.claim(full)
         XCTAssertIdentical(picture.canvas.superview, full)
         XCTAssertTrue(strip.subviews.isEmpty, "one layer, and it left the strip")
         XCTAssertIdentical(
             picture.canvas.player, player,
             "the layer must never let go of the player when the frame changes"
+        )
+    }
+
+    /**
+     TURN THE PHONE AND THE FILM STAYS (TestFlight 1.0.6, build 106701).
+
+     Rotating went black and stayed black both ways, with the camera corner
+     still playing. Since #833 the surface lives in a `GeometryReader`, and a
+     rotation reached the representable in this order, measured on the
+     simulator: make the new box, update the OLD box one more time, dismantle
+     the old box. "Every update mounts here" let that last update pull the
+     layer back into the box on its way out, the dismantle took it out of the
+     window, and nothing ever updated the new box again. The newest claim has
+     to win, whichever of the others SwiftUI touches afterwards.
+     */
+    @MainActor
+    func testTheOutgoingBoxCannotTakeThePictureBackOnItsWayOut() {
+        let picture = WatchPicture()
+        let player = AVPlayer()
+        picture.show(player, pip: WatchPictureInPicture())
+
+        let portrait = UIView()
+        picture.claim(portrait)
+
+        // make(new), update(old), dismantle(old): the rotation, in order.
+        let landscape = UIView()
+        picture.claim(landscape)
+        picture.settle()
+        picture.release(portrait)
+        XCTAssertIdentical(
+            picture.canvas.superview, landscape,
+            "the outgoing box's last update must not take the picture with it"
+        )
+
+        // And back: the same order the other way round.
+        let portraitAgain = UIView()
+        picture.claim(portraitAgain)
+        picture.settle()
+        picture.release(landscape)
+        XCTAssertIdentical(picture.canvas.superview, portraitAgain)
+        XCTAssertIdentical(picture.canvas.player, player)
+
+        // The other order SwiftUI may use: dismantle first, then make.
+        picture.release(portraitAgain)
+        XCTAssertNil(picture.canvas.superview, "no box standing, so no window")
+        XCTAssertIdentical(picture.canvas.player, player, "and the player is kept for the next box")
+        let next = UIView()
+        picture.claim(next)
+        XCTAssertIdentical(picture.canvas.superview, next)
+
+        // A box that is dismantled while a newer one shows the picture leaves
+        // the picture where it is.
+        let newer = UIView()
+        picture.claim(newer)
+        picture.release(next)
+        XCTAssertIdentical(picture.canvas.superview, newer)
+    }
+
+    /// The representable is what calls the rules above; this is what keeps it
+    /// from going back to "every update mounts here".
+    func testTheSurfaceClaimsOnMakeAndReleasesOnDismantle() throws {
+        let surface = try String(
+            contentsOf: sources.appending(path: "Voice/WatchVideoSurface.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(surface.contains("picture.claim(holder)"))
+        XCTAssertTrue(surface.contains("coordinator.picture?.release(holder)"))
+        XCTAssertTrue(surface.contains("picture.settle()"))
+        XCTAssertFalse(
+            surface.contains("mount(in: holder)"),
+            "an update that mounts into its own box is the black film of build 106701"
+        )
+    }
+
+    /**
+     THE THEATER'S PREFERENCES HAVE TO REACH `ChatView` (TestFlight 1.0.6).
+
+     The stage is the content of `ChatView`'s top `safeAreaInset`. A
+     preference only reaches readers ABOVE the view that sets it, and a reader
+     written before the inset modifier wraps the transcript, not the inset.
+     Both readers sat there since they were written, so neither value ever
+     arrived: landscape kept the title, the pin and the system back chevron
+     beside the overlay's own. Checked with a probe: a reader before
+     `.safeAreaInset` sees nothing from its content, one after it does.
+     */
+    func testChatReadsTheStagePreferencesOutsideTheInset() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        let stage = try XCTUnwrap(source.range(of: "watchStage(for: voiceChannel)\n"))
+        for key in ["WatchTheaterPreference", "WatchHeroPreference"] {
+            let reader = try XCTUnwrap(
+                source.range(of: ".onPreferenceChange(\(key).self)"),
+                "\(key) has no reader in ChatView"
+            )
+            XCTAssertGreaterThan(
+                reader.lowerBound, stage.upperBound,
+                "\(key) must be read after the inset that hosts the stage, or it never arrives"
+            )
+        }
+        XCTAssertTrue(source.contains(".navigationBarBackButtonHidden(watchTheater)"))
+        XCTAssertTrue(source.contains("if !watchTheater {"), "the pin stays out of the theater")
+        XCTAssertTrue(
+            source.contains(".toolbar(watchTheater ? .hidden : .automatic, for: .navigationBar)"),
+            "an empty bar still takes the touches over the overlay's chevron and pushes the stage down"
         )
     }
 

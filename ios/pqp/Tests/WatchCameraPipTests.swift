@@ -346,4 +346,113 @@ final class WatchCameraPipTests: XCTestCase {
         )
         XCTAssertEqual(atCap, pastCap, accuracy: 0.001)
     }
+
+    // MARK: - A camera that freezes without failing (TestFlight 1.0.6)
+
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    /// Feeds one sample a second, `positions[i]` at `t0 + start + i`, and
+    /// returns every action that was not `.none`, keyed by its second.
+    private func run(
+        _ watch: inout WatchCameraStallWatch, positions: [Double], from start: Int = 0
+    ) -> [Int: WatchCameraStallWatch.Action] {
+        var out: [Int: WatchCameraStallWatch.Action] = [:]
+        for (i, position) in positions.enumerated() {
+            let second = start + i
+            let action = watch.observe(
+                position: position, eligible: true, now: t0.addingTimeInterval(TimeInterval(second))
+            )
+            if action != .none { out[second] = action }
+        }
+        return out
+    }
+
+    func testAMovingCameraIsLeftAlone() {
+        var watch = WatchCameraStallWatch()
+        let positions = (0..<60).map { Double($0) }
+        XCTAssertTrue(run(&watch, positions: positions).isEmpty)
+    }
+
+    /// The owner's report: the item never failed, the picture sat on one
+    /// frame. Nudge first, then rebuild when the nudge did not take.
+    func testAStillPlayheadIsNudgedThenRebuilt() {
+        var watch = WatchCameraStallWatch()
+        let positions: [Double] = [0, 1, 2] + Array(repeating: 2.0, count: 20)
+        let actions = run(&watch, positions: positions)
+        let stall = Int(WatchCameraStallWatch.stallSeconds)
+        let check = Int(WatchCameraStallWatch.nudgeCheckSeconds)
+        XCTAssertEqual(actions[2 + stall], .nudge)
+        XCTAssertEqual(
+            actions[2 + stall + check], .rebuild,
+            "a nudge that moved nothing is followed by a rebuild one segment later"
+        )
+    }
+
+    func testANudgeThatWorksEndsTheEpisodeOnceHealthy() {
+        var watch = WatchCameraStallWatch()
+        // Stalls, gets nudged, then plays forward.
+        var positions: [Double] = [0, 1, 2] + Array(repeating: 2.0, count: 8)
+        positions += (0..<20).map { 3 + Double($0) }
+        let actions = run(&watch, positions: positions)
+        XCTAssertEqual(actions.values.filter { $0 == .rebuild }.count, 0)
+        XCTAssertEqual(actions.values.filter { $0 == .nudge }.count, 1)
+        // A fresh stall after a healthy stretch gets a nudge again, not a rebuild.
+        let next = run(&watch, positions: Array(repeating: 22.0, count: 11), from: positions.count)
+        XCTAssertEqual(Array(next.values), [.nudge])
+    }
+
+    /// Past the one nudge an episode gets, every further stall goes straight
+    /// to a rebuild (spent on the failure backoff by the caller), and never
+    /// faster than one stall's worth of stillness apart.
+    func testLaterStallsRebuildAtMostOncePerStallWindow() {
+        var watch = WatchCameraStallWatch()
+        let actions = run(&watch, positions: Array(repeating: 0.0, count: 61))
+        let rebuilds = actions.filter { $0.value == .rebuild }.keys.sorted()
+        XCTAssertEqual(actions.values.filter { $0 == .nudge }.count, 1)
+        XCTAssertGreaterThanOrEqual(rebuilds.count, 2)
+        for (a, b) in zip(rebuilds, rebuilds.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(b - a, Int(WatchCameraStallWatch.stallSeconds))
+        }
+    }
+
+    /// A backgrounded app is not watching: time spent there never counts.
+    func testIneligibleTimeNeverCountsTowardAStall() {
+        var watch = WatchCameraStallWatch()
+        _ = watch.observe(position: 5, eligible: true, now: t0)
+        for i in 1...30 {
+            XCTAssertEqual(
+                watch.observe(position: 5, eligible: false, now: t0.addingTimeInterval(TimeInterval(i))),
+                .none
+            )
+        }
+        XCTAssertEqual(watch.observe(position: 5, eligible: true, now: t0.addingTimeInterval(31)), .none)
+        XCTAssertEqual(watch.observe(position: 5, eligible: true, now: t0.addingTimeInterval(32)), .none)
+    }
+
+    /// A rebuilt player starts a new timeline; its first sample is a baseline,
+    /// not a comparison with the old player's position.
+    func testANewPlayerStartsAFreshBaseline() {
+        var watch = WatchCameraStallWatch()
+        _ = run(&watch, positions: [100, 101, 102])
+        watch.forgetPosition()
+        let actions = run(&watch, positions: [3, 4, 5, 6, 7], from: 3)
+        XCTAssertTrue(actions.isEmpty)
+    }
+
+    /// The stage has to act on it, and the corner has to let go of its player.
+    func testTheStageWatchesForAFrozenCameraAndTheBoxReleasesIt() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources")
+        let stage = try String(
+            contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
+        )
+        let pip = try String(
+            contentsOf: sources.appending(path: "Voice/WatchCameraPip.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(stage.contains("cameraStall.observe("))
+        XCTAssertTrue(stage.contains("case .nudge:"))
+        XCTAssertTrue(stage.contains("rebuildCamera(now: now)"))
+        XCTAssertTrue(pip.contains("static func dismantleUIView(_ canvas: CameraPlayerCanvas"))
+    }
 }

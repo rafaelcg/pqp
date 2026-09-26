@@ -152,6 +152,9 @@ struct ChatView: View {
      all, which is the one thing a broadcast with voice off is not.
      */
     private func offersJoin(_ voiceChannel: Channel) -> Bool {
+        // Not over the film: the theater's only control outside the overlay
+        // would be this one, one turn of the phone away in portrait.
+        if watchTheater { return false }
         if !voiceChannel.isWatchParty { return true }
         if watchPartyStageCard.isTheWayIn { return false }
         return watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id))
@@ -241,8 +244,11 @@ struct ChatView: View {
         // autohide every other control follows; the overlay draws its own
         // in its place and calls `dismiss()` through `onBack`.
         .navigationBarBackButtonHidden(watchTheater)
-        .onPreferenceChange(WatchHeroPreference.self) { watchHero = $0 }
-        .onPreferenceChange(WatchTheaterPreference.self) { watchTheater = $0 }
+        // And the bar itself goes. An empty bar with no fill still takes the
+        // touches in its strip, which is where the overlay's own chevron
+        // sits, and it still pushes the stage down by its height, which put
+        // the bottom controls half off the screen. Measured on the simulator.
+        .toolbar(watchTheater ? .hidden : .automatic, for: .navigationBar)
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
@@ -339,6 +345,14 @@ struct ChatView: View {
                 watchStage(for: voiceChannel)
             }
         }
+        // AFTER the inset, never before it. A preference only reaches the
+        // readers above the view that sets it, and the stage is the inset's
+        // content, not a child of anything this chain wraps before the inset.
+        // Read inside it (where these sat from #468 on), neither value ever
+        // arrived: the nav bar kept its fill, and the theater kept the title,
+        // the pin and a second back chevron over the film (TestFlight 1.0.6).
+        .onPreferenceChange(WatchHeroPreference.self) { watchHero = $0 }
+        .onPreferenceChange(WatchTheaterPreference.self) { watchTheater = $0 }
         // For the host's card on the stage, see `watchPartyStageCard`.
         // Fetched off the channel's own server, not the currently open one --
         // `voiceChannel` and `server` name the same server on every call site
