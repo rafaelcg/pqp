@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "7 de setembro de 2026",
+  updated: "23 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "fbe4bff7",
+      sourceRev: "4bb0baaa",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -293,8 +293,11 @@ export const privacyPtBr: LegalDocument = {
             Ele também é sem cookie, não guarda nada no seu dispositivo e não
             usa identificador persistente. Registra o endereço da página, a
             página que trouxe você, e o seu país, navegador e tipo de
-            dispositivo, tudo de forma agregada. Ele nunca vê a sua conta, e
-            bloquear ele também não quebra nada.
+            dispositivo, tudo de forma agregada. Dentro do app ele também conta
+            alguns passos nomeados do primeiro acesso, como passar pela
+            verificação de idade ou criar um servidor, como um nome e alguns
+            rótulos (como quanto tempo um passo levou), nunca um id. Ele nunca
+            vê a sua conta, e bloquear ele também não quebra nada.
           </p>
           <p>
             São dois porque respondem perguntas um pouco diferentes, e nenhum
@@ -302,29 +305,58 @@ export const privacyPtBr: LegalDocument = {
             junto.
           </p>
 
-          <h3>Medição de publicidade</h3>
+          <h3>Relatório de erros</h3>
           <p>
-            O pqp.gg compra um pouco de publicidade, e carrega o{" "}
-            <strong>rastreamento de conversão do Google Ads</strong> para a
-            gente saber se um anúncio produziu uma conta e não só um clique.
-            Essa é a única coisa no site que não é sem cookie, e a gente prefere
-            dizer isso na cara do que esconder. A tag do Google carrega em toda
-            página do pqp.gg, e ela define cookies de origem própria no domínio
-            pqp.gg (os nomes começam em <code>_gcl_</code>) para lembrar que a
-            sua visita chegou por um anúncio.
+            O app web no pqp.gg usa o <strong>Grafana Faro</strong>, da Grafana
+            Labs, para avisar a gente quando algo quebra, para a gente
+            consertar. Ele envia relatórios para o coletor da Grafana em São
+            Paulo. Um relatório tem o endereço da página, a mensagem de erro e
+            onde no nosso código ela aconteceu, erros que o app escreve no
+            console do navegador, medições de velocidade da página, os
+            endereços e tempos das requisições que o app faz, e o seu navegador
+            e sistema operacional.
           </p>
           <p>
-            Um evento é enviado ao Google, uma vez: quando uma conta é criada, a
-            tag informa que houve um cadastro. Ele não leva nome, nem e-mail,
-            nem id de usuário, nem nada que você digitou. O Google ainda vê o
-            seu endereço IP e qual página você abriu, que é o que qualquer
-            script de terceiro vê. Se você chegou por um anúncio, a gente
+            Ele leva um id de sessão aleatório, guardado no armazenamento de
+            sessão do seu navegador e trocado depois de 15 minutos parado ou de
+            quatro horas. O nosso código nunca diz a ele quem você é: nem nome,
+            nem e-mail, nem id de conta. Mas alguns endereços de requisição têm
+            ids, e o link para assistir a transmissão de uma watch party tem o
+            id da sua conta, então um relatório também pode ter. Ele não define
+            cookie, e não registra cliques, teclas nem a tela. Como a tag do Google, ele só entra na compilação hospedada do
+            pqp.gg, então uma cópia self-hosted não manda nada para a gente.
+          </p>
+
+          <h3>Medição de publicidade</h3>
+          <p>
+            O pqp.gg compra um pouco de publicidade, e carrega a{" "}
+            <strong>tag do Google Ads</strong> para a gente saber se um anúncio
+            produziu uma conta e não só um clique. Essa é a única coisa no site
+            que não é sem cookie, e a gente prefere dizer isso na cara do que
+            esconder. A tag do Google carrega em toda página do pqp.gg. Ela dá
+            a todo visitante um cookie de origem própria no domínio pqp.gg,{" "}
+            <code>_gcl_au</code>, com um identificador aleatório, e quando a sua
+            visita veio de um anúncio ela registra isso em outros cookies com
+            nomes começando em <code>_gcl_</code>.
+          </p>
+          <p>
+            Cada vez que você carrega uma página, a tag informa a visualização
+            ao Google: o endereço e o título da página, o tamanho da sua tela, o
+            seu navegador e sistema operacional, e o identificador do cookie{" "}
+            <code>_gcl_au</code>. O Google também vê o seu endereço IP, que é o
+            que qualquer script de terceiro vê. Parte desses envios vai para os
+            endereços que o Google Ads usa para montar públicos de remarketing,
+            então o Google Ads pode incluir a sua visita numa lista de público
+            da nossa conta de anúncios.
+          </p>
+          <p>
+            Quando uma conta é criada, a tag envia mais um evento: que houve um
+            cadastro. Esse evento não leva nome, nem e-mail, nem id de usuário,
+            nem nada que você digitou. Se você chegou por um anúncio, a gente
             também guarda o <code>gclid</code> na conta uma vez, junto com os
-            outros parâmetros de campanha. A gente não envia dados da sua
-            conta para o Google, não ativou conversões aprimoradas nem nenhum
-            cruzamento com dados de clientes, e não roda remarketing nem listas
-            de público. Entrar de novo não envia nada, e nada do que você faz
-            dentro do app envia também.
+            outros parâmetros de campanha. O nosso código não entrega dado
+            nenhum da conta para a tag: nem e-mail, nem nome, nem id de
+            usuário.
           </p>
           <p>
             O Google é um terceiro aqui e trata o que recebe, inclusive o seu
@@ -345,32 +377,35 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "ac93c305",
+      sourceRev: "10a18957",
       heading: "O que a gente não faz",
       body: (
         <ul>
           <li>
-            <strong>Sem perfil sobre você.</strong> Não tem gravador de sessão e
-            não tem serviço de relatório de erro, e nada do que a gente guarda
-            monta um retrato de você como pessoa. As duas ferramentas de
-            analytics descritas em &quot;O que a gente coleta&quot; acima contam
-            visitas e não conseguem identificar visitantes. A única exceção ao
-            &quot;nada segue você entre sites&quot; é a tag de conversão do
-            Google Ads, descrita no mesmo lugar: o trabalho dela é ligar um
-            clique em anúncio a um cadastro, e ela é a única coisa no pqp.gg que
-            um terceiro consegue ler.
+            <strong>Sem perfil sobre você da nossa parte.</strong> Não tem
+            gravador de sessão: nada grava a sua tela nem o que você digita. Os
+            relatórios de erro descritos em &quot;O que a gente coleta&quot;
+            são ligados a um id de sessão aleatório, não à sua conta. As duas
+            ferramentas de analytics descritas ali contam visitas e não
+            conseguem identificar visitantes. A exceção é a tag do Google Ads,
+            descrita no mesmo lugar: ela dá um identificador a todo visitante e
+            informa as visualizações de página ao Google, que pode usar isso
+            para públicos de publicidade.
           </li>
           <li>
-            <strong>Sem perfil publicitário e sem venda de dados.</strong> A
-            gente anuncia, sim, e conta quantos cadastros a publicidade
-            produziu, que é a tag de conversão acima. A gente não monta perfil
-            publicitário, não roda remarketing nem listas de público, e não vende
-            nem aluga dados pessoais.
+            <strong>Sem venda de dados.</strong> A gente anuncia, sim, e conta
+            quantos cadastros a publicidade produziu, pela tag do Google Ads
+            acima. A gente não entrega dado de conta nenhum para o Google, e não
+            vende nem aluga dados pessoais.
           </li>
           <li>
-            <strong>Sem fingerprinting de dispositivo e sem geolocalização.</strong>{" "}
-            A gente não sonda o seu dispositivo atrás de uma impressão digital e
-            não procura a sua localização.
+            <strong>Sem fingerprinting de dispositivo e sem rastrear a sua localização.</strong>{" "}
+            O nosso código não sonda o seu dispositivo atrás de uma impressão
+            digital, e nunca pede a sua localização ao navegador ou ao celular.
+            As ferramentas de analytics descritas em &quot;O que a gente
+            coleta&quot; deduzem o seu país pelo endereço IP, para contagens
+            agregadas. Essa é a localização mais precisa que o nosso analytics
+            registra.
           </li>
           <li>
             <strong>Sem gravação de voz.</strong> Nenhuma chamada é gravada nem
@@ -511,7 +546,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "6de9cf53",
+      sourceRev: "9b2be480",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -535,8 +570,9 @@ export const privacyPtBr: LegalDocument = {
               <strong>
                 Manter o serviço de pé e impedir que abusem dele.
               </strong>{" "}
-              Limites de uso, bloqueio de ataques, investigação de problemas,
-              proteção de outras pessoas contra dano.{" "}
+              Limites de uso, bloqueio de ataques, investigação de problemas
+              (inclusive os relatórios de erro e o analytics do site descritos
+              acima), proteção de outras pessoas contra dano.{" "}
               <em>
                 (Base: o nosso legítimo interesse, art. 7, IX — ponderado com os
                 seus direitos e limitado ao que isso realmente exige.)
@@ -576,10 +612,11 @@ export const privacyPtBr: LegalDocument = {
             </li>
             <li>
               <strong>Medir a nossa publicidade.</strong> Contar quantos
-              cadastros uma campanha de anúncio produziu, pela tag de conversão
-              do Google Ads descrita acima. Ela conta um evento. O evento não
-              leva nome, e-mail nem id de usuário. O Google ainda vê o seu IP e
-              a página, como está em &quot;Medição de publicidade&quot;.{" "}
+              cadastros uma campanha de anúncio produziu, pela tag do Google Ads
+              descrita acima. A tag informa cada visualização de página ao
+              Google, e um evento de cadastro que não leva nome, e-mail nem id de
+              usuário. O Google vê o seu IP e a página, como está em
+              &quot;Medição de publicidade&quot;.{" "}
               <em>
                 (Base: legítimo interesse, art. 7, IX. Para se opor, bloqueie a
                 tag no navegador ou escreva para a gente.)
@@ -612,7 +649,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "266a6929",
+      sourceRev: "acff1382",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -644,8 +681,13 @@ export const privacyPtBr: LegalDocument = {
             </li>
             <li>
               <strong>Cloudflare</strong> — serve o app web e o site
-              institucional. O Cloudflare Web Analytics, se estiver ligado na
-              zona, é injetado no edge deles em vez de ir no nosso código.
+              institucional. O Cloudflare Web Analytics é colocado em cada
+              página no edge deles em vez de ir no nosso código.
+            </li>
+            <li>
+              <strong>Grafana Labs</strong>: relatórios de erro do app web, pelo
+              Grafana Faro, enviados a um coletor em São Paulo. Está detalhado
+              em &quot;Relatório de erros&quot; acima.
             </li>
             <li>
               <strong>Cloudflare R2</strong> — armazenamento de objetos para os
@@ -684,9 +726,9 @@ export const privacyPtBr: LegalDocument = {
               <span lang="en">Settings</span> carregam do serviço deles.
             </li>
             <li>
-              <strong>Google Ads</strong> carrega a tag de conversão em toda
-              página do pqp.gg, então o Google vê o seu endereço IP e qual
-              página você abriu, e é avisado uma vez quando uma conta é criada.
+              <strong>Google Ads</strong> carrega a tag dele em toda página do
+              pqp.gg, então o Google vê o seu endereço IP e toda página que você
+              abre, e é avisado uma vez quando uma conta é criada.
               Está detalhado em &quot;Medição de publicidade&quot; acima.
             </li>
             <li>
@@ -721,7 +763,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "7843ade0",
+      sourceRev: "1907859b",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -737,7 +779,8 @@ export const privacyPtBr: LegalDocument = {
             <strong>São Paulo, Brasil (região gru da Fly)</strong>, e o servidor
             de mídia de voz roda em uma máquina da Vultr também em{" "}
             <strong>São Paulo</strong>, então uma chamada repassada não sai do
-            Brasil. A pessoa que administra o pqp.gg está no Reino Unido, então
+            Brasil. Os relatórios de erro do app web vão para um coletor da
+            Grafana em São Paulo. A pessoa que administra o pqp.gg está no Reino Unido, então
             tudo que é tratado por um humano é tratado lá.
           </p>
           <p>
@@ -1087,16 +1130,17 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "self-hosted",
-      sourceRev: "1eb5616f",
+      sourceRev: "dea03fdf",
       heading: "Instâncias self-hosted",
       body: (
         <p>
           Se você roda o pqp por conta própria, você escolhe o banco de dados, a
           aplicação do Clerk e a hospedagem, e você é o controlador dos seus
           usuários. O pqp.gg não recebe os dados dos seus usuários. A nossa
-          publicidade também não chega na sua cópia: a tag de conversão do
-          Google Ads descrita acima é adicionada só na compilação do pqp.gg, então
-          uma instância self-hosted sai sem ela. Conte para os seus membros como
+          publicidade, o nosso analytics e o nosso relatório de erros também
+          não chegam na sua cópia: a tag do Google Ads, o Umami e o Grafana
+          Faro descritos acima são adicionados só na compilação do pqp.gg,
+          então uma instância self-hosted sai sem eles. Conte para os seus membros como
           você lida com as informações deles.
         </p>
       ),
