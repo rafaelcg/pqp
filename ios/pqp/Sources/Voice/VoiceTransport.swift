@@ -385,6 +385,31 @@ func sfuMicrophoneDisposition(
     }
 }
 
+/// What `LiveKitVoiceClient.silenceMicrophone` managed.
+enum MicrophoneSilence: Equatable, Sendable {
+    /// No microphone track is on the room (taken off, or there was none).
+    case removed
+    /// The track is still published, muted.
+    case muted
+    /// Neither landed: the microphone may still be sending.
+    case failed
+
+    var isConfirmed: Bool { self != .failed }
+}
+
+/**
+ The microphone a reused seat is left with once a broadcast join has tried to
+ take it down: the one it asked for when the track came off the room, a
+ muted microphone when only the mute landed (the next unmute simply unmutes
+ it), and unchanged when nothing did (the caller ends the session then).
+ */
+func seatMicrophoneAfterSilence(requested: SeatMicrophone, result: MicrophoneSilence) -> SeatMicrophone {
+    switch result {
+    case .removed, .failed: requested
+    case .muted: requested == .none ? .startMuted : requested
+    }
+}
+
 /**
  What a `silence` becomes once the attempt to take the microphone down has an
  answer. Confirmed, the seat stays, muted, with the notice. Not confirmed, the

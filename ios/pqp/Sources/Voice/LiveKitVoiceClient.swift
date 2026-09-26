@@ -197,25 +197,29 @@ actor LiveKitVoiceClient {
      that goes live with no microphone while it already has one. `remove`
      takes the track off the room (the seat then has no microphone, and the
      next unmute publishes one again); otherwise it is muted in place. Either
-     way the other operation is the fallback when the first throws. `true`
-     only when one of the two landed, or there is no microphone on the room
-     at all. `false` means the microphone may still be on the wire, and the
+     way the other operation is the fallback when the first throws. The answer
+     says which one landed (`MicrophoneSilence`), so a caller that asked for
+     removal knows whether the seat really has no microphone now or a muted
+     one. `failed` means the microphone may still be on the wire, and the
      caller must not keep a seat that claims to be muted over it.
      */
-    func silenceMicrophone(remove: Bool = false) async -> Bool {
+    func silenceMicrophone(remove: Bool = false) async -> MicrophoneSilence {
         isMuted = true
-        guard let room, room.connectionState == .connected else { return false }
-        guard let microphone = microphonePublication(in: room) else { return true }
+        guard let room, room.connectionState == .connected else { return .failed }
+        guard let microphone = microphonePublication(in: room) else { return .removed }
         let unpublish: () async throws -> Void = {
             try await room.localParticipant.unpublish(publication: microphone)
         }
         let mute: () async throws -> Void = {
             try await room.localParticipant.setMicrophone(enabled: false)
         }
-        for attempt in remove ? [unpublish, mute] : [mute, unpublish] {
-            if (try? await attempt()) != nil { return true }
+        let order: [(MicrophoneSilence, () async throws -> Void)] = remove
+            ? [(.removed, unpublish), (.muted, mute)]
+            : [(.muted, mute), (.removed, unpublish)]
+        for (result, attempt) in order where (try? await attempt()) != nil {
+            return result
         }
-        return false
+        return .failed
     }
 
     private func microphonePublication(in room: Room) -> LocalTrackPublication? {

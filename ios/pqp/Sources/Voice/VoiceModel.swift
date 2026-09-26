@@ -1511,7 +1511,7 @@ final class VoiceModel {
             if muted != isMuted { isMuted = muted }
             return true
         case .silence(let notice):
-            let confirmed = await sfu.silenceMicrophone()
+            let confirmed = await sfu.silenceMicrophone().isConfirmed
             return await applyKeptMicrophone(
                 sfuMicrophoneAfterSilence(notice: notice, confirmed: confirmed), promoted: promoted
             )
@@ -1550,10 +1550,12 @@ final class VoiceModel {
         if !isMuted { isMuted = true }
         await voice.setMuted(true)
         guard transport == .livekit, status == .connected else { return }
-        let confirmed = await sfu.silenceMicrophone(remove: next.seat == .none)
-        // Nothing went wrong with a microphone that did mute, so there is no
-        // notice to show; only the unconfirmed case acts.
-        if case .end(let error) = sfuMicrophoneAfterSilence(notice: "", confirmed: confirmed) {
+        let result = await sfu.silenceMicrophone(remove: next.seat == .none)
+        // Removal can fall back to a mute; the seat says which it got.
+        seatMicrophone = seatMicrophoneAfterSilence(requested: next.seat, result: result)
+        // Nothing went wrong with a microphone that did go quiet, so there is
+        // no notice to show; only the unconfirmed case acts.
+        if case .end(let error) = sfuMicrophoneAfterSilence(notice: "", confirmed: result.isConfirmed) {
             await endSfuSession(error, promoted: true)
         }
     }

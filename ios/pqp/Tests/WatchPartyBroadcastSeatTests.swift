@@ -84,6 +84,18 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         XCTAssertTrue(alreadyNone.mute)
     }
 
+    /// Farol on #843: a removal that fell back to a mute leaves a muted
+    /// microphone on the room, and the seat must say so rather than `.none`.
+    func testTheSeatRecordsWhatTheSilenceActuallyDid() {
+        XCTAssertEqual(seatMicrophoneAfterSilence(requested: .none, result: .removed), .none)
+        XCTAssertEqual(seatMicrophoneAfterSilence(requested: .none, result: .muted), .startMuted)
+        XCTAssertEqual(seatMicrophoneAfterSilence(requested: .startMuted, result: .muted), .startMuted)
+        XCTAssertEqual(seatMicrophoneAfterSilence(requested: .startMuted, result: .removed), .startMuted)
+        XCTAssertTrue(MicrophoneSilence.removed.isConfirmed)
+        XCTAssertTrue(MicrophoneSilence.muted.isConfirmed)
+        XCTAssertFalse(MicrophoneSilence.failed.isConfirmed)
+    }
+
     /// An ordinary reopen (the stage reopened, a second Join tap) changes nothing.
     func testAnOrdinaryReopenLeavesTheSeatAlone() {
         for current in [SeatMicrophone.standard, .startMuted, .none] {
@@ -342,10 +354,11 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         guard let start = model.range(of: "private func reconcileReopenedSeat(") else {
             return XCTFail("reconcileReopenedSeat is gone")
         }
-        let body = model[start.upperBound...].prefix(900)
+        let body = model[start.upperBound...].prefix(1200)
         XCTAssertTrue(body.contains("await voice.setMuted(true)"))
         XCTAssertTrue(body.contains("await sfu.silenceMicrophone(remove: next.seat == .none)"))
         XCTAssertTrue(body.contains("sfuMicrophoneAfterSilence("))
+        XCTAssertTrue(body.contains("seatMicrophone = seatMicrophoneAfterSilence(requested: next.seat, result: result)"))
         XCTAssertTrue(model.contains("await reconcileReopenedSeat(with: microphone)"))
     }
 
