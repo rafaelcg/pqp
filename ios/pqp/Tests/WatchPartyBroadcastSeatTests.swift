@@ -64,6 +64,30 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         }
     }
 
+    /// Farol on #843: a host who took an ordinary seat through Join, then
+    /// created and went live with voice off, kept an unmuted microphone,
+    /// because the same-room join returned before the policy was applied.
+    func testABroadcastJoinOnAnExistingSeatMutesIt() {
+        let reopened = reopenedSeatMicrophone(current: .standard, requested: .none)
+        XCTAssertEqual(reopened.seat, .startMuted)
+        XCTAssertTrue(reopened.mute)
+        let voiceOn = reopenedSeatMicrophone(current: .standard, requested: .startMuted)
+        XCTAssertEqual(voiceOn.seat, .startMuted)
+        XCTAssertTrue(voiceOn.mute)
+        let alreadyNone = reopenedSeatMicrophone(current: .none, requested: .none)
+        XCTAssertEqual(alreadyNone.seat, .none)
+        XCTAssertTrue(alreadyNone.mute)
+    }
+
+    /// An ordinary reopen (the stage reopened, a second Join tap) changes nothing.
+    func testAnOrdinaryReopenLeavesTheSeatAlone() {
+        for current in [SeatMicrophone.standard, .startMuted, .none] {
+            let reopened = reopenedSeatMicrophone(current: current, requested: .standard)
+            XCTAssertEqual(reopened.seat, current)
+            XCTAssertFalse(reopened.mute)
+        }
+    }
+
     // MARK: - The party's voice option, off the wire
 
     private func decodeParty(options: String?) throws -> WatchPartyPayload {
@@ -160,6 +184,24 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
                 )
             }
         }
+    }
+
+    /// Farol on #843: a silence that is not confirmed must not leave a control
+    /// reading muted over a microphone that may be sending. Confirmed, the
+    /// seat stays muted; not confirmed, the session ends as a microphone
+    /// failure, in the stream's words.
+    func testASilenceIsKeptOnlyWhenConfirmed() {
+        let notice = sfuMicrophoneFailureNotice(room: .stream)
+        XCTAssertEqual(
+            sfuMicrophoneAfterSilence(notice: notice, confirmed: true),
+            .keep(muted: true, notice: notice)
+        )
+        guard case .end(let error) = sfuMicrophoneAfterSilence(notice: notice, confirmed: false) else {
+            return XCTFail("an unconfirmed silence must end the session")
+        }
+        guard case .microphone = error else { return XCTFail("expected a microphone failure, got \(error)") }
+        let message = sfuFailureMessage(error, room: .stream)
+        XCTAssertFalse(message?.contains("voice server") ?? true)
     }
 
     /// A room that has gone is still the end of the session, in stream words.
@@ -276,6 +318,16 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         XCTAssertEqual(asks, 2, "Go live and Rejoin must both pass the host microphone rule")
         let controller = try source("Voice/WatchPartyHostController.swift")
         XCTAssertTrue(controller.contains("serverName: serverName, microphone: microphone"))
+    }
+
+    /// Farol on #843: Rejoin and Go live leave a failed session for the same
+    /// room before joining, or the join reads as a reopen and never tries.
+    func testRejoinAndGoLiveLeaveAFailedSessionFirst() throws {
+        let leaveFailed = "if case .failed = voice.status, voice.channelId == channel.id {\n"
+        let stage = try source("Voice/WatchPartyStageHostView.swift")
+        XCTAssertTrue(stage.contains(leaveFailed))
+        let controller = try source("Voice/WatchPartyHostController.swift")
+        XCTAssertTrue(controller.contains(leaveFailed))
     }
 
     /// The toolbar's Join steps aside for the host's own card.

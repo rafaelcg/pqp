@@ -127,7 +127,7 @@ struct ChatView: View {
             serverWatchPartyEnabled: watchPartyLiveHlsConfig.enabled,
             canStartWatchParty: canStartWatchPartyHere,
             party: watchPartyHost.partyKnowledge(for: voiceChannel.id),
-            isSeated: voice.isLive && voice.channelId == voiceChannel.id
+            isSeated: voice.channelId == voiceChannel.id && voice.holdsSeat
         )
     }
 

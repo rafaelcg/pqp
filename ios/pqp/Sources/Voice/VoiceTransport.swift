@@ -360,9 +360,10 @@ enum SfuMicrophoneDisposition: Equatable, Sendable {
  the room to present; ending the session there ends the broadcast for
  everybody watching, over a microphone the party may not even have asked for.
  So a stream room keeps the seat and silences the microphone instead (mute on
- the wire, the control reads muted, the notice says so), and a microphone
- never ends a broadcast. `roomLost` still ends it: there is no room left to
- present into.
+ the wire, the control reads muted, the notice says so). The one exception
+ is a silence that cannot be confirmed (`sfuMicrophoneAfterSilence`): a
+ microphone that may still be sending under a muted control ends it after
+ all. `roomLost` still ends it: there is no room left to present into.
  */
 func sfuMicrophoneDisposition(
     _ outcome: SfuMicrophoneOutcome, wasMuted: Bool, keepsSeat: Bool,
@@ -382,6 +383,18 @@ func sfuMicrophoneDisposition(
     case .roomLost(let reason):
         .end(.lost(reason))
     }
+}
+
+/**
+ What a `silence` becomes once the attempt to take the microphone down has an
+ answer. Confirmed, the seat stays, muted, with the notice. Not confirmed, the
+ microphone may still be sending while the control says muted, which is the
+ one outcome worse than ending the broadcast, so the session ends after all.
+ */
+func sfuMicrophoneAfterSilence(notice: String, confirmed: Bool) -> SfuMicrophoneDisposition {
+    confirmed
+        ? .keep(muted: true, notice: notice)
+        : .end(.microphone("the microphone could not be silenced"))
 }
 
 /**

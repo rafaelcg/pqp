@@ -251,10 +251,16 @@ private struct WatchPartyStageLiveCard: View {
     }
 
     /// Back into the room of a party that is already live: no state change,
-    /// the same microphone rule as Go live.
+    /// the same microphone rule as Go live. A failed session for this room is
+    /// left first: `VoiceModel.join` reads "already in this channel" as a
+    /// reopen, which after a failure would show the old error instead of
+    /// trying, and this tap is somebody asking to try.
     private func rejoin() {
         voice.isCollapsed = false
         Task {
+            if case .failed = voice.status, voice.channelId == channel.id {
+                await voice.leave()
+            }
             await voice.join(
                 channel: channel, session: session, ratings: ratings, serverName: serverName,
                 microphone: watchPartyHostSeatMicrophone(voiceEnabled: party.voiceEnabled)

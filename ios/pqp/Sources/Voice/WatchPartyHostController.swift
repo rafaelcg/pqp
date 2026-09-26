@@ -364,6 +364,11 @@ final class WatchPartyHostController {
                     try await joinVoiceAndGuardSettle(
                         join: {
                             voice.isCollapsed = false
+                            // A failed session for this room would read as a
+                            // reopen and never try again; see `VoiceModel.join`.
+                            if case .failed = voice.status, voice.channelId == channel.id {
+                                await voice.leave()
+                            }
                             await voice.join(
                                 channel: channel, session: session, ratings: ratings,
                                 serverName: serverName, microphone: microphone

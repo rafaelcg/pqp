@@ -54,6 +54,10 @@ final class VoiceModel {
     /// Whether there is a session worth a surface: joining, connected, or a
     /// failure that has not been dismissed yet.
     var isLive: Bool { status != .idle }
+    /// Joining or in the room: a seat, as opposed to a failure still on
+    /// screen. The watch-party stage offers its host Go live and Rejoin again
+    /// after a failure, which is how somebody tries again.
+    var holdsSeat: Bool { status == .joining || status == .connected }
     private(set) var peers: [VoicePeerState] = [] {
         didSet { noteCallProgress() }
     }
@@ -508,7 +512,10 @@ final class VoiceModel {
         // room being left must hear about it before this one is entered. The
         // same room is a no-op: the stage was reopened, not rejoined.
         if status != .idle {
-            if channelId == channel.id { return }
+            if channelId == channel.id {
+                reconcileReopenedSeat(with: microphone)
+                return
+            }
             await leave()
         }
         callGeneration += 1
@@ -1394,9 +1401,15 @@ final class VoiceModel {
                 // published, and applying it would clear the line a seat that
                 // was refused the permission at join is showing.
                 if microphone != .withheld {
-                    await self.applyKeptMicrophone(sfuMicrophoneDisposition(
-                        microphone, wasMuted: self.isMuted, keepsSeat: true, room: self.roomKind
-                    ))
+                    let kept = await self.applyKeptMicrophone(
+                        sfuMicrophoneDisposition(
+                            microphone, wasMuted: self.isMuted, keepsSeat: true, room: self.roomKind
+                        ),
+                        promoted: promoted
+                    )
+                    // A microphone that could not be silenced ended the
+                    // session; nothing below has a room to act on.
+                    guard kept else { return }
                 }
                 // Media is up, so a share now has a room to land in. A no-op
                 // on the promoted path: the bridge was armed for the mesh and
@@ -1470,31 +1483,41 @@ final class VoiceModel {
     /// for the latest mute request (`MuteRequestLedger`).
     private func applyMicrophoneRepublish(_ outcome: SfuMicrophoneOutcome) async {
         guard status == .connected, transport == .livekit else { return }
-        let disposition = sfuMicrophoneDisposition(
-            outcome, wasMuted: isMuted, keepsSeat: true, room: roomKind
+        await applyKeptMicrophone(
+            sfuMicrophoneDisposition(outcome, wasMuted: isMuted, keepsSeat: true, room: roomKind),
+            promoted: true
         )
-        if case .end(let error) = disposition {
-            await endSfuSession(error, promoted: true)
-        } else {
-            await applyKeptMicrophone(disposition)
-        }
     }
 
-    /// A seat that stays after its microphone step: the notice, and the mute
-    /// control brought into line with the wire. `silence` also mutes the
-    /// published track itself, because nobody knows whether it is sending.
-    /// `end` is the caller's to act on and is ignored here.
-    private func applyKeptMicrophone(_ disposition: SfuMicrophoneDisposition) async {
+    /**
+     Carry out what the microphone step decided. Answers whether the seat was
+     kept.
+
+     `keep`: the notice, and the mute control brought into line with the wire.
+     `silence` (a watch party whose microphone is in an unknown state): take
+     the microphone down FIRST and only then claim it is muted. If that is not
+     confirmed (`LiveKitVoiceClient.silenceMicrophone`), a control reading
+     muted over a microphone that may be sending is the one outcome worse
+     than ending the broadcast, so it ends (`sfuMicrophoneAfterSilence`).
+     `end`: the ordinary SFU failure path.
+     */
+    @discardableResult
+    private func applyKeptMicrophone(
+        _ disposition: SfuMicrophoneDisposition, promoted: Bool
+    ) async -> Bool {
         switch disposition {
         case .keep(let muted, let notice):
             microphoneNotice = notice
             if muted != isMuted { isMuted = muted }
+            return true
         case .silence(let notice):
-            microphoneNotice = notice
-            if !isMuted { isMuted = true }
-            _ = await sfu.setMuted(true)
-        case .end:
-            break
+            let confirmed = await sfu.silenceMicrophone()
+            return await applyKeptMicrophone(
+                sfuMicrophoneAfterSilence(notice: notice, confirmed: confirmed), promoted: promoted
+            )
+        case .end(let error):
+            await endSfuSession(error, promoted: promoted)
+            return false
         }
     }
 
@@ -1508,6 +1531,24 @@ final class VoiceModel {
      session its microphone track brings up, so here the seat takes a muted
      one like every other mesh seat rather than joining a room it cannot hear.
      */
+    /**
+     A join for the room this phone is already in is a reopen, not a new seat,
+     but the microphone it asked for still has to hold.
+
+     The case: a host took an ordinary seat through Join while the room had
+     no party, created one on the call screen, and went live with voice off.
+     The seat already has a microphone, and tearing it down would be a second
+     negotiation path; what Go live promises is that it does not go out, so
+     the seat is muted (`seatStartsMuted` is true for every broadcast seat)
+     and from here on is treated as one that has a microphone, muted. An
+     ordinary reopen (`.standard`) changes nothing, as before.
+     */
+    private func reconcileReopenedSeat(with microphone: SeatMicrophone) {
+        let next = reopenedSeatMicrophone(current: seatMicrophone, requested: microphone)
+        seatMicrophone = next.seat
+        if next.mute, !isMuted { isMuted = true }
+    }
+
     private func startMeshAudioForSeatWithoutMicrophone() async {
         seatMicrophone = .startMuted
         try? await voice.startAudio()
