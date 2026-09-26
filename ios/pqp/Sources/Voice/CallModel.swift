@@ -1004,15 +1004,22 @@ final class CallModel {
         sfuJoin = Task { [weak self] in
             guard let self else { return }
             let outcome: Result<Void, SfuJoinError>
+            var roomOpened = false
             do {
                 try await withSfuTimeout {
                     try await self.connectSfu(peerId: peerId, channelId: channelId)
                 }
+                roomOpened = true
                 // After the join clock, and with its own error: the room is up,
                 // so a microphone that will not publish is not a voice server
                 // that could not be reached. See `SfuMicrophoneOutcome`.
-                if case .failed(let reason) = await self.sfu.publishMicrophone(muted: self.isMuted) {
-                    outcome = .failure(.microphone(reason))
+                // A call has no listen-only seat to keep, so every failure ends
+                // it, each with its own sentence.
+                let microphone = await self.sfu.publishMicrophone(muted: self.isMuted)
+                if case .end(let error) = sfuMicrophoneDisposition(
+                    microphone, wasMuted: self.isMuted, keepsSeat: false
+                ) {
+                    outcome = .failure(error)
                 } else {
                     outcome = .success(())
                 }
@@ -1022,7 +1029,9 @@ final class CallModel {
                 outcome = .failure(.connect(String(describing: error)))
             }
             guard !Task.isCancelled, self.selfPeerId == peerId, self.phase.isLive else {
-                if case .success = outcome { await self.sfu.disconnect() }
+                // A room this attempt opened is let go, including one whose
+                // microphone step decided to end it.
+                if roomOpened { await self.sfu.disconnect() }
                 return
             }
             switch outcome {

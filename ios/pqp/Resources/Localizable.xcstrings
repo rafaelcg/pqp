@@ -5361,6 +5361,16 @@
         }
       }
     },
+    "The connection to the voice server dropped, so the call ended. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conexão com o servidor de voz caiu, então a call terminou. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
     "Your profile, handle, avatar and settings." : {
       "localizations" : {
         "pt-BR" : {

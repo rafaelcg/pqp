@@ -158,8 +158,10 @@ actor LiveKitVoiceClient {
     /// back through here.
     func publishMicrophone(muted: Bool) async -> SfuMicrophoneOutcome {
         isMuted = muted
+        // No room, or one that has gone, is a lost connection and not a
+        // microphone problem: the caller must not keep a seat on it.
         guard let room, room.connectionState == .connected else {
-            return .failed("the room is not connected")
+            return .roomLost("the room is not connected")
         }
         do {
             _ = try await room.localParticipant.setMicrophone(
@@ -171,13 +173,19 @@ actor LiveKitVoiceClient {
             }
             return .published
         } catch {
+            let reason = String(describing: error)
             // A publish that landed and a mute that did not would leave a
             // microphone open that the person asked to be closed. Taking the
-            // track down is the only safe reading of "we do not know".
+            // track down is the only safe reading of "we do not know", and if
+            // that fails too the microphone's state really is unknown.
             if let microphone = microphonePublication(in: room) {
-                try? await room.localParticipant.unpublish(publication: microphone)
+                do {
+                    try await room.localParticipant.unpublish(publication: microphone)
+                } catch {
+                    return .unknownState(reason)
+                }
             }
-            return .failed(String(describing: error))
+            return .failed(reason)
         }
     }
 
@@ -196,17 +204,17 @@ actor LiveKitVoiceClient {
     ///
     /// An unmute with no microphone on the room (a listen-only seat that has
     /// just been given SPEAK, or a publish that failed at join) publishes one,
-    /// and that is the one case that answers `false`: the person asked to be
-    /// heard and cannot be. Everything else answers `true`.
+    /// and answers with that publish's outcome. Every other call answers nil:
+    /// no microphone was published, so there is nothing to report.
     @discardableResult
-    func setMuted(_ muted: Bool) async -> Bool {
+    func setMuted(_ muted: Bool) async -> SfuMicrophoneOutcome? {
         isMuted = muted
-        guard let room, room.connectionState == .connected else { return true }
+        guard let room, room.connectionState == .connected else { return nil }
         if !muted, microphonePublication(in: room) == nil {
-            return await publishMicrophone(muted: false) == .published
+            return await publishMicrophone(muted: false)
         }
         _ = try? await room.localParticipant.setMicrophone(enabled: !muted)
-        return true
+        return nil
     }
 
     /// Silences everyone else. The mic is the caller's to mute alongside, and
