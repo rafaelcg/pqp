@@ -97,6 +97,43 @@ struct CameraPipPref: Equatable, Sendable {
     var layout: CameraLayout
 
     static let `default` = CameraPipPref(corner: .bottomTrailing, layout: .pip)
+
+    /**
+     EXPLICIT ON PURPOSE -- WITHOUT THIS, `==` COMPARES SERIALIZED JSON,
+     NOT THE PREFERENCE.
+
+     A struct that conforms to both `Equatable` (declared right here) and
+     `RawRepresentable` (declared below, in the extension) has TWO
+     candidate implementations of `==`: the compiler's own memberwise
+     synthesis, and the standard library's `RawRepresentable where
+     RawValue: Equatable` default, which is `lhs.rawValue == rhs.rawValue`.
+     Retroactively adding `RawRepresentable` in a separate extension is
+     enough to make the compiler pick the library's version over
+     synthesizing its own -- confirmed by reproducing it standalone,
+     outside this app, with nothing else in play.
+
+     That default reduces two `CameraPipPref` values to their `rawValue`
+     STRINGS first. `rawValue` is `JSONEncoder` output, and Foundation does
+     not promise a stable key order between separate `encode` calls for the
+     same two-field struct; it was observed to differ often enough that
+     `testGarbageFallsBackToTheDefault` failed on every one of 50 straight
+     iterations on one machine and passed clean on another run entirely --
+     `{"corner":...,"layout":...}` against `{"layout":...,"corner":...}` for
+     the exact same preference, so `.default == .default` came back false.
+     `String(describing:)` (what a failed assertion prints) shows the
+     DECODED fields, which matched every time, making the two sides of the
+     failure look identical while the JSON blobs behind them did not.
+
+     A deterministic encoder (`.sortedKeys`) would have hidden this specific
+     trigger, but the actual defect is upstream of that: this preference's
+     equality should never have been "do the two serializations happen to
+     match", so it is pinned here as ordinary memberwise comparison instead,
+     which is what `Equatable` on a corner/layout pair is supposed to mean
+     regardless of anything JSON does on any given day.
+     */
+    static func == (lhs: CameraPipPref, rhs: CameraPipPref) -> Bool {
+        lhs.corner == rhs.corner && lhs.layout == rhs.layout
+    }
 }
 
 /// The JSON shape alone, with no `RawRepresentable` in sight.
