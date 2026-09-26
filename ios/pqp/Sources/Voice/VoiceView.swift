@@ -13,7 +13,15 @@ struct VoiceView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallRatingModel.self) private var ratings
     @Environment(VoiceModel.self) private var model
+    @Environment(WatchPartyHostController.self) private var watchPartyHost
     let channel: Channel
+
+    /// `nil` while the once-per-host-per-server streaming ack has not been
+    /// resolved for this channel. Owned here, not by `WatchPartyHostControls`,
+    /// because `controls` below reads it too: see that type's doc for why
+    /// the real screen-share button is what the ack gates, rather than a
+    /// second control drawn beside it.
+    @State private var watchPartyShareCleared: Bool?
 
     var body: some View {
         ZStack {
@@ -89,6 +97,9 @@ struct VoiceView: View {
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
                 )
+                if channel.isWatchParty {
+                    WatchPartyHostControls(channel: channel, shareCleared: $watchPartyShareCleared)
+                }
                 controls
             }
             .animation(Motion.standard, value: model.remoteScreen != nil)
@@ -356,7 +367,15 @@ struct VoiceView: View {
             // leading nowhere would be a lie; and a channel that denies SPEAK
             // would answer the broadcast with `screen-share-denied`. Both
             // rooms read the one rule. See `VoiceSpeakRule`.
-            if model.offersScreenShare {
+            //
+            // ON A `watch_party` CHANNEL, ALSO the once-per-host-per-server
+            // streaming ack: this IS the only door to the capture there, and
+            // `WatchPartyHostControls` is what resolves `watchPartyShareCleared`
+            // -- `nil` (checking) and `false` (owed) both hide this button
+            // rather than let it open the system picker ahead of the
+            // disclosure. See that type's doc for why there is no second,
+            // parallel button instead.
+            if model.offersScreenShare, !channel.isWatchParty || watchPartyShareCleared == true {
                 // The size is passed *in* rather than imposed with an outer
                 // `.frame`: the painted circle, the system picker and Apple's
                 // own button all have to be the same square, or part of what

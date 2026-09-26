@@ -172,6 +172,14 @@ enum RealtimeEvent: Sendable {
     /// cost one media-server participant no matter how many people watch.
     case channelLive(channelId: String, stream: LiveHlsStream?, watching: Int)
 
+    /// A `watch_party` channel's party changed shape: created, went live,
+    /// ended, or this account's own `viewerRole` in it changed. Sent to
+    /// everyone who may see the channel (the same audience `channelLive`
+    /// reaches), on every mutation and again on catch-up at socket auth for
+    /// every party the account may currently see. `party: nil` means the
+    /// channel has no active party at all. See `WatchPartyHostController`.
+    case watchPartyUpdate(channelId: String, party: WatchPartyPayload?)
+
     // Conversation calls. A DM "rings" where a server voice channel is
     // join-when-you-want; these three frames are that whole lifecycle as the
     // client sees it. Accepting a ring is not a frame — it is `join-voice-room`.
@@ -982,6 +990,19 @@ actor RealtimeClient {
         let watching: Int?
     }
 
+    /**
+     `watch-party-update`, decoded on its own, for the same reason
+     `LiveStreamFrame` above is: `Envelope` would decode this CLEANLY and
+     silently drop `party`, which is not among its `CodingKeys`. A frame that
+     arrives, parses and says nothing is worse than one that fails loudly,
+     which is the whole reason `LiveStreamFrame` and this type exist rather
+     than one more key added to `Envelope`.
+     */
+    private struct WatchPartyUpdateFrame: Decodable {
+        let channelId: String
+        let party: WatchPartyPayload?
+    }
+
     private struct TypeProbe: Decodable { let type: String }
 
     /// Internal rather than private so tests can feed frames straight in —
@@ -1257,6 +1278,10 @@ actor RealtimeClient {
             event = .channelLive(channelId: frame.channelId,
                                  stream: frame.stream,
                                  watching: frame.watching ?? 0)
+        case "watch-party-update":
+            guard let frame = try? Coding.decoder.decode(WatchPartyUpdateFrame.self, from: data)
+            else { return }
+            event = .watchPartyUpdate(channelId: frame.channelId, party: frame.party)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)

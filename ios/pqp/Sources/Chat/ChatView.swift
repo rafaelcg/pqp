@@ -17,6 +17,7 @@ struct ChatView: View {
     @Environment(CallModel.self) private var call
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
+    @Environment(WatchPartyHostController.self) private var watchPartyHost
     /// Popping this screen from the watch-party theater's own back chevron,
     /// which stands in for the system nav bar's while that bar's fill (and
     /// its back button) is hidden under the film. See `watchTheater`.
@@ -167,22 +168,33 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.error)
         .toolbar {
             /**
-             THE SEAT IS NOT OFFERED IN A WATCH PARTY, AND THAT IS THE POINT.
+             THE SEAT IS NOT OFFERED TO A WATCH PARTY'S AUDIENCE.
 
              A watcher costs one socket in a set on the API. A seat costs a
-             participant on the media box, a microphone permission prompt, and
-             on the default stage (`hosts_only`) it buys nothing at all: the
-             server denies SPEAK to everyone but the host and the co-hosts, so
-             the person ends up paying for a room they cannot talk in while
-             already having the film seatlessly on the same screen.
+             participant on the media box and a microphone permission
+             prompt, and on the default stage (`hosts_only`) it buys an
+             ordinary viewer nothing at all: the server denies SPEAK to
+             everyone but the host and the co-hosts, so the person ends up
+             paying for a room they cannot talk in while already having the
+             film seatlessly on the same screen. Six hundred people arriving
+             at once is the whole design constraint, and this was one green
+             phone button away from six hundred participants.
 
-             Six hundred people arriving at once is the whole design
-             constraint, and this was one green phone button away from six
-             hundred participants. iOS has no presenter or stage surface yet
-             (see `docs/WATCH_PARTY.md`), so there is nothing on this screen
-             the seat unlocks. Opening the channel IS attending.
+             BUT A CHANNEL WITH NO PARTY RUNNING IS AN ORDINARY VOICE ROOM,
+             and hosting a watch party from this phone needs a way in:
+             `WatchPartyHostGate.canCreate`/`canManage` are only knowable
+             once `welcome` has answered, which needs a seat first. So the
+             button reappears exactly where the server's own rule
+             (`mayGoOnAir`) would let someone through: nobody is running a
+             party here yet, or this account is already this party's host or
+             a co-host. `watchPartyMayJoinRoom`'s own doc explains the one
+             way this is narrower than the server (no Convidados signal,
+             out of scope on every platform for this PR) and why that is the
+             safe direction to be narrow in.
              */
-            if let voiceChannel, !voiceChannel.isWatchParty {
+            if let voiceChannel,
+               !voiceChannel.isWatchParty
+                || watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id)) {
                 ToolbarItem(placement: .topBarTrailing) {
                     // A button, not a link to the stage: the stage is presented
                     // from the root while the session is live, so this only
@@ -239,6 +251,15 @@ struct ChatView: View {
                         .accessibilityLabel("Pinned messages")
                 }
             }
+        }
+        // Tracks the channel's active party (if any) so the toolbar's Join
+        // button above can decide, before anybody has joined anything,
+        // whether this is an idle room or a live watch party. See
+        // `WatchPartyHostController.open`'s doc: idempotent, and also called
+        // from `VoiceView` once a seat is actually taken.
+        .task(id: voiceChannel?.id) {
+            guard let voiceChannel, voiceChannel.isWatchParty else { return }
+            watchPartyHost.open(channelId: voiceChannel.id, session: session)
         }
         // A collapsed call keeps a strip at the top of the thread it belongs to,
         // so "tuck the call away and read" does not mean losing it.

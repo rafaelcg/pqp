@@ -61,6 +61,40 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertEqual(watching, 0)
     }
 
+    /// `watch-party-update`, the frame `WatchPartyHostController` tracks.
+    /// Routed through its own decode struct rather than `Envelope`, for the
+    /// same reason `channel-live` is: `party` is not among `Envelope`'s own
+    /// keys, so the shared decoder would parse this cleanly and drop it.
+    func testWatchPartyUpdateCarriesTheFullPartyForTheHostToRead() async throws {
+        let event = await firstEvent(from: """
+        {"type":"watch-party-update","channelId":"c1",
+         "party":{"id":"p1","channelId":"c1","name":"Sessão de sábado","state":"live",
+                  "hostUserId":"u1","hostDisplayName":"Rafael","viewerRole":"host"}}
+        """)
+        guard case .watchPartyUpdate(let channelId, let party) = event else {
+            return XCTFail("expected watchPartyUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(channelId, "c1")
+        XCTAssertEqual(party?.id, "p1")
+        XCTAssertEqual(party?.name, "Sessão de sábado")
+        XCTAssertTrue(party?.isLive ?? false)
+        XCTAssertTrue(party?.isHost ?? false)
+    }
+
+    /// `party: null` is "no active party", not a decode failure -- the
+    /// channel going idle again has to reach `WatchPartyHostController` as a
+    /// real event, the same way a stream stopping does for `channel-live`.
+    func testWatchPartyUpdateWithNoPartyIsAnEventNotADecodeFailure() async throws {
+        let event = await firstEvent(from: """
+        {"type":"watch-party-update","channelId":"c1","party":null}
+        """)
+        guard case .watchPartyUpdate(let channelId, let party) = event else {
+            return XCTFail("expected watchPartyUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(channelId, "c1")
+        XCTAssertNil(party)
+    }
+
     /// The room's copy. Same object, no headcount, and it must not be confused
     /// for the channel one: only `channel-live` reaches somebody without a seat.
     func testVoiceStreamDecodesAsTheRoomsOwnFrame() async throws {
@@ -728,13 +762,36 @@ final class WatchPartyTests: XCTestCase {
      Asserted on the guard rather than on the button: the button is correct and
      stays, for voice channels.
      */
+    /**
+     THE SEAT IS NOT OFFERED TO A WATCH PARTY'S AUDIENCE, EVEN NOW THAT
+     HOSTING EXISTS.
+
+     Hosting a watch party from this phone (the iOS hosting PR) needed a way
+     back INTO a `watch_party` channel's room -- `canStartWatchParty` is only
+     knowable once `welcome` has answered, which needs a seat first -- so the
+     blanket `!voiceChannel.isWatchParty` this test used to require by itself
+     is gone. What replaces it still has to be provably narrow: the button
+     reappears only through `watchPartyMayJoinRoom`, which lets an idle
+     channel's room be joined by anybody (nobody to protect from a party
+     nobody is broadcasting to) and a running party's own host or co-host
+     back in, and refuses everyone else exactly as before. This test reads
+     the source for both halves, so a change that widens the condition back
+     toward "anybody, any time" fails here rather than being caught on a
+     phone.
+     */
     func testTheChatToolbarDoesNotOfferASeatInAWatchParty() throws {
         let source = try String(
             contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
         )
         XCTAssertTrue(
-            source.contains("if let voiceChannel, !voiceChannel.isWatchParty {"),
-            "watching is seatless, and a green phone button is how that stops being true"
+            source.contains("!voiceChannel.isWatchParty"),
+            "an ordinary voice channel must still always offer the seat"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id))"
+            ),
+            "a watch party channel must route through the same narrow rule the server enforces, not a blanket allow"
         )
         XCTAssertTrue(
             source.contains("WatchHeroPreference"),
