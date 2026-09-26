@@ -98,6 +98,18 @@ extension APIClient {
         return (try? await get("/api/live-hls/config", query: query)) ?? .off
     }
 
+    /// The throwing sibling of `liveHlsConfig(serverId:)`, for the one kind
+    /// of caller `liveHlsConfig` cannot serve: something that needs to tell
+    /// "the server answered `enabled: false`" apart from "the request
+    /// itself failed". `ChannelListView`'s availability retry loop is
+    /// exactly that -- it must not read a network blip as a confirmed `off`
+    /// and give up silently on ever offering the Create row. Every other
+    /// caller still wants `liveHlsConfig`'s fail-closed convenience.
+    func fetchLiveHlsConfigOrThrow(serverId: String) async throws -> LiveHlsConfigPayload {
+        let query = [URLQueryItem(name: "serverId", value: serverId)]
+        return try await get("/api/live-hls/config", query: query)
+    }
+
     /// The one-time "you're responsible for what you stream" gate
     /// (`hls_host_acks`), per user and per server. `true` means it has not
     /// been shown and confirmed yet for this server. See

@@ -7,13 +7,19 @@ import Foundation
 
  MIRRORS `client/src/components/watch-party/live-party-block.tsx`'s branch
  ladder, in particular the doc comment on its `parties.length === 0` branch:
- "NOTHING, OR ONE BUTTON". Four outcomes, checked in this order because each
- one is a stronger fact than the one after it:
+ "NOTHING, OR ONE BUTTON". Five outcomes now, checked in this order because
+ each one is a stronger fact than the one after it:
 
- 1. **A party is live.** Wins over everything, including this account's own
+ 1. **Unknown.** `parties` is `nil`: `GET /api/servers/:serverId/watch-parties`
+    has never answered cleanly for this screen. Reads the same as "nothing" --
+    no Create row (a party might already exist and this screen simply does
+    not know it yet), and no card either. NOT the same state as "asked, and
+    the answer was zero parties" -- see `parties`'s own doc below for why a
+    FAILED refetch must never collapse the two.
+ 2. **A party is live.** Wins over everything, including this account's own
     pending draft elsewhere in the server (there is at most one active party
     per channel, but a server can run more than one `watch_party` room).
- 2. **This account's own pending party.** A `draft`/`scheduled` row whose
+ 3. **This account's own pending party.** A `draft`/`scheduled` row whose
     `viewerRole` is `host` or `cohost` -- never a stranger's, which
     `GET /api/servers/:serverId/watch-parties` never sends this account
     anyway (`presentWatchParty` resolves visibility server side, so an
@@ -21,9 +27,9 @@ import Foundation
     is false, matching the web: a co-host who lost `START_WATCH_PARTY`
     after being added still needs the way back into a party already
     running.
- 3. **`canHost` alone.** One "Create watch party" row -- see `canHost`'s own
+ 4. **`canHost` alone.** One "Create watch party" row -- see `canHost`'s own
     doc for exactly what fact it is.
- 4. **Nothing.** No heading, no row, no placeholder -- exactly `live-party-
+ 5. **Nothing.** No heading, no row, no placeholder -- exactly `live-party-
     block.tsx`'s "NOTHING, OR ONE BUTTON" comment, mirrored down to the
     absence.
 
@@ -47,6 +53,17 @@ enum ServerWatchPartyListState: Equatable {
      answered with for this server, in any state it returned (the route
      itself only ever returns active ones -- live, draft, scheduled -- so
      nothing here has to re-check for `ended`/`cancelled`).
+
+     `nil` MEANS UNKNOWN, NOT "ASKED, GOT ZERO". A fetch that has never
+     landed a clean answer (or a REFETCH that failed after an earlier one
+     had) must never be read as "no parties running" -- the Farol finding
+     this closes: a transient failure used to clear the slot to `[]`, which
+     could drop a live card a manager was mid-broadcast on, or silently open
+     the Create row on top of a party the caller simply could not see any
+     more. The caller (`ChannelListView`) keeps the last successfully
+     fetched array on a failed refetch rather than assigning `nil` or `[]`
+     over it, so this case is reached only before the very first successful
+     fetch.
    - canHost: Whether the "Create watch party" row belongs on this server at
      all.
 
@@ -68,9 +85,12 @@ enum ServerWatchPartyListState: Equatable {
      function's `canHost` intentionally does not ask for.
  */
 func resolveServerWatchPartyListState(
-    parties: [WatchPartyPayload],
+    parties: [WatchPartyPayload]?,
     canHost: Bool
 ) -> ServerWatchPartyListState {
+    guard let parties else {
+        return .none
+    }
     if let live = newestLiveParty(in: parties) {
         return .live(live)
     }

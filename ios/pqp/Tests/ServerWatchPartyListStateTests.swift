@@ -22,6 +22,19 @@ final class ServerWatchPartyListStateTests: XCTestCase {
         )
     }
 
+    // MARK: - Unknown (nil parties)
+
+    /// The Farol finding this pins: `nil` (never fetched cleanly) must not
+    /// offer the Create row even when `canHost` is true, because a party
+    /// might already exist and this screen simply does not know it yet.
+    func testUnknownPartiesNeverOffersTheCreateRowEvenWhenCanHostIsTrue() {
+        XCTAssertEqual(resolveServerWatchPartyListState(parties: nil, canHost: true), .none)
+    }
+
+    func testUnknownPartiesWithNoHostPermissionIsAlsoNothing() {
+        XCTAssertEqual(resolveServerWatchPartyListState(parties: nil, canHost: false), .none)
+    }
+
     // MARK: - Nothing
 
     func testNoPartiesAndCannotHostIsNothing() {
