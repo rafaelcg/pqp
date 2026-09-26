@@ -440,6 +440,16 @@ class VoiceController(
     @Volatile private var wantedChannel: Pair<String, String?>? = null
 
     /**
+     * Set by [join]'s own parameter, and re-told to whichever engine is
+     * current on every [onWelcome] and [onTransportChanged] -- both call
+     * [VoiceTransport.setTolerateMicrophonePublishFailure] right before
+     * [VoiceTransport.start], because a promotion mid-call swaps the engine
+     * out for a fresh one that remembers nothing about the call it replaced.
+     * See that interface member's own doc.
+     */
+    @Volatile private var toleratesMicrophonePublishFailure = false
+
+    /**
      * The socket dropped while we were in a call, so the room has to be rebuilt.
      *
      * Set on the way *down* rather than inferred on the way up. The previous
@@ -483,11 +493,19 @@ class VoiceController(
      * The caller is responsible for having RECORD_AUDIO granted, because the
      * permission prompt belongs to the screen that asked, and a foreground
      * service of type `microphone` cannot legally start without it.
+     *
+     * [tolerateMicrophonePublishFailure] is `false` for every ordinary
+     * caller and stays that way: an ordinary call with no working microphone
+     * must keep failing to join, the way it always has. Watch-party hosting
+     * is the one caller that passes `true` -- a broadcast whose picture came
+     * up fine must not fail to start because a microphone would not publish.
+     * See [VoiceTransport.setTolerateMicrophonePublishFailure]'s own doc.
      */
-    fun join(channelId: String, channelName: String?) {
+    fun join(channelId: String, channelName: String?, tolerateMicrophonePublishFailure: Boolean = false) {
         if (_state.value.channelId == channelId && _state.value.stage == VoiceStage.Connected) {
             return
         }
+        this.toleratesMicrophonePublishFailure = tolerateMicrophonePublishFailure
         enter(channelId, channelName)
     }
 
@@ -984,6 +1002,10 @@ class VoiceController(
         // grant lives in a token that outlives a revocation, so the transport
         // has to hold the live answer or a revoked presenter can publish again.
         engine.setCanPublishScreen(canStream)
+        // Told on every `welcome`, same reasoning as the two calls above: a
+        // fresh engine remembers nothing about the join that is about to
+        // call `start` on it.
+        engine.setTolerateMicrophonePublishFailure(toleratesMicrophonePublishFailure)
 
         val peers = frame.participants("peers")
         // Written **before** the engine is started, not after. On the SFU path
@@ -1101,6 +1123,9 @@ class VoiceController(
         // promotion must not get it back because the room grew.
         engine.setCanPublishAudio(_state.value.canSpeak)
         engine.setCanPublishScreen(_state.value.screenShareSupported)
+        // Same reasoning: a promotion mid-call swaps in a fresh engine that
+        // remembers nothing about the tolerance the original join asked for.
+        engine.setTolerateMicrophonePublishFailure(toleratesMicrophonePublishFailure)
 
         // Written **before** the engine is started, for the same reason
         // [onWelcome] does it: `LiveKitEngine.start` hands the join to a

@@ -10,48 +10,96 @@ import org.junit.Test
 /**
  * Ir ao vivo and Encerrar, as an ordered list of effects rather than a
  * paragraph in a controller. This is the "go-live/end sequencing" the
- * hosting review's test plan asks for: state first, so a failed share never
+ * hosting review's test plan asks for: the mic first, so the party can
+ * never be live with it still open, state next so a failed share never
  * broadcasts silently, and Encerrar always leaves voice even when telling
  * the server the party ended fails.
  *
- * The go-live cases below are what a coordinator review of the first cut
- * added, on top of Farol's original 5: an ambiguous `setLive` failure (the
- * response lost or thrown after the server already committed) must not be
- * read as a plain refusal, and a `joinVoice` failure on an already-live
- * party must not be read as success.
+ * The go-live cases below are what two rounds of review added, on top of
+ * Farol's original 5: an ambiguous `setLive` failure (the response lost or
+ * thrown after the server already committed) must not be read as a plain
+ * refusal, a `joinVoice` failure on an already-live party must not be read
+ * as success, and -- the second round, after `muteMicrophone` moved ahead
+ * of `setLive` -- a mute that fails must abort before the party goes live
+ * at all, with cancellation still propagating rather than being read as an
+ * ordinary failure.
  */
 class WatchPartyHostSequenceTest {
 
     @Test
-    fun `go-live sets state, joins the room, mutes the mic, then starts the capture, in that order`() = runTest {
+    fun `go-live mutes the mic, sets state, joins the room, then starts the capture, in that order`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone" },
             setLive = { calls += "setLive"; true },
             checkLive = { fail("must not re-check a setLive that did not throw") },
             joinVoice = { calls += "joinVoice" },
-            muteMicrophone = { calls += "muteMicrophone" },
             endParty = { fail("must not end a party that was never joined-and-failed") },
             startScreenShare = { consent: String -> calls += "startScreenShare($consent)" },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.Live, result)
-        assertEquals(listOf("setLive", "joinVoice", "muteMicrophone", "startScreenShare(grant-1)"), calls)
+        assertEquals(listOf("muteMicrophone", "setLive", "joinVoice", "startScreenShare(grant-1)"), calls)
+    }
+
+    // ------------------------------------------------- muteMicrophone fails first
+
+    /**
+     * The claim this whole reordering makes: a mute that does not land means
+     * the party never goes live at all, not a live party with an open mic.
+     * `GoLiveResult.Refused` is reused rather than a dedicated case, because
+     * from the host's point of view "could not go live" is exactly what
+     * happened -- see `performWatchPartyGoLive`'s own doc.
+     */
+    @Test
+    fun `muteMicrophone failing aborts before setLive is ever called`() = runTest {
+        val calls = mutableListOf<String>()
+        val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone"; throw IllegalStateException("engine not ready") },
+            setLive = { fail("must not go live -- the mic could not be silenced") },
+            checkLive = { fail("must not re-check") },
+            joinVoice = { fail("must not join") },
+            endParty = { fail("nothing to end") },
+            startScreenShare = { fail("must not share") },
+            consent = "grant-1",
+        )
+        assertEquals(GoLiveResult.Refused, result)
+        assertEquals(listOf("muteMicrophone"), calls)
     }
 
     @Test
-    fun `a clean refusal (no throw) joins nothing, mutes nothing, starts no capture, and is never re-checked`() = runTest {
+    fun `cancellation of muteMicrophone propagates rather than being treated as an ordinary failure`() = runTest {
+        var threw = false
+        try {
+            performWatchPartyGoLive(
+                muteMicrophone = { throw CancellationException("scope gone") },
+                setLive = { fail("must not go live") },
+                checkLive = { fail("must not re-check") },
+                joinVoice = { fail("must not join") },
+                endParty = { fail("nothing to end") },
+                startScreenShare = { fail("must not share") },
+                consent = "grant-1",
+            )
+        } catch (e: CancellationException) {
+            threw = true
+        }
+        assertTrue(threw)
+    }
+
+    @Test
+    fun `a clean refusal (no throw) joins nothing, starts no capture, and is never re-checked`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone" },
             setLive = { calls += "setLive"; false },
             checkLive = { fail("a clean `false` is unambiguous -- checkLive must not run") },
             joinVoice = { calls += "joinVoice" },
-            muteMicrophone = { fail("nothing was joined -- there is no mic to silence") },
             endParty = { fail("nothing to end -- the party never went live") },
             startScreenShare = { calls += "startScreenShare" },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.Refused, result)
-        assertEquals(listOf("setLive"), calls)
+        assertEquals(listOf("muteMicrophone", "setLive"), calls)
     }
 
     // ---------------------------------------- an ambiguous `setLive` failure
@@ -60,17 +108,17 @@ class WatchPartyHostSequenceTest {
     fun `setLive throwing is re-checked, and a confirmed-live party still goes live`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone" },
             setLive = { calls += "setLive"; throw IllegalStateException("timeout") },
             checkLive = { calls += "checkLive"; true },
             joinVoice = { calls += "joinVoice" },
-            muteMicrophone = { calls += "muteMicrophone" },
             endParty = { fail("the party is live and was joined -- nothing to end") },
             startScreenShare = { consent: String -> calls += "startScreenShare($consent)" },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.Live, result)
         assertEquals(
-            listOf("setLive", "checkLive", "joinVoice", "muteMicrophone", "startScreenShare(grant-1)"),
+            listOf("muteMicrophone", "setLive", "checkLive", "joinVoice", "startScreenShare(grant-1)"),
             calls,
         )
     }
@@ -79,25 +127,25 @@ class WatchPartyHostSequenceTest {
     fun `setLive throwing, re-checked and confirmed NOT live, is a refusal`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone" },
             setLive = { calls += "setLive"; throw IllegalStateException("timeout") },
             checkLive = { calls += "checkLive"; false },
             joinVoice = { fail("must not join a party the re-check says is not live") },
-            muteMicrophone = { fail("must not run -- nothing was joined") },
             endParty = { fail("nothing to end -- confirmed not live") },
             startScreenShare = { fail("must not share") },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.Refused, result)
-        assertEquals(listOf("setLive", "checkLive"), calls)
+        assertEquals(listOf("muteMicrophone", "setLive", "checkLive"), calls)
     }
 
     @Test
     fun `setLive throwing AND the re-check itself throwing is still just a refusal, not a crash`() = runTest {
         val result = performWatchPartyGoLive(
+            muteMicrophone = { },
             setLive = { throw IllegalStateException("timeout") },
             checkLive = { throw IllegalStateException("the re-check failed too") },
             joinVoice = { fail("must not join") },
-            muteMicrophone = { fail("must not run") },
             endParty = { fail("nothing to end") },
             startScreenShare = { fail("must not share") },
             consent = "grant-1",
@@ -110,10 +158,10 @@ class WatchPartyHostSequenceTest {
         var threw = false
         try {
             performWatchPartyGoLive(
+                muteMicrophone = { },
                 setLive = { throw CancellationException("scope gone") },
                 checkLive = { fail("cancellation is not ambiguity -- must not re-check") },
                 joinVoice = { fail("must not join") },
-                muteMicrophone = { fail("must not run") },
                 endParty = { fail("nothing to end") },
                 startScreenShare = { fail("must not share") },
                 consent = "grant-1",
@@ -127,28 +175,28 @@ class WatchPartyHostSequenceTest {
     // --------------------------------------------- joinVoice fails, already live
 
     @Test
-    fun `joinVoice failing on an already-live party ends it and reports JoinFailed(ended = true), muting nothing`() = runTest {
+    fun `joinVoice failing on an already-live party ends it and reports JoinFailed(ended = true)`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { calls += "muteMicrophone" },
             setLive = { calls += "setLive"; true },
             checkLive = { fail("must not re-check a setLive that did not throw") },
             joinVoice = { calls += "joinVoice"; throw IllegalStateException("no room") },
-            muteMicrophone = { fail("the room was never entered -- there is no mic to silence") },
             endParty = { calls += "endParty"; true },
             startScreenShare = { fail("must not share -- the room was never entered") },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.JoinFailed(ended = true), result)
-        assertEquals(listOf("setLive", "joinVoice", "endParty"), calls)
+        assertEquals(listOf("muteMicrophone", "setLive", "joinVoice", "endParty"), calls)
     }
 
     @Test
     fun `joinVoice failing, and ALSO failing to end the party, is reported honestly`() = runTest {
         val result = performWatchPartyGoLive(
+            muteMicrophone = { },
             setLive = { true },
             checkLive = { fail("must not re-check") },
             joinVoice = { throw IllegalStateException("no room") },
-            muteMicrophone = { fail("must not run") },
             endParty = { throw IllegalStateException("network, again") },
             startScreenShare = { fail("must not share") },
             consent = "grant-1",
@@ -160,10 +208,10 @@ class WatchPartyHostSequenceTest {
     fun `joinVoice failing after the ambiguous-but-confirmed-live path still tries to end it`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
+            muteMicrophone = { },
             setLive = { throw IllegalStateException("timeout") },
             checkLive = { true },
             joinVoice = { calls += "joinVoice"; throw IllegalStateException("no room") },
-            muteMicrophone = { fail("must not run") },
             endParty = { calls += "endParty"; true },
             startScreenShare = { fail("must not share") },
             consent = "grant-1",
@@ -176,28 +224,36 @@ class WatchPartyHostSequenceTest {
 
     /**
      * The literal claim this whole change makes: "Ir ao vivo" silences
-     * whatever mic the room hands it, even one this phone had already
-     * published, unmuted, before the party went live -- see
-     * [performWatchPartyGoLive]'s own doc for why the mute is unconditional
-     * rather than a fresh-join default.
+     * whatever mic the room hands it BEFORE the party can become live, even
+     * for a host who is already seated in the room with an open mic and
+     * whose `joinVoice` is therefore a no-op re-entry -- see
+     * [performWatchPartyGoLive]'s own doc for why the mute runs first rather
+     * than after the join.
      */
     @Test
-    fun `muteMicrophone runs even when joinVoice is a no-op re-entry into a room already held`() = runTest {
+    fun `muteMicrophone runs, and lands, before setLive even for a host already seated with an open mic`() = runTest {
         val calls = mutableListOf<String>()
         val result = performWatchPartyGoLive(
-            setLive = { calls += "setLive"; true },
+            muteMicrophone = { calls += "muteMicrophone" },
+            setLive = {
+                // If the mic were still open at this point, the party would
+                // be going live before it was silenced -- exactly the window
+                // this ordering exists to close.
+                assertEquals(listOf("muteMicrophone"), calls)
+                calls += "setLive"
+                true
+            },
             checkLive = { fail("must not re-check") },
             // A phone already `Connected` to this channel's room:
             // `VoiceController.join` returns immediately without doing
             // anything, exactly like this no-op.
             joinVoice = { calls += "joinVoice" },
-            muteMicrophone = { calls += "muteMicrophone" },
             endParty = { fail("nothing to end") },
             startScreenShare = { calls += "startScreenShare" },
             consent = "grant-1",
         )
         assertEquals(GoLiveResult.Live, result)
-        assertEquals(listOf("setLive", "joinVoice", "muteMicrophone", "startScreenShare"), calls)
+        assertEquals(listOf("muteMicrophone", "setLive", "joinVoice", "startScreenShare"), calls)
     }
 
     // -------------------------------------------------------------- Encerrar

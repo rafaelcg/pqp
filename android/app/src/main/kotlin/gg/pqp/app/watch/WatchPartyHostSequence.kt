@@ -61,24 +61,32 @@ private suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {
 }
 
 /**
- * Ir ao vivo, in the order the hosting review calls out explicitly: state
- * first. `POST /api/watch-parties/:id/state {state:"live"}`, THEN
- * `join-voice-room`, THEN [muteMicrophone], THEN the screen capture/publish.
+ * Ir ao vivo, in order: [muteMicrophone] FIRST, then the hosting review's
+ * "state first" -- `POST /api/watch-parties/:id/state {state:"live"}` --
+ * THEN `join-voice-room`, THEN the screen capture/publish.
  *
- * [muteMicrophone] IS NOT OPTIONAL AND RUNS EVERY TIME THE ROOM IS ENTERED,
- * whatever this phone's standing mute preference is. A watch party is a
- * broadcast: "Ir ao vivo" is the audience arriving, not a request to speak,
+ * [muteMicrophone] RUNS BEFORE ANYTHING ELSE, whatever this phone's standing
+ * mute preference is, and NOTHING BELOW IT RUNS IF IT FAILS. A watch party is
+ * a broadcast: "Ir ao vivo" is the audience arriving, not a request to speak,
  * and a host who was unmuted on a call five minutes ago must not have that
  * carry into a stage five hundred people can now hear. This is the same
  * reason the web's `handleWatchPartyGoLive` forces `startMuted: true`
  * unconditionally rather than reading a mute-on-join preference -- "Ir ao
  * vivo should not blast the host's mic into the party, whatever mute-on-join
- * is set to". It runs even when this phone was ALREADY in the room (a host
- * who joined ahead of time to talk to a co-host before going live): silencing
- * an existing, live track the instant the broadcast starts is exactly the
- * case the web comment is about, not just a fresh join's default.
+ * is set to". Going first, ahead of [setLive], is deliberate and was a Farol
+ * finding on an earlier cut of this reordering that put it after [joinVoice]
+ * instead: for a host who joined ahead of time to talk to a co-host and is
+ * already seated with an open mic, [joinVoice] is a no-op re-entry, and a
+ * mute placed after [setLive] leaves a real window -- however short -- where
+ * the party is live on the server with that mic still open. Muting first
+ * closes the window to zero: the party cannot become live before its host's
+ * own mic is already silent, fresh join or one already in progress alike.
+ * And because it runs first, a [muteMicrophone] failure means [setLive] is
+ * never called at all -- there is no "already live" case to compensate for
+ * here, unlike [joinVoice] failing below, which can only happen once the
+ * party truly is live.
  *
- * TWO FAROL FINDINGS ON THE FIRST CUT OF THIS FUNCTION, both about what a
+ * THREE FAROL FINDINGS ON EARLIER CUTS OF THIS FUNCTION, all about what a
  * plain `if (!setLive()) return false` glossed over:
  *
  * 1. [setLive] THROWING is ambiguous, not a refusal. A lost response or a
@@ -95,6 +103,9 @@ private suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {
  *    live party this phone never actually entered is worse than a refused
  *    go-live: see [GoLiveResult.JoinFailed]'s doc for why it does not fix
  *    itself. [endParty] is the best-effort compensation.
+ * 3. [muteMicrophone] running AFTER [setLive] (an earlier cut of this
+ *    function) left the window described above. See its own doc for why it
+ *    now runs first instead.
  *
  * What is UNCHANGED, deliberately: [startScreenShare] failing (denied
  * consent, a refused publish -- both asynchronous on the real client, never
@@ -104,6 +115,15 @@ private suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {
  * "Compartilhar tela" retry) rather than from a party that was never entered.
  */
 suspend fun <C> performWatchPartyGoLive(
+    /**
+     * Forces this phone's own mic silent in the room, called before anything
+     * else in this function -- see the function's own doc for why. A throw
+     * here (cancellation aside, which propagates as always) means [setLive]
+     * is never even attempted: nothing else runs, and [GoLiveResult.Refused]
+     * is returned. This is the fallible step this function trusts least, so
+     * it is the one nothing else may follow when it does not land.
+     */
+    muteMicrophone: suspend () -> Unit,
     setLive: suspend () -> Boolean,
     /**
      * Consulted ONLY when [setLive] throws. Re-reads whether the party is
@@ -114,18 +134,14 @@ suspend fun <C> performWatchPartyGoLive(
      */
     checkLive: suspend () -> Boolean,
     joinVoice: () -> Unit,
-    /**
-     * Forces this phone's own mic silent in the room -- see this function's
-     * own doc for why it is unconditional. Called right after [joinVoice]
-     * succeeds and before [startScreenShare], never on a refusal or a failed
-     * join: there is no room to silence anything in yet.
-     */
-    muteMicrophone: () -> Unit,
     /** Best-effort only; its own failure is folded into [GoLiveResult.JoinFailed]'s `ended`. */
     endParty: suspend () -> Boolean,
     startScreenShare: (C) -> Unit,
     consent: C,
 ): GoLiveResult {
+    val muted = attempt { muteMicrophone() }
+    if (muted.isFailure) return GoLiveResult.Refused
+
     val live = attempt { setLive() }.fold(
         onSuccess = { it },
         onFailure = { attempt { checkLive() }.getOrDefault(false) },
@@ -138,7 +154,6 @@ suspend fun <C> performWatchPartyGoLive(
         return GoLiveResult.JoinFailed(ended = ended)
     }
 
-    muteMicrophone()
     startScreenShare(consent)
     return GoLiveResult.Live
 }
