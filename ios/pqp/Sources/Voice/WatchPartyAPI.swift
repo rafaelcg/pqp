@@ -43,6 +43,32 @@ extension APIClient {
         return response.party
     }
 
+    /// `GET /api/servers/:serverId/watch-parties`. Every party in the server
+    /// this person may see -- live, plus any draft/scheduled one they host or
+    /// co-host -- in one request. What `ChannelListView`'s watch-party slot
+    /// reads to decide between a live card, a pending card, a "Create watch
+    /// party" row, or nothing at all: see `resolveServerWatchPartyListState`.
+    /// Mirrors `fetchServerWatchParties` in `client/src/lib/watch-parties-api.ts`.
+    func fetchServerWatchParties(serverId: String) async throws -> [WatchPartyPayload] {
+        let response: WatchPartyListResponse = try await get("/api/servers/\(serverId)/watch-parties")
+        return response.parties
+    }
+
+    /// `POST /api/servers/:serverId/watch-parties`. Starts a party with no
+    /// channel chosen up front: the server finds or creates the one hidden
+    /// `watch_party` room this server keeps and opens an immediate `draft`
+    /// there, same as `createWatchParty` does for a channel that already
+    /// exists. This is what the channel list's "Create watch party" row
+    /// calls -- the row can be the very first watch party a server ever
+    /// runs, so it must not depend on a channel already being in this
+    /// client's list. Mirrors the web's `handleCreateWatchParty`
+    /// (`App.tsx`), which always goes through this same server-scoped route
+    /// rather than requiring a channel first.
+    func createServerWatchParty(serverId: String, name: String) async throws -> WatchPartyCreatedResponse {
+        struct Body: Encodable { let name: String }
+        return try await post("/api/servers/\(serverId)/watch-parties", body: Body(name: name))
+    }
+
     /// `POST /api/watch-parties/:id/state`. The target state, never a verb
     /// -- the server owns the transition table and refuses a move that is
     /// not in it. `lowLatency` only means anything alongside `state = "live"`.
@@ -70,6 +96,18 @@ extension APIClient {
     func liveHlsConfig(serverId: String) async -> LiveHlsConfigPayload {
         let query = [URLQueryItem(name: "serverId", value: serverId)]
         return (try? await get("/api/live-hls/config", query: query)) ?? .off
+    }
+
+    /// The throwing sibling of `liveHlsConfig(serverId:)`, for the one kind
+    /// of caller `liveHlsConfig` cannot serve: something that needs to tell
+    /// "the server answered `enabled: false`" apart from "the request
+    /// itself failed". `ChannelListView`'s availability retry loop is
+    /// exactly that -- it must not read a network blip as a confirmed `off`
+    /// and give up silently on ever offering the Create row. Every other
+    /// caller still wants `liveHlsConfig`'s fail-closed convenience.
+    func fetchLiveHlsConfigOrThrow(serverId: String) async throws -> LiveHlsConfigPayload {
+        let query = [URLQueryItem(name: "serverId", value: serverId)]
+        return try await get("/api/live-hls/config", query: query)
     }
 
     /// The one-time "you're responsible for what you stream" gate

@@ -90,6 +90,37 @@ struct ChatView: View {
     /// title, pulls the pin button back to portrait, and hands the back
     /// chevron to the overlay's own autohiding one.
     @State private var watchTheater = false
+    /// Whether this server may broadcast at all, read only for
+    /// `WatchStageView`'s idle card -- see `canHostWatchParty`'s own doc for
+    /// why this is fetched here rather than trusted to `voiceChannel`.
+    @State private var watchPartyLiveHlsConfig: LiveHlsConfigPayload = .off
+    /// This account's own resolved permission bitfields for `voiceChannel`'s
+    /// server, the same snapshot `ChannelListView` reads. See
+    /// `canHostWatchParty`.
+    @State private var watchPartyPermissions: PermissionsSnapshot?
+
+    /**
+     Whether `WatchStageView`'s idle card should point at the toolbar's Join
+     button instead of saying nothing is running. `START_WATCH_PARTY`, WITH
+     `voiceChannel.id` as the channel id (unlike `ChannelListView`'s own
+     `canHostWatchParty`, which asks with none): this screen, unlike the
+     sidebar's Create row, always names a channel that already exists, so
+     the more precise question -- does a channel-specific overwrite change
+     the answer for THIS room -- is the one to ask. See
+     `PermissionsSnapshot.can`'s own doc for the override-falls-back-to-
+     server-bits rule this mirrors from `use-permissions.ts`.
+
+     Deliberately not wired to anything that GATES an action (the toolbar's
+     Join button already decides that on its own, via
+     `watchPartyMayJoinRoom`): getting this wrong only costs a sentence,
+     never an unauthorised party, because the actual host controls inside
+     `VoiceView` still ask the server through `WatchPartyHostGate`.
+     */
+    private var canHostWatchParty: Bool {
+        guard let voiceChannel else { return false }
+        return watchPartyLiveHlsConfig.enabled
+            && (watchPartyPermissions?.can(PermissionBit.startWatchParty, channelId: voiceChannel.id) ?? false)
+    }
 
     var body: some View {
         ZStack {
@@ -277,8 +308,20 @@ struct ChatView: View {
         // channel and on every text one.
         .safeAreaInset(edge: .top, spacing: 0) {
             if let voiceChannel {
-                WatchStageView(channel: voiceChannel, onBack: { dismiss() })
+                WatchStageView(channel: voiceChannel, canHost: canHostWatchParty, onBack: { dismiss() })
                     .ignoresSafeArea(edges: .horizontal)
+            }
+        }
+        // Only for `WatchStageView`'s idle-card copy, see `canHostWatchParty`.
+        // Fetched off the channel's own server, not the currently open one --
+        // `voiceChannel` and `server` name the same server on every call site
+        // today, but `voiceChannel` is what actually determines whether this
+        // card draws at all.
+        .task(id: voiceChannel?.serverId) {
+            guard let serverId = voiceChannel?.serverId else { return }
+            watchPartyLiveHlsConfig = await session.api.liveHlsConfig(serverId: serverId)
+            if let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId) {
+                watchPartyPermissions = permissions
             }
         }
         .animation(Motion.standard, value: call.isCollapsed)

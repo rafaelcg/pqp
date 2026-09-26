@@ -704,16 +704,23 @@ final class WatchPartyTests: XCTestCase {
             "a party drawn with the speaker glyph is a party nobody can find"
         )
         XCTAssertTrue(
-            source.contains("String(localized: \"Watch party\")"),
-            "the section heading is the other half of telling the two apart"
-        )
-        XCTAssertTrue(
             source.contains("channels.filter(\\.isWatchParty)"),
             "the party section has to be built from the type"
         )
         XCTAssertTrue(
             source.contains("channels.filter { !$0.isWatchParty }"),
             "and filtered out of Voice, or it is listed twice"
+        )
+        // The section heading itself moved out of this file and into
+        // `WatchPartySidebarSlot`, which is what `ChannelListView` now hands
+        // the live/pending/create decision to -- see
+        // `resolveServerWatchPartyListState`.
+        let slot = try String(
+            contentsOf: sources.appending(path: "Voice/WatchPartySidebarSlot.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            slot.contains("String(localized: \"Watch party\")"),
+            "the live card's own heading is the other half of telling a party apart from a voice channel"
         )
     }
 
@@ -810,9 +817,13 @@ final class WatchPartyTests: XCTestCase {
         let source = try String(
             contentsOf: sources.appending(path: "Chat/ChannelListView.swift"), encoding: .utf8
         )
-        XCTAssertTrue(source.contains("case .channelLive(let channelId, let stream, _):"))
+        XCTAssertTrue(source.contains("case .channelLive(let channelId, let stream, let watching):"))
         XCTAssertTrue(source.contains("liveChannels.remove(channelId)"))
         XCTAssertTrue(source.contains("liveChannels.insert(channelId)"))
+        // The live card's viewer count rides the same frame and has to leave
+        // with the pill, or a stale number outlives the badge it sits beside.
+        XCTAssertTrue(source.contains("watchingByChannel.removeValue(forKey: channelId)"))
+        XCTAssertTrue(source.contains("watchingByChannel[channelId] = watching"))
     }
 
     // MARK: - The quieter theater
@@ -894,7 +905,7 @@ final class WatchPartyTests: XCTestCase {
             "the system chevron has to step aside for the overlay's own, or there are two"
         )
         XCTAssertTrue(
-            chat.contains("WatchStageView(channel: voiceChannel, onBack: { dismiss() })"),
+            chat.contains("WatchStageView(channel: voiceChannel, canHost: canHostWatchParty, onBack: { dismiss() })"),
             "the overlay's chevron needs a real dismiss action to call"
         )
     }

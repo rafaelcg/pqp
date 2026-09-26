@@ -36,6 +36,14 @@ struct WatchStageView: View {
     @Environment(VoiceModel.self) private var voice
 
     let channel: Channel
+    /// The coarse "this account can probably host here" reading `ChatView`
+    /// computes -- see its own `canHostWatchParty` doc. Read only by the
+    /// idle/`.unknown` notice below, to swap a discouraging "Nobody is
+    /// streaming yet" for a nudge toward the toolbar's own Join button. It
+    /// gates no action here; false is also the safe default for every
+    /// caller but `ChatView` (previews, and any future call site that has
+    /// not resolved it yet).
+    var canHost: Bool = false
     /// Only used in the theater, where the system nav bar's own back
     /// chevron is hidden so it does not sit over the film immune to the
     /// autohide the rest of the chrome follows. `ChatView` hands in its own
@@ -536,11 +544,20 @@ struct WatchStageView: View {
     private var stage: some View {
         switch model.phase {
         case .unknown, .idle:
+            // A DEEP LINK OR A LIST TAP CAN LAND A HOST HERE BEFORE THEY HAVE
+            // JOINED ANYTHING, and "Nobody is streaming yet" reads as a dead
+            // end to exactly the person who is about to fix that -- the
+            // toolbar's own Join button is one tap above this card the
+            // whole time (`ChatView`'s toolbar, gated by
+            // `watchPartyMayJoinRoom`), and `canHost` only changes which
+            // sentence points at it.
             if channel.isWatchParty {
                 notice(
                     icon: "movieclapper.fill",
                     title: "Watch party",
-                    message: "Nobody is streaming yet. When it starts, it shows up here."
+                    message: canHost
+                        ? "Nobody is streaming yet. Tap Join above to set one up."
+                        : "Nobody is streaming yet. When it starts, it shows up here."
                 )
             }
         case .live:
