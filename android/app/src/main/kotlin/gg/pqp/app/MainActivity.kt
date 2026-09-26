@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                     push = app.push,
                     calls = app.calls,
                     watch = app.watch,
+                    watchPartyHost = app.watchPartyHost,
                 )
             }
         }

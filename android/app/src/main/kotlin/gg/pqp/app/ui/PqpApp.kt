@@ -70,8 +70,14 @@ import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.WatchPartyHostController
+import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.mayTakeWatchPartySeat
+import gg.pqp.app.watch.needsHlsHostAck
+import gg.pqp.app.watch.confirmHlsHostAck
+import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
+import gg.pqp.app.watch.ui.WatchPartyHostControls
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -127,6 +133,7 @@ fun PqpApp(
     push: PushController,
     calls: CallController,
     watch: WatchLiveStore,
+    watchPartyHost: WatchPartyHostController,
 ) {
     val phase by session.phase.collectAsStateWithLifecycle()
 
@@ -164,7 +171,7 @@ fun PqpApp(
                     reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
                     onRetry = null,
                 )
-                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch)
+                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch, watchPartyHost)
             }
         }
     }
@@ -196,6 +203,7 @@ private fun SignedInNav(
     push: PushController,
     calls: CallController,
     watch: WatchLiveStore,
+    watchPartyHost: WatchPartyHostController,
 ) {
     val nav = rememberNavController()
     val voiceState by voice.state.collectAsStateWithLifecycle()
@@ -255,6 +263,19 @@ private fun SignedInNav(
         val notice = voiceState.notice ?: return@LaunchedEffect
         android.widget.Toast.makeText(context, notice, android.widget.Toast.LENGTH_LONG).show()
         voice.dismissNotice()
+    }
+
+    // A watch-party hosting action (Criar, Ir ao vivo, Encerrar) that did not
+    // land clean. Read here, above the per-channel UI, rather than inside
+    // `WatchPartyHostControls`: an Encerrar failure is reported AFTER
+    // `voice.leave()` has already dropped `canStartWatchParty`, which is
+    // what unmounts that composable, so an inline message there would never
+    // be seen. Same toast pattern as the two effects above.
+    val hostState by watchPartyHost.state.collectAsStateWithLifecycle()
+    LaunchedEffect(hostState.error) {
+        val message = hostState.error ?: return@LaunchedEffect
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        watchPartyHost.dismissError()
     }
 
     // A tapped notification, routed only once the app is signed in and has a
@@ -441,13 +462,45 @@ private fun SignedInNav(
                     // so an ordinary voice room is untouched. See
                     // `WatchPartySeat.kt`.
                     val seats by watch.seats.collectAsStateWithLifecycle()
+                    val parties by watch.parties.collectAsStateWithLifecycle()
+                    val activeParty = parties[route.channelId]
+                    // `welcome.canStream` in this channel, already resolved by
+                    // the server to START_WATCH_PARTY for a `watch_party`
+                    // channel type (`SpeakRule.kt`), and only known once this
+                    // phone has actually joined the channel's own room -- see
+                    // `WatchPartyHostGate.kt`'s doc for why that is the honest
+                    // answer rather than a gap.
+                    val canStartWatchParty = inThisRoom && voiceState.screenShareSupported
                     val maySit = mayTakeWatchPartySeat(
-                        canStartWatchParty = false,
+                        canStartWatchParty = canStartWatchParty,
                         party = seats[route.channelId],
                     )
                     val onJoinVoice: () -> Unit = {
                         withMicrophone { voice.join(route.channelId, route.channelName) }
                     }
+
+                    // Watch party hosting. `serverId` is null only for a
+                    // notification tap that has not resolved a channel record
+                    // yet, in which case there is nothing to host onto and
+                    // this reads as "off", same direction every other gate
+                    // here defaults to.
+                    var liveHlsEnabled by remember(route.serverId) { mutableStateOf(false) }
+                    var lowLatencyAvailable by remember(route.serverId) { mutableStateOf(false) }
+                    LaunchedEffect(route.serverId, route.isWatchParty) {
+                        val serverId = route.serverId
+                        if (!route.isWatchParty || serverId == null) return@LaunchedEffect
+                        val config = runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+                        liveHlsEnabled = config?.enabled == true
+                        lowLatencyAvailable = config?.lowLatency?.available == true
+                    }
+                    val hostGate = watchPartyHostGate(
+                        isWatchPartyChannel = route.isWatchParty,
+                        serverWatchPartyEnabled = liveHlsEnabled,
+                        canStartWatchParty = canStartWatchParty,
+                        party = activeParty,
+                    )
+                    // `hostState` itself is collected once, above, at
+                    // `SignedInNav` level -- see the toast effect there.
 
                     ChatScreen(
                         session = session,
@@ -474,6 +527,73 @@ private fun SignedInNav(
                                     isWatchPartyChannel = route.isWatchParty,
                                     canJoinCall = route.isWatchParty && !inThisRoom && maySit,
                                     onJoinCall = onJoinVoice,
+                                    hostControls = if (route.isWatchParty &&
+                                        (hostGate.canCreate || hostGate.canManage)
+                                    ) {
+                                        {
+                                            WatchPartyHostControls(
+                                                gate = hostGate,
+                                                party = activeParty,
+                                                hostState = hostState,
+                                                lowLatencyAvailable = lowLatencyAvailable,
+                                                selfMuted = voiceState.muted,
+                                                sharingScreen = voiceState.sharingScreen,
+                                                checkNeedsAck = {
+                                                    val serverId = route.serverId
+                                                    if (serverId == null) {
+                                                        false
+                                                    } else {
+                                                        // FAIL CLOSED: a lookup that could not be
+                                                        // answered must not be read as "already
+                                                        // acknowledged". Showing the disclosure one
+                                                        // extra time costs a tap; skipping it costs
+                                                        // the one thing it exists to guarantee (a
+                                                        // Farol finding on the first cut, which
+                                                        // defaulted to `false` here).
+                                                        runCatching { session.api.needsHlsHostAck(serverId) }
+                                                            .getOrDefault(true)
+                                                    }
+                                                },
+                                                confirmAck = {
+                                                    // No `runCatching` here: a failure must reach
+                                                    // the caller (`HostAckDialog`'s `onConfirm` in
+                                                    // `WatchPartyHostPanel.kt`), which keeps the
+                                                    // sheet open rather than silently starting the
+                                                    // capture without a saved ack (another Farol
+                                                    // finding on the first cut).
+                                                    val serverId = route.serverId
+                                                        ?: error("no server to acknowledge for")
+                                                    session.api.confirmHlsHostAck(serverId)
+                                                },
+                                                onCreate = { name ->
+                                                    watchPartyHost.create(route.channelId, name)
+                                                },
+                                                onGoLive = { lowLatency, consent ->
+                                                    val id = activeParty?.id
+                                                    if (id != null) {
+                                                        withMicrophone {
+                                                            watchPartyHost.goLive(
+                                                                channelId = route.channelId,
+                                                                channelName = route.channelName,
+                                                                partyId = id,
+                                                                lowLatency = lowLatency,
+                                                                consent = consent,
+                                                            )
+                                                        }
+                                                    }
+                                                },
+                                                onRetryShare = { consent ->
+                                                    withMicrophone { watchPartyHost.retryShare(consent) }
+                                                },
+                                                onEnd = {
+                                                    activeParty?.id?.let(watchPartyHost::end)
+                                                },
+                                                onUnmute = { voice.setMuted(false) },
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
                                 )
                             }
                         },

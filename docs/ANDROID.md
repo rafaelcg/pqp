@@ -1778,16 +1778,55 @@ into an immediate answer the day the server starts answering a cold join.
 
 ### Still not done
 
-- **Sending a screen on the SFU.** See the section above; the button is still
-  hidden on a LiveKit room, which is the transport every watch party runs on.
-  A host cannot present from Android yet.
-- **The watch party *event*, as a surface.** `watch-party-update` is read now,
-  but only for `viewerRole` and `options` (see below); `watch-party` is still
-  ignored. The phone draws the stream, not the party's name, host, co-hosts or
-  state machine, and has no create surface.
 - **Picture in picture**, and playing on with the screen off. Both want a media
   session and a service, which is a different piece of work with its own
   battery argument.
+- **Co-host promote/demote, Convidados, and scheduling a party ahead of time.**
+  The REST client (`WatchPartyApi.kt`) and the transition table both already
+  cover them server-side; only the Android UI does not exist yet. See
+  "Hosting from Android (2026-09-26)" below.
+- **The `mic-archive` recording track and a published camera.** Android has no
+  outgoing camera-capture pipeline at all today (it only *receives* remote
+  cameras), and does not publish the second, `LIVE_HLS_MIC_ARCHIVE`-gated mic
+  track the web does for presenters. Both are default-off server features;
+  neither blocks a phone hosting an ordinary watch party.
+
+### Hosting from Android (2026-09-26)
+
+A member holding START_WATCH_PARTY can now create a watch party, go live
+sharing the phone's screen, and end it, from this client —
+`WatchPartyHostController.kt`, `WatchPartyHostGate.kt`,
+`WatchPartyHostSequence.kt`, the REST client in `WatchPartyApi.kt`, and the
+Compose panel in `watch/ui/WatchPartyHostPanel.kt`. This closes the two
+"still not done" bullets that used to be here — sending a screen on the SFU
+was actually fixed by PR #420 already (finding 3 of
+`SCREEN_SHARE_AND_HOSTING_REVIEW.md`), and hosting the *party* itself is what
+this section replaces.
+
+**`canStartWatchParty` is read off `welcome.canStream`**, the same bit
+`VoiceState.screenShareSupported` already carries, which the server resolves
+to START_WATCH_PARTY for a `watch_party` channel type. That is only known
+once this phone has joined the channel's own voice room — open to anyone
+while no party is running, exactly like an ordinary voice channel — so the
+host-only controls (`WatchPartyHostGate.kt`) only appear once the actual host
+has joined that room, one tap earlier than the web's own "Criar watch party"
+button, which reads a client-side permission tree Android does not model at
+all yet (see `ChatViewModel.kt`'s own note on the same gap). Nobody else
+pays that cost.
+
+**Go-live order is state, then join, then capture** — `POST
+/api/watch-parties/:id/state {state:"live"}`, then `join-voice-room`, then
+the existing `MediaProjection` capture/publish path — pulled out as
+[`performWatchPartyGoLive`](../android/app/src/main/kotlin/gg/pqp/app/watch/WatchPartyHostSequence.kt)
+so the ordering is a JVM-tested fact. A failed state transition joins
+nothing; a failed capture after a successful one leaves the party genuinely
+live with no picture, which is the intended failure mode over a silent
+broadcast.
+
+**Out of scope, deliberately, in the first PR:** co-host promote/demote, the
+Convidados stage, scheduling a party ahead of time (always an immediate
+`draft`), the reactions/slow-mode options dialog, and the `mic-archive`
+track. All reuse the same REST client and transition table when built.
 
 ### The stage, not a voice room (2026-09-25)
 

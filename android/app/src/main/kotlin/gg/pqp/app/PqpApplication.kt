@@ -74,6 +74,14 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var watch: gg.pqp.app.watch.WatchLiveStore
         private set
 
+    /**
+     * Application-scoped for the same reason [calls] is: hosting is a call
+     * (the screen share reuses [voice] directly), so it has to outlive
+     * whatever screen started it in the same way an ordinary call does.
+     */
+    lateinit var watchPartyHost: gg.pqp.app.watch.WatchPartyHostController
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -105,6 +113,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             selfUserId = { (session.phase.value as? SessionPhase.Ready)?.me?.id },
             scope = appScope,
         )
+        watchPartyHost = gg.pqp.app.watch.WatchPartyHostController(this, session, voice, appScope)
     }
 
     /**

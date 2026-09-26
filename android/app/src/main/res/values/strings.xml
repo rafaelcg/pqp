@@ -452,6 +452,29 @@
     <string name="watch_camera_layout_hide_stream">Hide stream</string>
     <string name="watch_camera_voice_only">Presenter\'s voice</string>
 
+    <!-- Watch party hosting -->
+    <string name="watch_party_host_create">Create watch party</string>
+    <string name="watch_party_host_create_title">Name your watch party</string>
+    <string name="watch_party_host_create_name_placeholder">Saturday session</string>
+    <string name="watch_party_host_create_submit">Create</string>
+    <string name="watch_party_host_go_live">Go live</string>
+    <string name="watch_party_host_low_latency">Low latency (beta)</string>
+    <string name="watch_party_host_live_label">You\'re live</string>
+    <string name="watch_party_host_end">End</string>
+    <string name="watch_party_host_retry_share">Share your screen</string>
+    <string name="watch_party_host_go_live_failed">Could not go live. The server never confirmed it — try again.</string>
+    <string name="watch_party_host_join_failed_ended">Couldn\'t start the broadcast; the party was ended. Try again.</string>
+    <string name="watch_party_host_join_failed_not_ended">Couldn\'t start the broadcast, and the party could not be ended either. It may still show as live — try again in a moment.</string>
+    <string name="watch_party_host_end_failed">Left the call, but the server did not confirm the party ended. It may still show as live.</string>
+    <string name="watch_party_host_generic_error">Something went wrong. Try again.</string>
+    <string name="watch_party_host_ack_title">Before you go live</string>
+    <string name="watch_party_host_ack_body">You\'re responsible for what you stream. No pirated content or anything that breaks someone else\'s rights.</string>
+    <string name="watch_party_host_ack_confirm">Got it</string>
+    <string name="watch_party_host_mic_prompt_title">Turn on your mic?</string>
+    <string name="watch_party_host_mic_prompt_body">Your screen is live. Your microphone is still off, so the room cannot hear you talk over it.</string>
+    <string name="watch_party_host_mic_prompt_confirm">Turn on mic</string>
+    <string name="watch_party_host_mic_prompt_dismiss">Stay muted</string>
+
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Step %1$d of %2$d</string>
     <string name="onboarding_saving">Saving…</string>
