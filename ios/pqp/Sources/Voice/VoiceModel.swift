@@ -147,8 +147,14 @@ final class VoiceModel {
                 // because somebody decided to speak: the one moment the
                 // prompt is honest. Refused, the control goes back to muted
                 // and says why; granted, the seat publishes from here on.
+                // The prompt can stay up for as long as the person takes to
+                // answer it, so the session is checked again afterwards: a
+                // leave or a new join meanwhile owns the state now.
                 if !isMuted, seatMicrophone == .none, status != .idle {
-                    guard await requestMicrophone() else {
+                    let generation = callGeneration
+                    let granted = await requestMicrophone()
+                    guard generation == callGeneration, status != .idle else { return }
+                    guard granted else {
                         guard muteRequests.isCurrent(ticket) else { return }
                         microphoneNotice = Self.microphoneAccessOff
                         isMuted = true
