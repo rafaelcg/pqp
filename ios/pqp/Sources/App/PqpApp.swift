@@ -17,6 +17,12 @@ struct PqpApp: App {
     /// a question owned by that screen would be destroyed before it could be
     /// asked.
     @State private var ratings = CallRatingModel()
+    /// App-wide for the same reason `voice` is: hosting a watch party spans
+    /// `ChatView` (before a room exists) and `VoiceView` (the full-screen
+    /// cover once one does), and the busy/error state an in-flight Ir ao
+    /// vivo/Encerrar carries must survive whichever of those is on top. See
+    /// `WatchPartyHostController`'s own doc.
+    @State private var watchPartyHost = WatchPartyHostController()
     /// The one CXProvider/CXCallController pair for the process. Registering
     /// it here, at launch, and not lazily on the first call is what lets a
     /// cold-launched app still answer a call CallKit is already presenting.
@@ -48,6 +54,7 @@ struct PqpApp: App {
                 .environment(call)
                 .environment(voice)
                 .environment(ratings)
+                .environment(watchPartyHost)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that

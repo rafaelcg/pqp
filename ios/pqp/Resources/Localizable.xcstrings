@@ -7170,6 +7170,206 @@
           }
         }
       }
+    },
+    "Before you go live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de transmitir"
+          }
+        }
+      }
+    },
+    "You're responsible for what you stream. No pirated content or anything that breaks someone else's rights." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas."
+          }
+        }
+      }
+    },
+    "Turn on your mic?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar seu microfone?"
+          }
+        }
+      }
+    },
+    "Turn on mic" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar microfone"
+          }
+        }
+      }
+    },
+    "Stay muted" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar mudo"
+          }
+        }
+      }
+    },
+    "Your screen is live. Your microphone is still off, so the room cannot hear you talk over it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua tela está no ar. Seu microfone ainda está desligado, então a sala não consegue te ouvir comentando."
+          }
+        }
+      }
+    },
+    "Create watch party" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar watch party"
+          }
+        }
+      }
+    },
+    "Saturday session" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessão de sábado"
+          }
+        }
+      }
+    },
+    "Name your watch party" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dê um nome pra sua watch party"
+          }
+        }
+      }
+    },
+    "Low latency (beta)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixa latência (beta)"
+          }
+        }
+      }
+    },
+    "There is no preview before you go live. What you share is what your audience sees." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não há pré-visualização antes de você ir ao vivo. O que você compartilhar é o que a audiência vê."
+          }
+        }
+      }
+    },
+    "Go live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir ao vivo"
+          }
+        }
+      }
+    },
+    "You're live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você está ao vivo"
+          }
+        }
+      }
+    },
+    "End" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar"
+          }
+        }
+      }
+    },
+    "Not sharing your screen yet. Tap to share." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você ainda não está compartilhando a tela. Toque para compartilhar."
+          }
+        }
+      }
+    },
+    "Could not go live. The server never confirmed it. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ir ao vivo. O servidor não confirmou. Tente de novo."
+          }
+        }
+      }
+    },
+    "The broadcast could not start. The party was ended. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível iniciar a transmissão. A watch party foi encerrada. Tente de novo."
+          }
+        }
+      }
+    },
+    "The broadcast could not start, and the party could not be ended either. It may still show as live. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo. Tente de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "You left the call, but the server did not confirm the party ended. It may still show as live." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
+          }
+        }
+      }
+    },
+    "Something went wrong. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo deu errado. Tente de novo."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
