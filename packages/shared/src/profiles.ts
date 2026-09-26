@@ -96,6 +96,8 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "claim",
   "garanta",
   "tela",
+  "watch-party",
+  "watchparty",
   "apoie",
   "android",
   "cookies",

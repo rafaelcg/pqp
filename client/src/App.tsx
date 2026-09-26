@@ -351,16 +351,33 @@ import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  INTENT_PARAM,
   peekCreateIntent,
   stashCreateIntent,
   stashInviteRef,
+  stashWaitlistIntent,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
   takeInviteRef,
   takeJoinIntent,
+  takeWaitlistIntent,
+  waitlistIntentFromSearch,
   type CreateIntent,
 } from "@/lib/handle-intent";
+import {
+  ackWatchPartyApproval,
+  fetchWatchPartyApprovals,
+  loadWatchPartyWaitlist,
+  setWatchPartyWaitlistOwner,
+  shouldOfferWatchPartyTeaser,
+  useWatchPartyWaitlist,
+} from "@/lib/watch-party-waitlist";
+import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
+import {
+  WatchPartyApprovedToasts,
+  type WatchPartyApprovedCard,
+} from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
 import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
@@ -1688,6 +1705,16 @@ function MainAppContent({
   );
   const [createWatchPartyOpen, setCreateWatchPartyOpen] = useState(false);
   /**
+   * The watch party waitlist (`docs/WATCH_PARTY.md` §"The waitlist"). The
+   * dialog, a `?intent=watch-party-waitlist` waiting for onboarding to finish,
+   * and the "liberada" cards for servers the operator has since turned on.
+   */
+  const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
+  const [pendingWaitlist, setPendingWaitlist] = useState(false);
+  const [waitlistApprovals, setWaitlistApprovals] = useState<
+    WatchPartyApprovedCard[]
+  >([]);
+  /**
    * The draft THIS TAB opened and has not published yet, plus whether its
    * setup surface was ever actually on screen. See `watch-party-draft.ts`:
    * a draft this tab created and walked away from is an abandoned lock on the
@@ -2077,6 +2104,23 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  /**
+   * Asked ONLY where the server has already said no. A server whose config
+   * answered `enabled: true` (it runs watch parties) or has not answered yet
+   * makes no waitlist request at all, so nothing here can reach a server
+   * where a party can run.
+   */
+  // A different account gets an empty waitlist store (its rows are private).
+  const waitlistOwnerId = user?.id ?? null;
+  useEffect(() => {
+    setWatchPartyWaitlistOwner(waitlistOwnerId);
+  }, [waitlistOwnerId]);
+  const watchPartyWaitlist = useWatchPartyWaitlist(
+    selectedServerId,
+    isWatchPartyChannelsEnabled() &&
+      selectedServerId !== null &&
+      liveHlsConfig?.enabled === false,
+  );
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
   const screenFrameRateRef = useRef(localSettings.screenFrameRate);
@@ -3642,6 +3686,17 @@ function MainAppContent({
         setBootstrapReady(true);
 
         transport.onMessage((message) => {
+          if (message.type === "watch-party-waitlist-approved") {
+            setWaitlistApprovals((current) =>
+              current.some((card) => card.serverId === message.serverId)
+                ? current
+                : [
+                    ...current,
+                    { serverId: message.serverId, serverName: message.serverName },
+                  ],
+            );
+            return;
+          }
           if (message.type === "channel-session-reminder") {
             emitChannelSessionReminderToast({
               sessionId: message.sessionId,
@@ -6582,6 +6637,67 @@ function MainAppContent({
   }, [bootstrapReady, needsOnboarding, pendingCreate]);
 
   /**
+   * `?intent=watch-party-waitlist` (the public `/watch-party` page's button):
+   * the waitlist dialog, once the account exists and onboarding is done, on
+   * whatever server is open. Only while the deployment runs the campaign: a
+   * build that cannot turn a server on must not collect a request for one.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || needsOnboarding || !pendingWaitlist) {
+      return;
+    }
+    setPendingWaitlist(false);
+    // No cleanup cancelling this: clearing `pendingWaitlist` above re-runs
+    // the effect, and a cancel there threw away the very answer it waited on.
+    // The stash is spent only once the answer is in, so a failed read leaves
+    // it for the next load instead of losing what the person came for.
+    void loadWatchPartyWaitlist(selectedServerId)
+      .then((answer) => {
+        takeWaitlistIntent(browserStorage());
+        if (answer.campaign) {
+          setWaitlistDialogOpen(true);
+        }
+      })
+      .catch(() => {
+        // Still stashed: a reload within the hour tries again.
+      });
+  }, [bootstrapReady, needsOnboarding, pendingWaitlist, selectedServerId]);
+
+  /**
+   * "Watch party liberada!" for anybody who was offline when the operator
+   * pressed Ativar. Read once per load; the live frame covers the rest.
+   */
+  useEffect(() => {
+    if (!bootstrapReady) {
+      return;
+    }
+    let cancelled = false;
+    void fetchWatchPartyApprovals()
+      .then(({ approvals }) => {
+        if (!cancelled && approvals.length > 0) {
+          setWaitlistApprovals((current) => {
+            const known = new Set(current.map((card) => card.serverId));
+            return [
+              ...current,
+              ...approvals
+                .filter((approval) => !known.has(approval.serverId))
+                .map((approval) => ({
+                  serverId: approval.serverId,
+                  serverName: approval.serverName,
+                })),
+            ];
+          });
+        }
+      })
+      .catch(() => {
+        // A missed card is shown on the next load; not worth a banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapReady]);
+
+  /**
    * The three intentions somebody arrived with, acted on exactly once.
    *
    * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
@@ -6620,6 +6736,7 @@ function MainAppContent({
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
     const stashedCreate = takeCreateIntent(storage);
+    const stashedWaitlist = takeWaitlistIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
@@ -6627,6 +6744,13 @@ function MainAppContent({
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    const waitlistIntent =
+      waitlistIntentFromSearch(location.search) || stashedWaitlist;
+    if (waitlistIntent) {
+      setPendingWaitlist(true);
+      // Kept until the dialog opens, like the create intent above.
+      stashWaitlistIntent(storage);
+    }
     /**
      * Create community, for somebody who came to make one (a `/vem` CTA, a
      * `?import=discord` link). The import also tells the onboarding to skip
@@ -6645,11 +6769,15 @@ function MainAppContent({
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
+      waitlistIntentFromSearch(location.search) ||
       CREATE_INTENT_PARAMS.some((name) => params.has(name))
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
+      if (waitlistIntentFromSearch(location.search)) {
+        params.delete(INTENT_PARAM);
+      }
       for (const name of CREATE_INTENT_PARAMS) {
         params.delete(name);
       }
@@ -9092,6 +9220,36 @@ function MainAppContent({
         />
       )}
 
+      {/* The waitlist: at the root, because the public page's intent opens it
+          wherever the person lands, including with no server open. */}
+      <WatchPartyWaitlistDialog
+        open={waitlistDialogOpen}
+        onClose={() => setWaitlistDialogOpen(false)}
+        servers={servers.map((server) => ({ id: server.id, name: server.name }))}
+        initialServerId={selectedServerId}
+      />
+      <WatchPartyApprovedToasts
+        cards={waitlistApprovals}
+        onOpen={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          // A full load, not a selection: the server's live-hls answer is
+          // cached for the page's lifetime and still says no.
+          void ackWatchPartyApproval(serverId)
+            .catch(() => {})
+            .finally(() => {
+              window.location.assign(`/app/server/${serverId}`);
+            });
+        }}
+        onDismiss={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          void ackWatchPartyApproval(serverId).catch(() => {});
+        }}
+      />
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -9286,6 +9444,17 @@ function MainAppContent({
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
           onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
+          watchPartyTeaser={
+            shouldOfferWatchPartyTeaser({
+              hlsEnabled: liveHlsConfig?.enabled ?? null,
+              state: watchPartyWaitlist,
+            })
+              ? {
+                  onList: watchPartyWaitlist?.entry?.status === "waiting",
+                  onOpen: () => setWaitlistDialogOpen(true),
+                }
+              : null
+          }
           watchPartyHistoryChannels={watchPartyHistoryChannels}
           onOpenWatchPartyHistory={(channelId) =>
             setWatchPartyHistoryChannelId(channelId)

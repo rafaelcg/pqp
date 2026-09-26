@@ -18,6 +18,7 @@ import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
+import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { setIdleMessageSchema } from "./status.js";
 // --- threads ---
@@ -618,6 +619,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
   watchPartyUpdateSchema,
+  // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
+  watchPartyWaitlistApprovedSchema,
 ]);
 
 /**

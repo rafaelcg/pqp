@@ -4681,3 +4681,54 @@ CREATE INDEX IF NOT EXISTS idx_hls_session_viewer_stats_updated
 -- server's members, never shown to anybody.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country_at TIMESTAMPTZ;
+
+-- Low latency per server, the same tri-state as `live_hls_enabled` directly
+-- above and read the same way (`liveHlsLLServerOverride` in
+-- `voice/hls-remux.ts`): TRUE on, FALSE off even when
+-- `LIVE_HLS_LL_ALLOWLIST` names the server, NULL falls back to that variable
+-- exactly as before the column existed. `LIVE_HLS_LL` and the edge playlist
+-- front stay the master switches above all three. Every existing row is NULL,
+-- so adding it changes nothing. See `docs/WATCH_PARTY.md` §"Low latency is a
+-- click too".
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS live_hls_ll_enabled BOOLEAN;
+
+-- The watch party waitlist (`docs/WATCH_PARTY.md` §"The waitlist"). One row
+-- per person per server; `kind` says whether that person may manage the
+-- server's channels (`request`, what the operator acts on) or is a member
+-- saying they would watch (`interest`, counted only). `server_id` is NULL for
+-- somebody who signed up from the public page with no server to ask for yet.
+-- Approved by hand: the operator's "Ativar" on the dashboard sets
+-- `servers.live_hls_enabled` and every waiting row of that server with it.
+-- `seen_at` is when the person dismissed the "liberado" card, which is what
+-- lets somebody offline at the moment of approval still hear about it.
+CREATE TABLE IF NOT EXISTS watch_party_waitlist (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id       UUID REFERENCES servers(id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK (kind IN ('request', 'interest')),
+  audience_bucket TEXT CHECK (audience_bucket IN
+                    ('under-20', '20-50', '50-150', '150-500', '500-plus')),
+  note            TEXT CHECK (char_length(note) <= 140),
+  twitch_or_kick  TEXT CHECK (char_length(twitch_or_kick) <= 64),
+  status          TEXT NOT NULL DEFAULT 'waiting'
+                    CHECK (status IN ('waiting', 'approved', 'declined')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at      TIMESTAMPTZ,
+  seen_at         TIMESTAMPTZ,
+  CHECK (server_id IS NOT NULL OR kind = 'interest')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_party_waitlist_server_user
+  ON watch_party_waitlist (server_id, user_id)
+  WHERE server_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_user
+  ON watch_party_waitlist (user_id)
+  WHERE server_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
+  ON watch_party_waitlist (status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
+  ON watch_party_waitlist (user_id);

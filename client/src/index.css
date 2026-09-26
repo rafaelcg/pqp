@@ -1721,6 +1721,18 @@ h2,
 }
 
 /*
+ * The watch party waitlist's stage illustration (`watch-party-stage-art.tsx`):
+ * the same particle keyframe the real live reactions use, looped, so the
+ * teaser shows the feature rather than a second idea of it. Off under reduced
+ * motion, below, where the emoji simply sit on the picture.
+ */
+.wp-art-reaction {
+  animation: live-reaction-float 3.6s cubic-bezier(0.22, 0.61, 0.36, 1)
+    var(--wp-delay, 0ms) infinite both;
+  will-change: transform, opacity;
+}
+
+/*
  * /vem: the campaign page's motion. Keyframes only on transform and opacity,
  * so every one of them stays on the compositor on a mid-range phone.
  *
@@ -2041,6 +2053,7 @@ h2,
   .animate-icon-swap,
   .animate-live-reaction-float,
   .animate-live-reaction-burst,
+  .wp-art-reaction,
   .animate-rise,
   .animate-fade-in,
   .hero-parallax,

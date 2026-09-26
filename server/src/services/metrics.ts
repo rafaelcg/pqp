@@ -34,6 +34,10 @@ import {
 } from "../ws/voice.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
+  watchPartyWaitlistMetrics,
+  type WatchPartyWaitlistMetrics,
+} from "./watch-party-waitlist.js";
+import {
   watchPartyDraftTtlMinutes,
   watchPartyHostGoneMinutes,
   watchPartySweepCounters,
@@ -613,6 +617,15 @@ export interface AdminMetrics {
     draftTtlMinutes: number;
     hostGoneMinutes: number;
   };
+  /**
+   * The watch party waitlist (`services/watch-party-waitlist.ts`): rows ever,
+   * rows in the last seven days, how many are requests (somebody who manages
+   * a server asking for it) versus interest (a member saying they would
+   * watch), servers with somebody still waiting, and rows approved. Null when
+   * the read failed; the dashboard's "Lista de espera" has the per-server
+   * detail.
+   */
+  watchPartyWaitlist: WatchPartyWaitlistMetrics | null;
   liveHls: {
     enabled: boolean;
     configured: boolean;
@@ -1187,6 +1200,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
   const hlsViewers = await liveHlsViewerSessions().catch(() => null);
+  const waitlist = await watchPartyWaitlistMetrics().catch(() => null);
 
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same
@@ -1545,6 +1559,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       draftTtlMinutes: watchPartyDraftTtlMinutes(),
       hostGoneMinutes: watchPartyHostGoneMinutes(),
     },
+    watchPartyWaitlist: waitlist,
     liveHls: {
       enabled: hlsFlag.enabled,
       configured: isLiveHlsEnabled(),

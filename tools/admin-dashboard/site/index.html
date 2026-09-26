@@ -2023,10 +2023,51 @@
     <span class="pane-q">o que dá pra ligar e desligar agora, sem deploy e sem derrubar ninguém</span>
   </div>
 
+  <!-- ============ LISTA DE ESPERA ============ -->
+  <!-- First in the pane, ahead of what is on air: this table is why an
+       operator opens "controles" right now, before checking anything else
+       or touching a single switch. -->
+  <section aria-label="lista de espera">
+    <div class="sec-head">
+      <h2>lista de espera</h2>
+      <span class="rule"></span>
+      <span class="note">quem pediu pra transmitir, por servidor</span>
+    </div>
+    <div class="card pad">
+      <div class="ctl-search">
+        <span class="note" id="ctlWaitlistSummary">carregando</span>
+        <button type="button" class="ctl-btn" id="ctlWaitlistRefreshBtn" style="margin-left:auto">atualizar</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>servidor</th>
+              <th class="r">membros</th>
+              <th>pedidos</th>
+              <th class="r">interesse</th>
+              <th>público</th>
+              <th>status</th>
+              <th>desde</th>
+              <th class="r">ações</th>
+            </tr>
+          </thead>
+          <tbody id="ctlWaitlistBody"><!-- injected --></tbody>
+        </table>
+      </div>
+      <p class="ctl-msg" id="ctlWaitlistMsg" hidden></p>
+      <p class="ctl-caveat">
+        <b>ativar</b> é o mesmo interruptor de <b>watch party por servidor</b> abaixo, ligado junto com a
+        <b>baixa latência</b>, e aprova e avisa quem estava esperando naquele servidor.
+        <b>recusar</b> marca os pedidos daquele servidor como recusados e não avisa ninguém.
+      </p>
+    </div>
+  </section>
+
   <!-- ============ O QUE ESTÁ NO AR ============ -->
-  <!-- First, because the only reason to open this section during an event is
-       to change something, and changing something without knowing what is on
-       air is how an audience loses the picture. -->
+  <!-- Right after the waitlist, because the only reason to open this section
+       during an event is to change something, and changing something without
+       knowing what is on air is how an audience loses the picture. -->
   <section aria-label="o que está no ar">
     <div class="sec-head">
       <h2>o que está no ar</h2>
@@ -2050,6 +2091,11 @@
           <span class="k">desligados na mão</span>
           <span class="v num" id="ctlOverridesOff">—</span>
           <span class="k" style="color:var(--faint)">servidores</span>
+        </div>
+        <div class="stat-mini" id="ctlWaitlistMetricsTile">
+          <span class="k">lista de espera</span>
+          <span class="v num" id="ctlWaitlistWaiting">-</span>
+          <span class="k" style="color:var(--faint)" id="ctlWaitlistWaitingNote">-</span>
         </div>
       </div>
       <p class="m-note" style="font-size:12px;color:var(--muted);margin:14px 0 0" id="ctlMaster">carregando</p>
@@ -2077,6 +2123,7 @@
               <th class="r">membros</th>
               <th class="r">canais de watch party</th>
               <th>estado</th>
+              <th>baixa latência</th>
               <th class="r">ação</th>
             </tr>
           </thead>
@@ -4639,6 +4686,22 @@
     ];
   }
 
+  /* Same idea as ctlStateCell, for the low-latency switch. An API older than
+     this field never sends `liveHlsLlEffective` at all, and that is drawn as
+     "not reported" rather than guessed at as off. */
+  function ctlLlStateCell(row) {
+    if (!row || typeof row.liveHlsLlEffective === "undefined") {
+      return ['<span class="tag">-</span>', "esta api não reporta baixa latência"];
+    }
+    var state = (window.PQPInsights && window.PQPInsights.liveHlsLlState)
+      ? window.PQPInsights.liveHlsLlState(row)
+      : { tone: "off", label: "?", why: "" };
+    return [
+      '<span class="tag' + (state.tone === "on" ? " accent" : "") + '">' + esc(state.label) + "</span>",
+      state.why
+    ];
+  }
+
   function ctlRenderServers(payload) {
     var body = $("ctlServersBody");
     if (!body) return;
@@ -4669,13 +4732,14 @@
       : "");
 
     if (!ctlServers.length) {
-      body.innerHTML = '<tr><td colspan="5" class="muted">nenhum servidor com esse nome</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" class="muted">nenhum servidor com esse nome</td></tr>';
       return;
     }
 
     body.innerHTML = "";
     ctlServers.forEach(function (row) {
       var state = ctlStateCell(row);
+      var llState = ctlLlStateCell(row);
       var tr = el("tr", "ctl-row" + (ctlPickedServer === row.id ? " picked" : ""));
       tr.innerHTML =
         '<td><span class="ctl-name"><b>' + esc(row.name) + "</b>" +
@@ -4685,6 +4749,17 @@
         '<td class="r num">' + fmt(row.memberCount) + "</td>" +
         '<td class="r num">' + fmt(row.watchPartyChannels) + "</td>" +
         "<td>" + state[0] + "</td>" +
+        "<td>" + llState[0] +
+          '<div class="ctl-why" style="margin-top:2px">' + esc(llState[1]) + "</div>" +
+          '<div class="ctl-actions" style="margin-top:6px">' +
+            '<button type="button" class="ctl-btn' + (row.liveHlsLlOverride === true ? " on" : "") +
+              '" data-llact="on" data-id="' + esc(row.id) + '">LL ligar</button>' +
+            '<button type="button" class="ctl-btn' + (row.liveHlsLlOverride === false ? " on" : "") +
+              '" data-llact="off" data-id="' + esc(row.id) + '">LL desligar</button>' +
+            '<button type="button" class="ctl-btn" data-llact="clear" data-id="' + esc(row.id) +
+              '" title="apagar a decisão e voltar a seguir LIVE_HLS_LL_ALLOWLIST">LL seguir variável</button>' +
+          "</div>" +
+        "</td>" +
         '<td class="r"><span class="ctl-actions">' +
           '<button type="button" class="ctl-btn' + (row.liveHlsOverride === true ? " on" : "") +
             '" data-act="on" data-id="' + esc(row.id) + '">ligar</button>' +
@@ -4753,6 +4828,39 @@
       // channel pane both move with this, and one source beats three. The
       // sentence is written AFTER the re-read, because the re-read clears the
       // box on its way in and would otherwise swallow it.
+      return ctlLoadServers().then(function () {
+        ctlMsg("ctlServersMsg", said, "ok");
+        if (ctlPickedServer === serverId) return ctlLoadChannels(serverId);
+      });
+    }).catch(function (e) {
+      ctlMsg("ctlServersMsg", "não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
+      ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlBusy = false; });
+  }
+
+  /* The low-latency switch, same route as ctlSetServerLiveHls, but a body
+     that only carries `lowLatency`: the API leaves `enabled` untouched when
+     the field is omitted, so this never moves the availability switch beside
+     it. No confirmation: unlike turning availability off mid-stream, nothing
+     here can cut the picture for an audience already watching. */
+  function ctlSetServerLl(serverId, lowLatency, tr) {
+    if (ctlBusy) return;
+    ctlBusy = true;
+    ctlSetButtonsDisabled(tr, true);
+    ctlMsg("ctlServersMsg", "");
+    fetch("/operator/server-live-hls", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverId: serverId, lowLatency: lowLatency })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (row) {
+      var said = row.name + ": baixa latência " + (row.liveHlsLlOverride === null
+        ? "voltou a seguir a variável, e agora está " + (row.liveHlsLlEffective ? "ligada" : "desligada")
+        : (row.liveHlsLlOverride ? "ligada" : "desligada"));
       return ctlLoadServers().then(function () {
         ctlMsg("ctlServersMsg", said, "ok");
         if (ctlPickedServer === serverId) return ctlLoadChannels(serverId);
@@ -4905,6 +5013,192 @@
     }).then(function () { ctlBusy = false; });
   }
 
+  /* ---------------- lista de espera ----------------
+     Same rules as the rest of controles: no poll, a write disables its own
+     row, and the row is redrawn from the API's own reply. Loaded once when
+     the section is opened (ctlOnShown), on "atualizar", and after every
+     write, same as ctlLoadServers below it. */
+
+  var ctlWaitlistServers = [];
+  var ctlWaitlistLoaded = false;
+  var ctlWaitlistBusy = false;
+
+  function ctlWaitlistMsg(text, cls) { ctlMsg("ctlWaitlistMsg", text, cls); }
+
+  /** "twitch.tv/foo" or "kick.com/foo" (with or without a scheme) becomes a
+      clickable link; a bare name or anything else stays plain text, because
+      this page has no business guessing what domain it lives on. */
+  /* A link ONLY for exactly one Twitch or Kick channel, rebuilt from its two
+     parts. The API already normalises the field to that shape, and this
+     refuses anything else anyway: "contains twitch.tv/" would have linked
+     "evil.example/twitch.tv/x" too. */
+  function ctlWaitlistStreamHref(channel) {
+    var s = String(channel == null ? "" : channel).trim().toLowerCase();
+    var m = /^(?:https?:\/\/)?(?:www\.)?(twitch\.tv|kick\.com)\/([a-z0-9_]{2,25})\/?$/.exec(s);
+    return m ? "https://" + m[1] + "/" + m[2] : null;
+  }
+
+  function ctlWaitlistRequestsCell(requests, total) {
+    if (!requests || !requests.length) return '<span class="muted">-</span>';
+    var lines = requests.map(function (r) {
+      var parts = ["<b>" + esc(r.username) + "</b>"];
+      var bucket = window.PQPInsights ? window.PQPInsights.audienceBucketLabel(r.audienceBucket) : "";
+      if (bucket) parts.push(esc(bucket));
+      if (r.note) parts.push('"' + esc(r.note) + '"');
+      if (r.streamChannel) {
+        var href = ctlWaitlistStreamHref(r.streamChannel);
+        parts.push(href
+          ? '<a href="' + esc(href) + '" target="_blank" rel="noopener noreferrer">' + esc(r.streamChannel) + "</a>"
+          : esc(r.streamChannel));
+      }
+      return '<div class="ctl-why">' + parts.join(" · ") + "</div>";
+    });
+    var more = (total || 0) - requests.length;
+    if (more > 0) lines.push('<div class="ctl-why muted">+' + fmt(more) + " pedido(s) mais antigos</div>");
+    return '<span class="ctl-name">' + lines.join("") + "</span>";
+  }
+
+  function ctlRenderWaitlist(payload) {
+    var body = $("ctlWaitlistBody");
+    if (!body) return;
+    ctlWaitlistServers = (payload && payload.servers) || [];
+    var totals = (payload && payload.totals) || { waiting: 0, approved: 0, declined: 0 };
+    var serverless = payload ? (payload.serverless || 0) : 0;
+    setText("ctlWaitlistSummary", payload
+      ? (fmt(totals.waiting) + " esperando · " + fmt(totals.approved) + " liberado(s) · " +
+         fmt(totals.declined) + " recusado(s) · sem servidor: " + fmt(serverless))
+      : "carregando");
+
+    if (!ctlWaitlistServers.length) {
+      body.innerHTML = '<tr><td colspan="8" class="muted">ninguém na lista ainda</td></tr>';
+      return;
+    }
+
+    body.innerHTML = "";
+    ctlWaitlistServers.forEach(function (row) {
+      var tr = el("tr");
+      var statusLabel = window.PQPInsights ? window.PQPInsights.waitlistStatusLabel(row.status) : row.status;
+      var statusTag = row.status === "approved" ? "tag accent" : row.status === "waiting" ? "tag warn" : "tag";
+      var histogram = window.PQPInsights ? window.PQPInsights.waitlistBucketHistogram(row.buckets) : "";
+      var actions = row.status === "waiting"
+        ? '<span class="ctl-actions">' +
+            '<button type="button" class="ctl-btn" data-wact="activate" data-id="' + esc(row.serverId) + '">Ativar</button>' +
+            '<button type="button" class="ctl-btn" data-wact="decline" data-id="' + esc(row.serverId) + '">Recusar</button>' +
+          "</span>"
+        : '<span class="muted">-</span>';
+      tr.innerHTML =
+        '<td><span class="ctl-name"><b>' + esc(row.name) + "</b>" +
+          (row.isCommunity ? '<span class="tag">comunidade</span>' : "") +
+        "</span></td>" +
+        '<td class="r num">' + fmt(row.memberCount) + "</td>" +
+        "<td>" + ctlWaitlistRequestsCell(row.requests, row.requestCount) + "</td>" +
+        '<td class="r num">' + fmt(row.interest) + "</td>" +
+        "<td>" + (histogram ? esc(histogram) : '<span class="muted">-</span>') + "</td>" +
+        "<td><span class=\"" + statusTag + "\">" + esc(statusLabel) + "</span></td>" +
+        "<td>" + esc(fmtDay(row.firstAt)) + "</td>" +
+        '<td class="r">' + actions + "</td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function ctlLoadWaitlist() {
+    ctlWaitlistMsg("");
+    return fetchJson("/operator/watch-party-waitlist")
+      .then(function (payload) {
+        ctlWaitlistLoaded = true;
+        ctlRenderWaitlist(payload);
+      })
+      .catch(function (e) {
+        ctlWaitlistMsg("não deu pra ler a lista de espera: " + (e && e.message ? e.message : "erro"), "bad");
+      });
+  }
+
+  /* The one write here that is also the availability flip above: it sends
+     `enabled: true` and `lowLatency: true` through the very same route
+     ctlSetServerLiveHls uses, so the counters and the two tables agree
+     without a second source of truth. The API approves and notifies the
+     server's waiting requests as a side effect of that write, not of this
+     button, so the confirmation says so. */
+  function ctlActivateWaitlistServer(serverId, name, tr) {
+    // Shares the server table's lock too: an Ativar in flight and a
+    // "desligar" on the same server must not race to be the last write.
+    if (ctlWaitlistBusy || ctlBusy) return;
+    if (!window.confirm(
+      "Ativar watch party e baixa latência em " + name + "? Quem está na lista vai ser avisado."
+    )) return;
+    ctlWaitlistBusy = true;
+    ctlBusy = true;
+    ctlSetButtonsDisabled(tr, true);
+    ctlWaitlistMsg("");
+    fetch("/operator/server-live-hls", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverId: serverId, enabled: true, lowLatency: true })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (row) {
+      var said = row.name + ": watch party e baixa latência ligados, lista avisada";
+      return Promise.all([ctlLoadWaitlist(), ctlLoadServers()]).then(function () {
+        ctlWaitlistMsg(said, "ok");
+        if (ctlPickedServer === serverId) return ctlLoadChannels(serverId);
+      });
+    }).catch(function (e) {
+      ctlWaitlistMsg("não deu pra ativar: " + (e && e.message ? e.message : "erro"), "bad");
+      ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlWaitlistBusy = false; ctlBusy = false; });
+  }
+
+  function ctlDeclineWaitlistServer(serverId, name, tr) {
+    // Shares the server table's lock too: an Ativar in flight and a
+    // "desligar" on the same server must not race to be the last write.
+    if (ctlWaitlistBusy || ctlBusy) return;
+    if (!window.confirm("Recusar o pedido de " + name + "? Ninguém é avisado.")) return;
+    ctlWaitlistBusy = true;
+    ctlBusy = true;
+    ctlSetButtonsDisabled(tr, true);
+    ctlWaitlistMsg("");
+    fetch("/operator/watch-party-waitlist-decline", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverId: serverId })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (result) {
+      var said = name + ": pedido recusado (" + fmt(result.declined) + ")";
+      return ctlLoadWaitlist().then(function () { ctlWaitlistMsg(said, "ok"); });
+    }).catch(function (e) {
+      ctlWaitlistMsg("não deu pra recusar: " + (e && e.message ? e.message : "erro"), "bad");
+      ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlWaitlistBusy = false; ctlBusy = false; });
+  }
+
+  (function wireWaitlist() {
+    var body = $("ctlWaitlistBody");
+    if (body) {
+      body.addEventListener("click", function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest(".ctl-btn") : null;
+        if (!btn || btn.disabled) return;
+        var id = btn.getAttribute("data-id");
+        var wact = btn.getAttribute("data-wact");
+        var row = null;
+        for (var i = 0; i < ctlWaitlistServers.length; i++) {
+          if (ctlWaitlistServers[i].serverId === id) row = ctlWaitlistServers[i];
+        }
+        var name = row ? row.name : "";
+        if (wact === "activate") ctlActivateWaitlistServer(id, name, btn.closest("tr"));
+        else if (wact === "decline") ctlDeclineWaitlistServer(id, name, btn.closest("tr"));
+      });
+    }
+    var refresh = $("ctlWaitlistRefreshBtn");
+    if (refresh) refresh.addEventListener("click", function () { ctlLoadWaitlist(); });
+  })();
+
   (function wireControls() {
     var servers = $("ctlServersBody");
     if (servers) {
@@ -4913,6 +5207,7 @@
         if (!btn || btn.disabled) return;
         var id = btn.getAttribute("data-id");
         var act = btn.getAttribute("data-act");
+        var llact = btn.getAttribute("data-llact");
         var row = null;
         for (var i = 0; i < ctlServers.length; i++) if (ctlServers[i].id === id) row = ctlServers[i];
         if (act === "channels") {
@@ -4923,8 +5218,14 @@
           if (head && head.scrollIntoView) head.scrollIntoView({ block: "center" });
           return;
         }
-        if (!ctlConfirmFor(act, row)) return;
-        ctlSetServerLiveHls(id, act === "on" ? true : act === "off" ? false : null, btn.closest("tr"));
+        if (act) {
+          if (!ctlConfirmFor(act, row)) return;
+          ctlSetServerLiveHls(id, act === "on" ? true : act === "off" ? false : null, btn.closest("tr"));
+          return;
+        }
+        if (llact) {
+          ctlSetServerLl(id, llact === "on" ? true : llact === "off" ? false : null, btn.closest("tr"));
+        }
       });
     }
 
@@ -4962,8 +5263,8 @@
      would fight the operator's own scroll position mid-event; "atualizar" in
      the header and every write already re-read it. */
   function ctlOnShown() {
-    if (ctlLoaded) return;
-    ctlLoadServers();
+    if (!ctlWaitlistLoaded) ctlLoadWaitlist();
+    if (!ctlLoaded) ctlLoadServers();
   }
 
   function showTab(name, opts) {
@@ -5266,6 +5567,20 @@
         : "ninguém transmitindo agora");
   }
 
+  /* Beside it: the waitlist headline, from the same `/metrics` payload. Null
+     on an API older than this field, or when the campaign is off entirely:
+     both render as dashes, never a zero this page never measured. */
+  function renderControlsWaitlist(w) {
+    if (!w) {
+      setText("ctlWaitlistWaiting", "-");
+      setText("ctlWaitlistWaitingNote", "esta api não reporta lista de espera");
+      return;
+    }
+    setText("ctlWaitlistWaiting", fmt(w.requestsTotal));
+    setText("ctlWaitlistWaitingNote",
+      "em " + fmt(w.serversWaiting) + " servidor(es) · " + fmt(w.joins7d) + " entradas em 7 dias");
+  }
+
   // Quem está assistindo, somado entre as festas ao vivo. Um minuto atrás no
   // máximo (a api grava uma vez por minuto). Nada quando a api é mais velha
   // que esta página ou a leitura falhou: um zero ali seria inventado.
@@ -5286,6 +5601,7 @@
     lastRuntime = d.runtime || null;
     lastStatusHistory = d.statusHistory || null;
     renderControlsLive(d.liveHls || null);
+    renderControlsWaitlist(d.watchPartyWaitlist || null);
     var users = d.users || {}, servers = d.servers || {}, msgs = d.messages || {};
     var ch = d.channels || {}, voice = d.voice || {};
     var usersHourly = Array.isArray(users.byHour) && users.byHour.length ? users.byHour : [0, 0];
@@ -5537,6 +5853,7 @@
         // The controls section does not poll, so this button is the only way
         // to re-read it without a write. Only when it has been opened at all.
         if (ctlLoaded) ctlLoadServers();
+        if (ctlWaitlistLoaded) ctlLoadWaitlist();
         refreshOnce();
       });
     }

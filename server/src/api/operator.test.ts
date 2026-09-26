@@ -115,7 +115,7 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the seven routes, and account deletion is not one of them", () => {
+  it("is exactly the nine routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
@@ -124,6 +124,8 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/server-live-hls"],
       ["PUT", "/api/admin/channel-voice-transport"],
       ["PUT", "/api/admin/channel-sfu-region"],
+      ["GET", "/api/admin/watch-party-waitlist"],
+      ["PUT", "/api/admin/watch-party-waitlist/decline"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -140,6 +142,9 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/metrics"],
       ["GET", "/api/admin/servers/"],
       ["GET", "/api/servers"],
+      ["POST", "/api/admin/watch-party-waitlist"],
+      ["GET", "/api/admin/watch-party-waitlist/decline"],
+      ["GET", "/api/watch-party/waitlist"],
     ] as const;
     for (const [method, path] of refused) {
       expect(matchAdminMachineRoute(method, path)).toBeNull();

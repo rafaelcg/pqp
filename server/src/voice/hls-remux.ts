@@ -137,6 +137,12 @@ export function llPlaylistFrontConfigured(): boolean {
 export function resolveHlsMode(input: {
   serverId: string | null | undefined;
   requestedMode: boolean;
+  /**
+   * `servers.live_hls_ll_enabled` for this server, when the caller read it.
+   * Omitted or null is "nobody decided", which is the allowlist rule below
+   * verbatim, so every caller that predates the column is unchanged.
+   */
+  override?: boolean | null;
 }): "conventional" | "ll" {
   if (!input.requestedMode) {
     return "conventional";
@@ -146,6 +152,9 @@ export function resolveHlsMode(input: {
   }
   if (!llPlaylistFrontConfigured()) {
     return "conventional";
+  }
+  if (input.override === true || input.override === false) {
+    return input.override ? "ll" : "conventional";
   }
   const allowlist = liveHlsLLAllowlist();
   if (allowlist === null) {
@@ -164,15 +173,60 @@ export function resolveHlsMode(input: {
  * flag alone and ignores the allowlist, same as `liveHlsConfig()`'s base
  * answer for every other field here.
  */
-export function liveHlsLLAvailable(serverId: string | null | undefined): boolean {
+export function liveHlsLLAvailable(
+  serverId: string | null | undefined,
+  override: boolean | null = null,
+): boolean {
   if (!isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
     return false;
+  }
+  // The per-server row, TRUE or FALSE, beats the variable: same order and
+  // same reason as `resolveLiveHlsForServer` in `hls-egress.ts`. A server id
+  // is required for it to mean anything; the deployment-wide answer (no id)
+  // never has a row to read.
+  if (serverId && (override === true || override === false)) {
+    return override;
   }
   const allowlist = liveHlsLLAllowlist();
   if (allowlist === null) {
     return true;
   }
   return Boolean(serverId && allowlist.has(serverId));
+}
+
+/**
+ * `servers.live_hls_ll_enabled` for one server: TRUE / FALSE when an operator
+ * decided from the dashboard, NULL when nobody has.
+ *
+ * THE LOW-LATENCY TWIN OF `liveHlsServerOverride` (`hls-egress.ts`), and it
+ * keeps that function's two rules. Read per call, never cached, so a flip
+ * takes effect on the next reconcile and the next config read with no deploy
+ * and no restart. And a failed read answers NULL, which is
+ * `LIVE_HLS_LL_ALLOWLIST` exactly as it was before the column existed: a
+ * database hiccup must not flip a running party's mode.
+ *
+ * Callers only ask when the answer can matter (`LIVE_HLS_LL` on and an edge
+ * front configured), so a deployment without LL issues no query at all.
+ */
+export async function liveHlsLLServerOverride(
+  serverId: string | null | undefined,
+): Promise<boolean | null> {
+  if (!serverId || !isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
+    return null;
+  }
+  try {
+    const result = await getPool().query<{ live_hls_ll_enabled: boolean | null }>(
+      `SELECT live_hls_ll_enabled FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    return result.rows[0]?.live_hls_ll_enabled ?? null;
+  } catch (error) {
+    logEvent("voice.hlsLlOverrideReadFailed", {
+      serverId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /**
@@ -624,10 +678,19 @@ export async function resolveHlsModeForChannel(
     channelId,
     request.partyCreatedAtMs,
   );
-  const llAvailable = liveHlsLLAvailable(serverId);
+  // The dashboard's per-server LL switch, read only when a party actually
+  // asked: with nothing requested the mode is `conventional` whatever the row
+  // says, so there is no reason to spend a query on it on every roster event.
+  // A NULL row (every server nobody touched) and a failed read both answer
+  // the allowlist, which is this function before the column existed.
+  const llOverride = request.requested
+    ? await liveHlsLLServerOverride(serverId)
+    : null;
+  const llAvailable = liveHlsLLAvailable(serverId, llOverride);
   const mode = resolveHlsMode({
     serverId,
     requestedMode: request.requested && !partyDemoted && !demotionUnattributed,
+    override: llOverride,
   });
   // ONLY WHILE THERE IS A CHOICE TO EXPLAIN. With `LIVE_HLS_LL` unset every
   // decision is `conventional` for the one reason nobody needs telling, and

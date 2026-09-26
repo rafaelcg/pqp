@@ -48,6 +48,8 @@ export type MarketingPage =
   | "/download"
   | "/garanta"
   | "/claim"
+  | "/watch-party"
+  | "/watchparty"
   | "/privacy"
   | "/terms"
   | "/cookies"
@@ -76,6 +78,8 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/download",
   "/garanta",
   "/claim",
+  "/watch-party",
+  "/watchparty",
   "/privacy",
   "/terms",
   "/cookies",
@@ -130,6 +134,25 @@ interface PageCopy {
  * are catalogue duplicates (see the file comment); the policy and status pages
  * have no catalogue SEO keys, so their strings live only here.
  */
+/**
+ * `/watch-party` and `/watchparty`: one page under two spellings, canonical
+ * `/watch-party`, same arrangement as `/garanta` and `/claim`. Duplicates of
+ * `watchPartyPage.seo.*`, pinned by `marketing-meta.test.ts`.
+ */
+const WATCH_PARTY_COPY: PageCopy = {
+  canonicalPath: "/watch-party",
+  title: {
+      "pt-BR": "Watch party no pqp | Assistam juntos, com o servidor inteiro",
+      en: "Watch party on pqp | Watch together with your whole server",
+      es: "Watch party en pqp | Miren juntos con todo el servidor",
+    },
+  description: {
+      "pt-BR": "Compartilhe a tela e deixe centenas de pessoas assistirem no navegador, com baixa latência, a sua câmera no palco e o chat do lado. Entre na lista do acesso antecipado.",
+      en: "Share your screen and let hundreds watch in the browser, with low latency, your camera on stage and the chat beside it. Join the early access waitlist.",
+      es: "Comparte tu pantalla y deja que cientos miren en el navegador, con baja latencia, tu cámara en el escenario y el chat al lado. Entra a la lista de acceso anticipado.",
+    },
+};
+
 const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
@@ -272,6 +295,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
   },
+  "/watch-party": WATCH_PARTY_COPY,
+  "/watchparty": WATCH_PARTY_COPY,
   "/privacy": {
     canonicalPath: "/privacy",
     title: {

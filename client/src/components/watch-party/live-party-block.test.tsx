@@ -86,3 +86,68 @@ describe("the sidebar live block when the presenter's own publish drops", () => 
     expect(html).toContain('data-live-party-audience="3"');
   });
 });
+
+/**
+ * The waitlist teaser. The whole safety property is WHICH branch it lives in:
+ * only the "no party, no create control" one, so a server that can run a
+ * party (which passes `canStart` and `onCreate`) is byte for byte what it was.
+ */
+describe("the waitlist teaser", () => {
+  function idle(props: Partial<Parameters<typeof LivePartyBlock>[0]>) {
+    return renderToStaticMarkup(
+      <MemoryRouter>
+        <TooltipProvider>
+          <LivePartyBlock
+            parties={[]}
+            selectedChannelId={null}
+            onWatch={() => {}}
+            {...props}
+          />
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("draws the early access card where nothing else would be drawn", () => {
+    const html = idle({ teaser: { onList: false, onOpen: () => {} } });
+    expect(html).toContain('data-live-party-teaser="open"');
+    expect(html).toContain("Early access");
+  });
+
+  it("says On the list once this person joined", () => {
+    const html = idle({ teaser: { onList: true, onOpen: () => {} } });
+    expect(html).toContain('data-live-party-teaser="on-list"');
+    expect(html).toContain("On the list");
+  });
+
+  it("never replaces the real create control", () => {
+    const html = idle({
+      canStart: true,
+      onCreate: () => {},
+      teaser: { onList: false, onOpen: () => {} },
+    });
+    expect(html).toContain("data-live-party-create");
+    expect(html).not.toContain("data-live-party-teaser");
+  });
+
+  it("never covers a live party", () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <TooltipProvider>
+          <LivePartyBlock
+            parties={[PARTY]}
+            selectedChannelId={null}
+            onWatch={() => {}}
+            teaser={{ onList: false, onOpen: () => {} }}
+          />
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+    expect(html).toContain("data-live-party-row");
+    expect(html).not.toContain("data-live-party-teaser");
+  });
+
+  it("is nothing at all without a teaser, as before", () => {
+    expect(idle({})).toBe("");
+  });
+});
