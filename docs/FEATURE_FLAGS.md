@@ -61,8 +61,9 @@ Reads are synchronous: the whole table sits in one in-process snapshot.
   adds an audit row in the same transaction, which is what makes this exact.
   **A row changed by hand in SQL without an audit row is picked up by the
   5-minute backstop, not the TTL.** Use the dashboard or the API.
-- Two writes to the same flag are serialised with a transaction-scoped advisory
-  lock, so the audit's `previous` is always what the row really held.
+- Flag writes are serialised with one transaction-scoped advisory lock, held
+  until commit. That keeps the audit's `previous` true, and it makes audit ids
+  commit in order, which is what lets `MAX(id)` stand in for a version.
 - A write answers `applied: false` if the row committed but this process could
   not reload its own copy. The dashboard shows that instead of the old value.
 - **Database down:** the last snapshot keeps answering, and reloads back off for

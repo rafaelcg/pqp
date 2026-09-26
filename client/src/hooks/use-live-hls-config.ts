@@ -38,10 +38,10 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
   const key = serverId ?? "";
   let pending = cache.get(key);
   if (!pending) {
-    const versionAt = versionOf(key);
+    const ticket = ask(key);
     pending = fetchLiveHlsConfig(serverId).then(
       (answer) => {
-        apply(key, answer, versionAt);
+        apply(key, answer, ticket);
         return answer;
       },
       (error: unknown) => {
@@ -55,23 +55,31 @@ export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
 }
 
 /**
- * Bumped every time an answer for the key lands, and by a reset. A response
- * is applied only if nothing else landed for its key since it was asked for,
- * so a slow older request can never overwrite a newer answer.
+ * NEWEST ASKED WINS, whatever order the answers land in. Every request for a
+ * key takes the next number; an answer is stored only if nothing asked later
+ * has been stored already. So a slow older request can never overwrite a
+ * newer answer, and a newer one is never dropped for landing second.
  */
-const versions = new Map<string, number>();
+interface Ticket {
+  epoch: number;
+  seq: number;
+}
+const asked = new Map<string, number>();
+const landed = new Map<string, number>();
 let epoch = 0;
 
-function versionOf(key: string): string {
-  return `${epoch}:${versions.get(key) ?? 0}`;
+function ask(key: string): Ticket {
+  const seq = (asked.get(key) ?? 0) + 1;
+  asked.set(key, seq);
+  return { epoch, seq };
 }
 
-/** Store an answer if it is still the newest one asked for. Returns whether it changed anything. */
-function apply(key: string, answer: LiveHlsConfig, versionAt: string): boolean {
-  if (versionOf(key) !== versionAt) {
+/** Store an answer if it is the newest asked so far. Returns whether it changed anything. */
+function apply(key: string, answer: LiveHlsConfig, ticket: Ticket): boolean {
+  if (ticket.epoch !== epoch || ticket.seq <= (landed.get(key) ?? 0)) {
     return false;
   }
-  versions.set(key, (versions.get(key) ?? 0) + 1);
+  landed.set(key, ticket.seq);
   const before = settled.get(key);
   settled.set(key, answer);
   cache.set(key, Promise.resolve(answer));
@@ -126,12 +134,12 @@ export function revalidateLiveHlsConfig(): Promise<void> {
       .filter((key) => !revalidating.has(key))
       .map((key) => {
         revalidating.add(key);
-        const versionAt = versionOf(key);
+        const ticket = ask(key);
         const startedEpoch = epoch;
         return fetchLiveHlsConfig(key === "" ? undefined : key)
           .then(
             (answer) => {
-              if (apply(key, answer, versionAt)) {
+              if (apply(key, answer, ticket)) {
                 for (const listener of listeners.get(key) ?? []) {
                   listener();
                 }
@@ -159,7 +167,8 @@ export function resetLiveHlsConfigCache(): void {
   epoch += 1;
   cache.clear();
   settled.clear();
-  versions.clear();
+  asked.clear();
+  landed.clear();
   revalidating.clear();
 }
 

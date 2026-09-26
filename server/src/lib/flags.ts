@@ -588,15 +588,20 @@ async function afterWrite(key: FlagKey, serverId: string | null): Promise<boolea
 }
 
 /**
- * One writer per flag at a time. `SELECT ... FOR UPDATE` locks nothing when
- * the row does not exist yet, so two first writes to the same key would both
- * read "no decision" and audit the wrong `previous`. A transaction-scoped
- * advisory lock on the key serialises them.
+ * ONE FLAG WRITER AT A TIME, for the whole table, held until COMMIT.
+ *
+ * Two reasons, and the second is why it is not per key. `SELECT ... FOR
+ * UPDATE` locks nothing when the row does not exist yet, so two first writes
+ * to one key would both read "no decision" and audit the wrong `previous`.
+ * And the TTL check trusts `MAX(feature_flag_audit.id)` as a version: with
+ * two writers overlapping, the one holding the LOWER id could commit after a
+ * sibling had already read the higher one, and that change would be missed
+ * until the backstop. With every flag transaction serialised, ids commit in
+ * order and the version only ever moves forward. Operator writes are a few a
+ * day; the lock costs nothing that matters.
  */
-async function lockFlag(client: PoolClient, key: FlagKey): Promise<void> {
-  await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-    `feature_flag:${key}`,
-  ]);
+async function lockFlagWrites(client: PoolClient): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext('feature_flags'))`);
 }
 
 /**
@@ -673,7 +678,7 @@ export async function setGlobalFlag(
   let changed = false;
   try {
     await client.query("BEGIN");
-    await lockFlag(client, key);
+    await lockFlagWrites(client);
     const previous = await client.query<{ enabled: boolean | null }>(
       `SELECT enabled FROM feature_flags WHERE key = $1 FOR UPDATE`,
       [key],
@@ -725,7 +730,7 @@ export async function setServerFlagOverride(
   let changed = false;
   try {
     await client.query("BEGIN");
-    await lockFlag(client, key);
+    await lockFlagWrites(client);
     const server = await client.query(`SELECT 1 FROM servers WHERE id = $1`, [
       serverId,
     ]);

@@ -362,6 +362,27 @@ describeDb("runtime flags against Postgres", () => {
     expect(rows[1]!.previous).toBe(rows[0]!.next);
   });
 
+  it("writes to different flags commit in audit-id order, so MAX(id) is a safe version", async () => {
+    await flags.startFeatureFlags();
+    const keys = [
+      "live_hls_camera",
+      "live_hls_voice_track",
+      "community_home",
+      "turn_prefer_static",
+      "read_cache",
+    ] as const;
+    await Promise.all(
+      keys.map((key) => flags.setGlobalFlag(key, key !== "read_cache", { kind: "dashboard" })),
+    );
+    // Commit order is observable through the row's xmin; with the table-wide
+    // lock it must match id order exactly.
+    const { rows } = await getPool().query<{ id: string; xmin: string }>(
+      `SELECT id::text, xmin::text FROM feature_flag_audit ORDER BY id`,
+    );
+    const byId = rows.map((row) => Number(row.xmin));
+    expect(byId).toEqual([...byId].sort((a, b) => a - b));
+  });
+
   it("a committed write still answers when this process cannot reload, and says so", async () => {
     await flags.startFeatureFlags();
     const pool = getPool();

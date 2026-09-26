@@ -208,7 +208,7 @@ describe("the stores re-ask what is on screen", () => {
       fetchLiveHlsConfigMock.mockResolvedValueOnce({ enabled: false });
       await liveHls.loadLiveHlsConfig(`old-${i}`);
     }
-    releases.push(liveHls.watchLiveHlsConfig("old-3", () => {}));
+    const releaseOld3 = liveHls.watchLiveHlsConfig("old-3", () => {});
     fetchLiveHlsConfigMock.mockClear();
 
     const first = deferred<{ enabled: boolean }>();
@@ -221,6 +221,36 @@ describe("the stores re-ask what is on screen", () => {
     await Promise.all([a, b]);
     expect(liveHls.settledLiveHlsConfig("old-3")).toEqual({ enabled: true });
 
+
+    // A load and a re-ask for the same key out at once: whichever was ASKED
+    // later is kept, in either landing order. "old-5" is unwatched, so the
+    // pass above dropped its cached promise and the load below really asks.
+    releaseOld3();
+    for (const order of ["reask-first", "load-first"] as const) {
+      await liveHls.revalidateLiveHlsConfig();
+      const release = liveHls.watchLiveHlsConfig("old-5", () => {});
+      const loadAnswer = deferred<{ enabled: boolean; n: number }>();
+      const reaskAnswer = deferred<{ enabled: boolean; n: number }>();
+      fetchLiveHlsConfigMock.mockReturnValueOnce(loadAnswer.promise);
+      const loading = liveHls.loadLiveHlsConfig("old-5");
+      fetchLiveHlsConfigMock.mockReturnValueOnce(reaskAnswer.promise);
+      const reasking = liveHls.revalidateLiveHlsConfig();
+      if (order === "reask-first") {
+        reaskAnswer.resolve({ enabled: true, n: 2 });
+        await Promise.resolve();
+        loadAnswer.resolve({ enabled: false, n: 1 });
+      } else {
+        loadAnswer.resolve({ enabled: false, n: 1 });
+        await Promise.resolve();
+        reaskAnswer.resolve({ enabled: true, n: 2 });
+      }
+      await Promise.all([loading, reasking]);
+      expect({ order, kept: liveHls.settledLiveHlsConfig("old-5") }).toEqual({
+        order,
+        kept: { enabled: true, n: 2 },
+      });
+      release();
+    }
 
     // An unwatched server's old answer still draws the first frame, and its
     // next load asks again rather than trusting it.
