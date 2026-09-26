@@ -2,8 +2,10 @@ package gg.pqp.app.watch.ui
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -62,16 +64,20 @@ fun WatchPartyHostControls(
     hostState: WatchPartyHostState,
     lowLatencyAvailable: Boolean,
     selfMuted: Boolean,
+    /** Whether THIS phone's own capture is currently on the wire, independent of [party]'s state. */
+    sharingScreen: Boolean,
     checkNeedsAck: suspend () -> Boolean,
     confirmAck: suspend () -> Unit,
     onCreate: (String) -> Unit,
-    onGoLive: (lowLatency: Boolean, consent: android.content.Intent) -> Unit,
+    onGoLive: (lowLatency: Boolean, consent: Intent) -> Unit,
+    /** "Compartilhar tela" again on an already-live party -- see [LiveRow]'s doc. */
+    onRetryShare: (consent: Intent) -> Unit,
     onEnd: () -> Unit,
     onUnmute: () -> Unit,
-    onDismissError: () -> Unit,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showAckSheet by remember { mutableStateOf(false) }
+    var ackFailed by remember { mutableStateOf(false) }
     var lowLatency by remember(party?.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -88,11 +94,23 @@ fun WatchPartyHostControls(
         // and said no, and the card they were on is still there.
     }
 
-    fun requestGoLive() {
+    val retryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            onRetryShare(data)
+        }
+    }
+
+    fun requestScreenCapture(launcher: ActivityResultLauncher<Intent>) {
         val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
             as MediaProjectionManager
-        consentLauncher.launch(manager.createScreenCaptureIntent())
+        launcher.launch(manager.createScreenCaptureIntent())
     }
+
+    fun requestGoLive() = requestScreenCapture(consentLauncher)
+    fun requestRetryShare() = requestScreenCapture(retryLauncher)
 
     // Go-live mic prompt: once a share has just gone out and the mic is off,
     // offer to turn it on. Keyed on the busy transition rather than on
@@ -151,26 +169,20 @@ fun WatchPartyHostControls(
         } else if (canEndParty(party)) {
             LiveRow(
                 busy = hostState.busy == WatchPartyHostBusy.Ending,
+                sharingScreen = sharingScreen,
                 onEnd = onEnd,
+                onRetryShare = ::requestRetryShare,
             )
         }
     }
 
-    hostState.error?.let { message ->
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier
-                .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
-                .testTag("watchPartyHost.error"),
-        )
-        LaunchedEffect(message) {
-            // Read once, shown once; a stale refusal must not survive a
-            // second unrelated action.
-            onDismissError()
-        }
-    }
+    // No inline error text here on purpose: `hostState.error` on an Encerrar
+    // failure arrives AFTER `voice.leave()` has already dropped
+    // `canStartWatchParty`, which is what unmounts this whole composable --
+    // an inline message would never be seen. `SignedInNav` in `PqpApp.kt`
+    // reads `watchPartyHost.state` at a level that survives that and shows
+    // it as a toast, the same way it already does for `VoiceController`'s
+    // refusals and notices.
 
     if (showCreateDialog) {
         CreateWatchPartyDialog(
@@ -185,11 +197,24 @@ fun WatchPartyHostControls(
 
     if (showAckSheet) {
         HostAckDialog(
+            failed = ackFailed,
             onConfirm = {
                 scope.launch {
-                    confirmAck()
-                    showAckSheet = false
-                    requestGoLive()
+                    ackFailed = false
+                    // Fail CLOSED: if saving the ack itself throws, the sheet
+                    // stays open and the capture never starts. The first cut
+                    // of this flow let a thrown `confirmAck` fall through to
+                    // `requestGoLive()` anyway (a Farol finding) -- the one
+                    // disclosure this whole dialog exists to guarantee is
+                    // shown would have been silently skipped from the
+                    // host's saved state's point of view.
+                    val confirmed = runCatching { confirmAck() }.isSuccess
+                    if (confirmed) {
+                        showAckSheet = false
+                        requestGoLive()
+                    } else {
+                        ackFailed = true
+                    }
                 }
             },
             onDismiss = { showAckSheet = false },
@@ -264,27 +289,53 @@ private fun SetupRow(
     }
 }
 
+/**
+ * The party is live. Normally just "Encerrar" -- but when THIS phone's own
+ * capture is not on the wire (`!sharingScreen`, e.g. `setLive` succeeded and
+ * the capture then failed or was denied: the intended "live, no picture"
+ * failure mode `performWatchPartyGoLive`'s doc describes), a "Compartilhar
+ * tela" button is offered too, so that state is recoverable from here rather
+ * than requiring Encerrar and a whole new party.
+ */
 @Composable
-private fun LiveRow(busy: Boolean, onEnd: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text = stringResource(R.string.watch_party_host_live_label),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(
-            onClick = onEnd,
-            enabled = !busy,
-            modifier = Modifier.testTag("watchPartyHost.end"),
+private fun LiveRow(busy: Boolean, sharingScreen: Boolean, onEnd: () -> Unit, onRetryShare: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            if (busy) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp))
-            } else {
-                Text(text = stringResource(R.string.watch_party_host_end))
+            Text(
+                text = stringResource(R.string.watch_party_host_live_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = onEnd,
+                enabled = !busy,
+                modifier = Modifier.testTag("watchPartyHost.end"),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                } else {
+                    Text(text = stringResource(R.string.watch_party_host_end))
+                }
+            }
+        }
+        if (!sharingScreen) {
+            TextButton(
+                onClick = onRetryShare,
+                modifier = Modifier.testTag("watchPartyHost.retryShare"),
+            ) {
+                Icon(
+                    imageVector = PqpIcons.ShareScreen,
+                    contentDescription = null,
+                    modifier = Modifier.size(Sizes.iconInline),
+                )
+                Text(
+                    text = stringResource(R.string.watch_party_host_retry_share),
+                    modifier = Modifier.padding(start = Spacing.xs),
+                )
             }
         }
     }
@@ -329,12 +380,26 @@ private fun CreateWatchPartyDialog(busy: Boolean, onDismiss: () -> Unit, onCreat
  * "The streaming notice".
  */
 @Composable
-private fun HostAckDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun HostAckDialog(failed: Boolean, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("watchPartyHost.ackDialog"),
         title = { Text(stringResource(R.string.watch_party_host_ack_title)) },
-        text = { Text(stringResource(R.string.watch_party_host_ack_body)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.watch_party_host_ack_body))
+                if (failed) {
+                    Text(
+                        text = stringResource(R.string.watch_party_host_generic_error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .padding(top = Spacing.xs)
+                            .testTag("watchPartyHost.ackError"),
+                    )
+                }
+            }
+        },
         confirmButton = {
             TextButton(onClick = onConfirm, modifier = Modifier.testTag("watchPartyHost.ackConfirm")) {
                 Text(stringResource(R.string.watch_party_host_ack_confirm))

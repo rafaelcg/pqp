@@ -454,6 +454,10 @@
     <string name="watch_party_host_low_latency">Baixa latência (beta)</string>
     <string name="watch_party_host_live_label">Você está ao vivo</string>
     <string name="watch_party_host_end">Encerrar</string>
+    <string name="watch_party_host_retry_share">Compartilhar sua tela</string>
+    <string name="watch_party_host_go_live_failed">Não foi possível ir ao vivo. O servidor não confirmou — tente de novo.</string>
+    <string name="watch_party_host_end_failed">Você saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo.</string>
+    <string name="watch_party_host_generic_error">Algo deu errado. Tente de novo.</string>
     <string name="watch_party_host_ack_title">Antes de transmitir</string>
     <string name="watch_party_host_ack_body">Você é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas.</string>
     <string name="watch_party_host_ack_confirm">Entendi</string>

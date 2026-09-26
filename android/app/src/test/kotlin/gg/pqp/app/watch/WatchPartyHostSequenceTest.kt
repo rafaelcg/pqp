@@ -58,23 +58,25 @@ class WatchPartyHostSequenceTest {
     }
 
     @Test
-    fun `end tells the server first, then leaves voice`() = runTest {
+    fun `end tells the server first, then leaves voice, and reports success`() = runTest {
         val calls = mutableListOf<String>()
-        performWatchPartyEnd(
+        val ended = performWatchPartyEnd(
             setEnded = { calls += "setEnded" },
             leaveVoice = { calls += "leaveVoice" },
         )
         assertEquals(listOf("setEnded", "leaveVoice"), calls)
+        assertTrue(ended)
     }
 
     @Test
-    fun `end still leaves voice when telling the server the party ended fails`() = runTest {
+    fun `end still leaves voice when telling the server the party ended fails, and says so`() = runTest {
         val calls = mutableListOf<String>()
-        performWatchPartyEnd(
+        val ended = performWatchPartyEnd(
             setEnded = { calls += "setEnded"; throw IllegalStateException("network") },
             leaveVoice = { calls += "leaveVoice" },
         )
         assertEquals(listOf("setEnded", "leaveVoice"), calls)
+        assertFalse(ended)
     }
 
     private fun fail(message: String): Nothing = throw AssertionError(message)

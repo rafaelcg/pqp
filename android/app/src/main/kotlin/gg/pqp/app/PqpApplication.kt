@@ -113,7 +113,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             selfUserId = { (session.phase.value as? SessionPhase.Ready)?.me?.id },
             scope = appScope,
         )
-        watchPartyHost = gg.pqp.app.watch.WatchPartyHostController(session, voice, appScope)
+        watchPartyHost = gg.pqp.app.watch.WatchPartyHostController(this, session, voice, appScope)
     }
 
     /**

@@ -1,10 +1,13 @@
 package gg.pqp.app.watch
 
+import android.content.Context
 import android.content.Intent
 import android.util.Log
+import gg.pqp.app.R
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.voice.VoiceController
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +19,17 @@ enum class WatchPartyHostBusy { None, Creating, GoingLive, Ending }
 
 data class WatchPartyHostState(
     val busy: WatchPartyHostBusy = WatchPartyHostBusy.None,
-    /** The server's own sentence for the last refusal, or null. */
+    /**
+     * A sentence for the host about the LAST action that did not land clean:
+     * the server's own refusal for an [gg.pqp.app.core.ApiException], or one
+     * of this class's own strings when a state transition was asked for and
+     * the server never confirmed it (a lost response, a timeout, anything
+     * that is not a clean refusal). Never silently discarded in favour of a
+     * plain reset -- a Farol review of the first cut of this controller
+     * caught exactly that: `create`/`goLive`/`end` all reset to a clean,
+     * error-less state on ANY non-[ApiException] failure, which reported
+     * success to the host for a request that may or may not have landed.
+     */
     val error: String? = null,
 )
 
@@ -35,8 +48,15 @@ data class WatchPartyHostState(
  * voice seat to hold. So one [state] for the whole process is enough; there
  * is no per-channel host state to keep separate the way [WatchLiveStore]
  * keeps [WatchLiveStore.parties] per channel.
+ *
+ * [state] is read at the top of the signed-in tree (`SignedInNav` in
+ * `PqpApp.kt`), not only inside the host panel: a failure on Encerrar is
+ * reported AFTER `voice.leave()` has already dropped `canStartWatchParty`,
+ * which is what unmounts the panel that would otherwise show it. A toast
+ * hoisted above the per-channel UI is what survives that.
  */
 class WatchPartyHostController(
+    private val context: Context,
     private val session: SessionStore,
     private val voice: VoiceController,
     private val scope: CoroutineScope,
@@ -65,26 +85,47 @@ class WatchPartyHostController(
     /**
      * "Ir ao vivo". See [performWatchPartyGoLive] for the ordering this
      * wires up: the state transition, then the room join, then the capture
-     * -- in that order, on purpose.
+     * -- in that order, on purpose. A refused state transition is reported
+     * as a failure here (it used to reset silently to "not busy, no error",
+     * which is indistinguishable from success -- a Farol finding).
      */
     fun goLive(channelId: String, channelName: String?, partyId: String, lowLatency: Boolean, consent: Intent) {
         run(WatchPartyHostBusy.GoingLive) {
-            performWatchPartyGoLive(
+            val went = performWatchPartyGoLive(
                 setLive = { session.api.setWatchPartyState(partyId, "live", lowLatency) != null },
                 joinVoice = { voice.join(channelId, channelName) },
                 startScreenShare = { data: Intent -> voice.startScreenShare(data) },
                 consent = consent,
             )
+            if (!went) throw IllegalStateException(context.getString(R.string.watch_party_host_go_live_failed))
         }
     }
 
-    /** "Encerrar". See [performWatchPartyEnd] for the two effects and their order. */
+    /**
+     * "Compartilhar tela" again, once the party is already live but this
+     * phone's own capture never started or dropped -- the recovery path for
+     * exactly the failure mode [goLive]'s doc describes as intended ("live,
+     * no picture"). No party-state call here: the party is already `live`,
+     * only the capture needs retrying.
+     */
+    fun retryShare(consent: Intent) {
+        voice.startScreenShare(consent)
+    }
+
+    /**
+     * "Encerrar". See [performWatchPartyEnd] for the two effects and their
+     * order. Voice is left even when the server never confirmed the end
+     * (that guarantee lives in [performWatchPartyEnd] itself); what this
+     * wrapper adds is telling the host when that happened, rather than
+     * reporting a clean success either way.
+     */
     fun end(partyId: String) {
         run(WatchPartyHostBusy.Ending) {
-            performWatchPartyEnd(
+            val ended = performWatchPartyEnd(
                 setEnded = { session.api.setWatchPartyState(partyId, "ended") },
                 leaveVoice = { voice.leave() },
             )
+            if (!ended) throw IllegalStateException(context.getString(R.string.watch_party_host_end_failed))
         }
     }
 
@@ -94,12 +135,21 @@ class WatchPartyHostController(
             try {
                 block()
                 _state.value = WatchPartyHostState()
+            } catch (e: CancellationException) {
+                // Not a failure of the action -- the scope went away (a
+                // screen left, the process is dying). Reporting it as one
+                // would show a host a refusal for a request that was simply
+                // never finished asking. Coroutine cancellation must also
+                // propagate rather than being swallowed here.
+                throw e
             } catch (e: ApiException) {
                 Log.w(TAG, "watch party host action ($busy) refused: ${e.serverMessage}")
                 _state.value = WatchPartyHostState(error = e.serverMessage)
             } catch (e: Exception) {
                 Log.w(TAG, "watch party host action ($busy) failed: ${e.message}")
-                _state.value = WatchPartyHostState()
+                _state.value = WatchPartyHostState(
+                    error = e.message ?: context.getString(R.string.watch_party_host_generic_error),
+                )
             }
         }
     }

@@ -42,9 +42,15 @@ suspend fun <C> performWatchPartyGoLive(
  *
  * [setEnded] failing does not stop [leaveVoice] from running: the person
  * pressed Encerrar and the phone should stop broadcasting regardless of
- * whether the server managed to record that the party ended.
+ * whether the server managed to record that the party ended. It is also not
+ * swallowed into silence: the return value says whether the server actually
+ * confirmed the end, so the caller can tell the host "you're no longer
+ * broadcasting, but the party may still be listed as live" rather than
+ * quietly reporting success either way (a Farol finding on the first cut of
+ * this function, which did discard it).
  */
-suspend fun performWatchPartyEnd(setEnded: suspend () -> Unit, leaveVoice: () -> Unit) {
-    runCatching { setEnded() }
+suspend fun performWatchPartyEnd(setEnded: suspend () -> Unit, leaveVoice: () -> Unit): Boolean {
+    val ended = runCatching { setEnded() }.isSuccess
     leaveVoice()
+    return ended
 }
