@@ -151,4 +151,48 @@ class WatchPartyHostGateTest {
         assertFalse(canEndParty(party(state = "ended")))
         assertFalse(canEndParty(null))
     }
+
+    // ----------------------------------- mayManageWatchPartyWithoutASeat
+
+    /**
+     * The product rule this whole change exists for: a watch party is a
+     * broadcast, not a call, so the host must never be required to join the
+     * voice room just to see the setup card. Both reasons this function
+     * grants that are server-confirmed and neither is a seat.
+     */
+    @Test
+    fun `holding START_WATCH_PARTY with nothing running yet needs no seat`() {
+        assertTrue(mayManageWatchPartyWithoutASeat(mayStartWatchParty = true, party = null))
+    }
+
+    @Test
+    fun `the confirmed host of the running party needs no seat either, whatever its state`() {
+        assertTrue(mayManageWatchPartyWithoutASeat(mayStartWatchParty = false, party = party(state = "draft")))
+        assertTrue(mayManageWatchPartyWithoutASeat(mayStartWatchParty = false, party = party(state = "live")))
+    }
+
+    @Test
+    fun `START_WATCH_PARTY stops widening the instant somebody else's party exists`() {
+        // The permission bit alone is "may start one", not "may run this
+        // one" -- once a party is on the channel, only its own host reads
+        // true, exactly like `watchPartyHostGate`'s `canManage`.
+        assertFalse(
+            mayManageWatchPartyWithoutASeat(mayStartWatchParty = true, party = party(state = "live", role = "viewer")),
+        )
+    }
+
+    @Test
+    fun `a co-host is not covered -- Android tracks no co-host promotion yet`() {
+        assertFalse(
+            mayManageWatchPartyWithoutASeat(mayStartWatchParty = false, party = party(state = "live", role = "cohost")),
+        )
+    }
+
+    @Test
+    fun `neither the bit nor the host role means no seatless path`() {
+        assertFalse(mayManageWatchPartyWithoutASeat(mayStartWatchParty = false, party = null))
+        assertFalse(
+            mayManageWatchPartyWithoutASeat(mayStartWatchParty = false, party = party(state = "live", role = "viewer")),
+        )
+    }
 }

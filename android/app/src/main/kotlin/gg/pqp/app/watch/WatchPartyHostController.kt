@@ -84,18 +84,27 @@ class WatchPartyHostController(
 
     /**
      * "Ir ao vivo". See [performWatchPartyGoLive] for the ordering and the
-     * two Farol findings it exists to close: an ambiguous `setLive` failure
-     * is re-checked against the party's real state rather than assumed
-     * refused, and a join that fails on an already-live party is reported
-     * as such (best-effort ended, honestly, whichever way that lands) rather
-     * than as an unqualified success.
+     * Farol findings it exists to close: the mic is forced silent before
+     * anything else and aborts the whole attempt if that fails, an
+     * ambiguous `setLive` failure is re-checked against the party's real
+     * state rather than assumed refused, and a join that fails on an
+     * already-live party is reported as such (best-effort ended, honestly,
+     * whichever way that lands) rather than as an unqualified success.
      */
     fun goLive(channelId: String, channelName: String?, partyId: String, lowLatency: Boolean, consent: Intent) {
         run(WatchPartyHostBusy.GoingLive) {
             val result = performWatchPartyGoLive(
+                // Ir ao vivo should not blast the host's mic into the party,
+                // whatever this phone's standing mute preference is -- see
+                // `performWatchPartyGoLive`'s own doc.
+                muteMicrophone = { voice.setMuted(true) },
                 setLive = { session.api.setWatchPartyState(partyId, "live", lowLatency) != null },
                 checkLive = { session.api.fetchChannelWatchParty(channelId)?.let { it.id == partyId && it.isLive } == true },
-                joinVoice = { voice.join(channelId, channelName) },
+                // Tolerating a microphone that will not publish is a watch
+                // party's own trade, not an ordinary call's: see
+                // `LiveKitEngine.connect`'s doc for why the flag is scoped to
+                // this call site rather than default behaviour everywhere.
+                joinVoice = { voice.join(channelId, channelName, tolerateMicrophonePublishFailure = true) },
                 endParty = { session.api.setWatchPartyState(partyId, "ended") != null },
                 startScreenShare = { data: Intent -> voice.startScreenShare(data) },
                 consent = consent,

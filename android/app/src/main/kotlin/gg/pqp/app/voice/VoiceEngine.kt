@@ -290,6 +290,18 @@ class VoiceEngine(
     }
 
     /**
+     * Ignored. `start` builds this transport's local audio track eagerly, as
+     * part of the shared factory/ADM setup every mesh call goes through
+     * (`localAudio` above), not as a step scoped to one join the way
+     * [LiveKitEngine]'s SFU publish is -- there is no equivalent failure this
+     * transport's `start` can throw specifically because the microphone
+     * would not come up while the rest of the room connected fine, so there
+     * is nothing here for this flag to change. See [VoiceTransport]'s own
+     * doc for who sets it and why.
+     */
+    override fun setTolerateMicrophonePublishFailure(tolerate: Boolean) = Unit
+
+    /**
      * The mesh has no server between the microphone and the room, so this
      * client is the enforcement: the track stays on the transceiver (the peer
      * connections were negotiated with it) and is simply never enabled.

@@ -72,12 +72,13 @@ import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
-import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
+import gg.pqp.app.voice.voiceRefusalStringRes
 import gg.pqp.app.watch.WatchLiveStore
 import gg.pqp.app.watch.WatchPartyHostController
 import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.mayJoinWatchPartyRoom
+import gg.pqp.app.watch.mayManageWatchPartyWithoutASeat
 import gg.pqp.app.watch.needsHlsHostAck
 import gg.pqp.app.watch.confirmHlsHostAck
 import gg.pqp.app.watch.watchPartyHostGate
@@ -235,15 +236,21 @@ private fun SignedInNav(
     // like the microphone refusal above, because there is no scaffold at this
     // level to host a snackbar. The frame's own sentence is shown verbatim for
     // a notice: the server already wrote and translated it.
-    val roomFull = stringResource(R.string.voice_room_full)
-    val unsupported = stringResource(R.string.voice_transport_unsupported)
-    val screenDenied = stringResource(R.string.voice_screen_share_denied)
-    val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
-    val tokenRefused = stringResource(R.string.voice_token_refused)
-    val transportMismatch = stringResource(R.string.voice_transport_mismatch)
-    val backendTimedOut = stringResource(R.string.voice_backend_timeout)
-    val joinRefused = stringResource(R.string.voice_join_refused)
-    val joinTimedOut = stringResource(R.string.voice_join_timeout)
+    //
+    // Which SENTENCE a refusal gets is `voiceRefusalStringRes`'s call, not
+    // this composable's: a watch party's own room fails the way a stream
+    // fails ("could not connect to the stream"), never the way a call does
+    // ("the voice server", "this call"), because a broadcast is not one. Fed
+    // by whether the room this refusal came from is currently hosting or
+    // being watched as a party -- `WatchLiveStore.parties` keyed by the
+    // refusal's own `voiceState.channelId`, not by the screen on top, since
+    // this toast is shown above the whole nav graph and may outlive the
+    // screen that started the join.
+    val parties by watch.parties.collectAsStateWithLifecycle()
+    val inWatchPartyRefusalContext = voiceState.channelId?.let(parties::containsKey) == true
+    val refusalText = voiceState.refusal?.let {
+        stringResource(voiceRefusalStringRes(it, inWatchPartyRefusalContext))
+    }
     // One sentence per failure class, and the four SFU ones are not
     // interchangeable: a refused token, a room the server says is peer-to-peer,
     // a media box nothing can reach and a handshake that ran out of time have
@@ -251,18 +258,7 @@ private fun SignedInNav(
     // `SfuFailureKind` split them, which made every report of "voice does not
     // work on Android" unactionable.
     LaunchedEffect(voiceState.refusal) {
-        val text = when (voiceState.refusal) {
-            Refusal.RoomFull -> roomFull
-            Refusal.TransportUnsupported -> unsupported
-            Refusal.ScreenShareDenied -> screenDenied
-            Refusal.VoiceBackendUnreachable -> backendUnreachable
-            Refusal.VoiceTokenRefused -> tokenRefused
-            Refusal.VoiceTransportMismatch -> transportMismatch
-            Refusal.VoiceBackendTimedOut -> backendTimedOut
-            Refusal.JoinRefused -> joinRefused
-            Refusal.JoinTimedOut -> joinTimedOut
-            null -> return@LaunchedEffect
-        }
+        val text = refusalText ?: return@LaunchedEffect
         android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
         voice.dismissRefusal()
     }
@@ -515,25 +511,26 @@ private fun SignedInNav(
                             permissions = permissionsDeferred.await() ?: PermissionsSnapshot()
                         }
                     }
-                    // The channel list offers "Host a watch party" from
-                    // `Permission.START_WATCH_PARTY` alone, without making
-                    // that account join the room first
-                    // (`gg.pqp.app.core.Permissions.kt`). Landing here from
-                    // that row must show the create control right away
-                    // rather than the bare idle stage a plain viewer gets, so
-                    // the same bit widens `canCreate` here too -- ONLY while
-                    // there is no active party, so it never touches
-                    // `canManage` (which requires `party.isHost` regardless)
-                    // and never widens `canStartWatchParty` itself, which
-                    // `maySit` above still reads unchanged: holding the bit
-                    // is not a seat in somebody else's already-running party.
+                    // A watch party is a broadcast, not a call: setting one
+                    // up -- seeing "Criar watch party" with nothing running,
+                    // or "Ir ao vivo" on a party this account already hosts
+                    // -- must never require a voice-room join first
+                    // (`docs/WATCH_PARTY.md` "A watch party has no voice by
+                    // default"). `mayManageWatchPartyWithoutASeat` is that
+                    // seatless path, fed by `Permission.START_WATCH_PARTY`
+                    // (`gg.pqp.app.core.Permissions.kt`) and by [activeParty]
+                    // 's own server-resolved `viewerRole`; it never widens
+                    // `maySit` above, which still reads the bare
+                    // `canStartWatchParty` unchanged -- holding the bit, or
+                    // being this party's host, is not by itself a seat in
+                    // the room.
                     val mayStartWatchParty = route.isWatchParty &&
                         hasPermission(permissions.channelBits(route.channelId), Permission.START_WATCH_PARTY)
                     val hostGate = watchPartyHostGate(
                         isWatchPartyChannel = route.isWatchParty,
                         serverWatchPartyEnabled = liveHlsEnabled,
                         canStartWatchParty = canStartWatchParty ||
-                            (mayStartWatchParty && activeParty == null),
+                            mayManageWatchPartyWithoutASeat(mayStartWatchParty, activeParty),
                         party = activeParty,
                     )
                     // `hostState` itself is collected once, above, at
