@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ChannelListView: View {
     @Environment(SessionStore.self) private var session
+    /// For the host's landing on the call stage; see `landOnHostStage`.
+    @Environment(VoiceModel.self) private var voice
+    @Environment(CallRatingModel.self) private var ratings
     @Environment(\.dismiss) private var dismiss
     /// Foregrounding is one of the two moments `scheduleAvailabilityRetry`
     /// tries again promptly rather than waiting out whatever backoff delay
@@ -202,7 +205,7 @@ struct ChannelListView: View {
                             state: watchPartyListState,
                             watching: watchingByChannel,
                             isCreating: creatingWatchParty,
-                            onOpen: { channelId in openWatchPartyChannel(channelId) },
+                            onOpen: { party in openWatchPartyCard(party) },
                             onCreate: {
                                 watchPartyDraftName = ""
                                 showingCreateWatchParty = true
@@ -569,18 +572,53 @@ struct ChannelListView: View {
         }
     }
 
-    /// Opens the channel a live or pending watch-party card names. A plain
-    /// push, same as any other row in this list -- `ChatView` and
-    /// `WatchStageView` already do the rest (mount the picture, or for a
-    /// pending party this account hosts, offer the toolbar's Join button
-    /// straight into the setup card, see `WatchPartyHostControls`). Looked
-    /// up in `parties` rather than the full `channels` list: a
+    /// Opens the channel a live or pending watch-party card names.
+    ///
+    /// For the audience, a plain push, same as any other row in this list:
+    /// `ChatView` and `WatchStageView` mount the picture with no seat. For
+    /// this party's host or a co-host, the call stage, because that is the
+    /// only place `WatchPartyHostControls` is drawn; see `watchPartyCardTap`.
+    /// Looked up in `parties` rather than the full `channels` list: a
     /// `WatchPartyPayload.channelId` always names a `watch_party` channel,
     /// and searching the narrower, already-filtered list is what that type
     /// is for.
-    private func openWatchPartyChannel(_ channelId: String) {
-        guard let channel = parties.first(where: { $0.id == channelId }) else { return }
+    private func openWatchPartyCard(_ party: WatchPartyPayload) {
+        guard let channel = parties.first(where: { $0.id == party.channelId }) else { return }
+        switch watchPartyCardTap(for: party) {
+        case .watch:
+            openedChannel = channel
+        case .host:
+            landOnHostStage(channel)
+        }
+    }
+
+    /**
+     Put a host on the setup surface: take the seat and present the call
+     stage, where `WatchPartyHostControls` draws the setup card once `welcome`
+     has answered. The same two lines `ChatView`'s toolbar Join runs, not a
+     second host flow: the stage is presented from the app root while
+     `VoiceModel` is live, so joining is all it takes.
+
+     The channel is pushed underneath first, so collapsing the stage lands on
+     this party's transcript, exactly where a Join from the toolbar leaves
+     somebody.
+
+     A failed session for this same room is left before joining again.
+     `VoiceModel.join` treats "already in this channel" as a reopen and does
+     nothing, which after a failure would show the old error instead of
+     trying, and a tap on this card is somebody asking to try.
+     */
+    private func landOnHostStage(_ channel: Channel) {
         openedChannel = channel
+        voice.isCollapsed = false
+        Task {
+            if case .failed = voice.status, voice.channelId == channel.id {
+                await voice.leave()
+            }
+            await voice.join(
+                channel: channel, session: session, ratings: ratings, serverName: server.name
+            )
+        }
     }
 
     /**
@@ -599,10 +637,10 @@ struct ChannelListView: View {
      never an unauthorised party.
 
      On success the returned channel is appended to `channels` (it may be
-     brand new to this client) and opened directly, landing the host on the
-     toolbar's Join button and, once seated, `WatchPartyHostControls`'
-     already-built setup card -- exactly the "immediately show the host
-     setup" this PR asks for, reusing that flow rather than duplicating it.
+     brand new to this client) and the host lands on the call stage with
+     `WatchPartyHostControls`' setup card (`landOnHostStage`). Opening the
+     transcript alone, which the first cut did, left the host one Join tap
+     away from the only screen that could do anything with the party.
      */
     private func createWatchParty() async {
         let name = watchPartyDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -620,7 +658,7 @@ struct ChannelListView: View {
                 applyMatchedWatchPartyUpdate(channelId: party.channelId, party: party)
             }
             if let channel = response.channel {
-                openedChannel = channel
+                landOnHostStage(channel)
             }
         } catch {
             watchPartyCreateError = (error as? APIError)?.errorDescription ?? error.localizedDescription

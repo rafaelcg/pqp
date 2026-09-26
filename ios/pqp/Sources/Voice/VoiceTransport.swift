@@ -193,6 +193,14 @@ enum SfuJoinError: Error, Equatable, Sendable {
     case connect(String)
     /// `sfuJoinTimeout` elapsed with no connected room.
     case timedOut
+    /// The room connected and the microphone would not publish. `VoiceModel`
+    /// ends the session on this only when the microphone's state is unknown
+    /// (`SfuMicrophoneOutcome.unknownState`); a clean failure keeps the seat
+    /// there. `CallModel` ends the call on either.
+    case microphone(String)
+    /// The room connected and was gone again by the time the microphone step
+    /// ran. Not "could not reach": it was reached.
+    case lost(String)
     /// The join was abandoned by a leave (or a displacement) that landed while
     /// the token or the connect was in flight. Not a failure to show.
     case superseded
@@ -200,15 +208,133 @@ enum SfuJoinError: Error, Equatable, Sendable {
 
 /// The one sentence the user sees for every `SfuJoinError` worth showing.
 ///
-/// Identical to the web's `voice.error.transportUnreachable`, on purpose:
-/// the two clients meet in the same call and should describe the same failure
-/// the same way. `superseded` has no copy because nothing went wrong.
-func sfuFailureMessage(_ error: SfuJoinError) -> String? {
+/// The unreachable sentence is identical to the web's
+/// `voice.error.transportUnreachable`, on purpose: the two clients meet in the
+/// same call and should describe the same failure the same way. It is ONLY for
+/// what fails before the room is up. `microphone` and `lost` fail after, once
+/// the server has been reached and has accepted us, and blaming the network's
+/// reach for them sends somebody off to check a connection that worked.
+/// `superseded` has no copy because nothing went wrong.
+///
+/// `promoted` is a call somebody was already in, which "you have not joined
+/// this call" is false about; see `sfuPromotionFailureMessage`. The two
+/// after-connect sentences already say "the call ended", which is true on
+/// both paths, so they do not vary with it.
+func sfuFailureMessage(_ error: SfuJoinError, promoted: Bool = false) -> String? {
     switch error {
     case .superseded:
         nil
+    case .microphone:
+        String(localized: "Your microphone could not start on the voice server, so the call ended. Try again.")
+    case .lost:
+        String(localized: "The connection to the voice server dropped, so the call ended. Join again to come back.")
     case .token, .connect, .timedOut:
-        String(localized: "Could not reach the voice server, so you have not joined this call. Check your network and try again.")
+        promoted
+            ? sfuPromotionFailureMessage()
+            : String(localized: "Could not reach the voice server, so you have not joined this call. Check your network and try again.")
+    }
+}
+
+/**
+ What became of the microphone once the LiveKit room itself was up.
+
+ Its own step with its own outcome, separate from the connect, because the two
+ fail for different reasons and mean different things. A connect that fails
+ means nobody can hear or see anybody. A microphone that fails to publish means
+ the room is fine and only this phone's voice is missing from it.
+
+ And the SDK has a way of failing that is exactly the second kind:
+ `LocalParticipant._publish` waits for the first captured audio frame
+ (`LocalAudioTrack.startWaitingForFrames`, whose `AudioFrameWatcher` gives up
+ after 5 seconds) AFTER the server has already accepted the track. Folded into
+ `SfuJoinError.connect`, that told a host who was connected, published and seen
+ by the server that the voice server could not be reached, then walked them out
+ of a room that was working.
+ */
+enum SfuMicrophoneOutcome: Equatable, Sendable {
+    /// On the wire, muted or not as asked.
+    case published
+    /// Deliberately not published: a listen-only seat (`welcome.canSpeak`).
+    case withheld
+    /// The publish threw and no microphone track is left on the room. The room
+    /// is still connected; the only thing missing is this phone's voice.
+    case failed(String)
+    /// The publish threw and taking the track down threw too, so whether a
+    /// microphone is on the wire is unknown. Never a seat worth keeping: a
+    /// button that says muted over a track that may be sending is the one
+    /// outcome worse than a dropped call.
+    case unknownState(String)
+    /// There was no connected room to publish into. A connection that went,
+    /// not a microphone that would not start.
+    case roomLost(String)
+}
+
+/// The line a seated person reads when their microphone would not publish and
+/// the room kept them anyway. What is true (the room is fine, their voice is
+/// not in it) and what to do (unmute, which publishes again).
+func sfuMicrophoneFailureNotice() -> String {
+    String(localized: "Your microphone could not start, so nobody can hear you. You can still listen. Tap unmute to try again.")
+}
+
+/// What a session does after the microphone step.
+enum SfuMicrophoneDisposition: Equatable, Sendable {
+    /// Stay in the room. `muted` is what the mic control must now read, and
+    /// `notice` the sentence to show, if any.
+    case keep(muted: Bool, notice: String?)
+    /// End the session through the ordinary SFU failure path, with this error.
+    case end(SfuJoinError)
+}
+
+/**
+ What a microphone outcome means for the session. Pure, so every branch can be
+ pinned without a LiveKit room.
+
+ Only a CLEAN failure (`failed`: the publish threw and the track is gone) is a
+ seat worth keeping, and only where the model can keep one (`keepsSeat`:
+ `VoiceModel`, whose rooms work fine with a listener in them). It forces mute,
+ so the control agrees with the wire and the roster says "muted" rather than
+ leaving the room to wonder why somebody went quiet. A room that has gone
+ (`roomLost`) and a microphone whose state is unknown (`unknownState`) end the
+ session everywhere: the first has no call to keep, the second cannot promise
+ the button tells the truth.
+ */
+func sfuMicrophoneDisposition(
+    _ outcome: SfuMicrophoneOutcome, wasMuted: Bool, keepsSeat: Bool
+) -> SfuMicrophoneDisposition {
+    switch outcome {
+    case .published, .withheld:
+        .keep(muted: wasMuted, notice: nil)
+    case .failed(let reason):
+        keepsSeat
+            ? .keep(muted: true, notice: sfuMicrophoneFailureNotice())
+            : .end(.microphone(reason))
+    case .unknownState(let reason):
+        .end(.microphone(reason))
+    case .roomLost(let reason):
+        .end(.lost(reason))
+    }
+}
+
+/**
+ Which mute or unmute a result belongs to.
+
+ An unmute that has to publish the microphone again can take seconds, and the
+ person can tap again meanwhile. Without this an older unmute's failure,
+ landing after a newer one that worked, re-muted somebody whose microphone was
+ on. Every mute-state change takes a ticket; a result is applied only while its
+ ticket is still the latest. Monotonic for the model's lifetime, so a ticket
+ can never be reissued.
+ */
+struct MuteRequestLedger: Equatable, Sendable {
+    private(set) var latest = 0
+
+    mutating func begin() -> Int {
+        latest &+= 1
+        return latest
+    }
+
+    func isCurrent(_ ticket: Int) -> Bool {
+        ticket == latest
     }
 }
 

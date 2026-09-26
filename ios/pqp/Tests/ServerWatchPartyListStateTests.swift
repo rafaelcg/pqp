@@ -104,4 +104,26 @@ final class ServerWatchPartyListStateTests: XCTestCase {
             .live(newer)
         )
     }
+
+    // MARK: - What a card tap does
+
+    /// TestFlight 1.0.5: the owner's own draft ("Being set up. Tap to
+    /// continue.") pushed the transcript, where no setup card exists. A host's
+    /// and a co-host's pending card goes to the call stage instead.
+    func testAHostsPendingCardLandsOnTheStage() {
+        for state in ["draft", "scheduled"] {
+            XCTAssertEqual(watchPartyCardTap(for: party(state: state, viewerRole: "host")), .host)
+            XCTAssertEqual(watchPartyCardTap(for: party(state: state, viewerRole: "cohost")), .host)
+        }
+    }
+
+    /// A live party this account runs is where its End control is.
+    func testAHostsLiveCardLandsOnTheStage() {
+        XCTAssertEqual(watchPartyCardTap(for: party(state: "live", viewerRole: "host")), .host)
+    }
+
+    /// The audience keeps the seatless path: no seat, no microphone prompt.
+    func testAViewersLiveCardStillJustWatches() {
+        XCTAssertEqual(watchPartyCardTap(for: party(state: "live", viewerRole: "viewer")), .watch)
+    }
 }

@@ -10,10 +10,14 @@ import SwiftUI
  - `.live`: the party's name, the host's face, a viewer count when one is
    cheaply known, and a red "LIVE" pill. Tapping it opens the channel --
    `WatchStageView` mounts on its own and starts playing; no second tap, no
-   microphone prompt.
+   microphone prompt. Unless the party is this account's own, see below.
  - `.pending`: this account's own draft/scheduled party, so the control that
    would otherwise say "Create watch party" instead becomes the way back
    into the one already started.
+
+ WHAT A TAP DOES IS NOT DECIDED HERE. `onOpen` hands the whole party up and
+ the caller asks `watchPartyCardTap`: a host or co-host lands on the call
+ stage with the setup card, everybody else on the seatless picture.
  - `.canHost`: a single row that reads as an action, not a channel type --
    the whole reason build 21's bug ("watch party shows as a regular voice
    channel", see `ChannelListView`'s own doc) is not simply un-fixed by
@@ -40,7 +44,7 @@ struct WatchPartySidebarSlot: View {
     /// disables the row and swaps its icon for a spinner so a slow network
     /// does not read as an unresponsive tap and invite a second one.
     var isCreating: Bool = false
-    let onOpen: (String) -> Void
+    let onOpen: (WatchPartyPayload) -> Void
     let onCreate: () -> Void
 
     var body: some View {
@@ -64,7 +68,7 @@ struct WatchPartySidebarSlot: View {
 
     private func liveCard(_ party: WatchPartyPayload) -> some View {
         Button {
-            onOpen(party.channelId)
+            onOpen(party)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top, spacing: 8) {
@@ -148,7 +152,7 @@ struct WatchPartySidebarSlot: View {
 
     private func pendingCard(_ party: WatchPartyPayload) -> some View {
         Button {
-            onOpen(party.channelId)
+            onOpen(party)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "movieclapper.fill")

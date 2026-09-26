@@ -289,6 +289,123 @@ final class VoiceTransportTests: XCTestCase {
     /// A join abandoned by a leave is not a failure; nothing is shown.
     func testSupersededJoinIsSilent() {
         XCTAssertNil(sfuFailureMessage(.superseded))
+        XCTAssertNil(sfuFailureMessage(.superseded, promoted: true))
+    }
+
+    /// TestFlight 1.0.5: the room connected, the microphone track was accepted
+    /// by the server, and then the SDK's 5 second first-audio-frame wait threw.
+    /// That was reported as a voice server that could not be reached. A failure
+    /// after the room is up must never borrow the unreachable sentence.
+    func testAMicrophoneFailureIsNeverBlamedOnTheNetwork() {
+        let unreachable = sfuFailureMessage(.connect("refused"))
+        for promoted in [false, true] {
+            let message = sfuFailureMessage(.microphone("timedOut"), promoted: promoted)
+            XCTAssertNotNil(message)
+            XCTAssertNotEqual(message, unreachable)
+            XCTAssertNotEqual(message, sfuPromotionFailureMessage())
+            XCTAssertFalse(message?.contains("reach") ?? true)
+        }
+    }
+
+    /// A promoted room was a call somebody was in, so the pre-connect failures
+    /// get the promotion sentence rather than "you have not joined this call".
+    func testPromotedPreConnectFailuresUseThePromotionSentence() {
+        for error in [SfuJoinError.timedOut, .token("500"), .connect("refused")] {
+            XCTAssertEqual(sfuFailureMessage(error, promoted: true), sfuPromotionFailureMessage())
+        }
+    }
+
+    // MARK: - The microphone after the room is up
+
+    /// A clean microphone failure in a voice channel keeps the seat, forces
+    /// the button to muted so it agrees with the wire, and says why.
+    func testACleanMicrophoneFailureKeepsTheSeatMuted() {
+        for wasMuted in [false, true] {
+            XCTAssertEqual(
+                sfuMicrophoneDisposition(.failed("timedOut"), wasMuted: wasMuted, keepsSeat: true),
+                .keep(muted: true, notice: sfuMicrophoneFailureNotice())
+            )
+        }
+    }
+
+    /// A call has no seat to keep: the same failure ends it, as a microphone
+    /// failure and not as an unreachable server.
+    func testACleanMicrophoneFailureEndsACall() {
+        XCTAssertEqual(
+            sfuMicrophoneDisposition(.failed("timedOut"), wasMuted: false, keepsSeat: false),
+            .end(.microphone("timedOut"))
+        )
+    }
+
+    /// Farol on #842: a room that was gone by the microphone step is a lost
+    /// connection, never a microphone-only failure that marks the seat live.
+    func testALostRoomEndsTheSessionAsALostConnection() {
+        for keepsSeat in [false, true] {
+            XCTAssertEqual(
+                sfuMicrophoneDisposition(.roomLost("gone"), wasMuted: false, keepsSeat: keepsSeat),
+                .end(.lost("gone"))
+            )
+        }
+        let message = sfuFailureMessage(.lost("gone"))
+        XCTAssertNotNil(message)
+        XCTAssertNotEqual(message, sfuFailureMessage(.connect("refused")))
+        XCTAssertNotEqual(message, sfuFailureMessage(.microphone("x")))
+        XCTAssertEqual(sfuFailureMessage(.lost("gone"), promoted: true), message)
+    }
+
+    /// Farol on #842: when the failed track could not be taken down, whether a
+    /// microphone is sending is unknown, and no seat is kept on that.
+    func testAnUnknownMicrophoneStateEndsTheSessionEverywhere() {
+        for keepsSeat in [false, true] {
+            XCTAssertEqual(
+                sfuMicrophoneDisposition(.unknownState("unpublish"), wasMuted: true, keepsSeat: keepsSeat),
+                .end(.microphone("unpublish"))
+            )
+        }
+    }
+
+    /// A published microphone and a listen-only seat change nothing: the mute
+    /// the person chose stands and there is nothing to explain.
+    func testAWorkingOrWithheldMicrophoneLeavesMuteAlone() {
+        for outcome in [SfuMicrophoneOutcome.published, .withheld] {
+            for wasMuted in [false, true] {
+                for keepsSeat in [false, true] {
+                    XCTAssertEqual(
+                        sfuMicrophoneDisposition(outcome, wasMuted: wasMuted, keepsSeat: keepsSeat),
+                        .keep(muted: wasMuted, notice: nil)
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Which mute request a result belongs to
+
+    /// Farol on #842: unmute A (publishing, slow), mute, unmute B (works).
+    /// A's failure arrives last and must not re-mute somebody B unmuted.
+    func testAnOlderUnmutesResultIsStaleOnceANewerRequestExists() {
+        var ledger = MuteRequestLedger()
+        let unmuteA = ledger.begin()
+        let mute = ledger.begin()
+        let unmuteB = ledger.begin()
+        XCTAssertFalse(ledger.isCurrent(unmuteA))
+        XCTAssertFalse(ledger.isCurrent(mute))
+        XCTAssertTrue(ledger.isCurrent(unmuteB))
+    }
+
+    /// Tickets only go up, so none is ever handed out twice.
+    func testMuteTicketsAreNeverReissued() {
+        var ledger = MuteRequestLedger()
+        let tickets = (0..<5).map { _ in ledger.begin() }
+        XCTAssertEqual(Set(tickets).count, tickets.count)
+        XCTAssertEqual(tickets, tickets.sorted())
+    }
+
+    /// The notice is not the unreachable sentence either: the person is in the
+    /// call, and it has to say so.
+    func testTheMicrophoneNoticeSaysTheCallIsStillUp() {
+        XCTAssertNotEqual(sfuMicrophoneFailureNotice(), sfuFailureMessage(.connect("refused")))
+        XCTAssertFalse(sfuMicrophoneFailureNotice().contains("not joined"))
     }
 
     // MARK: - Keeping the room across a socket blip
