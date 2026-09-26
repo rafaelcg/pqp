@@ -105,6 +105,81 @@ final class WatchPartyHostControllerTests: XCTestCase {
         XCTAssertEqual(tracker.knowledge, .known(party(state: "live")))
     }
 
+    // MARK: - reset() bumps rather than zeroes the generation
+
+    func testResetForgetsTheParty() {
+        var tracker = WatchPartyPartyTracker()
+        tracker.applyAuthoritative(party())
+        tracker.reset()
+        XCTAssertEqual(tracker.knowledge, .unknown)
+    }
+
+    /**
+     THE SECOND-ROUND FAROL FINDING. Two visits to the same channel handing
+     out the SAME generation numbers is what let a fetch from the first
+     visit -- still in flight when the phone came back -- be mistaken for
+     the second visit's own fetch. `reset()` bumping `generation` rather
+     than zeroing it (the first cut's bug: replacing the whole tracker with
+     `WatchPartyPartyTracker()`) is what closes that: every number this
+     tracker ever hands out is unique for its whole lifetime, so a stale
+     fetch's captured version can never coincide with a legitimate one
+     from a later epoch.
+     */
+    func testAFetchFromBeforeAResetCannotBeMistakenForOneAfterIt() {
+        var tracker = WatchPartyPartyTracker()
+        // Visit 1: a fetch begins for this channel.
+        let firstVisitFetch = tracker.beginFetch()
+        // The phone leaves, then returns to the SAME channel: `open` resets.
+        tracker.reset()
+        // Visit 2: a fresh fetch begins and answers immediately.
+        let secondVisitFetch = tracker.beginFetch()
+        XCTAssertNotEqual(
+            firstVisitFetch, secondVisitFetch,
+            "two visits must never hand out the same generation number"
+        )
+        tracker.applyFetchResult(party(state: "live"), requestedGeneration: secondVisitFetch)
+        XCTAssertEqual(tracker.knowledge, .known(party(state: "live")))
+        // The FIRST visit's fetch, delayed this whole time, finally answers
+        // with whatever it saw back then -- it must not overwrite visit 2's
+        // already-applied, correct answer.
+        let stillApplied = tracker.applyFetchResult(party(state: "ended"), requestedGeneration: firstVisitFetch)
+        XCTAssertFalse(stillApplied)
+        XCTAssertEqual(tracker.knowledge, .known(party(state: "live")))
+    }
+
+    func testResetAdvancesGenerationEvenWithNoFetchInFlight() {
+        var tracker = WatchPartyPartyTracker()
+        let before = tracker.beginFetch()
+        tracker.reset()
+        let after = tracker.beginFetch()
+        XCTAssertNotEqual(before, after)
+    }
+
+    // MARK: - WatchPartyFetchBackoff gives up eventually
+
+    func testBackoffDoublesUpToItsCeiling() {
+        var backoff = WatchPartyFetchBackoff()
+        let delays = (0..<WatchPartyFetchBackoff.maxAttempts).compactMap { _ in backoff.next() }
+        XCTAssertEqual(delays.count, WatchPartyFetchBackoff.maxAttempts)
+        XCTAssertEqual(delays.first, .milliseconds(1_000))
+        XCTAssertEqual(delays.last, .milliseconds(30_000))
+        // Strictly non-decreasing, capped at 30s.
+        for delay in delays {
+            XCTAssertLessThanOrEqual(delay, .milliseconds(30_000))
+        }
+    }
+
+    /// Farol finding: an unbounded retry keeps generating traffic for a
+    /// channel nobody is looking at any more (there is no explicit
+    /// `close()`). `next()` must eventually say so rather than retry forever.
+    func testBackoffGivesUpAfterMaxAttempts() {
+        var backoff = WatchPartyFetchBackoff()
+        for _ in 0..<WatchPartyFetchBackoff.maxAttempts {
+            XCTAssertNotNil(backoff.next())
+        }
+        XCTAssertNil(backoff.next(), "must give up once maxAttempts is reached")
+    }
+
     // MARK: - Farol finding #1: the macro's own module
 
     func testControllerImportsObservationForTheObservableMacro() throws {

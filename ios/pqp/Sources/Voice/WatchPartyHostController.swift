@@ -89,10 +89,62 @@ struct WatchPartyPartyTracker: Equatable, Sendable {
         return true
     }
 
+    /**
+     Forget this channel's party because the CONTROLLER is now tracking a
+     DIFFERENT channel -- never because this one's answer is merely stale.
+
+     BUMPS `generation` RATHER THAN ZEROING IT. A second Farol finding: the
+     first cut replaced the whole tracker with `WatchPartyPartyTracker()` on
+     every channel switch, which restarts `generation` at 0 every time. Two
+     visits to the same channel then hand out the SAME numbers (1, 2, 3...)
+     to two different epochs, and a fetch from the first visit, delayed
+     long enough to still be in flight when the phone comes back to that
+     channel, can carry a `requestedGeneration` that coincidentally matches
+     the second visit's -- `applyFetchResult`'s equality check cannot tell
+     the two apart, and a stale answer overwrites a fresh one. `generation`
+     bumping monotonically FOREVER, never restarting, is what makes every
+     number this tracker ever hands out unique for the whole life of the
+     app, so a fetch from a channel that is no longer even the one tracked
+     can never be mistaken for current.
+     */
+    mutating func reset() {
+        generation &+= 1
+        party = nil
+        known = false
+    }
+
     /// This tracker's `party`/`known`, as `WatchPartyHostGate.swift`'s
     /// functions want it.
     var knowledge: WatchPartyKnowledge {
         known ? .known(party) : .unknown
+    }
+}
+
+/**
+ Capped exponential backoff for `WatchPartyHostController.fetchParty`'s
+ retry loop, and a bound on how long it may run.
+
+ FAROL FINDING THIS CLOSES. There is no explicit `close()` on
+ `WatchPartyHostController` (by design -- see its own doc), so a fetch that
+ keeps failing had nothing at all stopping it from retrying forever, even
+ once nobody is looking at that channel any more. Six attempts (roughly a
+ minute of backoff, 1s doubling to 30s) is long enough to ride out a
+ transient blip -- the case this retry exists for -- without becoming an
+ unbounded background job.
+ */
+struct WatchPartyFetchBackoff: Sendable {
+    private(set) var delayMs = 1_000
+    private var attempt = 0
+    static let maxAttempts = 6
+
+    /// The next delay to sleep before retrying, or `nil` once `maxAttempts`
+    /// has been reached -- the caller's cue to give up.
+    mutating func next() -> Duration? {
+        attempt += 1
+        guard attempt <= Self.maxAttempts else { return nil }
+        let duration = Duration.milliseconds(delayMs)
+        delayMs = min(delayMs * 2, 30_000)
+        return duration
     }
 }
 
@@ -178,8 +230,10 @@ final class WatchPartyHostController {
         }
         guard changed else { return }
         // A previous channel's knowledge must not linger under a new
-        // channel's id while the fresh read below is in flight.
-        partyState = WatchPartyPartyTracker()
+        // channel's id while the fresh read below is in flight. `reset()`,
+        // not a fresh `WatchPartyPartyTracker()` -- see its doc for why
+        // zeroing `generation` here was itself a Farol finding.
+        partyState.reset()
         fetchParty(channelId: channelId, session: session)
     }
 
@@ -217,13 +271,14 @@ final class WatchPartyHostController {
      above calls it again on every reconnect for the same reason.
 
      Cancels any fetch already in flight (a previous channel's, or an
-     earlier attempt for this one) before starting.
+     earlier attempt for this one) before starting. Gives up after
+     `WatchPartyFetchBackoff.maxAttempts` failures -- see that type's doc.
      */
     private func fetchParty(channelId: String, session: SessionStore) {
         fetchTask?.cancel()
         let requestedGeneration = partyState.beginFetch()
         fetchTask = Task { [weak self] in
-            var delayMs = 1_000
+            var backoff = WatchPartyFetchBackoff()
             while !Task.isCancelled {
                 do {
                     let fetched = try await session.api.fetchChannelWatchParty(channelId: channelId)
@@ -233,10 +288,10 @@ final class WatchPartyHostController {
                 } catch {
                     if error is CancellationError { return }
                     guard let self, self.channelId == channelId,
-                          self.partyState.generation == requestedGeneration
+                          self.partyState.generation == requestedGeneration,
+                          let delay = backoff.next()
                     else { return }
-                    try? await Task.sleep(for: .milliseconds(delayMs))
-                    delayMs = min(delayMs * 2, 30_000)
+                    try? await Task.sleep(for: delay)
                 }
             }
         }
@@ -244,14 +299,18 @@ final class WatchPartyHostController {
 
     /// "Criar watch party". Always a name-only, immediate `draft` -- no
     /// scheduling in this build (see `APIClient.createWatchParty`'s doc).
-    /// The response is applied directly (see `WatchPartyPartyTracker`'s
+    /// A successful response is applied directly (see `WatchPartyPartyTracker`'s
     /// doc): a missed `watch-party-update` must not leave the controller
-    /// still offering Create after the party actually exists.
+    /// still offering Create after the party actually exists. `nil` here
+    /// is not informative the way a GET's `nil` is -- it is the shape of a
+    /// server error the write path never actually returns cleanly (any
+    /// refusal throws instead) -- so it is left unapplied rather than wiping
+    /// out whatever this phone already knew.
     func create(channelId: String, name: String, session: SessionStore) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         run(.creating) {
             let created = try await session.api.createWatchParty(channelId: channelId, name: trimmed)
-            if self.channelId == channelId { self.partyState.applyAuthoritative(created) }
+            if let created, self.channelId == channelId { self.partyState.applyAuthoritative(created) }
         }
     }
 
@@ -270,13 +329,21 @@ final class WatchPartyHostController {
         run(.goingLive) {
             let result = try await performWatchPartyGoLive(
                 setLive: {
+                    // `nil` here is a refused/unconfirmed transition, not a
+                    // fact about the party's existence -- applying it would
+                    // wipe out a party this phone already knows is real
+                    // (still `draft`, just not live yet). Only a confirmed
+                    // party is authoritative; leave the tracker alone
+                    // otherwise (Farol finding).
                     let updated = try await session.api.setWatchPartyState(
                         partyId: partyId, state: "live", lowLatency: lowLatency
                     )
-                    if self.channelId == channel.id { self.partyState.applyAuthoritative(updated) }
+                    if let updated, self.channelId == channel.id { self.partyState.applyAuthoritative(updated) }
                     return updated != nil
                 },
                 checkLive: {
+                    // Unlike the write above, a GET's `nil` genuinely means
+                    // "no active party" and is safe to apply either way.
                     let fetched = try await session.api.fetchChannelWatchParty(channelId: channel.id)
                     if self.channelId == channel.id { self.partyState.applyAuthoritative(fetched) }
                     guard let fetched else { return false }
@@ -291,7 +358,7 @@ final class WatchPartyHostController {
                 },
                 endParty: {
                     let ended = try await session.api.setWatchPartyState(partyId: partyId, state: "ended")
-                    if self.channelId == channel.id { self.partyState.applyAuthoritative(ended) }
+                    if let ended, self.channelId == channel.id { self.partyState.applyAuthoritative(ended) }
                     return ended != nil
                 }
             )
@@ -325,8 +392,12 @@ final class WatchPartyHostController {
         run(.ending) {
             let ended = try await performWatchPartyEnd(
                 setEnded: {
+                    // Same reasoning as `goLive`'s `setLive`/`endParty`: a
+                    // `nil` here is an unconfirmed transition, not proof
+                    // the party is gone, so only a confirmed answer is
+                    // applied (Farol finding).
                     let updated = try await session.api.setWatchPartyState(partyId: partyId, state: "ended")
-                    if self.channelId == channelId { self.partyState.applyAuthoritative(updated) }
+                    if let updated, self.channelId == channelId { self.partyState.applyAuthoritative(updated) }
                     return updated != nil
                 },
                 leaveVoice: { await voice.leave() }
