@@ -330,6 +330,20 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         XCTAssertTrue(controller.contains(leaveFailed))
     }
 
+    /// Farol on #843: a reused seat going live must take the microphone down
+    /// on the wire, confirmed, not only flip the mute control.
+    func testAReusedSeatIsSilencedOnTheWireBeforeItReadsMuted() throws {
+        let model = try source("Voice/VoiceModel.swift")
+        guard let start = model.range(of: "private func reconcileReopenedSeat(") else {
+            return XCTFail("reconcileReopenedSeat is gone")
+        }
+        let body = model[start.upperBound...].prefix(900)
+        XCTAssertTrue(body.contains("await voice.setMuted(true)"))
+        XCTAssertTrue(body.contains("await sfu.silenceMicrophone()"))
+        XCTAssertTrue(body.contains("sfuMicrophoneAfterSilence("))
+        XCTAssertTrue(model.contains("await reconcileReopenedSeat(with: microphone)"))
+    }
+
     /// The toolbar's Join steps aside for the host's own card.
     func testTheToolbarJoinStepsAsideForTheHostsCard() throws {
         let chat = try source("Chat/ChatView.swift")

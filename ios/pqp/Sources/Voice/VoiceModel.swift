@@ -513,7 +513,7 @@ final class VoiceModel {
         // same room is a no-op: the stage was reopened, not rejoined.
         if status != .idle {
             if channelId == channel.id {
-                reconcileReopenedSeat(with: microphone)
+                await reconcileReopenedSeat(with: microphone)
                 return
             }
             await leave()
@@ -1522,16 +1522,6 @@ final class VoiceModel {
     }
 
     /**
-     A mesh room for a seat that joined with no microphone.
-
-     Not a watch party's normal path: live HLS pins every party room to the
-     SFU (`liveHlsForcesSfu` on the server), and that is the only kind of room
-     the stage's Go live is offered for. But a room's transport is the server's
-     to decide, and the mesh cannot play a room at all without the audio
-     session its microphone track brings up, so here the seat takes a muted
-     one like every other mesh seat rather than joining a room it cannot hear.
-     */
-    /**
      A join for the room this phone is already in is a reopen, not a new seat,
      but the microphone it asked for still has to hold.
 
@@ -1542,13 +1532,42 @@ final class VoiceModel {
      the seat is muted (`seatStartsMuted` is true for every broadcast seat)
      and from here on is treated as one that has a microphone, muted. An
      ordinary reopen (`.standard`) changes nothing, as before.
+
+     THE WIRE FIRST, AND CONFIRMED. The property's `didSet` mutes both
+     transports too, but in a detached task whose result nobody reads. Here
+     the mesh track is disabled directly (it cannot fail), and on the SFU the
+     published track is taken down through `silenceMicrophone`, whose answer
+     decides: not confirmed means a control saying muted over a microphone
+     that may still be sending, and the session ends instead
+     (`sfuMicrophoneAfterSilence`), the same rule as a microphone in an
+     unknown state. A room still joining publishes from `isMuted` when it
+     comes up, so there is nothing on the wire yet to take down.
      */
-    private func reconcileReopenedSeat(with microphone: SeatMicrophone) {
+    private func reconcileReopenedSeat(with microphone: SeatMicrophone) async {
         let next = reopenedSeatMicrophone(current: seatMicrophone, requested: microphone)
         seatMicrophone = next.seat
-        if next.mute, !isMuted { isMuted = true }
+        guard next.mute else { return }
+        if !isMuted { isMuted = true }
+        await voice.setMuted(true)
+        guard transport == .livekit, status == .connected else { return }
+        let confirmed = await sfu.silenceMicrophone()
+        // Nothing went wrong with a microphone that did mute, so there is no
+        // notice to show; only the unconfirmed case acts.
+        if case .end(let error) = sfuMicrophoneAfterSilence(notice: "", confirmed: confirmed) {
+            await endSfuSession(error, promoted: true)
+        }
     }
 
+    /**
+     A mesh room for a seat that joined with no microphone.
+
+     Not a watch party's normal path: live HLS pins every party room to the
+     SFU (`liveHlsForcesSfu` on the server), and that is the only kind of room
+     the stage's Go live is offered for. But a room's transport is the server's
+     to decide, and the mesh cannot play a room at all without the audio
+     session its microphone track brings up, so here the seat takes a muted
+     one like every other mesh seat rather than joining a room it cannot hear.
+     */
     private func startMeshAudioForSeatWithoutMicrophone() async {
         seatMicrophone = .startMuted
         try? await voice.startAudio()
