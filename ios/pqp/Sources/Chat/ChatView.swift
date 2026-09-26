@@ -100,26 +100,75 @@ struct ChatView: View {
     @State private var watchPartyPermissions: PermissionsSnapshot?
 
     /**
-     Whether `WatchStageView`'s idle card should point at the toolbar's Join
-     button instead of saying nothing is running. `START_WATCH_PARTY`, WITH
-     `voiceChannel.id` as the channel id (unlike `ChannelListView`'s own
-     `canHostWatchParty`, which asks with none): this screen, unlike the
-     sidebar's Create row, always names a channel that already exists, so
-     the more precise question -- does a channel-specific overwrite change
-     the answer for THIS room -- is the one to ask. See
-     `PermissionsSnapshot.can`'s own doc for the override-falls-back-to-
-     server-bits rule this mirrors from `use-permissions.ts`.
+     `START_WATCH_PARTY` for this room, WITH `voiceChannel.id` as the channel
+     id (unlike `ChannelListView`'s own `canHostWatchParty`, which asks with
+     none): this screen, unlike the sidebar's Create row, always names a
+     channel that already exists, so the more precise question -- does a
+     channel-specific overwrite change the answer for THIS room -- is the one
+     to ask. See `PermissionsSnapshot.can`'s own doc for the override-falls-
+     back-to-server-bits rule this mirrors from `use-permissions.ts`.
 
-     Deliberately not wired to anything that GATES an action (the toolbar's
-     Join button already decides that on its own, via
-     `watchPartyMayJoinRoom`): getting this wrong only costs a sentence,
-     never an unauthorised party, because the actual host controls inside
-     `VoiceView` still ask the server through `WatchPartyHostGate`.
+     The server stays the real gate: create and go-live are refused there
+     for anybody without the bit, whatever this reading says.
      */
-    private var canHostWatchParty: Bool {
+    private var canStartWatchPartyHere: Bool {
         guard let voiceChannel else { return false }
-        return watchPartyLiveHlsConfig.enabled
-            && (watchPartyPermissions?.can(PermissionBit.startWatchParty, channelId: voiceChannel.id) ?? false)
+        return watchPartyPermissions?.can(PermissionBit.startWatchParty, channelId: voiceChannel.id) ?? false
+    }
+
+    /// The host's card on the stage above the transcript: Create, the setup
+    /// card, or a live party with no seat behind it. See
+    /// `watchPartyStageHostCard`. Nothing in the theater, where the film has
+    /// the whole screen.
+    private var watchPartyStageCard: WatchPartyStageHostCard {
+        guard let voiceChannel, !watchTheater else { return .hidden }
+        return watchPartyStageHostCard(
+            isWatchPartyChannel: voiceChannel.isWatchParty,
+            serverWatchPartyEnabled: watchPartyLiveHlsConfig.enabled,
+            canStartWatchParty: canStartWatchPartyHere,
+            party: watchPartyHost.partyKnowledge(for: voiceChannel.id),
+            isSeated: voice.isLive && voice.channelId == voiceChannel.id
+        )
+    }
+
+    /**
+     Whether the toolbar's Join belongs on this channel.
+
+     THE SEAT IS NOT OFFERED TO A WATCH PARTY'S AUDIENCE, and it is not the
+     host's way in either. A watcher costs one socket in a set on the API; a
+     seat costs a participant on the media box and a microphone permission
+     prompt, and on the default stage (`hosts_only`) it buys an ordinary
+     viewer nothing, since the server denies SPEAK to everyone but the host
+     and the co-hosts. Six hundred people arriving at once is the whole
+     design constraint, and this was one green phone button away from six
+     hundred participants.
+
+     A CHANNEL WITH NO PARTY RUNNING IS STILL AN ORDINARY VOICE ROOM, so the
+     button stays where the server's own rule (`mayGoOnAir`) would let
+     someone through (`watchPartyMayJoinRoom`, whose doc explains the one way
+     it is narrower than the server). But where the stage already shows this
+     account's own party, the stage's Go live or Rejoin is the way in: a
+     phone button beside it would seat the host as a call, microphone and
+     all, which is the one thing a broadcast with voice off is not.
+     */
+    private func offersJoin(_ voiceChannel: Channel) -> Bool {
+        if !voiceChannel.isWatchParty { return true }
+        if watchPartyStageCard.isTheWayIn { return false }
+        return watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id))
+    }
+
+    /// The stage above the transcript: the host's card, then the picture.
+    /// Its own function so `body` stays small enough to type-check.
+    private func watchStage(for voiceChannel: Channel) -> some View {
+        let card = watchPartyStageCard
+        return VStack(spacing: 0) {
+            WatchPartyStageHostView(
+                channel: voiceChannel, serverName: server?.name, card: card,
+                lowLatencyAvailable: watchPartyLiveHlsConfig.lowLatency.available
+            )
+            WatchStageView(channel: voiceChannel, hostCardShown: card != .hidden, onBack: { dismiss() })
+                .ignoresSafeArea(edges: .horizontal)
+        }
     }
 
     var body: some View {
@@ -198,34 +247,9 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
         .toolbar {
-            /**
-             THE SEAT IS NOT OFFERED TO A WATCH PARTY'S AUDIENCE.
-
-             A watcher costs one socket in a set on the API. A seat costs a
-             participant on the media box and a microphone permission
-             prompt, and on the default stage (`hosts_only`) it buys an
-             ordinary viewer nothing at all: the server denies SPEAK to
-             everyone but the host and the co-hosts, so the person ends up
-             paying for a room they cannot talk in while already having the
-             film seatlessly on the same screen. Six hundred people arriving
-             at once is the whole design constraint, and this was one green
-             phone button away from six hundred participants.
-
-             BUT A CHANNEL WITH NO PARTY RUNNING IS AN ORDINARY VOICE ROOM,
-             and hosting a watch party from this phone needs a way in:
-             `WatchPartyHostGate.canCreate`/`canManage` are only knowable
-             once `welcome` has answered, which needs a seat first. So the
-             button reappears exactly where the server's own rule
-             (`mayGoOnAir`) would let someone through: nobody is running a
-             party here yet, or this account is already this party's host or
-             a co-host. `watchPartyMayJoinRoom`'s own doc explains the one
-             way this is narrower than the server (no Convidados signal,
-             out of scope on every platform for this PR) and why that is the
-             safe direction to be narrow in.
-             */
-            if let voiceChannel,
-               !voiceChannel.isWatchParty
-                || watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id)) {
+            // Who gets a seat from here, and why a host's own party does not:
+            // see `offersJoin`.
+            if let voiceChannel, offersJoin(voiceChannel) {
                 ToolbarItem(placement: .topBarTrailing) {
                     // A button, not a link to the stage: the stage is presented
                     // from the root while the session is live, so this only
@@ -306,13 +330,16 @@ struct ChatView: View {
         // navigation. `WatchStageView` renders nothing at all when the channel
         // is not being broadcast to, so this is inert on an ordinary voice
         // channel and on every text one.
+        //
+        // The host's own card sits on the same stage, above the picture:
+        // setting a party up and going live need no seat, the way the web's
+        // stage does it. See `watchPartyStageCard`.
         .safeAreaInset(edge: .top, spacing: 0) {
             if let voiceChannel {
-                WatchStageView(channel: voiceChannel, canHost: canHostWatchParty, onBack: { dismiss() })
-                    .ignoresSafeArea(edges: .horizontal)
+                watchStage(for: voiceChannel)
             }
         }
-        // Only for `WatchStageView`'s idle-card copy, see `canHostWatchParty`.
+        // For the host's card on the stage, see `watchPartyStageCard`.
         // Fetched off the channel's own server, not the currently open one --
         // `voiceChannel` and `server` name the same server on every call site
         // today, but `voiceChannel` is what actually determines whether this

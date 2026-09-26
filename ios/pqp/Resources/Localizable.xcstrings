@@ -1141,6 +1141,16 @@
         }
       }
     },
+    "Could not connect to the stream server. Check your network and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra conectar ao servidor da transmissão. Verifique a sua conexão e tente de novo."
+          }
+        }
+      }
+    },
     "Could not delete your account" : {
       "localizations" : {
         "pt-BR" : {
@@ -2821,6 +2831,16 @@
         }
       }
     },
+    "Nobody is streaming yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém começou a transmitir ainda."
+          }
+        }
+      }
+    },
     "Nobody's around" : {
       "localizations" : {
         "pt-BR" : {
@@ -3387,6 +3407,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Recusar"
+          }
+        }
+      }
+    },
+    "Rejoin" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar pra sala"
           }
         }
       }
@@ -4291,6 +4321,16 @@
         }
       }
     },
+    "The connection to the stream server dropped, so the stream stopped. Try again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conexão com o servidor da transmissão caiu, então a transmissão parou. Tente de novo pra voltar."
+          }
+        }
+      }
+    },
     "The date of birth on file is under 18. pqp's Terms require everyone to be 18 or older." : {
       "localizations" : {
         "pt-BR" : {
@@ -4931,6 +4971,26 @@
         }
       }
     },
+    "Voice is off. Your screen goes out, your microphone does not." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz desligada. Sua tela vai ao ar, seu microfone não."
+          }
+        }
+      }
+    },
+    "Voice is on. Your microphone joins muted." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voz ligada. Seu microfone entra desligado."
+          }
+        }
+      }
+    },
     "WEBHOOK" : {
       "localizations" : {
         "pt-BR" : {
@@ -5221,6 +5281,16 @@
         }
       }
     },
+    "You left the room, so your screen is not going out. Rejoin to keep presenting." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você saiu da sala, então sua tela não está indo ao ar. Volte pra continuar transmitindo."
+          }
+        }
+      }
+    },
     "You'll need a new invite to get back in." : {
       "localizations" : {
         "pt-BR" : {
@@ -5277,6 +5347,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você, perfil e ajustes"
+          }
+        }
+      }
+    },
+    "Your broadcast stopped, but the server did not confirm the party ended. It may still show as live." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua transmissão parou, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
           }
         }
       }
@@ -5351,6 +5431,16 @@
         }
       }
     },
+    "Your microphone could not start, so nobody can hear you. The stream keeps going. Tap unmute to try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ligar o seu microfone, então ninguém está te ouvindo. A transmissão continua. Toque em ativar microfone pra tentar de novo."
+          }
+        }
+      }
+    },
     "Your microphone could not start, so nobody can hear you. You can still listen. Tap unmute to try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -5367,6 +5457,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A conexão com o servidor de voz caiu, então a call terminou. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
+    "Your microphone could not start, so the stream stopped. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ligar o seu microfone, então a transmissão parou. Tente de novo."
           }
         }
       }
@@ -7381,16 +7481,6 @@
         }
       }
     },
-    "You left the call, but the server did not confirm the party ended. It may still show as live." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Você saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
-          }
-        }
-      }
-    },
     "Something went wrong. Try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -7427,16 +7517,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcada. Toca pra abrir."
-          }
-        }
-      }
-    },
-    "Nobody is streaming yet. Tap Join above to set one up." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ninguém começou a transmitir ainda. Toca em Entrar pra montar uma."
           }
         }
       }
