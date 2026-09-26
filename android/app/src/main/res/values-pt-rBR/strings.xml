@@ -445,6 +445,23 @@
     <string name="watch_camera_layout_hide_stream">Ocultar transmissão</string>
     <string name="watch_camera_voice_only">Voz do apresentador</string>
 
+    <!-- Watch party hosting -->
+    <string name="watch_party_host_create">Criar watch party</string>
+    <string name="watch_party_host_create_title">Dê um nome pra sua watch party</string>
+    <string name="watch_party_host_create_name_placeholder">Sessão de sábado</string>
+    <string name="watch_party_host_create_submit">Criar</string>
+    <string name="watch_party_host_go_live">Ir ao vivo</string>
+    <string name="watch_party_host_low_latency">Baixa latência (beta)</string>
+    <string name="watch_party_host_live_label">Você está ao vivo</string>
+    <string name="watch_party_host_end">Encerrar</string>
+    <string name="watch_party_host_ack_title">Antes de transmitir</string>
+    <string name="watch_party_host_ack_body">Você é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas.</string>
+    <string name="watch_party_host_ack_confirm">Entendi</string>
+    <string name="watch_party_host_mic_prompt_title">Ligar seu microfone?</string>
+    <string name="watch_party_host_mic_prompt_body">Sua tela está no ar. Seu microfone ainda está desligado, então a sala não consegue te ouvir comentando.</string>
+    <string name="watch_party_host_mic_prompt_confirm">Ligar microfone</string>
+    <string name="watch_party_host_mic_prompt_dismiss">Continuar mudo</string>
+
     <!-- First run (onboarding V2). Copy mirrors client/src/locales, see docs/ANDROID.md. -->
     <string name="onboarding_progress">Passo %1$d de %2$d</string>
     <string name="onboarding_saving">Salvando…</string>

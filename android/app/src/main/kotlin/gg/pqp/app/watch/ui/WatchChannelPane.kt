@@ -41,6 +41,8 @@ fun WatchChannelPane(
     isWatchPartyChannel: Boolean = false,
     canJoinCall: Boolean = false,
     onJoinCall: (() -> Unit)? = null,
+    /** See [WatchPane]'s doc on the same name. */
+    hostControls: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val channels by store.channels.collectAsStateWithLifecycle()
@@ -88,6 +90,7 @@ fun WatchChannelPane(
         isWatchPartyChannel = isWatchPartyChannel,
         canJoinCall = canJoinCall,
         onJoinCall = onJoinCall,
+        hostControls = hostControls,
         modifier = modifier,
     )
 }

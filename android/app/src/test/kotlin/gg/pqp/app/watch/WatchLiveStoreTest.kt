@@ -343,6 +343,52 @@ class WatchLiveStoreTest {
         assertEquals(false, store.mayTakeSeat("c1"))
     }
 
+    /**
+     * The host's own reading of the same frame: name and state, not only the
+     * seat rule. [WatchPartyHostGate] is built off this map.
+     */
+    @Test
+    fun `the full party is kept alongside the seat rule`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(
+            frame(
+                """
+                {"type":"watch-party-update","channelId":"c1",
+                 "party":{"id":"p1","channelId":"c1","name":"Sessao","state":"draft",
+                          "hostUserId":"$ME","hostDisplayName":"Me","viewerRole":"host",
+                          "options":{"voiceEnabled":false,"stageMode":"hosts_only"},
+                          "stage":{"invited":[],"hands":[],"handRaised":false}}}
+                """,
+            ),
+        )
+        val party = store.parties.value["c1"]
+        assertEquals("Sessao", party?.name)
+        assertEquals("draft", party?.state)
+        assertEquals(true, party?.isHost)
+    }
+
+    /** `party: null` clears both maps, not only the seat rule. */
+    @Test
+    fun `party null clears the full party too`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(
+            frame(
+                """
+                {"type":"watch-party-update","channelId":"c1",
+                 "party":{"id":"p1","channelId":"c1","name":"Sessao","state":"live",
+                          "hostUserId":"$ME","hostDisplayName":"Me","viewerRole":"host",
+                          "options":{"voiceEnabled":false,"stageMode":"hosts_only"},
+                          "stage":{"invited":[],"hands":[],"handRaised":false}}}
+                """,
+            ),
+        )
+        assertTrue(store.parties.value.containsKey("c1"))
+        frames.emit(frame("""{"type":"watch-party-update","channelId":"c1","party":null}"""))
+        assertTrue(store.parties.value.isEmpty())
+    }
+
     private companion object {
         const val ME = "11111111-1111-1111-1111-111111111111"
     }

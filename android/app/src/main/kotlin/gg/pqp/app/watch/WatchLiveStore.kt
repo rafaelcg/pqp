@@ -120,6 +120,17 @@ class WatchLiveStore(
     fun mayTakeSeat(channelId: String): Boolean =
         mayTakeWatchPartySeat(canStartWatchParty = false, party = _seats.value[channelId])
 
+    private val _parties = MutableStateFlow<Map<String, WatchPartyPayload>>(emptyMap())
+
+    /**
+     * The full `watch-party-update` object per channel, for the host's own
+     * UI: the party's name, state and who is running it. [seats] reads the
+     * same frame for the narrower seat rule; this is knowledge only, same as
+     * [seats] -- nothing here joins anything, and [WatchPartyHostController]
+     * is where the two are actually acted on.
+     */
+    val parties: StateFlow<Map<String, WatchPartyPayload>> = _parties.asStateFlow()
+
     /** The channel this socket has announced a seatless watch on, or null. */
     @Volatile
     private var watching: String? = null
@@ -165,6 +176,12 @@ class WatchLiveStore(
                         _seats.value - channelId
                     } else {
                         _seats.value + (channelId to seat)
+                    }
+                    val party = decodeWatchPartyPayload(frame)
+                    _parties.value = if (party == null) {
+                        _parties.value - channelId
+                    } else {
+                        _parties.value + (channelId to party)
                     }
                 }
             }

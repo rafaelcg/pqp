@@ -197,6 +197,15 @@ fun WatchPane(
      */
     canJoinCall: Boolean = false,
     onJoinCall: (() -> Unit)? = null,
+    /**
+     * The host's own controls for this channel's party -- "Criar watch
+     * party" on the empty stage, "Ir ao vivo"/"Encerrar" once one exists --
+     * drawn by the caller ([gg.pqp.app.watch.ui.WatchChannelPane]) rather
+     * than by this pane, which knows nothing about hosting and stays that
+     * way: `null` (the default) draws nothing extra at all, so every
+     * existing caller and every existing test is untouched.
+     */
+    hostControls: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -293,6 +302,7 @@ fun WatchPane(
         Column(modifier.fillMaxWidth().testTag("watch.pane")) {
             IdleCard()
             JoinCallRow(canJoinCall = canJoinCall, onJoinCall = onJoinCall)
+            hostControls?.invoke()
         }
         return
     }
@@ -892,6 +902,7 @@ fun WatchPane(
         }
 
         JoinCallRow(canJoinCall = canJoinCall, onJoinCall = onJoinCall)
+        hostControls?.invoke()
     }
 }
 
