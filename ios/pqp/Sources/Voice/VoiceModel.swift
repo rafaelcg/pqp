@@ -1527,11 +1527,11 @@ final class VoiceModel {
 
      The case: a host took an ordinary seat through Join while the room had
      no party, created one on the call screen, and went live with voice off.
-     The seat already has a microphone, and tearing it down would be a second
-     negotiation path; what Go live promises is that it does not go out, so
-     the seat is muted (`seatStartsMuted` is true for every broadcast seat)
-     and from here on is treated as one that has a microphone, muted. An
-     ordinary reopen (`.standard`) changes nothing, as before.
+     The seat takes the policy it asked for (`reopenedSeatMicrophone`):
+     voice off takes the SFU microphone off the room and the seat becomes one
+     with none, so the next unmute is the deliberate act that publishes it
+     again; voice on mutes it in place. An ordinary reopen (`.standard`)
+     changes nothing, as before.
 
      THE WIRE FIRST, AND CONFIRMED. The property's `didSet` mutes both
      transports too, but in a detached task whose result nobody reads. Here
@@ -1550,7 +1550,7 @@ final class VoiceModel {
         if !isMuted { isMuted = true }
         await voice.setMuted(true)
         guard transport == .livekit, status == .connected else { return }
-        let confirmed = await sfu.silenceMicrophone()
+        let confirmed = await sfu.silenceMicrophone(remove: next.seat == .none)
         // Nothing went wrong with a microphone that did mute, so there is no
         // notice to show; only the unconfirmed case acts.
         if case .end(let error) = sfuMicrophoneAfterSilence(notice: "", confirmed: confirmed) {

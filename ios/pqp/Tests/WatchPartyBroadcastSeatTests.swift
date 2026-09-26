@@ -68,9 +68,14 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
     /// created and went live with voice off, kept an unmuted microphone,
     /// because the same-room join returned before the policy was applied.
     func testABroadcastJoinOnAnExistingSeatMutesIt() {
+        // Voice off: the seat goes to no microphone at all, as asked.
         let reopened = reopenedSeatMicrophone(current: .standard, requested: .none)
-        XCTAssertEqual(reopened.seat, .startMuted)
+        XCTAssertEqual(reopened.seat, .none)
         XCTAssertTrue(reopened.mute)
+        let fromMuted = reopenedSeatMicrophone(current: .startMuted, requested: .none)
+        XCTAssertEqual(fromMuted.seat, .none)
+        // Voice on: a microphone, muted; a seat without one stays without.
+        XCTAssertEqual(reopenedSeatMicrophone(current: .none, requested: .startMuted).seat, .none)
         let voiceOn = reopenedSeatMicrophone(current: .standard, requested: .startMuted)
         XCTAssertEqual(voiceOn.seat, .startMuted)
         XCTAssertTrue(voiceOn.mute)
@@ -339,7 +344,7 @@ final class WatchPartyBroadcastSeatTests: XCTestCase {
         }
         let body = model[start.upperBound...].prefix(900)
         XCTAssertTrue(body.contains("await voice.setMuted(true)"))
-        XCTAssertTrue(body.contains("await sfu.silenceMicrophone()"))
+        XCTAssertTrue(body.contains("await sfu.silenceMicrophone(remove: next.seat == .none)"))
         XCTAssertTrue(body.contains("sfuMicrophoneAfterSilence("))
         XCTAssertTrue(model.contains("await reconcileReopenedSeat(with: microphone)"))
     }

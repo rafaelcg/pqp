@@ -90,17 +90,21 @@ func seatStartsMuted(_ seat: SeatMicrophone, muteOnJoinPreference: Bool) -> Bool
 }
 
 /**
- A join for the room this phone already holds a seat in is a reopen, and the
- seat keeps whatever microphone it has. But a broadcast join (Go live, Rejoin)
- still promises the microphone does not go out: the seat is muted, and a
- `.standard` one is from then on a seat with a microphone, muted. An ordinary
- reopen changes nothing. A `.none` seat stays `.none`.
+ A join for the room this phone already holds a seat in is a reopen, not a new
+ seat, but a broadcast join (Go live, Rejoin) still gets the microphone it
+ asked for. `.none` takes the seat to no microphone at all (the caller takes
+ the track off the room); `.startMuted` mutes it, and a `.standard` seat is
+ from then on a seat with a microphone, muted, while a `.none` one stays
+ without. An ordinary reopen changes nothing.
  */
 func reopenedSeatMicrophone(
     current: SeatMicrophone, requested: SeatMicrophone
 ) -> (seat: SeatMicrophone, mute: Bool) {
-    guard requested != .standard else { return (current, false) }
-    return (current == .standard ? .startMuted : current, true)
+    switch requested {
+    case .standard: (current, false)
+    case .none: (.none, true)
+    case .startMuted: (current == .standard ? .startMuted : current, true)
+    }
 }
 
 /**

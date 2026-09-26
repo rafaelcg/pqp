@@ -193,27 +193,29 @@ actor LiveKitVoiceClient {
      Makes sure no microphone is sending, and says whether that is CONFIRMED.
 
      For a microphone whose state is unknown (`SfuMicrophoneOutcome.unknownState`)
-     in a room that is kept anyway (a watch party's broadcast). Mute first,
-     then take the track down if the mute throws; `true` only when one of the
-     two landed, or there is no microphone on the room at all. `false` means
-     the microphone may still be on the wire, and the caller must not keep a
-     seat that claims to be muted over it.
+     in a room that is kept anyway (a watch party's broadcast), and for a seat
+     that goes live with no microphone while it already has one. `remove`
+     takes the track off the room (the seat then has no microphone, and the
+     next unmute publishes one again); otherwise it is muted in place. Either
+     way the other operation is the fallback when the first throws. `true`
+     only when one of the two landed, or there is no microphone on the room
+     at all. `false` means the microphone may still be on the wire, and the
+     caller must not keep a seat that claims to be muted over it.
      */
-    func silenceMicrophone() async -> Bool {
+    func silenceMicrophone(remove: Bool = false) async -> Bool {
         isMuted = true
         guard let room, room.connectionState == .connected else { return false }
         guard let microphone = microphonePublication(in: room) else { return true }
-        do {
-            try await room.localParticipant.setMicrophone(enabled: false)
-            return true
-        } catch {
-            do {
-                try await room.localParticipant.unpublish(publication: microphone)
-                return true
-            } catch {
-                return false
-            }
+        let unpublish: () async throws -> Void = {
+            try await room.localParticipant.unpublish(publication: microphone)
         }
+        let mute: () async throws -> Void = {
+            try await room.localParticipant.setMicrophone(enabled: false)
+        }
+        for attempt in remove ? [unpublish, mute] : [mute, unpublish] {
+            if (try? await attempt()) != nil { return true }
+        }
+        return false
     }
 
     private func microphonePublication(in room: Room) -> LocalTrackPublication? {
