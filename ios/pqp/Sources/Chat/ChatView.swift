@@ -194,7 +194,7 @@ struct ChatView: View {
              */
             if let voiceChannel,
                !voiceChannel.isWatchParty
-                || watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyParty(for: voiceChannel)) {
+                || watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id)) {
                 ToolbarItem(placement: .topBarTrailing) {
                     // A button, not a link to the stage: the stage is presented
                     // from the root while the session is live, so this only
@@ -677,15 +677,6 @@ struct ChatView: View {
             .padding(.bottom, 4)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
-    }
-
-    /// `watchPartyHost.party`, but only when the controller is actually
-    /// tracking `channel` -- see `WatchPartyHostController.open`'s doc and
-    /// `WatchPartyHostControls.party`'s identical guard, which this mirrors
-    /// for the same reason: a stale party from some other channel must not
-    /// decide whether THIS channel's Join button is offered.
-    private func watchPartyParty(for channel: Channel) -> WatchPartyPayload? {
-        watchPartyHost.channelId == channel.id ? watchPartyHost.party : nil
     }
 }
 

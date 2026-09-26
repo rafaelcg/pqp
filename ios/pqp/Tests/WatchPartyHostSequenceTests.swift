@@ -226,6 +226,89 @@ final class WatchPartyHostSequenceTests: XCTestCase {
         XCTAssertEqual(log, ["setEnded", "leaveVoice"])
     }
 
+    // MARK: - joinVoiceAndGuardSettle
+
+    /**
+     Farol finding on `WatchPartyHostController.goLive`'s first cut: a
+     timed-out or refused `waitForVoiceJoin` ended the party without ever
+     telling `VoiceModel` to give up on the join it had just asked for, so a
+     late `welcome` could seat the phone in a room for a party already told
+     it ended. `joinVoiceAndGuardSettle` is the fix, pulled out as its own
+     pure function so the guarantee -- a failed settle always leaves before
+     the failure propagates -- is provable without a real `VoiceModel`.
+     */
+    func testJoinVoiceAndGuardSettleLeavesNothingBehindOnSuccess() async throws {
+        actor Calls { var log: [String] = []; func add(_ s: String) { log.append(s) } }
+        let calls = Calls()
+        try await joinVoiceAndGuardSettle(
+            join: { await calls.add("join") },
+            waitForSettle: { await calls.add("waitForSettle") },
+            leaveOnFailure: { await calls.add("leaveOnFailure") }
+        )
+        let log = await calls.log
+        XCTAssertEqual(log, ["join", "waitForSettle"])
+    }
+
+    func testJoinVoiceAndGuardSettleLeavesBeforeRethrowingAnOrdinaryFailure() async {
+        actor Calls { var log: [String] = []; func add(_ s: String) { log.append(s) } }
+        let calls = Calls()
+        var rethrown = false
+        do {
+            try await joinVoiceAndGuardSettle(
+                join: { await calls.add("join") },
+                waitForSettle: { await calls.add("waitForSettle"); throw Failure() },
+                leaveOnFailure: { await calls.add("leaveOnFailure") }
+            )
+        } catch is Failure {
+            rethrown = true
+        } catch {
+            XCTFail("expected Failure, got \(error)")
+        }
+        XCTAssertTrue(rethrown)
+        let log = await calls.log
+        XCTAssertEqual(log, ["join", "waitForSettle", "leaveOnFailure"])
+    }
+
+    /// A timeout is modelled here as an ordinary throw from `waitForSettle`
+    /// (that is exactly what `WatchPartyHostController.waitForVoiceJoin`
+    /// does past its deadline) -- the leave must still run.
+    func testJoinVoiceAndGuardSettleLeavesOnATimeoutTheSameWay() async {
+        actor Calls { var log: [String] = []; func add(_ s: String) { log.append(s) } }
+        let calls = Calls()
+        do {
+            try await joinVoiceAndGuardSettle(
+                join: {},
+                waitForSettle: { throw WatchPartyHostError.message("timed out") },
+                leaveOnFailure: { await calls.add("leaveOnFailure") }
+            )
+            XCTFail("expected a throw")
+        } catch {
+            // Expected -- the point of this test is that leave still ran.
+        }
+        let log = await calls.log
+        XCTAssertEqual(log, ["leaveOnFailure"])
+    }
+
+    func testJoinVoiceAndGuardSettleLeavesBeforeRethrowingCancellation() async {
+        actor Calls { var log: [String] = []; func add(_ s: String) { log.append(s) } }
+        let calls = Calls()
+        var rethrown = false
+        do {
+            try await joinVoiceAndGuardSettle(
+                join: {},
+                waitForSettle: { throw CancellationError() },
+                leaveOnFailure: { await calls.add("leaveOnFailure") }
+            )
+        } catch is CancellationError {
+            rethrown = true
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertTrue(rethrown)
+        let log = await calls.log
+        XCTAssertEqual(log, ["leaveOnFailure"])
+    }
+
     // MARK: - The streaming-responsibility ack, fail-closed
 
     func testAckNeedsShowingReturnsTheLookupsCleanAnswer() async throws {

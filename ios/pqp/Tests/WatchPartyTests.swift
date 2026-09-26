@@ -789,7 +789,7 @@ final class WatchPartyTests: XCTestCase {
         )
         XCTAssertTrue(
             source.contains(
-                "watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyParty(for: voiceChannel))"
+                "watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id))"
             ),
             "a watch party channel must route through the same narrow rule the server enforces, not a blanket allow"
         )

@@ -29,6 +29,13 @@ struct WatchPartyPayload: Codable, Equatable, Sendable {
     var isCohost: Bool { viewerRole == "cohost" }
     var isLive: Bool { state == "live" }
     var isPreLive: Bool { state == "draft" || state == "scheduled" }
+    /// The party is over and nothing may move it again (`ended`/`cancelled`
+    /// in `WATCH_PARTY_PHASES` -- `TRANSITIONS` in `watch-party-session.ts`
+    /// allows no move out of either). `fetchChannelWatchParty` can still
+    /// return one of these for a while after the fact, and it must read the
+    /// same as "no active party" everywhere a caller asks "is one running":
+    /// see `WatchPartyHostGate.swift`.
+    var isTerminal: Bool { state == "ended" || state == "cancelled" }
 }
 
 /// `{party: ...}`, the envelope every mutation route and the

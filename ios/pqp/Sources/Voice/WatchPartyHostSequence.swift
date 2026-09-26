@@ -66,6 +66,41 @@ enum GoLiveResult: Equatable {
 }
 
 /**
+ Joins voice, then waits for the join to actually settle, and -- if that
+ wait fails for ANY reason, including a timeout or a cancellation -- leaves
+ (or cancels) the join before the failure propagates.
+
+ THE FAROL FINDING THIS CLOSES. `performWatchPartyGoLive`'s `joinVoice`
+ param used to be just `{ await voice.join(...); try await waitForVoiceJoin(...) }`.
+ If the wait timed out, the sequence read that as `joinFailed` and ended the
+ party -- but nothing had told `VoiceModel` to give up on the join it had
+ just asked for. A `welcome` that arrives late, after this function already
+ gave up, would then seat the phone in a room for a party that has already
+ been told it ended: an unintended seat, and call state that disagrees with
+ the party's own row. `leaveOnFailure` is the fix -- `VoiceModel.leave()`
+ both sends `voice-leave` (so the server hears "never mind" even if
+ `welcome` was already in flight) and drops this session's own WS handler,
+ so a `welcome` that slips through anyway is not acted on locally either.
+
+ Pulled out as its own pure function, over closures, for the same reason
+ `performWatchPartyGoLive` is: the guarantee is a fact about ordering that a
+ test can pin without a real `VoiceModel`.
+ */
+@MainActor func joinVoiceAndGuardSettle(
+    join: () async -> Void,
+    waitForSettle: () async throws -> Void,
+    leaveOnFailure: () async -> Void
+) async throws {
+    await join()
+    do {
+        try await waitForSettle()
+    } catch {
+        await leaveOnFailure()
+        throw error
+    }
+}
+
+/**
  Ir ao vivo, in the order the hosting review calls out explicitly: state
  first. `POST /api/watch-parties/:id/state {state:"live"}`, THEN
  `join-voice-room`.

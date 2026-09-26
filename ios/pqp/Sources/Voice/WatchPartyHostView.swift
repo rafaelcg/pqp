@@ -55,12 +55,20 @@ struct WatchPartyHostControls: View {
     @State private var lowLatency = false
     @State private var showMicPrompt = false
 
-    /// `host.party` only when the app-scoped controller is actually tracking
-    /// THIS channel -- see `WatchPartyHostController.open`'s doc for why two
-    /// screens can both call `open`, and why a mismatch has to read as
-    /// "unknown" rather than as some other channel's party.
+    /// This channel's party as `WatchPartyHostController` currently knows
+    /// it -- `.unknown` before the first fetch/frame lands, or if that
+    /// controller is tracking a different channel. See its own doc.
+    private var partyKnowledge: WatchPartyKnowledge {
+        host.partyKnowledge(for: channel.id)
+    }
+
+    /// The resolved payload, for the setup/live cards below, which only
+    /// ever render once `gate.canManage` is already true -- by then the
+    /// party is known and not terminal, so unwrapping `.known` here is safe;
+    /// `nil` is still the honest answer for `.unknown` or "no active party".
     private var party: WatchPartyPayload? {
-        host.channelId == channel.id ? host.party : nil
+        if case .known(let party) = partyKnowledge { return party }
+        return nil
     }
 
     private var canStartWatchParty: Bool {
@@ -72,7 +80,7 @@ struct WatchPartyHostControls: View {
             isWatchPartyChannel: channel.isWatchParty,
             serverWatchPartyEnabled: liveHlsConfig.enabled,
             canStartWatchParty: canStartWatchParty,
-            party: party
+            party: partyKnowledge
         )
     }
 
@@ -224,7 +232,7 @@ struct WatchPartyHostControls: View {
                     .foregroundStyle(Palette.signal)
                 Spacer()
                 Button {
-                    host.end(partyId: party.id, session: session, voice: voice)
+                    host.end(channelId: channel.id, partyId: party.id, session: session, voice: voice)
                 } label: {
                     if host.busy == .ending {
                         ProgressView()

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// A sentence for a `performWatchPartyGoLive`/`performWatchPartyEnd` outcome
 /// that is not a plain `APIError` -- the ordering functions themselves are
@@ -24,6 +25,78 @@ enum WatchPartyHostBusy: Equatable {
 }
 
 /**
+ The channel's party, as far as this phone currently knows it, and the three
+ ways that knowledge can change. Pulled out of `WatchPartyHostController` as
+ a plain value type so the race it exists to close -- a slow background
+ fetch outliving a fresher realtime update, or getting overwritten instead
+ of overwriting -- is provable by a plain unit test rather than only
+ readable from a class wired to a real `SessionStore`.
+
+ THREE SOURCES, ONE RULE. A `watch-party-update` frame and the direct
+ response to a mutation THIS phone just made (`create`, go-live, Encerrar)
+ are both ALWAYS applied and always advance `generation`: each is strictly
+ newer than anything this phone knew a moment ago, by construction (a frame
+ the server just sent, or the server's own answer to a request this phone
+ just made). A Farol finding on the first cut of `WatchPartyHostController`
+ was exactly this: a successful mutation's response was reduced to a `Bool`
+ and thrown away, so a missed `watch-party-update` (the socket briefly down,
+ the frame lost) could leave the controller reporting stale state
+ indefinitely even though the phone itself had just been told the truth.
+
+ A background fetch (`WatchPartyHostController.fetchParty`'s retry loop) is
+ different: it can be answered well after it was asked, so it only wins if
+ `generation` has not moved since it started -- `beginFetch` hands out the
+ version to prove that with, and `applyFetchResult` is the check. Another
+ Farol finding: without this, a fetch that happened to be slow could
+ overwrite a `watch-party-update` frame that arrived while it was in
+ flight, undoing a party that had just gone live or just been created.
+
+ `known` starts `false` and stays `false` until one of the three actually
+ lands. Before that, `party == nil` must NOT read as "no active party" --
+ the third Farol finding this type closes: a failed initial fetch used to
+ be indistinguishable from a channel with nothing running, which offered a
+ watch party's audience a Join button and hid Create from an eligible host.
+ */
+struct WatchPartyPartyTracker: Equatable, Sendable {
+    private(set) var party: WatchPartyPayload?
+    private(set) var known = false
+    private(set) var generation = 0
+
+    /// A `watch-party-update` frame, or the direct response to a mutation
+    /// this phone just made. Always applied.
+    mutating func applyAuthoritative(_ party: WatchPartyPayload?) {
+        generation &+= 1
+        self.party = party
+        known = true
+    }
+
+    /// Claim the version a fetch about to start must hand back unchanged to
+    /// `applyFetchResult`.
+    mutating func beginFetch() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    /// A background fetch's result. Applied only if `requestedGeneration`
+    /// (from `beginFetch`) still matches the current version -- i.e.
+    /// nothing fresher landed while the fetch was in flight. Returns
+    /// whether it was applied.
+    @discardableResult
+    mutating func applyFetchResult(_ party: WatchPartyPayload?, requestedGeneration: Int) -> Bool {
+        guard requestedGeneration == generation else { return false }
+        self.party = party
+        known = true
+        return true
+    }
+
+    /// This tracker's `party`/`known`, as `WatchPartyHostGate.swift`'s
+    /// functions want it.
+    var knowledge: WatchPartyKnowledge {
+        known ? .known(party) : .unknown
+    }
+}
+
+/**
  Hosting a watch party from this phone: create, go live, end. And, ambiently,
  tracking the channel's current party so `WatchPartyHostView` has something
  to gate its buttons on before a host ever joins the room.
@@ -40,7 +113,7 @@ enum WatchPartyHostBusy: Equatable {
 
  A phone hosts at most one party at a time: one screen to capture, one voice
  seat to hold, one channel whose `watch-party-update` frames are worth
- tracking. So one `party`/`busy`/`error` triple is enough; there is no
+ tracking. So one `partyState`/`busy`/`error` triple is enough; there is no
  per-channel state to keep separate.
  */
 @MainActor
@@ -54,24 +127,35 @@ final class WatchPartyHostController {
     /// reset -- `run(_:_:)` below always writes SOME outcome.
     private(set) var error: String?
 
-    /// The active party for `channelId`, kept current by
-    /// `watch-party-update` frames and an explicit re-read on `open`. `nil`
-    /// while no party is running, or before the first read has landed.
-    private(set) var party: WatchPartyPayload?
+    /// The channel this is currently tracking, and what it knows about that
+    /// channel's party -- see `WatchPartyPartyTracker`'s doc for the three
+    /// ways `partyState` can change and why a fetch alone is not enough.
     private(set) var channelId: String?
+    private(set) var partyState = WatchPartyPartyTracker()
 
     private var session: SessionStore?
+    private var fetchTask: Task<Void, Never>?
     private let handlerKey = "watch-party-host-" + UUID().uuidString
 
     func dismissError() {
         error = nil
     }
 
+    /// This channel's party, as far as this controller currently knows it --
+    /// `.unknown` if this controller is tracking a DIFFERENT channel (see
+    /// `open`'s doc): a stale answer from another channel must never be read
+    /// as "no party here" for THIS channel, which is exactly the gap
+    /// `WatchPartyHostGate`'s callers need closed.
+    func partyKnowledge(for channelId: String) -> WatchPartyKnowledge {
+        guard self.channelId == channelId else { return .unknown }
+        return partyState.knowledge
+    }
+
     /**
      Start (or keep) tracking `channelId`'s party.
 
      Idempotent for the same channel: called from both `ChatView` (so the
-     toolbar's Join button can read `party` before anybody has joined
+     toolbar's Join button can read the party before anybody has joined
      anything) and `VoiceView` (so a host who wandered off to another
      channel's chat mid-broadcast, then opened this call's cover again,
      re-pins tracking back to the channel they are actually live in -- see
@@ -93,39 +177,87 @@ final class WatchPartyHostController {
             }
         }
         guard changed else { return }
-        // A previous channel's party must not linger under a new channel's
-        // id while the fresh read below is in flight.
-        party = nil
-        Task { [weak self] in
-            guard let fetched = try? await session.api.fetchChannelWatchParty(channelId: channelId)
-            else { return }
-            guard let self, self.channelId == channelId else { return }
-            self.party = fetched
-        }
+        // A previous channel's knowledge must not linger under a new
+        // channel's id while the fresh read below is in flight.
+        partyState = WatchPartyPartyTracker()
+        fetchParty(channelId: channelId, session: session)
     }
 
     private func apply(_ event: RealtimeEvent) {
-        guard case .watchPartyUpdate(let eventChannelId, let party) = event,
-              eventChannelId == channelId
-        else { return }
-        self.party = party
+        switch event {
+        case .watchPartyUpdate(let eventChannelId, let party):
+            guard channelId == eventChannelId else { return }
+            fetchTask?.cancel()
+            partyState.applyAuthoritative(party)
+        case .ready:
+            // A NEW SOCKET KNOWS NOTHING ABOUT THIS VIEWER, same reasoning
+            // `WatchModel.apply`'s own `.ready` case documents: the catch-up
+            // burst at auth is per-server, sent once, and a reconnect can
+            // land after it, or the party can have changed while this
+            // socket was down. Re-resolve authoritatively rather than trust
+            // whatever is already known.
+            if let channelId, let session {
+                fetchParty(channelId: channelId, session: session)
+            }
+        default:
+            break
+        }
+    }
+
+    /**
+     Resolve (or re-resolve) `channelId`'s party, retrying with backoff on
+     failure.
+
+     FAROL FINDING THIS CLOSES. The first cut of `open` fetched once: a
+     failed lookup left the channel reading as "no party" until something
+     else (a realtime frame) happened to correct it, silently hiding Create
+     from an eligible host and offering an ordinary viewer a Join button on
+     a party that might well be live. This retries with capped exponential
+     backoff for as long as this remains the tracked channel, and `.ready`
+     above calls it again on every reconnect for the same reason.
+
+     Cancels any fetch already in flight (a previous channel's, or an
+     earlier attempt for this one) before starting.
+     */
+    private func fetchParty(channelId: String, session: SessionStore) {
+        fetchTask?.cancel()
+        let requestedGeneration = partyState.beginFetch()
+        fetchTask = Task { [weak self] in
+            var delayMs = 1_000
+            while !Task.isCancelled {
+                do {
+                    let fetched = try await session.api.fetchChannelWatchParty(channelId: channelId)
+                    guard let self, self.channelId == channelId else { return }
+                    self.partyState.applyFetchResult(fetched, requestedGeneration: requestedGeneration)
+                    return
+                } catch {
+                    if error is CancellationError { return }
+                    guard let self, self.channelId == channelId,
+                          self.partyState.generation == requestedGeneration
+                    else { return }
+                    try? await Task.sleep(for: .milliseconds(delayMs))
+                    delayMs = min(delayMs * 2, 30_000)
+                }
+            }
+        }
     }
 
     /// "Criar watch party". Always a name-only, immediate `draft` -- no
     /// scheduling in this build (see `APIClient.createWatchParty`'s doc).
-    /// The created party reaches `party` via the `watch-party-update` this
-    /// call itself provokes; nothing here applies an optimistic copy.
+    /// The response is applied directly (see `WatchPartyPartyTracker`'s
+    /// doc): a missed `watch-party-update` must not leave the controller
+    /// still offering Create after the party actually exists.
     func create(channelId: String, name: String, session: SessionStore) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         run(.creating) {
-            _ = try await session.api.createWatchParty(channelId: channelId, name: trimmed)
+            let created = try await session.api.createWatchParty(channelId: channelId, name: trimmed)
+            if self.channelId == channelId { self.partyState.applyAuthoritative(created) }
         }
     }
 
-    /// "Ir ao vivo". See `performWatchPartyGoLive` for the ordering. `join`
-    /// itself does not throw on a refused/timed-out join (see
-    /// `waitForVoiceJoin`'s doc for why iOS needs this bridge at all, unlike
-    /// Android where the equivalent call is already throwing).
+    /// "Ir ao vivo". See `performWatchPartyGoLive` for the ordering and
+    /// `joinVoiceAndGuardSettle` for why a timed-out join is left rather
+    /// than abandoned in place.
     func goLive(
         channel: Channel,
         serverName: String?,
@@ -138,21 +270,29 @@ final class WatchPartyHostController {
         run(.goingLive) {
             let result = try await performWatchPartyGoLive(
                 setLive: {
-                    try await session.api.setWatchPartyState(
+                    let updated = try await session.api.setWatchPartyState(
                         partyId: partyId, state: "live", lowLatency: lowLatency
-                    ) != nil
+                    )
+                    if self.channelId == channel.id { self.partyState.applyAuthoritative(updated) }
+                    return updated != nil
                 },
                 checkLive: {
-                    guard let party = try await session.api.fetchChannelWatchParty(channelId: channel.id)
-                    else { return false }
-                    return party.id == partyId && party.isLive
+                    let fetched = try await session.api.fetchChannelWatchParty(channelId: channel.id)
+                    if self.channelId == channel.id { self.partyState.applyAuthoritative(fetched) }
+                    guard let fetched else { return false }
+                    return fetched.id == partyId && fetched.isLive
                 },
                 joinVoice: {
-                    await voice.join(channel: channel, session: session, ratings: ratings, serverName: serverName)
-                    try await Self.waitForVoiceJoin(voice, channelId: channel.id)
+                    try await joinVoiceAndGuardSettle(
+                        join: { await voice.join(channel: channel, session: session, ratings: ratings, serverName: serverName) },
+                        waitForSettle: { try await Self.waitForVoiceJoin(voice, channelId: channel.id) },
+                        leaveOnFailure: { await voice.leave() }
+                    )
                 },
                 endParty: {
-                    try await session.api.setWatchPartyState(partyId: partyId, state: "ended") != nil
+                    let ended = try await session.api.setWatchPartyState(partyId: partyId, state: "ended")
+                    if self.channelId == channel.id { self.partyState.applyAuthoritative(ended) }
+                    return ended != nil
                 }
             )
             switch result {
@@ -181,10 +321,14 @@ final class WatchPartyHostController {
     /// (that guarantee lives in `performWatchPartyEnd` itself); what this
     /// wrapper adds is telling the host when that happened, rather than
     /// reporting a clean success either way.
-    func end(partyId: String, session: SessionStore, voice: VoiceModel) {
+    func end(channelId: String, partyId: String, session: SessionStore, voice: VoiceModel) {
         run(.ending) {
             let ended = try await performWatchPartyEnd(
-                setEnded: { try await session.api.setWatchPartyState(partyId: partyId, state: "ended") != nil },
+                setEnded: {
+                    let updated = try await session.api.setWatchPartyState(partyId: partyId, state: "ended")
+                    if self.channelId == channelId { self.partyState.applyAuthoritative(updated) }
+                    return updated != nil
+                },
                 leaveVoice: { await voice.leave() }
             )
             if !ended {
@@ -198,8 +342,8 @@ final class WatchPartyHostController {
     }
 
     /**
-     Bounded wait for `VoiceModel.join` to settle, so `performWatchPartyGoLive`'s
-     `joinVoice` has something throwing to call.
+     Bounded wait for `VoiceModel.join` to settle, so `joinVoiceAndGuardSettle`
+     has something throwing to call.
 
      `VoiceModel.join` returns once the join is ASKED for -- the WS
      `voice-join` frame is sent -- not once the server has answered it;
