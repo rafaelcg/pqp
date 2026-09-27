@@ -1,6 +1,7 @@
 import {
   CACA_BUGS_BADGE,
   TURMA_1000_BADGE,
+  type FeedbackContext,
   type FeedbackItem,
   type FeedbackKind,
   type FeedbackStatus,
@@ -41,20 +42,30 @@ function toItem(row: FeedbackRow): FeedbackItem {
   };
 }
 
+/** Long enough for any real browser's string, short enough to bound a row. */
+const USER_AGENT_MAX_LENGTH = 400;
+
 export async function createFeedback(
   userId: string,
-  input: { kind: FeedbackKind; body: string },
+  input: { kind: FeedbackKind; body: string; context?: FeedbackContext },
+  userAgent?: string,
 ): Promise<FeedbackItem> {
+  // The user agent comes from this request's own header, never from the body:
+  // the client already has every other field, and this one it cannot forge
+  // into something the operator would read as a different device.
+  const agent = userAgent?.slice(0, USER_AGENT_MAX_LENGTH) || undefined;
+  const context =
+    input.context || agent ? { ...(input.context ?? {}), userAgent: agent } : null;
   const result = await getPool().query<FeedbackRow>(
     `WITH inserted AS (
-       INSERT INTO feedback (user_id, kind, body)
-       VALUES ($1, $2, $3)
+       INSERT INTO feedback (user_id, kind, body, context)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, user_id, kind, body, status, created_at
      )
      SELECT i.id, i.user_id, u.username, i.kind, i.body, i.status, i.created_at
        FROM inserted i
        LEFT JOIN users u ON u.id = i.user_id`,
-    [userId, input.kind, input.body],
+    [userId, input.kind, input.body, context ? JSON.stringify(context) : null],
   );
   return toItem(result.rows[0]!);
 }
@@ -137,6 +148,159 @@ export async function resolveFeedback(
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// The operator's queue, on the dashboard.
+
+export const ADMIN_FEEDBACK_PATH = "/api/admin/feedback";
+export const ADMIN_FEEDBACK_RESOLVE_PATH = "/api/admin/feedback/resolve";
+
+/**
+ * One item as the operator dashboard shows it: the whole text, who wrote it,
+ * and where they were. Richer than `FeedbackItem` on purpose, and only ever
+ * served to an instance moderator or the dashboard's machine token. It names
+ * a person (tag, handle, account age) because a bug report nobody can follow
+ * up on is half a report; it still carries no account id and no email.
+ */
+export interface OperatorFeedbackItem {
+  id: string;
+  kind: FeedbackKind;
+  status: FeedbackStatus;
+  body: string;
+  createdAt: string;
+  context: (FeedbackContext & { userAgent?: string }) | null;
+  /** Null when the account was deleted since. */
+  author: {
+    tag: string;
+    displayName: string | null;
+    handle: string | null;
+    accountCreatedAt: string;
+    /** Everything this person has sent, and how many of those were confirmed. */
+    sent: number;
+    confirmed: number;
+  } | null;
+}
+
+export interface OperatorFeedbackPage {
+  items: OperatorFeedbackItem[];
+  /** Pass as `before` for the next page; null on the last one. */
+  next: string | null;
+  counts: {
+    open: number;
+    confirmed: number;
+    closed: number;
+    last24h: number;
+    openByKind: Record<FeedbackKind, number>;
+  };
+}
+
+export type OperatorFeedbackStatusFilter = FeedbackStatus | "all";
+
+export async function listOperatorFeedback(options: {
+  status: OperatorFeedbackStatusFilter;
+  kind: FeedbackKind | null;
+  before?: string;
+  limit: number;
+}): Promise<OperatorFeedbackPage> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (options.status !== "all") {
+    params.push(options.status);
+    clauses.push(`f.status = $${params.length}`);
+  }
+  if (options.kind) {
+    params.push(options.kind);
+    clauses.push(`f.kind = $${params.length}`);
+  }
+  if (options.before && /^[0-9]{1,19}$/.test(options.before)) {
+    params.push(options.before);
+    clauses.push(`f.id < $${params.length}::bigint`);
+  }
+  // One more than asked, to know whether there is a next page.
+  params.push(options.limit + 1);
+  const pool = getPool();
+  const rows = await pool.query<{
+    id: string;
+    kind: FeedbackKind;
+    status: FeedbackStatus;
+    body: string;
+    created_at: Date;
+    context: OperatorFeedbackItem["context"];
+    username: string | null;
+    discriminator: string | null;
+    display_name: string | null;
+    handle: string | null;
+    account_created_at: Date | null;
+    sent: number | null;
+    confirmed: number | null;
+  }>(
+    `SELECT f.id, f.kind, f.status, f.body, f.created_at, f.context,
+            u.username, u.discriminator, u.display_name, u.handle,
+            u.created_at AS account_created_at,
+            a.sent, a.confirmed
+       FROM feedback f
+       LEFT JOIN users u ON u.id = f.user_id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS sent,
+                COUNT(*) FILTER (WHERE status = 'confirmed')::int AS confirmed
+           FROM feedback mine
+          WHERE mine.user_id = f.user_id
+       ) a ON f.user_id IS NOT NULL
+      ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+      ORDER BY f.id DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  const counts = await pool.query<{
+    open: number;
+    confirmed: number;
+    closed: number;
+    last24h: number;
+    open_bug: number;
+    open_idea: number;
+    open_other: number;
+  }>(
+    `SELECT COUNT(*) FILTER (WHERE status = 'open')::int AS open,
+            COUNT(*) FILTER (WHERE status = 'confirmed')::int AS confirmed,
+            COUNT(*) FILTER (WHERE status = 'closed')::int AS closed,
+            COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS last24h,
+            COUNT(*) FILTER (WHERE status = 'open' AND kind = 'bug')::int AS open_bug,
+            COUNT(*) FILTER (WHERE status = 'open' AND kind = 'idea')::int AS open_idea,
+            COUNT(*) FILTER (WHERE status = 'open' AND kind = 'other')::int AS open_other
+       FROM feedback`,
+  );
+  const page = rows.rows.slice(0, options.limit);
+  const c = counts.rows[0]!;
+  return {
+    items: page.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      status: row.status,
+      body: row.body,
+      createdAt: row.created_at.toISOString(),
+      context: row.context,
+      author:
+        row.username && row.account_created_at
+          ? {
+              tag: `${row.username}#${row.discriminator ?? "0000"}`,
+              displayName: row.display_name,
+              handle: row.handle,
+              accountCreatedAt: row.account_created_at.toISOString(),
+              sent: row.sent ?? 0,
+              confirmed: row.confirmed ?? 0,
+            }
+          : null,
+    })),
+    next: rows.rows.length > options.limit ? page[page.length - 1]!.id : null,
+    counts: {
+      open: c.open,
+      confirmed: c.confirmed,
+      closed: c.closed,
+      last24h: c.last24h,
+      openByKind: { bug: c.open_bug, idea: c.open_idea, other: c.open_other },
+    },
+  };
 }
 
 /** Display names for earned badges. The slug is storage; this is the label. */

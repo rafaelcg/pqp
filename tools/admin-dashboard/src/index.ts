@@ -20,12 +20,13 @@
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Ten `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Four reads (find a server, list its voice channels, the watch
- *     party waitlist, the runtime feature flags) and six PUTs (watch party
- *     availability and low latency per server, a channel's transport pin, a
- *     channel's SFU region, declining a server's waitlist, a feature flag
- *     globally, a feature flag for one server). They are in `OPERATOR_ROUTES` below, an
+ *     Twelve `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Five reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags, the feedback queue) and
+ *     seven PUTs (watch party availability and low latency per server, a
+ *     channel's transport pin, a channel's SFU region, declining a server's
+ *     waitlist, a feature flag globally, a feature flag for one server,
+ *     confirming or closing a feedback item). They are in `OPERATOR_ROUTES` below, an
  *     exact (method, path) table for the same reason the API keeps one: the
  *     blast radius of the password plus the machine token should be readable
  *     in one glance, and a prefix is a thing somebody widens by accident.
@@ -363,6 +364,26 @@ const OPERATOR_ROUTES: {
     method: "PUT",
     path: "/operator/channel-sfu-region",
     forward: (_url, origin) => `${origin}/api/admin/channel-sfu-region`,
+  },
+  // The feedback queue ("moderação"): the whole text, the author's tag and
+  // handle, where they were; and confirm or close, which can grant the
+  // caça-bugs badge. Only these four parameters are forwarded.
+  {
+    method: "GET",
+    path: "/operator/feedback",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/feedback`);
+      for (const name of ["status", "kind", "before", "limit"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
+  },
+  {
+    method: "PUT",
+    path: "/operator/feedback-resolve",
+    forward: (_url, origin) => `${origin}/api/admin/feedback/resolve`,
   },
   // Runtime feature flags ("interruptores"): the list with effective values,
   // overrides and the audit trail; a global decision; a per-server override.

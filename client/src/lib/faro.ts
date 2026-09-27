@@ -115,6 +115,20 @@ export function initFaro(deps: InitFaroDeps = {}): Faro | null {
   return faro;
 }
 
+/**
+ * This tab's Faro session id, or null when Faro is off (every self-host, and
+ * local dev). The feedback box attaches it so the operator can open the
+ * errors around the moment a bug was reported. It is Faro's own random id and
+ * identifies a browser session, not an account.
+ */
+export function faroSessionId(): string | null {
+  try {
+    return faro?.api.getSession()?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Test seam: forget the instance so a later `initFaro` runs again. */
 export function resetFaroForTests(): void {
   faro = null;

@@ -115,11 +115,13 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the thirteen routes, and account deletion is not one of them", () => {
+  it("is exactly the fifteen routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
       ["GET", "/api/admin/user-activity"],
+      ["GET", "/api/admin/feedback"],
+      ["PUT", "/api/admin/feedback/resolve"],
       ["GET", "/api/admin/servers"],
       ["GET", "/api/admin/server-channels"],
       ["PUT", "/api/admin/server-live-hls"],
@@ -822,6 +824,115 @@ describeDb("the operator's two levers", () => {
         `SELECT actor_kind, actor_id FROM feature_flag_audit`,
       );
       expect(audit.rows).toEqual([{ actor_kind: "moderator", actor_id: operator.id }]);
+    });
+  });
+
+  describe("the feedback queue", () => {
+    it("stores where the person was and shows the operator who sent it", async () => {
+      const sent = await asUser(ana, "POST", "/api/feedback", {
+        kind: "bug",
+        body: "a transmissão está indo sem som",
+        context: {
+          platform: "desktop",
+          appVersion: "4718c63",
+          path: "/app",
+          viewport: "1440x900",
+          locale: "pt-BR",
+          voice: { inCall: true, transport: "livekit", watchParty: true },
+          faroSessionId: "abc_123",
+        },
+      });
+      expect(sent.status).toBe(201);
+      await asUser(ana, "POST", "/api/feedback", { kind: "idea", body: "redução de ruído" });
+
+      const page = await asMachine<{
+        items: {
+          id: string;
+          kind: string;
+          body: string;
+          context: Record<string, unknown> | null;
+          author: { tag: string; displayName: string; sent: number } | null;
+        }[];
+        next: string | null;
+        counts: { open: number; openByKind: Record<string, number> };
+      }>("GET", "/api/admin/feedback?status=open");
+      expect(page.status).toBe(200);
+      expect(page.body.counts.open).toBe(2);
+      expect(page.body.counts.openByKind).toEqual({ bug: 1, idea: 1, other: 0 });
+      expect(page.body.items.map((i) => i.kind)).toEqual(["idea", "bug"]);
+      const bug = page.body.items[1]!;
+      expect(bug.body).toBe("a transmissão está indo sem som");
+      expect(bug.author).toMatchObject({ displayName: "Ana", sent: 2 });
+      expect(bug.author!.tag).toMatch(/#/);
+      expect(bug.context).toMatchObject({
+        platform: "desktop",
+        appVersion: "4718c63",
+        voice: { inCall: true, transport: "livekit", watchParty: true },
+        faroSessionId: "abc_123",
+      });
+      // Read from the request's own header, never from the body.
+      expect(typeof bug.context!.userAgent).toBe("string");
+      // An older client that sends no context still gets the user agent.
+      expect(page.body.items[0]!.context).toEqual({
+        userAgent: expect.any(String),
+      });
+      // No account id on this route, only the tag.
+      expect(JSON.stringify(page.body)).not.toContain(ana.id);
+
+      const bugsOnly = await asMachine<{ items: unknown[] }>(
+        "GET",
+        "/api/admin/feedback?status=all&kind=bug",
+      );
+      expect(bugsOnly.body.items).toHaveLength(1);
+
+      const paged = await asMachine<{ items: { id: string }[]; next: string | null }>(
+        "GET",
+        "/api/admin/feedback?status=all&limit=1",
+      );
+      expect(paged.body.items).toHaveLength(1);
+      expect(paged.body.next).toBe(paged.body.items[0]!.id);
+    });
+
+    it("confirms a bug from the dashboard and grants the badge", async () => {
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "tela preta" });
+      const [item] = (
+        await asMachine<{ items: { id: string }[] }>("GET", "/api/admin/feedback")
+      ).body.items;
+
+      const confirmed = await asMachine<{ feedback: { status: string } }>(
+        "PUT",
+        "/api/admin/feedback/resolve",
+        { id: item!.id, status: "confirmed" },
+      );
+      expect(confirmed.status).toBe(200);
+      expect(confirmed.body.feedback.status).toBe("confirmed");
+      const badge = await getPool().query(
+        `SELECT 1 FROM user_badges WHERE user_id = $1 AND badge = 'caca-bugs'`,
+        [ana.id],
+      );
+      expect(badge.rowCount).toBe(1);
+
+      const missing = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "999999",
+        status: "closed",
+      });
+      expect(missing.status).toBe(404);
+      const junk = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "1; DROP TABLE feedback",
+        status: "closed",
+      });
+      expect(junk.status).toBe(400);
+    });
+
+    it("is 404 for an ordinary account and for a wrong token", async () => {
+      expect((await asUser(ana, "GET", "/api/admin/feedback")).status).toBe(404);
+      expect(
+        (await asUser(ana, "PUT", "/api/admin/feedback/resolve", { id: "1", status: "closed" }))
+          .status,
+      ).toBe(404);
+      expect(
+        (await asMachine("GET", "/api/admin/feedback", undefined, WRONG_TOKEN)).status,
+      ).not.toBe(200);
     });
   });
 });

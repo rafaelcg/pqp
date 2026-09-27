@@ -1595,6 +1595,7 @@
   "settings.feedback.kind.other": "Outro",
   "settings.feedback.placeholder": "O que aconteceu, e onde? Quanto mais detalhe, mais rápida a caçada.",
   "settings.feedback.send": "Manda",
+  "settings.feedback.attached": "Vai junto: seu usuário, a versão do app, seu aparelho e navegador, a tela em que você está e se está numa chamada. É assim que a gente reproduz o bug.",
   "settings.feedback.done": "Recebido. Se o bug for real, o selo é seu. 🐛",
   "settings.feedback.again": "Mandar outro",
   "settings.feedback.error": "Deu ruim ao enviar. Tenta de novo.",

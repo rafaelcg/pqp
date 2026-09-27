@@ -132,7 +132,7 @@ read as nine equals.
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
-| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The rail carries a count badge when anything is open |
+| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
 ### controles: the only part of this page that writes
@@ -478,9 +478,9 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   payload: all human accounts that exist, not a window and not actives
 - **communities**: totals, per category, and the listed communities with member,
   channel and message counts. Gated on `COMMUNITIES_ENABLED`
-- **moderation**: report and feedback queues by status, bans, unexpired
-  timeouts, and the last eight feedback bodies (truncated by the API, never
-  attributed)
+- **moderation**: report and feedback queues by status, bans and unexpired
+  timeouts. The `recentFeedback` field is still sent for older copies of the
+  page; this page reads the feedback queue from its own route instead
 - the deployed API commit (`APP_VERSION`) and the excluded account kinds
 - **product**: accepted friendships and open friend requests, claimed
   attachments (total and last 24h), invites created in 24h plus cumulative
@@ -554,6 +554,35 @@ Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
   while it has been opened. The API caches the report for five minutes because
   it scans months of messages.
 - Server side: `server/src/services/user-activity.ts`.
+
+### The feedback queue
+
+Live, from `GET /api/admin/feedback` (proxied as `/operator/feedback`, only
+`status`, `kind`, `before` and `limit` forwarded), and written back through
+`PUT /api/admin/feedback/resolve` (`/operator/feedback-resolve`):
+
+1. Every item shows the whole text, its kind, status, time and number.
+2. It shows who sent it: display name, tag, @handle linked to the public
+   profile, account age, and how many items that person has sent and had
+   confirmed. No account id and no email.
+3. It shows where they were, from `feedback.context`: platform, app version,
+   browser and OS (parsed from the user agent the API read from its own
+   request header), window size, language, the app route, whether they were
+   in a call and on which media path, whether a watch party was live, and the
+   Grafana Faro session id. Items sent before this change, or from a client
+   that sends none, say so.
+4. Filters: status (open, confirmed, closed, all) and kind. 25 at a time, with
+   "carregar mais".
+5. **confirmar** sets the status to confirmed. On a bug it also grants the
+   author the caça-bugs badge, in the same transaction. **fechar** is for
+   handled, duplicate or not actionable.
+
+The web and desktop feedback box says under the button what travels with it.
+The iOS and Android apps have no feedback box yet.
+
+This is the first route on the machine token that names a person. That is why
+it is its own read, fetched when **moderação** is opened, and not a field on
+`/metrics`.
 
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
@@ -723,9 +752,11 @@ each one.
 ## Why it is behind a password
 
 The repo is open source and a `workers.dev` hostname is guessable. The page is
-aggregate counts and holds no id, handle or email, but it is not *only* counts:
-the "most active" tables carry the **names of private servers and channels**,
-and the call-rating notes and feedback entries are **free text people wrote**.
+mostly aggregate counts and holds no account id or email, but it is not *only*
+counts: the "most active" tables carry the **names of private servers and
+channels**, the call-rating notes and feedback entries are **free text people
+wrote**, and the feedback queue names **who wrote each item** (tag and handle)
+and the device they used.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
 the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every

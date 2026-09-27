@@ -643,6 +643,23 @@
   .stat-mini.attn .v { color: var(--warning); }
   .stat-mini.bad .v { color: var(--danger); }
 
+  .fb-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 4px 0 6px; }
+  .fb-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fb-seg .ctl-btn[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent-edge); color: var(--text); }
+  .fb-kind { display: inline-flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+  .fb-msg { font-size: 12px; color: var(--muted); margin: 6px 0 0; min-height: 1em; }
+  .fb-msg.bad { color: var(--danger); }
+  .fb-msg.ok { color: var(--success); }
+  .fb-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .fb-item { border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; background: var(--surface-2); min-width: 0; }
+  .fb-head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 11.5px; color: var(--faint); }
+  .fb-body { margin: 8px 0; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .fb-line { font-size: 12px; color: var(--muted); margin: 3px 0 0; overflow-wrap: anywhere; }
+  .fb-line b { color: var(--text); font-weight: 600; }
+  .fb-line a { color: var(--accent); }
+  .fb-line code { font-size: 11.5px; }
+  .fb-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .fb-empty { font-size: 12.5px; color: var(--faint); padding: 8px 0; }
   .bug { display: flex; flex-direction: column; gap: 3px; }
   .bug .b-title { font-weight: 600; }
   .bug .b-meta { font-size: 11.5px; color: var(--faint); }
@@ -2310,11 +2327,11 @@
   <!-- ============ SAFETY & FEEDBACK ============ -->
   <section aria-label="segurança e feedback" id="secModeration">
     <div class="sec-head">
-      <h2>segurança e feedback</h2>
+      <h2>denúncias</h2>
       <span class="rule"></span>
-      <span class="note">fila de denúncias e caça-bugs</span>
+      <span class="note">fila de denúncias e sanções</span>
     </div>
-    <div class="grid g-2">
+    <div class="grid g-1">
       <div class="card pad">
         <p class="subtle-title">fila de denúncias</p>
         <div class="stat-row">
@@ -2352,31 +2369,62 @@
         </p>
       </div>
 
-      <div class="card pad">
-        <p class="subtle-title">caça-bugs · fila de feedback</p>
-        <div class="stat-row">
-          <div class="stat-mini" id="fbOpenTile">
-            <span class="k">abertos</span>
-            <span class="v num" id="fbOpen">—</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">confirmados</span>
-            <span class="v num" id="fbConfirmed">—</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">novos · 24h</span>
-            <span class="v num" id="fbNew24h">—</span>
-          </div>
+    </div>
+  </section>
+
+  <!-- ============ FEEDBACK QUEUE ============
+       Its own read (/operator/feedback), fetched when "moderação" is opened
+       and after every confirm or close, never on the 30 s poll. The whole
+       text, who wrote it and where they were. The counters at the top also
+       come from /metrics, so they are right before the section is opened. -->
+  <section aria-label="caça-bugs, fila de feedback" id="secFeedback">
+    <div class="sec-head">
+      <h2>caça-bugs · fila de feedback</h2>
+      <span class="rule"></span>
+      <span class="note" id="fbNote">abre quando você entra nesta seção</span>
+    </div>
+    <div class="card pad">
+      <div class="stat-row">
+        <div class="stat-mini" id="fbOpenTile">
+          <span class="k">abertos</span>
+          <span class="v num" id="fbOpen">—</span>
+          <span class="k" style="color:var(--faint)" id="fbOpenNote">—</span>
         </div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr><th>relato</th><th>tipo</th><th>estado</th></tr>
-            </thead>
-            <tbody id="bugsBody"><!-- injected --></tbody>
-          </table>
+        <div class="stat-mini">
+          <span class="k">confirmados</span>
+          <span class="v num" id="fbConfirmed">—</span>
+        </div>
+        <div class="stat-mini">
+          <span class="k">fechados</span>
+          <span class="v num" id="fbClosed">—</span>
+        </div>
+        <div class="stat-mini">
+          <span class="k">novos · 24h</span>
+          <span class="v num" id="fbNew24h">—</span>
         </div>
       </div>
+      <div class="fb-filters">
+        <div class="fb-seg" role="group" aria-label="estado">
+          <button type="button" class="ctl-btn" data-fb-status="open" aria-pressed="true">abertos</button>
+          <button type="button" class="ctl-btn" data-fb-status="confirmed" aria-pressed="false">confirmados</button>
+          <button type="button" class="ctl-btn" data-fb-status="closed" aria-pressed="false">fechados</button>
+          <button type="button" class="ctl-btn" data-fb-status="all" aria-pressed="false">todos</button>
+        </div>
+        <label class="fb-kind">tipo
+          <select class="occ-select" id="fbKind" aria-label="tipo de feedback">
+            <option value="">todos</option>
+            <option value="bug">bug</option>
+            <option value="idea">ideia</option>
+            <option value="other">outro</option>
+          </select>
+        </label>
+      </div>
+      <p class="fb-msg" id="fbMsg" role="status"></p>
+      <div class="fb-list" id="fbList"><!-- injected --></div>
+      <p style="margin:12px 0 0"><button type="button" class="ctl-btn" id="fbMore" hidden>carregar mais</button></p>
+      <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0">
+        confirmar um bug dá ao autor o selo 🐛 caça-bugs no perfil público, na mesma transação. fechar serve para resolvido, duplicado ou sem ação. o contexto (aparelho, versão, tela, chamada) vem de quem mandou pelo app web ou desktop depois desta versão; itens antigos não têm.
+      </p>
     </div>
   </section>
 
@@ -3958,37 +4006,6 @@
     });
   }
 
-  /* ---------------- render: feedback queue ----------------
-     The bodies are what people typed, truncated by the API. No author travels
-     with them and none is shown. */
-  var FEEDBACK_KIND = { bug: "bug", idea: "ideia", other: "outro" };
-  var FEEDBACK_STATUS = {
-    open: { label: "aberto", cls: "badge warn" },
-    confirmed: { label: "confirmado", cls: "badge bad" },
-    closed: { label: "fechado", cls: "badge ok" }
-  };
-  function renderBugs(items) {
-    var bb = $("bugsBody");
-    if (!bb) return;
-    bb.innerHTML = "";
-    items = Array.isArray(items) ? items : [];
-    if (!items.length) {
-      bb.innerHTML = '<tr><td colspan="3" class="empty-cell">ninguém mandou feedback ainda</td></tr>';
-      return;
-    }
-    items.forEach(function (b) {
-      var st = FEEDBACK_STATUS[b.status] || { label: String(b.status || "?"), cls: "badge" };
-      var when = b.createdAt ? fmtStamp(new Date(b.createdAt)) : "";
-      var tr = el("tr");
-      tr.innerHTML =
-        '<td><div class="bug"><span class="b-title">' + esc(b.body || "") + '</span>' +
-          (when ? '<span class="b-meta">' + esc(when) + '</span>' : '') + '</div></td>' +
-        '<td><span class="badge">' + esc(FEEDBACK_KIND[b.kind] || b.kind || "?") + '</span></td>' +
-        '<td><span class="' + st.cls + '">' + esc(st.label) + '</span></td>';
-      bb.appendChild(tr);
-    });
-  }
-
   /* ---------------- a section whose data this API does not send yet ----------
      The dashboard ships ahead of the API: the Worker deploys in seconds and
      the API restarts every live call, so the two are deliberately not released
@@ -4562,6 +4579,229 @@
     actLoad(false);
   }
 
+  /* ---------------- feedback queue ----------------
+     Reads /operator/feedback (the api's /api/admin/feedback): the whole text,
+     who sent it (tag, @handle, account age, how many they have sent) and where
+     they were (platform, build, browser, screen, call). Writes go through
+     /operator/feedback-resolve; confirming a bug grants the caça-bugs badge on
+     the api, in the same transaction. Read when "moderação" is opened, after
+     every write, and on "atualizar"; never on the 30 s poll. */
+  var FB_KIND = { bug: "bug", idea: "ideia", other: "outro" };
+  var FB_STATUS = {
+    open: { label: "aberto", cls: "badge warn" },
+    confirmed: { label: "confirmado", cls: "badge bad" },
+    closed: { label: "fechado", cls: "badge ok" }
+  };
+  var fbq = { status: "open", kind: "", items: [], next: null, asked: false, busy: false, seq: 0 };
+
+  function fbMsg(text, cls) {
+    var e = $("fbMsg");
+    if (!e) return;
+    e.textContent = text || "";
+    e.className = "fb-msg" + (cls ? " " + cls : "");
+  }
+
+  /** "Chrome 128 no macOS". Best effort, from the header the api stored. */
+  function fbAgent(ua) {
+    if (!ua) return "";
+    var browser = "", os = "";
+    var m;
+    if ((m = ua.match(/Electron\/(\d+)/))) browser = "app desktop (electron " + m[1] + ")";
+    else if ((m = ua.match(/Edg\/(\d+)/))) browser = "Edge " + m[1];
+    else if ((m = ua.match(/OPR\/(\d+)/))) browser = "Opera " + m[1];
+    else if ((m = ua.match(/Firefox\/(\d+)/))) browser = "Firefox " + m[1];
+    else if ((m = ua.match(/Chrome\/(\d+)/))) browser = "Chrome " + m[1];
+    else if ((m = ua.match(/Version\/(\d+)[\d.]* .*Safari\//))) browser = "Safari " + m[1];
+    if (/iPhone|iPad/.test(ua)) os = "iOS";
+    else if (/Android/.test(ua)) os = "Android";
+    else if (/Windows NT/.test(ua)) os = "Windows";
+    else if (/Mac OS X/.test(ua)) os = "macOS";
+    else if (/CrOS/.test(ua)) os = "ChromeOS";
+    else if (/Linux/.test(ua)) os = "Linux";
+    if (!browser && !os) return ua.slice(0, 80);
+    return browser + (browser && os ? " no " : "") + os;
+  }
+
+  function fbAge(iso) {
+    var days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+    if (!isFinite(days) || days < 0) return "";
+    if (days === 0) return "conta criada hoje";
+    if (days === 1) return "conta de 1 dia";
+    if (days < 60) return "conta de " + fmt(days) + " dias";
+    return "conta de " + fmt(Math.round(days / 30)) + " meses";
+  }
+
+  function fbAuthorLine(a) {
+    if (!a) return '<p class="fb-line">autor: conta apagada</p>';
+    var who = (a.displayName ? "<b>" + esc(a.displayName) + "</b> · " : "") + esc(a.tag);
+    if (a.handle) {
+      who += ' · <a href="https://pqp.gg/@' + encodeURIComponent(a.handle) + '" target="_blank" rel="noopener">@' +
+        esc(a.handle) + "</a>";
+    }
+    var bits = [fbAge(a.accountCreatedAt)];
+    bits.push(fmt(a.sent) + (a.sent === 1 ? " enviado" : " enviados") +
+      (a.confirmed ? ", " + fmt(a.confirmed) + (a.confirmed === 1 ? " confirmado" : " confirmados") : ""));
+    return '<p class="fb-line">' + who + " · " + esc(bits.filter(Boolean).join(" · ")) + "</p>";
+  }
+
+  function fbContextLines(c) {
+    if (!c) return '<p class="fb-line" style="color:var(--faint)">sem contexto (enviado antes desta versão)</p>';
+    var device = [];
+    if (c.platform) device.push({ web: "web", desktop: "app desktop", ios: "iphone", android: "android" }[c.platform] || c.platform);
+    var agent = fbAgent(c.userAgent);
+    if (agent) device.push(agent);
+    if (c.viewport) device.push(c.viewport);
+    if (c.locale) device.push(c.locale);
+    if (c.appVersion) device.push("versão " + c.appVersion);
+    var out = device.length ? '<p class="fb-line">' + esc(device.join(" · ")) + "</p>" : "";
+    var where = [];
+    if (c.path) where.push("tela <code>" + esc(c.path) + "</code>");
+    if (c.voice) {
+      if (c.voice.inCall) {
+        var call = "em chamada";
+        if (c.voice.transport) call += " (" + (c.voice.transport === "livekit" ? "servidor de mídia" : c.voice.transport === "mesh" ? "ponto a ponto" : c.voice.transport) + ")";
+        if (c.voice.watchParty) call += " com watch party ao vivo";
+        where.push(esc(call));
+      } else {
+        where.push("fora de chamada");
+      }
+    }
+    if (c.faroSessionId) where.push("sessão faro <code>" + esc(c.faroSessionId) + "</code>");
+    if (where.length) out += '<p class="fb-line">' + where.join(" · ") + "</p>";
+    return out;
+  }
+
+  function fbRender() {
+    var list = $("fbList");
+    if (!list) return;
+    if (!fbq.items.length) {
+      list.innerHTML = '<p class="fb-empty">nada aqui com esse filtro</p>';
+    } else {
+      list.innerHTML = fbq.items.map(function (f) {
+        var st = FB_STATUS[f.status] || { label: String(f.status), cls: "badge" };
+        var actions = "";
+        if (f.status !== "confirmed") {
+          actions += '<button type="button" class="ctl-btn" data-fb-act="confirmed" data-fb-id="' + esc(f.id) + '">' +
+            (f.kind === "bug" ? "confirmar bug · dá o selo" : "confirmar") + "</button>";
+        }
+        if (f.status !== "closed") {
+          actions += '<button type="button" class="ctl-btn" data-fb-act="closed" data-fb-id="' + esc(f.id) + '">fechar</button>';
+        }
+        return '<article class="fb-item" data-fb-item="' + esc(f.id) + '">' +
+          '<div class="fb-head"><span class="badge">' + esc(FB_KIND[f.kind] || f.kind) + '</span>' +
+          '<span class="' + st.cls + '">' + esc(st.label) + "</span>" +
+          "<span>" + esc(f.createdAt ? fmtStamp(new Date(f.createdAt)) : "") + "</span>" +
+          "<span>#" + esc(f.id) + "</span></div>" +
+          '<div class="fb-body">' + esc(f.body) + "</div>" +
+          fbAuthorLine(f.author) +
+          fbContextLines(f.context) +
+          (actions ? '<div class="fb-actions">' + actions + "</div>" : "") +
+          "</article>";
+      }).join("");
+    }
+    var more = $("fbMore");
+    if (more) more.hidden = !fbq.next;
+  }
+
+  function fbCounts(c) {
+    if (!c) return;
+    setText("fbOpen", fmt(c.open));
+    setText("fbConfirmed", fmt(c.confirmed));
+    setText("fbClosed", fmt(c.closed));
+    setText("fbNew24h", fmt(c.last24h));
+    var k = c.openByKind || {};
+    function n(v, one, many) { v = v || 0; return fmt(v) + " " + (v === 1 ? one : many); }
+    setText("fbOpenNote", n(k.bug, "bug", "bugs") + " · " + n(k.idea, "ideia", "ideias") + " · " + n(k.other, "outro", "outros"));
+    tone("fbOpenTile", c.open ? "attn" : "good");
+  }
+
+  function fbLoad(append) {
+    var seq = ++fbq.seq;
+    var q = "status=" + encodeURIComponent(fbq.status) + "&limit=25" +
+      (fbq.kind ? "&kind=" + encodeURIComponent(fbq.kind) : "") +
+      (append && fbq.next ? "&before=" + encodeURIComponent(fbq.next) : "");
+    setText("fbNote", "carregando");
+    return fetchJson("/operator/feedback?" + q).then(function (r) {
+      // A filter changed while this was in flight: its answer is stale.
+      if (seq !== fbq.seq) return;
+      if (!r || !Array.isArray(r.items)) throw new Error("payload inesperado");
+      sectionRestore("secFeedback");
+      fbq.items = append ? fbq.items.concat(r.items) : r.items;
+      fbq.next = r.next || null;
+      fbCounts(r.counts);
+      setText("fbNote", "texto inteiro, autor e contexto");
+      fbRender();
+    }).catch(function (e) {
+      if (seq !== fbq.seq) return;
+      var reason = e && e.message ? e.message : String(e);
+      if (reason.indexOf("404") !== -1 || reason.indexOf("401") !== -1) {
+        setText("fbNote", "esta api ainda não tem a fila completa");
+        return;
+      }
+      setText("fbNote", "a leitura falhou · " + reason);
+    });
+  }
+
+  function fbResolve(id, status, button) {
+    if (fbq.busy) return;
+    fbq.busy = true;
+    var item = document.querySelector('[data-fb-item="' + id + '"]');
+    if (item) ctlSetButtonsDisabled(item, true);
+    fbMsg("");
+    fetch("/operator/feedback-resolve", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: String(id), status: status })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (r) {
+      var f = r && r.feedback;
+      var said = "#" + id + (status === "confirmed"
+        ? (f && f.kind === "bug" ? " confirmado; o autor ganhou o selo caça-bugs" : " confirmado")
+        : " fechado");
+      return fbLoad(false).then(function () { fbMsg(said, "ok"); });
+    }).catch(function (e) {
+      fbMsg("não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
+      if (item) ctlSetButtonsDisabled(item, false);
+    }).then(function () { fbq.busy = false; });
+  }
+
+  function fbOnShown() {
+    if (fbq.asked) return;
+    fbq.asked = true;
+    fbLoad(false);
+  }
+
+  (function wireFeedback() {
+    var sec = $("secFeedback");
+    if (!sec) return;
+    sec.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      var seg = t.closest("[data-fb-status]");
+      if (seg) {
+        fbq.status = seg.getAttribute("data-fb-status");
+        Array.prototype.forEach.call(sec.querySelectorAll("[data-fb-status]"), function (b) {
+          b.setAttribute("aria-pressed", b === seg ? "true" : "false");
+        });
+        fbMsg("");
+        fbLoad(false);
+        return;
+      }
+      var act = t.closest("[data-fb-act]");
+      if (act) {
+        fbResolve(act.getAttribute("data-fb-id"), act.getAttribute("data-fb-act"), act);
+        return;
+      }
+      if (t.closest("#fbMore")) fbLoad(true);
+    });
+    var kind = $("fbKind");
+    if (kind) kind.addEventListener("change", function () { fbq.kind = kind.value; fbMsg(""); fbLoad(false); });
+  })();
+
   /* ---------------- render: user detail ---------------- */
   function renderUserDetail(d) {
     if (!d.userDetail) return sectionUnavailable("secUserDetail", "o perfil da base de usuários");
@@ -4783,10 +5023,9 @@
     var fbOpen = Number(fb.open) || 0;
     setText("fbOpen", fmt(fbOpen));
     setText("fbConfirmed", fmt(Number(fb.confirmed) || 0));
+    setText("fbClosed", fmt(Number(fb.closed) || 0));
     setText("fbNew24h", fmt(Number(fb.last24h) || 0));
     tone("fbOpenTile", fbOpen ? "attn" : "good");
-
-    renderBugs(mod.recentFeedback);
 
     var badge = $("tabModCount");
     if (badge) {
@@ -5860,6 +6099,7 @@
     // fetched once on load (see wireOccupancy) and refreshed at most every
     // five minutes, whichever section is showing.
     if (name === "tempo") { occOnShown(); actOnShown(); }
+    if (name === "moderacao") fbOnShown();
     if (name === "controles") ctlOnShown();
     if (!opts || !opts.silent) {
       try {
@@ -5978,7 +6218,6 @@
     fillSkel("sfuHostBadges", skel("skel-sm", "width:120px;display:inline-block"));
     skelRows("topChannelsBody", 4, 5);
     skelRows("commBody", 6, 3);
-    skelRows("bugsBody", 3, 3);
   }
   paintSkeletons();
 
@@ -6428,6 +6667,7 @@
       refreshBtn.addEventListener("click", function () {
         occTick(true);
         if (act.asked) actLoad(true);
+        if (fbq.asked) fbLoad(false);
         // The controls section does not poll, so this button is the only way
         // to re-read it without a write. Only when it has been opened at all.
         if (ctlLoaded) ctlLoadServers();

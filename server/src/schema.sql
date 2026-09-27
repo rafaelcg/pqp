@@ -2873,6 +2873,13 @@ CREATE TABLE IF NOT EXISTS feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_status_id
   ON feedback (status, id DESC);
 
+-- Where the person was when they wrote it: platform, build, route, call
+-- state, Faro session (`feedbackContextSchema` in @pqp/shared), plus the user
+-- agent the server read from its own request header. NULL for anything filed
+-- before this column, and for clients that send none. Read by the operator
+-- dashboard only.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS context JSONB;
+
 -- Earned marks, keyed by a stable badge slug ('caca-bugs', 'turma-1000').
 -- Deliberately generic — the next achievement is one INSERT away — and
 -- deliberately NOT the community-membership "badges" on the public profile,

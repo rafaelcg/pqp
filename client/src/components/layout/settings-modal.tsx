@@ -187,6 +187,10 @@ import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { requestConnectionCheck } from "@/lib/settings-request";
+import {
+  buildFeedbackContext,
+  type FeedbackVoiceContext,
+} from "@/lib/feedback-context";
 import { cn } from "@/lib/utils";
 
 export interface LocalSettings {
@@ -468,6 +472,8 @@ interface SettingsModalProps {
   requestedSection?: SectionId | null;
   /** Open the shortcut map. Settings stays up; the overlay stacks on top. */
   onShowShortcutOverlay?: () => void;
+  /** The call half of a feedback item's context, which only `App` knows. */
+  feedbackVoice?: FeedbackVoiceContext | null;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -3779,8 +3785,8 @@ function BannerField({
  * badge, which is the entire gamification budget of this feature: one fun
  * consequence, no points, no leaderboard.
  */
-function FeedbackSection() {
-  const { t } = useTranslation();
+function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
+  const { t, locale } = useTranslation();
   const [kind, setKind] = useState<FeedbackKind>("bug");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -3812,7 +3818,11 @@ function FeedbackSection() {
     setSending(true);
     setError(null);
     try {
-      await sendFeedback({ kind, body: body.trim() });
+      await sendFeedback({
+        kind,
+        body: body.trim(),
+        context: buildFeedbackContext(voice, { locale }),
+      });
       setSent(true);
     } catch {
       setError(t("settings.feedback.error"));
@@ -3873,6 +3883,7 @@ function FeedbackSection() {
           </p>
         )}
       </div>
+      <p className="text-xs text-paper-muted">{t("settings.feedback.attached")}</p>
     </div>
   );
 }
@@ -3896,6 +3907,7 @@ export function SettingsModal({
   onAudioSettingsLive,
   requestedSection = null,
   onShowShortcutOverlay,
+  feedbackVoice = null,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
@@ -4254,7 +4266,7 @@ export function SettingsModal({
               />
             )}
 
-            {section === "feedback" && <FeedbackSection />}
+            {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
 
             {section === "moderation" &&
               (canModerateInstance ? (

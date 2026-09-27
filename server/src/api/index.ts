@@ -72,6 +72,7 @@ import {
   ackWatchPartyWaitlistApprovalSchema,
   joinWatchPartyWaitlistSchema,
   createReportSchema,
+  FEEDBACK_KINDS,
   FEEDBACK_PAGE_MAX,
   FEEDBACK_PAGE_SIZE,
   createCallRatingSchema,
@@ -573,8 +574,11 @@ import {
   resolveReport,
 } from "../services/reports.js";
 import {
+  ADMIN_FEEDBACK_PATH,
+  ADMIN_FEEDBACK_RESOLVE_PATH,
   createFeedback,
   listFeedback,
+  listOperatorFeedback,
   listUserAchievements,
   resolveFeedback,
 } from "../services/feedback.js";
@@ -2231,6 +2235,20 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // The feedback queue: the whole text, the author's tag and handle, and
+  // where they were. The first route on this token that names a person,
+  // which is why it is its own read and not a field on /metrics. And its one
+  // write, confirm or close, which can grant the caça-bugs badge.
+  {
+    method: "GET",
+    path: ADMIN_FEEDBACK_PATH,
+    run: async (_req, query) => listOperatorFeedback(operatorFeedbackQuery(query)),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_FEEDBACK_RESOLVE_PATH,
+    run: async (req) => operatorResolveFeedback(req),
   },
   {
     method: "GET",
@@ -9413,7 +9431,12 @@ router.post("/api/feedback", async ({ req, res, user }) => {
     throw new HttpError(429, "Slow down");
   }
   const body = createFeedbackSchema.parse(await readJsonBody(req));
-  const item = await createFeedback(user.id, body);
+  const agent = req.headers["user-agent"];
+  const item = await createFeedback(
+    user.id,
+    body,
+    typeof agent === "string" ? agent : undefined,
+  );
   return created({ feedback: item });
 });
 
@@ -9434,6 +9457,53 @@ router.get("/api/feedback/instance", async ({ url, user }) => {
       ? (feedbackStatusSchema.safeParse(rawStatus).data ?? undefined)
       : undefined,
   });
+});
+
+/**
+ * The operator dashboard's feedback queue: the whole text, who sent it and
+ * where they were (`listOperatorFeedback`). Same two ways in as the other
+ * admin reads: an instance moderator here, the machine token in `handleApi`.
+ */
+function operatorFeedbackQuery(params: URLSearchParams) {
+  const status = params.get("status");
+  const kind = params.get("kind");
+  return {
+    status:
+      status === "all"
+        ? ("all" as const)
+        : (feedbackStatusSchema.safeParse(status).data ?? ("open" as const)),
+    kind: z.enum(FEEDBACK_KINDS).safeParse(kind).data ?? null,
+    before: params.get("before") ?? undefined,
+    limit: clampLimit(params.get("limit"), FEEDBACK_PAGE_SIZE, FEEDBACK_PAGE_MAX),
+  };
+}
+
+const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
+  id: z.string().regex(/^[0-9]{1,19}$/),
+});
+
+/** Confirm or close from the dashboard. Same transaction and badge rule. */
+async function operatorResolveFeedback(req: IncomingMessage) {
+  const body = operatorResolveFeedbackSchema.parse(await readJsonBody(req));
+  const resolved = await resolveFeedback(body.id, body.status);
+  if (!resolved) {
+    throw new NotFound("Feedback not found");
+  }
+  return { feedback: resolved };
+}
+
+router.get(ADMIN_FEEDBACK_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listOperatorFeedback(operatorFeedbackQuery(url.searchParams));
+});
+
+router.put(ADMIN_FEEDBACK_RESOLVE_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorResolveFeedback(req);
 });
 
 /**

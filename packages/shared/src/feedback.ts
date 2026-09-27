@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { safeTextSchema } from "./api.js";
+import { voiceRoomTransportSchema } from "./signaling.js";
 
 /**
  * Product feedback — the box in settings, not the moderation queue.
@@ -14,8 +15,40 @@ export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
 
 export const FEEDBACK_BODY_MAX_LENGTH = 2000;
 
+/**
+ * Where the person was when they wrote it. A bug report that says "screen
+ * share broke after the update" is only actionable with the platform, the
+ * build and whether they were in a call, so the client attaches this and the
+ * settings box says so. Every field is optional and bounded; an older client
+ * sends none of it. The user agent is not here: the server reads its own
+ * header rather than trusting a copy.
+ */
+export const FEEDBACK_PLATFORMS = ["web", "desktop", "ios", "android"] as const;
+export const feedbackContextSchema = z.object({
+  platform: z.enum(FEEDBACK_PLATFORMS),
+  /** The deployed commit, or "dev". */
+  appVersion: z.string().trim().max(64).optional(),
+  /** The app route, e.g. `/app/servers/…/channels/…`. */
+  path: z.string().trim().max(200).optional(),
+  locale: z.string().trim().max(16).optional(),
+  /** Window size, `1440x900`. */
+  viewport: z.string().regex(/^[0-9]{1,5}x[0-9]{1,5}$/).optional(),
+  voice: z
+    .object({
+      inCall: z.boolean(),
+      transport: voiceRoomTransportSchema.nullable().optional(),
+      /** The call's channel had a watch party stream live. */
+      watchParty: z.boolean().optional(),
+    })
+    .optional(),
+  /** Grafana Faro session, to open this person's errors around that moment. */
+  faroSessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional(),
+});
+export type FeedbackContext = z.infer<typeof feedbackContextSchema>;
+
 export const createFeedbackSchema = z.object({
   kind: z.enum(FEEDBACK_KINDS),
+  context: feedbackContextSchema.optional(),
   body: z
     .string()
     .trim()

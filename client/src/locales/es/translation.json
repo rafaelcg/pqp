@@ -1605,6 +1605,7 @@
   "settings.feedback.kind.other": "Otro",
   "settings.feedback.placeholder": "¿Qué pasó, y dónde? Mientras más detalle, más rápida la cacería.",
   "settings.feedback.send": "Mandar",
+  "settings.feedback.attached": "Va junto: tu usuario, la versión de la app, tu dispositivo y navegador, la pantalla en la que estás y si estás en una llamada. Así reproducimos el bug.",
   "settings.feedback.done": "Recibido. Si el bug se confirma, la insignia es tuya. 🐛",
   "settings.feedback.again": "Mandar otro",
   "settings.feedback.error": "No se pudo enviar. Intenta de nuevo.",
