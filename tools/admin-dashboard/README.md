@@ -530,7 +530,8 @@ Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
   signup week (day 1, days 7 to 13, days 30 to 36 after the signup day).
 - "Active" means the app connected that São Paulo day (an authenticated
   WebSocket on web, desktop, iOS or Android), the person did something in it
-  (sent, reacted, typed, joined a call or a watch party), or sent a message.
+  (opened a channel, sent, reacted, typed, joined a call or a watch party),
+  or sent a message.
   Watch party viewers and voice-only users count. Automatic frames such as
   WebRTC signalling do not. The API writes one row per person per day to
   `user_activity_days`, batched once a minute per process.
