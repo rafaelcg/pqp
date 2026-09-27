@@ -1058,7 +1058,13 @@ export function createChatController(
       const active = [...typing.entries()].filter(
         ([, entry]) => entry.expiresAt > now,
       );
-      const key = active.map(([userId]) => userId).sort().join(",");
+      // Sorted by userId so the key does not depend on Map iteration order;
+      // displayName rides along so a rename mid-typing invalidates the cache
+      // too, not just a change in who is active.
+      const key = active
+        .map(([userId, entry]) => `${userId}:${entry.displayName}`)
+        .sort()
+        .join(",");
       if (key === typingUsersCacheKey) {
         return typingUsersCache;
       }

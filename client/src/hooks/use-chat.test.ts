@@ -960,6 +960,34 @@ describe("typing indicators", () => {
     // Empty stays stable too, once settled.
     expect(chat.getTypingUsers()).toBe(fourth);
   });
+
+  // Farol caught this: the cache key used to be user ids alone, so a rename
+  // mid-typing (the same person, still actively typing) left the indicator
+  // showing the stale name until the active set changed for some other
+  // reason. The display name has to be part of what invalidates the cache.
+  it("picks up a display name change for a user who stays active", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    expect(first).toEqual([{ userId: "u1", displayName: "Ana" }]);
+
+    // Same user, still active, renamed mid-typing (a fresh typing-broadcast
+    // carrying the new name, the only way this field can change).
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana Paula",
+    } as never);
+    const second = chat.getTypingUsers();
+    expect(second).not.toBe(first);
+    expect(second).toEqual([{ userId: "u1", displayName: "Ana Paula" }]);
+  });
 });
 
 describe("history pagination", () => {
