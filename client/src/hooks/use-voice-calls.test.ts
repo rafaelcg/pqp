@@ -99,6 +99,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishCamera: async () => {},
     disconnect: async () => {},
     isConnected: () => false,
+    setCallActive: () => {},
   })),
 }));
 
@@ -207,6 +208,7 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => "online",
     isConnected: () => true,
+    setCallActive: () => {},
     retryNow: () => {},
     getLastClose: () => null,
     getUnauthorizedStreak: () => 0,

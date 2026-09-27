@@ -62,6 +62,7 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => (state.connected ? "online" : "reconnecting"),
     isConnected: () => state.connected,
+    setCallActive: () => {},
     retryNow: () => {},
     getLastClose: () => null,
     getUnauthorizedStreak: () => 0,

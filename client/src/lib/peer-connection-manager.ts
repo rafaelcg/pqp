@@ -7,6 +7,7 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
+import { emitNetworkHint } from "./network-hints";
 import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
   DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
@@ -1050,6 +1051,12 @@ export function createPeerConnectionManager(
       ) {
         managed.iceRestartAttempts = 0;
         clearIceRestartTimer(managed);
+        // ICE checks run every second or two, so a mesh leg usually notices
+        // the network before `/ws` does: tell the signalling transport (see
+        // `network-hints.ts`). "up" only acts on a socket that is down.
+        emitNetworkHint("up");
+      } else if (pc.iceConnectionState === "disconnected") {
+        emitNetworkHint("suspect");
       } else if (pc.iceConnectionState === "failed") {
         scheduleIceRestart(managed);
       }

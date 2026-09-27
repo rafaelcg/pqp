@@ -1986,6 +1986,13 @@ function MainAppContent({
     };
   }, [voice]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  // In a call, the socket keeps a tighter watch on itself: a dead link under
+  // a voice seat is found in about ten seconds instead of half a minute. Only
+  // in a call, because the pings are paid for on the server by everybody.
+  const inVoiceCall = voiceState.status !== "idle";
+  useEffect(() => {
+    transport.setCallActive(inVoiceCall);
+  }, [transport, inVoiceCall]);
   // Leaving the room, or being moved out of it, ends the warning: the seat it
   // was about is gone.
   useEffect(() => {

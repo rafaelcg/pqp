@@ -8,7 +8,27 @@ import type {
 // into a transport.
 import { translateMessage } from "@/lib/i18n";
 import { getWsUrl } from "@/lib/utils";
-import { drainJitterMs } from "@/lib/reconnect-jitter";
+import { onNetworkHint } from "@/lib/network-hints";
+import {
+  freshKeepaliveState,
+  KEEPALIVE_TICK_MS,
+  keepaliveAction,
+  noteInbound,
+  noteNetworkUp,
+  noteProbeSent,
+  notePingSent,
+  OPEN_TIMEOUT_MS,
+  READY_TIMEOUT_MS,
+  reconnectCauseForClose,
+  reconnectDelayMs,
+  resetInFlight,
+  STALE_CONNECT_MS,
+  TOKEN_ABANDON_MS,
+  TOKEN_TIMEOUT_MS,
+  type KeepaliveMode,
+  type KeepaliveState,
+  type ReconnectCause,
+} from "@/lib/realtime-liveness";
 
 type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => void;
 type TokenProvider = () => Promise<string | null>;
@@ -20,11 +40,6 @@ export type RealtimeStatus =
   | "reconnecting"
   | "unauthorized";
 
-// Hosted proxies (Railway edge) drop idle WebSockets, so keep traffic flowing
-// well under typical idle timeouts. A pong is expected each interval, but we
-// only declare the link dead after MAX_MISSED_PONGS consecutive misses — one
-// slow round-trip (mobile radio, a brief server event-loop stall) must not
-// self-disconnect an otherwise healthy connection.
 /**
  * Optional wire features this build understands, declared on the `auth` frame.
  *
@@ -69,49 +84,13 @@ const WIRE_CAPS = [
   "sfu-region",
 ] as const;
 
-const PING_INTERVAL_MS = 20_000;
-const MAX_MISSED_PONGS = 2;
-const RECONNECT_BASE_DELAY_MS = 1_000;
-const RECONNECT_BACKOFF_FACTOR = 2;
-const RECONNECT_MAX_DELAY_MS = 30_000;
-// Close codes a deploy produces: 1001 is the drain's own close
-// (server/src/lib/drain.ts), 1006/1012 are what an outright process restart
-// looks like from the browser (abnormal close / service restart). Every open
-// tab sees one of these at nearly the same instant, so the FIRST reconnect
-// attempt after one gets the wider drainJitterMs() spread instead of the
-// tight backoff window — see docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md
-// item C7 and CLAUDE.md pitfall 10/11. A later attempt in the same backoff
-// sequence (the drain closed us again, or the retry itself failed) falls
-// through to the ordinary full-jitter backoff below.
-const DRAIN_CLOSE_CODES = new Set([1001, 1006, 1012]);
+// The timing rules (keepalive, connect timeouts, reconnect delay) live in
+// `realtime-liveness.ts` as pure functions, with the incident that shaped
+// them. Re-exported so callers and tests keep one import.
+export { reconnectDelayMs } from "@/lib/realtime-liveness";
 
-/**
- * Exponential backoff with full jitter (the AWS formula): a delay drawn
- * uniformly from [0, min(cap, base * factor ** attempt)]. `attempt` is
- * 0-based and counts failed reconnect attempts since the last successful
- * `ready`.
- */
-function backoffDelayMs(attempt: number): number {
-  const cap = Math.min(
-    RECONNECT_MAX_DELAY_MS,
-    RECONNECT_BASE_DELAY_MS * RECONNECT_BACKOFF_FACTOR ** attempt,
-  );
-  return Math.random() * cap;
-}
+const PING_FRAME = JSON.stringify({ type: "ping" });
 
-/**
- * The delay before the reconnect attempt numbered `attempt` (0-based). Only
- * the very first attempt (`attempt === 0`) of a deploy-shaped close gets the
- * wide drain spread; everything else — later attempts in the same sequence,
- * and the first attempt after any other close reason (auth refused, a
- * malformed WS URL, an ordinary 1000) — uses the standard backoff.
- */
-export function reconnectDelayMs(attempt: number, closeCode?: number): number {
-  if (attempt === 0 && closeCode !== undefined && DRAIN_CLOSE_CODES.has(closeCode)) {
-    return drainJitterMs();
-  }
-  return backoffDelayMs(attempt);
-}
 // Bound the offline outbound queues so a long disconnect can't grow memory
 // without limit; overflow drops the oldest entries.
 const MAX_CHAT_QUEUE = 200;
@@ -177,6 +156,12 @@ export interface RealtimeTransport {
    */
   getUnauthorizedStreak(): number;
   isConnected(): boolean;
+  /**
+   * True while this tab holds a voice seat. Switches the keepalive to the
+   * fast profile (`KEEPALIVE_PROFILES` in `realtime-liveness.ts`), so a dead
+   * link under a call is found in about ten seconds, not half a minute.
+   */
+  setCallActive(active: boolean): void;
 }
 
 export function createRealtimeTransport(): RealtimeTransport {
@@ -196,8 +181,29 @@ export function createRealtimeTransport(): RealtimeTransport {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
-  let awaitingPong = false;
-  let missedPongs = 0;
+  /** Open, then ready, deadline for the attempt in flight. */
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
+  let connectStartedAt = 0;
+  let keepalive: KeepaliveState | null = null;
+  let keepaliveMode: KeepaliveMode = "normal";
+  /** When the link was lost, for the fast-retry window; null while online. */
+  let lossStartedAt: number | null = null;
+  /**
+   * Why the pending reconnect is waiting. Only a `network` wait may be cut
+   * short by evidence that the network is back: a drain's spread protects the
+   * server from every tab at once, and a refusal's backoff protects it from
+   * being hammered, and neither is about this tab's link.
+   */
+  let pendingCause: ReconnectCause | null = null;
+  /**
+   * The token request still out, and when it started. A request that hung
+   * past `TOKEN_TIMEOUT_MS` is not called again on every retry, or a long
+   * outage piles one more stuck refresh up per attempt; the next attempt
+   * waits on the same one, until it is old enough to give up on.
+   */
+  let tokenInFlight: Promise<string | null> | null = null;
+  let tokenInFlightSince = 0;
+  let unsubscribeHints: (() => void) | null = null;
   const chatQueue: ChatClientMessage[] = [];
   const voiceQueue: VoiceClientMessage[] = [];
   let lastClose: RealtimeClose | null = null;
@@ -228,6 +234,14 @@ export function createRealtimeTransport(): RealtimeTransport {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    pendingCause = null;
+  }
+
+  function clearConnectTimer() {
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    }
   }
 
   function stopKeepalive() {
@@ -235,8 +249,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       clearInterval(pingTimer);
       pingTimer = null;
     }
-    awaitingPong = false;
-    missedPongs = 0;
+    keepalive = null;
   }
 
   function stopFlushTimer() {
@@ -246,77 +259,189 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
   }
 
+  /**
+   * This socket is gone as far as we are concerned, whatever the browser
+   * thinks: a half-open TCP connection never fires `close` on its own, and
+   * the closing handshake `close()` starts can take as long again. Detach
+   * first so nothing waits on it.
+   */
+  function declareDead(ws: WebSocket) {
+    handleConnectionLoss(ws, false, "network");
+    try {
+      ws.close();
+    } catch {
+      // already closing
+    }
+  }
+
+  function sendPing(ws: WebSocket, probe: boolean) {
+    if (!keepalive) {
+      return;
+    }
+    try {
+      ws.send(PING_FRAME);
+    } catch {
+      declareDead(ws);
+      return;
+    }
+    if (probe) {
+      noteProbeSent(keepalive, Date.now());
+    } else {
+      notePingSent(keepalive, Date.now());
+    }
+  }
+
   function startKeepalive(ws: WebSocket) {
     stopKeepalive();
+    keepalive = freshKeepaliveState(Date.now());
+    // A tick, not a ping interval: the schedule is `keepaliveAction`'s, and
+    // evaluating it every second is what lets the fast profile find a dead
+    // link in about ten seconds. The tick itself sends nothing unless the
+    // socket has been silent.
     pingTimer = setInterval(() => {
-      if (ws !== socket || ws.readyState !== WebSocket.OPEN) {
+      if (ws !== socket || ws.readyState !== WebSocket.OPEN || !keepalive) {
         return;
       }
-      if (awaitingPong) {
-        // Previous ping went unanswered this interval — tolerate a few before
-        // giving up, so a single latency spike doesn't drop a live connection.
-        missedPongs += 1;
-        if (missedPongs >= MAX_MISSED_PONGS) {
-          // Half-open connection: the close event may never fire on its own.
-          handleConnectionLoss(ws);
-          ws.close();
-          return;
-        }
+      const action = keepaliveAction(keepalive, Date.now(), keepaliveMode);
+      if (action === "dead") {
+        declareDead(ws);
+      } else if (action === "ping") {
+        sendPing(ws, false);
       }
-      awaitingPong = true;
-      ws.send(JSON.stringify({ type: "ping" }));
-    }, PING_INTERVAL_MS);
+    }, KEEPALIVE_TICK_MS);
   }
 
   /**
-   * `closeCode` is passed straight through to `reconnectDelayMs` — only the
-   * caller that just saw a close event has one; the auth-refused and
-   * malformed-URL paths below have nothing to pass and get ordinary backoff.
+   * Something outside the socket says the network may have changed. One ping
+   * with a short deadline settles whether this socket survived it.
    */
-  function scheduleReconnect(closeCode?: number) {
+  function probe() {
+    const ws = socket;
+    if (manualClose || !ws || !isReady || !keepalive) {
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) {
+      declareDead(ws);
+      return;
+    }
+    if (keepalive.probeDeadlineAt !== null) {
+      return; // one probe at a time
+    }
+    sendPing(ws, true);
+  }
+
+  /**
+   * Evidence that the network works right now (the browser's `online`, media
+   * reconnecting). Whatever the transport is waiting on BECAUSE OF THE
+   * NETWORK, stop waiting. A drain spread or a refusal backoff stays: media
+   * recovering says nothing about the server that closed us, and every tab
+   * in a call would otherwise hear the same hint and reconnect together.
+   */
+  function networkIsUp(source: "browser" | "media") {
+    if (manualClose) {
+      return;
+    }
+    const ws = socket;
+    if (!ws) {
+      // The browser's own `online` / visible is about this machine alone, so
+      // it may cut an abnormal-close spread short too. A media hint may not:
+      // every tab in a call hears one, and the spread is what keeps a crash's
+      // worth of tabs from reaching auth together.
+      const skippable =
+        pendingCause === "network" ||
+        (source === "browser" && pendingCause === "abnormal");
+      if (reconnectTimer && skippable) {
+        clearReconnectTimer();
+        void connectSocket();
+      }
+      return;
+    }
+    if (
+      !isReady &&
+      ws.readyState === WebSocket.CONNECTING &&
+      Date.now() - connectStartedAt >= STALE_CONNECT_MS
+    ) {
+      // Most likely dialled on the network that just went away, and would
+      // otherwise sit out its open timeout. Redo it on the one that is here.
+      declareDead(ws);
+      clearReconnectTimer();
+      void connectSocket();
+      return;
+    }
+    if (isReady && keepalive) {
+      // Pings still unanswered now that the network is back: a socket that
+      // survived answers within a round trip, so stop waiting for the full
+      // deadline (`UP_GRACE_MS`).
+      noteNetworkUp(keepalive, Date.now());
+    }
+  }
+
+  /**
+   * `cause` picks the schedule in `reconnectDelayMs`: a drain gets the deploy
+   * spread, a loss this tab detected retries at once, a 1005 / 1006 close
+   * within 1.5 s (a crash sends it to every tab at once), both then quickly,
+   * and a refusal (auth, rate limit, a deliberate close) keeps the slow
+   * backoff.
+   */
+  function scheduleReconnect(cause: ReconnectCause = "refused") {
     if (manualClose || reconnectTimer) {
       return;
     }
     setPendingStatus();
-    const delay = reconnectDelayMs(reconnectAttempt, closeCode);
+    const now = Date.now();
+    if (lossStartedAt === null) {
+      lossStartedAt = now;
+    }
+    const delay = reconnectDelayMs(reconnectAttempt, cause, now - lossStartedAt);
     reconnectAttempt += 1;
+    pendingCause = cause;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
+      pendingCause = null;
       void connectSocket();
     }, delay);
   }
 
   function handleOnline() {
-    // Network came back: this is the user's own connectivity returning, not
-    // a deploy — skip the remaining backoff and retry right away rather than
-    // waiting out a delay sized for a thundering herd that isn't this tab.
-    if (!manualClose && reconnectTimer) {
-      clearReconnectTimer();
-      void connectSocket();
-    }
+    // Network came back: this is the user's own connectivity returning. A
+    // retry waiting on the network goes now; a drain spread or a refusal
+    // backoff is left alone (`networkIsUp`).
+    // A socket that looks open may be the pre-outage one, dead on an address
+    // this machine no longer has: probe it.
+    networkIsUp("browser");
+    probe();
   }
 
   function handleVisibility() {
     if (manualClose || document.visibilityState !== "visible") {
       return;
     }
-    // Coming back to the foreground: background tabs throttle timers, so a
-    // missed-pong count here is stale — reset it instead of dropping a link
-    // that is actually fine. If the socket did die while hidden, reconnect now
-    // rather than waiting out the backoff.
-    awaitingPong = false;
-    missedPongs = 0;
-    if (!socket && reconnectTimer) {
-      clearReconnectTimer();
-      void connectSocket();
+    // Coming back to the foreground: background tabs throttle timers, so an
+    // in-flight ping count here is stale. Forget it rather than dropping a
+    // link that is actually fine, and probe instead: a laptop that slept or a
+    // phone that switched networks while this tab was hidden comes back to a
+    // socket that is dead, and the probe finds that out in seconds.
+    if (keepalive) {
+      resetInFlight(keepalive);
+    }
+    networkIsUp("browser");
+    probe();
+  }
+
+  function handleNetworkHint(hint: "up" | "suspect") {
+    if (hint === "up") {
+      networkIsUp("media");
+    } else {
+      probe();
     }
   }
 
-  // Idempotent per socket: reached from both the close event and pong timeout.
+  // Idempotent per socket: reached from the close event, the keepalive, a
+  // connect timeout and a failed send.
   function handleConnectionLoss(
     ws: WebSocket,
     authFailed = false,
-    closeCode?: number,
+    cause: ReconnectCause = "network",
   ) {
     if (ws !== socket) {
       return;
@@ -325,6 +450,10 @@ export function createRealtimeTransport(): RealtimeTransport {
     const wasReady = isReady;
     isReady = false;
     stopKeepalive();
+    clearConnectTimer();
+    if (wasReady) {
+      lossStartedAt = Date.now();
+    }
     // Anything still undrained stays queued for the next connection — except
     // voice signaling: queued offers/ICE would flush before join-voice-room
     // and race a session resume.
@@ -340,7 +469,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       unauthorizedStreak += 1;
       setStatus("unauthorized");
       errorHandler?.(translateMessage("connection.authFailed"));
-      scheduleReconnect();
+      scheduleReconnect("refused");
       return;
     }
 
@@ -349,7 +478,49 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     setPendingStatus();
     errorHandler?.(translateMessage("connection.reconnecting"));
-    scheduleReconnect(closeCode);
+    scheduleReconnect(cause);
+  }
+
+  /** The token, null for "no session", or "timeout" for a provider that hung. */
+  async function resolveToken(
+    provider: TokenProvider,
+  ): Promise<string | null | "timeout"> {
+    const now = Date.now();
+    if (!tokenInFlight || now - tokenInFlightSince >= TOKEN_ABANDON_MS) {
+      // One request at a time: a retry after a timeout waits on the request
+      // that is still out instead of stacking another beside it. Clerk's
+      // `getToken` takes no abort signal, so this is the only bound there is.
+      const call = provider();
+      tokenInFlight = call;
+      tokenInFlightSince = now;
+      const settle = () => {
+        if (tokenInFlight === call) {
+          tokenInFlight = null;
+        }
+      };
+      call.then(settle, settle);
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), TOKEN_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([tokenInFlight, timeout]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  function armConnectTimer(ws: WebSocket, ms: number) {
+    clearConnectTimer();
+    connectTimer = setTimeout(() => {
+      connectTimer = null;
+      if (ws === socket && !isReady) {
+        declareDead(ws);
+      }
+    }, ms);
   }
 
   async function connectSocket() {
@@ -361,13 +532,25 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     let token: string | null = null;
     let tokenFetchFailed = false;
+    let tokenTimedOut = false;
     try {
-      token = await tokenProvider();
+      const resolved = await resolveToken(tokenProvider);
+      if (resolved === "timeout") {
+        tokenTimedOut = true;
+      } else {
+        token = resolved;
+      }
     } catch {
       tokenFetchFailed = true;
       token = null;
     }
     if (manualClose || socket) {
+      return;
+    }
+    if (tokenTimedOut) {
+      // A hung refresh is the network, not the session: no "unauthorized",
+      // no hang-up, just the next attempt on the fast schedule.
+      scheduleReconnect("network");
       return;
     }
     if (!token) {
@@ -382,7 +565,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       if (hasConnectedOnce && !offline) {
         authUnavailableHandler?.();
       }
-      scheduleReconnect();
+      scheduleReconnect(offline ? "network" : "refused");
       return;
     }
 
@@ -394,13 +577,19 @@ export function createRealtimeTransport(): RealtimeTransport {
       // A malformed VITE_WS_URL throws here rather than firing an error event,
       // which would otherwise leave the transport silently idle forever.
       errorHandler?.(translateMessage("connection.wsUrlFailed"));
-      scheduleReconnect();
+      scheduleReconnect("refused");
       return;
     }
     socket = ws;
+    connectStartedAt = Date.now();
+    // Without a bound, an attempt made while the network was down waits out
+    // the operating system's connect timeout (75 s on macOS), and the attempt
+    // that would have worked waits behind it.
+    armConnectTimer(ws, OPEN_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
       if (ws === socket) {
+        armConnectTimer(ws, READY_TIMEOUT_MS);
         ws.send(JSON.stringify({ type: "auth", token, caps: WIRE_CAPS }));
       }
     });
@@ -408,6 +597,10 @@ export function createRealtimeTransport(): RealtimeTransport {
     ws.onmessage = (event) => {
       if (ws !== socket) {
         return;
+      }
+      // Any frame proves the link, so a busy socket never needs a ping.
+      if (keepalive) {
+        noteInbound(keepalive, Date.now());
       }
       try {
         const message = JSON.parse(event.data as string) as
@@ -417,14 +610,14 @@ export function createRealtimeTransport(): RealtimeTransport {
           | VoiceSignalingMessage;
 
         if (message.type === "pong") {
-          awaitingPong = false;
-          missedPongs = 0;
           return;
         }
 
         if (message.type === "ready") {
           isReady = true;
+          clearConnectTimer();
           reconnectAttempt = 0;
+          lossStartedAt = null;
           unauthorizedStreak = 0;
           const reconnected = hasConnectedOnce;
           hasConnectedOnce = true;
@@ -458,12 +651,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       // (and a socket that errors is done either way) — funnel both paths
       // through the same idempotent loss handler.
       if (ws === socket && !manualClose) {
-        handleConnectionLoss(ws);
-        try {
-          ws.close();
-        } catch {
-          // already closing
-        }
+        declareDead(ws);
       }
     };
 
@@ -473,7 +661,11 @@ export function createRealtimeTransport(): RealtimeTransport {
         reason: event.reason ?? "",
         at: Date.now(),
       };
-      handleConnectionLoss(ws, event.code === 4401, event.code);
+      handleConnectionLoss(
+        ws,
+        event.code === 4401,
+        reconnectCauseForClose(event.code),
+      );
     };
   }
 
@@ -512,19 +704,43 @@ export function createRealtimeTransport(): RealtimeTransport {
     flushTimer = setTimeout(tick, FLUSH_INTERVAL_MS);
   }
 
+  /**
+   * Send now if the socket is ready and nothing is queued ahead; false means
+   * the caller queues. A send that finds the socket already closing, or that
+   * throws, is the link telling us it is gone before `close` has fired (or
+   * when it never will): act on it now rather than at the next keepalive.
+   */
+  function trySendNow(message: ChatClientMessage | VoiceClientMessage): boolean {
+    const ws = socket;
+    if (!ws || !isReady || flushTimer !== null) {
+      return false;
+    }
+    if (ws.readyState !== WebSocket.OPEN) {
+      if (ws.readyState !== WebSocket.CONNECTING) {
+        declareDead(ws);
+      }
+      return false;
+    }
+    try {
+      ws.send(JSON.stringify(message));
+      return true;
+    } catch {
+      declareDead(ws);
+      return false;
+    }
+  }
+
   function sendOrQueueChat(message: ChatClientMessage) {
     // While a paced flush is draining, join the back of the queue — a direct
     // send would overtake older messages and spend the same rate budget.
-    if (flushTimer === null && socket?.readyState === WebSocket.OPEN && isReady) {
-      socket.send(JSON.stringify(message));
+    if (trySendNow(message)) {
       return;
     }
     enqueueBounded(chatQueue, message, MAX_CHAT_QUEUE);
   }
 
   function sendOrQueueVoice(message: VoiceClientMessage) {
-    if (flushTimer === null && socket?.readyState === WebSocket.OPEN && isReady) {
-      socket.send(JSON.stringify(message));
+    if (trySendNow(message)) {
       return;
     }
     // Voice signaling is ephemeral (peer ids reset on rejoin), so a small cap
@@ -535,10 +751,13 @@ export function createRealtimeTransport(): RealtimeTransport {
   return {
     connect(provider: TokenProvider) {
       tokenProvider = provider;
+      tokenInFlight = null;
       manualClose = false;
       hasConnectedOnce = false;
       window.addEventListener("online", handleOnline);
       document.addEventListener("visibilitychange", handleVisibility);
+      unsubscribeHints?.();
+      unsubscribeHints = onNetworkHint(handleNetworkHint);
       void connectSocket();
     },
 
@@ -546,13 +765,18 @@ export function createRealtimeTransport(): RealtimeTransport {
       manualClose = true;
       window.removeEventListener("online", handleOnline);
       document.removeEventListener("visibilitychange", handleVisibility);
+      unsubscribeHints?.();
+      unsubscribeHints = null;
       clearReconnectTimer();
+      clearConnectTimer();
       stopKeepalive();
+      lossStartedAt = null;
       reconnectAttempt = 0;
       socket?.close(1000);
       socket = null;
       isReady = false;
       tokenProvider = null;
+      tokenInFlight = null;
       chatQueue.length = 0;
       voiceQueue.length = 0;
       setStatus("idle");
@@ -613,6 +837,10 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     isConnected() {
       return socket?.readyState === WebSocket.OPEN && isReady;
+    },
+
+    setCallActive(active: boolean) {
+      keepaliveMode = active ? "fast" : "normal";
     },
   };
 }
