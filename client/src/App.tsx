@@ -6176,11 +6176,18 @@ function MainAppContent({
     async (serverId: string) => {
       const [{ servers: serverList }, liveParties] = await Promise.all([
         fetchServers(),
+        // Capped: the party only picks the landing, so a slow answer must
+        // never hold up a join that already succeeded.
         isWatchPartyChannelsEnabled()
-          ? apiFetchServerWatchParties(serverId).then(
-              (answer) => answer.parties,
-              () => [] as WatchParty[],
-            )
+          ? Promise.race([
+              apiFetchServerWatchParties(serverId).then(
+                (answer) => answer.parties,
+                () => [] as WatchParty[],
+              ),
+              new Promise<WatchParty[]>((resolve) =>
+                window.setTimeout(() => resolve([]), 3_000),
+              ),
+            ])
           : Promise.resolve([] as WatchParty[]),
       ]);
       setServers(serverList);
