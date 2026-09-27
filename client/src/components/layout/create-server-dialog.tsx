@@ -3,6 +3,8 @@ import { intlLocale } from "@/lib/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isDiscordInviteLink,
+  MAX_IMPORT_CATEGORIES,
+  MAX_IMPORT_CHANNELS,
   type Channel,
   type DiscordImportErrorCode,
   type DiscordImportPlan,
@@ -58,6 +60,12 @@ const IMPORT_ERROR_KEYS: Record<DiscordImportErrorCode, MessageKey> = {
   unavailable: "importDiscord.error.unavailable",
 };
 
+/** Slots for `importDiscord.error.tooMany`, so the copy follows the caps. */
+const IMPORT_CAPS = {
+  channels: MAX_IMPORT_CHANNELS,
+  categories: MAX_IMPORT_CATEGORIES,
+};
+
 /**
  * The sentence for a failed preview or apply, in the reader's language. The
  * server's `error` is English, so it is never shown; its `code` picks the
@@ -72,10 +80,14 @@ export function discordImportErrorKey(
   }
   const details = error.details as { code?: unknown } | null;
   const code = typeof details?.code === "string" ? details.code : null;
-  if (code && code in IMPORT_ERROR_KEYS) {
+  if (code && Object.prototype.hasOwnProperty.call(IMPORT_ERROR_KEYS, code)) {
     return IMPORT_ERROR_KEYS[code as DiscordImportErrorCode];
   }
   switch (error.status) {
+    case 0:
+      return "importDiscord.error.network";
+    case 503:
+      return "importDiscord.error.serverBusy";
     case 400:
       return "importDiscord.error.notATemplate";
     case 404:
@@ -263,7 +275,9 @@ export function CreateServerDialog({
       setPlan(next);
       setStep("preview");
     } catch (err) {
-      setError(t(discordImportErrorKey(err, "importDiscord.error.previewFailed")));
+      setError(
+        t(discordImportErrorKey(err, "importDiscord.error.previewFailed"), IMPORT_CAPS),
+      );
     } finally {
       setBusy(false);
     }
@@ -299,7 +313,9 @@ export function CreateServerDialog({
       });
       setStep("done");
     } catch (err) {
-      setError(t(discordImportErrorKey(err, "importDiscord.error.applyFailed")));
+      setError(
+        t(discordImportErrorKey(err, "importDiscord.error.applyFailed"), IMPORT_CAPS),
+      );
     } finally {
       setBusy(false);
     }

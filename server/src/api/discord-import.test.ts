@@ -189,6 +189,59 @@ describeDb("discord layout import API", () => {
     expect(res.body.code).toBe("rateLimited");
   });
 
+  it("refuses an invite link on apply too, before fetching or creating", async () => {
+    const res = await call(user, "POST", "/api/import/discord/apply", {
+      source: "https://discord.com/invite/abcdefg",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("inviteLink");
+    expect(vi.mocked(safeFetch)).not.toHaveBeenCalled();
+    const servers = await getPool().query(`SELECT count(*)::int AS n FROM servers`);
+    expect(servers.rows[0]?.n).toBe(0);
+  });
+
+  it("blames Discord, not the link, when its answer is not JSON", async () => {
+    vi.mocked(safeFetch).mockResolvedValue({
+      statusCode: 200,
+      headers: {},
+      body: Buffer.from("<html>maintenance</html>"),
+      finalUrl: "https://discord.com/api/v10/guilds/templates/abcd1234",
+    });
+    const res = await call(user, "POST", "/api/import/discord/preview", {
+      source: "abcd1234",
+    });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("unavailable");
+  });
+
+  it("blames Discord, not the link, when its answer has the wrong shape", async () => {
+    fetchOk({ message: "changed format" });
+    const res = await call(user, "POST", "/api/import/discord/apply", {
+      source: "abcd1234",
+    });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("unavailable");
+  });
+
+  it("names a template over the channel cap as tooMany", async () => {
+    fetchOk(
+      guildTemplate(
+        Array.from({ length: 201 }, (_, i) => ({
+          id: i + 1,
+          type: 0,
+          name: `c${i}`,
+          position: i,
+          parent_id: null,
+        })),
+      ),
+    );
+    const res = await call(user, "POST", "/api/import/discord/preview", {
+      source: "abcd1234",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("tooMany");
+  });
+
   it("maps a too-large Discord body to 413", async () => {
     vi.mocked(safeFetch).mockRejectedValue(new FetchTooLargeError());
     const res = await call(user, "POST", "/api/import/discord/preview", {

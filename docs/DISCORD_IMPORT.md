@@ -119,15 +119,18 @@ Auth required. Character accounts get 403, same as `POST /api/servers`.
 
 `source` is a bare code, `discord.new/CODE`, or
 `discord.com/template/CODE`, with or without `https://`. The pasted string is
-never fetched as a URL.
+never fetched as a URL. Only `^[A-Za-z0-9]{4,32}$` is interpolated into
+`https://discord.com/api/v10/guilds/templates/{code}`.
 
-A failure carries `code` beside the English `error`: `notATemplate`,
+An import failure carries `code` beside the English `error`: `notATemplate`,
 `inviteLink` (a `discord.gg` or `discord.com/invite` link, the most common
 wrong paste), `notFound`, `tooMany`, `tooLarge`, `rateLimited`, or
-`unavailable`. The client shows its own sentence for the code and never the
-English one.
-Only `^[A-Za-z0-9]{4,32}$` is interpolated into
-`https://discord.com/api/v10/guilds/templates/{code}`.
+`unavailable`. `unavailable` also covers a Discord reply that is not a
+readable template, because by then the link itself was fine. The client
+shows its own sentence for the code and never the English one. Other
+failures have no `code`: the character-account 403, a body that fails
+validation, and the API's own 503 and 500. The client maps those by status
+(0 is a network error, 503 is "try again") or shows a generic message.
 
 Fetch uses `safeFetch` (5s, 512KB, 3 redirects). Per-user limiter matches
 export. A small global bucket protects the shared Discord egress IP.

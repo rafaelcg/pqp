@@ -24,10 +24,25 @@ describe("discordImportErrorKey", () => {
     );
   });
 
-  it("uses the fallback for anything else", () => {
+  it("says the connection failed, not that the link is wrong", () => {
     expect(discordImportErrorKey(new ApiError(0, "Network"), FALLBACK)).toBe(
-      FALLBACK,
+      "importDiscord.error.network",
     );
+    expect(discordImportErrorKey(new ApiError(503, "Busy"), FALLBACK)).toBe(
+      "importDiscord.error.serverBusy",
+    );
+  });
+
+  it("ignores a code that names an Object prototype member", () => {
+    expect(
+      discordImportErrorKey(
+        new ApiError(500, "x", null, { code: "constructor" }),
+        FALLBACK,
+      ),
+    ).toBe(FALLBACK);
+  });
+
+  it("uses the fallback for anything else", () => {
     expect(discordImportErrorKey(new Error("boom"), FALLBACK)).toBe(FALLBACK);
     expect(
       discordImportErrorKey(
