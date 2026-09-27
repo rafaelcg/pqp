@@ -303,9 +303,58 @@ interface Row {
   dayLabel: string | null;
 }
 
-function buildRows(messages: ChatMessage[]): Row[] {
-  return messages.map((message, index) => {
+/**
+ * One row's cached build, keyed by message id: the `Row` object itself, and
+ * the neighbor it was built against — `startsGroup`/`dayLabel` depend on the
+ * PREVIOUS message too, so a cache hit has to confirm that one has not moved
+ * as well, not just this message.
+ */
+interface RowCacheEntry {
+  row: Row;
+  message: ChatMessage;
+  previous: ChatMessage | undefined;
+}
+
+/**
+ * `messages.map()` used to build a brand-new `{ message, startsGroup,
+ * dayLabel }` object for every row on every call — which runs on every new
+ * message, reaction, edit, anything that gives `messages` a new array
+ * reference. `MessageRow` is `memo()`'d, but `row` is one of its props, so a
+ * fresh `Row` object for an UNCHANGED message still reads as "this row's
+ * props changed" and defeats the memo for the other 200+ rows a live
+ * message did not touch, every single time one arrives. Profiling a busy
+ * watch party (see message-list.tsx's PR history) found this was the
+ * largest remaining cost: hundreds of rows re-running their full render,
+ * including two `Intl` timestamp formats each, on every new message.
+ *
+ * `cache` persists across calls (a `useRef` in `MessageList`) and hands back
+ * the SAME `Row` object for a message whose own data and immediate
+ * predecessor have not changed — which, for ordinary appends (the normal
+ * shape of live chat: new messages land at the end, older ones do not move),
+ * is every row except the new one. An edit or a reaction still gets a fresh
+ * `Row`, correctly, because the message object itself is a new reference.
+ */
+function buildRows(
+  messages: readonly ChatMessage[],
+  cache: Map<string, RowCacheEntry>,
+): Row[] {
+  const rows: Row[] = new Array(messages.length);
+  const seen = new Set<string>();
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
     const previous = index > 0 ? messages[index - 1] : undefined;
+    seen.add(message.id);
+
+    const cached = cache.get(message.id);
+    if (
+      cached &&
+      cached.message === message &&
+      cached.previous === previous
+    ) {
+      rows[index] = cached.row;
+      continue;
+    }
+
     const newDay =
       !previous || !isSameDay(previous.createdAt, message.createdAt);
     const withinWindow =
@@ -315,14 +364,27 @@ function buildRows(messages: ChatMessage[]): Row[] {
         new Date(previous.createdAt).getTime() <
         GROUP_WINDOW_MS;
 
-    return {
+    const row: Row = {
       message,
       // A reply always opens a block: its quote header needs the author line
       // above it to read as an answer rather than a stray fragment.
       startsGroup: newDay || !withinWindow || Boolean(message.replyTo),
       dayLabel: newDay ? formatDayLabel(message.createdAt) : null,
     };
-  });
+    cache.set(message.id, { row, message, previous });
+    rows[index] = row;
+  }
+
+  // A message that scrolled out of the loaded window (pagination, a bulk
+  // delete) should not keep its entry forever — same reasoning as the row
+  // callback cache below.
+  for (const id of cache.keys()) {
+    if (!seen.has(id)) {
+      cache.delete(id);
+    }
+  }
+
+  return rows;
 }
 
 /** Consecutive pings in a group share one wash, not a stack of rounded cards. */
@@ -366,7 +428,18 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
   return "rounded-md";
 }
 
-export function MessageList({
+/**
+ * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
+ * of the parent (`App` — a presence tick, a typing broadcast, an unrelated
+ * bit of app state) re-runs this entire function regardless of whether
+ * anything it reads actually changed, which rebuilds JSX for every row even
+ * when `MessageRow`'s own memo would go on to skip every one of them. Only
+ * pays off because the callback props above are now genuinely stable
+ * (`chat.method` references and `useCallback`s in `App.tsx`, not fresh
+ * arrows per render) — memoizing a component whose props are rebuilt every
+ * render buys nothing.
+ */
+export const MessageList = memo(function MessageList({
   messages,
   onCopyOwnerInvite,
   currentUserId,
@@ -522,7 +595,11 @@ export function MessageList({
   /** A short, one-line heads-up for new arrivals — never the message itself. */
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
 
-  const rows = useMemo(() => buildRows(messages), [messages]);
+  const rowCache = useRef(new Map<string, RowCacheEntry>());
+  const rows = useMemo(
+    () => buildRows(messages, rowCache.current),
+    [messages],
+  );
   const mentionMask = useMemo(
     () =>
       rows.map((row) =>
@@ -531,6 +608,24 @@ export function MessageList({
     [rows, currentUsername, currentUserId],
   );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  // `rows` (the array, not its contents) gets a new reference on every
+  // message arrival even when almost every `Row` inside it is the cached,
+  // reused one, so `rowIds` does too. `handleRowNavigate` below only reads
+  // this to answer "where is this row / what's next", never during render,
+  // so it takes it from a ref instead of closing over it directly — keeping
+  // the callback's own identity stable is what lets `MessageRow`'s memo()
+  // actually skip re-rendering the ~250 other rows a single new message
+  // does not touch.
+  const rowIdsRef = useRef(rowIds);
+  // Same reasoning as `useStableCallback` (see that hook's own comment): a
+  // ref written straight in the render body can end up holding a value from
+  // a render that never committed, and `handleRowNavigate` below is exactly
+  // the kind of callback — a permanently stable identity, invoked later from
+  // a real keyboard event — that bug would hit. A layout effect only runs
+  // once React has actually committed this render.
+  useLayoutEffect(() => {
+    rowIdsRef.current = rowIds;
+  });
 
   // A message scrolled out of history (bulk delete, forget-on-report, a page
   // that fell off the loaded window) should not keep its handler entry
@@ -738,6 +833,7 @@ export function MessageList({
       if (event.target !== event.currentTarget) {
         return;
       }
+      const rowIds = rowIdsRef.current;
       const index = rowIds.indexOf(messageId);
       if (index === -1) {
         return;
@@ -774,7 +870,7 @@ export function MessageList({
         });
       }
     },
-    [rowIds, prefersReducedMotion],
+    [prefersReducedMotion],
   );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -1252,9 +1348,23 @@ export function MessageList({
               firstUnreadId,
             );
             const rowId = row.message.id;
+            // React's `key`, not `rowId` (every callback and lookup below
+            // stays on the real id): a just-sent message's id changes from
+            // `pending:<nonce>` to the server's real one the moment it is
+            // confirmed (see the `message-broadcast` handler in
+            // `use-chat.ts`), and keying on `id` there would unmount this row
+            // and mount a fresh one mid-interaction — losing an open context
+            // menu, a hover state, an in-flight touch. `use-chat.ts` carries
+            // the nonce onto the confirmed message for exactly this: keying
+            // on it instead keeps the same DOM node across that swap. Every
+            // other message either never had a nonce (loaded from history)
+            // or has since lost it (a later update that does not carry it
+            // forward), so this only changes identity for the message you
+            // just sent, in the seconds after you sent it.
+            const elementKey = row.message.nonce ?? rowId;
             return (
             <MessageRow
-              key={rowId}
+              key={elementKey}
               row={row}
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
@@ -1611,7 +1721,7 @@ export function MessageList({
       )}
     </div>
   );
-}
+});
 
 const FAILED_ACTION_TILE =
   "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";

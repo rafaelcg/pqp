@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import {
   forwardRef,
+  memo,
   useEffect,
   useId,
   useMemo,
@@ -372,7 +373,7 @@ export function liveStateForChannel(
     : liveStateFromRoster(participants);
 }
 
-export function ChannelList({
+export const ChannelList = memo(function ChannelList({
   server,
   threadsByChannel = {},
   unreadThreadIds = EMPTY_THREAD_IDS,
@@ -1748,7 +1749,7 @@ export function ChannelList({
       {footer}
     </aside>
   );
-}
+});
 
 /**
  * Icon, name and chevron: the one control that opens the server menu.

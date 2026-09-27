@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -207,7 +208,7 @@ function asRosterRow(person: PublicUser): ServerMember {
   };
 }
 
-export function MemberSidebar({
+export const MemberSidebar = memo(function MemberSidebar({
   open,
   onSelectThread = null,
   wide,
@@ -773,7 +774,7 @@ export function MemberSidebar({
       )}
     </>
   );
-}
+});
 
 // --------------------------------------------------------------------- a row
 

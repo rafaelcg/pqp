@@ -1060,11 +1060,16 @@ export function createChatController(
       );
       // Sorted by userId so the key does not depend on Map iteration order;
       // displayName rides along so a rename mid-typing invalidates the cache
-      // too, not just a change in who is active.
-      const key = active
-        .map(([userId, entry]) => `${userId}:${entry.displayName}`)
-        .sort()
-        .join(",");
+      // too, not just a change in who is active. JSON.stringify rather than
+      // a joined string: a display name may itself contain the separator
+      // (a comma, say), and two different active sets could then stringify
+      // to the same joined text. `JSON.stringify` on the tuple array escapes
+      // each field, so no display name can forge a collision.
+      const key = JSON.stringify(
+        active
+          .map(([userId, entry]) => [userId, entry.displayName] as const)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      );
       if (key === typingUsersCacheKey) {
         return typingUsersCache;
       }
@@ -1684,6 +1689,14 @@ export function createChatController(
             );
             if (index >= 0) {
               revokeLocalPreviews(messages[index]!);
+              // Carry the nonce onto the confirmed row: `message-list.tsx`
+              // keys `MessageRow` by it when present, precisely so this swap
+              // (the optimistic `pending:<nonce>` id becoming the server's
+              // real one) updates the existing DOM node instead of unmounting
+              // it and mounting a new one. Losing this here would only cost a
+              // later, unrelated update its stable key back to the id — the
+              // swap itself is the one every send goes through.
+              incoming.nonce = message.nonce;
               messages = [
                 ...messages.slice(0, index),
                 incoming,
