@@ -33,8 +33,9 @@
  *     Everything else stays GET-only.
  *  3. Serve. `/` is the static page from the assets binding, and
  *     `/insights.js` the one script it loads (the three verdicts on "agora",
- *     kept in their own file so they can be unit tested). Both sit behind the
- *     gate. Anything else is a 404 from an allowlist, not a passthrough, so
+ *     kept in their own file so they can be unit tested). `/novo` is the
+ *     redesigned view, with `novo.css`, `novo.js` and `novo-model.js`. All of
+ *     it sits behind the gate. Anything else is a 404 from an allowlist, not a passthrough, so
  *     the Worker cannot be used as an open proxy or an asset lister.
  *
  * Every response carries `Cache-Control: no-store` and `Referrer-Policy:
@@ -539,14 +540,19 @@ export default {
       return proxyJson(`${origin}/status.json`, {});
     }
 
-    // The page and the one script it loads. An allowlist rather than a
+    // The pages and the files they load. An allowlist rather than a
     // passthrough to the assets binding: this Worker must not be usable as an
-    // asset lister or an open proxy, so a path that is not one of these two is
-    // a 404 whatever happens to be in the bucket.
+    // asset lister or an open proxy, so a path that is not one of these is a
+    // 404 whatever happens to be in the bucket. `/novo` is the redesigned
+    // view; `/` stays the classic one while both exist.
     const ASSETS: Record<string, string> = {
       "/": "/",
       "/index.html": "/",
       "/insights.js": "/insights.js",
+      "/novo": "/novo",
+      "/novo.css": "/novo.css",
+      "/novo.js": "/novo.js",
+      "/novo-model.js": "/novo-model.js",
     };
     const asset = ASSETS[path];
     if (asset) {

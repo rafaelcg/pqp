@@ -1,0 +1,145 @@
+import { strict as assert } from "node:assert";
+import test from "node:test";
+import "../site/novo-model.js";
+
+/**
+ * The redesigned dashboard's data layer. What is pinned here is the part a
+ * reader cannot check by looking: which number a card shows before tracking
+ * exists, what counts as needing attention, and that the live feed only ever
+ * reports a real difference between two reads.
+ */
+const M = globalThis.PQPNovo;
+
+function metrics(over) {
+  return Object.assign({
+    users: { total: 5535, last24h: 251, byHour: [1, 2, 3] },
+    servers: { total: 1677, last24h: 37 },
+    messages: { last24h: 2035, previous24h: 491, lastHour: 13, byHour: [4, 5, 6] },
+    voice: { participants: 77, activeRooms: 30, largestRoomNow: 5, rooms: [] },
+    moderation: { reports: { open: 0, last24h: 0 }, feedback: { open: 20, confirmed: 0, last24h: 3 } },
+    callRatings: { total: 98, average: 4.5, distribution: { 1: 2, 2: 3, 3: 7, 4: 25, 5: 61 }, byTransport: [], recentNotes: [] },
+    runtime: { db: { breaker: { state: "closed", rejected: 0 } } },
+    liveHls: { silentSessions: 0 },
+    userDetail: { withHandle: 2000, withAvatar: 3000, withBanner: 500, ageChecked: 5200 }
+  }, over || {});
+}
+
+function activity(days, over) {
+  return Object.assign({ trackingSince: "2026-09-28", days: days, operatingCost: { monthlyUsd: 310 } }, over || {});
+}
+
+test("before tracking, the actives card shows who wrote and says so", () => {
+  const a = activity([
+    { day: "2026-09-26", dau: null, wau: null, mau: null, postedDau: 188, postedWau: 630, postedMau: 1883 },
+    { day: "2026-09-27", dau: null, wau: null, mau: null, postedDau: 90, postedWau: 640, postedMau: 1890 }
+  ]);
+  const h = M.activityHeadline(a);
+  assert.equal(h.label, "escreveram ontem");
+  assert.equal(h.value, 188);
+  assert.match(h.badge.text, /28\/09/);
+  assert.equal(M.costPerActive(a).text, "—");
+});
+
+test("once tracked, yesterday's actives and cost per active are real", () => {
+  const a = activity([
+    { day: "2026-10-28", dau: 900, wau: 2000, mau: 3100, postedDau: 190, postedWau: 640, postedMau: 1890 },
+    { day: "2026-10-29", dau: 300, wau: 2000, mau: 3100, postedDau: 90, postedWau: 640, postedMau: 1890 }
+  ]);
+  const h = M.activityHeadline(a);
+  assert.equal(h.label, "ativos ontem");
+  assert.equal(h.value, 900);
+  assert.equal(M.costPerActive(a).text, "US$ 0,10");
+});
+
+test("the KPI trend lines come only from real series", () => {
+  const k = M.hojeKpis(metrics(), null, null);
+  const byKey = Object.fromEntries(k.map((x) => [x.key, x]));
+  assert.equal(byKey.voice.series, null, "no occupancy read yet: no invented line");
+  assert.deepEqual(byKey.msgs.series, [4, 5, 6]);
+  assert.equal(byKey.cost.series, null);
+  assert.equal(byKey.msgs.badge.text, "+314%");
+});
+
+test("attention lists the queue and low ratings, and never a calm sentence beside a warning", () => {
+  const list = M.attention(metrics(), [{ state: "ok", head: "fine" }], { components: [] });
+  const titles = list.map((a) => a.title);
+  assert.ok(titles.some((t) => /20 feedbacks abertos/.test(t)));
+  assert.ok(titles.some((t) => /12 notas baixas/.test(t)));
+  assert.ok(!titles.includes("Nada pedindo atenção"));
+});
+
+test("attention says nothing needs you when nothing does", () => {
+  const calm = metrics({ moderation: { reports: { open: 0 }, feedback: { open: 0 } }, callRatings: null });
+  const list = M.attention(calm, [], { components: [] });
+  assert.deepEqual(list.map((a) => a.tone), ["ok"]);
+});
+
+test("a degraded component and an open breaker come first", () => {
+  const m = metrics({ runtime: { db: { breaker: { state: "open", rejected: 40 } } } });
+  const list = M.attention(m, [], { components: [{ label: "Database", state: "degraded" }] });
+  assert.equal(list[0].tone, "bad");
+  assert.ok(list.slice(0, 2).some((a) => /instável/.test(a.title)));
+});
+
+test("the feed reports only real differences between two reads", () => {
+  const a = metrics();
+  assert.deepEqual(M.feedDiff(a, a), []);
+  const b = metrics({
+    users: { total: 5537 },
+    voice: { rooms: [{ server: "Cinemoon", channel: "sala", participants: 3 }] },
+    moderation: { reports: { last24h: 0 }, feedback: { last24h: 4 } }
+  });
+  const kinds = M.feedDiff(a, b, "t").map((e) => e.kind);
+  assert.deepEqual(kinds, ["signup", "room", "feedback"]);
+});
+
+test("the heatmap averages minute samples by São Paulo weekday and hour", () => {
+  // 2026-09-26 is a Saturday; 01:30Z is 22:30 in São Paulo.
+  const h = M.heatmap([{ day: "2026-09-26", points: [
+    { at: "2026-09-27T01:30:00Z", participants: 100 },
+    { at: "2026-09-27T01:31:00Z", participants: 60 }
+  ] }]);
+  assert.equal(h.cells[5][22], 80);
+  assert.equal(h.max, 80);
+  assert.equal(h.cells[0][0], null);
+});
+
+test("the funnel is shares of the signup cohort, with the drop per step", () => {
+  const f = M.funnel({ window30d: { signup: 200, ageGate: 180, handle: 10, firstJoin: 150, firstMessage: 80, firstVoice: 60, firstWatchParty: 20 } });
+  assert.equal(f[0].pct, 100);
+  assert.equal(f[1].pct, 90);
+  assert.equal(f[1].drop, 10);
+  // The optional @handle is not a step: no fake cliff before "entrou num servidor".
+  assert.ok(!f.some((x) => /@/.test(x.label)));
+  assert.equal(f[2].drop, 15);
+  assert.equal(f.length, 6);
+});
+
+test("a step that grows never shows a negative drop", () => {
+  const f = M.funnel({ window30d: { signup: 10, ageGate: 5, firstJoin: 8, firstMessage: 1, firstVoice: 1, firstWatchParty: 0 } });
+  assert.equal(f[2].drop, null);
+});
+
+test("attention details are cut at a word, never mid-word", () => {
+  const long = "o pico em uso chegou a 10 de 10 desde que a contagem começou, ou seja, houve pelo menos um instante em que a parede foi tocada. agora está em 2 e sem fila.";
+  const list = M.attention({ moderation: {}, runtime: {} }, [{ state: "warn", head: "pool", body: long }], { components: [] });
+  assert.match(list[0].detail, /…$/);
+  assert.ok(!/ e…$/.test(list[0].detail) || long.includes(list[0].detail.slice(0, -1)));
+  assert.ok(long.startsWith(list[0].detail.slice(0, -1)));
+});
+
+test("sources join signups with how many came back", () => {
+  const s = M.sources({ total: 300 }, { activeWindowDays: 7, rows: [
+    { channel: null, signups: 100, retained: 20 }, { channel: "reddit", signups: 40, retained: 18 }
+  ] });
+  assert.equal(s.rows[0].name, "sem origem");
+  assert.equal(s.rows[1].rate, 45);
+  assert.equal(s.max, 100);
+});
+
+test("rating distribution sums to the scores that exist", () => {
+  const r = M.ratingDistribution(metrics().callRatings);
+  assert.equal(r.total, 98);
+  assert.equal(r.rows[0].stars, 5);
+  assert.equal(r.rows[0].pct, 62.2);
+});
