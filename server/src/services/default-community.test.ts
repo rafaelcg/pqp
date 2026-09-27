@@ -83,6 +83,12 @@ describeDb("placeInDefaultCommunity", () => {
     const result = await placeInDefaultCommunity(user.id);
     expect(result).toEqual({ placed: true, serverId });
     expect(await isMember(serverId, user.id)).toBe(true);
+
+    const source = await getPool().query<{ join_source: string | null }>(
+      `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, user.id],
+    );
+    expect(source.rows[0]?.join_source).toBe("default_placement");
   });
 
   it("leaves alone an account that already has a community", async () => {

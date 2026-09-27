@@ -799,6 +799,58 @@ describeDb("communities", () => {
       expect(joins).toHaveLength(1);
       expect(joins[0]!.actorId).toBe(joiner.id);
     });
+
+    it("records which door the join came through", async () => {
+      const serverId = await makeCommunity("Portas");
+      const sourceOf = async (userId: string) =>
+        (
+          await getPool().query<{ join_source: string | null }>(
+            `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [serverId, userId],
+          )
+        ).rows[0]?.join_source;
+
+      await call(joiner, "POST", `/api/communities/${serverId}/join`, {
+        via: "community_directory",
+      });
+      expect(await sourceOf(joiner.id)).toBe("community_directory");
+    });
+
+    it("leaves join_source NULL for a bare join, and never re-attributes a re-entry", async () => {
+      const serverId = await makeCommunity("Sem porta");
+      const sourceOf = async (userId: string) =>
+        (
+          await getPool().query<{ join_source: string | null }>(
+            `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [serverId, userId],
+          )
+        ).rows[0]?.join_source;
+
+      expect((await call(joiner, "POST", `/api/communities/${serverId}/join`)).status).toBe(
+        200,
+      );
+      expect(await sourceOf(joiner.id)).toBe(null);
+
+      // Re-opening the door with a `via` on an existing membership must not
+      // rewrite the door it actually came through the first time.
+      await call(joiner, "POST", `/api/communities/${serverId}/join`, {
+        via: "community_address",
+      });
+      expect(await sourceOf(joiner.id)).toBe(null);
+    });
+
+    it("ignores a via that is not one of the doors it knows", async () => {
+      const serverId = await makeCommunity("Porta falsa");
+      const result = await call(joiner, "POST", `/api/communities/${serverId}/join`, {
+        via: "not-a-real-door",
+      });
+      expect(result.status).toBe(200);
+      const row = await getPool().query<{ join_source: string | null }>(
+        `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+        [serverId, joiner.id],
+      );
+      expect(row.rows[0]?.join_source).toBe(null);
+    });
   });
 
   // ------------------------------------------------------------- the opt-in

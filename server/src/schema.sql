@@ -3069,6 +3069,37 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_ref TEXT;
 CREATE INDEX IF NOT EXISTS idx_server_members_join_ref
   ON server_members (joined_at) WHERE join_ref IS NOT NULL;
 
+-- Which DOOR this membership came through, as a fixed small set rather than a
+-- free-text tag: `join_ref` above answers "which invite link" and stays NULL
+-- for every door that is not an invite, which is exactly the gap that left
+-- every join at the 2026-09-26 moonkisticos watch party unattributed: 100
+-- people came in through `/c/<slug>` and the directory and neither door wrote
+-- anything. This column is the other half: it names the DOOR (invite / SSO /
+-- community address / community directory / the QG corner-card hint / the
+-- first-run default placement), independent of whether that door also
+-- carried a finer tag.
+--
+-- Written by the same call that creates the row, never backfilled and never
+-- corrected after: `joinCommunity` (services/communities.ts), `redeemInvite`
+-- (services/invites.ts, alongside join_ref) and `joinServerBySso`
+-- (services/servers.ts) each stamp it once, inside the same transaction as
+-- the INSERT. NULL means the server's owner (server creation is not a "join"),
+-- a dev-seed or character-account row, or a membership made before this
+-- column existed, never a door this column forgot to name.
+--
+-- Like join_ref: no identifier, never shown to anybody in a user-facing
+-- payload, read only as a COUNT (`GET /api/admin/metrics`,
+-- `product.serverJoins.bySource7d`, and the per-server query in
+-- tools/admin-dashboard/README.md).
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_source TEXT
+  CHECK (join_source IN (
+    'invite', 'sso', 'community_address', 'community_directory', 'qg_hint',
+    'default_placement'
+  ));
+-- Per-server "joins by source" is the query this exists to make cheap.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_source
+  ON server_members (server_id, joined_at) WHERE join_source IS NOT NULL;
+
 -- Servers that began as a Discord Guild Template copy. The audit row is the
 -- only record of that, and the operator dashboard counts it every 30 seconds,
 -- so it gets a partial index rather than a scan of the whole log.

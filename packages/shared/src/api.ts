@@ -1088,6 +1088,34 @@ export function normalizeJoinRef(raw: unknown): string | null {
 }
 
 /**
+ * The door a community join came through, as `POST /api/communities/:id/join`
+ * stores it in `server_members.join_source`.
+ *
+ * Three values because three client surfaces post this route: the public
+ * address page (`pqp.gg/c/<slug>`, itself the `?join=<slug>` intent through
+ * sign-up), the directory's own card, and the QG corner-card hint
+ * (`components/layout/qg-hint.tsx`) that nudges an account not yet in the
+ * house community. Optional and tolerant on purpose, the same rule
+ * `normalizeJoinRef` follows: a join must never fail over how it is counted,
+ * so an unreadable body or an unrecognised value joins exactly as a bare POST
+ * always has.
+ */
+export const COMMUNITY_JOIN_VIA_VALUES = [
+  "community_address",
+  "community_directory",
+  "qg_hint",
+] as const;
+
+export type CommunityJoinVia = (typeof COMMUNITY_JOIN_VIA_VALUES)[number];
+
+export function normalizeCommunityJoinVia(raw: unknown): CommunityJoinVia | null {
+  return typeof raw === "string" &&
+    (COMMUNITY_JOIN_VIA_VALUES as readonly string[]).includes(raw)
+    ? (raw as CommunityJoinVia)
+    : null;
+}
+
+/**
  * Where a signup came from, as the landing page saw it.
  *
  * The five values are the ones a campaign link can carry (`utm_source`,

@@ -118,7 +118,7 @@ export async function placeInDefaultCommunity(
   // means the member count, the system join message and the roster all behave
   // the way they do for a normal join, rather than this inventing a second way
   // to become a member.
-  const result = await joinCommunity(serverId, userId);
+  const result = await joinCommunity(serverId, userId, { via: "default_placement" });
   if (!result.ok) {
     return { placed: false, reason: "unavailable" };
   }

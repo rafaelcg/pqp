@@ -186,7 +186,7 @@ export function CommunitiesView({
     setJoiningId(community.id);
     setJoinError(null);
     try {
-      const result = await joinCommunity(community.id);
+      const result = await joinCommunity(community.id, "community_directory");
       setCommunities((prev) => applyJoin(prev, community.id));
       await onEnterCommunity(community.id, result.joinedNow);
     } catch (err) {

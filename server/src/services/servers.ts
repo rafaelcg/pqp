@@ -981,8 +981,8 @@ export async function joinServerBySso(
     }
 
     const inserted = await client.query(
-      `INSERT INTO server_members (server_id, user_id, role)
-       VALUES ($1, $2, 'member')
+      `INSERT INTO server_members (server_id, user_id, role, join_source)
+       VALUES ($1, $2, 'member', 'sso')
        ON CONFLICT DO NOTHING`,
       [serverId, userId],
     );

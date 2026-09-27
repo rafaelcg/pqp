@@ -485,6 +485,18 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 - **product**: accepted friendships and open friend requests, claimed
   attachments (total and last 24h), invites created in 24h plus cumulative
   invite uses, and push subscriptions by platform (`web` / `apns`)
+- **`product.invites.joinsByRef7d`**: every tagged invite join in the last 7
+  days, by the `?ref=` a link carried (`convite`, `discord`, ...). Untagged
+  invite joins are not listed
+- **`product.serverJoins.bySource7d`**: every server join in the last 7 days,
+  by DOOR (`server_members.join_source`): `invite`, `sso`, `community_address`
+  (the `pqp.gg/c/<slug>` page and its `?join=` intent through sign-up),
+  `community_directory` (the directory card), `qg_hint` (the QG corner-card
+  nudge), `default_placement` (first-run placement into the instance's
+  default community). Instance-wide, not per server — see "joins by source,
+  per server" below for that. A join whose door was not recorded is not
+  listed here; that is expected for anything joined before this column
+  existed and for a server's owner (creating a server is not a join)
 
 Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 `/occupancy`, same machine token, same 8 s timeout):
@@ -613,6 +625,50 @@ tab bar scrolls rather than wrapping.
 Webhook pseudo-accounts and character (house cast) accounts are excluded from
 every user and message count, the same way the acquisition report excludes
 them; their message volume is reported separately as `messages.automated24h`.
+
+### Joins by source, per server (SQL)
+
+`product.serverJoins.bySource7d` on `/metrics` is instance-wide, which answers
+"which doors are people using this week" but not "who found *this* server".
+For a single server (an owner asking "where did my 100 new members on
+Saturday come from", the 2026-09-26 moonkisticos question this whole feature
+exists to answer), run this directly against the database (`docs/DB_RUNBOOK.md`
+has the connection string; use the read-only `pqp_ro` role):
+
+```sql
+SELECT
+  COALESCE(join_source, 'unknown') AS source,
+  COUNT(*) AS joins
+FROM server_members
+WHERE server_id = '<server-id>'
+  AND role <> 'owner'
+  AND joined_at >= now() - interval '7 days'
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+Widen or narrow `joined_at` for a different window (drop it entirely for the
+server's whole history), or add `AND join_source = 'community_address'` to
+isolate one door. `join_ref` rides alongside `join_source = 'invite'` and adds
+the finer `?ref=` tag a shared link carried:
+
+```sql
+SELECT
+  join_ref,
+  COUNT(*) AS joins
+FROM server_members
+WHERE server_id = '<server-id>'
+  AND join_source = 'invite'
+  AND joined_at >= now() - interval '7 days'
+GROUP BY 1
+ORDER BY 2 DESC NULLS LAST;
+```
+
+`join_source` is NULL for any membership made before this column existed
+(2026-09-27) and for a server's owner, never for a door the app forgot to
+name going forward. See the comment on `server_members.join_source` in
+`server/src/schema.sql` for the full list of doors and which service writes
+each one.
 
 ## Why it is behind a password
 

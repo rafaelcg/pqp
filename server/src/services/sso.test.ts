@@ -75,10 +75,11 @@ describeDb("SSO domain joins", () => {
     expect(result.ok && result.joinedNow).toBe(true);
 
     const membership = await getPool().query(
-      `SELECT role FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      `SELECT role, join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
       [serverId, acmeEmployee.id],
     );
     expect(membership.rows[0]?.role).toBe("member");
+    expect(membership.rows[0]?.join_source).toBe("sso");
   });
 
   it("refuses a non-matching domain", async () => {
