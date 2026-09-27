@@ -25,6 +25,7 @@ const MEDIA_FILES = [
   "share-cursor.spec.ts",
   "video-quality.spec.ts",
   "viewer-video-quality.spec.ts",
+  "voice-call-stage-back-to-streams.spec.ts",
   "voice-channel-slow-mode.spec.ts",
   "voice-lobby.spec.ts",
   "voice-move-speaking-ring.spec.ts",

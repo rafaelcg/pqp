@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   Hand,
+  LayoutGrid,
   Loader2,
   Maximize2,
   MonitorPlay,
@@ -110,6 +111,7 @@ import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   NO_SCREEN_FULLSCREEN,
+  escapeExitsExpandedFullscreen,
   reconcileScreenFullscreen,
   syncScreenFullscreen,
   toggleScreenFullscreen,
@@ -515,6 +517,27 @@ function useStageFullscreen(
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // ESCAPE HAS TO WORK IN `expand` TOO — see `escapeExitsExpandedFullscreen`.
+  // `element` and `video` are covered above and by the platform itself; a
+  // person stuck in an in-page solo picture with no keyboard escape and a
+  // hard-to-find corner button is exactly the report this fixes.
+  useEffect(() => {
+    if (mode !== "expand") {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        !escapeExitsExpandedFullscreen(mode, stateRef.current.active)
+      ) {
+        return;
+      }
+      apply({ next: NO_SCREEN_FULLSCREEN, request: "exit" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [apply, mode]);
 
   const toggle = useCallback(() => {
     apply(toggleStageFullscreen(stateRef.current));
@@ -1880,6 +1903,31 @@ function ActiveCall({
                large, in the middle. It is the same room the strip describes,
                and the state a voice call spends most of its life in. */
             <RoomView people={listeners} youLabel={t("voice.tile.you")} />
+          )}
+          {/* Picking one stream and clicking away from it used to leave no
+              obvious way back — reported verbatim, 2026-09-27, as counter-
+              intuitive and even obscure. The corner minimize button and
+              Escape (above) both still work; this is the same exit spelled
+              out in words, drawn every time one picture is alone on the
+              stage rather than only on hover, so it survives an idle mouse,
+              a touch device and a person who never noticed the small icon. */}
+          {(soloPerson || soloTile) && (
+            <button
+              type="button"
+              data-testid="stage-show-all-streams"
+              className={cn(
+                "absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
+                STAGE_LAYER.badges,
+              )}
+              onClick={() => {
+                if (fullscreen.soloPeerId !== null) {
+                  fullscreen.toggleScreen(fullscreen.soloPeerId);
+                }
+              }}
+            >
+              <LayoutGrid aria-hidden="true" className="h-3.5 w-3.5" />
+              {t("voice.stage.showAllStreams")}
+            </button>
           )}
         </div>
         {/* The strip: everybody the stage did not take. Skipped while one
