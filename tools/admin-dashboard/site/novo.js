@@ -924,13 +924,28 @@
     else if (fl._err) sw.appendChild(h("p", { class: "empty", text: "a leitura falhou · " + fl._err }));
     else {
       $("sFlagsAside").textContent = fmt(fl.flags.length) + " interruptores";
+      // A switch here flips a live production flag for every server, so a
+      // click asks first, in the row, and a flag the dashboard has decided
+      // can go back to following its environment variable.
       fl.flags.forEach(function (f) {
         var src = f.stored ? "painel" : f.envSet ? "variável" : "padrão";
-        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": f.key, disabled: S.flagBusy ? true : null, onclick: function () { writeFlag(f, !f.effective); } });
-        sw.appendChild(h("div", { class: "rowlink", style: "cursor:default" }, [
+        var pending = S.flagPending === f.key;
+        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": f.key, disabled: S.flagBusy ? true : null,
+          onclick: function () { S.flagPending = pending ? null : f.key; renderSistema(); } });
+        var row = h("div", { class: "rowlink", style: "cursor:default" }, [
           h("span", { class: "t" }, [h("b", { style: "font-size:13.5px", text: f.description }), h("span", { text: f.key + " · segue: " + src + (f.overrides && f.overrides.length ? " · " + f.overrides.length + " servidores com exceção" : "") })]),
           btn
-        ]));
+        ]);
+        sw.appendChild(row);
+        if (pending) {
+          var def = f.envDefault;
+          sw.appendChild(h("div", { class: reduceMotion ? null : "slidein", style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 0 14px;font-size:13px" }, [
+            h("span", { style: "flex:1;min-width:200px;color:var(--muted)", text: (f.effective ? "Desligar" : "Ligar") + " " + f.key + " para todos os servidores? Vale em segundos, sem deploy." }),
+            h("button", { type: "button", class: "btn primary", style: "height:36px;padding:0 14px", disabled: S.flagBusy ? true : null, text: f.effective ? "desligar" : "ligar", onclick: function () { writeFlag(f, !f.effective); } }),
+            f.stored ? h("button", { type: "button", class: "btn", style: "height:36px;padding:0 14px", disabled: S.flagBusy ? true : null, text: "voltar ao padrão (" + (def ? "ligado" : "desligado") + ")", onclick: function () { writeFlag(f, null); } }) : null,
+            h("button", { type: "button", class: "btn", style: "height:36px;padding:0 14px;color:var(--muted)", text: "cancelar", onclick: function () { S.flagPending = null; renderSistema(); } })
+          ]));
+        }
       });
     }
     // watch party
@@ -952,8 +967,8 @@
     fetch("/operator/flags", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: f.key, enabled: enabled }) })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
       .then(function (row) {
-        S.flagBusy = false;
-        $("sSwitchMsg").textContent = f.key + ": " + (row.effective ? "ligado" : "desligado") + " · vale em segundos nas instâncias";
+        S.flagBusy = false; S.flagPending = null;
+        $("sSwitchMsg").textContent = f.key + ": " + (enabled === null ? "voltou a seguir a variável, e agora está " : "") + (row.effective ? "ligado" : "desligado") + " · vale em segundos nas instâncias";
         loadFlags();
       })
       .catch(function (e) { S.flagBusy = false; $("sSwitchMsg").textContent = "não deu pra gravar: " + (e && e.message ? e.message : "erro"); renderSistema(); });
