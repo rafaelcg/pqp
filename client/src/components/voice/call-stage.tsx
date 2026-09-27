@@ -82,6 +82,7 @@ import {
   type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
+import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
@@ -2207,6 +2208,18 @@ function ActiveCall({
           visible={!chrome.hidden}
         />
         <CinemaHint visible={screenStream !== null} />
+        {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
+            share button, before the picker opens, since that is where the
+            question actually gets asked. Gone once the share is already
+            running, since by then the picker has already been answered. */}
+        <LinuxShareAudioHint
+          visible={
+            !chrome.hidden &&
+            Boolean(onStartScreenShare) &&
+            !voiceState.isSharingScreen
+          }
+          isDesktopShell={isDesktopApp()}
+        />
         {watchPartyChrome ? null : controls}
       </div>
         </>
