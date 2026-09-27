@@ -17,7 +17,14 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -2432,6 +2439,149 @@ function MainAppContent({
     },
     [],
   );
+
+  /**
+   * `ChannelList` (the whole left sidebar: channels, voice occupancy, watch
+   * party affordances) is wrapped in `memo()`, but nearly every one of these
+   * was an inline arrow rebuilt on every render of `MainAppContent` — or a
+   * plain `function handleX()` that was never itself a `useCallback` — so
+   * the memo comparison failed on essentially every prop, every render,
+   * which is the same "memoized child, unmemoized props" shape the message
+   * list had (see message-list.tsx). `useStableCallback` gives each one a
+   * permanent identity without re-auditing every handler's own dependency
+   * list; see that hook's own comment for why that trade is safe here.
+   *
+   * Deliberately placed here, ahead of the `bootstrapError` /
+   * `ageGate` / `!bootstrapReady` / `needsOnboarding` early returns further
+   * down: a hook has to run on every render regardless of what this
+   * component goes on to display, and closures over names declared later in
+   * this function body (`handleThreadMembership`, `toggleChannelSidebar`,
+   * etc.) are still safe here — they resolve those bindings when the
+   * returned callback is actually CALLED, by which point the whole
+   * function body has long since finished running, not when this line
+   * itself executes.
+   */
+  const stableOnOpenThread = useStableCallback((thread: ThreadSummary) =>
+    void openThreadFromSidebar(thread),
+  );
+  const stableOnLeaveThread = useStableCallback((thread: ThreadSummary) =>
+    void handleThreadMembership(thread, false),
+  );
+  const stableOnMarkThreadRead = useStableCallback((thread: ThreadSummary) =>
+    void clearUnread(thread.channelId),
+  );
+  const stableOnMobileClose = useStableCallback(() => setMobileNavOpen(false));
+  const stableOnSelectChannel = useStableCallback((id: string) =>
+    void selectChannel(id),
+  );
+  const stableOnJoinVoice = useStableCallback((channelId: string) =>
+    handleJoinVoiceFromList(channelId),
+  );
+  const stableOnWatchLiveParty = useStableCallback((channelId: string) =>
+    void handleWatchLiveParty(channelId),
+  );
+  const stableOnCreateWatchParty = useStableCallback(() =>
+    setCreateWatchPartyOpen(true),
+  );
+  const stableOnOpenWatchPartyHistory = useStableCallback(
+    (channelId: string) => setWatchPartyHistoryChannelId(channelId),
+  );
+  const stableCanMoveIn = useStableCallback((channelId: string) =>
+    perms.can(moveMembersBit(), channelId),
+  );
+  const stableCanConnectIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.CONNECT, channelId),
+  );
+  const stableCanMuteIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.MUTE_MEMBERS, channelId),
+  );
+  const stableCanKickUser = useStableCallback((userId: string) =>
+    canKickOccupant(userId),
+  );
+  const stableOnMoveVoiceOccupant = useStableCallback(
+    (userId: string, channelId: string) =>
+      void handleMoveVoiceOccupant(userId, channelId),
+  );
+  const stableOnDisconnectVoiceOccupant = useStableCallback((userId: string) =>
+    void handleDisconnectVoiceOccupant(userId),
+  );
+  const stableOnServerMuteOccupant = useStableCallback(
+    (userId: string, muted: boolean) =>
+      void handleServerMuteOccupant(userId, muted),
+  );
+  const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
+    void handleLowerOccupantHand(userId),
+  );
+  const stableOnKickOccupant = useStableCallback(
+    (userId: string, name: string) => void handleKickOccupant(userId, name),
+  );
+  const stableOnSetPeerVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setPeerVolume(userId, volume),
+  );
+  const stableOnSetScreenVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
+  );
+  const stableOnCreateChannel = useStableCallback(
+    (type: ChannelType, isPrivate: boolean) =>
+      setChannelPrompt({ mode: "create", type, isPrivate }),
+  );
+  const stableOnRenameChannel = useStableCallback((channel: Channel) =>
+    setChannelPrompt({ mode: "rename", channel }),
+  );
+  const stableOnOpenChannelSettings = useStableCallback(
+    (
+      channel: Channel,
+      section: ChannelSettingsSectionId,
+      options?: { forceAdvanced?: boolean },
+    ) =>
+      setChannelSettings({
+        channelId: channel.id,
+        section,
+        forceAdvanced: options?.forceAdvanced ?? false,
+      }),
+  );
+  const stableOnDeleteChannel = useStableCallback((id: string) =>
+    void handleDeleteChannel(id),
+  );
+  const stableOnPurgeChannel = useStableCallback(
+    (channel: Pick<Channel, "id" | "name">) =>
+      setPurgeChannel({ id: channel.id, name: channel.name }),
+  );
+  const stableOnMoveChannel = useStableCallback(
+    (id: string, parentId: string | null, index: number) =>
+      void handleMoveChannel(id, parentId, index),
+  );
+  const stableOnFavoriteChannelIdsChange = useStableCallback(
+    (ids: string[]) => handleFavoriteChannelIdsChange(ids),
+  );
+  const stableOnInvite = useStableCallback(() => setInviteMode("create"));
+  const stableOnOpenMembers = useStableCallback(() => setMembersOpen(true));
+  const stableOnOpenServerSettings = useStableCallback(() =>
+    setServerSettingsOpen(true),
+  );
+  const stableOnExpand = useStableCallback(() => toggleChannelSidebar());
+  const stableOnSelectCommunityHome = useStableCallback(() => {
+    if (selectedServerId) {
+      setWhatsNewOpen(false);
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+    }
+  });
+  // `favoriteChannelIds` / `channelListFooter` are memoized by hand rather
+  // than with `useMemo`: they depend on `selectedServer` and
+  // `sidebarIconsOnly`, both declared further down this function (after the
+  // `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
+  // early returns), so a `useMemo` call here would read them before their
+  // declaration. Declaring the REF here (which needs no dependency, so no
+  // ordering problem) and doing the actual comparison down where those
+  // values exist keeps this hook call unconditional while the memoization
+  // itself still runs after everything it needs is in scope.
+  const favoriteChannelIdsKeyRef = useRef("");
+  const favoriteChannelIdsRef = useRef<string[]>(EMPTY_FAVORITE_CHANNEL_IDS);
+  const channelListFooterKeyRef = useRef<boolean | null>(null);
+  const channelListFooterRef = useRef<ReactNode>(null);
+
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
@@ -9277,135 +9427,26 @@ function MainAppContent({
     </div>
   ) : null;
 
-  /**
-   * `ChannelList` (the whole left sidebar: channels, voice occupancy, watch
-   * party affordances) is wrapped in `memo()`, but nearly every one of these
-   * was an inline arrow rebuilt on every render of `MainAppContent` — or a
-   * plain `function handleX()` that was never itself a `useCallback` — so
-   * the memo comparison failed on essentially every prop, every render,
-   * which is the same "memoized child, unmemoized props" shape the message
-   * list had (see message-list.tsx). `useStableCallback` gives each one a
-   * permanent identity without re-auditing every handler's own dependency
-   * list; see that hook's own comment for why that trade is safe here.
-   */
-  const stableOnOpenThread = useStableCallback((thread: ThreadSummary) =>
-    void openThreadFromSidebar(thread),
-  );
-  const stableOnLeaveThread = useStableCallback((thread: ThreadSummary) =>
-    void handleThreadMembership(thread, false),
-  );
-  const stableOnMarkThreadRead = useStableCallback((thread: ThreadSummary) =>
-    void clearUnread(thread.channelId),
-  );
-  const stableOnMobileClose = useStableCallback(() => setMobileNavOpen(false));
-  const stableOnSelectChannel = useStableCallback((id: string) =>
-    void selectChannel(id),
-  );
-  const stableOnJoinVoice = useStableCallback((channelId: string) =>
-    handleJoinVoiceFromList(channelId),
-  );
-  const stableOnWatchLiveParty = useStableCallback((channelId: string) =>
-    void handleWatchLiveParty(channelId),
-  );
-  const stableOnCreateWatchParty = useStableCallback(() =>
-    setCreateWatchPartyOpen(true),
-  );
-  const stableOnOpenWatchPartyHistory = useStableCallback(
-    (channelId: string) => setWatchPartyHistoryChannelId(channelId),
-  );
-  const stableCanMoveIn = useStableCallback((channelId: string) =>
-    perms.can(moveMembersBit(), channelId),
-  );
-  const stableCanConnectIn = useStableCallback((channelId: string) =>
-    perms.can(Permission.CONNECT, channelId),
-  );
-  const stableCanMuteIn = useStableCallback((channelId: string) =>
-    perms.can(Permission.MUTE_MEMBERS, channelId),
-  );
-  const stableCanKickUser = useStableCallback((userId: string) =>
-    canKickOccupant(userId),
-  );
-  const stableOnMoveVoiceOccupant = useStableCallback(
-    (userId: string, channelId: string) =>
-      void handleMoveVoiceOccupant(userId, channelId),
-  );
-  const stableOnDisconnectVoiceOccupant = useStableCallback((userId: string) =>
-    void handleDisconnectVoiceOccupant(userId),
-  );
-  const stableOnServerMuteOccupant = useStableCallback(
-    (userId: string, muted: boolean) =>
-      void handleServerMuteOccupant(userId, muted),
-  );
-  const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
-    void handleLowerOccupantHand(userId),
-  );
-  const stableOnKickOccupant = useStableCallback(
-    (userId: string, name: string) => void handleKickOccupant(userId, name),
-  );
-  const stableOnSetPeerVolume = useStableCallback(
-    (userId: string, volume: number) => voice.setPeerVolume(userId, volume),
-  );
-  const stableOnSetScreenVolume = useStableCallback(
-    (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
-  );
-  const stableOnCreateChannel = useStableCallback(
-    (type: ChannelType, isPrivate: boolean) =>
-      setChannelPrompt({ mode: "create", type, isPrivate }),
-  );
-  const stableOnRenameChannel = useStableCallback((channel: Channel) =>
-    setChannelPrompt({ mode: "rename", channel }),
-  );
-  const stableOnOpenChannelSettings = useStableCallback(
-    (
-      channel: Channel,
-      section: ChannelSettingsSectionId,
-      options?: { forceAdvanced?: boolean },
-    ) =>
-      setChannelSettings({
-        channelId: channel.id,
-        section,
-        forceAdvanced: options?.forceAdvanced ?? false,
-      }),
-  );
-  const stableOnDeleteChannel = useStableCallback((id: string) =>
-    void handleDeleteChannel(id),
-  );
-  const stableOnPurgeChannel = useStableCallback(
-    (channel: Pick<Channel, "id" | "name">) =>
-      setPurgeChannel({ id: channel.id, name: channel.name }),
-  );
-  const stableOnMoveChannel = useStableCallback(
-    (id: string, parentId: string | null, index: number) =>
-      void handleMoveChannel(id, parentId, index),
-  );
-  const stableOnFavoriteChannelIdsChange = useStableCallback(
-    (ids: string[]) => handleFavoriteChannelIdsChange(ids),
-  );
-  const stableOnInvite = useStableCallback(() => setInviteMode("create"));
-  const stableOnOpenMembers = useStableCallback(() => setMembersOpen(true));
-  const stableOnOpenServerSettings = useStableCallback(() =>
-    setServerSettingsOpen(true),
-  );
-  const stableOnExpand = useStableCallback(() => toggleChannelSidebar());
-  const stableOnSelectCommunityHome = useStableCallback(() => {
-    if (selectedServerId) {
-      setWhatsNewOpen(false);
-      markCommunityHomeRowSeen(selectedServerId);
-      setCommunityHomeRowNew(false);
-      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+  // The second half of the hand-rolled memoization declared near the top of
+  // this function (see the comment there): plain code, not a hook, so it is
+  // fine for it to run down here — after the early returns, where
+  // `selectedServer` and `sidebarIconsOnly` actually exist.
+  {
+    const favoriteChannelIdsRaw = selectedServer
+      ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
+      : EMPTY_FAVORITE_CHANNEL_IDS;
+    const favoriteChannelIdsKey = favoriteChannelIdsRaw.join(",");
+    if (favoriteChannelIdsKey !== favoriteChannelIdsKeyRef.current) {
+      favoriteChannelIdsKeyRef.current = favoriteChannelIdsKey;
+      favoriteChannelIdsRef.current = favoriteChannelIdsRaw;
     }
-  });
-  const favoriteChannelIds = useMemo(
-    () =>
-      selectedServer
-        ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
-        : EMPTY_FAVORITE_CHANNEL_IDS,
-    [selectedServer, user?.preferences?.favoriteChannels],
-  );
-  const channelListFooter = useMemo(
-    () => sidebarFooter(sidebarIconsOnly),
-    [sidebarIconsOnly],
-  );
+    if (channelListFooterKeyRef.current !== sidebarIconsOnly) {
+      channelListFooterKeyRef.current = sidebarIconsOnly;
+      channelListFooterRef.current = sidebarFooter(sidebarIconsOnly);
+    }
+  }
+  const favoriteChannelIds = favoriteChannelIdsRef.current;
+  const channelListFooter = channelListFooterRef.current;
 
   return (
     // The friends snapshot, published to everything that draws a relationship:
