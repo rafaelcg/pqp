@@ -221,7 +221,7 @@ test("live now lists every watch party with an audience and voice rooms of 20 or
   const m = metrics({
     voice: { rooms: [
       { server: "Cinemoon", channel: "sessão", participants: 4, sharingScreen: 1, transport: "livekit", openedAt: null },
-      { server: "Os Crias", channel: "geral", participants: 23, sharingScreen: 0, transport: "livekit", openedAt: "2026-09-27T20:00:00Z" },
+      { server: "Os Crias", channel: "geral", participants: 23, sharingScreen: 0, transport: "livekit", openedAt: "2026-09-27T20:00:00Z", community: { slug: "os-crias", listed: true, suspended: false } },
       { server: "Resenha", channel: "papo", participants: 19, sharingScreen: 0, transport: "livekit", openedAt: null }
     ] },
     liveHls: { viewers: { live: [
@@ -236,6 +236,9 @@ test("live now lists every watch party with an audience and voice rooms of 20 or
   assert.equal(live.rows[0].total, 144);
   assert.equal(live.rows[0].sharing, 1);
   assert.equal(live.largest.channel, "geral");
+  assert.equal(live.rows[0].community, null);
+  assert.deepEqual(M.communityBadge(live.rows[1].community), { text: "comunidade", tone: "accent", href: "https://pqp.gg/c/os-crias" });
+  assert.equal(M.communityBadge({ slug: "x", listed: false, suspended: true }).text, "comunidade suspensa");
 });
 
 test("live now is empty, and names the biggest room, when nothing is big", () => {

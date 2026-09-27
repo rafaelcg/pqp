@@ -206,7 +206,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 30px 28px 64px; display: flex
 
 /* ---------- charts ---------- */
 .chart { position: relative; width: 100%; }
-.chart svg { display: block; overflow: visible; }
+.chart svg { display: block; overflow: visible; max-width: 100%; height: auto; }
 .axis { font-size: 10.5px; fill: var(--faint); }
 .tip {
   position: absolute; z-index: 5; pointer-events: none; padding: 9px 11px; border-radius: 10px;
@@ -465,13 +465,28 @@ table.t .m { color: var(--muted); }
 .live-row .kind { justify-self: start; }
 .live-row .where { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .live-row .where b { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.live-row .where span { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-row .where .srv { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--muted); }
+.live-row .where .srv > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.live-row .where .srv .badge { flex: none; text-decoration: none; }
 .live-row .people { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .live-row .people .n { color: var(--text); font-family: var(--display); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
 .live-row .people span { font-size: 12.5px; color: var(--muted); }
 .live-row .meta { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--muted); }
 @media (max-width: 760px) {
-  .live-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
-  .live-row .kind { grid-column: 1 / -1; }
-  .live-row .meta { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; }
+  .live-row { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+  .live-row .where .srv { flex-wrap: wrap; row-gap: 4px; }
+  .live-row .where b, .live-row .where .srv > span:first-child { white-space: normal; }
+  .live-row .people { flex-wrap: wrap; }
+  .live-row .meta { flex-direction: row; flex-wrap: wrap; gap: 4px 12px; }
+  .live-card.on > h2 .aside { display: none; }
 }
+
+/* Set by fitHeader() when the header's contents do not fit on one row. */
+.top.stack { height: auto; flex-wrap: wrap; row-gap: 10px; padding-top: 12px; padding-bottom: 12px; }
+.top.stack .tabs { order: 3; width: 100%; overflow-x: auto; }
+/* The status never shrinks while stacking can make room. Only once the
+   tabs have their own row may a very long status (an outage names the
+   service) shorten instead of pushing the page sideways. */
+.status { flex-shrink: 0; }
+.top.stack .status { flex-shrink: 1; min-width: 0; max-width: 100%; }
+#statusText { overflow: hidden; text-overflow: ellipsis; }

@@ -328,13 +328,13 @@
     var tip = h("div", { class: "tip" });
     var dots = series.map(function (sr) { var d = h("span", { style: "position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:" + sr.color + ";border:2px solid var(--bg);pointer-events:none;opacity:0;transition:opacity 120ms" }); wrap.appendChild(d); return d; });
     wrap.appendChild(cross); wrap.appendChild(tip);
-    var hit = h("div", { style: "position:absolute;left:0;top:0;width:" + W + "px;height:" + H + "px;cursor:crosshair" });
+    var hit = h("div", { style: "position:absolute;left:0;top:0;width:100%;height:" + H + "px;cursor:crosshair" });
     hit.addEventListener("mousemove", function (ev) {
       var r = hit.getBoundingClientRect();
       var i = Math.max(0, Math.min(n - 1, Math.round((ev.clientX - r.left) / (W / (n - 1)))));
       var x = X(i);
       cross.style.left = x + "px"; cross.style.opacity = 1;
-      clear(tip).appendChild(h("span", { class: "tt", text: i === n - 1 ? labels[i] + " · hoje, em curso" : labels[i] }));
+      clear(tip).appendChild(h("span", { class: "tt", text: i === n - 1 ? labels[i] + (opts.lastLabel ? " · " + opts.lastLabel : " · hoje, em curso") : labels[i] }));
       series.forEach(function (sr, si) {
         var v = sr.values[i];
         dots[si].style.opacity = typeof v === "number" ? 1 : 0;
@@ -418,6 +418,7 @@
     }).catch(function (e) {
       $("statusText").textContent = "sem leitura da api · " + (e && e.message ? e.message : "erro");
       $("status").className = "status bad";
+      fitHeader();
       if ((e && e.status === 429) || !S.metrics) { clearTimeout(S.retryTimer); S.retryTimer = setTimeout(refresh, (((e && e.retryAfter) || 5) + 1) * 1000); }
     });
   }
@@ -485,8 +486,21 @@
       env.title = "lendo " + m.apiHost;
       env.classList.toggle("other", m.apiHost !== "api.pqp.gg");
     }
+    fitHeader();
   }
   var NAMES = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
+
+  /**
+   * The header's contents change with what it reports (a longer status, a
+   * staging host in the environment chip), so no fixed breakpoint can know
+   * when they stop fitting. Measure instead: lay the header out on one row,
+   * and if it overflows, move the tabs to a row of their own.
+   */
+  function fitHeader() {
+    var top = document.querySelector(".top"); if (!top) return;
+    top.classList.remove("stack");
+    if (top.scrollWidth > top.clientWidth + 1) top.classList.add("stack");
+  }
 
   // ---------------------------------------------------------------- HOJE
   function renderHoje() {
@@ -585,7 +599,10 @@
         : "na chamada";
       rowsHost.appendChild(h("div", { class: "live-row" }, [
         h("span", { class: "badge kind " + (party ? "accent" : "flat"), text: party ? "watch party" : "sala de voz" }),
-        h("span", { class: "where" }, [h("b", { text: r.channel ? "#\u00a0" + r.channel : "conversa direta" }), h("span", { text: r.server || "sem servidor" })]),
+        h("span", { class: "where" }, [
+          h("b", { text: r.channel ? "#\u00a0" + r.channel : "conversa direta" }),
+          h("span", { class: "srv" }, [h("span", { text: r.server || "sem servidor" }), communityChip(r.community)])
+        ]),
         h("span", { class: "people" }, [h("span", { class: "n num", text: fmt(r.total) }), h("span", { text: who })]),
         h("span", { class: "meta" }, [
           r.since ? h("span", { text: "no ar " + ago(r.since) }) : null,
@@ -594,6 +611,12 @@
         ])
       ]));
     });
+  }
+
+  function communityChip(c) {
+    var b = M.communityBadge(c);
+    if (!b) return null;
+    return h(b.href ? "a" : "span", { class: "badge " + b.tone, href: b.href, target: b.href ? "_blank" : null, rel: b.href ? "noopener" : null, title: b.href ? b.href.replace("https://", "") : null, text: b.text });
   }
 
   function renderHeat() {
@@ -642,7 +665,7 @@
     details($("hDetails"), "hd", "tudo que estava em “agora”, a um clique", [
       { id: "leituras", title: "Leituras do sistema", summary: "pool, latência e voz, com os números por trás de cada frase", openByDefault: true, body: [verdictEls] },
       { id: "salas", title: "Salas abertas agora", summary: fmt(voice.activeRooms) + " salas · " + fmt(voice.participants) + " pessoas · caminho de mídia e há quanto tempo cada uma está no ar",
-        body: [rooms.length ? table(["sala", "servidor", "caminho", "pessoas", "compartilhando", "no ar há"], rooms.map(function (r) { return [r.channel || "conversa", r.server || "—", r.transport === "livekit" ? "servidor de mídia" : "ponto a ponto", fmt(r.participants), fmt(r.sharingScreen), r.openedAt ? ago(r.openedAt).replace("há ", "") : "—"]; }), [3, 4]) : para("Ninguém em chamada agora.")] },
+        body: [rooms.length ? table(["sala", "servidor", "caminho", "pessoas", "compartilhando", "no ar há"], rooms.map(function (r) { return [r.channel || "conversa", (r.server || "—") + (r.community ? " · " + M.communityBadge(r.community).text : ""), r.transport === "livekit" ? "servidor de mídia" : "ponto a ponto", fmt(r.participants), fmt(r.sharingScreen), r.openedAt ? ago(r.openedAt).replace("há ", "") : "—"]; }), [3, 4]) : para("Ninguém em chamada agora.")] },
       { id: "saude", title: "Saúde dos serviços", summary: (function () { var on = comps.filter(function (c) { return c.state !== "disabled"; }); var ok = on.filter(function (c) { return c.state === "operational"; }).length; var off = comps.length - on.length; return ok + " de " + on.length + " operacionais" + (off ? " · " + off + (off === 1 ? " desligado" : " desligados") : "") + " · latência agora, normal (p50) e uptime"; })(),
         body: [table(["componente", "estado", "agora", "normal (p50)", "p95", "uptime 24 h"], comps.map(function (c) { var hc = hist[c.key] || {}; return [NAMES[c.key] || c.label, { operational: "operacional", degraded: "instável", down: "fora do ar", disabled: "desligado" }[c.state] || c.state, ms(c.latencyMs), ms(hc.p50), ms(hc.p95), c.uptime24h != null ? M.dec(c.uptime24h * 100, 2) + "%" : "—"]; }), [2, 3, 4, 5])] },
       { id: "voz", title: "Voz hoje", summary: "maior sala hoje: " + fmt(voice.peakRoomSizeToday) + " · contado desde " + (voice.peakTrackedSince ? stamp(voice.peakTrackedSince) : "—"),
@@ -1332,7 +1355,9 @@
     S.activityDays = d; S.firstDraw["line:cChart:" + d] = false; loadActivity(true); renderCrescimento();
   });
   var resizeTimer;
-  window.addEventListener("resize", function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(function () { renderScreen(S.screen); }, 150); });
+  window.addEventListener("resize", function () { fitHeader(); clearTimeout(resizeTimer); resizeTimer = setTimeout(function () { renderScreen(S.screen); }, 150); });
+  fitHeader();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitHeader);
   show(location.hash.slice(1) || "hoje");
   refresh();
   setInterval(function () { if (!document.hidden) refresh(); }, REFRESH_MS);

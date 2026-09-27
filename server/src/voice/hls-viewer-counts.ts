@@ -1,6 +1,12 @@
 import type { Pool } from "pg";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
+import {
+  communityColumns,
+  communityTag,
+  type CommunityColumns,
+  type CommunityTag,
+} from "../services/community-tag.js";
 
 /**
  * HOW MANY PEOPLE WATCHED A WATCH PARTY.
@@ -479,6 +485,8 @@ export function noteHlsViewer(
 export interface LiveHlsViewerSession {
   channel: string | null;
   server: string | null;
+  /** Set when the server is a community; see `services/community-tag.ts`. */
+  community: CommunityTag | null;
   /** The broadcast's start, epoch ms, as the history dialog names it. */
   startedAt: number;
   liveViewers: number;
@@ -494,7 +502,7 @@ export interface LiveHlsViewerSession {
 export async function liveHlsViewerSessions(
   limit = 20,
 ): Promise<LiveHlsViewerSession[]> {
-  const result = await getPool().query<{
+  const result = await getPool().query<CommunityColumns & {
     channel: string | null;
     server: string | null;
     started_at_ms: string;
@@ -504,6 +512,7 @@ export async function liveHlsViewerSessions(
   }>(
     `SELECT c.name AS channel,
             srv.name AS server,
+            ${communityColumns("srv")},
             st.started_at_ms::text AS started_at_ms,
             (SELECT COUNT(*)::int FROM hls_session_viewers v
               WHERE v.channel_id = st.channel_id
@@ -522,6 +531,7 @@ export async function liveHlsViewerSessions(
   return result.rows.map((row) => ({
     channel: row.channel,
     server: row.server,
+    community: communityTag(row),
     startedAt: Number(row.started_at_ms),
     liveViewers: row.live,
     peakViewers: row.peak_viewers,

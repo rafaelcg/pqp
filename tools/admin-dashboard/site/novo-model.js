@@ -401,13 +401,13 @@
     var all = [];
     parties.forEach(function (p) {
       var e = { kind: "party", channel: p.channel, server: p.server, inCall: 0, audience: num(p.liveViewers), peak: p.peakViewers != null ? num(p.peakViewers) : null,
-        since: p.startedAt ? new Date(p.startedAt).toISOString() : null, sharing: 0, transport: null };
+        since: p.startedAt ? new Date(p.startedAt).toISOString() : null, sharing: 0, transport: null, community: p.community || null };
       byKey[key(p.server, p.channel)] = e; all.push(e);
     });
     rooms.forEach(function (r) {
       var stage = (r.server || r.channel) ? byKey[key(r.server, r.channel)] : null;
-      if (stage) { stage.inCall = num(r.participants); stage.sharing = num(r.sharingScreen); stage.transport = r.transport || null; return; }
-      all.push({ kind: "voice", channel: r.channel, server: r.server, inCall: num(r.participants), audience: 0, peak: null, since: r.openedAt || null, sharing: num(r.sharingScreen), transport: r.transport || null });
+      if (stage) { stage.inCall = num(r.participants); stage.sharing = num(r.sharingScreen); stage.transport = r.transport || null; stage.community = stage.community || r.community || null; return; }
+      all.push({ kind: "voice", channel: r.channel, server: r.server, inCall: num(r.participants), audience: 0, peak: null, since: r.openedAt || null, sharing: num(r.sharingScreen), transport: r.transport || null, community: r.community || null });
     });
     all.forEach(function (e) { e.total = e.inCall + e.audience; });
     all.sort(function (a, b) { return b.total - a.total; });
@@ -416,11 +416,21 @@
     return { min: min, rows: watch, largest: largest };
   }
 
+  /**
+   * The badge for a community, or null for a private server. An API from
+   * before the field existed sends nothing, which reads as private.
+   */
+  function communityBadge(c) {
+    if (!c) return null;
+    if (c.suspended) return { text: "comunidade suspensa", tone: "warn", href: null };
+    return { text: c.listed ? "comunidade" : "comunidade · só pelo link", tone: "accent", href: c.slug ? "https://pqp.gg/c/" + c.slug : null };
+  }
+
   var api = {
     fmt: fmt, dec: dec, pct: pct, fmtPct: fmtPct, deltaLabel: deltaLabel, shortDay: shortDay,
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
     attention: attention, systemStatus: systemStatus, groupFeedback: groupFeedback, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
-    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow
+    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow, communityBadge: communityBadge
   };
   root.PQPNovo = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
