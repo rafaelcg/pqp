@@ -1252,6 +1252,7 @@
   "voice.strip.showAll": "Ver todo mundo",
   "voice.strip.showFewer": "Ver menos",
   "voice.stage.noVideo": "Ninguém ligou a câmera nem compartilhou tela",
+  "voice.stage.showAllStreams": "Ver todas as transmissões",
   "voice.share.peerPresenting": "{name} está compartilhando",
   "voice.share.focus": "Ver a tela de {name}",
   "voice.share.stop": "Parar de compartilhar",

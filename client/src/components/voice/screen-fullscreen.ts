@@ -120,6 +120,24 @@ export function syncScreenFullscreen(
 }
 
 /**
+ * Whether an Escape press has to be handled here rather than left to the
+ * browser. `element` mode is the browser's own fullscreen: Escape exits it
+ * with no help from this file, and `fullscreenchange` tells `syncScreenFullscreen`
+ * so. `video` is the native player on an iPhone, which has no Escape key at
+ * all. `expand` is drawn entirely in the page, so nothing owns Escape for it
+ * — reported verbatim, 2026-09-27, as picking one stream on the call stage
+ * and having no obvious way back to the others. Same fix as
+ * `watch-fullscreen.ts`'s version of this comment, one file over: a picture
+ * reached with a click needs the same key to back out of it.
+ */
+export function escapeExitsExpandedFullscreen(
+  mode: "element" | "video" | "expand",
+  active: boolean,
+): boolean {
+  return mode === "expand" && active;
+}
+
+/**
  * A presenter can stop sharing while their screen is the one blown up. Without
  * this the stage would stay fullscreen on a peer that has no stream and no
  * tile: a black rectangle with no way back except Escape.

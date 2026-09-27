@@ -1252,6 +1252,7 @@
   "voice.strip.showAll": "Show everyone",
   "voice.strip.showFewer": "Show fewer",
   "voice.stage.noVideo": "Nobody has a camera or a screen on",
+  "voice.stage.showAllStreams": "Show all streams",
   "voice.share.peerPresenting": "{name} is presenting",
   "voice.share.focus": "Watch {name}",
   "voice.share.stop": "Stop sharing",
