@@ -617,7 +617,15 @@ export const MessageList = memo(function MessageList({
   // actually skip re-rendering the ~250 other rows a single new message
   // does not touch.
   const rowIdsRef = useRef(rowIds);
-  rowIdsRef.current = rowIds;
+  // Same reasoning as `useStableCallback` (see that hook's own comment): a
+  // ref written straight in the render body can end up holding a value from
+  // a render that never committed, and `handleRowNavigate` below is exactly
+  // the kind of callback — a permanently stable identity, invoked later from
+  // a real keyboard event — that bug would hit. A layout effect only runs
+  // once React has actually committed this render.
+  useLayoutEffect(() => {
+    rowIdsRef.current = rowIds;
+  });
 
   // A message scrolled out of history (bulk delete, forget-on-report, a page
   // that fell off the loaded window) should not keep its handler entry
@@ -1340,9 +1348,23 @@ export const MessageList = memo(function MessageList({
               firstUnreadId,
             );
             const rowId = row.message.id;
+            // React's `key`, not `rowId` (every callback and lookup below
+            // stays on the real id): a just-sent message's id changes from
+            // `pending:<nonce>` to the server's real one the moment it is
+            // confirmed (see the `message-broadcast` handler in
+            // `use-chat.ts`), and keying on `id` there would unmount this row
+            // and mount a fresh one mid-interaction — losing an open context
+            // menu, a hover state, an in-flight touch. `use-chat.ts` carries
+            // the nonce onto the confirmed message for exactly this: keying
+            // on it instead keeps the same DOM node across that swap. Every
+            // other message either never had a nonce (loaded from history)
+            // or has since lost it (a later update that does not carry it
+            // forward), so this only changes identity for the message you
+            // just sent, in the seconds after you sent it.
+            const elementKey = row.message.nonce ?? rowId;
             return (
             <MessageRow
-              key={rowId}
+              key={elementKey}
               row={row}
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}

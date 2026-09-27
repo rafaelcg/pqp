@@ -17,14 +17,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -2342,9 +2335,14 @@ function MainAppContent({
   const watchPartyHistoryChannelsRef = useRef<
     readonly WatchPartyHistoryChannel[]
   >(watchPartyHistoryChannelsRaw);
-  const watchPartyHistoryChannelsKey = watchPartyHistoryChannelsRaw
-    .map((channel) => `${channel.id}:${channel.name}`)
-    .join(",");
+  // JSON.stringify of the tuple list, not a joined string: `channel.name` is
+  // user-controlled text and can itself contain the separator, so two
+  // different channel lists could otherwise stringify to the same key (the
+  // same class of bug Farol found in the typing-users cache — see
+  // use-chat.ts).
+  const watchPartyHistoryChannelsKey = JSON.stringify(
+    watchPartyHistoryChannelsRaw.map((channel) => [channel.id, channel.name]),
+  );
   if (watchPartyHistoryChannelsKey !== watchPartyHistoryChannelsKeyRef.current) {
     watchPartyHistoryChannelsKeyRef.current = watchPartyHistoryChannelsKey;
     watchPartyHistoryChannelsRef.current = watchPartyHistoryChannelsRaw;
@@ -2413,10 +2411,23 @@ function MainAppContent({
    * (selecting a channel, sending your own message) still reads as instant;
    * a burst inside `REFRESH_COALESCE_MS` collapses to one trailing render
    * instead of one per frame.
+   *
+   * 30ms, not the 250ms `bumpMemberRosterNudge` uses: this path also carries
+   * the swap of YOUR OWN message from its optimistic `pending:<nonce>` row to
+   * the server-confirmed one (`use-chat.ts`'s message-broadcast handler),
+   * which changes that row's React key and forces a real remount — losing
+   * any transient DOM state tied to the old node, an open context menu among
+   * it. A 100ms window widened the gap between "server confirmed" and "the
+   * DOM actually reflects it" enough to land inside a keyboard/mouse
+   * interaction with that same row on a loaded CI runner (`element was
+   * detached from the DOM, retrying` on `message-keyboard-accessibility` /
+   * `message-quick-reactions`). 30ms still collapses a genuine same-tick
+   * burst (several WS frames arriving together) without meaningfully
+   * widening that pre-existing race.
    */
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshPendingRef = useRef(false);
-  const REFRESH_COALESCE_MS = 100;
+  const REFRESH_COALESCE_MS = 30;
   const refresh = useCallback(() => {
     if (refreshTimerRef.current !== null) {
       refreshPendingRef.current = true;
@@ -2568,19 +2579,33 @@ function MainAppContent({
       void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
     }
   });
-  // `favoriteChannelIds` / `channelListFooter` are memoized by hand rather
-  // than with `useMemo`: they depend on `selectedServer` and
-  // `sidebarIconsOnly`, both declared further down this function (after the
-  // `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
-  // early returns), so a `useMemo` call here would read them before their
+  // `favoriteChannelIds` is memoized by hand rather than with `useMemo`: it
+  // depends on `selectedServer`, declared further down this function (after
+  // the `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
+  // early returns), so a `useMemo` call here would read it before its
   // declaration. Declaring the REF here (which needs no dependency, so no
-  // ordering problem) and doing the actual comparison down where those
-  // values exist keeps this hook call unconditional while the memoization
-  // itself still runs after everything it needs is in scope.
+  // ordering problem) and doing the actual comparison down where that value
+  // exists keeps this hook call unconditional while the memoization itself
+  // still runs after everything it needs is in scope. Its key is the joined
+  // list of ids themselves, which is exactly what the output is derived
+  // from, so there is nothing it can miss.
+  //
+  // `channelListFooter` (`sidebarFooter()`'s output) was given the same
+  // treatment once and it was wrong: that function also reads `voiceState`,
+  // `musicInComposer`, `liveAttachedHint` and more, none of which were in
+  // its cache key (`sidebarIconsOnly` alone), so the voice status bar, the
+  // music mini player and the download hint banner all went stale the
+  // moment any of THAT changed without `sidebarIconsOnly` also changing —
+  // a call ending, a track changing, a hint appearing, none of it repainted
+  // this footer. It showed up as a layout shift landing mid-interaction
+  // elsewhere on the page (a stale "Get the app" banner appearing or
+  // disappearing under a click it had no business being under), which is
+  // what `e2e/user-status-menu.spec.ts` caught. `sidebarFooter()`'s two
+  // other call sites were never touched and call it fresh every render —
+  // this one now matches them instead of trying to cache a value with this
+  // many true inputs by a key that named only one of them.
   const favoriteChannelIdsKeyRef = useRef("");
   const favoriteChannelIdsRef = useRef<string[]>(EMPTY_FAVORITE_CHANNEL_IDS);
-  const channelListFooterKeyRef = useRef<boolean | null>(null);
-  const channelListFooterRef = useRef<ReactNode>(null);
 
   /**
    * `MemberSidebar` (the right-hand roster) is also wrapped in `memo()`, and
@@ -9476,7 +9501,7 @@ function MainAppContent({
   // The second half of the hand-rolled memoization declared near the top of
   // this function (see the comment there): plain code, not a hook, so it is
   // fine for it to run down here — after the early returns, where
-  // `selectedServer` and `sidebarIconsOnly` actually exist.
+  // `selectedServer` actually exists.
   {
     const favoriteChannelIdsRaw = selectedServer
       ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
@@ -9486,13 +9511,8 @@ function MainAppContent({
       favoriteChannelIdsKeyRef.current = favoriteChannelIdsKey;
       favoriteChannelIdsRef.current = favoriteChannelIdsRaw;
     }
-    if (channelListFooterKeyRef.current !== sidebarIconsOnly) {
-      channelListFooterKeyRef.current = sidebarIconsOnly;
-      channelListFooterRef.current = sidebarFooter(sidebarIconsOnly);
-    }
   }
   const favoriteChannelIds = favoriteChannelIdsRef.current;
-  const channelListFooter = channelListFooterRef.current;
 
   return (
     // The friends snapshot, published to everything that draws a relationship:
@@ -9916,7 +9936,7 @@ function MainAppContent({
           onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
-          footer={channelListFooter}
+          footer={sidebarFooter(sidebarIconsOnly)}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}

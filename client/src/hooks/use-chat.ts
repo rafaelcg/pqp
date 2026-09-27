@@ -1689,6 +1689,14 @@ export function createChatController(
             );
             if (index >= 0) {
               revokeLocalPreviews(messages[index]!);
+              // Carry the nonce onto the confirmed row: `message-list.tsx`
+              // keys `MessageRow` by it when present, precisely so this swap
+              // (the optimistic `pending:<nonce>` id becoming the server's
+              // real one) updates the existing DOM node instead of unmounting
+              // it and mounting a new one. Losing this here would only cost a
+              // later, unrelated update its stable key back to the id — the
+              // swap itself is the one every send goes through.
+              incoming.nonce = message.nonce;
               messages = [
                 ...messages.slice(0, index),
                 incoming,

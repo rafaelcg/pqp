@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 
 /**
  * Returns a function with a PERMANENTLY stable identity that always calls
@@ -31,6 +31,17 @@ export function useStableCallback<Args extends unknown[], Return>(
   fn: (...args: Args) => Return,
 ): (...args: Args) => Return {
   const fnRef = useRef(fn);
-  fnRef.current = fn;
+  // Farol caught this: writing `fnRef.current = fn` directly in the render
+  // body is a side effect during render. React can call a component's
+  // render function for work that never commits (an interrupted concurrent
+  // render, a throwaway pass), and if that write reaches the ref anyway, a
+  // real event on the ALREADY-committed UI can fire through to a closure
+  // that captured props/state from a render the user never actually saw —
+  // acting on a selection or a value that was never really current. A
+  // layout effect only runs after React has committed, so the ref can never
+  // hold a handler from a render that got thrown away.
+  useLayoutEffect(() => {
+    fnRef.current = fn;
+  });
   return useCallback((...args: Args) => fnRef.current(...args), []);
 }
