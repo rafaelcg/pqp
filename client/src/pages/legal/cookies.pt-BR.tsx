@@ -97,7 +97,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "816a9015",
+      sourceRev: "5ec53e79",
       heading: "Armazenamento local",
       body: (
         <>
@@ -272,7 +272,8 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp:cargos-hint-2026-08</code>,{" "}
               <code>pqp:cinema-hint-2026-09</code>,{" "}
               <code>pqp:music-pip-2026-09</code>,{" "}
-              <code>pqp:voice-clean-settings-seen</code>, toda chave que começa
+              <code>pqp:voice-clean-settings-seen</code>,{" "}
+              <code>pqp:obs-virtual-camera-hint-dismissed</code>, toda chave que começa
               com <code>pqp:feature-hint-</code>, e{" "}
               <code>pqp:voice-capacity-</code> seguido do id de um canal de voz.
             </li>
@@ -313,6 +314,12 @@ export const cookiesPtBr: LegalDocument = {
               criar antes de entrar na conta, para a gente terminar isso depois
               do cadastro. Cada um expira em uma hora e é apagado depois de
               usado.
+            </li>
+            <li>
+              <code>pqp:pending-watch-party-waitlist</code>: que você abriu o
+              link da lista de espera da watch party antes de entrar na conta,
+              para o formulário abrir depois do cadastro. Expira em uma hora e é
+              apagado depois de usado.
             </li>
           </ul>
           <p>
@@ -386,6 +393,11 @@ export const cookiesPtBr: LegalDocument = {
             <li>
               <code>pqp:confetti-spent</code>: o id da sua conta, para o confete
               de boas-vindas tocar uma vez só.
+            </li>
+            <li>
+              <code>pqp:stale-chunk-reload-at</code>: quando o app se recarregou
+              pela última vez depois de publicarmos uma versão nova, para
+              recarregar no máximo uma vez a cada 30 segundos.
             </li>
             <li>
               <code>com.grafana.faro.session</code> e{" "}

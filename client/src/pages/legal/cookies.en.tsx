@@ -251,7 +251,8 @@ export const cookiesEn: LegalDocument = {
               <code>pqp:cargos-hint-2026-08</code>,{" "}
               <code>pqp:cinema-hint-2026-09</code>,{" "}
               <code>pqp:music-pip-2026-09</code>,{" "}
-              <code>pqp:voice-clean-settings-seen</code>, every key that starts
+              <code>pqp:voice-clean-settings-seen</code>,{" "}
+              <code>pqp:obs-virtual-camera-hint-dismissed</code>, every key that starts
               with <code>pqp:feature-hint-</code>, and{" "}
               <code>pqp:voice-capacity-</code> followed by a voice channel id.
             </li>
@@ -291,6 +292,12 @@ export const cookiesEn: LegalDocument = {
               meant to join or create before signing in, so we can finish that
               after you create an account. Each expires after an hour and is
               cleared once used.
+            </li>
+            <li>
+              <code>pqp:pending-watch-party-waitlist</code>: that you opened the
+              watch party waitlist link before signing in, so the waitlist form
+              opens after you create an account. It expires after an hour and
+              is cleared once used.
             </li>
           </ul>
           <p>
@@ -362,6 +369,11 @@ export const cookiesEn: LegalDocument = {
             <li>
               <code>pqp:confetti-spent</code>: your account id, so the welcome
               confetti plays once.
+            </li>
+            <li>
+              <code>pqp:stale-chunk-reload-at</code>: the time the app last
+              reloaded itself after we published a new version, so it reloads
+              at most once every 30 seconds.
             </li>
             <li>
               <code>com.grafana.faro.session</code> and{" "}
