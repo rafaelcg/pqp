@@ -29,9 +29,12 @@ export function buildFeedbackContext(
     context.path = window.location.pathname.slice(0, 200);
     context.viewport = `${Math.round(window.innerWidth)}x${Math.round(window.innerHeight)}`;
   }
-  const locale = (env.locale ?? (typeof navigator !== "undefined" ? navigator.language : ""))
-    .trim()
-    .slice(0, 16);
+  // The app's own language (`lib/locale.ts` writes it to <html lang>), falling
+  // back to the browser's.
+  const fromApp =
+    env.locale ?? (typeof document !== "undefined" ? document.documentElement.lang : "");
+  const fromBrowser = typeof navigator !== "undefined" ? navigator.language : "";
+  const locale = (fromApp || fromBrowser || "").trim().slice(0, 16);
   if (locale) {
     context.locale = locale;
   }

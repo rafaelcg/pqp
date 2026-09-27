@@ -228,31 +228,43 @@ export async function listOperatorFeedback(options: {
     body: string;
     created_at: Date;
     context: OperatorFeedbackItem["context"];
+    user_id: string | null;
     username: string | null;
     discriminator: string | null;
     display_name: string | null;
     handle: string | null;
     account_created_at: Date | null;
-    sent: number | null;
-    confirmed: number | null;
   }>(
-    `SELECT f.id, f.kind, f.status, f.body, f.created_at, f.context,
+    `SELECT f.id, f.kind, f.status, f.body, f.created_at, f.context, f.user_id,
             u.username, u.discriminator, u.display_name, u.handle,
-            u.created_at AS account_created_at,
-            a.sent, a.confirmed
+            u.created_at AS account_created_at
        FROM feedback f
        LEFT JOIN users u ON u.id = f.user_id
-       LEFT JOIN LATERAL (
-         SELECT COUNT(*)::int AS sent,
-                COUNT(*) FILTER (WHERE status = 'confirmed')::int AS confirmed
-           FROM feedback mine
-          WHERE mine.user_id = f.user_id
-       ) a ON f.user_id IS NOT NULL
       ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
       ORDER BY f.id DESC
       LIMIT $${params.length}`,
     params,
   );
+  // Each author's history, once per author on the page rather than once per
+  // row: one grouped read over `idx_feedback_user`. The ids stay in here.
+  const authorIds = [
+    ...new Set(rows.rows.map((row) => row.user_id).filter((id): id is string => !!id)),
+  ];
+  const history = new Map<string, { sent: number; confirmed: number }>();
+  if (authorIds.length > 0) {
+    const counted = await pool.query<{ user_id: string; sent: number; confirmed: number }>(
+      `SELECT user_id,
+              COUNT(*)::int AS sent,
+              COUNT(*) FILTER (WHERE status = 'confirmed')::int AS confirmed
+         FROM feedback
+        WHERE user_id = ANY($1::uuid[])
+        GROUP BY user_id`,
+      [authorIds],
+    );
+    for (const row of counted.rows) {
+      history.set(row.user_id, { sent: row.sent, confirmed: row.confirmed });
+    }
+  }
   const counts = await pool.query<{
     open: number;
     confirmed: number;
@@ -288,8 +300,8 @@ export async function listOperatorFeedback(options: {
               displayName: row.display_name,
               handle: row.handle,
               accountCreatedAt: row.account_created_at.toISOString(),
-              sent: row.sent ?? 0,
-              confirmed: row.confirmed ?? 0,
+              sent: history.get(row.user_id ?? "")?.sent ?? 0,
+              confirmed: history.get(row.user_id ?? "")?.confirmed ?? 0,
             }
           : null,
     })),

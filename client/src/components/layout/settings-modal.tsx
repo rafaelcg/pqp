@@ -3786,7 +3786,7 @@ function BannerField({
  * consequence, no points, no leaderboard.
  */
 function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const [kind, setKind] = useState<FeedbackKind>("bug");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -3821,7 +3821,7 @@ function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
       await sendFeedback({
         kind,
         body: body.trim(),
-        context: buildFeedbackContext(voice, { locale }),
+        context: buildFeedbackContext(voice),
       });
       setSent(true);
     } catch {
