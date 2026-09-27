@@ -23,6 +23,7 @@ import {
   reconnectDelayMs,
   resetInFlight,
   STALE_CONNECT_MS,
+  TOKEN_ABANDON_MS,
   TOKEN_TIMEOUT_MS,
   type KeepaliveMode,
   type KeepaliveState,
@@ -187,6 +188,21 @@ export function createRealtimeTransport(): RealtimeTransport {
   let keepaliveMode: KeepaliveMode = "normal";
   /** When the link was lost, for the fast-retry window; null while online. */
   let lossStartedAt: number | null = null;
+  /**
+   * Why the pending reconnect is waiting. Only a `network` wait may be cut
+   * short by evidence that the network is back: a drain's spread protects the
+   * server from every tab at once, and a refusal's backoff protects it from
+   * being hammered, and neither is about this tab's link.
+   */
+  let pendingCause: ReconnectCause | null = null;
+  /**
+   * The token request still out, and when it started. A request that hung
+   * past `TOKEN_TIMEOUT_MS` is not called again on every retry, or a long
+   * outage piles one more stuck refresh up per attempt; the next attempt
+   * waits on the same one, until it is old enough to give up on.
+   */
+  let tokenInFlight: Promise<string | null> | null = null;
+  let tokenInFlightSince = 0;
   let unsubscribeHints: (() => void) | null = null;
   const chatQueue: ChatClientMessage[] = [];
   const voiceQueue: VoiceClientMessage[] = [];
@@ -218,6 +234,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    pendingCause = null;
   }
 
   function clearConnectTimer() {
@@ -315,7 +332,10 @@ export function createRealtimeTransport(): RealtimeTransport {
 
   /**
    * Evidence that the network works right now (the browser's `online`, media
-   * reconnecting). Whatever the transport is waiting on, stop waiting.
+   * reconnecting). Whatever the transport is waiting on BECAUSE OF THE
+   * NETWORK, stop waiting. A drain spread or a refusal backoff stays: media
+   * recovering says nothing about the server that closed us, and every tab
+   * in a call would otherwise hear the same hint and reconnect together.
    */
   function networkIsUp() {
     if (manualClose) {
@@ -323,7 +343,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     const ws = socket;
     if (!ws) {
-      if (reconnectTimer) {
+      if (reconnectTimer && pendingCause === "network") {
         clearReconnectTimer();
         void connectSocket();
       }
@@ -365,16 +385,18 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     const delay = reconnectDelayMs(reconnectAttempt, cause, now - lossStartedAt);
     reconnectAttempt += 1;
+    pendingCause = cause;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
+      pendingCause = null;
       void connectSocket();
     }, delay);
   }
 
   function handleOnline() {
-    // Network came back: this is the user's own connectivity returning, not
-    // a deploy — skip the remaining backoff and retry right away rather than
-    // waiting out a delay sized for a thundering herd that isn't this tab.
+    // Network came back: this is the user's own connectivity returning. A
+    // retry waiting on the network goes now; a drain spread or a refusal
+    // backoff is left alone (`networkIsUp`).
     // A socket that looks open may be the pre-outage one, dead on an address
     // this machine no longer has: probe it.
     networkIsUp();
@@ -454,12 +476,27 @@ export function createRealtimeTransport(): RealtimeTransport {
   async function resolveToken(
     provider: TokenProvider,
   ): Promise<string | null | "timeout"> {
+    const now = Date.now();
+    if (!tokenInFlight || now - tokenInFlightSince >= TOKEN_ABANDON_MS) {
+      // One request at a time: a retry after a timeout waits on the request
+      // that is still out instead of stacking another beside it. Clerk's
+      // `getToken` takes no abort signal, so this is the only bound there is.
+      const call = provider();
+      tokenInFlight = call;
+      tokenInFlightSince = now;
+      const settle = () => {
+        if (tokenInFlight === call) {
+          tokenInFlight = null;
+        }
+      };
+      call.then(settle, settle);
+    }
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), TOKEN_TIMEOUT_MS);
     });
     try {
-      return await Promise.race([provider(), timeout]);
+      return await Promise.race([tokenInFlight, timeout]);
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -705,6 +742,7 @@ export function createRealtimeTransport(): RealtimeTransport {
   return {
     connect(provider: TokenProvider) {
       tokenProvider = provider;
+      tokenInFlight = null;
       manualClose = false;
       hasConnectedOnce = false;
       window.addEventListener("online", handleOnline);
@@ -729,6 +767,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       socket = null;
       isReady = false;
       tokenProvider = null;
+      tokenInFlight = null;
       chatQueue.length = 0;
       voiceQueue.length = 0;
       setStatus("idle");

@@ -222,6 +222,15 @@ export const READY_TIMEOUT_MS = 12_000;
 export const TOKEN_TIMEOUT_MS = 5_000;
 
 /**
+ * A token request still out after a timeout is waited on by the next attempt
+ * rather than joined by a second one (`getToken` cannot be aborted, and a
+ * long outage would otherwise stack one stuck refresh per retry). Past this
+ * age it is given up on and a fresh one is made, so a request that never
+ * settles cannot hold the transport offline forever.
+ */
+export const TOKEN_ABANDON_MS = 30_000;
+
+/**
  * An attempt still CONNECTING when evidence arrives that the network is back
  * (the `online` event, media reconnecting) was very likely started on the
  * network that went away. Older than this, it is abandoned and redone.

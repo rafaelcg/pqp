@@ -803,6 +803,14 @@ describe("fast recovery from a network blip", () => {
     await flush();
     expect(transport.getStatus()).toBe("reconnecting");
     expect(authLost).toBe(0);
+    // The retry waits on the request still out instead of stacking another.
+    expect(calls).toBe(2);
+    expect(sockets).toHaveLength(1);
+
+    // Past TOKEN_ABANDON_MS the stuck request is given up on, a fresh one
+    // answers, and the socket comes back.
+    await vi.advanceTimersByTimeAsync(26_000);
+    await flush();
     expect(calls).toBe(3);
     expect(sockets).toHaveLength(2);
   });
@@ -834,15 +842,46 @@ describe("fast recovery from a network blip", () => {
     expect(sockets).toHaveLength(2);
   });
 
-  it("skips a pending backoff when the media connection comes back", async () => {
+  it("skips a pending network backoff when the media connection comes back", async () => {
     vi.spyOn(Math, "random").mockReturnValue(1);
     await online(true);
 
-    sockets[0]!.close(1001); // a drain: first attempt spread up to 4s
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    // The retry fails too: the next one waits (up to 1s at attempt 1).
+    sockets[1]!.close(1006);
     await vi.advanceTimersByTimeAsync(100);
+    await flush();
+    expect(sockets).toHaveLength(2);
+
+    emitNetworkHint("up");
+    await flush();
+    expect(sockets).toHaveLength(3);
+  });
+
+  it("never cuts a drain spread or a refusal backoff short", async () => {
+    const listeners = captureWindowListeners();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    await online(true);
+
+    // A deploy's drain: every tab in a call hears the same media hint, and
+    // the spread is what keeps them from reconnecting together.
+    sockets[0]!.close(1001);
+    await vi.advanceTimersByTimeAsync(100);
+    emitNetworkHint("up");
+    listeners.online?.();
     await flush();
     expect(sockets).toHaveLength(1);
 
+    await vi.advanceTimersByTimeAsync(4_000);
+    await flush();
+    expect(sockets).toHaveLength(2);
+
+    // A rate limit is never hammered either.
+    sockets[1]!.accept();
+    sockets[1]!.close(4429);
+    await vi.advanceTimersByTimeAsync(100);
     emitNetworkHint("up");
     await flush();
     expect(sockets).toHaveLength(2);
