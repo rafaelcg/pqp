@@ -17,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "23 de setembro de 2026",
+  updated: "27 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -97,7 +97,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "5ec53e79",
+      sourceRev: "fb247018",
       heading: "Armazenamento local",
       body: (
         <>
@@ -132,8 +132,8 @@ export const cookiesPtBr: LegalDocument = {
               espaçamento entre mensagens.
             </li>
             <li>
-              <code>pqp:locale</code>: o idioma que você escolheu (inglês ou
-              português), quando você escolheu algum.
+              <code>pqp:locale</code>: o idioma que você escolheu (inglês,
+              português ou espanhol), quando você escolheu algum.
             </li>
           </ul>
           <p>
@@ -288,12 +288,15 @@ export const cookiesPtBr: LegalDocument = {
               <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
               <code>gclid</code> ou <code>ref</code>), esses valores e a página
               em que você chegou, para a gente saber de qual link veio um
-              cadastro. Não guarda identificador de tipo nenhum, o nosso código
-              nunca entrega ele a terceiro, expira em 30 dias, é gravado uma vez só (um link
-              de campanha posterior não substitui) e é apagado do seu
-              dispositivo na primeira vez que o app carrega depois do seu
-              login, quando é enviado uma única vez para a sua conta. Se você
-              nunca se cadastrar, ele simplesmente expira.
+              cadastro. Se você chegou por um anúncio do Google, o{" "}
+              <code>gclid</code> é o identificador que o Google deu a esse
+              clique no anúncio. Nada mais ali identifica você. O nosso código
+              nunca entrega isso a terceiro. Expira em 30 dias e é gravado uma
+              vez só (um link de campanha posterior não substitui). Na primeira
+              vez que o app carrega depois do seu login, ele é enviado uma única
+              vez para a sua conta e apagado do seu dispositivo, e o nosso
+              servidor guarda esses valores na sua conta. Se você nunca se
+              cadastrar, ele simplesmente expira.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: o identificador da conta
@@ -362,11 +365,14 @@ export const cookiesPtBr: LegalDocument = {
             <li>O Clerk também guarda entradas próprias aqui, para a sessão.</li>
           </ul>
           <p>
-            O seu tema e visual, idioma, exibição do chat, sons, níveis de
-            notificação e as principais configurações de voz (entrar mudo, modo
-            de entrada, volumes) também são salvos na sua conta no nosso
-            servidor, para acompanhar você em outro dispositivo. Veja a{" "}
-            <Link to="/privacy">Política de Privacidade</Link>.
+            O seu tema e visual, exibição do chat, sons, níveis de notificação e
+            as principais configurações de voz (entrar mudo, modo de entrada,
+            volumes) também são salvos na sua conta no nosso servidor, para
+            acompanhar você em outro dispositivo. O seu idioma também é salvo na
+            conta, mas só para definir o idioma das notificações push, e não
+            acompanha você em outro dispositivo. As notificações push existem em
+            inglês e em português, então espanhol fica salvo como inglês. Veja
+            a <Link to="/privacy">Política de Privacidade</Link>.
           </p>
           <p>
             O <strong>armazenamento de sessão</strong> (some quando você fecha a
@@ -425,7 +431,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "f537eca5",
+      sourceRev: "6847772e",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -491,10 +497,12 @@ export const cookiesPtBr: LegalDocument = {
               para o coletor da Grafana em São Paulo (
               <code>faro-collector-prod-sa-east-1.grafana.net</code>). Um
               relatório tem o endereço da página, a mensagem de erro e onde no
-              nosso código ela aconteceu, erros que o app escreve no console do
-              navegador, medições de velocidade da página, os endereços e tempos
-              das requisições que o app faz, e o seu navegador e sistema
-              operacional. Ele leva o id de sessão aleatório do armazenamento de
+              nosso código ela aconteceu, mensagens que o app escreve no console
+              do navegador nos níveis info, aviso e erro, avisos de qualquer
+              coisa que o navegador bloqueou pela política de segurança do site,
+              as páginas por onde você passa dentro do app, medições de
+              velocidade da página, os endereços e tempos das requisições que o
+              app faz, e o seu navegador e sistema operacional. Ele leva o id de sessão aleatório do armazenamento de
               sessão listado acima. O nosso código nunca diz a ele quem você é,
               mas alguns endereços de requisição têm ids, e o link para assistir
               a transmissão de uma watch party tem o id da sua conta. Ele não
@@ -521,18 +529,21 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "not-used",
-      sourceRev: "f31c91fe",
+      sourceRev: "d9ac32c2",
       heading: "O que a gente não usa",
       body: (
         <>
           <p>
-            Nenhuma gravação de sessão: nada no pqp.gg grava a sua tela nem o
-            que você digita. Nenhuma impressão digital de dispositivo feita pelo
-            nosso código. As notificações no desktop são disparadas localmente
-            pelo seu próprio navegador. Push no telefone e na web existe quando
-            a API hospedada está configurada com VAPID ou APNs; isso passa pela
-            Apple ou pelo serviço de push do navegador, não por um SDK de
-            analytics de terceiro. A tag do Google descrita em
+            Nenhuma gravação de sessão: nada no pqp.gg grava como você usa o
+            site nem o que você digita. (Uma watch party é gravada como
+            transmissão; a <Link to="/privacy">Política de Privacidade</Link>{" "}
+            explica.) Nenhuma impressão digital de dispositivo feita pelo nosso
+            código. As notificações no desktop são disparadas localmente pelo
+            seu próprio navegador. As notificações push, quando você liga,
+            passam pela Apple no iPhone, pelo Firebase Cloud Messaging do Google
+            no app de Android, e pelo serviço de push do próprio navegador na
+            web. Nenhum deles é um SDK de analytics de terceiro, e nenhuma
+            notificação traz o texto de uma mensagem. A tag do Google descrita em
             &quot;Cookies&quot; acima é a única peça de maquinaria de
             publicidade aqui.
           </p>

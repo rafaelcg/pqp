@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "23 September 2026",
+  updated: "27 September 2026",
   sections: [
     {
       id: "intro",
@@ -116,8 +116,8 @@ export const cookiesEn: LegalDocument = {
               <code>pqp-chat-display</code>: chat text size and message spacing.
             </li>
             <li>
-              <code>pqp:locale</code>: your chosen language (English or
-              Portuguese), when you have set one.
+              <code>pqp:locale</code>: your chosen language (English,
+              Portuguese or Spanish), when you have set one.
             </li>
           </ul>
           <p>
@@ -267,12 +267,14 @@ export const cookiesEn: LegalDocument = {
               <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
               <code>gclid</code> or <code>ref</code>), those values and the
               page you landed on, so we can tell which link a sign-up came
-              from. It holds no identifier of any kind, our code never gives it
-              to a third party, it expires after 30 days, it is written only once (a
-              later campaign link does not replace it), and is deleted from
-              your device the first time the app loads after you sign in,
-              when it is sent to your account once. If you never sign up it
-              simply expires.
+              from. If you arrived from a Google ad, <code>gclid</code> is the
+              identifier Google gave that ad click. Nothing else in it
+              identifies you. Our code never gives it to a third party. It
+              expires after 30 days, and it is written only once (a later
+              campaign link does not replace it). The first time the app loads
+              after you sign in, it is sent to your account once and deleted
+              from your device, and our server keeps those values on your
+              account. If you never sign up it simply expires.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the
@@ -338,10 +340,13 @@ export const cookiesEn: LegalDocument = {
             <li>Clerk keeps its own entries here too, for the session.</li>
           </ul>
           <p>
-            Your theme and look, language, chat display, sounds, notification
-            levels and main voice settings (mute-on-join, input mode, volumes)
-            are also saved to your account on our server so they follow you to
-            another device. See the{" "}
+            Your theme and look, chat display, sounds, notification levels and
+            main voice settings (mute-on-join, input mode, volumes) are also
+            saved to your account on our server so they follow you to another
+            device. Your language is saved to your account too, but only to
+            pick the language of push notifications, and it does not follow you
+            to another device. Push notifications exist in English and
+            Portuguese, so Spanish is saved as English. See the{" "}
             <Link to="/privacy">Privacy Policy</Link>.
           </p>
           <p>
@@ -463,9 +468,12 @@ export const cookiesEn: LegalDocument = {
               Grafana&apos;s collector in São Paulo (
               <code>faro-collector-prod-sa-east-1.grafana.net</code>). A report
               holds the page address, the error message and where in our code
-              it happened, errors the app writes to the browser console, page
-              speed measurements, the addresses and timings of requests the app
-              makes, and your browser and operating system. It carries the
+              it happened, messages the app writes to the browser console at the
+              info, warning and error levels, reports of anything the browser
+              blocked under the site&apos;s security policy, the pages you move
+              between inside the app, page speed measurements, the addresses
+              and timings of requests the app makes, and your browser and
+              operating system. It carries the
               random session id in session storage listed above. Our code
               never tells it who you are, but some request addresses contain
               ids, and the link for watching a watch-party stream contains your
@@ -496,12 +504,15 @@ export const cookiesEn: LegalDocument = {
       body: (
         <>
           <p>
-            No session replay: nothing on pqp.gg records your screen or what
-            you type. No device fingerprinting by our code.
-            Desktop notifications are raised locally by your own browser.
-            Phone and web push exist when the hosted API is configured with
-            VAPID or APNs; those go through Apple or the browser&apos;s push
-            service, not through a third-party analytics SDK. The Google tag
+            No session replay: nothing on pqp.gg records how you use the site
+            or what you type. (A watch party is recorded as a broadcast; the{" "}
+            <Link to="/privacy">Privacy Policy</Link> explains it.) No device
+            fingerprinting by our code. Desktop notifications are raised
+            locally by your own browser. Push notifications, when you turn them
+            on, go through Apple for an iPhone, Google&apos;s Firebase Cloud
+            Messaging for the Android app, and the browser&apos;s own push
+            service for the web. None of them is a third-party analytics SDK,
+            and no notification carries the text of a message. The Google tag
             under &quot;Cookies&quot; above is the one piece of advertising
             machinery here.
           </p>

@@ -449,7 +449,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Viven en servidores en São Paulo. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina.",
+        "Viven en servidores en São Paulo. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies, reporte de errores y la etiqueta de Google Ads; todo está en pqp.gg/privacy.",
     },
   ],
 };
@@ -649,7 +649,7 @@ export const TELA_FAQ: Record<
     {
       question: "¿Qué guardan sobre mí?",
       answer:
-        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami) y una etiqueta de conversión de Google Ads que solo cuenta registros. Sin remarketing, sin listas de audiencia.",
+        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
     },
     {
       question: "¿Por qué compartir pantalla desde el navegador?",

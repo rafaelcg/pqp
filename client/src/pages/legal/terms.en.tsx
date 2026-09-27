@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "7 September 2026",
+  updated: "27 September 2026",
   sections: [
     {
       id: "intro",
@@ -365,17 +365,21 @@ export const termsEn: LegalDocument = {
           Voice uses WebRTC. In a small room, audio and screen-share video
           travel directly between participants and pass through no server of
           ours. In a large room they are relayed by a media server we run
-          ourselves in São Paulo, Brazil, which passes them on and keeps
-          nothing: no call is recorded by us or stored by us on either path.
-          Which rooms are which, and what relaying means for your data, is set
-          out in the <Link to="/privacy">Privacy Policy</Link>. A watch party
-          syncs a YouTube video on each person&apos;s device; we do not host
-          that stream. The direct path has a practical ceiling: every person in
-          a channel connects to every other one, so a busy direct room gets
-          heavy on everybody&apos;s connection. Quality depends on your network,
-          and on the direct path on your peers too, and we do not guarantee
-          uninterrupted audio. You are responsible for what you share on screen
-          and for what you play in a watch party.
+          ourselves, in São Paulo, Miami or London, which passes them on and
+          keeps nothing: no ordinary call is recorded by us or stored by us on
+          either path. A watch party is different. It is a broadcast that we
+          stream to its audience and record, and the recording is kept for 30
+          days. Which rooms are which, and what relaying and recording mean for
+          your data, is set out in the{" "}
+          <Link to="/privacy">Privacy Policy</Link>. The music queue in a voice
+          call plays a YouTube video on each person&apos;s device; we do not
+          host that stream. The direct path has a practical ceiling: every
+          person in a channel connects to every other one, so a busy direct
+          room gets heavy on everybody&apos;s connection. Quality depends on
+          your network, and on the direct path on your peers too, and we do not
+          guarantee uninterrupted audio. You are responsible for what you share
+          on screen, for what you play in the music queue, and for what you
+          broadcast in a watch party.
         </p>
       ),
     },
