@@ -1232,6 +1232,7 @@ describe("newSegmentDurationsSince", () => {
     expect(newSegmentDurationsSince(fragments, null)).toEqual({
       durations: [4.1, 4.3, 9.0],
       lastSeenSn: 12,
+      reset: false,
     });
   });
 
@@ -1244,10 +1245,12 @@ describe("newSegmentDurationsSince", () => {
     expect(newSegmentDurationsSince(fragments, 10)).toEqual({
       durations: [4.3, 4.2],
       lastSeenSn: 12,
+      reset: false,
     });
     expect(newSegmentDurationsSince(fragments, 12)).toEqual({
       durations: [],
       lastSeenSn: 12,
+      reset: false,
     });
   });
 
@@ -1264,6 +1267,7 @@ describe("newSegmentDurationsSince", () => {
     expect(newSegmentDurationsSince(fragments, 10)).toEqual({
       durations: [9.0, 4.2],
       lastSeenSn: 12,
+      reset: false,
     });
   });
 
@@ -1276,6 +1280,7 @@ describe("newSegmentDurationsSince", () => {
     expect(newSegmentDurationsSince(fragments, null)).toEqual({
       durations: [4.1],
       lastSeenSn: 11,
+      reset: false,
     });
   });
 
@@ -1283,6 +1288,59 @@ describe("newSegmentDurationsSince", () => {
     expect(newSegmentDurationsSince([], 5)).toEqual({
       durations: [],
       lastSeenSn: 5,
+      reset: false,
+    });
+  });
+
+  // Farol, this PR: a remux restart or a new run's media-sequence base
+  // (pitfall 20 in CLAUDE.md) can make the SAME attach start seeing LOWER
+  // sequence numbers than it already recorded. Comparing every fragment
+  // against the stale `lastSeenSn` would read every one of them as
+  // "already seen" forever, freezing the cadence window on pre-restart
+  // evidence.
+  describe("a media-sequence reset", () => {
+    it("detects the newest listed fragment sitting behind what was already seen", () => {
+      const fragments = [
+        { sn: 0, duration: 4.0 },
+        { sn: 1, duration: 4.1 },
+      ];
+      expect(newSegmentDurationsSince(fragments, 500)).toEqual({
+        durations: [4.0, 4.1],
+        lastSeenSn: 1,
+        reset: true,
+      });
+    });
+
+    it("treats a reset like a fresh attach: every listed fragment counts, none skipped as 'already seen'", () => {
+      // Without reset detection, sn 0 and 1 would both be <= 500 and
+      // silently dropped forever.
+      const fragments = [{ sn: 0, duration: 9.0 }];
+      const result = newSegmentDurationsSince(fragments, 500);
+      expect(result.durations).toEqual([9.0]);
+      expect(result.reset).toBe(true);
+    });
+
+    it("is not confused by an ordinary empty-progress poll (nothing new, sequence unchanged)", () => {
+      const fragments = [
+        { sn: 10, duration: 4.1 },
+        { sn: 11, duration: 4.2 },
+      ];
+      // The newest listed fragment (11) is NOT behind lastSeenSn (11):
+      // this is "no new segment yet", not a reset.
+      expect(newSegmentDurationsSince(fragments, 11)).toEqual({
+        durations: [],
+        lastSeenSn: 11,
+        reset: false,
+      });
+    });
+
+    it("an all-non-numeric fragment list (e.g. only an init segment) is never mistaken for a reset", () => {
+      const fragments = [{ sn: "initSegment" as const, duration: 0 }];
+      expect(newSegmentDurationsSince(fragments, 500)).toEqual({
+        durations: [],
+        lastSeenSn: 500,
+        reset: false,
+      });
     });
   });
 });

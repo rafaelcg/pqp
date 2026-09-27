@@ -6,6 +6,7 @@ import {
   LL_SEGMENT_CADENCE_WINDOW,
   LL_SEGMENTS_CATCH_UP_RATE,
   LL_SEGMENTS_FETCH_MARGIN_SECONDS,
+  LL_SEGMENTS_MAX_FLOOR_SECONDS,
   LL_SEGMENTS_MIN_SESSION_AGE_MS,
   LL_SEGMENTS_SLOW_DOWN_RATE,
   LL_SEGMENTS_TARGET_SECONDS,
@@ -413,6 +414,87 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
       tickN += 1;
     }
     expect(g.state().targetSeconds).toBe(6 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+  });
+
+  // Farol, this PR's second pass: `onSegmentDuration`'s immediate raise
+  // has to respect the SAME `LL_SEGMENTS_MAX_FLOOR_SECONDS` ceiling
+  // `onManifest`'s path (`segmentsFloorSeconds`) already enforces --
+  // otherwise a single very long real segment (a stall, a presenter
+  // reconnect) could push `floorSeconds` past what `onManifest` could ever
+  // reach on its own.
+  it("caps the immediate raise at LL_SEGMENTS_MAX_FLOOR_SECONDS, same ceiling onManifest's own path uses", () => {
+    const g = new LlLatencyGovernor({
+      delivery: "segments",
+      now: T0,
+      segmentCadenceDecay: () => true,
+    });
+    // A real, directly-measured 90 s segment is not "nonsense" the way an
+    // implausible MANIFEST value is (`onManifest` rejects a `targetduration`
+    // over `LL_SEGMENTS_MAX_FLOOR_SECONDS` outright, on purpose, and does
+    // not raise anything for it -- see "ignores nonsense" above): this
+    // reading really happened, so it is accepted, just clamped at the same
+    // hard ceiling every other path already respects.
+    g.onSegmentDuration(90);
+    expect(g.state().targetSeconds).toBe(LL_SEGMENTS_MAX_FLOOR_SECONDS);
+    expect(g.state().targetSeconds).toBeLessThan(90 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+    // A reading that a manifest COULD legitimately advertise (<=20) raises
+    // the floor to exactly the same number either path would produce --
+    // `segmentsFloorSeconds` is the one formula both go through.
+    const g2 = new LlLatencyGovernor({ delivery: "segments", now: T0 });
+    g2.onManifest({ targetDurationSeconds: 15 });
+    const g3 = new LlLatencyGovernor({
+      delivery: "segments",
+      now: T0,
+      segmentCadenceDecay: () => true,
+    });
+    g3.onSegmentDuration(15);
+    expect(g3.state().targetSeconds).toBe(g2.state().targetSeconds);
+  });
+
+  // Farol, this PR's second pass: a remux restart (or a new run's
+  // media-sequence base, pitfall 20) must not let pre-restart segment
+  // readings keep bounding the decay forever, but must also not itself
+  // raise or lower the floor -- only clear the evidence.
+  describe("resetSegmentCadence", () => {
+    it("clears the window so a full new one is required before any further give-back", () => {
+      const g = new LlLatencyGovernor({
+        delivery: "segments",
+        now: T0,
+        segmentCadenceDecay: () => true,
+      });
+      g.onManifest({ targetDurationSeconds: 13 }); // floor 16
+      for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
+        g.onSegmentDuration(6);
+      }
+      g.resetSegmentCadence();
+      // One tick's worth of "clean" time passing does not decay anything:
+      // the window is empty again, exactly like a fresh governor.
+      g.tick(T0 + LL_TARGET_DECAY_AFTER_MS);
+      expect(g.state().targetSeconds).toBe(16);
+      // A fresh window of post-reset readings decays it again, same as
+      // any other full window.
+      let tickN = 2;
+      for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
+        g.onSegmentDuration(6);
+      }
+      for (let i = 0; i < 30; i += 1) {
+        g.tick(T0 + tickN * LL_TARGET_DECAY_AFTER_MS);
+        tickN += 1;
+      }
+      expect(g.state().targetSeconds).toBe(6 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+    });
+
+    it("does not itself raise or lower the floor", () => {
+      const g = new LlLatencyGovernor({
+        delivery: "segments",
+        now: T0,
+        segmentCadenceDecay: () => true,
+      });
+      g.onManifest({ targetDurationSeconds: 13 }); // floor 16
+      const before = g.state().targetSeconds;
+      g.resetSegmentCadence();
+      expect(g.state().targetSeconds).toBe(before);
+    });
   });
 });
 

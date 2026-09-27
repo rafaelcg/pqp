@@ -1565,7 +1565,8 @@ export interface FragSnDuration {
  * Every REAL duration a `LEVEL_UPDATED` firing adds beyond what this player
  * has already fed the LL governor (`LlLatencyGovernor.onSegmentDuration`),
  * oldest first, plus the newest sequence number seen so the caller can hold
- * it for the next call.
+ * it for the next call, and whether the caller should also call
+ * `LlLatencyGovernor.resetSegmentCadence()` first.
  *
  * WHY THIS EXISTS, NOT JUST `.at(-1)` (Farol, this PR). `LEVEL_UPDATED`
  * fires once per part under the blocking reload, but nothing guarantees
@@ -1577,6 +1578,20 @@ export interface FragSnDuration {
  * cadence window, which is exactly the false "all clear" the decay's
  * safety margin (`LL_SEGMENT_CADENCE_WINDOW`) exists to prevent.
  *
+ * `reset` (Farol, this PR): a live media sequence only ever grows -- until
+ * a remux restart or a new run's media-sequence base (pitfall 20 in
+ * CLAUDE.md) makes the SAME attach start seeing LOWER `sn`s than it
+ * already recorded. Comparing every fragment's `sn` against the OLD
+ * `lastSeenSn` in that case would read every one of them as "already
+ * seen" forever, silently freezing the cadence window on stale, pre-
+ * restart evidence. Detected here off the manifest alone (the newest
+ * fragment this call is handed is BEHIND what was already seen): treated
+ * exactly like a fresh attach (`lastSeenSn` effectively `null` for this
+ * call, so every currently-listed fragment counts as real, recent
+ * evidence) and flagged so the caller also clears the governor's own
+ * window -- pre- and post-restart readings must never be averaged
+ * together as if they described one continuous cadence.
+ *
  * `fragments` is hls.js's own oldest-first order, so the result is too.
  * `lastSeenSn === null` (a fresh attach) takes every currently-listed
  * fragment as real, recent evidence -- there is nothing before it to miss.
@@ -1584,15 +1599,23 @@ export interface FragSnDuration {
 export function newSegmentDurationsSince(
   fragments: readonly FragSnDuration[],
   lastSeenSn: number | null,
-): { durations: number[]; lastSeenSn: number | null } {
+): { durations: number[]; lastSeenSn: number | null; reset: boolean } {
+  const numericSns = fragments
+    .map((fragment) => fragment.sn)
+    .filter((sn): sn is number => typeof sn === "number");
+  const newestListedSn = numericSns.length > 0 ? Math.max(...numericSns) : null;
+  const reset =
+    lastSeenSn !== null && newestListedSn !== null && newestListedSn < lastSeenSn;
+  const effectiveLastSeenSn = reset ? null : lastSeenSn;
+
   const durations: number[] = [];
-  let newestSn = lastSeenSn;
+  let newestSn = effectiveLastSeenSn;
   for (const fragment of fragments) {
     const sn = fragment.sn;
     if (typeof sn !== "number") {
       continue;
     }
-    if (lastSeenSn !== null && sn <= lastSeenSn) {
+    if (effectiveLastSeenSn !== null && sn <= effectiveLastSeenSn) {
       continue;
     }
     if (Number.isFinite(fragment.duration)) {
@@ -1602,5 +1625,5 @@ export function newSegmentDurationsSince(
       newestSn = sn;
     }
   }
-  return { durations, lastSeenSn: newestSn };
+  return { durations, lastSeenSn: newestSn, reset };
 }

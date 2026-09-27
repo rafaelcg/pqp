@@ -2696,12 +2696,19 @@ export function HlsWatchPlayer({
           // no-op unless `llSegmentCadenceDecay` is on) --
           // `newSegmentDurationsSince` in `hls-live-edge.ts` is what walks
           // the manifest for that; see its own comment for why `.at(-1)`
-          // alone would miss a segment.
+          // alone would miss a segment. `seen.reset` fires on a remux
+          // restart or a new run's media-sequence base (pitfall 20): the
+          // governor's cadence window is pre-restart evidence at that
+          // point and has to earn a fresh one, never averaged with what
+          // comes next.
           if (governor) {
             const seen = newSegmentDurationsSince(
               data.details.fragments,
               lastSeenSegmentSn,
             );
+            if (seen.reset) {
+              governor.resetSegmentCadence();
+            }
             for (const duration of seen.durations) {
               governor.onSegmentDuration(duration);
             }

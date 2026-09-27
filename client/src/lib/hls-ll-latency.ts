@@ -244,7 +244,12 @@ export class LlLatencyGovernor {
    * notice would mean this exact real-time reading, the one thing this
    * method exists to trust, gets ignored the one time it matters most.
    * `raiseFloor` is the same one-way-up primitive `onManifest` already
-   * uses, so this can never conflict with it, only agree or arrive first.
+   * uses, and the raise goes through the SAME `segmentsFloorSeconds`
+   * ceiling `onManifest` computes off `EXT-X-TARGETDURATION` (a Farol
+   * finding on this PR's first pass: an uncapped raise here could push
+   * `floorSeconds` past `LL_SEGMENTS_MAX_FLOOR_SECONDS`, which
+   * `onManifest`'s own path can never do), so this can never conflict with
+   * it, only agree or arrive first.
    */
   onSegmentDuration(durationSeconds: number): void {
     if (
@@ -259,9 +264,27 @@ export class LlLatencyGovernor {
     if (this.recentSegmentDurationsSeconds.length > LL_SEGMENT_CADENCE_WINDOW) {
       this.recentSegmentDurationsSeconds.shift();
     }
-    this.raiseFloor(
-      Math.max(LL_SEGMENTS_TARGET_SECONDS, durationSeconds + LL_SEGMENTS_FETCH_MARGIN_SECONDS),
-    );
+    this.raiseFloor(segmentsFloorSeconds(durationSeconds));
+  }
+
+  /**
+   * The live playlist's media sequence just went backward (Farol, this PR):
+   * a remux restart, or a new run's media-sequence base (pitfall 20 in
+   * CLAUDE.md), can make a LATER segment carry a LOWER sequence number
+   * than one this governor already saw. `newSegmentDurationsSince`
+   * (`hls-live-edge.ts`) detects exactly that shape and tells the caller to
+   * call this before feeding the new readings, so every duration recorded
+   * from here on is unambiguously post-restart.
+   *
+   * Clears `recentSegmentDurationsSeconds` ONLY. Never touches
+   * `floorSeconds`/`targetSeconds`: a restart is not evidence the party got
+   * worse (do not raise) or better (do not lower) -- it just means the
+   * decay's evidence window has to earn a fresh full window of real
+   * readings again before it may give anything back, which is the
+   * conservative side of "smooth beats fast" this class already lives by.
+   */
+  resetSegmentCadence(): void {
+    this.recentSegmentDurationsSeconds = [];
   }
 
   /**
