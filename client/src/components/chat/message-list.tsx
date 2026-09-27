@@ -120,6 +120,22 @@ const HIGHLIGHT_MS = 2_000;
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
 
+/**
+ * Skip layout and paint for a row while it is off screen, the cheap half of
+ * virtualizing a transcript that can run to hundreds of messages in a busy
+ * watch party. The row stays in the DOM (a permalink or Tab still finds it;
+ * the browser renders it on demand when it scrolls near or gets focus) but
+ * its subtree is excluded from style/layout work until then — a plain GIF
+ * message and a poll card both cost nothing while scrolled away. `auto` in
+ * the size lets the browser remember each row's real height after its first
+ * render, so a row that scrolls back into view does not jump; the `64px`
+ * fallback is only a guess for the very first paint.
+ */
+const ROW_CONTENT_VISIBILITY: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: "auto 64px",
+};
+
 /** First three of `QUICK_REACTIONS`, shown on the hover bar. */
 const HOVER_QUICK_REACTIONS = QUICK_REACTIONS.slice(0, 3);
 
@@ -445,6 +461,24 @@ export function MessageList({
   latestMessageRef.current = messages[messages.length - 1];
   /** Row elements by message id, so a jump can find its target. */
   const rowNodes = useRef(new Map<string, HTMLElement>());
+  /**
+   * Per-row event handler cache, keyed by message id and then by handler
+   * name. `MessageRow` is wrapped in `memo()`, but every one of these
+   * handlers used to be built fresh inside the `rows.map()` below — a new
+   * closure for all ~N rows on every render of this component, which is
+   * exactly what a busy channel does on every incoming message, reaction,
+   * typing tick or roster change. A fresh closure is a new prop value, so
+   * the memo comparison failed for every row every time, and the "only the
+   * new message's row should re-render" guarantee `memo()` exists to give
+   * never actually held. `stableRowCallback` below hands back the SAME
+   * function for the same row and the same dependencies, so an unrelated
+   * re-render of this component leaves untouched rows' props
+   * reference-equal and `memo()` skips them. See the busy watch-party
+   * profiling in PR #… (message-list.tsx main-thread cost).
+   */
+  const rowCallbackCache = useRef(
+    new Map<string, Map<string, { deps: readonly unknown[]; fn: unknown }>>(),
+  );
   const flashTimer = useRef<number | null>(null);
   const noticeTimer = useRef<number | null>(null);
   const highlightRef = useRef<string | null>(highlightMessageId);
@@ -497,6 +531,57 @@ export function MessageList({
     [rows, currentUsername, currentUserId],
   );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+
+  // A message scrolled out of history (bulk delete, forget-on-report, a page
+  // that fell off the loaded window) should not keep its handler entry
+  // forever — the cache would otherwise grow for as long as the channel
+  // stays open, the same unbounded-growth shape as the transcript itself.
+  useEffect(() => {
+    const live = new Set(rowIds);
+    for (const id of rowCallbackCache.current.keys()) {
+      if (!live.has(id)) {
+        rowCallbackCache.current.delete(id);
+      }
+    }
+  }, [rowIds]);
+
+  /**
+   * Returns a function for this row that is reference-stable across
+   * `MessageList` renders as long as `deps` compares equal (shallow,
+   * `Object.is` per entry) to the last call for this row + `key`. Building
+   * the function is the caller's job (`factory`), same as `useMemo` — this
+   * just skips calling it again when nothing it closed over changed.
+   *
+   * Not a hook: it is called from inside `rows.map()` below, a variable
+   * number of times per render, which a real hook may never do. The state
+   * it reads and writes lives in one `useRef` created unconditionally above,
+   * so this is a plain function riding on that ref, the same shape as
+   * `registerRow` or `markMenuRow` a little further down.
+   */
+  function stableRowCallback<F>(
+    rowId: string,
+    key: string,
+    deps: readonly unknown[],
+    factory: () => F,
+  ): F {
+    let forRow = rowCallbackCache.current.get(rowId);
+    if (!forRow) {
+      forRow = new Map();
+      rowCallbackCache.current.set(rowId, forRow);
+    }
+    const cached = forRow.get(key);
+    if (
+      cached &&
+      cached.deps.length === deps.length &&
+      cached.deps.every((value, index) => Object.is(value, deps[index]))
+    ) {
+      return cached.fn as F;
+    }
+    const fn = factory();
+    forRow.set(key, { deps, fn });
+    return fn;
+  }
+
   const firstUnreadId = useMemo(
     () => findFirstUnreadMessageId(messages, unreadSince),
     [messages, unreadSince],
@@ -1166,9 +1251,10 @@ export function MessageList({
               index,
               firstUnreadId,
             );
+            const rowId = row.message.id;
             return (
             <MessageRow
-              key={row.message.id}
+              key={rowId}
               row={row}
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
@@ -1186,84 +1272,167 @@ export function MessageList({
               isBlocked={
                 row.message.authorId !== currentUserId &&
                 blockedAuthorIds.has(row.message.authorId) &&
-                !revealedIds.has(row.message.id)
+                !revealedIds.has(rowId)
               }
-              onReveal={() =>
-                setRevealedIds((current) =>
-                  new Set(current).add(row.message.id),
-                )
-              }
-              isFlashing={flashId === row.message.id}
+              onReveal={stableRowCallback(rowId, "reveal", [], () => () =>
+                setRevealedIds((current) => new Set(current).add(rowId)),
+              )}
+              isFlashing={flashId === rowId}
               registerRow={registerRow}
               onJumpToMessage={jumpToMessage}
-              onReply={onReplyTo ? () => onReplyTo(row.message) : undefined}
-              isPickerOpen={pickerMessageId === row.message.id}
-              isEditing={editingId === row.message.id}
-              onOpenPicker={() => setPickerMessageId(row.message.id)}
-              onClosePicker={() => {
-                setPickerMessageId(null);
-                // The picker unmounts on close; without this, the focus it
-                // held goes to <body> and the keyboard user is adrift.
-                requestAnimationFrame(() => {
-                  rowNodes.current.get(row.message.id)?.focus();
-                });
-              }}
-              onStartEdit={() => {
-                setEditingId(row.message.id);
-                setActiveMessageId(row.message.id);
-              }}
-              onCancelEdit={() => setEditingId(null)}
-              onSubmitEdit={async (body) => {
-                await onEditMessage?.(row.message.id, body);
-                setEditingId(null);
-              }}
+              onReply={
+                onReplyTo
+                  ? stableRowCallback(
+                      rowId,
+                      "reply",
+                      [onReplyTo, row.message],
+                      () => () => onReplyTo(row.message),
+                    )
+                  : undefined
+              }
+              isPickerOpen={pickerMessageId === rowId}
+              isEditing={editingId === rowId}
+              onOpenPicker={stableRowCallback(
+                rowId,
+                "openPicker",
+                [],
+                () => () => setPickerMessageId(rowId),
+              )}
+              onClosePicker={stableRowCallback(
+                rowId,
+                "closePicker",
+                [],
+                () => () => {
+                  setPickerMessageId(null);
+                  // The picker unmounts on close; without this, the focus it
+                  // held goes to <body> and the keyboard user is adrift.
+                  requestAnimationFrame(() => {
+                    rowNodes.current.get(rowId)?.focus();
+                  });
+                },
+              )}
+              onStartEdit={stableRowCallback(
+                rowId,
+                "startEdit",
+                [],
+                () => () => {
+                  setEditingId(rowId);
+                  setActiveMessageId(rowId);
+                },
+              )}
+              onCancelEdit={stableRowCallback(
+                rowId,
+                "cancelEdit",
+                [],
+                () => () => setEditingId(null),
+              )}
+              onSubmitEdit={stableRowCallback(
+                rowId,
+                "submitEdit",
+                [onEditMessage],
+                () => async (body: string) => {
+                  await onEditMessage?.(rowId, body);
+                  setEditingId(null);
+                },
+              )}
               onDelete={
                 onDeleteMessage
-                  ? () => void onDeleteMessage(row.message.id)
+                  ? stableRowCallback(
+                      rowId,
+                      "delete",
+                      [onDeleteMessage],
+                      () => () => void onDeleteMessage(rowId),
+                    )
                   : undefined
               }
               selecting={selecting}
-              selected={selectedIds.has(row.message.id)}
+              selected={selectedIds.has(rowId)}
               onToggleSelect={
                 selecting
-                  ? (extend) => toggleSelected(row.message.id, extend)
+                  ? stableRowCallback(
+                      rowId,
+                      "toggleSelect",
+                      [toggleSelected],
+                      () => (extend: boolean) => toggleSelected(rowId, extend),
+                    )
                   : undefined
               }
               onStartSelect={
                 bulkDeleteEnabled && !selecting
-                  ? () => startSelecting(row.message.id)
+                  ? stableRowCallback(
+                      rowId,
+                      "startSelect",
+                      [startSelecting],
+                      () => () => startSelecting(rowId),
+                    )
                   : undefined
               }
               onPin={
                 onPinMessage
-                  ? () => void onPinMessage(row.message.id)
+                  ? stableRowCallback(
+                      rowId,
+                      "pin",
+                      [onPinMessage],
+                      () => () => void onPinMessage(rowId),
+                    )
                   : undefined
               }
               onUnpin={
                 onUnpinMessage
-                  ? () => void onUnpinMessage(row.message.id)
+                  ? stableRowCallback(
+                      rowId,
+                      "unpin",
+                      [onUnpinMessage],
+                      () => () => void onUnpinMessage(rowId),
+                    )
                   : undefined
               }
               onReport={
                 onReportMessage
-                  ? () => onReportMessage(row.message)
+                  ? stableRowCallback(
+                      rowId,
+                      "report",
+                      [onReportMessage, row.message],
+                      () => () => onReportMessage(row.message),
+                    )
                   : undefined
               }
               onToggleReaction={onToggleReaction}
               onVotePoll={onVotePoll}
               onClosePoll={onClosePoll}
-              onRetry={() =>
-                row.message.nonce && onRetryMessage?.(row.message.nonce)
-              }
-              onDiscard={() =>
-                row.message.nonce && onDiscardMessage?.(row.message.nonce)
-              }
+              onRetry={stableRowCallback(
+                rowId,
+                "retry",
+                [onRetryMessage, row.message.nonce],
+                () => () =>
+                  row.message.nonce && onRetryMessage?.(row.message.nonce),
+              )}
+              onDiscard={stableRowCallback(
+                rowId,
+                "discard",
+                [onDiscardMessage, row.message.nonce],
+                () => () =>
+                  row.message.nonce && onDiscardMessage?.(row.message.nonce),
+              )}
               onStartThread={
-                onStartThread ? () => onStartThread(row.message) : undefined
+                onStartThread
+                  ? stableRowCallback(
+                      rowId,
+                      "startThread",
+                      [onStartThread, row.message],
+                      () => () => onStartThread(row.message),
+                    )
+                  : undefined
               }
               onOpenThread={
                 onOpenThread && row.message.thread
-                  ? () => onOpenThread(row.message.thread!, row.message)
+                  ? stableRowCallback(
+                      rowId,
+                      "openThread",
+                      [onOpenThread, row.message],
+                      () => () =>
+                        onOpenThread(row.message.thread!, row.message),
+                    )
                   : undefined
               }
               isThreadOpen={
@@ -1276,29 +1445,60 @@ export function MessageList({
                   : false
               }
               showLinkEmbeds={showLinkEmbeds}
-              isActive={row.message.id === effectiveActiveId}
-              onFocusRow={() => setActiveMessageId(row.message.id)}
+              isActive={rowId === effectiveActiveId}
+              onFocusRow={stableRowCallback(
+                rowId,
+                "focusRow",
+                [],
+                () => () => setActiveMessageId(rowId),
+              )}
               onNavigate={handleRowNavigate}
-              onMenuOpenRow={() => markMenuRow(row.message.id)}
-              onMenuClose={(refocus) => {
-                markMenuRow(null);
-                if (refocus) {
-                  requestAnimationFrame(() => {
-                    rowNodes.current.get(row.message.id)?.focus();
-                  });
-                }
-              }}
+              onMenuOpenRow={stableRowCallback(
+                rowId,
+                "menuOpenRow",
+                [],
+                () => () => markMenuRow(rowId),
+              )}
+              onMenuClose={stableRowCallback(
+                rowId,
+                "menuClose",
+                [],
+                () => (refocus: boolean) => {
+                  markMenuRow(null);
+                  if (refocus) {
+                    requestAnimationFrame(() => {
+                      rowNodes.current.get(rowId)?.focus();
+                    });
+                  }
+                },
+              )}
               authors={authors}
               roles={roles}
               unreadHeld={unreadHeld}
-              onForward={onForward ? () => onForward(row.message) : undefined}
+              onForward={
+                onForward
+                  ? stableRowCallback(
+                      rowId,
+                      "forward",
+                      [onForward, row.message],
+                      () => () => onForward(row.message),
+                    )
+                  : undefined
+              }
               onMarkUnread={
-                onMarkUnread ? () => onMarkUnread(row.message) : undefined
+                onMarkUnread
+                  ? stableRowCallback(
+                      rowId,
+                      "markUnread",
+                      [onMarkUnread, row.message],
+                      () => () => onMarkUnread(row.message),
+                    )
+                  : undefined
               }
               onMarkRead={onMarkRead}
-              showUnreadDivider={row.message.id === firstUnreadId}
+              showUnreadDivider={rowId === firstUnreadId}
               unreadDividerRef={
-                row.message.id === firstUnreadId ? unreadDividerRef : undefined
+                rowId === firstUnreadId ? unreadDividerRef : undefined
               }
             />
             );
@@ -2062,6 +2262,7 @@ const MessageRow = memo(function MessageRow({
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
           className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          style={ROW_CONTENT_VISIBILITY}
         >
           <span className="italic">{t("chat.blocked")}</span>
           <button
@@ -2330,6 +2531,7 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
           )}
+          style={ROW_CONTENT_VISIBILITY}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
@@ -3028,11 +3230,46 @@ export function GifAttachment({ media }: { media: GifMedia }) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const [isPlaying, setIsPlaying] = useState(false);
   const style = { maxHeight: `${GIF_MAX_HEIGHT_PX}px` };
+  const imgRef = useRef<HTMLImageElement>(null);
+  /**
+   * True once this GIF has scrolled well clear of the viewport. A busy
+   * channel can have dozens of these mounted at once, all above or below
+   * what is actually on screen, and an animated `<img>` keeps decoding and
+   * repainting every frame regardless — the browser has no idea it is not
+   * visible unless told. `loading="lazy"` only defers the *first* fetch;
+   * it does nothing once the GIF has already loaded and is animating off
+   * screen, which is the steady-state case in a channel that has been open
+   * a while. Meaningful only when there is a still frame to fall back to:
+   * an animated `<img>` cannot be paused in place (see the reduced-motion
+   * branch below, which exists for exactly that reason), so with no still
+   * frame this just leaves the GIF alone rather than swapping one
+   * always-decoding image for another.
+   */
+  const [offscreen, setOffscreen] = useState(false);
+  useEffect(() => {
+    if (!media.stillUrl || prefersReducedMotion) {
+      return;
+    }
+    const node = imgRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => setOffscreen(!entry.isIntersecting),
+      // A wide buffer: a GIF a couple of screens away resumes before it is
+      // actually visible, so scrolling toward one never shows a freeze-frame
+      // flash mid-scroll.
+      { rootMargin: "800px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [media.stillUrl, prefersReducedMotion]);
 
   if (!prefersReducedMotion || isPlaying) {
     return (
       <img
-        src={media.url}
+        ref={imgRef}
+        src={offscreen && media.stillUrl ? media.stillUrl : media.url}
         alt={media.alt}
         loading="lazy"
         decoding="async"
