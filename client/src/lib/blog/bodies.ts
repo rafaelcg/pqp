@@ -24,6 +24,16 @@ const BODIES: Record<
   string,
   Record<BlogLocale, BodyLoader> & { es?: BodyLoader }
 > = {
+  "watch-party-mais-redonda": {
+    "pt-BR": () =>
+      import("@/content/blog/watch-party-mais-redonda.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/watch-party-mais-redonda.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "servidores-de-voz-miami-e-londres": {
     "pt-BR": () =>
       import("@/content/blog/servidores-de-voz-miami-e-londres.pt-BR.md?raw").then(
