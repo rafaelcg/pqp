@@ -96,13 +96,16 @@
    * wrote, labelled as such.
    */
   function activityHeadline(activity) {
+    if (activity && activity._err) {
+      return { label: "ativos ontem", value: null, text: "—", badge: { text: "leitura falhou", tone: "bad" }, note: "tenta de novo sozinho em alguns segundos", series: null };
+    }
     if (!activity || !Array.isArray(activity.days) || activity.days.length < 2) {
       return { label: "ativos ontem", value: null, text: "—", badge: { text: "carregando", tone: "flat" }, note: "abre com a primeira leitura", series: null };
     }
     var days = activity.days;
     var y = days[days.length - 2];
     // The line ends on yesterday, the day the number shows; today is partial.
-    var done = days.slice(0, -1);
+    var done = days.slice(0, -1).slice(-30);
     var dauSeries = done.map(function (d) { return d.dau; }).filter(function (v) { return v != null; });
     if (y.dau != null) {
       return {
@@ -121,6 +124,7 @@
   }
 
   function costPerActive(activity) {
+    if (activity && activity._err) return { text: "—", badge: { text: "leitura falhou", tone: "bad" }, note: "depende da leitura de ativos" };
     var cost = activity && activity.operatingCost ? activity.operatingCost.monthlyUsd : null;
     if (!cost) {
       return { text: "—", badge: { text: "sem custo", tone: "flat" }, note: "defina MONTHLY_COST_USD no worker" };
@@ -348,7 +352,8 @@
   /** Rolling series for the actives chart, with the untracked stretch null. */
   function activitySeries(activity) {
     if (!activity || !Array.isArray(activity.days)) return null;
-    var d = activity.days;
+    // Today is partial; drawn beside finished days it reads as a collapse.
+    var d = activity.days.length > 1 ? activity.days.slice(0, -1) : activity.days;
     return {
       labels: d.map(function (x) { return shortDay(x.day); }),
       dau: d.map(function (x) { return x.dau; }), mau: d.map(function (x) { return x.mau; }),

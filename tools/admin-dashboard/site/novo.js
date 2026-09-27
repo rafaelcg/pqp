@@ -322,7 +322,7 @@
     }
     var wrap = h("div", { style: "position:relative;height:" + (H + 24) + "px" }, [svg]);
     var xl = h("div", { style: "position:absolute;left:0;right:0;top:" + (H + 6) + "px;display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint)" });
-    [0, Math.floor(n / 3), Math.floor(2 * n / 3), n - 1].forEach(function (i, k) { xl.appendChild(h("span", { text: k === 3 ? "hoje" : labels[i] })); });
+    [0, Math.floor(n / 3), Math.floor(2 * n / 3), n - 1].forEach(function (i, k) { xl.appendChild(h("span", { text: k === 3 ? (opts.lastLabel || "hoje") : labels[i] })); });
     wrap.appendChild(xl);
     var cross = h("span", { style: "position:absolute;top:0;width:1px;height:" + H + "px;background:var(--muted);pointer-events:none;opacity:0;transition:opacity 120ms" });
     var tip = h("div", { class: "tip" });
@@ -430,6 +430,8 @@
       if (days !== S.activityDays) return;
       S.activity = { _err: e && e.message ? e.message : "erro", _days: days, _at: Date.now() };
       renderScreen(S.screen);
+      clearTimeout(S.activityRetry);
+      S.activityRetry = setTimeout(function () { if (S.activity && S.activity._err) loadActivity(true); }, ((e && e.retryAfter) || 15) * 1000);
     });
   }
   function loadHeat() {
@@ -625,14 +627,21 @@
 
   function renderCrescimento() {
     var m = S.metrics; var a = S.activity && !S.activity._err ? S.activity : null;
-    var act = M.activityHeadline(a);
+    var act = M.activityHeadline(S.activity);
     var days = a ? a.days : [];
     var y = days.length >= 2 ? days[days.length - 2] : null;
-    var tracked = y && y.dau != null;
+    // Before a read (or after a failed one) the cards keep their real names
+    // and say why they are empty, instead of quietly becoming another metric.
+    var tracked = !y || y.dau != null;
+    var failed = S.activity && S.activity._err;
+    var missing = failed ? { text: "leitura falhou", tone: "bad" } : { text: "carregando", tone: "flat" };
+    // Cards always show the last 30 finished days, whatever the chart's window.
+    var done = days.slice(0, -1).slice(-30);
+    var line = function (k) { var v = done.map(function (x) { return x[k]; }).filter(function (n) { return n != null; }); return v.length > 1 ? v : null; };
     var kpis = [
-      { key: "dau", label: act.label, value: act.value, badge: act.badge, note: act.note, series: act.series, color: "accent" },
-      { key: "wau", label: tracked ? "ativos na semana" : "escreveram na semana", value: y ? (tracked ? y.wau : y.postedWau) : null, badge: null, note: "últimos 7 dias, até ontem (wau)", series: days.map(function (x) { return tracked ? x.wau : x.postedWau; }).filter(function (v) { return v != null; }), color: "accent" },
-      { key: "mau", label: y && y.mau != null ? "ativos no mês" : "escreveram no mês", value: y ? (y.mau != null ? y.mau : y.postedMau) : null, badge: null, note: y && y.mau != null ? "últimos 30 dias, até ontem (mau)" : "ativos no mês depois de 30 dias de rastreio", series: y && y.mau != null ? days.map(function (x) { return x.mau; }).filter(function (v) { return v != null; }) : days.map(function (x) { return x.postedMau; }), color: "series" },
+      { key: "dau", label: act.label, value: act.value, text: act.text, badge: act.badge, note: act.note, series: act.series, seriesNote: "30 dias", color: "accent" },
+      { key: "wau", label: tracked ? "ativos na semana" : "escreveram na semana", value: y ? (tracked ? y.wau : y.postedWau) : null, badge: y ? null : missing, note: "últimos 7 dias, até ontem (wau)", series: line(tracked ? "wau" : "postedWau"), seriesNote: "30 dias", color: "accent" },
+      { key: "mau", label: !y || y.mau != null ? "ativos no mês" : "escreveram no mês", value: y ? (y.mau != null ? y.mau : y.postedMau) : null, badge: y ? null : missing, note: !y || y.mau != null ? "últimos 30 dias, até ontem (mau)" : "ativos no mês depois de 30 dias de rastreio", series: line(y && y.mau == null ? "postedMau" : "mau"), seriesNote: "30 dias", color: "series" },
       { key: "signups", label: "cadastros · 30 dias", value: m && m.activation ? m.activation.window30d.signup : null, badge: m && m.activation ? { text: fmt(m.activation.window7d.signup) + " em 7 dias", tone: "flat" } : null, note: "contas humanas novas · linha dos últimos " + (m && m.userDetail ? m.userDetail.signupsByDay.length : 14) + " dias", series: m && m.userDetail ? m.userDetail.signupsByDay.map(function (x) { return x.n; }) : null, color: "series" }
     ];
     renderKpis($("cKpis"), kpis, "ck-");
@@ -656,7 +665,15 @@
     var ser = M.activitySeries(a);
     var chart = $("cChart"), legend = clear($("cLegend"));
     if (!ser) {
-      clear(chart).appendChild(h("p", { class: "empty", text: S.activity && S.activity._err ? "a leitura falhou · " + S.activity._err : "lendo…" }));
+      clear(chart);
+      if (S.activity && S.activity._err) {
+        chart.appendChild(h("div", { class: "empty", style: "display:flex;flex-direction:column;align-items:flex-start;gap:10px" }, [
+          h("span", { text: "Não deu para ler os ativos agora. Tentando de novo sozinho." }),
+          h("span", { style: "font-size:12px;color:var(--faint)", text: "detalhe: " + S.activity._err }),
+          h("button", { type: "button", class: "btn", text: "tentar agora", onclick: function () { loadActivity(true); } })
+        ]));
+      } else chart.appendChild(h("p", { class: "empty", text: "lendo…" }));
+      $("cChartFoot").textContent = "\u00a0";
     } else {
       var series = [];
       if (ser.tracked) {
@@ -666,10 +683,10 @@
       series.push({ label: "escreveram em 30 dias", values: ser.postedMau, color: "var(--series)", dashed: true });
       series.push({ label: "escreveram no dia", values: ser.postedDau, color: "var(--accent)", dashed: true });
       var marker = ser.trackingSince ? ser.labels.indexOf(M.shortDay(ser.trackingSince)) : -1;
-      lineChart(chart, series, ser.labels, { label: "ativos por dia e em 30 dias", marker: marker > 0 ? marker : null, markerLabel: "rastreio começa", height: 400 });
+      lineChart(chart, series, ser.labels, { label: "ativos por dia e em 30 dias", marker: marker > 0 ? marker : null, markerLabel: "rastreio começa", height: 400, lastLabel: "ontem" });
       series.forEach(function (sr) { legend.appendChild(h("span", null, [h("i", { class: sr.dashed ? "dash" : null, style: "background:" + sr.color + ";color:" + sr.color }), sr.label])); });
       if (!ser.tracked) legend.appendChild(h("span", { style: "color:var(--faint)", text: "ativos: a partir de " + M.shortDay(ser.trackingSince) }));
-      $("cChartFoot").textContent = "linha cheia: abriram o app ou escreveram · tracejada: só quem escreveu · o último dia está em curso";
+      $("cChartFoot").textContent = "linha cheia: abriram o app ou escreveram · tracejada: só quem escreveu · termina ontem, o último dia completo";
     }
     // funnel
     var f = M.funnel(m && m.activation);
@@ -694,13 +711,27 @@
     else if (ch._key !== cohortKey) {
       ch._key = cohortKey; clear(ch);
       var cAnim = firstTime("cohort");
-      var grid = h("div", { style: "display:grid;grid-template-columns:70px 80px repeat(3, minmax(0, 1fr));gap:6px;align-items:center" });
+      var grid = h("div", { style: "display:grid;grid-template-columns:minmax(84px, auto) 56px repeat(3, minmax(0, 1fr));gap:6px;align-items:center" });
       [["semana", ""], ["cadastros", ""], ["dia 1", "o dia seguinte"], ["semana 1", "dias 7 a 13"], ["mês 1", "dias 30 a 36"]].forEach(function (t, i) {
         grid.appendChild(h("span", { style: "display:flex;flex-direction:column;gap:1px;font-size:11px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:0.06em;text-align:" + (i === 1 ? "right" : i > 1 ? "center" : "left") }, [t[0], t[1] ? h("span", { style: "text-transform:none;letter-spacing:0;font-weight:500", text: t[1] }) : null]));
       });
       var brackets = ["no dia 1", "na semana 1 (dias 7 a 13)", "no mês 1 (dias 30 a 36)"];
-      a.cohorts.slice().reverse().forEach(function (c, r) {
-        grid.appendChild(h("span", { style: "font-size:13px;color:var(--muted)", text: M.shortDay(c.week) }));
+      var rel = ["esta semana", "semana passada"];
+      var sentence = function (c, b, j, r) {
+        var useActive = b.activeEligible > 0;
+        var elig = useActive ? b.activeEligible : b.eligible, got = useActive ? b.active : b.posted;
+        var who = r < 2 ? rel[r] + " (" + M.shortDay(c.week) + ")" : "semana de " + M.shortDay(c.week);
+        if (!elig) return who + ": " + brackets[j] + " ainda não terminou, então não conta como perda";
+        return who + ": de " + fmt(elig) + " cadastros que já passaram " + brackets[j] + ", " + fmt(got) + " (" + Math.round(got / elig * 100) + "%)" + (useActive ? " voltaram ao app" : " escreveram de novo");
+      };
+      // Without hovering, the caption answers "did last week's sign-ups come
+      // back?" with the newest finished cell of last week's row.
+      var rows = a.cohorts.slice().reverse();
+      var pick = rows[1] || rows[0];
+      var restCap = pick ? (function () { var r = rows[1] ? 1 : 0; var js = [0, 1, 2].filter(function (j) { var b = [pick.d1, pick.d7, pick.d30][j]; return (b.activeEligible || b.eligible) > 0; }); var j = js.length ? js[js.length - 1] : 0; return sentence(pick, [pick.d1, pick.d7, pick.d30][j], j, r); })() : "";
+      cap.textContent = restCap;
+      rows.forEach(function (c, r) {
+        grid.appendChild(h("span", { style: "display:flex;flex-direction:column;gap:1px;font-size:13px;color:var(--muted)" }, [M.shortDay(c.week), r < 2 ? h("span", { style: "font-size:11px;color:var(--faint)", text: rel[r] }) : null]));
         grid.appendChild(h("span", { class: "num", style: "font-size:13px;text-align:right", text: fmt(c.size) }));
         [c.d1, c.d7, c.d30].forEach(function (b, j) {
           var useActive = b.activeEligible > 0;
@@ -710,10 +741,9 @@
           var cell = h("span", { class: "num" + (cAnim ? " pop" : ""), title: useActive ? "voltaram ao app" : "escreveram de novo", style: "padding:9px 0;border-radius:8px;text-align:center;font-size:13px;font-weight:700;outline:2px solid transparent;outline-offset:1px;transition:outline-color 120ms;animation-delay:" + ((r + j) * 45 + 300) + "ms;" + (p == null ? "color:var(--faint);font-weight:400;font-size:12px;border:1px dashed var(--line)" : "background:" + tone.bg + ";color:" + tone.ink + (useActive ? "" : ";box-shadow:inset 0 0 0 1.5px var(--faint);font-style:italic")), text: p == null ? "ainda não" : Math.round(p * 100) + "%" });
           cell.addEventListener("mouseenter", function () {
             cell.style.outlineColor = "var(--text)";
-            cap.textContent = p == null ? "semana de " + M.shortDay(c.week) + ": " + brackets[j] + " ainda não terminou, então não conta como perda"
-              : "de " + fmt(elig) + " cadastros da semana de " + M.shortDay(c.week) + " que já passaram " + brackets[j] + ", " + fmt(got) + (useActive ? " voltaram ao app" : " escreveram de novo");
+            cap.textContent = sentence(c, b, j, r);
           });
-          cell.addEventListener("mouseleave", function () { cell.style.outlineColor = "transparent"; });
+          cell.addEventListener("mouseleave", function () { cell.style.outlineColor = "transparent"; cap.textContent = restCap; });
           grid.appendChild(cell);
         });
       });
@@ -762,12 +792,20 @@
     var m = S.metrics; if (!m) return;
     var cr = m.callRatings || {};
     var dist = (m.distribution || {});
-    var comm = m.communities || {};
     renderKpis($("pKpis"), [
       { key: "rating", label: "nota das chamadas · 7 dias", value: cr.average, format: function (v) { return M.dec(v); }, badge: { text: fmt(cr.total) + " avaliações", tone: "flat" }, note: "de 1 a 5, depois de cada chamada", series: null, color: "accent" },
       { key: "apk", label: "cliques no apk · total", value: dist.apkClicks != null ? dist.apkClicks : null, badge: { text: "+" + fmt(dist.apkClicksToday || 0) + " hoje", tone: dist.apkClicksToday ? "ok" : "flat" }, note: dist.apkDownloads != null ? fmt(dist.apkDownloads) + " downloads no github" : "downloads indisponíveis", series: null, color: "series" },
       { key: "channels", label: "canais de texto ativos · 24h", value: m.activeTextChannels24h, badge: { text: fmt(m.distinctSenders24h) + " pessoas", tone: "flat" }, note: "escreveram neles", series: null, color: "accent" },
-      { key: "comm", label: "comunidades listadas", value: comm.enabled ? comm.listed : null, badge: comm.enabled ? { text: fmt(comm.total) + " com endereço", tone: "flat" } : { text: "desligado", tone: "flat" }, note: comm.enabled ? "no diretório público" : "COMMUNITIES_ENABLED desligado", series: null, color: "series" }
+      (function () {
+        // Whether a call actually connects matters more than the directory
+        // size, so it takes the fourth card; communities stay in the details.
+        var calls = m.calls || {};
+        var rate = M.pct(calls.joinConnected, calls.joinAttempts);
+        var ring = M.pct(calls.ringsAnswered, calls.rings);
+        return { key: "join", label: "entradas em chamada que conectaram", value: rate, format: function (v) { return M.fmtPct(v); },
+          badge: calls.joinAttempts ? { text: fmt(calls.joinConnected) + " de " + fmt(calls.joinAttempts), tone: rate != null && rate < 90 ? "warn" : "ok" } : { text: "sem entradas ainda", tone: "flat" },
+          note: "desde o último reinício" + (ring != null ? " · " + M.fmtPct(ring) + " dos toques atendidos" : ""), series: null, color: "series" };
+      })()
     ], "pk-");
     var rd = M.ratingDistribution(cr);
     var rh = clear($("pRating"));
@@ -788,12 +826,21 @@
     var nh = clear($("pNotes"));
     var notes = cr.recentNotes || [];
     if (!notes.length) nh.appendChild(h("p", { class: "empty", text: "Ninguém deixou nota escrita numa avaliação baixa." }));
-    notes.slice(0, 4).forEach(function (n) {
+    var shown = S.notesAll ? notes : notes.slice(0, 4);
+    shown.forEach(function (n) {
       nh.appendChild(h("div", { class: "note" }, [
         h("div", { class: "nh" }, [h("span", { class: "stars", style: "color:" + (n.rating === 3 ? "var(--warn)" : "var(--bad)"), text: "★".repeat(n.rating) + "☆".repeat(5 - n.rating) }), h("span", { style: "color:var(--faint)", text: ago(n.createdAt) })]),
         h("p", { text: n.note })
       ]));
     });
+    if (notes.length > 4) {
+      nh.appendChild(h("button", { type: "button", class: "btn", style: "align-self:flex-start", "aria-expanded": S.notesAll ? "true" : "false",
+        text: S.notesAll ? "mostrar só 4" : "ver as outras " + (notes.length - 4),
+        onclick: function () { S.notesAll = !S.notesAll; renderProduto(); } }));
+    }
+    $("pNotesHead").textContent = notes.length
+      ? (notes.length >= 10 ? "as 10 notas escritas mais recentes" : notes.length === 1 ? "a única nota escrita" : "as " + notes.length + " notas escritas") + " em 7 dias · só avaliações de 3 ou menos pedem texto"
+      : "só avaliações de 3 ou menos pedem texto";
     var rings = clear($("pRings"));
     var ringAnim = firstTime("rings");
     var rc = ["var(--accent)", "var(--series)", "var(--warn)", "var(--ok)"];

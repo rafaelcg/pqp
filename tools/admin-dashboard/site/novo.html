@@ -88,17 +88,19 @@
         <h1 class="headline" id="cHeadline">Quem usa, quem volta, de onde vem</h1>
         <p class="lede" id="cLede">&nbsp;</p>
       </div>
-      <div class="seg" role="group" aria-label="janela do gráfico" id="cRange">
-        <span class="ind" aria-hidden="true"></span>
-        <button type="button" data-days="30" aria-pressed="false">30 dias</button>
-        <button type="button" data-days="90" aria-pressed="true">90 dias</button>
-        <button type="button" data-days="180" aria-pressed="false">180 dias</button>
-      </div>
     </div>
     <div class="grid g4" id="cKpis"></div>
     <div class="grid g-chart">
       <section class="card rise" style="animation-delay:260ms" aria-label="ativos por dia">
-        <h2>ativos por dia e em 30 dias<span class="aside legend" id="cLegend"></span></h2>
+        <h2>ativos por dia e em 30 dias
+          <span class="seg aside-seg" role="group" aria-label="período do gráfico" id="cRange">
+            <span class="ind" aria-hidden="true"></span>
+            <button type="button" data-days="30" aria-pressed="false">30 dias</button>
+            <button type="button" data-days="90" aria-pressed="true">90 dias</button>
+            <button type="button" data-days="180" aria-pressed="false">180 dias</button>
+          </span>
+        </h2>
+        <div class="legend chart-legend" id="cLegend"></div>
         <div class="chart" id="cChart"></div>
         <span class="foot" id="cChartFoot">&nbsp;</span>
       </section>
@@ -112,7 +114,8 @@
       <section class="card rise" style="animation-delay:380ms" aria-label="retenção por semana de cadastro">
         <h2>retenção por semana de cadastro</h2>
         <div id="cCohort"></div>
-        <span class="foot" id="cCohortCap"><span data-point>passe o mouse</span> numa célula · em itálico com contorno: só quem escreveu, porque a janela começou antes do rastreio</span>
+        <span class="foot" id="cCohortCap">&nbsp;</span>
+        <span class="foot" style="color:var(--faint)"><span data-point>passe o mouse</span> numa célula para ler outra · em itálico com contorno: só quem escreveu, porque a janela começou antes do rastreio</span>
       </section>
       <section class="card rise" style="animation-delay:440ms" aria-label="de onde vêm e quantos ficam">
         <h2>de onde vêm, e quantos ficam</h2>
@@ -137,7 +140,8 @@
         <div id="pRating"></div>
       </section>
       <section class="card rise" style="animation-delay:320ms" aria-label="o que escreveram nas notas baixas">
-        <h2>o que escreveram · só notas de 3 ou menos</h2>
+        <h2>o que escreveram nas notas baixas</h2>
+        <span class="foot" id="pNotesHead" style="margin-top:-6px">&nbsp;</span>
         <div id="pNotes" style="display:flex;flex-direction:column;gap:10px"></div>
       </section>
       <section class="card rise" style="animation-delay:380ms" aria-label="o que as pessoas preencheram">

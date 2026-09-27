@@ -104,7 +104,7 @@ button { font-family: inherit; }
 }
 .env { font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); white-space: nowrap; }
 .env.other { color: var(--warn); border-color: var(--warn); background: var(--warn-dim); }
-.ghost.icon { width: 36px; justify-content: center; padding: 0; font-weight: 700; }
+.ghost.icon { width: 36px; flex: 0 0 auto; justify-content: center; padding: 0; font-weight: 700; }
 #toClassic .short { display: none; }
 .gloss { position: fixed; top: 72px; right: 20px; z-index: 30; width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 96px); overflow: auto; padding: 18px 20px; border-radius: 14px; background: var(--s4); border: 1px solid var(--line2); box-shadow: var(--shadow); }
 .gloss h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--muted); }
@@ -444,4 +444,12 @@ table.t .m { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .draw { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+
+/* The period control belongs to the chart it changes, not to the page. */
+.card > h2 .aside-seg { margin-left: auto; font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.chart-legend { margin: -4px 0 12px; }
+@media (max-width: 760px) {
+  .card > h2:has(.aside-seg) { flex-wrap: wrap; row-gap: 10px; }
+  .card > h2 .aside-seg { margin-left: 0; }
 }

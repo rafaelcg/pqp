@@ -200,3 +200,19 @@ test("the same report sent three times is one group of three", () => {
   assert.equal(g[0].item.id, "14");
   assert.deepEqual(g[0].others.map((x) => x.id), ["8", "2"]);
 });
+
+test("the actives chart ends on yesterday, never on the partial day", () => {
+  const s = M.activitySeries(activity([
+    { day: "2026-10-27", dau: 800, mau: 3000, postedDau: 100, postedMau: 900 },
+    { day: "2026-10-28", dau: 900, mau: 3100, postedDau: 190, postedMau: 910 },
+    { day: "2026-10-29", dau: 30, mau: 3100, postedDau: 9, postedMau: 910 }
+  ]));
+  assert.equal(s.labels.length, 2);
+  assert.equal(s.dau[s.dau.length - 1], 900);
+});
+
+test("a failed activity read says so instead of loading forever", () => {
+  const failed = { _err: "HTTP 502" };
+  assert.equal(M.activityHeadline(failed).badge.text, "leitura falhou");
+  assert.equal(M.costPerActive(failed).badge.text, "leitura falhou");
+});
