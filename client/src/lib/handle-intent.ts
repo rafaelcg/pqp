@@ -206,6 +206,19 @@ export function takeJoinIntent(
 }
 
 /**
+ * The waiting community, WITHOUT spending it. For the first run's shape
+ * only: somebody who came through a community's link already has a room to
+ * go to, so the wizard must not open on "create your own server". Asking
+ * must not use up the intent the arrival effect acts on.
+ */
+export function peekJoinIntent(
+  storage: Pick<Storage, "getItem"> | null,
+  now: number = Date.now(),
+): string | null {
+  return peek(storage, JOIN_KEY, now);
+}
+
+/**
  * `?add=rafa` on any `/app` URL.
  *
  * The public profile's CTA sends people to `/app?add=<handle>` when they are

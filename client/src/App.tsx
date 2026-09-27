@@ -361,6 +361,7 @@ import {
   takeHandleClaim,
   takeInviteRef,
   takeJoinIntent,
+  peekJoinIntent,
   takeWaitlistIntent,
   waitlistIntentFromSearch,
   type CreateIntent,
@@ -454,6 +455,7 @@ import {
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
+import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -1331,6 +1333,20 @@ function MainAppContent({
    * set whether or not this device has welcomed the account there before.
    */
   const [inviteJoin, setInviteJoin] = useState<
+    "pending" | "failed" | { serverId: string } | null
+  >(null);
+  /**
+   * The same two facts for a community's public link (`/c/<slug>`, which
+   * reaches the app as `?join=<slug>`). That person came for one room, so the
+   * first run takes the invite's shape: two screens, the room named on the
+   * first, and no "create your own server" door. On 2026-09-26, 7 of the 93
+   * accounts MoonKase's link created mid-show made a server of their own in
+   * that step and were moved into it, away from the party they came for.
+   * A failed join is not an invite that died, so it never borrows that copy:
+   * `communityJoin === "failed"` hands the wizard a plain first screen.
+   */
+  const [arrivedOnCommunityLink, setArrivedOnCommunityLink] = useState(false);
+  const [communityJoin, setCommunityJoin] = useState<
     "pending" | "failed" | { serverId: string } | null
   >(null);
   /**
@@ -4655,7 +4671,15 @@ function MainAppContent({
   }, [loadConversations, syncRoute]);
 
   const loadChannels = useCallback(
-    async (serverId: string) => {
+    async (
+      serverId: string,
+      /**
+       * Pick the landing from what this server has on right now rather than
+       * from its layout: `refreshAfterJoin` passes the watch parties it
+       * fetched, so a join during a show opens the show.
+       */
+      liveParties?: readonly WatchParty[],
+    ) => {
       setChannelsLoading(true);
       try {
         const { channels: list } = await fetchChannels(serverId);
@@ -4663,11 +4687,16 @@ function MainAppContent({
         setChannels(list);
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
-        const land = pickServerLandingTarget(
-          list,
-          communityHomeOn() && server?.communityHomeEnabled === true,
-          server?.isCommunity === true,
-        );
+        const liveParty = liveParties
+          ? pickLivePartyChannel(liveParties, list)
+          : null;
+        const land = liveParty
+          ? { id: liveParty }
+          : pickServerLandingTarget(
+              list,
+              communityHomeOn() && server?.communityHomeEnabled === true,
+              server?.isCommunity === true,
+            );
         if (land) {
           await selectChannel(land.id, serverId);
         } else {
@@ -6170,12 +6199,40 @@ function MainAppContent({
     void voice.applyScreenFrameRate(shareMaxFrameRate());
   }
 
+  /**
+   * Open a server this account just joined (or made).
+   *
+   * A JOIN DURING A SHOW OPENS THE SHOW. Every join path ends here: the
+   * community link's `?join=`, an invite link, the directory card, the
+   * wizard's typed invite. When a watch party is live in the server, the
+   * person lands on it instead of the Overview or `#general`. On 2026-09-26
+   * every newcomer who reached MoonKase's party went through the Overview
+   * first and spent a median 45 s finding it; see `lib/live-party-landing.ts`.
+   * The party list is asked for beside the server list and a failure reads
+   * as "nothing live", so this can only ever fall back to the old landing,
+   * never cost the join.
+   */
   const refreshAfterJoin = useCallback(
     async (serverId: string) => {
-      const { servers: serverList } = await fetchServers();
+      const [{ servers: serverList }, liveParties] = await Promise.all([
+        fetchServers(),
+        // Capped: the party only picks the landing, so a slow answer must
+        // never hold up a join that already succeeded.
+        isWatchPartyChannelsEnabled()
+          ? Promise.race([
+              apiFetchServerWatchParties(serverId).then(
+                (answer) => answer.parties,
+                () => [] as WatchParty[],
+              ),
+              new Promise<WatchParty[]>((resolve) =>
+                window.setTimeout(() => resolve([]), 3_000),
+              ),
+            ])
+          : Promise.resolve([] as WatchParty[]),
+      ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId);
+      await loadChannels(serverId, liveParties);
     },
     [loadChannels],
   );
@@ -6919,9 +6976,12 @@ function MainAppContent({
        * already in is not an arrival.
        */
       if (join) {
+        setArrivedOnCommunityLink(true);
+        setCommunityJoin("pending");
         try {
           const { community } = await lookupCommunityBySlug(join);
           const result = await joinCommunityApi(community.id, "community_address");
+          setCommunityJoin({ serverId: community.id });
           if (result.joinedNow) {
             const storage = browserStorage();
             if (!hasArrived(storage, community.id)) {
@@ -6941,6 +7001,7 @@ function MainAppContent({
           // purpose — see rule 3 in services/communities.ts — so this says one
           // thing for all of them.
           setAppError(t("handle.join.failed"));
+          setCommunityJoin("failed");
         }
       }
     })();
@@ -7291,9 +7352,17 @@ function MainAppContent({
    * gate have to agree with the dots on the wizard.
    */
   const firstRunPath = onboardingPath({
+    // A community's link is an invite in every way the first run cares
+    // about: the person already has a room. Three places again (the state
+    // after the arrival effect spent the intent, the URL, the stash). A join
+    // that FAILED gave them no room, so it gets the ordinary first run.
     invite:
       arrivedOnInviteLink ||
-      parseAppRoute(location.pathname)?.kind === "invite",
+      parseAppRoute(location.pathname)?.kind === "invite" ||
+      (communityJoin !== "failed" &&
+        (arrivedOnCommunityLink ||
+          joinIntentFromSearch(location.search) !== null ||
+          peekJoinIntent(browserStorage()) !== null)),
     // Three places, because each is the only one that knows at some moment:
     // the URL (a `/vem` CTA is a client-side navigation, so the boot-time
     // stash never saw it), the stash (a sign-in redirect dropped the query),
@@ -7343,9 +7412,11 @@ function MainAppContent({
    * join path in the app needs.
    */
   if (needsOnboarding && user) {
+    const roomJoin =
+      inviteJoin ?? (communityJoin === "failed" ? null : communityJoin);
     const joinedServer =
-      inviteJoin && typeof inviteJoin === "object"
-        ? servers.find((server) => server.id === inviteJoin.serverId)
+      roomJoin && typeof roomJoin === "object"
+        ? servers.find((server) => server.id === roomJoin.serverId)
         : undefined;
     return (
       <OnboardingFlow
@@ -7363,7 +7434,9 @@ function MainAppContent({
                     name: joinedServer.name,
                     iconUrl: joinedServer.iconUrl ?? null,
                   }
-                : "pending"
+                : inviteJoin === null && communityJoin === "failed"
+                  ? null
+                  : "pending"
         }
         // Keep an intent that is already waiting: a `?import=<code>` link
         // carries the template to pre-fill, and the door must not wipe it.
@@ -7420,6 +7493,10 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  /** The open channel is a watch party that is on air right now. */
+  const selectedPartyLive =
+    selectedChannel?.kind === "server" &&
+    watchParties.byChannel[selectedChannel.id]?.state === "live";
 
   /** True while the open server is one this account made and is alone in. */
   const ownerAloneHere =
@@ -7711,17 +7788,26 @@ function MainAppContent({
       communityHomePostToast &&
         communityHomePostToast.serverId === selectedServerId,
     ),
-    qg: qgHintWanted,
+    // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
+    // cargos and shortcuts all wait until the person is not watching a film.
+    // The phone-app card is the sharp one, being a way out of the page: 8 of
+    // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
+    // went to /android instead of the party. Holding only that one would hand
+    // the corner to the next card in line, so the whole tail yields. The
+    // update notice, a Baú post and the voice nudge are not campaigns.
+    qg: qgHintWanted && !selectedPartyLive,
     voiceClean: wantsVoiceCleanHint,
-    mobileBeta: wantsMobileBeta,
-    whatsNew: wantsWhatsNew,
+    mobileBeta: wantsMobileBeta && !selectedPartyLive,
+    whatsNew: wantsWhatsNew && !selectedPartyLive,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
+      !selectedPartyLive &&
       Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
+      !selectedPartyLive &&
       attachedFeatureHint === null,
   });
   // A DM arrival card and the bottom-right onboarding queue would collide on
@@ -8252,11 +8338,15 @@ function MainAppContent({
           />
         )}
       {renderArrivalBanner(
-        selectedChannel.kind === "server" && selectedChannel.type === "text"
-          ? "text"
-          : selectedChannel.kind === "server" && selectedChannel.type === "voice"
-            ? "voice"
-            : "other",
+        // A live party first, whatever kind of room it is running in.
+        selectedPartyLive
+          ? "party"
+          : selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? "text"
+            : selectedChannel.kind === "server" &&
+                selectedChannel.type === "voice"
+              ? "voice"
+              : "other",
         selectedChannel.kind === "server" && selectedChannel.type === "text"
           ? selectedChannel.name
           : null,
