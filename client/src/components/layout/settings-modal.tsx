@@ -62,6 +62,12 @@ import {
   type ShortcutOverrides,
 } from "@/lib/keyboard-shortcuts";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
+import { ObsVirtualCameraHint } from "@/components/voice/obs-virtual-camera-hint";
+import {
+  dismissObsVirtualCameraHint,
+  isObsVirtualCameraHintDismissed,
+  isObsVirtualCameraLabel,
+} from "@/lib/obs-virtual-camera";
 import {
   DEFAULT_VIDEO_QUALITY,
   parseVideoQuality,
@@ -1216,6 +1222,9 @@ function VoiceSection({
   // change while the dialog is open, and re-evaluating it per render would run
   // a media query on every slider tick.
   const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  const [obsHintDismissed, setObsHintDismissed] = useState(
+    isObsVirtualCameraHintDismissed,
+  );
   const selectClass =
     "h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal";
 
@@ -1459,24 +1468,40 @@ function VoiceSection({
         </span>
       </label>
 
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.cameraDevice")}
-        </span>
-        <select
-          value={draftLocal.cameraDeviceId}
-          onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
-          onFocus={() => onRevealCameras()}
-          className={selectClass}
-        >
-          <option value="">{t("settings.voice.systemDefault")}</option>
-          {cameras.map((device) => (
-            <option key={device.deviceId} value={device.deviceId}>
-              {device.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div>
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.cameraDevice")}
+          </span>
+          <select
+            value={draftLocal.cameraDeviceId}
+            onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+            onFocus={() => onRevealCameras()}
+            className={selectClass}
+          >
+            <option value="">{t("settings.voice.systemDefault")}</option>
+            {cameras.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ObsVirtualCameraHint
+          show={
+            !obsHintDismissed &&
+            isObsVirtualCameraLabel(
+              cameras.find(
+                (device) => device.deviceId === draftLocal.cameraDeviceId,
+              )?.label ?? "",
+            )
+          }
+          onDismiss={() => {
+            dismissObsVirtualCameraHint();
+            setObsHintDismissed(true);
+          }}
+        />
+      </div>
 
       <div>
         <label className="block">

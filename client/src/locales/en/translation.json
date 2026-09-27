@@ -1691,6 +1691,8 @@
   "settings.voice.permissionNeeded": "Microphone permission needed to list devices and show input level.",
   "settings.voice.inputDevice": "Input device",
   "settings.voice.cameraDevice": "Camera",
+  "settings.voice.obsVirtualCameraHint": "Using OBS Virtual Camera? To send only your face, open OBS's Virtual Camera settings and set Output type to Source, with your webcam.",
+  "settings.voice.obsVirtualCameraHint.dismiss": "Dismiss",
   "settings.voice.systemDefault": "System default",
   "settings.voice.inputVolume": "Input volume",
   "settings.voice.inputLevel": "Input level",
