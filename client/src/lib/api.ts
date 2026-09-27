@@ -31,6 +31,7 @@ import type {
   ScheduleCommunityHomePostRequest,
   UpdateCommunityHomePostRequest,
   CommunityConfig,
+  CommunityJoinVia,
   CommunityPage,
   CommunitySettings,
   CommunitySummary,
@@ -1004,14 +1005,20 @@ export const fetchCommunities = (
  *
  * Idempotent on the server, which is what makes it safe to fire from a card the
  * user may double-tap. `joinedNow` distinguishes a welcome from a re-entry.
+ *
+ * `via` names the door this call is being made from: `"community_address"`
+ * from the `?join=<slug>` flow off `pqp.gg/c/<slug>`, `"community_directory"`
+ * from the directory card, `"qg_hint"` from the QG corner-card hint. So the
+ * server can tell them apart in `server_members.join_source`. Optional: a
+ * caller that omits it still joins.
  */
-export const joinCommunity = (serverId: string) =>
+export const joinCommunity = (serverId: string, via?: CommunityJoinVia) =>
   post<{
     ok: boolean;
     serverId: string;
     serverName: string;
     joinedNow: boolean;
-  }>(`/api/communities/${serverId}/join`, {});
+  }>(`/api/communities/${serverId}/join`, via ? { via } : {});
 
 /**
  * Resolve a public slug to the listing behind it, for a signed-in caller.

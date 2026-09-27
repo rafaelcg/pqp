@@ -6881,7 +6881,7 @@ function MainAppContent({
       if (join) {
         try {
           const { community } = await lookupCommunityBySlug(join);
-          const result = await joinCommunityApi(community.id);
+          const result = await joinCommunityApi(community.id, "community_address");
           if (result.joinedNow) {
             const storage = browserStorage();
             if (!hasArrived(storage, community.id)) {

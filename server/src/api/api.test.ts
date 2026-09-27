@@ -564,6 +564,13 @@ describeDb("API authorization", () => {
             [serverId, userId],
           )
         ).rows[0]?.join_ref;
+      const sourceOf = async (userId: string) =>
+        (
+          await getPool().query<{ join_source: string | null }>(
+            `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [serverId, userId],
+          )
+        ).rows[0]?.join_source;
 
       // A tagged link: the tag lands on the membership, lower-cased.
       expect(
@@ -571,6 +578,8 @@ describeDb("API authorization", () => {
           .status,
       ).toBe(200);
       expect(await refOf(outsider.id)).toBe("discord");
+      // join_source names the door (invite) independently of the ref tag.
+      expect(await sourceOf(outsider.id)).toBe("invite");
 
       // Re-opening a link with another tag does not re-attribute the join.
       await call(outsider, "POST", `/api/invites/${code}/join`, { ref: "convite" });
@@ -596,6 +605,8 @@ describeDb("API authorization", () => {
       });
       expect((await call(bare, "POST", `/api/invites/${code}/join`)).status).toBe(200);
       expect(await refOf(bare.id)).toBeNull();
+      // No tag, but still the invite door.
+      expect(await sourceOf(bare.id)).toBe("invite");
     });
 
     it("lets members create invites but not list them", async () => {

@@ -37,6 +37,7 @@ import {
   createGifAttachmentSchema,
   createInviteSchema,
   normalizeJoinRef,
+  normalizeCommunityJoinVia,
   createServerSchema,
   createWebhookSchema,
   deleteAccountSchema,
@@ -4491,12 +4492,25 @@ router.get("/api/communities/:serverId", async ({ user }, { serverId }) => {
  * Audited on the server side of the join, matching `member.sso_join`: an owner
  * looking at their audit log should be able to see who walked in off the
  * directory, which is the one thing a public listing changes about their server.
+ *
+ * The optional `{ via }` body names the door (`community_address` from the
+ * public page, `community_directory` from the card, `qg_hint` from the
+ * corner-card hint) for `join_source`, attribution only, same tolerance as an
+ * invite's `?ref=`: an unreadable body or a value that is not one of the
+ * three joins exactly as a bare POST always has.
  */
 router.post(
   "/api/communities/:serverId/join",
-  async ({ user }, { serverId }) => {
+  async ({ req, user }, { serverId }) => {
     requireCommunities();
-    const result = await joinCommunity(serverId!, user.id);
+    let via: ReturnType<typeof normalizeCommunityJoinVia> = null;
+    try {
+      const body = await readJsonBody<{ via?: unknown }>(req);
+      via = normalizeCommunityJoinVia(body?.via);
+    } catch {
+      via = null;
+    }
+    const result = await joinCommunity(serverId!, user.id, { via });
     if (!result.ok) {
       if (result.reason === "banned") {
         throw new Forbidden("You are banned from this community");

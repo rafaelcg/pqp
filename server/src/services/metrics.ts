@@ -945,6 +945,15 @@ export interface AdminMetrics {
        */
       joinsByRef7d: Record<string, number>;
     };
+    /**
+     * Every server join in the last 7 days, by door
+     * (`server_members.join_source`: invite / sso / community_address /
+     * community_directory / qg_hint / default_placement). Instance-wide, not
+     * per server; a join whose door was not recorded (NULL, mostly rows made
+     * before this column existed) does not appear here. See
+     * tools/admin-dashboard/README.md for a per-server breakdown query.
+     */
+    serverJoins: { bySource7d: Record<string, number> };
     push: { web: number; apns: number; fcm: number };
     /**
      * PUSH SEND OUTCOMES per platform since boot (cumulative, per instance),
@@ -1237,6 +1246,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     statusHistory,
     importCounts,
     joinRefs,
+    joinSources,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ private_text: string; dm: string; grp: string }>(
@@ -1490,6 +1500,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY COUNT(*) DESC, join_ref
         LIMIT 10`,
     ),
+    () => pool.query<{ source: string; n: string }>(
+      `SELECT join_source AS source, COUNT(*)::text AS n
+         FROM server_members
+        WHERE join_source IS NOT NULL
+          AND joined_at >= now() - interval '7 days'
+        GROUP BY join_source
+        ORDER BY COUNT(*) DESC, join_source`,
+    ),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1693,6 +1711,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         uses: Number(productCounts.rows[0]?.invite_uses ?? 0),
         joinsByRef7d: Object.fromEntries(
           joinRefs.rows.map((row) => [row.ref, Number(row.n)]),
+        ),
+      },
+      serverJoins: {
+        bySource7d: Object.fromEntries(
+          joinSources.rows.map((row) => [row.source, Number(row.n)]),
         ),
       },
       push: {

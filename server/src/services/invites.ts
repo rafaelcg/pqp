@@ -85,7 +85,8 @@ export async function getInviteByCode(code: string): Promise<DbInvite | null> {
  * `options.ref` is the `?ref=` tag the invite link carried, already normalised
  * (`normalizeJoinRef`). It is written onto the membership only when this call
  * creates it: re-opening a link you already used neither counts a use nor
- * re-attributes the join.
+ * re-attributes the join. `join_source` is always `'invite'` here, tag or no
+ * tag: it is the door, and this is the only door this function is.
  */
 export async function redeemInvite(
   code: string,
@@ -122,8 +123,8 @@ export async function redeemInvite(
     }
 
     const inserted = await client.query(
-      `INSERT INTO server_members (server_id, user_id, role, join_ref)
-       VALUES ($1, $2, 'member', $3)
+      `INSERT INTO server_members (server_id, user_id, role, join_ref, join_source)
+       VALUES ($1, $2, 'member', $3, 'invite')
        ON CONFLICT DO NOTHING`,
       [invite.server_id, userId, options.ref ?? null],
     );
