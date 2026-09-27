@@ -2858,6 +2858,16 @@ export function HlsWatchPlayer({
   // nor focus inside it reaches the bar's own handlers: it holds the chrome
   // up itself while it is open, the way the quality menu does.
   const [cameraLayoutOpen, setCameraLayoutOpen] = useState(false);
+  // The QUICK cluster's own menu-open flag (below), read by nothing --
+  // `Menu` wants a setter to report into, and this deliberately does NOT
+  // feed `useIdleChrome`'s `pinned` the way `cameraLayoutOpen` above does.
+  // That pin exists to keep the FADING bar up while its own menu is open,
+  // and the quick cluster is never part of the fading bar: wiring this in
+  // too would flip `chrome.hidden` back to false the instant the quick
+  // layout menu opened, which is also this cluster's own visibility
+  // condition (see below) -- the button a person just pressed would vanish
+  // under their pointer.
+  const [, setQuickCameraLayoutOpen] = useState(false);
   const chrome = useIdleChrome(
     layout === "cinema" && hasFrame,
     qualityOpen || cameraLayoutOpen || barHovered || barFocused,
@@ -3100,6 +3110,81 @@ export function HlsWatchPlayer({
           >
             <Move className="h-3 w-3" aria-hidden="true" />
           </button>
+        </div>
+      ) : null}
+      {/* THE QUICK CLUSTER: mute, and the camera layout picker beside it,
+          reachable with NO hover and NO tap-to-reveal.
+          A 108-viewer watch party on 2026-09-26 asked "how do I mute?" three
+          times in chat, and once asked to hide the host's webcam and was told
+          "only in fullscreen, but then you lose chat" -- both controls
+          already live in the ordinary (non-fullscreen) stage, inside the
+          Twitch-style bar below, but that bar fades after
+          `IDLE_CHROME_DELAY_MS` of no pointer movement and a touch viewer has
+          no pointer to rest: nothing ever wakes it back up for them, so a
+          control that exists reads as a control that does not.
+          Shown exactly opposite the fading bar (`chrome.hidden`), never
+          alongside it, so there is only ever one mute button on screen: the
+          quick pair the instant the bar is not there, the full bar's own the
+          moment a person hovers, taps the stage, or opens this cluster's
+          own menu. */}
+      {cinema && !forceMuted ? (
+        <div
+          data-testid="watch-quick-controls"
+          className={cn(
+            "absolute bottom-3 left-3 flex items-center gap-1.5",
+            STAGE_LAYER.chrome,
+            reducedMotion ? "transition-none" : "transition-opacity duration-200",
+            chrome.hidden
+              ? "pointer-events-auto opacity-100"
+              : "pointer-events-none opacity-0",
+          )}
+        >
+          <button
+            type="button"
+            data-testid="watch-quick-mute"
+            aria-pressed={silenced}
+            aria-label={
+              silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+            }
+            title={silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")}
+            tabIndex={chrome.hidden ? 0 : -1}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+            onClick={() => {
+              if (silenced) {
+                restoreSound();
+                return;
+              }
+              updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+            }}
+          >
+            <VolumeGlyph volume={volumePref.volume} muted={silenced} />
+          </button>
+          {layoutOffered ? (
+            <Menu
+              align="start"
+              side="top"
+              onOpenChange={setQuickCameraLayoutOpen}
+              items={CAMERA_LAYOUTS.map((option) => ({
+                id: `camera-layout-quick-${option}`,
+                label: t(`voice.hls.cameraLayout.${option}`),
+                icon: layoutIcon[option],
+                checked: cameraLayout === option,
+                onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+              }))}
+            >
+              <button
+                type="button"
+                data-testid="watch-quick-camera-layout"
+                data-camera-layout={cameraLayout}
+                aria-label={t("voice.hls.cameraLayout")}
+                title={t("voice.hls.cameraLayout")}
+                tabIndex={chrome.hidden ? 0 : -1}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+              >
+                <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Menu>
+          ) : null}
         </div>
       ) : null}
       {holdingReason === "over" || holdingReason === "awaiting" ? (
