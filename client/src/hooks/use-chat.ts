@@ -424,17 +424,6 @@ export function createChatController(
   let newestLoadedId: string | null = null;
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
-  /**
-   * `getTypingUsers()` used to build a brand-new array on every call, even
-   * when nobody's typing state had actually changed — and it is called on
-   * every render of whatever reads it, which in a busy channel is every
-   * render of the whole app (a message, a reaction, a roster tick). A fresh
-   * array is a new prop reference downstream, which is exactly what defeats
-   * `memo()`. This caches the last built list and its keys, and only builds
-   * again when the active typers actually differ.
-   */
-  let typingUsersCache: TypingUser[] = [];
-  let typingUsersCacheKey = "";
   const sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
@@ -1055,25 +1044,9 @@ export function createChatController(
 
     getTypingUsers(): TypingUser[] {
       const now = Date.now();
-      const active = [...typing.entries()].filter(
-        ([, entry]) => entry.expiresAt > now,
-      );
-      // Sorted by userId so the key does not depend on Map iteration order;
-      // displayName rides along so a rename mid-typing invalidates the cache
-      // too, not just a change in who is active.
-      const key = active
-        .map(([userId, entry]) => `${userId}:${entry.displayName}`)
-        .sort()
-        .join(",");
-      if (key === typingUsersCacheKey) {
-        return typingUsersCache;
-      }
-      typingUsersCacheKey = key;
-      typingUsersCache = active.map(([userId, entry]) => ({
-        userId,
-        displayName: entry.displayName,
-      }));
-      return typingUsersCache;
+      return [...typing.entries()]
+        .filter(([, entry]) => entry.expiresAt > now)
+        .map(([userId, entry]) => ({ userId, displayName: entry.displayName }));
     },
 
     getChannelId() {
