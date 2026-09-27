@@ -2582,6 +2582,52 @@ function MainAppContent({
   const channelListFooterKeyRef = useRef<boolean | null>(null);
   const channelListFooterRef = useRef<ReactNode>(null);
 
+  /**
+   * `MemberSidebar` (the right-hand roster) is also wrapped in `memo()`, and
+   * had the exact same shape of problem: every callback prop was an inline
+   * arrow rebuilt on every render of this component, which — with a
+   * hundred-member server — meant re-rendering the whole roster on every
+   * unrelated tick. Same fix, same reasoning about closures resolving their
+   * captured bindings at call time as the `ChannelList` block above.
+   */
+  const stableOnMemberNickname = useStableCallback(
+    (userId: string, nickname: string | null) => {
+      setServerMembers((prev) =>
+        prev.map((row) => (row.id === userId ? { ...row, nickname } : row)),
+      );
+    },
+  );
+  const stableOnMention = useStableCallback((username: string) =>
+    setComposerInsert(`@${username}`),
+  );
+  const stableOnBlockUser = useStableCallback((userId: string) =>
+    void handleBlockUser(userId),
+  );
+  const stableOnUnblockUser = useStableCallback((userId: string) =>
+    void handleUnblockUser(userId),
+  );
+  const stableOnReportUser = useStableCallback((member: ServerMember) =>
+    setReportTarget({
+      kind: "user",
+      userId: member.id,
+      subjectName: member.displayName,
+      serverId: selectedServerId,
+    }),
+  );
+  const stableOnOpenMembersPanel = useStableCallback(() =>
+    setMembersOpen(true),
+  );
+  // A real `useMemo`, not the hand-rolled ref pattern above: `channels` is
+  // declared well before this point (line ~1153), so there is no ordering
+  // problem to work around.
+  const memberSidebarVoiceChannels = useMemo(
+    () =>
+      channels
+        .filter((c) => isVoiceRoomChannelType(c.type))
+        .map((c) => ({ id: c.id, name: c.name })),
+    [channels],
+  );
+
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
@@ -10244,32 +10290,17 @@ function MainAppContent({
           showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
           members={serverMembers}
-          onMemberNickname={(userId, nickname) => {
-            setServerMembers((prev) =>
-              prev.map((row) =>
-                row.id === userId ? { ...row, nickname } : row,
-              ),
-            );
-          }}
-          onMention={(username) => setComposerInsert(`@${username}`)}
-          onBlockUser={(userId) => void handleBlockUser(userId)}
-          onUnblockUser={(userId) => void handleUnblockUser(userId)}
-          onReportUser={(member) =>
-            setReportTarget({
-              kind: "user",
-              userId: member.id,
-              subjectName: member.displayName,
-              serverId: selectedServerId,
-            })
-          }
-          onOpenMembersPanel={() => setMembersOpen(true)}
+          onMemberNickname={stableOnMemberNickname}
+          onMention={stableOnMention}
+          onBlockUser={stableOnBlockUser}
+          onUnblockUser={stableOnUnblockUser}
+          onReportUser={stableOnReportUser}
+          onOpenMembersPanel={stableOnOpenMembersPanel}
           // The same context the profile card gets, so the row's menu and the
           // card cannot disagree about what this account may do to somebody.
           moderation={cardModeration}
           voiceOccupancy={voiceState.occupancy}
-          voiceChannels={channels
-            .filter((c) => isVoiceRoomChannelType(c.type))
-            .map((c) => ({ id: c.id, name: c.name }))}
+          voiceChannels={memberSidebarVoiceChannels}
           roles={serverRoles}
           friendIds={memberSidebarFriendIds}
         />
