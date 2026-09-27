@@ -528,11 +528,17 @@ Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
 - **quem usa e quem volta**, under **ao longo do tempo**. Daily, weekly and
   monthly actives (DAU, WAU, MAU), DAU/MAU, a 90-day chart, and retention by
   signup week (day 1, days 7 to 13, days 30 to 36 after the signup day).
-- "Active" means the person opened the app that São Paulo day (an
-  authenticated WebSocket on web, desktop, iOS or Android) or sent a message.
-  Watch party viewers and voice-only users count. The API notes it at WS auth
-  and on any frame except the keepalive, and writes one row per person per day
-  to `user_activity_days`, batched once a minute per process.
+- "Active" means the app connected that São Paulo day (an authenticated
+  WebSocket on web, desktop, iOS or Android), the person did something in it
+  (sent, reacted, typed, joined a call or a watch party), or sent a message.
+  Watch party viewers and voice-only users count. Automatic frames such as
+  WebRTC signalling do not. The API writes one row per person per day to
+  `user_activity_days`, batched once a minute per process.
+- Honest limit: an app left open counts again on any day it reconnects, and an
+  API deploy reconnects every open app. Read "ativos" as "had pqp open".
+  "Escreveram" is the strict measure.
+- `trackingSince` is the day after the first row, because the deploy that
+  started tracking landed partway through its day.
 - Two measures are shown side by side and never blended. "Escreveram" (sent a
   message) goes back to the first message. "Ativos" only exists from the day
   tracking started (`trackingSince`). A window that reaches back before that

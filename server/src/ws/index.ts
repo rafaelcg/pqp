@@ -72,6 +72,35 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const CHAT_MESSAGE_TYPES = new Set<string>(CHAT_CLIENT_MESSAGE_TYPES);
 
+/**
+ * Frames that mean a person did something, for daily actives
+ * (`services/user-activity.ts`). An allowlist on purpose: signalling
+ * (`offer`, `answer`, `ice-candidate`) and resubscribes fire on their own,
+ * and would count an idle tab as active every day. The voice half matches
+ * `SELF_INITIATED_VOICE_FRAMES` in `ws/voice.ts`, which is what the idle
+ * hangup counts as somebody being there.
+ */
+const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
+  "message-create",
+  "message-update",
+  "message-delete",
+  "reaction-toggle",
+  "typing",
+  "poll-vote",
+  "poll-close",
+  "join-voice-room",
+  "watch-live",
+  "set-voice-state",
+  "set-sharing-screen",
+  "set-camera",
+  "set-raised-hand",
+  "set-watch-party",
+  "set-music",
+  "set-music-listening",
+  "live-reaction",
+  "voice-still-here",
+]);
+
 const VOICE_MESSAGE_TYPES = new Set<string>([
   "join-voice-room",
   "leave-voice-room",
@@ -376,9 +405,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     if (!session) {
       return;
     }
-    // Any frame but the keepalive is somebody using the app, which is what
-    // counts a tab left open across midnight on the day it is used again.
-    userActivity.note(session.user.id);
+    // Somebody doing something counts a tab left open across midnight on the
+    // day it is used again. A Map lookup when already noted today.
+    if (ACTIVITY_FRAME_TYPES.has(type)) {
+      userActivity.note(session.user.id);
+    }
 
     if (CHAT_MESSAGE_TYPES.has(type)) {
       await handleChatMessage(session, parsed);

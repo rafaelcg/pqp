@@ -202,7 +202,8 @@ describeDb("user activity", () => {
     });
 
     it("keeps the two measures apart and only counts brackets that are over", async () => {
-      // Tracking starts 2026-09-10. Today is Sunday 2026-09-20 in São Paulo.
+      // First row 2026-09-09, so tracking counts from 2026-09-10. Today is
+      // Sunday 2026-09-20 in São Paulo.
       const ana = await person("ana", "2026-09-01 12:00");
       const bia = await person("bia", "2026-09-09 12:00");
       const cast = await person("cast", "2026-09-09 12:00");
@@ -213,6 +214,8 @@ describeDb("user activity", () => {
       await post(ana, "2026-09-05 20:00");
       await post(ana, "2026-09-08 23:30");
       await post(hook, "2026-09-19 10:00");
+      // The deploy day, partial: tracking counts from the day after.
+      await opened(ana, "2026-09-09");
       await opened(ana, "2026-09-10");
       await opened(ana, "2026-09-19");
       await opened(bia, "2026-09-10");

@@ -14,10 +14,14 @@ import { logEvent } from "../lib/log.js";
  * were close to invisible in its retention numbers.
  *
  * WHAT COUNTS AS ACTIVE
- * An authenticated WebSocket, noted at `auth` and again on any frame the
- * client sends that is not the keepalive, so a tab left open across midnight
- * counts the next day only if somebody does something in it. Web, Electron,
- * iOS and Android all hold that socket, so it is the same signal everywhere.
+ * The app connecting (WebSocket `auth`), or the person doing something in it
+ * (`ACTIVITY_FRAME_TYPES` in `ws/index.ts`: sending, reacting, typing,
+ * joining a call or a watch party, the voice frames the idle hangup counts).
+ * Never WebRTC signalling or other frames a client sends on its own. Web,
+ * Electron, iOS and Android all hold that socket, so it is one signal
+ * everywhere. Honest limit: an app left open counts again on any day it
+ * reconnects, and an API deploy reconnects everything, so this reads closer
+ * to "had pqp open" than "used it". `posted` is the strict measure.
  *
  * NO WRITE PER CONNECTION
  * A deploy reconnects every socket at once, and a per-connection UPDATE is
@@ -428,8 +432,11 @@ export async function computeUserActivityReport(
   const today = activityDay(nowMs);
   const firstDay = addDays(today, -(query.days - 1));
 
+  // The day AFTER the first row. The deploy that started tracking landed
+  // partway through its day, so that day missed everybody who came before it
+  // and would read as a jump in actives the next morning.
   const since = await pool.query<{ first: string | null }>(
-    `SELECT to_char(MIN(day), 'YYYY-MM-DD') AS first FROM user_activity_days`,
+    `SELECT to_char(MIN(day) + 1, 'YYYY-MM-DD') AS first FROM user_activity_days`,
   );
   const trackingSince = since.rows[0]?.first ?? null;
 
