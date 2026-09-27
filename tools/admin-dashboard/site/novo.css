@@ -160,6 +160,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 30px 28px 64px; display: flex
 .badge.accent { background: var(--accent-dim); color: var(--accent); }
 .kpi .k-mid { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; min-height: 38px; }
 .kpi .k-value { font-family: var(--display); font-size: 32px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; border-radius: 6px; padding: 2px 4px; margin: -2px -4px; }
+.kpi .k-value.long { font-size: 24px; white-space: nowrap; }
 .kpi .k-note { font-size: 12px; color: var(--faint); }
 .spark { width: 108px; height: 36px; flex: none; overflow: visible; }
 

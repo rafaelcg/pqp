@@ -139,6 +139,8 @@
       var v = card.querySelector(".k-value");
       if (k.value != null) setNumber(v, id, k.value, k.format);
       else v.textContent = k.text != null ? k.text : "—";
+      // A money or long text value steps down a size instead of wrapping.
+      v.classList.toggle("long", k.value == null && String(v.textContent).length > 5);
       card.querySelector(".k-note").textContent = k.note || "";
       var sp = card.querySelector(".k-spark");
       clear(sp).appendChild(sparkline(k.series, id, k.color));
@@ -606,7 +608,7 @@
           var useActive = b.activeEligible > 0;
           var elig = useActive ? b.activeEligible : b.eligible, got = useActive ? b.active : b.posted;
           var p = elig ? got / elig : null;
-          var cell = h("span", { class: "num" + (cAnim ? " pop" : ""), style: "padding:9px 0;border-radius:8px;text-align:center;font-size:13px;font-weight:700;outline:2px solid transparent;outline-offset:1px;transition:outline-color 120ms;animation-delay:" + ((r + j) * 45 + 300) + "ms;" + (p == null ? "color:var(--faint);font-weight:400;font-size:12px;border:1px dashed var(--line)" : "background:color-mix(in oklch, var(--accent) " + Math.round(12 + p * 140) + "%, transparent);color:" + (p > 0.3 ? "var(--accent-ink)" : "var(--text)")), text: p == null ? "ainda não" : Math.round(p * 100) + "%" });
+          var cell = h("span", { class: "num" + (cAnim ? " pop" : ""), style: "padding:9px 0;border-radius:8px;text-align:center;font-size:13px;font-weight:700;outline:2px solid transparent;outline-offset:1px;transition:outline-color 120ms;animation-delay:" + ((r + j) * 45 + 300) + "ms;" + (p == null ? "color:var(--faint);font-weight:400;font-size:12px;border:1px dashed var(--line)" : "background:color-mix(in oklch, var(--accent) " + Math.min(100, Math.round(12 + p * 140)) + "%, transparent);color:" + (p > 0.3 ? "var(--accent-ink)" : "var(--text)")), text: p == null ? "ainda não" : Math.round(p * 100) + "%" });
           cell.addEventListener("mouseenter", function () {
             cell.style.outlineColor = "var(--text)";
             cap.textContent = p == null ? "semana de " + M.shortDay(c.week) + ": " + brackets[j] + " ainda não terminou, então não conta como perda"
