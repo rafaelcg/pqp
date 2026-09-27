@@ -139,6 +139,11 @@ describe("arrivalVariant", () => {
     expect(arrivalVariant({ ...base, surface: "other" })).toBe("generic");
   });
 
+  it("says nothing over a live watch party, where the film is the welcome", () => {
+    expect(arrivalVariant({ ...base, surface: "party" })).toBeNull();
+    expect(arrivalVariant({ ...base, surface: "party", inCall: true })).toBeNull();
+  });
+
   it("tells an owner alone in their new room to send the invite, wherever they are", () => {
     for (const surface of ["text", "voice", "home", "other"] as const) {
       expect(

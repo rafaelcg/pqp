@@ -251,18 +251,24 @@ class SfuJoinFailureTest {
     /**
      * And every one of those refusals reaches a *different* sentence.
      *
-     * Read out of `PqpApp.kt` and the two resource files rather than asserted
-     * against a Kotlin copy of them, for the reason in [RepoSources]: a `when`
-     * branch that quietly points two refusals at the same `stringResource` is
-     * exactly the regression this change exists to prevent, and it compiles.
+     * Read out of `VoiceRefusalCopy.kt` (the one place a [Refusal] becomes a
+     * `stringResource`, since `voiceRefusalStringRes` moved it out of
+     * `PqpApp.kt`'s own `LaunchedEffect`) and the two resource files, rather
+     * than asserted against a Kotlin copy of them, for the reason in
+     * [RepoSources]: a `when` branch that quietly points two refusals at the
+     * same `R.string` is exactly the regression this change exists to
+     * prevent, and it compiles. The sentence picked here is the one OUTSIDE a
+     * watch party's own room (the `else` half of `voiceRefusalStringRes`'s
+     * `if (inWatchParty)`), matching what this test always asserted: the
+     * plain, ordinary-call wording stays four distinct sentences. See
+     * `VoiceRefusalCopyTest` for the watch-party half.
      */
     @Test
     fun `every SFU refusal shows a distinct sentence in both languages`() {
-        val ui = RepoSources.read("android/app/src/main/kotlin/gg/pqp/app/ui/PqpApp.kt")
-        val locals = Regex("""val\s+(\w+)\s*=\s*stringResource\(R\.string\.(\w+)\)""")
-            .findAll(ui)
-            .associate { it.groupValues[1] to it.groupValues[2] }
-        val branches = Regex("""Refusal\.(\w+)\s*->\s*(\w+)""")
+        val ui = RepoSources.read("android/app/src/main/kotlin/gg/pqp/app/voice/VoiceRefusalCopy.kt")
+        val branches = Regex(
+            """Refusal\.(\w+)\s*->\s*\n?\s*if \(inWatchParty\) R\.string\.\w+ else R\.string\.(\w+)""",
+        )
             .findAll(ui)
             .associate { it.groupValues[1] to it.groupValues[2] }
 
@@ -273,9 +279,7 @@ class SfuJoinFailureTest {
             "VoiceBackendTimedOut",
         )
         val keys = sfuRefusals.map { refusal ->
-            val local = branches[refusal]
-                ?: error("PqpApp.kt has no toast branch for Refusal.$refusal")
-            locals[local] ?: error("$local is not a stringResource in PqpApp.kt")
+            branches[refusal] ?: error("VoiceRefusalCopy.kt has no toast branch for Refusal.$refusal")
         }
         assertEquals("two SFU refusals point at the same string", keys.size, keys.toSet().size)
 

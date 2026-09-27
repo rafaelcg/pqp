@@ -2,70 +2,99 @@ import SwiftUI
 import ClerkKit
 import ClerkKitUI
 
-/// Onboarding.
+/// The welcome, before there is an account.
 ///
-/// Three beats, and the mark is continuous through all of them — it shrinks and
-/// moves rather than being replaced per page, so the sequence reads as one
-/// object being handled rather than three unrelated screens. `matchedGeometry`
-/// is what makes that literal instead of two views that happen to look alike.
+/// V1 was three marketing beats in a row, each one a tap between somebody and
+/// the thing they came for. V2 is one screen that says what pqp is in a line,
+/// three skimmable things it does, and the door. Or, when a link brought them
+/// here, the room that is waiting for them: "You're invited to {server}", its
+/// picture and how many people are inside, read from the public invite
+/// preview before any sign-in exists.
+///
+/// The mark is the same view as the small one in the wizard's header (matched
+/// geometry through `brand`), so signing in reads as the mark settling into
+/// its corner rather than one screen replacing another.
 struct OnboardingView: View {
     @Environment(SessionStore.self) private var session
-    @State private var step = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let brand: Namespace.ID
+
     @State private var markProgress = 0.0
     @State private var signingIn = false
-    @State private var showingAuth = false
-    @Namespace private var mark
+    @State private var authSheet: AuthSheet?
+    @State private var preview: PublicInvitePreview?
+    @State private var heroShown = false
+    /// A short screen (iPhone SE, or a big text size on any phone): the mark
+    /// and the headline step down a size so the three moments stay in view
+    /// above the buttons instead of scrolling under them.
+    @State private var compact = false
 
-    private let beats: [(title: String, body: String)] = [
-        (
-            String(localized: "Your friends.\nYour community.\nYour mess."),
-            String(localized: "Group chat you actually own. Text that flies, voice that doesn't flake.")
-        ),
-        (
-            String(localized: "Rooms for\neverything."),
-            String(localized: "Communities, channels, DMs. Voice you can drop into without scheduling it first.")
-        ),
-        (
-            String(localized: "Yours to keep."),
-            String(localized: "Open source. Self-host it, or use the hosted one. Same product either way.")
-        ),
-    ]
+    /// Which of Clerk's flows the sheet opens on.
+    private struct AuthSheet: Identifiable {
+        let mode: AuthView.Mode
+        var id: String { mode.rawValue }
+    }
 
     var body: some View {
         ZStack {
             Palette.ink.ignoresSafeArea()
-            AmbientGlow(step: step)
+            WelcomeGlow(invite: session.pendingInviteCode != nil)
 
             VStack(spacing: 0) {
-                Spacer(minLength: 0)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: compact ? 20 : 30) {
+                        SpeechMark(size: compact ? 52 : 72, dotProgress: markProgress)
+                            .matchedGeometryEffect(id: "mark", in: brand)
+                            .accessibilityHidden(true)
+                            .padding(.top, compact ? 12 : 24)
 
-                SpeechMark(size: 108, dotProgress: markProgress)
-                    .matchedGeometryEffect(id: "mark", in: mark)
-                    .padding(.bottom, 40)
-
-                copyBlock
-                    .padding(.horizontal, 28)
-
-                Spacer(minLength: 0)
+                        if session.pendingInviteCode != nil {
+                            inviteHero
+                                .transition(.opacity)
+                        } else {
+                            coldHero
+                                .transition(.opacity)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollBounceBehavior(.basedOnSize)
 
                 controls
                     .padding(.horizontal, 24)
+                    .padding(.top, 8)
                     .padding(.bottom, 12)
             }
         }
+        .onGeometryChange(for: Bool.self) { $0.size.height < 700 } action: { compact = $0 }
+        .animation(FirstRunMotion.step(reduceMotion), value: session.pendingInviteCode)
+        .animation(FirstRunMotion.pop(reduceMotion), value: preview)
         .onAppear {
             // The dots land after the bubble has settled, so the mark
             // assembles rather than appearing complete.
-            withAnimation(.easeOut(duration: 1.1).delay(0.25)) {
+            withAnimation(.easeOut(duration: reduceMotion ? 0.2 : 1.1).delay(reduceMotion ? 0 : 0.25)) {
                 markProgress = 1
             }
+            withAnimation(FirstRunMotion.pop(reduceMotion).delay(0.15)) {
+                heroShown = true
+            }
+        }
+        .task(id: session.pendingInviteCode) {
+            guard let code = session.pendingInviteCode else {
+                preview = nil
+                return
+            }
+            preview = await APIClient.publicInvitePreview(code: code)
         }
         // Clerk's own flow, used as shipped. It covers email codes, OAuth and
-        // MFA — none of which can be exercised without a real inbox, so a
+        // MFA, none of which can be exercised without a real inbox, so a
         // hand-rolled replacement would be unverifiable code on the one path
         // where being wrong locks everybody out.
-        .sheet(isPresented: $showingAuth) {
-            AuthView(mode: .signInOrUp)
+        .sheet(item: $authSheet) { sheet in
+            AuthView(mode: sheet.mode)
                 .onDisappear {
                     guard session.hasClerkSession else { return }
                     signingIn = true
@@ -77,85 +106,123 @@ struct OnboardingView: View {
         }
     }
 
-    private var copyBlock: some View {
-        VStack(spacing: 14) {
-            Text(beats[step].title)
-                .font(Typography.display(34))
-                .foregroundStyle(Palette.paper)
-                .multilineTextAlignment(.center)
-                .lineSpacing(2)
-                // A different id per step makes SwiftUI treat the copy as a new
-                // view and run the transition, instead of cross-fading text in
-                // place, which reads as a glitch.
-                .id("title-\(step)")
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .move(edge: .leading).combined(with: .opacity)
-                ))
+    // MARK: - Heroes
 
-            Text(beats[step].body)
-                .font(Typography.body)
-                .foregroundStyle(Palette.paperMuted)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-                .id("body-\(step)")
-                .transition(.opacity)
+    private var coldHero: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Open source · Free · No card required")
+                    .font(FirstRunType.eyebrow)
+                    .textCase(.uppercase)
+                    .tracking(1.1)
+                    .foregroundStyle(Palette.signal)
+
+                Text("Voice, screen share and chat. For your crew, on your terms.")
+                    .font(compact ? FirstRunType.title : FirstRunType.display)
+                    .foregroundStyle(Palette.paper)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            .opacity(heroShown ? 1 : 0)
+            .offset(y: heroShown || reduceMotion ? 0 : 12)
+
+            FeatureMomentList(moments: FeatureMoment.welcome, delay: 0.35)
         }
-        .frame(minHeight: 200, alignment: .top)
     }
 
-    private var controls: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 7) {
-                ForEach(beats.indices, id: \.self) { index in
-                    Capsule()
-                        .fill(index == step ? Palette.signal : Palette.border)
-                        // The active dot widens rather than just brightening —
-                        // position stays readable at a glance, and in a glance
-                        // is all anyone gives a progress indicator.
-                        .frame(width: index == step ? 22 : 7, height: 7)
+    private var inviteHero: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 6) {
+                Image(systemName: "envelope.open.fill").imageScale(.small)
+                Text("Invite")
+                    .textCase(.uppercase)
+                    .tracking(1.1)
+            }
+            .font(FirstRunType.eyebrow)
+            .foregroundStyle(Palette.signal)
+
+            HStack(alignment: .center, spacing: 16) {
+                ServerIconTile(
+                    name: preview?.serverName ?? "pqp",
+                    iconUrl: preview?.iconUrl,
+                    size: 76
+                )
+                .shadow(color: Palette.signal.opacity(0.25), radius: 18)
+                .scaleEffect(preview != nil || reduceMotion ? 1 : 0.9)
+                .opacity(preview != nil ? 1 : 0.5)
+
+                if let count = preview?.memberCount {
+                    Label {
+                        Text("\(count) people inside")
+                    } icon: {
+                        Image(systemName: "person.2.fill")
+                    }
+                    .font(FirstRunType.callout.weight(.semibold))
+                    .foregroundStyle(Palette.paperSubtle)
+                    .transition(.opacity)
                 }
             }
-            .animation(Motion.standard, value: step)
-            .padding(.bottom, 8)
 
+            Group {
+                if let name = preview?.serverName {
+                    Text("You're invited to \(name)")
+                } else {
+                    Text("Somebody sent you an invite")
+                }
+            }
+            .font(compact ? FirstRunType.title : FirstRunType.display)
+            .foregroundStyle(Palette.paper)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("welcome.inviteTitle")
+
+            Text("Create an account and you're in. Takes a minute.")
+                .font(FirstRunType.body)
+                .foregroundStyle(Palette.paperMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .opacity(heroShown ? 1 : 0)
+        .offset(y: heroShown || reduceMotion ? 0 : 12)
+    }
+
+    // MARK: - Controls
+
+    private var controls: some View {
+        VStack(spacing: 10) {
             if let error = session.lastError {
                 Text(error)
-                    .font(Typography.callout)
+                    .font(FirstRunType.callout)
                     .foregroundStyle(Palette.danger)
                     .multilineTextAlignment(.center)
                     .transition(.opacity)
             }
 
-            Button(step == beats.count - 1 ? "Get started" : "Next") {
-                if step == beats.count - 1 {
-                    signIn()
-                } else {
-                    withAnimation(Motion.standard) { step += 1 }
+            Button {
+                begin(.signInOrUp)
+            } label: {
+                HStack(spacing: 8) {
+                    if signingIn { ProgressView().tint(Palette.inkDeep) }
+                    Text("Create account")
                 }
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(signingIn)
-            .overlay {
-                if signingIn {
-                    ProgressView().tint(Palette.inkDeep)
-                }
-            }
+            .accessibilityIdentifier("welcome.start")
 
-            Button("Skip") {
-                signIn()
+            Button("I have an account") {
+                begin(.signIn)
             }
-            .font(Typography.callout)
-            .foregroundStyle(Palette.paperMuted)
-            .opacity(step == beats.count - 1 ? 0 : 1)
-            .disabled(step == beats.count - 1 || signingIn)
-            .animation(Motion.standard, value: step)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Palette.paperSubtle)
+            .frame(minHeight: 44)
+            .disabled(signingIn)
+            .accessibilityIdentifier("welcome.signIn")
         }
     }
 
-    private func signIn() {
-        // Under the bypass there is nothing to sign into — the server accepts a
-        // fixed token — so onboarding completes straight through.
+    private func begin(_ mode: AuthView.Mode) {
+        // Under the bypass there is nothing to sign into: the server accepts a
+        // fixed token, so the welcome completes straight through.
         guard session.authMode == .clerk else {
             signingIn = true
             Task {
@@ -165,45 +232,50 @@ struct OnboardingView: View {
             return
         }
         // A keychain session can predate this install (the keychain outlives
-        // an uninstall). Adopt it when it works — no sheet at all — and purge
-        // it when the API refuses it, or the sheet would open straight onto
-        // "you're already signed in" with no way forward.
+        // an uninstall). Adopt it when it works, with no sheet at all, and
+        // purge it when the API refuses it, or the sheet would open straight
+        // onto "you're already signed in" with no way forward.
         signingIn = true
         Task {
             let adopted = await session.adoptExistingSession()
             signingIn = false
             if !adopted {
-                showingAuth = true
+                authSheet = AuthSheet(mode: mode)
             }
         }
     }
 }
 
-/// A slow gradient wash that shifts per beat.
-///
-/// Deliberately low-contrast and animated over more than a second: the job is
-/// to make the background feel lit rather than flat, and anything faster or
-/// brighter competes with the copy for attention.
-private struct AmbientGlow: View {
-    let step: Int
-
-    private var alignment: UnitPoint {
-        switch step {
-        case 0: .topLeading
-        case 1: .topTrailing
-        default: .bottom
-        }
-    }
+/// Two slow washes of colour drifting behind the welcome. Low contrast on
+/// purpose; still under Reduce Motion.
+private struct WelcomeGlow: View {
+    let invite: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drift = false
 
     var body: some View {
-        RadialGradient(
-            colors: [Palette.signal.opacity(0.16), .clear],
-            center: alignment,
-            startRadius: 10,
-            endRadius: 420
-        )
+        ZStack {
+            RadialGradient(
+                colors: [Palette.signal.opacity(invite ? 0.2 : 0.15), .clear],
+                center: drift ? UnitPoint(x: 0.9, y: 0.1) : UnitPoint(x: 0.2, y: 0.05),
+                startRadius: 10,
+                endRadius: 420
+            )
+            RadialGradient(
+                colors: [Color(red: 0.45, green: 0.72, blue: 1).opacity(0.08), .clear],
+                center: drift ? UnitPoint(x: 0.1, y: 0.9) : UnitPoint(x: 0.8, y: 0.75),
+                startRadius: 10,
+                endRadius: 380
+            )
+        }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 1.2), value: step)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 9).repeatForever(autoreverses: true)) {
+                drift = true
+            }
+        }
     }
 }

@@ -158,8 +158,7 @@ final class AccountDeletionUITests: XCTestCase {
         // Signing out returns the app to its first-run intro, which is the one
         // screen that cannot be reached with a session in hand.
         XCTAssertTrue(
-            app.buttons["Skip"].waitForExistence(timeout: 20)
-                || app.buttons["Next"].waitForExistence(timeout: 5),
+            app.buttons["welcome.start"].waitForExistence(timeout: 20),
             "Deleting the account should leave the app signed out"
         )
 

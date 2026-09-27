@@ -12,14 +12,14 @@ import (
 // this Session and then immediately reads state the video track's async
 // teardown can still be advancing must not be able to observe that state
 // mid-flush. Connect itself cannot be unit-tested (it needs a live LiveKit
-// room), so this drives the same videoWG pairing Connect's OnTrackSubscribed
+// room), so this drives the same readersWG pairing Connect's OnTrackSubscribed
 // video case uses directly: Add(1) before readRTP would start, a slow
 // "OnVideoTrackEnded" standing in for session.Session.Finish actually doing
 // real work, then Done() -- exactly the shape readRTP+the deferred Done in
 // Connect produce for a real video track.
 //
 // Run with -race (the repo's `make test` always does): without the fix
-// (videoWG.Wait removed from Close), this test does not fail on its own --
+// (readersWG.Wait removed from Close), this test does not fail on its own --
 // there is nothing here for the race detector to catch by itself, since
 // there is only one writer to `finished`. What it demonstrates instead is
 // the actual contract: Close's RETURN must be provably after Done, not
@@ -32,7 +32,7 @@ func TestSessionCloseWaitsForVideoTrackEnded(t *testing.T) {
 
 	var finished atomic.Bool
 
-	sess.videoWG.Add(1)
+	sess.readersWG.Add(1)
 	go func() {
 		// Stand in for readRTP blocking on real RTP packets, then
 		// calling a slow OnVideoTrackEnded (session.Session.Finish
@@ -41,7 +41,7 @@ func TestSessionCloseWaitsForVideoTrackEnded(t *testing.T) {
 		// wraps in Add/defer Done around the real readRTP call.
 		time.Sleep(50 * time.Millisecond)
 		finished.Store(true)
-		sess.videoWG.Done()
+		sess.readersWG.Done()
 	}()
 
 	sess.Close()
@@ -55,7 +55,7 @@ func TestSessionCloseWaitsForVideoTrackEnded(t *testing.T) {
 // other half of the same contract: a session that never found a video
 // track (Close called during StateWaiting, before any presenter ever
 // shared) must not hang forever waiting for a goroutine that will never
-// call Done -- videoWG's counter was never incremented, so Wait must
+// call Done -- readersWG's counter was never incremented, so Wait must
 // return immediately.
 func TestSessionCloseReturnsImmediatelyWhenNoVideoTrackEverBound(t *testing.T) {
 	sess := &Session{}
@@ -69,19 +69,19 @@ func TestSessionCloseReturnsImmediatelyWhenNoVideoTrackEverBound(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(1 * time.Second):
-		t.Fatal("Session.Close hung with no video track ever bound; videoWG.Wait should return immediately when Add was never called")
+		t.Fatal("Session.Close hung with no video track ever bound; readersWG.Wait should return immediately when Add was never called")
 	}
 }
 
 // TestSessionCloseIsIdempotent mirrors aacenc.Encoder's own
 // "Close is safe to call more than once" guarantee (see
 // internal/aacenc/encoder_test.go's TestEncoderCloseIsIdempotent): a second
-// Close, after videoWG's counter is already back at zero, must return
+// Close, after readersWG's counter is already back at zero, must return
 // immediately rather than block or panic.
 func TestSessionCloseIsIdempotent(t *testing.T) {
 	sess := &Session{}
-	sess.videoWG.Add(1)
-	sess.videoWG.Done()
+	sess.readersWG.Add(1)
+	sess.readersWG.Done()
 
 	done := make(chan struct{})
 	go func() {
@@ -93,14 +93,14 @@ func TestSessionCloseIsIdempotent(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(1 * time.Second):
-		t.Fatal("a second Session.Close hung after videoWG's counter was already back at zero")
+		t.Fatal("a second Session.Close hung after readersWG's counter was already back at zero")
 	}
 }
 
 // simulateVideoTrackSubscribed reproduces the exact critical section
 // Connect's OnTrackSubscribed video case runs in subscriber.go: take
 // closeMu, bail out with nothing registered if the session is already
-// closed, otherwise Add(1) to videoWG WHILE STILL HOLDING closeMu, release,
+// closed, otherwise Add(1) to readersWG WHILE STILL HOLDING closeMu, release,
 // then run the stand-in "readRTP" (onEnded, called synchronously, exactly
 // where the real readRTP calls Handlers.OnVideoTrackEnded before
 // returning) before the deferred Done. Kept here rather than driving it
@@ -113,9 +113,9 @@ func simulateVideoTrackSubscribed(sess *Session, onEnded func()) (registered boo
 		sess.closeMu.Unlock()
 		return false
 	}
-	sess.videoWG.Add(1)
+	sess.readersWG.Add(1)
 	sess.closeMu.Unlock()
-	defer sess.videoWG.Done()
+	defer sess.readersWG.Done()
 	if onEnded != nil {
 		onEnded()
 	}
@@ -124,13 +124,13 @@ func simulateVideoTrackSubscribed(sess *Session, onEnded func()) (registered boo
 
 // TestSessionCloseRacesConcurrentTrackSubscription is the -race regression
 // test for Farol's round-2 finding on PR #584: the FIRST version of this
-// fix called videoWG.Add(1) with no synchronization against Close at all,
+// fix called readersWG.Add(1) with no synchronization against Close at all,
 // so a video track discovered right as Close begins could either race
 // Add against Wait (a WaitGroup misuse the race detector reports
 // directly) or lose the race entirely -- Close's Wait observing a zero
 // counter and returning before the late-arriving track's Add ever ran, the
 // same "restart() reads Health() before the async work finished" class of
-// bug the videoWG mechanism exists to close in the first place.
+// bug the readersWG mechanism exists to close in the first place.
 //
 // This fires simulateVideoTrackSubscribed and Close truly concurrently,
 // many times (scheduling is what surfaces this kind of race, not a single
@@ -138,7 +138,7 @@ func simulateVideoTrackSubscribed(sess *Session, onEnded func()) (registered boo
 // the reader never registered at all (Close won the race for closeMu --
 // no read started, nothing to wait for) OR it registered and its onEnded
 // callback is provably finished by the time both goroutines have joined
-// (Close won the race for the underlying videoWG.Wait -- and read the
+// (Close won the race for the underlying readersWG.Wait -- and read the
 // segment index of a section 3.1 race). There is no third outcome: a
 // registered reader whose callback never finished before Close returned.
 //
@@ -178,5 +178,45 @@ func TestSessionCloseRacesConcurrentTrackSubscription(t *testing.T) {
 		if !readFinished.Load() {
 			t.Fatalf("iteration %d: a reader registered but its callback never finished before both goroutines returned -- Close's Wait did not actually wait for the registered reader", i)
 		}
+	}
+}
+
+// TestSessionCloseFiresOnVideoTrackEndedOnceAfterTheReaders: the trailing
+// fragment flush (session.Session.Finish in production) now belongs to the
+// END OF THE SESSION, not to the end of whichever track happened to be
+// bound, because a track ending mid-session is a presenter between two
+// shares. It must still run exactly once, and only after every reader has
+// returned.
+func TestSessionCloseFiresOnVideoTrackEndedOnceAfterTheReaders(t *testing.T) {
+	var calls atomic.Int32
+	var readerDone atomic.Bool
+	sess := newSession(Config{}, Handlers{OnVideoTrackEnded: func() {
+		if !readerDone.Load() {
+			t.Error("OnVideoTrackEnded ran before the reader returned")
+		}
+		calls.Add(1)
+	}})
+	sess.videoEverBound.Store(true)
+	sess.readersWG.Add(1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		readerDone.Store(true)
+		sess.readersWG.Done()
+	}()
+	sess.Close()
+	sess.Close()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("OnVideoTrackEnded ran %d times, want exactly once", got)
+	}
+}
+
+// And never for a session that never bound a video track: there is nothing
+// to flush, and the idr-log mode reads the call as "the reader stopped".
+func TestSessionCloseSkipsOnVideoTrackEndedWhenNothingWasBound(t *testing.T) {
+	called := false
+	sess := newSession(Config{}, Handlers{OnVideoTrackEnded: func() { called = true }})
+	sess.Close()
+	if called {
+		t.Fatal("OnVideoTrackEnded ran for a session that never bound a video track")
 	}
 }

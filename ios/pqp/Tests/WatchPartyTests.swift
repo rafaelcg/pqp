@@ -61,6 +61,40 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertEqual(watching, 0)
     }
 
+    /// `watch-party-update`, the frame `WatchPartyHostController` tracks.
+    /// Routed through its own decode struct rather than `Envelope`, for the
+    /// same reason `channel-live` is: `party` is not among `Envelope`'s own
+    /// keys, so the shared decoder would parse this cleanly and drop it.
+    func testWatchPartyUpdateCarriesTheFullPartyForTheHostToRead() async throws {
+        let event = await firstEvent(from: """
+        {"type":"watch-party-update","channelId":"c1",
+         "party":{"id":"p1","channelId":"c1","name":"Sessão de sábado","state":"live",
+                  "hostUserId":"u1","hostDisplayName":"Rafael","viewerRole":"host"}}
+        """)
+        guard case .watchPartyUpdate(let channelId, let party) = event else {
+            return XCTFail("expected watchPartyUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(channelId, "c1")
+        XCTAssertEqual(party?.id, "p1")
+        XCTAssertEqual(party?.name, "Sessão de sábado")
+        XCTAssertTrue(party?.isLive ?? false)
+        XCTAssertTrue(party?.isHost ?? false)
+    }
+
+    /// `party: null` is "no active party", not a decode failure -- the
+    /// channel going idle again has to reach `WatchPartyHostController` as a
+    /// real event, the same way a stream stopping does for `channel-live`.
+    func testWatchPartyUpdateWithNoPartyIsAnEventNotADecodeFailure() async throws {
+        let event = await firstEvent(from: """
+        {"type":"watch-party-update","channelId":"c1","party":null}
+        """)
+        guard case .watchPartyUpdate(let channelId, let party) = event else {
+            return XCTFail("expected watchPartyUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(channelId, "c1")
+        XCTAssertNil(party)
+    }
+
     /// The room's copy. Same object, no headcount, and it must not be confused
     /// for the channel one: only `channel-live` reaches somebody without a seat.
     func testVoiceStreamDecodesAsTheRoomsOwnFrame() async throws {
@@ -119,13 +153,37 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertNil(liveStreamURL(hlsUrl: "  ", apiBaseURL: URL(string: "https://a.b")!))
     }
 
+    // MARK: - The presence beat's own credential
+
+    /// `hlsSessionToken` reads the same `?t=` back out, whichever shape
+    /// `hlsUrl` came in as, which is what the presence beat sends to
+    /// `POST /api/live-hls/presence`.
+    func testHlsSessionTokenReadsTheTOffARelativeUrl() {
+        XCTAssertEqual(
+            hlsSessionToken(from: "/api/voice/hls-playlist/c1/1757000000000?t=abc.def-_"),
+            "abc.def-_"
+        )
+    }
+
+    func testHlsSessionTokenReadsTheTOffAnAbsoluteUrl() {
+        XCTAssertEqual(
+            hlsSessionToken(from: "https://cdn.example/live/x.m3u8?t=xyz&other=1"),
+            "xyz"
+        )
+    }
+
+    func testHlsSessionTokenIsNilWithoutOne() {
+        XCTAssertNil(hlsSessionToken(from: "https://cdn.example/live/x.m3u8?sig=1"))
+    }
+
     // MARK: - When the player may be restarted, and when it may not
 
     private func stream(_ startedAt: Int, _ token: String) -> LiveHlsStream {
         LiveHlsStream(
             hlsUrl: "/api/voice/hls-playlist/c1/\(startedAt)?t=\(token)",
             startedAt: startedAt, presenterPeerId: "p1",
-            delaySeconds: nil, topHeight: nil, topFramerate: nil
+            delaySeconds: nil, topHeight: nil, topFramerate: nil,
+            cameraHlsUrl: nil, cameraHasVideo: nil, cameraHasVoiceAudio: nil
         )
     }
 
@@ -568,16 +626,120 @@ final class WatchPartyTests: XCTestCase {
         picture.show(player, pip: WatchPictureInPicture())
 
         let strip = UIView()
-        picture.mount(in: strip)
+        picture.claim(strip)
         XCTAssertIdentical(picture.canvas.superview, strip)
 
         let full = UIView()
-        picture.mount(in: full)
+        picture.claim(full)
         XCTAssertIdentical(picture.canvas.superview, full)
         XCTAssertTrue(strip.subviews.isEmpty, "one layer, and it left the strip")
         XCTAssertIdentical(
             picture.canvas.player, player,
             "the layer must never let go of the player when the frame changes"
+        )
+    }
+
+    /**
+     TURN THE PHONE AND THE FILM STAYS (TestFlight 1.0.6, build 106701).
+
+     Rotating went black and stayed black both ways, with the camera corner
+     still playing. Since #833 the surface lives in a `GeometryReader`, and a
+     rotation reached the representable in this order, measured on the
+     simulator: make the new box, update the OLD box one more time, dismantle
+     the old box. "Every update mounts here" let that last update pull the
+     layer back into the box on its way out, the dismantle took it out of the
+     window, and nothing ever updated the new box again. The newest claim has
+     to win, whichever of the others SwiftUI touches afterwards.
+     */
+    @MainActor
+    func testTheOutgoingBoxCannotTakeThePictureBackOnItsWayOut() {
+        let picture = WatchPicture()
+        let player = AVPlayer()
+        picture.show(player, pip: WatchPictureInPicture())
+
+        let portrait = UIView()
+        picture.claim(portrait)
+
+        // make(new), update(old), dismantle(old): the rotation, in order.
+        let landscape = UIView()
+        picture.claim(landscape)
+        picture.settle()
+        picture.release(portrait)
+        XCTAssertIdentical(
+            picture.canvas.superview, landscape,
+            "the outgoing box's last update must not take the picture with it"
+        )
+
+        // And back: the same order the other way round.
+        let portraitAgain = UIView()
+        picture.claim(portraitAgain)
+        picture.settle()
+        picture.release(landscape)
+        XCTAssertIdentical(picture.canvas.superview, portraitAgain)
+        XCTAssertIdentical(picture.canvas.player, player)
+
+        // The other order SwiftUI may use: dismantle first, then make.
+        picture.release(portraitAgain)
+        XCTAssertNil(picture.canvas.superview, "no box standing, so no window")
+        XCTAssertIdentical(picture.canvas.player, player, "and the player is kept for the next box")
+        let next = UIView()
+        picture.claim(next)
+        XCTAssertIdentical(picture.canvas.superview, next)
+
+        // A box that is dismantled while a newer one shows the picture leaves
+        // the picture where it is.
+        let newer = UIView()
+        picture.claim(newer)
+        picture.release(next)
+        XCTAssertIdentical(picture.canvas.superview, newer)
+    }
+
+    /// The representable is what calls the rules above; this is what keeps it
+    /// from going back to "every update mounts here".
+    func testTheSurfaceClaimsOnMakeAndReleasesOnDismantle() throws {
+        let surface = try String(
+            contentsOf: sources.appending(path: "Voice/WatchVideoSurface.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(surface.contains("picture.claim(holder)"))
+        XCTAssertTrue(surface.contains("coordinator.picture?.release(holder)"))
+        XCTAssertTrue(surface.contains("picture.settle()"))
+        XCTAssertFalse(
+            surface.contains("mount(in: holder)"),
+            "an update that mounts into its own box is the black film of build 106701"
+        )
+    }
+
+    /**
+     THE THEATER'S PREFERENCES HAVE TO REACH `ChatView` (TestFlight 1.0.6).
+
+     The stage is the content of `ChatView`'s top `safeAreaInset`. A
+     preference only reaches readers ABOVE the view that sets it, and a reader
+     written before the inset modifier wraps the transcript, not the inset.
+     Both readers sat there since they were written, so neither value ever
+     arrived: landscape kept the title, the pin and the system back chevron
+     beside the overlay's own. Checked with a probe: a reader before
+     `.safeAreaInset` sees nothing from its content, one after it does.
+     */
+    func testChatReadsTheStagePreferencesOutsideTheInset() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        let stage = try XCTUnwrap(source.range(of: "watchStage(for: voiceChannel)\n"))
+        for key in ["WatchTheaterPreference", "WatchHeroPreference"] {
+            let reader = try XCTUnwrap(
+                source.range(of: ".onPreferenceChange(\(key).self)"),
+                "\(key) has no reader in ChatView"
+            )
+            XCTAssertGreaterThan(
+                reader.lowerBound, stage.upperBound,
+                "\(key) must be read after the inset that hosts the stage, or it never arrives"
+            )
+        }
+        XCTAssertTrue(source.contains(".navigationBarBackButtonHidden(watchTheater)"))
+        XCTAssertTrue(source.contains("if !watchTheater {"), "the pin stays out of the theater")
+        XCTAssertTrue(
+            source.contains(".toolbar(watchTheater ? .hidden : .automatic, for: .navigationBar)"),
+            "an empty bar still takes the touches over the overlay's chevron and pushes the stage down"
         )
     }
 
@@ -646,16 +808,23 @@ final class WatchPartyTests: XCTestCase {
             "a party drawn with the speaker glyph is a party nobody can find"
         )
         XCTAssertTrue(
-            source.contains("String(localized: \"Watch party\")"),
-            "the section heading is the other half of telling the two apart"
-        )
-        XCTAssertTrue(
             source.contains("channels.filter(\\.isWatchParty)"),
             "the party section has to be built from the type"
         )
         XCTAssertTrue(
             source.contains("channels.filter { !$0.isWatchParty }"),
             "and filtered out of Voice, or it is listed twice"
+        )
+        // The section heading itself moved out of this file and into
+        // `WatchPartySidebarSlot`, which is what `ChannelListView` now hands
+        // the live/pending/create decision to -- see
+        // `resolveServerWatchPartyListState`.
+        let slot = try String(
+            contentsOf: sources.appending(path: "Voice/WatchPartySidebarSlot.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            slot.contains("String(localized: \"Watch party\")"),
+            "the live card's own heading is the other half of telling a party apart from a voice channel"
         )
     }
 
@@ -680,8 +849,10 @@ final class WatchPartyTests: XCTestCase {
             source.contains("case .unknown, .idle:"),
             "waiting and nothing-yet are one card, not two sentences half a second apart"
         )
+        // Still gated on the type first; the host's own card above the stage
+        // (`hostCardShown`) is the only other thing the notice steps aside for.
         XCTAssertTrue(
-            source.contains("if channel.isWatchParty {"),
+            source.contains("if channel.isWatchParty, !hostCardShown {"),
             "an ordinary voice channel must stay inert"
         )
         XCTAssertTrue(
@@ -704,13 +875,36 @@ final class WatchPartyTests: XCTestCase {
      Asserted on the guard rather than on the button: the button is correct and
      stays, for voice channels.
      */
+    /**
+     THE SEAT IS NOT OFFERED TO A WATCH PARTY'S AUDIENCE, EVEN NOW THAT
+     HOSTING EXISTS.
+
+     Hosting a watch party from this phone (the iOS hosting PR) needed a way
+     back INTO a `watch_party` channel's room -- `canStartWatchParty` is only
+     knowable once `welcome` has answered, which needs a seat first -- so the
+     blanket `!voiceChannel.isWatchParty` this test used to require by itself
+     is gone. What replaces it still has to be provably narrow: the button
+     reappears only through `watchPartyMayJoinRoom`, which lets an idle
+     channel's room be joined by anybody (nobody to protect from a party
+     nobody is broadcasting to) and a running party's own host or co-host
+     back in, and refuses everyone else exactly as before. This test reads
+     the source for both halves, so a change that widens the condition back
+     toward "anybody, any time" fails here rather than being caught on a
+     phone.
+     */
     func testTheChatToolbarDoesNotOfferASeatInAWatchParty() throws {
         let source = try String(
             contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
         )
         XCTAssertTrue(
-            source.contains("if let voiceChannel, !voiceChannel.isWatchParty {"),
-            "watching is seatless, and a green phone button is how that stops being true"
+            source.contains("!voiceChannel.isWatchParty"),
+            "an ordinary voice channel must still always offer the seat"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "watchPartyMayJoinRoom(canStartWatchParty: false, party: watchPartyHost.partyKnowledge(for: voiceChannel.id))"
+            ),
+            "a watch party channel must route through the same narrow rule the server enforces, not a blanket allow"
         )
         XCTAssertTrue(
             source.contains("WatchHeroPreference"),
@@ -729,9 +923,13 @@ final class WatchPartyTests: XCTestCase {
         let source = try String(
             contentsOf: sources.appending(path: "Chat/ChannelListView.swift"), encoding: .utf8
         )
-        XCTAssertTrue(source.contains("case .channelLive(let channelId, let stream, _):"))
+        XCTAssertTrue(source.contains("case .channelLive(let channelId, let stream, let watching):"))
         XCTAssertTrue(source.contains("liveChannels.remove(channelId)"))
         XCTAssertTrue(source.contains("liveChannels.insert(channelId)"))
+        // The live card's viewer count rides the same frame and has to leave
+        // with the pill, or a stale number outlives the badge it sits beside.
+        XCTAssertTrue(source.contains("watchingByChannel.removeValue(forKey: channelId)"))
+        XCTAssertTrue(source.contains("watchingByChannel[channelId] = watching"))
     }
 
     // MARK: - The quieter theater
@@ -813,7 +1011,7 @@ final class WatchPartyTests: XCTestCase {
             "the system chevron has to step aside for the overlay's own, or there are two"
         )
         XCTAssertTrue(
-            chat.contains("WatchStageView(channel: voiceChannel, onBack: { dismiss() })"),
+            chat.contains("WatchStageView(channel: voiceChannel, hostCardShown: card != .hidden, onBack: { dismiss() })"),
             "the overlay's chevron needs a real dismiss action to call"
         )
     }

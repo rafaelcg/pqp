@@ -5,9 +5,14 @@ vi.mock("@/lib/api", () => ({
   fetchLiveHlsConfig: (...args: unknown[]) => fetchLiveHlsConfigMock(...args),
 }));
 
-const { loadLiveHlsConfig, resetLiveHlsConfigCache } = await import(
-  "./use-live-hls-config"
-);
+const {
+  loadLiveHlsConfig,
+  resetLiveHlsConfigCache,
+  settledLiveHlsConfig,
+  useLiveHlsConfig,
+} = await import("./use-live-hls-config");
+const { createElement } = await import("react");
+const { renderToStaticMarkup } = await import("react-dom/server");
 
 describe("loadLiveHlsConfig", () => {
   beforeEach(() => {
@@ -31,5 +36,28 @@ describe("loadLiveHlsConfig", () => {
       enabled: false,
       delaySeconds: 10,
     });
+  });
+
+  it("hands a surface that mounts after the answer arrived the config on its first render", async () => {
+    // Production rehearsal C, 2026-09-25: the setup card's "Baixa latência
+    // (beta)" row drew a frame after the rest of the card, because an answer
+    // already in hand could only be read on a later tick.
+    const config = { enabled: true, delaySeconds: 10, lowLatency: { available: true } };
+    fetchLiveHlsConfigMock.mockResolvedValue(config);
+    expect(settledLiveHlsConfig("s1")).toBeNull();
+    await loadLiveHlsConfig("s1");
+    expect(settledLiveHlsConfig("s1")).toEqual(config);
+
+    let firstRender: unknown = "never rendered";
+    function Probe() {
+      const seen = useLiveHlsConfig("s1");
+      if (firstRender === "never rendered") {
+        firstRender = seen;
+      }
+      return null;
+    }
+    renderToStaticMarkup(createElement(Probe));
+    expect(firstRender).toEqual(config);
+    expect(settledLiveHlsConfig(null)).toBeNull();
   });
 });

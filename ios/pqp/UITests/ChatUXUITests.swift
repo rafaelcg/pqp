@@ -35,8 +35,8 @@ final class ChatUXUITests: XCTestCase {
         // `OnboardingFlowUITests` has carried the same line since it hit this.
         app.launchArguments += ["-pqp.lastVisited", "none"]
         app.launch()
-        XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
-        app.buttons["Skip"].tap()
+        XCTAssertTrue(app.buttons["welcome.start"].waitForExistence(timeout: 5))
+        app.buttons["welcome.start"].tap()
 
         // The seeded server is appended to the END of the rail, so on a machine
         // that already holds a few servers it starts off the right-hand edge.

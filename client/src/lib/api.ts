@@ -31,6 +31,7 @@ import type {
   ScheduleCommunityHomePostRequest,
   UpdateCommunityHomePostRequest,
   CommunityConfig,
+  CommunityJoinVia,
   CommunityPage,
   CommunitySettings,
   CommunitySummary,
@@ -284,10 +285,11 @@ export async function apiFetch<T>(
   }
 }
 
-function post<T>(path: string, body?: unknown) {
+function post<T>(path: string, body?: unknown, headers?: Record<string, string>) {
   return apiFetch<T>(path, {
     method: "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(headers ? { headers } : {}),
   });
 }
 
@@ -727,6 +729,21 @@ export interface LiveHlsConfig {
    * offers "Baixa latência (beta)" when this is true.
    */
   lowLatency?: { available: boolean };
+  /**
+   * The tallest camera a watch-party presenter may publish while their share
+   * is on air (`LIVE_HLS_CAMERA_480`: 480, or 360 when switched off). Absent
+   * on an older API, which reads as 360, the old behaviour. See
+   * `presenterCameraQualityFor` in `lib/video-quality.ts`.
+   */
+  cameraHeight?: number;
+  /**
+   * Whether this deployment's `LlLatencyGovernor` may let a segments-mode
+   * viewer's hold-back floor shrink again once real recent segments prove
+   * the remux's cadence is tighter than `EXT-X-TARGETDURATION`'s all-time
+   * worst (`LIVE_HLS_LL_SEGMENT_CADENCE_DECAY`, off by default). Absent on
+   * an older server, which reads as off -- exactly today's behaviour.
+   */
+  llSegmentCadenceDecay?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
@@ -863,19 +880,27 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
-export const createServer = (name: string) =>
-  post<{ server: Server; channels: Channel[] }>("/api/servers", { name });
+export const createServer = (name: string, idempotencyKey?: string) =>
+  post<{ server: Server; channels: Channel[] }>(
+    "/api/servers",
+    { name },
+    idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  );
 
 export const previewDiscordImport = (source: string) =>
   post<DiscordImportPlan>("/api/import/discord/preview", { source });
 
-export const applyDiscordImport = (source: string) =>
+export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
   post<{
     server: Server;
     channels: Channel[];
     roles: ServerRole[];
     invite: Invite;
-  }>("/api/import/discord/apply", { source });
+  }>(
+    "/api/import/discord/apply",
+    { source },
+    idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  );
 
 export const updateServer = (
   serverId: string,
@@ -988,14 +1013,20 @@ export const fetchCommunities = (
  *
  * Idempotent on the server, which is what makes it safe to fire from a card the
  * user may double-tap. `joinedNow` distinguishes a welcome from a re-entry.
+ *
+ * `via` names the door this call is being made from: `"community_address"`
+ * from the `?join=<slug>` flow off `pqp.gg/c/<slug>`, `"community_directory"`
+ * from the directory card, `"qg_hint"` from the QG corner-card hint. So the
+ * server can tell them apart in `server_members.join_source`. Optional: a
+ * caller that omits it still joins.
  */
-export const joinCommunity = (serverId: string) =>
+export const joinCommunity = (serverId: string, via?: CommunityJoinVia) =>
   post<{
     ok: boolean;
     serverId: string;
     serverName: string;
     joinedNow: boolean;
-  }>(`/api/communities/${serverId}/join`, {});
+  }>(`/api/communities/${serverId}/join`, via ? { via } : {});
 
 /**
  * Resolve a public slug to the listing behind it, for a signed-in caller.

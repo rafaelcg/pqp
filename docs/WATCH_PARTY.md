@@ -1642,6 +1642,25 @@ a minute or two part-load errors in ten seconds switches to segments in
 place (no rebuild; this replaced §4's old "pin", which rebuilt the player at
 the conventional ~25 s cushion).
 
+**On segments, the manifest's segment length is a floor (2026-09-25).** A
+segments viewer can only load up to the end of the newest complete segment,
+and `pqp-remux` closes a segment only on a keyframe, so segments run 5 to
+12 s and `EXT-X-TARGETDURATION` (the longest so far) reads 7 to 12. The
+target is therefore never under `EXT-X-TARGETDURATION` + 3 s
+(`LL_SEGMENTS_FETCH_MARGIN_SECONDS`, capped at 20 s), and the force-seek
+ceiling sits a whole target duration above it, because latency is measured
+to the edge of the open segment. The rehearsal that found it (one UK
+viewer, `TARGETDURATION` 8 then 12, target 8) stalled every one to two
+minutes; the lab rig with the real player went from 0.46 to 0.13 s of
+stall per viewer-minute at ~5 s segments, and from 1.94 to 0.96 at ~8 to
+12 s segments, for about 1.5 to 4 s more latency. A viewer who presses
+"Assistir" in the first 12 s of a session (`llStartDelayMs`, read off the
+`startedAt` in the playlist path) waits behind the "starting" screen until
+the session is 12 s old instead of freezing four times while its cushion
+builds (rehearsal: 5.0, 9.1, 9.1 and 4.8 s in the first 30 s; lab go-live
+join, four viewers, first minute: 14 stalls and 37.8 s frozen down to none,
+for a first frame about 5 s later).
+
 Why, measured on the lab rig (`tools/ll-loss-harness`, the real remux, the
 real Worker playlist, the real player in headless Chrome behind jittery
 links): part loading froze a mobile viewer 11 to 33 times a minute, while
@@ -1829,10 +1848,46 @@ the first tick. `voice.hlsMicArchiveStarted` / `voice.hlsMicArchiveStopped`
 zero with the flag on and `liveHls.sessions` above zero means the hosts'
 browsers have not picked up the bundle that publishes the track.
 
-A session records **once or not at all**: the file is named after the session's
-`startedAt`, so a second Track Egress would write to the same key and overwrite
-the half already recorded. Turning the flag back on mid-party therefore does
-not restart it; the next share gets its own name.
+**An archive that ends mid-show comes back in place** (since 2026-09-24, after
+a rehearsal's archive egress ended seven minutes into a fourteen-minute show and
+the voice download stopped there). Every run after the first writes under its
+own name, `<startedAt>-mic-r<its start, ms>.ogg`, never over `-mic.ogg`, and
+still under the `mic` row's `object_prefix`, so retention and `keep_replay`
+cover every run. What brings one back: its egress ended (a first death retries
+in 3 s, a second inside five minutes waits two minutes, the camera's cadence),
+the host's `mic-archive` track was replaced, or the presenter came back on a
+new peer. Each is `voice.hlsMicArchiveRestartedInPlace` with its `reason`
+(`egress-ended`, `mic-track-replaced`, `presenter-reconnected`,
+`mic-track-returned`); a death is `voice.hlsMicArchiveDied` with `retryInMs`.
+The row's `runs` records when each run started (`base`, ms after `startedAt`;
+nothing renders a `mic` row as a playlist). An inherited session still never
+starts a FIRST archive mid-film, and the flag going off stops it for good.
+
+**Nor does the presenter moving machines** (since 2026-09-25, after rehearsal D
+lost its whole voice file). A page reload that lands on the other API replica
+takes the presenter out of LiveKit, so the archive's egress has ended by the
+time the session is handed over and adopted there. The adopting machine used to
+skip the open `mic` row as "not listed" without closing it, and read "a row
+exists" as "never another archive": nothing after the reload was recorded, and
+since the history only offers a row with `ended_at`, the voice before it was
+never offered either ("gravação da voz desligada"). Both adoptions (the LL
+companion's `adoptLlCompanionRows` and the ladder's `adoptRunningLiveHlsSession`)
+now close a row of the session whose egress is gone, and `inheritMicArchive`
+marks a session whose `mic` row exists and is closed as one that recorded: the
+new page's `mic-archive` track starts the next run (`mic-track-returned`), and
+the monitor looks for that track for a minute because it lands a beat after the
+share. `voice.hlsLlCompanionRowsEnded` and `voice.hlsMicArchiveInherited` are
+the log lines. An open row a live machine still holds is never continued, so
+there is never a second archive on one session.
+
+**The download joins the runs into one file.** "Voz do apresentador" over more
+than one run is one Ogg Opus stream (`server/src/voice/ogg-stitch.ts`): later
+runs' pages rewritten into the first run's stream (serial, page sequence,
+granule, CRC; nothing changes length, so `Content-Length` is still exact) and
+Opus silence where the archive was down, so the voice after a restart plays at
+the moment it was spoken and still lines up with the film. A run is placed by
+its start (from its name, or the row for the first run), never earlier than the
+previous one ended. A single run is handed back byte for byte, as before.
 
 **Stitching it back together**, once both files are pulled out of the bucket:
 
@@ -1902,17 +1957,76 @@ command with no deploy, and `liveHls.cameraSessions` on the operator dashboard
 says how many are running.
 
 **What the viewer gets.** A second, muted hls.js instance (`WatchCameraPip`)
-floated in a corner of the film, mounted only in the cinema layout —
-never inside a grid tile, which would be a picture in a picture in a picture,
-and never in the docked mini player, a 240px box with room for the film and
-almost nothing else. The stage and the corner are boxes rather than players
-(`lib/watch-camera-pip.ts`), so swapping (click the small picture) re-attaches
-neither hls.js instance and nobody rebuffers to look at a webcam; the control
-bar stays where it is because it belongs to the stage. The corner is one of
-four and is remembered per browser with the swap (`pqp:watch-camera-pip`).
-**Fullscreen unmounts it**, so a camera nobody can see costs no decode. A
-camera that never produces a frame draws nothing at all — no spinner, no
-placeholder, no error.
+beside or over the film, mounted only in the cinema layout: never inside a
+grid tile, which would be a picture in a picture in a picture, and never in
+the docked mini player, a 240px box with room for the film and almost nothing
+else. A camera that never produces a frame draws nothing at all (no spinner,
+no placeholder, no error), and until its first frame the film keeps the whole
+stage whatever the layout.
+
+**A frozen camera recovers by itself (2026-09-25).** In rehearsal D the webcam
+froze at 13:48:22Z and stayed on that frame for the rest of the show, while
+its playlist kept advancing on the server: hls.js never went fatal, and the
+camera had no watchdog at all. It now has a small one of its own
+(`lib/camera-stall.ts`, `CameraStallWatch`), separate from the film's and much
+smaller. While the camera is mounted (still announced, and not hidden, or
+hidden but carrying the voice) and the page is visible, playback that has not
+moved for 8 s gets one nudge. "Moved" is decoded frames when there is a
+picture, because in "separada" the voice keeps `currentTime` advancing under a
+frozen face, and the clock for the voice-only shape (`cameraProgress`). The
+nudge is `startLoad(-1)` and a seek to the live edge. If the picture is not
+moving 4 s after it (`CAMERA_NUDGE_CHECK_MS`; the nudge's own seek does not
+count as movement) the camera's own hls.js instance is rebuilt, and further
+rebuilds follow 15, 30, 60 and then every 120 s, each with 25 % jitter so a
+camera egress hiccup does not become five hundred simultaneous rebuilds. Ten
+seconds of forward play resets the backoff. It never asks the server anything,
+never draws anything, and never touches the film's player or its audio. A
+rebuild hides the corner until the fresh instance paints, which is better
+than a frozen face.
+
+**A token restamp never touches the camera's player (2026-09-25).** In
+rehearsal E, after the presenter reloaded, the viewer's webcam swapped to a
+new blob every 30 s on the wall clock and froze for ~10 s every minute or so,
+always at exactly 597 frames. The server restamps `cameraHlsUrl`'s `?t=` on the
+audience keyframe, and the camera applied each restamp with
+`hls.loadSource(url)`, believing it reloaded the manifest in place. In hls.js
+1.7 it does not: a different URL (and a restamp always differs, by its token)
+is `detachMedia()` + `attachMedia()` on the same instance, a new MediaSource
+with an empty buffer and the old live position state, which half the time
+played exactly its twenty-second window (597 frames at 30 fps) and stopped.
+The camera now does what the film's player has done since B1.3: `xhrSetup`
+swaps the newest token into each playlist request (`withFreshHlsToken`) and
+the instance is never touched. The native player (no MSE) has no loader, so
+it takes a new `src` only when its token is within 15 minutes of expiring,
+judged on the server's clock (the fresh token's mint time against the
+attached one's expiry, `nativeTokenRefreshDue`). Separately, every camera run writes the one shared
+live playlist and numbers from 0 again, so a run restarted soon after the
+last can list a sequence number the player holds under a different segment;
+hls.js calls that a media sequence mismatch and goes fatal, and the camera now
+rebuilds on it within 3 s of jitter (fatal only, at most every 10 s) instead
+of freezing until the stall watch noticed.
+
+**The viewer picks the layout (2026-09-25).** Rafael's four, from one small
+control in the player's own bar (`watch-camera-layout`, a `Menu`), offered
+only while the presenter's camera is on the stream, so a party with no webcam
+has exactly the bar it always had:
+
+| Layout | What it draws | What it costs |
+|---|---|---|
+| Padrão (default) | The film on the stage, the webcam in a corner (bottom right, movable with the corner button, which comes and goes with the chrome) | Both players |
+| Lado a lado | Halves of the stage; stacked, film on top, when the PLAYER is narrower than 36rem (`@container/watch`), which is a phone held upright | Both players |
+| Ocultar câmera | The film alone | The camera's player is **unmounted**: no download, no decode. Unless it carries the presenter's voice ("separada"), in which case it stays, drawn as the voice-only corner, because hiding a face must not silence the host |
+| Ocultar transmissão | The webcam alone, on the stage | The film keeps playing **underneath, covered**: it carries the party's sound, and detaching it would rebuffer the film on the way back |
+
+Every layout change is a class change on the two elements
+(`cameraPipBoxes` in `lib/watch-camera-pip.ts`); no hls.js instance is ever
+re-attached by it. The choice and the corner are remembered per browser
+(`pqp:watch-camera-pip`, every read and write in `try/catch`, default
+"Padrão"); a preference stored by the old click-to-swap reads as the default,
+never as "hide the film". **Fullscreen now keeps the chosen layout**: it used
+to unmount the camera outright, when a corner was the only way to show one;
+with the picker the viewer says what fullscreen shows, "Ocultar câmera"
+included. The menu portals into the fullscreen element so it opens there.
 
 **Audio stays on the main stream, always**, and the camera playlist has no
 audio track at all (`CAMERA_RUNG.audioKbps = 0`, proto3's "unset"). The two
@@ -1921,8 +2035,36 @@ drift between the face and the film — bounded below by the segment length
 (`LIVE_HLS_SEGMENT_SECONDS`, 4 s in production) and not chased further: holding
 the film back to match a webcam would be a worse film.
 
-**iOS and Android are out of scope.** `cameraHlsUrl` is optional on the shared
-schema, so they parse the frame and ignore the field.
+**Telling the audience, and the bug that hid it (2026-09-25).** The camera
+starts in the reconcile queue's link AFTER the film's reconcile has answered
+the push that found it, so that push never carried it; every later push read
+the room's stream, which by then carried the camera, compared it with the
+reconcile's answer (the same stream) and sent nothing. A viewer got
+`cameraHlsUrl` only when an unrelated push happened to straddle the camera
+start: often in a busy party, never in a quiet one. And an **LL** party never
+got it at all: its camera runs on the LL companion (`llCompanions`), whose
+copy of the stream nobody reads, while every audience reader reads the LL
+stream (`llStreamFor`). The production LL rehearsal that morning recorded
+773 s of `cam360p30` and showed its only viewer the film alone. Now the camera
+reconcile mirrors the slot onto the LL stream (`setLlCameraSlot`,
+`mirrorLlCameraSlot`), asks for a push whenever the slot moves
+(`camera-started` / `camera-stopped` on `voice.hlsChangeHeard`), and
+`pushLiveHls` compares against what the audience was last TOLD
+(`liveHlsCameraUntold`), not against the room it just mutated. Pinned for both
+modes on two instances by `server/src/ws/voice-live-cluster.test.ts`.
+
+**Android is still out of scope.** `cameraHlsUrl` is optional on the shared
+schema, so it parses the frame and ignores the field.
+
+**iOS draws it.** `WatchCameraPip.swift` runs a second, independent
+`AVPlayer` on `cameraHlsUrl`, muted unless `cameraHasVoiceAudio`, in whichever
+of the four layouts the web offers (`pip`, `side`, `stream`, `camera`;
+`voice.hls.cameraLayout` on the web is the same choice, remembered
+separately per platform). Same restamp rule as the film's own player
+(`WatchStreamSwap`): the corner's own swap keys on the playlist's path, not
+`LiveHlsStream.startedAt`, since the camera never mints an identity of its
+own on the wire. See `ios/pqp/Sources/Voice/WatchCameraPip.swift` and
+`ios/pqp/Tests/WatchCameraPipTests.swift`.
 
 **Recording.** The camera's segments live under the same session prefix as
 every other rendition, so the retention sweep and the superseded-session sweep
@@ -1942,6 +2084,100 @@ invariants between them -- including the five that broke together on
 over, and a viewer stuck on "reconnecting" with the truth in the sidebar
 beside it. Read that first when a party is in a state nobody can explain;
 this section is the restart machinery underneath it.
+
+### A restart keeps the session (2026-09-24)
+
+**The ladder restarts IN PLACE.** Production, 2026-09-24, one conventional show:
+at 07:42:32 the 480p egress died 22 s after go-live (`Timestamping error on
+input streams`) and the restart minted a new `startedAt`; at 07:51:41, right
+after a rolling deploy's adoption, the presenter's resumed client republished
+the screen on a new track sid and the session was stopped and started again.
+Every viewer re-attached twice for one party. Now none of these ends the
+session: an egress that died or stuck (`egress-ended`), a replaced screen or
+screen-audio track (`screen-track-replaced`), and the same person back under a
+fresh peer id with a fresh track (`presenter-reconnected`, recognised through
+`setLiveHlsPresenterIdentity`). The room stays in `rooms`, announced, with the
+same stream, camera and voice archive; the ladder's egresses are stopped and a
+new **egress run** starts under the same `startedAt` (`restartRoomInPlace` in
+`hls-egress.ts`). Only a genuine end ends it: the share gone past its grace, the
+host ending the party, the presenter gone, or the restart budget
+(`HLS_MAX_RESTARTS` in five minutes) running out
+(`hlsStopped reason=restart-budget-exhausted`). A session that was never
+announced (its first playlist never went live) still restarts fresh, since
+nobody is attached to it.
+
+**A run writes under its own names** (`hls-runs.ts`), the camera's `-r<ms>` shape:
+`<startedAt>-<rung>-r<ms>_NNNNN.ts`, `...-r<ms>.m3u8` (live) and
+`...-r<ms>-index.m3u8` (the run's whole record). A fresh egress numbers from
+`_00000` again, so a shared name would overwrite the previous run. Every run
+still starts with the row's `object_prefix`, so retention deletes all of them
+and `keep_replay` keeps all of them through the one row.
+
+**The media sequence is durable, on the row.** `hls_sessions.runs` (JSONB, NULL
+for a rung that never restarted) lists `{suffix, base}` per run. `base` is the
+media sequence the run's first segment takes in the stitched playlist, decided
+once at restart time from the previous run's final live playlist (read after
+its egress is stopped: `#EXT-X-MEDIA-SEQUENCE` plus entries), estimated high
+when that cannot be read. The proxy (`renderSignedPlaylist`) reads the runs
+with its liveness check, merges each finished run's frozen tail capped at the
+next run's base, then the current run, and emits one `#EXT-X-DISCONTINUITY` on
+each run's first segment plus `#EXT-X-DISCONTINUITY-SEQUENCE` once one has
+slid out. Because the base is on the row, a second machine, or an API that
+booted after the restart, renders the same sequence line, and a viewer
+bouncing between them through Cloudflare never sees a number reused. The live
+render also drops `#EXT-X-ENDLIST`: a stopped egress writes one, and the row,
+not the transcoder, says when a session is over. While the new run has not
+written yet (its playlist 404s) the proxy serves the frozen tail, so the
+player holds instead of erroring.
+
+**Viewers** keep their player: the same URL means `sameHlsSession`, and the web
+player treats a frozen same-session playlist as a hold rather than a rebuild
+(`hls-stall.ts` puts `sequence-stuck` ahead of `stall` on the conventional
+path, the hold keeps the loader running, and Safari's native element is given
+40 s before its source is reset). The seam is detection plus the new egress's
+cold start: in `tools/restart-harness` (real API build, two processes behind a
+round-robin edge, ffmpeg as the egress, stock hls.js) a 15 s dead gap left the
+playhead moving again 8 s after the new run started, one hls.js instance, one
+master load, no fatal error, over two restarts.
+
+**Recordings** include every run in order: the replay stitches each run's
+`-index.m3u8` into one VOD with a discontinuity between runs (capped the same
+way as the live render), and the film download plans every run the way the
+camera's does, moving each later run's MPEG-TS clock to where its
+`#EXT-X-PROGRAM-DATE-TIME` says it started.
+
+**Adoption carries the runs.** Both the boot reconcile and the resume adoption
+read `runs`, so the monitor probes the playlist the adopted egress is actually
+writing (probing the first run's frozen one would read a healthy ladder as
+stuck). The boot reconcile also passes the ladder's `audio_track_id` now: left
+out, the first reconcile after a deploy saw the screen's music sid disagree
+with a remembered null and restarted the ladder for nothing. A handover is
+refused while a ladder is between runs (there is no running egress to adopt).
+
+**The camera and the host's voice archive ride through it untouched.** Two
+related fixes from the same show, where ~100 s of camera went missing after the
+first rolling restart: a camera adopted with the presenter's separated voice
+(`audio_track_id` on its row) re-seeds the "separada" declaration, which the
+client never re-sends after a deploy, so the first reconcile no longer restarts
+the camera silent; and a camera that dies once retries after 3 s instead of the
+two-minute cooldown (a second death inside five minutes still waits it out).
+
+`voice.hlsRungRestartingInPlace` (stop), `voice.hlsRungRestartedInPlace`
+(`reason`, `runSuffix`, `bases`, `playlistWaitMs`, `seamMs`) and
+`voice.hlsRungRestartFailed` narrate it; `liveHls.restartsInPlaceTotal`,
+`restartsInPlaceByReason` and `restartingSessions` on `/api/admin/metrics`
+count it.
+
+**LL (pqp-remux) keeps its session the same way, on the box.** A dead
+pipeline there is the box's own business: its watchdog restarts a stalled
+session once, inside the same session, and only a second stall demotes it to
+the conventional ladder. A replaced screen or screen-audio track and the same
+person back under a fresh peer id are no longer restarts at all: the box
+rebinds its subscriber to the new track inside the running session, and the
+API tells it who to follow (`POST /sessions/:id/rebind`, `rebindLlSession`).
+The same reasons apply (`screen-track-replaced`, `presenter-reconnected`) and
+the log line is `voice.hlsLlRebound`. See "A low-latency party keeps its
+session when the presenter republishes or reconnects" below.
 
 **Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
 `no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
@@ -1966,6 +2202,136 @@ monitor reads that every tick, ends the `hls_sessions` row, counts
 `liveHls.llDemoted`, logs `voice.hlsLlDemoted channelId reason`, clears the
 party's `low_latency_requested` and reconciles the channel so the rungs start.
 See `docs/plans/LL_HLS.md` §5.
+
+**The party waits for its presenter (2026-09-24).** Production rehearsal B,
+~17:15Z: the presenter reloaded the page. A reload is a clean leave, so the
+seat is gone rather than held for resume, the five-second no-sharer grace ended
+the LL session before the page was back, and the return (a new peer id)
+started a new session with a new `startedAt`: every viewer re-attached and the
+recording split in two. Now a presenter who LEFT or STOPPED SHARING, in a party
+that is not over, is waited for `HLS_PRESENTER_RETURN_GRACE_MS` (default 60 s;
+`0` is the old behaviour and the rollback) while the audience keeps the frozen
+tail (`voice.hlsPresenterReturnHeld`).
+
+- **The same person back inside the window continues the SAME session**
+  (`voice.hlsPresenterReturned samePerson=true`): the LL box is rebound to the
+  new peer (`voice.hlsLlRebound reason=presenter-reconnected`), the ladder
+  restarts in place (#803), the camera and the voice archive stay with the
+  session. `ws/voice.ts` remembers who was presenting (`lastPresenterByChannel`),
+  because a reload leaves no seat anywhere that still names them, and the
+  media path's presenter check counts a presenter being waited for as present,
+  so a ladder whose egress died with the share is not ended as "presenter
+  gone" under the hold.
+- **On the other machine.** A reload that lands on the other replica is found
+  by the owner (the same user sharing on a live other instance) and the session
+  is handed there (#802); the receiving machine recognises the person from the
+  row's new `hls_sessions.presenter_user_id` and rebinds. LL only: a
+  conventional ladder between egress runs cannot be handed over (#803), so its
+  reload on the other replica still ends at the window's close and restarts
+  there. Same machine works for both.
+- **Anybody else sharing is a new session at once** (`samePerson=false`), and
+  nobody back by the end of the window ends it exactly as before
+  (`voice.hlsPresenterReturnExpired`, then `hlsStopped` / `hlsLlStopped reason=no-share`).
+- **The camera across a handover.** Rehearsal B, 17:18:29Z: at the rolling
+  restart's handover the camera recording died, was restarted onto the
+  presenter's OLD camera track (LiveKit lists a republished camera beside the
+  one it replaces for a moment, in no promised order), died again 31 s later
+  with "track not found", and came back at 17:19:04: 52.8 s missing from the
+  camera download. `chooseCameraTrack` keeps the camera the running egress is
+  bound to while it is still listed (an adoption no longer restarts it for a
+  listing race), and after a death or a replacement never goes back onto that
+  track while another camera is listed (`voice.hlsCameraTrackStaleSkipped`).
+
+Pinned by `server/src/ws/voice-hls-rolling-deploy.test.ts` (two replicas, real
+Postgres): a reload on the same machine and on the other one, a different
+person, the window expiring, the ladder's in-place restart, and the camera
+across an LL handover. All but the expiry and different-person cases fail
+without the change.
+
+**The returning presenter is not their own audience (2026-09-25).** Rehearsal
+C: after a presenter reload the host's activity feed showed "+1 assistindo"
+three times inside a minute with one real viewer, and the header read "2
+assistindo". Two causes. The frame kept naming the OLD peer until the reconcile
+rebound the session, while the presenter sat in the room under a new one, and
+`liveStateFromStream` subtracted the presenter by peer id alone, so they
+counted as a viewer. Every stream a socket is handed now carries the person
+too (`LiveHlsStream.presenterUserId`, stamped in `ws/voice.ts` from what the
+process saw share, and on the copy the bus carries to the other machine), and
+the count subtracts every seat belonging to that person. And the reloaded
+feed took "no `channel-live` yet" as a count of 0, so the viewer already
+watching arrived as a fresh "+1"; an unknown count is `null` now and sets no
+baseline (`feedAudienceCount` in `client/src/lib/watch-party-activity.ts`).
+The recorded peak and unique counts were not affected (the history row read
+"pico de 1 pessoa · 1 única"): they come from the viewer presence, not from
+this sum.
+
+**A low-latency party keeps its session when the presenter republishes or
+reconnects (2026-09-24).** The LL twin of the ladder's in-place restart
+(PR #803). Until now `pqp-remux`'s subscriber bound the FIRST screen-share
+track it saw and never looked at another: a republish (the web client does one
+on every resume after an API deploy, and whenever the presenter picks
+something else to share) reached the box only through its one watchdog
+restart, a second republish in the same party demoted it to the conventional
+ladder, and a presenter back under a new peer id (a reconnect that could not
+resume) was a new LL session with a new `startedAt`. Now:
+
+- **The box follows one presenter identity** (`presenterIdentity` on
+  `POST /sessions`; LiveKit identities are peer ids) and binds that
+  identity's newest screen-share track, and its audio, whenever one appears
+  (`tools/pqp-remux/internal/subscriber/binder.go`). A replacement is bound
+  INSIDE the same session: the same ring, part and segment numbering, the same
+  epoch and so the same PROGRAM-DATE-TIME anchor, the same R2 prefix and
+  replay index (`session.Session.BeginVideoSource`). The new source's frames
+  are dropped until its first IDR, which opens a new segment; a new source
+  whose parameter sets differ publishes a new init map with a discontinuity,
+  the path #769 already built. The timeline never rewinds and never gains a
+  hole: the old source's last frame (or the keep-alive's repeat of it) covers
+  the gap. A co-host sharing at the same moment is never bound.
+- **The API rebinds rather than replaces.** The same PERSON under a new peer id
+  (`setLlPresenterIdentity`, registered by `ws/voice.ts` from its peers and
+  the voice registry) is `POST /sessions/:id/rebind` naming the new identity
+  (`rebindLlSession` in `hls-remux.ts`): same URL, same row (whose
+  `presenter_peer_id` follows), `voice.hlsLlRebound reason=presenter-reconnected`.
+  A republish under the same peer id is seen by the LL companion's track probe
+  and nudges the box the same way (`reason=screen-track-replaced`); the box has
+  normally rebound on its own by then and answers `unchanged`.
+- **What the box cannot do is said, and handled by what it could.** An older
+  box without the route (a plain-text 404) falls back to a new session, as LL
+  always did; a box that lost the session does too; a demoted session is left
+  to the demotion sweep; a control API that cannot be reached holds the
+  session and retries on the next reconcile. Each is
+  `voice.hlsLlRebindFailed` with `why` and `fallback`, and
+  `liveHls.llRebindFailuresByWhy` on the dashboard, which belongs at zero.
+  `liveHls.llRebindsTotal` / `llRebindsByReason` count the ones that worked.
+- **Across the two replicas.** A reconnect that lands on the OTHER machine
+  used to be frozen behind the old seat's 90 s resume hold on the machine that
+  owned the session, while the machine with the presenter stood down (the
+  session was owned elsewhere), and then ended for a new one. The owner now
+  looks up the same user sharing on another live machine and hands the session
+  there (`voice.hlsPresenterReconnectedElsewhere`, then #802's ordinary
+  handover); the receiving machine's resume adoption recognises the person
+  from the old seat's registry row and rebinds.
+- **The camera and the host's voice archive ride through it.** Same
+  `startedAt`, so the LL companion is kept; the camera follows its new track,
+  and "separada" moves with the reattached peer id.
+- **Waiting for the new source's keyframe is not a stall.** The box drops the
+  new source's frames until its first IDR, so no part is published and the
+  last IDR recedes while packets arrive: exactly what the watchdog's
+  part-stuck restart and IDR-gap demotion (3x the segment target) read as a
+  broken session. While a rebind waits (`RebindWaitingSince` on the pipeline's
+  health) neither fires, for up to `FIRST_PART_TIMEOUT_MS` (60 s), after which
+  it demotes with its own reason, `rebind-no-keyframe`. When the keyframe
+  lands both clocks restart from it. So a publisher slow to answer the
+  keyframe request (15 s and more) leaves `liveHls.llDemoted` at 0.
+- **The replay and the film are one recording.** The VOD playlist lists every
+  segment once, in order, with the init switch; the film planner reads it as
+  one clock (an init change, not a restart).
+
+Pinned by `tools/pqp-remux/internal/{subscriber,session,pipeline,control,film}`'s
+rebind tests, `server/src/voice/hls-remux.test.ts` §"a presenter track change
+keeps the LL session", `hls-ll-companions.test.ts`, the two-machine case in
+`server/src/ws/voice-hls-rolling-deploy.test.ts`, and
+`tools/ll-loss-harness`'s `SCENARIO=republish` / `SCENARIO=reconnect`.
 
 **An LL session ending has to reach the audience the same way a conventional
 one does, and for eighteen minutes on 2026-09-15 it did not.** `pushLiveHls`
@@ -2500,7 +2866,97 @@ in place. Raise the `WATCH_PARTY_MAX_PUBLISH_HEIGHT` default once the egress
 moves closer to the presenter (a regional media box) or an OBS/RTMP ingest path
 exists.
 
+### A share that shrank and never grew back (2026-09-25)
+
+Production rehearsal F: after the presenter reloaded, the share went out at
+280x180 and stayed there for the rest of the show, so the audience and the
+recording got 280x180 upscaled. `qualityLimitationReason` said `bandwidth`,
+the encoder had 891 kbit/s granted and sent about 390, and nothing on the page
+had asked for anything smaller.
+
+**It is not the ingest pin.** PR 475's `maintain-resolution` + divisor-1 pin
+was removed on purpose by PR 668 (under a real uplink dip it held the pixels
+and let the frame rate collapse to 1-3 fps), so a watch-party share is
+`maintain-framerate` with no divisor, and PR 827 only made the rest of the pin
+(layer trim, priority) re-apply after a reload.
+
+**What wedges it**, reproduced in a real Chromium against a local LiveKit with
+200 ms of RTT and read out of WebRTC's own verbose log: a fresh peer connection
+starts its estimate near 300 kbit/s, the quality scaler's initial frame dropper
+walks the share down a notch per dropped frame (every renegotiation, the camera
+going up included, re-arms it), and Chrome applies the restriction at the
+capturer, so the screen track itself reports the small size. When the scaler
+then asks for a notch back up, the capture never delivers a larger frame, and
+libwebrtc will not adapt again until one arrives: "Not adapting up because
+VideoStreamAdapter returned kAwaitingPreviousAdaptation", for as long as the
+share lasts. The bandwidth estimate cannot climb out on its own either, because
+a 280x180 encoder never sends enough for the estimator to see more room.
+
+**The fix** (`client/src/lib/screen-resolution-recovery.ts`) rides the 2 s
+`setHlsSource` tick while the share feeds a party. When the top layer is at
+80 % of its planned height or less, Chrome blames bandwidth, the encoder is
+sending under 80 % of its own target, and that has held for 6 s without
+climbing, the sender's `degradationPreference` goes to `balanced` and straight
+back: libwebrtc clears the adapter's restrictions on any switch into or out of
+balanced, and the capture returns to full size at once. A share that is
+spending its whole budget (a real squeeze) or limited by CPU is never touched,
+and repeated kicks back off to one a minute. Console:
+`[pqp] screen share unstuck from its adapted size`.
+
+### The presenter's camera at 480p
+
+Rafael, 2026-09-25: "480p tops, then if we can we bump down to 360p whilst
+keeping the stream as priority". **`LIVE_HLS_CAMERA_480`, on by default**, and
+off is exactly the 360p behaviour below, both halves, with no client rebuild.
+
+- **The browser** asks `GET /api/live-hls/config` for `cameraHeight` (480 while
+  the switch is on; absent or anything else reads as 360) and caps a
+  presenter's camera at that (`presenterCameraQualityFor`,
+  `effectiveCameraQuality`): 854x480, 700 kbit/s ceiling. While presenting the
+  camera publishes ONE fallback layer under the capture
+  (`presenterCameraSimulcastRungs`: 360p under 480p), because livekit-client
+  builds only two layers for a capture under 960 px and takes the smallest
+  rung it is handed as the bottom one, so the ordinary `[180, 360]` would have
+  put 180p under 480p.
+- **"Bump down" is the browser's own congestion control**, not a measurement
+  of ours. The share's sender bids at `priority: "high"` while it feeds the
+  party (`raiseScreenPriority` in `livekit-session.ts`, on the FIRST encoding
+  only: priority is per sender, Chrome reads it off `encodings[0]`, and a
+  write that puts it on a later encoding is refused whole, which is why every
+  simulcast share kept `low` until 2026-09-25), four times the weight of
+  the camera's default `low`. When the uplink cannot carry both, the camera
+  gets what the film does not need, its 480p layer pauses, and 360p carries
+  on. A browser that refuses `priority` once is never asked again, so the
+  layer pin it rides on cannot fail twice over it.
+- **The server** encodes the camera slot at 854x480, 800 kbit/s, H.264 Main
+  3.1 (`CAMERA_RUNG_480`) only when LiveKit says the presenter's camera
+  publishes at least 450 lines on its shorter side (`cameraRungFor`); a 360p
+  publication (an older tab, a presenter who picked 360p, the switch off) or
+  an unknown size gets the 360p rung, so the egress never upscales. Picked
+  once, at egress start: when the 480p layer pauses under pressure, the SFU
+  forwards the 360p layer and the egress scales it up for as long as that
+  lasts, which is a cheap bilinear scale, rather than restarting the camera
+  (a gap and a new run in the recording) every time a presenter's Wi-Fi
+  hiccups.
+- **The price**: `HLS_CAMERA_480_MBPS` is 1.5 times the 360p camera's estimate
+  (1.78 times the pixels, and decode and mux do not grow with the output),
+  still under half a rendition; `decideCameraEgress` prices the slot by the
+  shape it is about to start, so a box with room for a 360p camera and not a
+  480p one refuses it (and retries on the cooldown) rather than overrunning.
+  An adopted camera is charged at the 480p price while the switch is on,
+  because its row does not say which size it was. The egress container's CPU
+  cap is untouched.
+- **The name stays `cam360p30`.** It is an identifier: object prefixes in the
+  bucket, `hls_sessions.rung`, the playlist path, the retention sweep, the
+  history and download plans and the edge Worker's route all key on it, and
+  old recordings carry it. Renaming would mean reading two names everywhere
+  for as long as an old recording exists, to change a string no viewer sees.
+  `voice.hlsCameraStarted` logs `height` and `publishedLines` for each run.
+
 ### The presenter's camera is held at 360p while the party is on air
+
+(With `LIVE_HLS_CAMERA_480` on, the default since 2026-09-25, the cap is
+480p; see the section above. This is what the switch off restores.)
 
 Measured on staging, 2026-09-12. A presenter turned their webcam on during a
 live party: VP8 720p with three simulcast layers up to 1.5 Mbit/s, beside a
@@ -2521,6 +2977,23 @@ is presenting. It is a cap, not a setting — the chosen quality is stored
 untouched and comes back the moment the session ends — and it never raises
 somebody who already picked smaller. Client-only: a tab that has not reloaded
 keeps the old behaviour.
+
+**The cap holds through a quick re-share (2026-09-25).** Production rehearsal
+C: the presenter stopped the SCREEN only and shared again two seconds later,
+and the camera recording lost 3.1 s. The 2 s sampler saw "not sharing" and
+lifted the cap, the camera was republished at full size, and the re-share
+capped it again: two republishes, two new camera tracks, and each new track is
+a camera egress restart on the server (the server itself leaves a running
+camera egress alone while its track is still listed). The cap now also holds
+while the room's live stream still names THIS peer as presenter
+(`watchPartyCameraCapWanted` in `client/src/lib/hls-source-quality.ts`),
+which is the server's return hold for a presenter who stopped sharing
+(`HLS_PRESENTER_RETURN_GRACE_MS`), and comes off when the session does
+(`voice-stream` null). A page reload still costs the camera its gap: the old
+page's camera track dies with it, and the new one only exists once the
+reloaded page has rejoined, published a camera and the egress has started on
+it (17.5 s in the rehearsal, most of it the page coming back and the camera
+being turned on again).
 
 ### The restart that should not happen at all: swapping the share in place
 
@@ -3136,6 +3609,55 @@ Turning a server **off while a party is streaming** stops the egress at the
 next reconcile and the audience loses the picture. That is the one control on
 that page with a confirmation.
 
+### Low latency is a click too (2026-09-25)
+
+`LIVE_HLS_LL_ALLOWLIST` had the same problem `LIVE_HLS_SERVER_ALLOWLIST` had
+before `live_hls_enabled`: adding a server meant an `.env` edit and a
+container recreate. And low latency is the mode that makes many small parties
+affordable: a conventional party transcodes and counts against
+`LIVE_HLS_MAX_SESSIONS` (3), while an LL party is a `pqp-remux` passthrough
+that only costs the camera rung and the voice archive (about 0.25 core
+measured). So the per-server decision is a column too:
+**`servers.live_hls_ll_enabled`**, the same tri-state, read the same way.
+
+| `live_hls_ll_enabled` | Answer |
+|---|---|
+| `TRUE` | low latency is available on this server |
+| `FALSE` | it is not, **even if `LIVE_HLS_LL_ALLOWLIST` names the server** |
+| `NULL` | `LIVE_HLS_LL_ALLOWLIST` decides, exactly as before the column existed |
+
+`LIVE_HLS_LL` and the edge playlist front (`LIVE_HLS_PLAYLIST_BASE_URL`) stay
+the master switches above all three: no row can turn on a deployment that
+cannot serve an LL playlist. Every existing row is NULL, so the deploy that
+adds the column changes nothing, including for the servers production already
+names in the variable.
+
+**Where it is read.** `liveHlsLLServerOverride` (`server/src/voice/hls-remux.ts`)
+reads the row per call, never cached, and a failed read answers NULL (the
+variable), the same rule `liveHlsServerOverride` follows. Two readers:
+`resolveHlsModeForChannel`, which reads it **only when the live party asked
+for low latency** (with nothing requested the answer is `conventional`
+whatever the row says, so the reconcile that runs on every roster event does
+not pay a query for it), and `liveHlsConfigForServer`, which is what gives the
+host the "Baixa latência (beta)" switch (`lowLatency.available`). A deployment
+with `LIVE_HLS_LL` off issues no query at all. Pinned by "the per-server low
+latency switch" in `server/src/voice/hls-ll-demotion.test.ts`, which runs with
+`VOICE_REGISTRY=postgres` and `CLUSTER_BUS=postgres` set, and by the pure
+matrix in `hls-remux.test.ts` ("NULL answers exactly what no override
+answers").
+
+**Where it is written.** The same operator route as availability:
+`PUT /api/admin/server-live-hls` takes `{ serverId, enabled?, lowLatency? }`,
+at least one of the two, and an omitted field is left as it is, so every body
+the dashboard sent before this change means what it meant. The controles table
+has a "baixa latência" column with its own three buttons, and the waitlist's
+"Ativar" sets both at once. Audited as `server.live_hls_update` with a
+`liveHlsLowLatency` change and logged as `operator.liveHlsLlServerSet`.
+
+Like availability, the host's switch is cached for the page's lifetime
+(`useLiveHlsConfig`), so a host who already has the channel open reloads
+before "Baixa latência (beta)" appears.
+
 ### The one real cost left: concurrent parties
 
 Measured on the same LiveKit and egress versions production runs (2026-09-09,
@@ -3632,6 +4154,120 @@ and the header avatars all live there. `App.tsx` also owns
 `use-voice.ts`'s mixer what to carry, fired from an effect keyed on whichever
 party this browser is presenting.
 
+## The waitlist
+
+Rafael, 2026-09-25: watch parties are gated per server because each one costs
+media-box CPU, so treat the gate as a campaign. Everybody sees the button, the
+button explains the feature and takes names, and the operator turns servers on
+by hand. That doubles as a measure of demand: sodtz ran a 61-person film night
+on a plain voice channel because his server did not have watch parties.
+
+**Nothing here touches a server that runs parties, or a party that is
+running.** The teaser is drawn only where `GET /api/live-hls/config?serverId=`
+has answered `enabled: false` (`shouldOfferWatchPartyTeaser`,
+`client/src/lib/watch-party-waitlist.ts`); `true` gets exactly the create
+control it had before and `null` (not answered yet) gets nothing. The client
+does not even ask the waitlist API for a server whose config said yes. On the
+server, joining refuses a server where `resolveLiveHlsForServer` already says
+yes (409). The one write that reaches the availability column is the
+operator's own flip, and the waitlist follows it, never the other way round.
+Pinned by "the waitlist teaser" in `live-party-block.test.tsx` (it never
+replaces the create control and never covers a live party) and by
+`client/e2e/watch-party.spec.ts` passing unchanged with the campaign on.
+
+### What a person sees
+
+- **The teaser.** In the sidebar slot where Criar watch party lives, for
+  everybody in a server that does not have watch parties: "Watch party" with
+  "Acesso antecipado" under it, or "Na lista" once they joined
+  (`LivePartyBlock.teaser`). Only in the branch with no live party and no
+  create control.
+- **The dialog** (`components/watch-party/waitlist/`): an illustration of a
+  party (`WatchPartyStageArt`: the landing's own hero painting as the film,
+  the real `LivePill`, the presenter's camera in the corner layout, the chat
+  column, reactions on the real `live-reaction-float` keyframe, which stop
+  under reduced motion), the five things a party is, why it is gated, and then
+  one of four endings, decided by the server:
+  - `request`: the owner, an admin, or anybody holding MANAGE_CHANNELS or
+    MANAGE_SERVER. Which server (defaults to the open one), roughly how many
+    would watch (five ranges, required), what they want to watch (140
+    characters, optional) and a Twitch or Kick channel (optional, normalised
+    to `twitch.tv/name` or `kick.com/name`).
+  - `member`: everybody else. "Peça para quem administra o servidor", and
+    "Eu também quero", which records `interest`: counted, never acted on.
+  - `serverless`: somebody with no server (typically arriving from the public
+    page). Their interest has `server_id` NULL.
+  - an existing row, shown as what it is: waiting ("Você está na lista",
+    with "Editar pedido"), declined, or approved.
+- **"Watch party liberada!"** when the operator turns a server on
+  (`WatchPartyApprovedToasts`): live over the socket, and from
+  `GET /api/watch-party/waitlist/approvals` at boot for anybody who was
+  offline, until they press a button. "Abrir servidor" is a full load of
+  `/app/server/<id>`, because the tab's live-hls answer is cached and still
+  says no.
+
+### The table, the routes, the notice
+
+`watch_party_waitlist` (`schema.sql`): one row per person per server (a
+partial unique index, plus one serverless row per person), `kind` request or
+interest, `audience_bucket`, `note`, `twitch_or_kick`, `status`
+waiting / approved / declined, `decided_at`, and `seen_at` for the card.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/watch-party/waitlist?serverId=` | a member (404 otherwise) | `{ campaign, canRequest, available, entry }`, the caller's own row only |
+| `POST /api/watch-party/waitlist` | a member, or anybody with `serverId: null` | join or edit; the server picks the kind; the status never moves from here |
+| `GET /api/watch-party/waitlist/approvals` | anybody | their unseen approvals, only for servers they are still in |
+| `POST /api/watch-party/waitlist/approvals/ack` | anybody | dismiss one |
+| `GET /api/admin/watch-party-waitlist` | operator (machine token or instance moderator) | per server (at most 200): the newest 20 requests with name, range, note and channel plus the total; interest, status counts and the range histogram aggregated in SQL |
+| `PUT /api/admin/watch-party-waitlist/decline` | operator | the server's waiting rows, declined, silently |
+
+Rate limited at five joins and then one every 30 seconds per account. Zod
+lives in `packages/shared/src/watch-party-waitlist.ts`.
+
+**Approving is by hand, and it is the availability flip.** Rafael's call:
+there is no auto-approve. `setServerLiveHls` (`services/operator.ts`) calls
+`approveWatchPartyWaitlist` whenever a write leaves the server effectively on
+(`resolveLiveHlsForServer`, so a TRUE row under a master switch that is off
+tells nobody "liberada"): the dashboard's "Ativar" on the waitlist (which also
+sets `live_hls_ll_enabled`, see §"Low latency is a click too") and the plain
+"ligar" in controles. Every waiting row of that server becomes approved, and
+the people behind them get a `watch-party-waitlist-approved` frame on this
+machine's sockets, the same frame relayed over `CLUSTER_BUS` to the other
+machine (`watch-party.waitlist-approved`), and a push in their language, in
+batches of 150 people. It runs after the column is written, so nothing a
+party needs waits on it. The approval UPDATE may fail the request (the flip
+is idempotent, so the operator presses it again); the notices are best
+effort. A join that races the flip (checked "off", inserted after the sweep)
+asks again after its INSERT and approves itself.
+
+**The campaign switch.** `WATCH_PARTY_WAITLIST`: `on`, `off`, and unset
+follows `isLiveHlsEnabled()`, so a self-host that cannot run a watch party
+never teases one and the hosted deployment has it on until somebody sets
+`off`. It is read per request; the client never needs a rebuild. The teaser
+also sits behind the existing `VITE_WATCH_PARTY_CHANNELS` build flag, like
+everything else in the sidebar block.
+
+Since the runtime flags landed the variable is only the default: the
+`watch_party_waitlist` flag (dashboard, **controles → interruptores**) turns
+the campaign on or off globally, or for one server, with no restart, and an
+open tab drops or shows the teaser on its next focus. See
+`docs/FEATURE_FLAGS.md`.
+
+**Counters.** `watchPartyWaitlist` on `GET /api/admin/metrics`: `joinsTotal`,
+`joins7d`, `requestsTotal`, `interestTotal`, `serversWaiting`,
+`approvedTotal`.
+
+### The public page
+
+`pqp.gg/watch-party` (and `/watchparty`, canonical `/watch-party`): the same
+illustration and feature list, and a button that carries
+`?intent=watch-party-waitlist` through sign-up (`lib/handle-intent.ts`, stashed
+at boot and on the click, consumed after onboarding), so a new account lands
+with the dialog open. Open Graph copy comes from `marketing-meta.ts`, pinned
+to `watchPartyPage.seo.*` by its test; the card image is the default one.
+Both words are reserved handles.
+
 ## Native apps
 
 Both decode `type` as a plain string, so the new type never fails a parse.
@@ -3844,11 +4480,24 @@ later, per app:
   than squashing it to zero height.
 
   Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`,
-  `ios/pqp/Tests/WatchPartyTests.swift`.
+  `ios/pqp/Tests/WatchPartyTests.swift`, `ios/pqp/Tests/WatchCameraPipTests.swift`.
+
+  The presenter's camera (`cameraHlsUrl`) draws too, as a draggable corner
+  PiP with the web's four layouts, remembered per phone
+  (`WatchCameraPip.swift`).
+
+  A plain voice channel with a share going out, and a watch party with
+  nobody eligible to speak on it, both deliberately have NO "join the call"
+  button anywhere on this stage: the web guards against exactly that third
+  join button reappearing on a watch party channel (pass 5 of this doc), and
+  iOS still has no stage/cohost/raise-hand surface that would make an
+  unconditional join button mean anything different from taking a seat that
+  cannot speak. Revisit once the party OBJECT below exists here.
 
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share
-  control unless `welcome.canStream`, and the create sheet offering the type.
+  control unless `welcome.canStream`, past broadcasts (the web's
+  `watch-party-history-dialog.tsx`), and the create sheet offering the type.
 - Android: a distinct icon and the create sheet are still missing. The share
   control follows `welcome.canStream` rather than the transport now, so a host
   can present on a LiveKit room, which is the transport every watch party runs

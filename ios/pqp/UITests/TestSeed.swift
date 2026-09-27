@@ -248,6 +248,31 @@ enum TestSeed {
         test.wait(for: [done], timeout: 15)
     }
 
+    /// A week-long invite to a seeded server, as its code. What a friend
+    /// would have pasted in the group chat.
+    static func createInvite(_ test: XCTestCase, serverId: String) -> String {
+        guard !serverId.isEmpty else { return "" }
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/servers/\(serverId)/invites")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token())", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["expiresInHours": 168])
+
+        let done = XCTestExpectation(description: "create invite")
+        nonisolated(unsafe) var code = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let invite = json["invite"] as? [String: Any] {
+                code = invite["code"] as? String ?? ""
+            }
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+        XCTAssertFalse(code.isEmpty, "Could not mint an invite to arrive through")
+        return code
+    }
+
     /// Removes a seeded server. Best effort — a failure here should not fail
     /// the test that already passed, but it is asserted loudly enough to notice
     /// if cleanup silently stops working and the list starts growing again.

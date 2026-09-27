@@ -167,4 +167,70 @@ class WatchSourceTest {
         val audienceKeyframeMs = 30_000L
         assertTrue(HLS_VIEWER_TOKEN_TTL_MS - WATCH_TOKEN_RENEWAL_MS > audienceKeyframeMs)
     }
+
+    // MARK: - The presence beat's own credential
+
+    @Test
+    fun `hlsSessionToken reads the t off an api-relative url`() {
+        assertEquals(
+            "abc.def-_",
+            hlsSessionToken("/api/voice/hls-playlist/c1/1757000000000?t=abc.def-_"),
+        )
+    }
+
+    @Test
+    fun `hlsSessionToken reads the t off an absolute url`() {
+        assertEquals(
+            "xyz",
+            hlsSessionToken("https://cdn.example/live/x.m3u8?t=xyz&other=1"),
+        )
+    }
+
+    @Test
+    fun `hlsSessionToken is null without one`() {
+        assertEquals(null, hlsSessionToken("https://cdn.example/live/x.m3u8?sig=1"))
+    }
+
+    // MARK: - The camera PiP's own reattach rule
+
+    /**
+     * Same rule as the film, ported for a playlist that never gets its own
+     * `startedAt`: the camera rides the film's session, so only the PATH
+     * (the run) tells the two apart, never the query string a restamp
+     * rewrites every thirty seconds.
+     */
+    @Test
+    fun `a camera token restamp is not a new source`() {
+        assertFalse(
+            watchCameraSourceChanged(
+                "https://api.test/api/voice/hls-playlist/c1/100-cam360p30?t=aaa",
+                "https://api.test/api/voice/hls-playlist/c1/100-cam360p30?t=bbb",
+            ),
+        )
+    }
+
+    @Test
+    fun `a camera run restart under the same session is a new source`() {
+        assertTrue(
+            watchCameraSourceChanged(
+                "https://api.test/api/voice/hls-playlist/c1/100-cam360p30-r1?t=aaa",
+                "https://api.test/api/voice/hls-playlist/c1/100-cam360p30-r2?t=aaa",
+            ),
+        )
+    }
+
+    @Test
+    fun `the camera appearing or disappearing is a change`() {
+        assertTrue(watchCameraSourceChanged(null, "https://x/cam.m3u8?t=a"))
+        assertTrue(watchCameraSourceChanged("https://x/cam.m3u8?t=a", null))
+        assertFalse(watchCameraSourceChanged(null, null))
+    }
+
+    @Test
+    fun `cameraPathKey strips only the query`() {
+        assertEquals(
+            "https://api.test/api/voice/hls-playlist/c1/100-cam360p30",
+            cameraPathKey("https://api.test/api/voice/hls-playlist/c1/100-cam360p30?t=aaa&x=1"),
+        )
+    }
 }

@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HlsWatchPlayer } from "./hls-watch-player";
 
 /**
@@ -42,15 +42,16 @@ describe("the presenter's camera reaches the stage", () => {
     expect(markup({ cameraSrc: null })).not.toContain("watch-camera-pip");
   });
 
-  it("mounts nothing in fullscreen", () => {
-    // Unmounted rather than hidden: a camera nobody can see must not go on
-    // decoding 360p for a whole film.
-    expect(
-      markup({
-        cameraSrc: CAMERA,
-        fullscreen: { active: true, toggle: () => {} },
-      }),
-    ).not.toContain("watch-camera-pip");
+  it("keeps the viewer's layout in fullscreen", () => {
+    // Fullscreen used to unmount the camera ("the film and nothing else").
+    // With the picker the viewer says what fullscreen shows, "hide camera"
+    // included, so the camera and the picker both stay.
+    const drawn = markup({
+      cameraSrc: CAMERA,
+      fullscreen: { active: true, toggle: () => {} },
+    });
+    expect(drawn).toContain("watch-camera-pip");
+    expect(drawn).toContain("watch-camera-layout");
   });
 
   it("mounts nothing inside a grid tile or the docked mini player", () => {
@@ -65,12 +66,12 @@ describe("the presenter's camera reaches the stage", () => {
     );
   });
 
-  it("draws no swap control before the camera has a frame", () => {
+  it("draws no corner control before the camera has a frame", () => {
     // A control over a picture that is not there yet is a control that does
     // nothing, on the first thing a viewer's eye lands on.
     const drawn = markup({ cameraSrc: CAMERA });
     expect(drawn).toContain("watch-camera-pip");
-    expect(drawn).not.toContain("watch-camera-pip-swap");
+    expect(drawn).not.toContain("watch-camera-pip-corner");
   });
 
   it("keeps the film's own element on the stage", () => {
@@ -78,5 +79,70 @@ describe("the presenter's camera reaches the stage", () => {
     // it: the stage `<video>` is what the control bar, the stall watchdog and
     // fullscreen all act on.
     expect(markup({ cameraSrc: CAMERA })).toContain("object-contain");
+  });
+});
+
+describe("the layout picker (2026-09-25)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stored(layout: string) {
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => JSON.stringify({ corner: "bottom-right", layout }),
+        setItem: () => {},
+      },
+    });
+  }
+
+  it("is in the player's chrome while the presenter's camera is on", () => {
+    const drawn = markup({ cameraSrc: CAMERA });
+    expect(drawn).toContain('data-testid="watch-camera-layout"');
+    // The default with nothing stored.
+    expect(drawn).toContain('data-camera-layout="pip"');
+    // A real, named button: keyboard reachable, a label a screen reader says.
+    expect(drawn).toMatch(/<button[^>]*aria-label="[^"]+"[^>]*data-testid="watch-camera-layout"|<button[^>]*data-testid="watch-camera-layout"[^>]*aria-label="[^"]+"/);
+  });
+
+  it("is absent with no camera: the stage looks exactly as it did", () => {
+    expect(markup()).not.toContain("watch-camera-layout");
+  });
+
+  it("is absent for the presenter's voice alone, which has no picture", () => {
+    expect(markup({ cameraSrc: CAMERA, cameraHasVideo: false })).not.toContain(
+      "watch-camera-layout",
+    );
+  });
+
+  it("is absent in the docked mini player", () => {
+    expect(markup({ cameraSrc: CAMERA, layout: "mini" })).not.toContain(
+      "watch-camera-layout",
+    );
+  });
+
+  it("'hide camera' unmounts the webcam's player, and keeps the picker to bring it back", () => {
+    stored("stream");
+    const drawn = markup({ cameraSrc: CAMERA });
+    expect(drawn).not.toContain('data-testid="watch-camera-pip"');
+    expect(drawn).toContain('data-camera-layout="stream"');
+  });
+
+  it("'hide camera' keeps a camera that carries the presenter's voice, drawn as the voice", () => {
+    stored("stream");
+    const drawn = markup({ cameraSrc: CAMERA, cameraHasVoiceAudio: true });
+    expect(drawn).toContain('data-testid="watch-camera-pip"');
+    // Drawn as the voice-only corner: no picture, the voice slider still there.
+    expect(drawn).not.toContain("data-has-video");
+    expect(drawn).toContain("watch-camera-pip-voice-volume");
+  });
+
+  it("every other layout mounts the camera and keeps the film's own element", () => {
+    for (const layout of ["pip", "side", "camera"]) {
+      stored(layout);
+      const drawn = markup({ cameraSrc: CAMERA });
+      expect(drawn).toContain('data-testid="watch-camera-pip"');
+      expect(drawn).toContain(`data-camera-layout="${layout}"`);
+    }
   });
 });

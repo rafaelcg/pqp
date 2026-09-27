@@ -42,6 +42,8 @@ describe("marketingPageFromMetaPath", () => {
       "/download",
       "/garanta",
       "/claim",
+      "/watch-party",
+      "/watchparty",
       "/privacy",
       "/terms",
       "/cookies",
@@ -101,6 +103,8 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/android", prefix: "androidPage" },
     { path: "/download", prefix: "downloadPage" },
     { path: "/claim", prefix: "claim" },
+    { path: "/watch-party", prefix: "watchPartyPage" },
+    { path: "/watchparty", prefix: "watchPartyPage" },
   ];
 
   for (const { path, prefix } of PINNED) {
@@ -337,6 +341,7 @@ describe("Spanish", () => {
       ["/android", "androidPage"],
       ["/download", "downloadPage"],
       ["/claim", "claim"],
+      ["/watch-party", "watchPartyPage"],
     ] as const) {
       const head = renderMarketingHead(path, "es");
       expect(head, path).toContain(

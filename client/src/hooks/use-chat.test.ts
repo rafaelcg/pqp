@@ -920,6 +920,116 @@ describe("typing indicators", () => {
     } as never);
     expect(chat.getTypingUsers()).toEqual([]);
   });
+
+  // Regression for the busy-watch-party freeze: `getTypingUsers()` is read on
+  // every render of whatever displays it, which in a live channel can be
+  // dozens of times a second. Rebuilding the array every call hands the
+  // caller a new reference each time even when nobody's typing state moved,
+  // which defeats a `memo()` boundary downstream (see message-list.tsx's
+  // `MessageList`). It must return the SAME array when the active typers are
+  // unchanged, and a genuinely new array only when they differ.
+  it("returns the same array reference across calls when typers have not changed", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    const second = chat.getTypingUsers();
+    expect(second).toBe(first);
+
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u2",
+      displayName: "Beto",
+    } as never);
+    const third = chat.getTypingUsers();
+    expect(third).not.toBe(first);
+    expect(third).toEqual([
+      { userId: "u1", displayName: "Ana" },
+      { userId: "u2", displayName: "Beto" },
+    ]);
+
+    vi.advanceTimersByTime(6_000);
+    const fourth = chat.getTypingUsers();
+    expect(fourth).toEqual([]);
+    expect(fourth).not.toBe(third);
+    // Empty stays stable too, once settled.
+    expect(chat.getTypingUsers()).toBe(fourth);
+  });
+
+  // Farol caught this: the cache key used to be user ids alone, so a rename
+  // mid-typing (the same person, still actively typing) left the indicator
+  // showing the stale name until the active set changed for some other
+  // reason. The display name has to be part of what invalidates the cache.
+  it("picks up a display name change for a user who stays active", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    expect(first).toEqual([{ userId: "u1", displayName: "Ana" }]);
+
+    // Same user, still active, renamed mid-typing (a fresh typing-broadcast
+    // carrying the new name, the only way this field can change).
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana Paula",
+    } as never);
+    const second = chat.getTypingUsers();
+    expect(second).not.toBe(first);
+    expect(second).toEqual([{ userId: "u1", displayName: "Ana Paula" }]);
+  });
+
+  // A second Farol pass on the same fix: the cache key used to join
+  // "userId:displayName" pairs with a plain comma, so a comma inside a
+  // display name could make two DIFFERENT active sets stringify to the same
+  // key. Concretely, under the old scheme, one user named "1,b:2" and two
+  // users named "1" / "2" both joined to the literal string "a:1,b:2" —
+  // proof by construction, not just a suspicion.
+  it("does not collide when a display name contains the old separator", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1,b:2",
+    } as never);
+    const oneUserCommaName = chat.getTypingUsers();
+    expect(oneUserCommaName).toEqual([{ userId: "a", displayName: "1,b:2" }]);
+
+    // Switch to the OTHER active set that collided under the old scheme:
+    // "a" typing "1" and "b" typing "2".
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1",
+    } as never);
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "b",
+      displayName: "2",
+    } as never);
+    const twoUsersSplit = chat.getTypingUsers();
+    expect(twoUsersSplit).not.toBe(oneUserCommaName);
+    expect(twoUsersSplit).toEqual(
+      expect.arrayContaining([
+        { userId: "a", displayName: "1" },
+        { userId: "b", displayName: "2" },
+      ]),
+    );
+    expect(twoUsersSplit).toHaveLength(2);
+  });
 });
 
 describe("history pagination", () => {

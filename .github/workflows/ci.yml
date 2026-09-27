@@ -31,7 +31,6 @@ on:
       - ".github/workflows/monitor-*.yml"
       - ".github/workflows/pr-size-label.yml"
       - ".github/workflows/provision-turn.yml"
-      - "tools/db-backup/**"
       - "tools/sfu/**"
       - "tools/log-shipper/**"
   pull_request:
@@ -56,7 +55,6 @@ on:
       - ".github/workflows/monitor-*.yml"
       - ".github/workflows/pr-size-label.yml"
       - ".github/workflows/provision-turn.yml"
-      - "tools/db-backup/**"
       - "tools/sfu/**"
       - "tools/log-shipper/**"
   workflow_dispatch:

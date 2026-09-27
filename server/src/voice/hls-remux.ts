@@ -3,6 +3,7 @@ import {
   remuxControlSignaturePayload,
   remuxErrorResponseSchema,
   remuxListSessionsResponseSchema,
+  remuxRebindResponseSchema,
   remuxSessionInfoSchema,
   REMUX_CONTROL_NONCE_HEADER,
   REMUX_CONTROL_SIGNATURE_HEADER,
@@ -11,6 +12,7 @@ import {
   LIVE_HLS_MODE_PARAM,
   type LiveHlsStream,
   type RemuxKeyframePolicy,
+  type RemuxRebindResult,
   type RemuxSessionInfo,
 } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
@@ -135,6 +137,12 @@ export function llPlaylistFrontConfigured(): boolean {
 export function resolveHlsMode(input: {
   serverId: string | null | undefined;
   requestedMode: boolean;
+  /**
+   * `servers.live_hls_ll_enabled` for this server, when the caller read it.
+   * Omitted or null is "nobody decided", which is the allowlist rule below
+   * verbatim, so every caller that predates the column is unchanged.
+   */
+  override?: boolean | null;
 }): "conventional" | "ll" {
   if (!input.requestedMode) {
     return "conventional";
@@ -144,6 +152,9 @@ export function resolveHlsMode(input: {
   }
   if (!llPlaylistFrontConfigured()) {
     return "conventional";
+  }
+  if (input.override === true || input.override === false) {
+    return input.override ? "ll" : "conventional";
   }
   const allowlist = liveHlsLLAllowlist();
   if (allowlist === null) {
@@ -162,15 +173,92 @@ export function resolveHlsMode(input: {
  * flag alone and ignores the allowlist, same as `liveHlsConfig()`'s base
  * answer for every other field here.
  */
-export function liveHlsLLAvailable(serverId: string | null | undefined): boolean {
+export function liveHlsLLAvailable(
+  serverId: string | null | undefined,
+  override: boolean | null = null,
+): boolean {
   if (!isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
     return false;
+  }
+  // The per-server row, TRUE or FALSE, beats the variable: same order and
+  // same reason as `resolveLiveHlsForServer` in `hls-egress.ts`. A server id
+  // is required for it to mean anything; the deployment-wide answer (no id)
+  // never has a row to read.
+  if (serverId && (override === true || override === false)) {
+    return override;
   }
   const allowlist = liveHlsLLAllowlist();
   if (allowlist === null) {
     return true;
   }
   return Boolean(serverId && allowlist.has(serverId));
+}
+
+/**
+ * `LIVE_HLS_LL_SEGMENT_CADENCE_DECAY`: **off by default**, and off is
+ * byte-for-byte the governor's behaviour before this existed --
+ * `GET /api/live-hls/config`'s `llSegmentCadenceDecay` reaching the client
+ * as `undefined`/`false` is what keeps `LlLatencyGovernor`'s
+ * `cadenceDecayEnabled` off, so nothing here changes anything until it is
+ * turned on.
+ *
+ * On, a segments-mode ("LL-lite") viewer's hold-back floor may ALSO shrink
+ * once several segments in a row prove the remux's real cadence is tighter
+ * than the worst segment `EXT-X-TARGETDURATION` has ever recorded --
+ * `EXT-X-TARGETDURATION` can only grow for a manifest's whole life (HLS's
+ * own rule), so today one slow segment (a presenter reconnect, a keyframe
+ * request that took a few retries) taxes the REST of the party at that
+ * floor even once the remux is back to closing 4-5 s segments. See
+ * `LlLatencyGovernor.decayFloorToRecentCadence` in
+ * `client/src/lib/hls-ll-latency.ts` for the bound: it never gives back
+ * more than the last `LL_SEGMENT_CADENCE_WINDOW` REAL segment durations
+ * justify, and a single slow segment reappearing raises the floor again on
+ * the very next manifest update, same as today.
+ *
+ * Read per call like every other switch in this file, so it can be turned
+ * on for one deployment (or rolled back) with no client rebuild -- a
+ * viewer already mid-party picks it up on this browser's next
+ * `GET /api/live-hls/config` fetch (today: the next page load or fresh
+ * player mount, since that answer is cached for the tab's lifetime, same
+ * as `lowLatency.available` itself; see `use-live-hls-config.ts`).
+ */
+export function liveHlsLLSegmentCadenceDecayEnabled(): boolean {
+  return process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY === "true";
+}
+
+/**
+ * `servers.live_hls_ll_enabled` for one server: TRUE / FALSE when an operator
+ * decided from the dashboard, NULL when nobody has.
+ *
+ * THE LOW-LATENCY TWIN OF `liveHlsServerOverride` (`hls-egress.ts`), and it
+ * keeps that function's two rules. Read per call, never cached, so a flip
+ * takes effect on the next reconcile and the next config read with no deploy
+ * and no restart. And a failed read answers NULL, which is
+ * `LIVE_HLS_LL_ALLOWLIST` exactly as it was before the column existed: a
+ * database hiccup must not flip a running party's mode.
+ *
+ * Callers only ask when the answer can matter (`LIVE_HLS_LL` on and an edge
+ * front configured), so a deployment without LL issues no query at all.
+ */
+export async function liveHlsLLServerOverride(
+  serverId: string | null | undefined,
+): Promise<boolean | null> {
+  if (!serverId || !isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
+    return null;
+  }
+  try {
+    const result = await getPool().query<{ live_hls_ll_enabled: boolean | null }>(
+      `SELECT live_hls_ll_enabled FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    return result.rows[0]?.live_hls_ll_enabled ?? null;
+  } catch (error) {
+    logEvent("voice.hlsLlOverrideReadFailed", {
+      serverId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /**
@@ -622,10 +710,19 @@ export async function resolveHlsModeForChannel(
     channelId,
     request.partyCreatedAtMs,
   );
-  const llAvailable = liveHlsLLAvailable(serverId);
+  // The dashboard's per-server LL switch, read only when a party actually
+  // asked: with nothing requested the mode is `conventional` whatever the row
+  // says, so there is no reason to spend a query on it on every roster event.
+  // A NULL row (every server nobody touched) and a failed read both answer
+  // the allowlist, which is this function before the column existed.
+  const llOverride = request.requested
+    ? await liveHlsLLServerOverride(serverId)
+    : null;
+  const llAvailable = liveHlsLLAvailable(serverId, llOverride);
   const mode = resolveHlsMode({
     serverId,
     requestedMode: request.requested && !partyDemoted && !demotionUnattributed,
+    override: llOverride,
   });
   // ONLY WHILE THERE IS A CHOICE TO EXPLAIN. With `LIVE_HLS_LL` unset every
   // decision is `conventional` for the one reason nobody needs telling, and
@@ -1277,10 +1374,70 @@ async function findRemuxSessionById(
   }
 }
 
+/**
+ * What the box said to `POST /sessions/:id/rebind`, as the five answers the
+ * caller acts on differently. `unsupported` is a box too old to have the
+ * route (its ServeMux answers a plain-text 404, or a 405), which is the one
+ * case where falling back to a new session is the right thing; `gone` is a
+ * JSON 404 from a box that has the route and not the session.
+ */
+type RemuxRebindAnswer =
+  | { kind: "ok"; result: RemuxRebindResult }
+  | { kind: "unsupported"; status: number }
+  | { kind: "gone" }
+  | { kind: "demoted" }
+  | { kind: "failed"; error: string };
+
+async function remuxRebindSession(
+  sessionId: string,
+  presenterIdentity: string,
+): Promise<RemuxRebindAnswer> {
+  let response: Response;
+  try {
+    response = await remuxFetch("POST", `/sessions/${sessionId}/rebind`, {
+      presenterIdentity,
+    });
+  } catch (error) {
+    return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+  if (response.status === 200) {
+    try {
+      const parsed = remuxRebindResponseSchema.parse(await response.json());
+      if (parsed.result === "unsupported") {
+        return { kind: "unsupported", status: 200 };
+      }
+      return { kind: "ok", result: parsed.result };
+    } catch (error) {
+      return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  if (response.status === 409) {
+    return { kind: "demoted" };
+  }
+  if (response.status === 404 || response.status === 405) {
+    // JSON with the box's own words: the route exists and the session does
+    // not. Anything else (Go's plain-text "404 page not found"): the route
+    // does not exist, so this box cannot rebind at all.
+    let jsonError: string | null = null;
+    try {
+      const parsed = remuxErrorResponseSchema.safeParse(await response.json());
+      jsonError = parsed.success ? parsed.data.error : null;
+    } catch {
+      jsonError = null;
+    }
+    if (response.status === 404 && jsonError === "session not found") {
+      return { kind: "gone" };
+    }
+    return { kind: "unsupported", status: response.status };
+  }
+  return { kind: "failed", error: await errorMessage(response) };
+}
+
 function buildStartRequest(input: {
   sessionId: string;
   channelId: string;
   startedAt: number;
+  presenterPeerId: string;
 }): {
   sessionId: string;
   room: string;
@@ -1292,6 +1449,7 @@ function buildStartRequest(input: {
   keyframePolicy: RemuxKeyframePolicy;
   pliPaceMs: number;
   pliGateFactor: number;
+  presenterIdentity: string;
 } {
   const cfg = remuxSessionConfig();
   return {
@@ -1319,6 +1477,11 @@ function buildStartRequest(input: {
     keyframePolicy: cfg.keyframePolicy,
     pliPaceMs: cfg.pliPaceMs,
     pliGateFactor: cfg.pliGateFactor,
+    // WHOSE SCREEN. LiveKit identities are peer ids, so this names the
+    // presenter exactly: the box binds only their screen share and follows
+    // it through every republish, instead of the first screen share it
+    // happens to see. An older box ignores the field.
+    presenterIdentity: input.presenterPeerId,
   };
 }
 
@@ -1383,6 +1546,26 @@ interface LlRoom {
    * not reconnected yet", not "they stopped sharing".
    */
   adoptedAtMs?: number;
+  /**
+   * Who is presenting, as a person rather than a socket, when this process
+   * can say (`setLlPresenterIdentity`). A reconnect that could not resume
+   * comes back under a fresh peer id; the same person is still the same
+   * party, and their session is rebound in place rather than replaced.
+   */
+  presenterUserId?: string | null;
+  /**
+   * The row's `presenter_peer_id` has not caught up with a rebind yet (its
+   * UPDATE failed). Retried on every reconcile until it lands: the other
+   * machine's resume adoption matches on that column.
+   */
+  presenterRowStale?: boolean;
+  /**
+   * Whether the row carries `presenter_user_id`. False for a session this
+   * process adopted (a row written before the column, or by a machine that
+   * could not name the person): filled on the first reconcile that can,
+   * while the presenter is still here to be named (Farol review, PR #817).
+   */
+  presenterUserRecorded?: boolean;
 }
 
 const llRooms = new Map<string, LlRoom>();
@@ -1415,6 +1598,21 @@ let llStopFailures = 0;
  * sat at zero through the incident it was invented to name.
  */
 let llDemoted = 0;
+/**
+ * LL sessions kept across a presenter track change (`voice.hlsLlRebound`), by
+ * reason: `presenter-reconnected` (the same person under a new peer id) and
+ * `screen-track-replaced` (a republish seen by the companion probe). The LL
+ * twin of the ladder's `restartsInPlaceByReason`.
+ */
+const llRebindsByReason = new Map<string, number>();
+let llRebindsTotal = 0;
+/**
+ * Rebinds the box could not do, by why (`voice.hlsLlRebindFailed`):
+ * `unsupported` (a box without the route, answered with a new session),
+ * `session-gone`, `demoted`, `control-api-error`. Belongs at zero once the
+ * box carries the route.
+ */
+const llRebindFailuresByWhy = new Map<string, number>();
 
 function llObjectPrefix(channelId: string, startedAt: number): string {
   // Same scheme as `hlsObjectPrefix` in `hls-egress.ts` (`live/<channel>/<startedAt>-<suffix>`),
@@ -1483,6 +1681,7 @@ async function recordLlSessionStarted(
   partTargetMs: number,
   originBaseUrl: string,
   watchPartySessionId: string | null,
+  presenterUserId: string | null = null,
 ): Promise<boolean> {
   try {
     await getPool().query(
@@ -1491,8 +1690,8 @@ async function recordLlSessionStarted(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, mode, remux_session_id,
           presenter_peer_id, part_target_ms, origin_base_url, instance_id,
-          watch_party_session_id, keep_replay)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9, TRUE)
+          watch_party_session_id, keep_replay, presenter_user_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9, TRUE, $10)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
@@ -1511,6 +1710,9 @@ async function recordLlSessionStarted(
         // channel" are certainly the same. A demotion reads it back off the
         // row rather than asking the channel again.
         watchPartySessionId,
+        // The person, so the machine this is handed to can recognise them
+        // coming back under another peer id (see the column's comment).
+        presenterUserId,
       ],
     );
     return true;
@@ -1598,6 +1800,64 @@ export function llStreamFor(channelId: string): LiveHlsStream | null {
   return llRooms.get(channelId)?.stream ?? null;
 }
 
+/** The camera fields an LL stream carries while its companion runs a camera. */
+export interface LlCameraSlot {
+  cameraHlsUrl: string;
+  cameraHasVideo: boolean;
+  cameraHasVoiceAudio: boolean;
+}
+
+/**
+ * STATE THE PRESENTER'S CAMERA ON THE LL STREAM ITSELF.
+ *
+ * An LL party's camera is a LiveKit egress run by the companion room in
+ * `hls-egress.ts` (`llCompanions`), and until 2026-09-25 its `cameraHlsUrl`
+ * was written onto the COMPANION's copy of the stream and nowhere else. Every
+ * reader that hands a stream to an audience (`pushLiveHls`, the keyframe,
+ * `GET /live`) reads this map through `llStreamFor`, so an LL viewer was
+ * never told a camera existed: the production rehearsal that morning
+ * recorded 773 s of `cam360p30` and showed its only viewer the film alone.
+ *
+ * `hls-egress.ts` calls this every time the companion's camera slot changes,
+ * and again after every LL reconcile (a resume or an adoption rebuilds the
+ * stream from scratch). Only for the session the slot belongs to: a slot for
+ * an older `startedAt` is dropped rather than pinned onto a new session.
+ * Returns whether the stream changed.
+ */
+export function setLlCameraSlot(
+  channelId: string,
+  startedAt: number,
+  slot: LlCameraSlot | null,
+): boolean {
+  const room = llRooms.get(channelId);
+  if (!room || room.stream.startedAt !== startedAt) {
+    return false;
+  }
+  const current = room.stream;
+  if (slot) {
+    if (
+      current.cameraHlsUrl === slot.cameraHlsUrl &&
+      current.cameraHasVideo === slot.cameraHasVideo &&
+      current.cameraHasVoiceAudio === slot.cameraHasVoiceAudio
+    ) {
+      return false;
+    }
+    room.stream = { ...current, ...slot };
+    return true;
+  }
+  if (current.cameraHlsUrl === undefined) {
+    return false;
+  }
+  const {
+    cameraHlsUrl: _url,
+    cameraHasVideo: _video,
+    cameraHasVoiceAudio: _audio,
+    ...rest
+  } = current;
+  room.stream = rest;
+  return true;
+}
+
 interface OpenLlRow {
   id: string;
   startedAtMs: number;
@@ -1609,6 +1869,8 @@ interface OpenLlRow {
   instanceId: string | null;
   /** The `channel_sessions` row that asked for LL. NULL on a pre-column row. */
   watchPartySessionId: string | null;
+  /** The presenter as a person (`presenter_user_id`). NULL on older rows. */
+  presenterUserId: string | null;
   /**
    * `part_target_ms` AS STORED, which is what a resume must hand the
    * audience rather than whatever `LIVE_HLS_REMUX_PART_MS` says right now:
@@ -1646,9 +1908,11 @@ async function findOpenLlRow(
       instance_id: string | null;
       watch_party_session_id: string | null;
       part_target_ms: number | null;
+      presenter_user_id?: string | null;
     }>(
       `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at,
-              stop_attempts, instance_id, watch_party_session_id, part_target_ms
+              stop_attempts, instance_id, watch_party_session_id, part_target_ms,
+              presenter_user_id
        FROM hls_sessions
        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
        ORDER BY started_at DESC
@@ -1671,6 +1935,7 @@ async function findOpenLlRow(
         instanceId: row.instance_id,
         watchPartySessionId: row.watch_party_session_id,
         partTargetMs: row.part_target_ms,
+        presenterUserId: row.presenter_user_id ?? null,
       },
     };
   } catch (error) {
@@ -1831,6 +2096,7 @@ async function startLlSession(
   // truth (see `OpenLlRow.partTargetMs`). A NULL on a pre-column row falls
   // back to today's config, which is what it would have been written with.
   let partTargetMs = cfg.partMs;
+  const startedAtFromRow = openRow !== null;
   if (openRow) {
     // Our own unresolved attempt for this exact presenter: resume it
     // deterministically. `remuxSessionId` should already be set (the INSERT
@@ -1851,6 +2117,7 @@ async function startLlSession(
       cfg.partMs,
       originBaseUrl,
       party.ok ? party.id : null,
+      await llIdentityOf(channelId, presenterPeerId),
     );
     if (!inserted) {
       // No remux call was ever made: nothing on the box to roll back.
@@ -1880,7 +2147,7 @@ async function startLlSession(
       info = existing;
     } else {
       info = await remuxStartSession(
-        buildStartRequest({ sessionId, channelId, startedAt }),
+        buildStartRequest({ sessionId, channelId, startedAt, presenterPeerId }),
       );
     }
   } catch (error) {
@@ -1897,6 +2164,8 @@ async function startLlSession(
     return null;
   }
 
+  const startPerson = await llIdentityOf(channelId, presenterPeerId);
+  const resumedRow = startedAtFromRow;
   const stream: LiveHlsStream = {
     hlsUrl: llPlaylistUrl(channelId, startedAt),
     startedAt,
@@ -1911,7 +2180,14 @@ async function startLlSession(
     // started with.
     partTargetMs,
   };
-  llRooms.set(channelId, { sessionId, startedAt, presenterPeerId, stream });
+  llRooms.set(channelId, {
+    sessionId,
+    startedAt,
+    presenterPeerId,
+    stream,
+    presenterUserId: startPerson,
+    presenterUserRecorded: startPerson !== null && !resumedRow,
+  });
   logEvent("voice.hlsLlStarted", { channelId, sessionId, subscribed: info.subscribed });
   return stream;
 }
@@ -2144,13 +2420,48 @@ export async function adoptRunningLlHlsSession(
     );
   };
 
+  // THE SAME PERSON UNDER A NEW PEER ID is still this party: a reconnect
+  // that could not resume, landing on this machine. Adopt the session as it
+  // is (the box still follows the old identity) and rebind it below. The old
+  // peer's person comes from the voice registry, where it is held for its
+  // resume window; a peer nobody can name is a different person, which is
+  // what this always assumed.
+  let reconnectedFrom: string | null = null;
+  let rowPresenterStale = false;
   if (row.presenterPeerId !== presenterPeerId) {
-    // A DIFFERENT PERSON IS PRESENTING NOW. A resume keeps its peer id, so a
-    // mismatch here is a genuine handover and deserves its own session.
-    return refuse("fresh", "presenter-changed", {
-      startedAt: row.startedAtMs,
-      was: row.presenterPeerId,
-    });
+    if (
+      row.presenterPeerId &&
+      ((await sameLlPerson(channelId, row.presenterPeerId, presenterPeerId)) ||
+        (row.presenterUserId !== null &&
+          row.presenterUserId === (await llIdentityOf(channelId, presenterPeerId))))
+    ) {
+      // The same person: known from the old peer if anything still names it,
+      // and otherwise from the row (a reload leaves no seat behind).
+      reconnectedFrom = row.presenterPeerId;
+    } else {
+      // ...UNLESS THE BOX ALREADY FOLLOWS THIS PEER: a rebind whose row write
+      // was lost with the process that made it. The box, not the row, is the
+      // durable record of who it follows (Farol review, PR #813). Asked only
+      // on this mismatch, so an ordinary resume costs nothing extra.
+      let boxFollows = false;
+      try {
+        const listed = await remuxListSessions();
+        boxFollows =
+          listed.find((session) => session.sessionId === row.remuxSessionId)
+            ?.presenterIdentity === presenterPeerId;
+      } catch {
+        boxFollows = false;
+      }
+      if (!boxFollows) {
+        // A DIFFERENT PERSON IS PRESENTING NOW. A genuine handover deserves
+        // its own session.
+        return refuse("fresh", "presenter-changed", {
+          startedAt: row.startedAtMs,
+          was: row.presenterPeerId,
+        });
+      }
+      rowPresenterStale = true;
+    }
   }
 
   const liveOthers = await liveOtherInstances();
@@ -2225,21 +2536,28 @@ export async function adoptRunningLlHlsSession(
   }
 
   const startedAt = row.startedAtMs;
+  const adoptedPeer = reconnectedFrom ?? presenterPeerId;
   const stream: LiveHlsStream = {
     hlsUrl: llPlaylistUrl(channelId, startedAt),
     startedAt,
-    presenterPeerId,
+    presenterPeerId: adoptedPeer,
     delaySeconds: llDelaySeconds(),
     mode: "ll",
     partTargetMs: row.partTargetMs ?? remuxSessionConfig().partMs,
   };
-  llRooms.set(channelId, {
+  const adoptedRoom: LlRoom = {
     sessionId: row.remuxSessionId,
     startedAt,
-    presenterPeerId,
+    presenterPeerId: adoptedPeer,
     stream,
     adoptedAtMs: Date.now(),
-  });
+    presenterUserId: await llIdentityOf(channelId, presenterPeerId),
+  };
+  llRooms.set(channelId, adoptedRoom);
+  if (rowPresenterStale) {
+    adoptedRoom.presenterRowStale = true;
+    await persistLlPresenter(channelId, adoptedRoom);
+  }
   // Not remembered in the decision cache: an adoption is answered once and
   // every later call short-circuits on `llRooms.has` above.
   logEvent("voice.hlsLlSessionResumeAdopted", {
@@ -2249,21 +2567,297 @@ export async function adoptRunningLlHlsSession(
     from: row.instanceId,
     sessionId: row.remuxSessionId,
     rowId: row.id,
+    ...(reconnectedFrom ? { reconnectedFrom } : {}),
   });
+  if (reconnectedFrom) {
+    const outcome = await rebindLlSession(
+      channelId,
+      adoptedRoom,
+      presenterPeerId,
+      "presenter-reconnected",
+    );
+    if (outcome.kind === "fallback") {
+      // A box that cannot rebind: what LL did before, a session of their
+      // own. Ours now, so ours to stop; the caller starts the new one.
+      await stopLlSession(channelId, "presenter-changed");
+      return { kind: "fresh" };
+    }
+    return { kind: "adopted", stream: outcome.stream };
+  }
   return { kind: "adopted", stream };
+}
+
+// ---------------------------------------------------------------------------
+// Rebinding in place: the same party, a new screen track
+// ---------------------------------------------------------------------------
+
+/**
+ * Which person a peer is, as `ws/voice.ts` knows it: its own `peers` map
+ * first, and the voice registry's row (`voice_peers.user_id`) for a peer
+ * seated on the other machine, a presenter held for their resume window
+ * included. Null when nobody can say: the peer is long gone.
+ */
+export type LlPresenterIdentity = (
+  channelId: string,
+  peerId: string,
+) => string | null | Promise<string | null>;
+
+let llPresenterIdentity: LlPresenterIdentity | null = null;
+
+/** `ws/voice.ts` registers the room's own answer; see `LlPresenterIdentity`. */
+export function setLlPresenterIdentity(identity: LlPresenterIdentity | null): void {
+  llPresenterIdentity = identity;
+}
+
+async function llIdentityOf(channelId: string, peerId: string): Promise<string | null> {
+  const identity = llPresenterIdentity;
+  if (!identity) {
+    return null;
+  }
+  try {
+    return (await identity(channelId, peerId)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether two peer ids are the same PERSON. Unknown on either side is "no":
+ * a new session is what LL always did, so it is the safe answer.
+ */
+async function sameLlPerson(channelId: string, a: string, b: string): Promise<boolean> {
+  if (a === b) {
+    return true;
+  }
+  const [x, y] = await Promise.all([llIdentityOf(channelId, a), llIdentityOf(channelId, b)]);
+  return x !== null && x === y;
+}
+
+/**
+ * Whether `peerId` is the same PERSON already presenting `room`. The person
+ * is remembered when the session starts or is adopted, and asked again from
+ * the old peer id when it was not known then (a boot adoption runs before any
+ * socket is back): a peer held for its resume window is still findable.
+ */
+async function sameLlPresenterPerson(
+  room: LlRoom,
+  channelId: string,
+  peerId: string,
+): Promise<boolean> {
+  if (room.presenterPeerId === peerId) {
+    return true;
+  }
+  const known = room.presenterUserId ?? (await llIdentityOf(channelId, room.presenterPeerId));
+  if (!known) {
+    return false;
+  }
+  room.presenterUserId = known;
+  return (await llIdentityOf(channelId, peerId)) === known;
+}
+
+type LlRebindOutcome =
+  | { kind: "rebound"; stream: LiveHlsStream }
+  | { kind: "held"; stream: LiveHlsStream; why: string }
+  | { kind: "fallback" };
+
+/**
+ * Write the room's presenter peer id onto its row. Returns whether it landed;
+ * a failure marks the room so the next reconcile tries again (Farol review,
+ * PR #813: a single swallowed failure left the row naming the old peer for
+ * good, and a later handover could then no longer recognise the presenter).
+ */
+async function persistLlPresenter(channelId: string, room: LlRoom): Promise<boolean> {
+  try {
+    const person = await llIdentityOf(channelId, room.presenterPeerId);
+    if (!person && !room.presenterRowStale && room.presenterPeerId) {
+      // Nothing to add: the peer id is already on the row, and nobody can
+      // name the person yet. Asked again on a later reconcile.
+      return true;
+    }
+    await getPool().query(
+      `UPDATE hls_sessions
+          SET presenter_peer_id = $2,
+              presenter_user_id = COALESCE($3, presenter_user_id)
+        WHERE object_prefix = $1 AND ended_at IS NULL`,
+      [llObjectPrefix(channelId, room.startedAt), room.presenterPeerId, person],
+    );
+    if (person) {
+      room.presenterUserId = person;
+      room.presenterUserRecorded = true;
+    }
+    room.presenterRowStale = false;
+    return true;
+  } catch (error) {
+    room.presenterRowStale = true;
+    logEvent("voice.hlsLlSessionRecordFailed", {
+      channelId,
+      startedAt: room.startedAt,
+      step: "presenter-peer",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * KEEP THE SESSION, CHANGE THE TRACK. PR #803 made the conventional ladder
+ * restart in place when the presenter republishes or comes back under a new
+ * peer id; this is the LL half. The box's subscriber follows one presenter
+ * identity through every republish on its own (`internal/subscriber`'s
+ * binder), so a republish by the same peer needs nothing from here but a
+ * nudge; a new peer id for the same person needs this call to name them.
+ * Either way the box keeps the session id, the R2 prefix, part and segment
+ * numbering and the PROGRAM-DATE-TIME anchor, so the audience keeps the same
+ * URL and the replay and the film stay one recording.
+ *
+ * What the box can answer, and what each means here:
+ *  - rebound (`bound`, `unchanged`, `waiting`, `pending`): the session stays,
+ *    under the new peer id, and so does its row (`presenter_peer_id` moves
+ *    with it, so the other machine's resume adoption matches the peer that
+ *    is actually presenting now).
+ *  - `unsupported` (a box that predates the route): FALL BACK to what LL did
+ *    before, a new session. Logged with why.
+ *  - `gone`: the box no longer holds the session. Fall back too; the demotion
+ *    sweep would otherwise find it gone on its next tick and demote the party
+ *    to the conventional ladder, for a presenter who is sharing right now.
+ *  - `demoted`: HELD. The demotion sweep owns that session's end, and minting
+ *    a new LL session here would race it.
+ *  - `failed` (the control API could not be asked): HELD, retried on the next
+ *    reconcile. Could not ask is not permission to tear down, the rule this
+ *    whole file is built on.
+ */
+async function rebindLlSession(
+  channelId: string,
+  room: LlRoom,
+  presenterPeerId: string,
+  reason: "presenter-reconnected" | "screen-track-replaced",
+  detail: Record<string, unknown> = {},
+): Promise<LlRebindOutcome> {
+  const started = Date.now();
+  const answer = await remuxRebindSession(room.sessionId, presenterPeerId);
+  if (answer.kind === "ok") {
+    const from = room.presenterPeerId;
+    if (from !== presenterPeerId) {
+      room.presenterPeerId = presenterPeerId;
+      room.stream = { ...room.stream, presenterPeerId };
+      // The session is rebound on the box either way; only the other
+      // machine's adoption reads the row, and a failed write is retried on
+      // the next reconcile (`presenterRowStale`).
+      room.presenterRowStale = true;
+      await persistLlPresenter(channelId, room);
+    }
+    llRebindsTotal += 1;
+    llRebindsByReason.set(reason, (llRebindsByReason.get(reason) ?? 0) + 1);
+    logEvent("voice.hlsLlRebound", {
+      channelId,
+      sessionId: room.sessionId,
+      startedAt: room.startedAt,
+      reason,
+      from,
+      to: presenterPeerId,
+      result: answer.result,
+      ms: Date.now() - started,
+      ...detail,
+    });
+    return { kind: "rebound", stream: room.stream };
+  }
+  const why =
+    answer.kind === "unsupported"
+      ? "unsupported"
+      : answer.kind === "gone"
+        ? "session-gone"
+        : answer.kind === "demoted"
+          ? "demoted"
+          : "control-api-error";
+  const fallback =
+    answer.kind === "unsupported" || answer.kind === "gone"
+      ? reason === "presenter-reconnected"
+        ? "new-session"
+        : "none"
+      : answer.kind === "demoted"
+        ? "demotion-sweep"
+        : "retry";
+  llRebindFailuresByWhy.set(why, (llRebindFailuresByWhy.get(why) ?? 0) + 1);
+  logEvent("voice.hlsLlRebindFailed", {
+    channelId,
+    sessionId: room.sessionId,
+    startedAt: room.startedAt,
+    reason,
+    why,
+    fallback,
+    from: room.presenterPeerId,
+    to: presenterPeerId,
+    ...(answer.kind === "unsupported" ? { status: answer.status } : {}),
+    ...(answer.kind === "failed" ? { error: answer.error } : {}),
+    ...detail,
+  });
+  if (fallback === "new-session") {
+    return { kind: "fallback" };
+  }
+  return { kind: "held", stream: room.stream, why };
+}
+
+/**
+ * The presenter's screen (or screen audio) track was replaced under the same
+ * peer id: a republish, which the web client does on every resume after a
+ * deploy and whenever the presenter changes what they share. `hls-egress.ts`
+ * sees it through the LL companion's track probe and calls this. The box
+ * follows the presenter's newest track on its own; this names them again so
+ * a box that somehow missed it binds it now, and so the API's log says what
+ * happened (`voice.hlsLlRebound reason=screen-track-replaced`). Never ends
+ * or restarts anything: an older box that cannot rebind is left to its own
+ * watchdog, exactly as before.
+ *
+ * Serialized with this channel's reconciles (`llReconcileQueue`). Answers
+ * whether the replacement is dealt with; false means the control API could
+ * not be asked, and the caller should nudge again on its next reconcile.
+ */
+export function rebindLlForReplacedTrack(
+  channelId: string,
+  presenterPeerId: string,
+  detail: Record<string, unknown> = {},
+): Promise<boolean> {
+  let done = true;
+  const previous = llReconcileQueue.get(channelId) ?? Promise.resolve();
+  const chained = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const room = llRooms.get(channelId);
+      if (!room || room.presenterPeerId !== presenterPeerId) {
+        return room?.stream ?? null;
+      }
+      const outcome = await rebindLlSession(
+        channelId,
+        room,
+        presenterPeerId,
+        "screen-track-replaced",
+        detail,
+      );
+      // ONLY "could not ask" is worth asking again. A box without the route,
+      // one that lost the session, or a demoted session will answer the same
+      // way next time, and their fallbacks are somebody else's.
+      done = !(outcome.kind === "held" && outcome.why === "control-api-error");
+      return llRooms.get(channelId)?.stream ?? null;
+    });
+  llReconcileQueue.set(channelId, chained);
+  void chained.finally(() => {
+    if (llReconcileQueue.get(channelId) === chained) {
+      llReconcileQueue.delete(channelId);
+    }
+  });
+  return chained.then(() => done);
 }
 
 /**
  * The LL half of `reconcileLiveHlsNow`, single-flighted per channel. No
  * track probing: unlike the conventional ladder, `pqp-remux` finds the
  * presenter's screen share itself (its README, "Presenter authorization" —
- * the first `SCREEN_SHARE` source it sees), so there is nothing here to
- * compare a track sid against. A presenter reconnecting under a fresh peer
- * id is therefore NOT specially reattached the way the conventional path
- * does it: the simpler rule below (same peer id keeps the session, any
- * other change restarts it) is correct for L1.5's scope and can be
- * sharpened once `L1.6`'s watchdog exists to make a restart cheap to
- * recover from.
+ * the presenter identity it is told, through every republish), so there is
+ * nothing here to compare a track sid against. Same peer id keeps the
+ * session; the same PERSON under a new peer id (a reconnect that could not
+ * resume) is rebound in place (`rebindLlSession`); anybody else is a new
+ * session. A replaced screen track under the same peer id is seen by the
+ * companion probe in `hls-egress.ts` (`rebindLlForReplacedTrack`).
  *
  * SELF-CONTAINED SINGLE-FLIGHT. `hls-egress.ts`'s own `reconcileLiveHls`
  * already serializes calls per channel with its own queue, but a Farol
@@ -2304,9 +2898,29 @@ async function reconcileLlHlsNowLocked(
   }
   const current = llRooms.get(channelId);
   if (current && current.presenterPeerId === presenterPeerId) {
+    if (current.presenterRowStale || !current.presenterUserRecorded) {
+      await persistLlPresenter(channelId, current);
+    }
     return current.stream;
   }
   if (current) {
+    // A NEW PEER ID IS NOT NECESSARILY A NEW PRESENTER. A reconnect that
+    // could not resume comes back under a fresh peer id and republishes the
+    // screen; the same person is still the same party. Rebind the running
+    // session to them, in place: same URL, same numbering, same recording.
+    // Only a box that cannot (an older binary, or one that lost the session)
+    // falls through to the new session this always used to be.
+    if (await sameLlPresenterPerson(current, channelId, presenterPeerId)) {
+      const outcome = await rebindLlSession(
+        channelId,
+        current,
+        presenterPeerId,
+        "presenter-reconnected",
+      );
+      if (outcome.kind !== "fallback") {
+        return outcome.stream;
+      }
+    }
     await stopLlSession(channelId, "presenter-changed");
     if (llRooms.has(channelId)) {
       // The stop above did not land (still in the map): do not start a
@@ -2586,6 +3200,8 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
     instanceId: row.instance_id,
     watchPartySessionId: row.watch_party_session_id,
     partTargetMs: row.part_target_ms,
+    // Only a stop is ever retried from here; nothing reads the person.
+    presenterUserId: null,
   };
 }
 
@@ -2777,14 +3393,20 @@ export async function adoptLlHlsSessions(): Promise<{
       continue;
     }
     const startedAt = new Date(row.started_at).getTime();
-    llRooms.set(row.channel_id, {
+    // THE BOX IS THE DURABLE RECORD OF WHO IT FOLLOWS. A rebind whose row
+    // write never landed (and a process that died before retrying it) leaves
+    // `presenter_peer_id` naming the old peer while the box follows the new
+    // one; trusting the row would have the new peer's reconnect read as a
+    // different presenter and replace the session (Farol review, PR #813).
+    const bootPresenter = remote.presenterIdentity || row.presenter_peer_id;
+    const bootRoom: LlRoom = {
       sessionId: remote.sessionId,
       startedAt,
-      presenterPeerId: row.presenter_peer_id,
+      presenterPeerId: bootPresenter,
       stream: {
         hlsUrl: llPlaylistUrl(row.channel_id, startedAt),
         startedAt,
-        presenterPeerId: row.presenter_peer_id,
+        presenterPeerId: bootPresenter,
         delaySeconds: llDelaySeconds(),
         mode: "ll",
         // OFF THE ROW, not off this process's own config: an adopted
@@ -2793,7 +3415,12 @@ export async function adoptLlHlsSessions(): Promise<{
         partTargetMs: row.part_target_ms ?? remuxSessionConfig().partMs,
       },
       adoptedAtMs: Date.now(),
-    });
+    };
+    llRooms.set(row.channel_id, bootRoom);
+    if (bootPresenter !== row.presenter_peer_id) {
+      bootRoom.presenterRowStale = true;
+      await persistLlPresenter(row.channel_id, bootRoom);
+    }
     adopted += 1;
     logEvent("voice.hlsLlSessionAdopted", {
       channelId: row.channel_id,
@@ -2866,12 +3493,18 @@ export function llHlsActivity(): {
   startFailures: number;
   stopFailures: number;
   demoted: number;
+  rebindsTotal: number;
+  rebindsByReason: Record<string, number>;
+  rebindFailuresByWhy: Record<string, number>;
 } {
   return {
     sessions: llRooms.size,
     startFailures: llStartFailures,
     stopFailures: llStopFailures,
     demoted: llDemoted,
+    rebindsTotal: llRebindsTotal,
+    rebindsByReason: Object.fromEntries(llRebindsByReason),
+    rebindFailuresByWhy: Object.fromEntries(llRebindFailuresByWhy),
   };
 }
 
@@ -2897,4 +3530,8 @@ export function resetHlsRemuxForTests(): void {
   llStartFailures = 0;
   llStopFailures = 0;
   llDemoted = 0;
+  llRebindsTotal = 0;
+  llRebindsByReason.clear();
+  llRebindFailuresByWhy.clear();
+  llPresenterIdentity = null;
 }

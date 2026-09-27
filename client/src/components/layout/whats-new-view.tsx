@@ -5,7 +5,15 @@ import { Menu, Sparkles, X } from "lucide-react";
 import { blogMediaMarkdown } from "@/components/blog/blog-markdown";
 import { formatPostDate, formatPostShortDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
-import { POSTS, type BlogLocale, type BlogPost } from "@/lib/blog/posts";
+import {
+  POSTS,
+  blogReadLocaleFor,
+  postLocale,
+  postSummary,
+  postTitle,
+  type BlogPost,
+  type BlogReadLocale,
+} from "@/lib/blog/posts";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -49,7 +57,7 @@ export function WhatsNewView({
   footer,
 }: WhatsNewViewProps) {
   const { t, locale } = useTranslation();
-  const blogLocale: BlogLocale = locale === "pt-BR" ? "pt-BR" : "en";
+  const readLocale = blogReadLocaleFor(locale);
   const [selectedSlug, setSelectedSlug] = useState(
     () => POSTS[0]?.slug ?? "",
   );
@@ -125,7 +133,7 @@ export function WhatsNewView({
                         dateTime={post.date}
                         className="block text-[11px] font-medium uppercase tracking-[0.14em] text-paper-muted/80"
                       >
-                        {formatPostShortDate(post.date, blogLocale)}
+                        {formatPostShortDate(post.date, postLocale(post, readLocale))}
                       </time>
                       <span
                         className={cn(
@@ -133,10 +141,10 @@ export function WhatsNewView({
                           active ? "font-semibold text-paper" : "font-medium",
                         )}
                       >
-                        {post.title[blogLocale]}
+                        {postTitle(post, readLocale)}
                       </span>
                       <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-paper-muted">
-                        {post.summary[blogLocale]}
+                        {postSummary(post, readLocale)}
                       </span>
                     </button>
                   </li>
@@ -171,7 +179,7 @@ export function WhatsNewView({
           <WhatsNewArticle
             key={selected.slug}
             post={selected}
-            locale={blogLocale}
+            locale={readLocale}
           />
         ) : (
           <p className="relative z-10 px-8 py-16 text-sm text-paper-muted">
@@ -188,7 +196,7 @@ function WhatsNewArticle({
   locale,
 }: {
   post: BlogPost;
-  locale: BlogLocale;
+  locale: BlogReadLocale;
 }) {
   const { t } = useTranslation();
   const [body, setBody] = useState<string | null>(null);
@@ -218,16 +226,16 @@ function WhatsNewArticle({
           dateTime={post.date}
           className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted/70"
         >
-          {formatPostDate(post.date, locale)}
+          {formatPostDate(post.date, postLocale(post, locale))}
         </time>
         <h2
           id="whats-new-article-title"
           className="mt-4 text-balance font-display text-3xl font-bold leading-[1.12] tracking-tight sm:text-4xl"
         >
-          {post.title[locale]}
+          {postTitle(post, locale)}
         </h2>
         <p className="mt-4 text-pretty text-lg leading-relaxed text-paper-muted">
-          {post.summary[locale]}
+          {postSummary(post, locale)}
         </p>
 
         <div className="blog-prose mt-10">

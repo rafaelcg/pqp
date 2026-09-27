@@ -31,7 +31,16 @@ import {
   articleTitle,
   type BlogArticle,
 } from "./blog/articles";
-import { POSTS, postBySlug, type BlogLocale, type BlogPost } from "./blog/posts";
+import {
+  POSTS,
+  postBySlug,
+  postLocale,
+  postSummary,
+  postTitle,
+  type BlogLocale,
+  type BlogPost,
+  type BlogReadLocale,
+} from "./blog/posts";
 
 const CANONICAL_ORIGIN = "https://pqp.gg";
 
@@ -114,12 +123,12 @@ function jsonLdForIndex(locale: BlogLocale): string {
   });
 }
 
-function jsonLdForPost(post: BlogPost, locale: BlogLocale): string {
+function jsonLdForPost(post: BlogPost, locale: BlogReadLocale): string {
   return JSON.stringify({
     "@context": "https://schema.org",
     "@type": "BlogPosting",
-    headline: post.title[locale],
-    description: post.summary[locale],
+    headline: postTitle(post, locale),
+    description: postSummary(post, locale),
     url: `${CANONICAL_ORIGIN}/blog/${post.slug}`,
     // No `dateModified`: a release note describes a day, and quietly restamping
     // one because a typo was fixed would misdate the thing it reports.
@@ -189,13 +198,27 @@ function jsonLdForArticle(article: BlogArticle, locale: BlogLocale): string {
   );
 }
 
+/**
+ * The language a post's card is written in for this request. Spanish only for
+ * a Spanish reader of a post that has Spanish copy; every other post keeps the
+ * English card a Spanish reader has always had.
+ */
+function postCardLocale(
+  post: BlogPost,
+  locale: BlogLocale,
+  servedLocale: string,
+): BlogReadLocale {
+  return postLocale(post, servedLocale === "es" ? "es" : locale);
+}
+
 export function renderBlogHead(
   target: BlogTarget,
   locale: BlogLocale,
   /**
-   * The app language to stamp, when it differs from the copy's: posts exist
-   * in Portuguese and English only, so a Spanish reader gets the English post
-   * while the chrome around it should still boot in Spanish.
+   * The app language to stamp, when it differs from the copy's: most posts
+   * exist in Portuguese and English only, so a Spanish reader gets the English
+   * post while the chrome around it should still boot in Spanish. A post with
+   * Spanish copy is served in Spanish to that reader instead.
    */
   servedLocale: string = locale,
 ): string {
@@ -207,13 +230,17 @@ export function renderBlogHead(
       : target.kind === "article"
         ? `${CANONICAL_ORIGIN}/blog/${target.article.slug}`
         : `${CANONICAL_ORIGIN}/blog`;
+  const postCopy =
+    target.kind === "post"
+      ? postCardLocale(target.post, locale, servedLocale)
+      : locale;
   const title = isPost
-    ? `${target.post.title[locale]} · pqp`
+    ? `${postTitle(target.post, postCopy)} · pqp`
     : isArticle
       ? `${articleTitle(target.article, locale)} · pqp`
       : INDEX_COPY[locale].title;
   const description = isPost
-    ? target.post.summary[locale]
+    ? postSummary(target.post, postCopy)
     : isArticle
       ? articleSummary(target.article, locale)
       : INDEX_COPY[locale].description;
@@ -227,6 +254,9 @@ export function renderBlogHead(
     `<link rel="alternate" hreflang="x-default" href="${e(url)}" />`,
     `<link rel="alternate" hreflang="pt-BR" href="${e(url)}?lang=pt-BR" />`,
     `<link rel="alternate" hreflang="en" href="${e(url)}?lang=en" />`,
+    ...(isPost && target.post.title.es
+      ? [`<link rel="alternate" hreflang="es" href="${e(url)}?lang=es" />`]
+      : []),
     // `article` rather than `website` for a post or a guide: it is what puts
     // the date and the byline on the card in every unfurler that shows them.
     `<meta property="og:type" content="${isPost || isArticle ? "article" : "website"}" />`,
@@ -260,7 +290,7 @@ export function renderBlogHead(
     `<meta name="pqp:locale" content="${servedLocale}" />`,
     `<script type="application/ld+json">${
       isPost
-        ? jsonLdForPost(target.post, locale)
+        ? jsonLdForPost(target.post, postCopy)
         : isArticle
           ? jsonLdForArticle(target.article, locale)
           : jsonLdForIndex(locale)
@@ -296,6 +326,11 @@ export function injectBlogHead(
   let stripped = html.replace(MANAGED_TAGS, "");
   if (locale === "pt-BR") {
     stripped = stripped.replace('<html lang="en">', '<html lang="pt-BR">');
+  } else if (
+    target.kind === "post" &&
+    postCardLocale(target.post, locale, servedLocale) === "es"
+  ) {
+    stripped = stripped.replace('<html lang="en">', '<html lang="es">');
   }
   const insertAt = stripped.indexOf("<head>") + "<head>".length;
   return (

@@ -109,6 +109,8 @@ interface StaleSession {
   rung: string | null;
   /** Which API process last started or adopted this session. NULL = nobody's. */
   instance_id: string | null;
+  /** A ladder rung's egress runs (`hls-runs.ts`); NULL for one run. */
+  runs?: unknown;
   still_open: boolean;
 }
 
@@ -260,7 +262,7 @@ export async function reconcileStaleHlsSessions(): Promise<{
 
   const rows = await getPool().query<StaleSession>(
     `SELECT id, channel_id, object_prefix, egress_id, presenter_peer_id,
-            video_track_id, audio_track_id, rung, instance_id,
+            video_track_id, audio_track_id, rung, instance_id, runs,
             ended_at IS NULL AS still_open
      FROM hls_sessions
      WHERE cleaned_at IS NULL
@@ -358,7 +360,15 @@ export async function reconcileStaleHlsSessions(): Promise<{
       startedAt: session.startedAt,
       presenterPeerId: row.presenter_peer_id,
       videoTrackId: row.video_track_id ?? "",
+      // The screen's own audio sid the rung was started with. Left out, the
+      // adopted room read it as null, and the first reconcile after a deploy
+      // saw the SFU's real audio sid disagree and restarted the ladder as a
+      // "screen-track-replaced" for a share that had not changed at all.
+      audioTrackId: row.audio_track_id,
       rung: row.rung ?? session.rung,
+      // Which egress run this is (`hls-runs.ts`), so the monitor probes the
+      // playlist the adopted egress is actually writing.
+      runs: row.runs,
     });
     adoptedIds.add(row.id);
     adopted += 1;

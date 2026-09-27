@@ -385,6 +385,27 @@ CREATE TABLE IF NOT EXISTS servers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Idempotency for room creation: an optional client-supplied key on
+-- POST /api/servers and POST /api/import/discord/apply, scoped per caller.
+-- The first request with a key inserts this row with server_id still NULL
+-- and fills it in before committing; a concurrent request with the same key
+-- blocks on the unique index until that commit (ordinary Postgres MVCC, no
+-- advisory lock needed), then reads back the room the first request made
+-- instead of making a second one. Pruned after 24h by
+-- `pruneExpiredServerIdempotencyKeys` (server/src/jobs.ts); a client that
+-- never sends the header never touches this table. See
+-- server/src/services/idempotency-keys.ts.
+CREATE TABLE IF NOT EXISTS server_create_idempotency_keys (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS server_create_idempotency_keys_created_at_idx
+  ON server_create_idempotency_keys (created_at);
+
 CREATE TABLE IF NOT EXISTS server_members (
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -3048,6 +3069,45 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_ref TEXT;
 CREATE INDEX IF NOT EXISTS idx_server_members_join_ref
   ON server_members (joined_at) WHERE join_ref IS NOT NULL;
 
+-- Which DOOR this membership came through, as a fixed small set rather than a
+-- free-text tag: `join_ref` above answers "which invite link" and stays NULL
+-- for every door that is not an invite, which is exactly the gap that left
+-- every join at the 2026-09-26 moonkisticos watch party unattributed: 100
+-- people came in through `/c/<slug>` and the directory and neither door wrote
+-- anything. This column is the other half: it names the DOOR (invite / SSO /
+-- community address / community directory / the QG corner-card hint / the
+-- first-run default placement), independent of whether that door also
+-- carried a finer tag.
+--
+-- Written by the same call that creates the row, never backfilled and never
+-- corrected after: `joinCommunity` (services/communities.ts), `redeemInvite`
+-- (services/invites.ts, alongside join_ref) and `joinServerBySso`
+-- (services/servers.ts) each stamp it once, inside the same transaction as
+-- the INSERT. NULL means the server's owner (server creation is not a "join"),
+-- a dev-seed or character-account row, or a membership made before this
+-- column existed, never a door this column forgot to name.
+--
+-- Like join_ref: no identifier, never shown to anybody in a user-facing
+-- payload, read only as a COUNT (`GET /api/admin/metrics`,
+-- `product.serverJoins.bySource7d`, and the per-server query in
+-- tools/admin-dashboard/README.md).
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_source TEXT
+  CHECK (join_source IN (
+    'invite', 'sso', 'community_address', 'community_directory', 'qg_hint',
+    'default_placement'
+  ));
+-- Per-server "joins by source" is the query this exists to make cheap: the
+-- documented query in tools/admin-dashboard/README.md filters on server_id
+-- first, so that is the leading column.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_source
+  ON server_members (server_id, joined_at) WHERE join_source IS NOT NULL;
+-- The instance-wide 7-day aggregate metrics.ts reads for
+-- `product.serverJoins.bySource7d` has no server_id predicate, so the index
+-- above (server_id-leading) cannot narrow it by joined_at: same shape as
+-- idx_server_members_join_ref just above, joined_at-leading and nothing else.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_source_joined_at
+  ON server_members (joined_at) WHERE join_source IS NOT NULL;
+
 -- Servers that began as a Discord Guild Template copy. The audit row is the
 -- only record of that, and the operator dashboard counts it every 30 seconds,
 -- so it gets a partial index rather than a scan of the whole log.
@@ -4097,6 +4157,27 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL DEFAULT 0;
 
+-- THE EGRESS RUNS BEHIND ONE LADDER RUNG, for a watch party that restarted
+-- its transcode IN PLACE (`restartRoomInPlace` in hls-egress.ts). A rung row
+-- is one rendition of one session for the whole party; each restart of its
+-- egress (it died, its playlist stuck, the presenter's screen track was
+-- replaced) writes under its own names (`<startedAt>-<rung>-r<ms>...`) and
+-- appends one entry here: `{"suffix":"-r<ms>","base":<media sequence of its
+-- first segment>}`. The playlist proxy stitches every run into one live
+-- playlist with `#EXT-X-DISCONTINUITY` between them, the replay and the film
+-- download read every run in order. NULL is the only shape a row had before:
+-- one run, the legacy names, base 0.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS runs JSONB;
+
+-- WHO IS PRESENTING, AS A PERSON (users.id), for an LL session: the peer id
+-- beside it changes on every reconnect that cannot resume, and a page reload
+-- leaves no seat anywhere that still names the person. The machine a session
+-- is handed to reads this to tell "the same presenter came back" (continue the
+-- session, rebind the box) from "somebody else is presenting" (a new one).
+-- Plain TEXT, no foreign key: it is a comparison key, and a deleted account
+-- must not block ending the row. NULL on every row written before it.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS presenter_user_id TEXT;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.
@@ -4630,3 +4711,109 @@ CREATE TABLE IF NOT EXISTS hls_session_viewer_stats (
 
 CREATE INDEX IF NOT EXISTS idx_hls_session_viewer_stats_updated
   ON hls_session_viewer_stats (updated_at);
+
+-- Where an account was last seen, for picking a voice room's SFU region
+-- (`server/src/voice/region-audience.ts`). The two-letter CF-IPCountry of
+-- the WebSocket upgrade and nothing finer: never an IP, never a city. Written
+-- at WS auth, throttled, and only when LIVEKIT_REGIONS is set, so a
+-- self-host without regions leaves both NULL forever. Read by aggregating a
+-- server's members, never shown to anybody.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_country_at TIMESTAMPTZ;
+
+-- Low latency per server, the same tri-state as `live_hls_enabled` directly
+-- above and read the same way (`liveHlsLLServerOverride` in
+-- `voice/hls-remux.ts`): TRUE on, FALSE off even when
+-- `LIVE_HLS_LL_ALLOWLIST` names the server, NULL falls back to that variable
+-- exactly as before the column existed. `LIVE_HLS_LL` and the edge playlist
+-- front stay the master switches above all three. Every existing row is NULL,
+-- so adding it changes nothing. See `docs/WATCH_PARTY.md` §"Low latency is a
+-- click too".
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS live_hls_ll_enabled BOOLEAN;
+
+-- The watch party waitlist (`docs/WATCH_PARTY.md` §"The waitlist"). One row
+-- per person per server; `kind` says whether that person may manage the
+-- server's channels (`request`, what the operator acts on) or is a member
+-- saying they would watch (`interest`, counted only). `server_id` is NULL for
+-- somebody who signed up from the public page with no server to ask for yet.
+-- Approved by hand: the operator's "Ativar" on the dashboard sets
+-- `servers.live_hls_enabled` and every waiting row of that server with it.
+-- `seen_at` is when the person dismissed the "liberado" card, which is what
+-- lets somebody offline at the moment of approval still hear about it.
+CREATE TABLE IF NOT EXISTS watch_party_waitlist (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id       UUID REFERENCES servers(id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK (kind IN ('request', 'interest')),
+  audience_bucket TEXT CHECK (audience_bucket IN
+                    ('under-20', '20-50', '50-150', '150-500', '500-plus')),
+  note            TEXT CHECK (char_length(note) <= 140),
+  twitch_or_kick  TEXT CHECK (char_length(twitch_or_kick) <= 64),
+  status          TEXT NOT NULL DEFAULT 'waiting'
+                    CHECK (status IN ('waiting', 'approved', 'declined')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at      TIMESTAMPTZ,
+  seen_at         TIMESTAMPTZ,
+  CHECK (server_id IS NOT NULL OR kind = 'interest')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_party_waitlist_server_user
+  ON watch_party_waitlist (server_id, user_id)
+  WHERE server_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_party_waitlist_serverless_user
+  ON watch_party_waitlist (user_id)
+  WHERE server_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
+  ON watch_party_waitlist (status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
+  ON watch_party_waitlist (user_id);
+
+-- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
+-- A flag is only a row here once an operator has decided something about it:
+-- no row, or `enabled` NULL, means "follow the environment variable, then the
+-- code default", which is exactly how the switch behaved before this table
+-- existed. So a self-host that never opens the dashboard never has a row and
+-- never notices. `updated_by` is the moderator's own id, NULL for the
+-- dashboard's machine token (the same convention as `audit_log.actor_id`).
+-- `key` is not constrained here on purpose: the registry in flags.ts is the
+-- list of flags, and the write path refuses a key it does not know, while a
+-- row left behind by a flag since removed from the code is simply ignored.
+CREATE TABLE IF NOT EXISTS feature_flags (
+  key        TEXT PRIMARY KEY,
+  enabled    BOOLEAN,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- One server's decision about one flag, above the global row. Only for flags
+-- the registry marks `perServer`. Clearing an override deletes its row.
+CREATE TABLE IF NOT EXISTS feature_flag_overrides (
+  key        TEXT NOT NULL,
+  server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  enabled    BOOLEAN NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  PRIMARY KEY (key, server_id)
+);
+
+-- Who flipped what, and when. Its own table because `audit_log` is
+-- server-scoped (`server_id` NOT NULL) and a global flip belongs to no server.
+-- `server_id` carries no foreign key so the trail outlives a deleted server;
+-- `previous` / `next` NULL mean "no decision" (the environment default).
+CREATE TABLE IF NOT EXISTS feature_flag_audit (
+  id         BIGSERIAL PRIMARY KEY,
+  key        TEXT NOT NULL,
+  server_id  UUID,
+  previous   BOOLEAN,
+  next       BOOLEAN,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('dashboard', 'moderator')),
+  actor_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feature_flag_audit_created
+  ON feature_flag_audit (created_at DESC);

@@ -10,6 +10,7 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 - [pqp vs Discord](https://pqp.gg/vs-discord): the comparison page
 - [Screen share](https://pqp.gg/tela): sharing a screen with sound from the browser
 - [Claim your @](https://pqp.gg/garanta): how a public handle works
+- [Watch party](https://pqp.gg/watch-party): streaming to hundreds in the browser; early access waitlist
 - [Blog and release notes](https://pqp.gg/blog): what shipped, week by week
 - [iOS beta](https://pqp.gg/beta): TestFlight
 - [Android beta](https://pqp.gg/android): direct APK

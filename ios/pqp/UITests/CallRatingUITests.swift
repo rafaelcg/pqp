@@ -26,8 +26,8 @@ final class CallRatingUITests: XCTestCase {
             "-pqp.fakeCallRating",
         ]
         app.launch()
-        XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 10))
-        app.buttons["Skip"].tap()
+        XCTAssertTrue(app.buttons["welcome.start"].waitForExistence(timeout: 10))
+        app.buttons["welcome.start"].tap()
         return app
     }
 

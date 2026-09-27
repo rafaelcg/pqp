@@ -108,6 +108,48 @@ type StartSessionRequest struct {
 	KeyframePolicy KeyframePolicy `json:"keyframePolicy"`
 	PliPaceMs      int            `json:"pliPaceMs"`
 	PliGateFactor  float64        `json:"pliGateFactor"`
+	// PresenterIdentity is the LiveKit identity (a pqp peer id) whose screen
+	// share this session shows, and follows through every republish
+	// (internal/subscriber's binder). Empty, which is what an older pqp-api
+	// sends, keeps the old rule: the first screen share seen, and then that
+	// same person. POST /sessions/:id/rebind changes it mid-session.
+	PresenterIdentity string `json:"presenterIdentity,omitempty"`
+}
+
+// maxIdentityLen bounds a presenter identity. A pqp peer id is a UUID; this
+// is generous and exists only so a caller cannot hand the box an unbounded
+// string to log and compare on every screen-share subscription.
+const maxIdentityLen = 256
+
+// RebindRequest is POST /sessions/:id/rebind's body: the identity the
+// session follows from now on. pqp-api sends it when the same person is
+// presenting under a new peer id (a reconnect that could not resume), and
+// as a nudge when it sees the presenter's screen track replaced.
+type RebindRequest struct {
+	PresenterIdentity string `json:"presenterIdentity"`
+}
+
+// Validate refuses an empty or oversized identity.
+func (r RebindRequest) Validate() error {
+	if r.PresenterIdentity == "" {
+		return fmt.Errorf("presenterIdentity must not be empty")
+	}
+	if len(r.PresenterIdentity) > maxIdentityLen {
+		return fmt.Errorf("presenterIdentity must be at most %d bytes", maxIdentityLen)
+	}
+	return nil
+}
+
+// RebindResponse is POST /sessions/:id/rebind's 200 body. Result is one of
+// "bound" (the presenter's screen track was bound by this call), "unchanged"
+// (it already was), "waiting" (the presenter has no screen track in the room
+// yet; it is bound the moment one appears, and the picture holds until then)
+// or "pending" (the session is between two pipelines of a watchdog restart,
+// which binds the named presenter when it comes up).
+type RebindResponse struct {
+	SessionID         string `json:"sessionId"`
+	PresenterIdentity string `json:"presenterIdentity"`
+	Result            string `json:"result"`
 }
 
 // Validate mirrors remuxStartSessionRequestSchema's own constraints
@@ -155,6 +197,9 @@ func (r StartSessionRequest) Validate() error {
 	}
 	if r.PliGateFactor <= 0 {
 		return fmt.Errorf("pliGateFactor must be a positive number")
+	}
+	if len(r.PresenterIdentity) > maxIdentityLen {
+		return fmt.Errorf("presenterIdentity must be at most %d bytes", maxIdentityLen)
 	}
 	return nil
 }
@@ -244,6 +289,12 @@ type SessionInfo struct {
 	// segment target"), so an operator reading a raw response should not
 	// have to do that subtraction by hand.
 	LastIdrAgeMs *int64 `json:"lastIdrAgeMs"`
+	// PresenterIdentity is who the session currently follows ("" when no
+	// presenter was ever named and no screen share has been bound yet).
+	PresenterIdentity string `json:"presenterIdentity"`
+	// VideoRebinds counts screen-share tracks replaced inside this session
+	// (a republish, a reconnect), across watchdog restarts.
+	VideoRebinds uint64 `json:"videoRebinds"`
 }
 
 // ListSessionsResponse is GET /sessions's body: byte-for-byte

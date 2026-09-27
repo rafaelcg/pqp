@@ -218,6 +218,19 @@ class LiveKitEngine(
      */
     @Volatile private var canPublishAudio = true
 
+    /**
+     * Set by [setTolerateMicrophonePublishFailure] before every [start] that
+     * wants it -- see that interface member's own doc for who asks for `true`
+     * and why. `false` is the safe default: an ordinary call that cannot
+     * publish its microphone must keep failing (and retrying) the way it
+     * always has.
+     */
+    @Volatile private var toleratesMicrophonePublishFailure = false
+
+    override fun setTolerateMicrophonePublishFailure(tolerate: Boolean) {
+        toleratesMicrophonePublishFailure = tolerate
+    }
+
     /** Non-null between [start] and [stop]. Guards late callbacks from an old room. */
     @Volatile private var localPeerId: String? = null
 
@@ -516,7 +529,36 @@ class LiveKitEngine(
             }
 
             seedParticipants(created)
-            if (canPublishAudio) publishMicrophone(created)
+            // A microphone that will not come up -- RECORD_AUDIO revoked
+            // between the gate and here, the device busy, the SDK's own
+            // internals -- must never take the rest of the room down with it
+            // ON A CALL THAT ASKED FOR THAT TOLERANCE (`toleratesMicrophonePublishFailure`,
+            // set by `setTolerateMicrophonePublishFailure`; today that is
+            // watch-party hosting alone). Everywhere else this is unchanged
+            // from before: the whole connect attempt still fails and retries,
+            // because an ordinary call with no working microphone is not one
+            // worth having joined. `publishMicrophone` itself already leaves
+            // the room usable with no mic track at all when it throws
+            // (nothing here half-publishes), the same shape
+            // `setCanPublishAudio` already tolerates for the mid-call grant
+            // case just below.
+            //
+            // Cancellation is rethrown rather than folded into "publish
+            // failed": a `stop()` that lands while `publishMicrophone` is
+            // suspended must abort this attempt exactly the way it always
+            // has, not be read as an ordinary failure that lets `onConnected`
+            // run on a room the caller is already tearing down (a Farol
+            // finding on the first cut of this tolerance).
+            if (canPublishAudio) {
+                try {
+                    publishMicrophone(created)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    if (!toleratesMicrophonePublishFailure) throw error
+                    Log.w(TAG, "could not publish the microphone", error)
+                }
+            }
             onConnected()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             // `stop` already owns this room: it read `room` before cancelling

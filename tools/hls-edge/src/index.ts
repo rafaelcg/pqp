@@ -640,6 +640,17 @@ export async function handlePlaylistRequest(
   if (cached) {
     noteCacheHit(channelId, rung);
     const headers = new Headers(cached.headers);
+    // THE BROWSER GETS THE SAME LIFETIME ON A HIT AS ON A MISS. What
+    // `caches.default` hands back is not what was put: the stored copy comes
+    // back carrying the zone's Browser Cache TTL (`max-age=14400`, four
+    // hours) and a `Last-Modified`, so a viewer's browser kept a LIVE
+    // playlist for hours and hls.js looped the same few seconds of the film
+    // from its own HTTP cache (production rehearsal G, 2026-09-25). A live
+    // playlist is two seconds of truth, never more.
+    headers.set("Cache-Control", `public, max-age=${CACHE_TTL_SECONDS}`);
+    headers.delete("Last-Modified");
+    headers.delete("Expires");
+    headers.delete("ETag");
     headers.set("X-HLS-Edge-Cache", "HIT");
     const response = new Response(cached.body, { status: cached.status, headers });
     return isLlRendition ? await stampLlToken(response, credential) : response;

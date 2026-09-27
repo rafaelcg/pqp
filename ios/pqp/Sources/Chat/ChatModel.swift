@@ -657,8 +657,9 @@ final class ChatModel {
              .voiceTransportChanged, .voiceJoinRefused, .voiceScreenShareDenied,
              .voiceModeration,
              // The broadcast belongs to the stage above this transcript, not
-             // to the transcript. `WatchModel` is what reads these.
-             .voiceStream, .channelLive,
+             // to the transcript. `WatchModel` is what reads these, and
+             // `WatchPartyHostController` reads `watchPartyUpdate`.
+             .voiceStream, .channelLive, .watchPartyUpdate,
              .voiceCameraDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a

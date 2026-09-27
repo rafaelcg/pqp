@@ -23,10 +23,12 @@
 # exactly one thing — see "the pqp-deploy user" below and
 # tools/api-host/pqp-deploy.sh.
 #
-# Secrets (.env, backup.env, certs/origin.{pem,key}) are NEVER written by
-# this script beyond an empty template on first run. See docs/deploy-vultr.md
-# "Secrets" for how they actually get onto the box (scp'd by hand once, not
-# by CI, not by cloud-init user data).
+# Secrets (.env, certs/origin.{pem,key}) are NEVER written by this script
+# beyond an empty template on first run. See docs/deploy-vultr.md "Secrets"
+# for how they actually get onto the box (scp'd by hand once, not by CI, not
+# by cloud-init user data). The nightly backup (below) reads its secrets
+# from .env too, DATABASE_URL and LIVE_HLS_S3_*, rather than a file of its
+# own; see docs/DB_RUNBOOK.md.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -210,7 +212,8 @@ if [[ ! -f "$DEST/.env" ]]; then
 # docs/deploy-vultr.md "Secrets to copy from Fly" for the full list this
 # box needs (DATABASE_URL, CLERK_SECRET_KEY, CORS_ALLOWED_ORIGINS,
 # CLERK_AUTHORIZED_PARTIES, TRUST_PROXY, PG_POOL_MAX, TURN_*, LIVEKIT_*,
-# S3_*, ...).
+# S3_*, LIVE_HLS_S3_*; the last of these is also what the nightly backup
+# below uploads to, see docs/DB_RUNBOOK.md).
 DATABASE_URL=
 CLERK_SECRET_KEY=
 CORS_ALLOWED_ORIGINS=https://pqp.gg,https://pqp-3yr.pages.dev
@@ -223,49 +226,27 @@ ENVEOF
   echo "   !! wrote an empty $DEST/.env template — fill it in before the first deploy"
 fi
 
-if [[ ! -f "$DEST/backup.env" ]]; then
-  cat >"$DEST/backup.env" <<'ENVEOF'
-# Nightly backup secrets, deliberately separate from .env: a leaked backup
-# credential should not also be the API's database role. See
-# tools/db-backup/backup.sh and docs/DB_RUNBOOK.md.
-BACKUP_DATABASE_URL=
-R2_BACKUP_BUCKET=
-R2_ACCOUNT_ID=
-R2_BACKUP_ACCESS_KEY_ID=
-R2_BACKUP_SECRET_ACCESS_KEY=
-ENVEOF
-  chmod 0600 "$DEST/backup.env"
-  chown pqp:pqp "$DEST/backup.env"
-  echo "   !! wrote an empty $DEST/backup.env template — fill it in before backups can run"
+echo "== rclone (nightly backup upload to R2)"
+if ! command -v rclone >/dev/null; then
+  apt-get install -y -qq rclone >/dev/null
 fi
 
 echo "== nightly db backup"
-# Reuses tools/db-backup verbatim (same image the Fly backup machine runs;
-# see tools/db-backup/backup.sh and docs/DB_RUNBOOK.md), built locally on
-# this box rather than pulled, so the backup path has no GHCR dependency.
-if [[ -d "$HERE/db-backup" ]]; then
-  # Copy CONTENTS into an existing destination (trailing "/." on the
-  # source, trailing "/" on the destination) rather than the directory
-  # itself, so a second run overwrites the same files in place instead of
-  # nesting a stale copy at $DEST/db-backup/db-backup — `cp -r src dst`
-  # nests when dst already exists, which the first run itself creates.
-  mkdir -p "$DEST/db-backup"
-  cp -r "$HERE/db-backup/." "$DEST/db-backup/"
-  chown -R pqp:pqp "$DEST/db-backup"
-  docker build -t pqp-db-backup:local "$DEST/db-backup" >/dev/null
-  cat >/etc/cron.d/pqp-db-backup <<CRON
-# Mirrors the Fly scheduled machine (docs/DB_RUNBOOK.md), same script, same
-# retention. 05:00 UTC = 02:00 America/Sao_Paulo, same off-peak window.
-0 5 * * * pqp docker run --rm --env-file $DEST/backup.env pqp-db-backup:local >>/var/log/pqp-db-backup.log 2>&1
+# Runs directly on this box as a root cron job (see tools/api-host/
+# db-backup.sh and docs/DB_RUNBOOK.md) rather than as a separate Fly app;
+# `pqp-db-backup` (the old scheduled machine) was destroyed 2026-09-24. The
+# script reads DATABASE_URL and LIVE_HLS_S3_* out of /opt/pqp/.env, the
+# same values the API containers already use, so there is no backup-only
+# secret to create or keep in sync here.
+install -d -o root -g root -m 0755 "$DEST/backup"
+install -m 0755 -o root -g root "$HERE/db-backup.sh" "$DEST/backup/run.sh"
+cat >/etc/cron.d/pqp-db-backup <<CRON
+# 04:23 UTC = 01:23 America/Sao_Paulo, an off-peak window. See docs/DB_RUNBOOK.md.
+23 4 * * * root $DEST/backup/run.sh >>/var/log/pqp-db-backup.log 2>&1
 CRON
-  chmod 0644 /etc/cron.d/pqp-db-backup
-  touch /var/log/pqp-db-backup.log
-  chown pqp:pqp /var/log/pqp-db-backup.log
-else
-  echo "   tools/db-backup not copied alongside this script (expected $HERE/db-backup);"
-  echo "   copy it over (scp -r tools/db-backup tools/api-host root@<box>:/opt/pqp-provision/)"
-  echo "   and re-run to wire up the nightly backup."
-fi
+chmod 0644 /etc/cron.d/pqp-db-backup
+touch /var/log/pqp-db-backup.log
+chown root:root /var/log/pqp-db-backup.log
 
 echo "== monitoring (Alloy: box metrics + container logs to Grafana Cloud)"
 if ! command -v alloy >/dev/null; then

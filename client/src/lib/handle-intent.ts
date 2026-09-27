@@ -206,6 +206,19 @@ export function takeJoinIntent(
 }
 
 /**
+ * The waiting community, WITHOUT spending it. For the first run's shape
+ * only: somebody who came through a community's link already has a room to
+ * go to, so the wizard must not open on "create your own server". Asking
+ * must not use up the intent the arrival effect acts on.
+ */
+export function peekJoinIntent(
+  storage: Pick<Storage, "getItem"> | null,
+  now: number = Date.now(),
+): string | null {
+  return peek(storage, JOIN_KEY, now);
+}
+
+/**
  * `?add=rafa` on any `/app` URL.
  *
  * The public profile's CTA sends people to `/app?add=<handle>` when they are
@@ -436,4 +449,56 @@ export function takeInviteRef(
   }
   const [stashedCode, stashedRef] = stashed.split(" ");
   return stashedCode === code ? normalizeJoinRef(stashedRef) : null;
+}
+
+// ------------------------------------------------- watch party waitlist
+
+/**
+ * WAITLIST. `pqp.gg/watch-party` sells watch parties and its button is a
+ * sign-up button, so the thing the visitor came for (the waitlist) lives
+ * behind an auth round trip and an onboarding that never mentions it. Same
+ * shape as CREATE: `?intent=watch-party-waitlist` on the `/app` URL, stashed
+ * at boot and on the click, consumed once the account exists and onboarding
+ * is out of the way, which opens the waitlist dialog on the server the
+ * person is looking at (or on the "no server yet" ending).
+ *
+ * `intent` is a parameter name chosen to carry more than one campaign later.
+ * Only this exact value means anything; anything else is no intent.
+ */
+export const WATCH_PARTY_WAITLIST_INTENT = "watch-party-waitlist";
+export const INTENT_PARAM = "intent";
+const WAITLIST_KEY = "pqp:pending-watch-party-waitlist";
+
+/** The `/app` URL every waitlist CTA points at. */
+export const WATCH_PARTY_WAITLIST_HREF = `/app?${INTENT_PARAM}=${WATCH_PARTY_WAITLIST_INTENT}`;
+
+export function waitlistIntentFromSearch(search: string): boolean {
+  return (
+    new URLSearchParams(search).get(INTENT_PARAM) === WATCH_PARTY_WAITLIST_INTENT
+  );
+}
+
+export function stashWaitlistIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): void {
+  write(storage, WAITLIST_KEY, WATCH_PARTY_WAITLIST_INTENT, now);
+}
+
+export function takeWaitlistIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): boolean {
+  return take(storage, WAITLIST_KEY, now) === WATCH_PARTY_WAITLIST_INTENT;
+}
+
+/** At boot, before routing: the sign-in redirect keeps the path, drops the query. */
+export function rememberWaitlistIntentFromLocation(
+  storage: WritableStorage | null,
+  location: Pick<Location, "search">,
+  now: number = Date.now(),
+): void {
+  if (waitlistIntentFromSearch(location.search)) {
+    stashWaitlistIntent(storage, now);
+  }
 }

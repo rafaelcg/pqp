@@ -12,13 +12,16 @@ import {
 } from "react";
 import {
   Check,
+  Columns2,
   Crop,
   Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
+  Monitor,
   Move,
   Pause,
+  PictureInPicture,
   PictureInPicture2,
   Play,
   Radio,
@@ -27,6 +30,8 @@ import {
   Volume1,
   Volume2,
   VolumeX,
+  Webcam,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -65,6 +70,8 @@ import {
   LlLatencyGovernor,
   llPartsOptedIn,
   llSegmentsCatchUpRate,
+  hlsSessionStartedAtMs,
+  llStartDelayMs,
   type LlDelivery,
 } from "@/lib/hls-ll-latency";
 import {
@@ -93,16 +100,22 @@ import {
   llHlsConfig,
   LL_HLS_STARTUP_GRACE_MS,
   mediaSeekableEnd,
+  newSegmentDurationsSince,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
   validPartTargetMs,
   type HlsLLPlayerConfig,
   type HlsMode,
 } from "@/lib/hls-live-edge";
+import {
+  loadLiveHlsConfig,
+  settledDeploymentLiveHlsConfig,
+} from "@/hooks/use-live-hls-config";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
-import { drainJitterMs } from "@/lib/reconnect-jitter";
+import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Menu } from "@/components/ui/menu";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
@@ -143,11 +156,15 @@ import {
   useIdleChrome,
 } from "@/hooks/use-idle-chrome";
 import {
+  CAMERA_LAYOUTS,
+  cameraLayoutOffered,
   cameraPipBoxes,
   cameraPipMounted,
+  effectiveCameraLayout,
   nextCameraPipCorner,
   readCameraPipPref,
   writeCameraPipPref,
+  type CameraLayout,
   type CameraPipPref,
 } from "@/lib/watch-camera-pip";
 import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
@@ -232,6 +249,28 @@ type StreamPhase = "playing" | "reconnecting" | "dead";
  * playlist polling.
  */
 const SESSION_OVER_POLL_MS = 20_000;
+
+/**
+ * "A TRANSMISSÃO CAIU" TRIES AGAIN BY ITSELF (rehearsal D, 2026-09-25). The
+ * watchdog's `"dead"` is the end of ITS budget, not proof the party ended: a
+ * viewer sat on that screen for three minutes of a show that was still
+ * running, because the only way back was a button nobody watching a film is
+ * looking for. While the screen is up on a live stream, press it for them
+ * after a jittered wait: `reconnect({ forceRebuild: true })` asks the server
+ * first, so a party that did end turns into the over/awaiting screen (and its
+ * slow poll) instead of a rebuild, and one still live is rebuilt onto the
+ * freshest URL. Jittered so a whole audience that went dead together does not
+ * come back in the same second. Never for a replay.
+ *
+ * BACKED OFF while it keeps failing: each retry that lands on "dead" again
+ * doubles the wait, up to `DEAD_RETRY_MAX_DOUBLINGS` doublings (8 to 15 s,
+ * then 16 to 30 s, then 32 to 60 s), and a painted frame starts it over. A
+ * decoder the LL media-rebuild bound gave up on must not turn into a player
+ * that tears itself down every ten seconds for the rest of the party.
+ */
+const DEAD_RETRY_MIN_MS = 8_000;
+const DEAD_RETRY_MAX_MS = 15_000;
+const DEAD_RETRY_MAX_DOUBLINGS = 2;
 
 /** hls.js instance shape this file actually touches. */
 interface HlsHandle {
@@ -557,6 +596,22 @@ export function HlsWatchPlayer({
   // re-render on.
   const pinnedToConventionalRef = useRef(false);
   const [pinnedToConventional, setPinnedToConventional] = useState(false);
+  // Warms the deployment-wide `GET /api/live-hls/config` cache
+  // (fire-and-forget; `loadLiveHlsConfig` itself dedupes an in-flight or
+  // already-settled fetch) so an LL attach below can read
+  // `llSegmentCadenceDecay` SYNCHRONOUSLY (`settledDeploymentLiveHlsConfig`)
+  // when it builds the governor, instead of blocking construction on a
+  // network round trip. An attach that starts before this resolves gets the
+  // flag off for that one attach and picks it up on the next rebuild --
+  // this component reconnects and rebuilds often enough over a party's
+  // length that the race costs at most the first few seconds of one.
+  useEffect(() => {
+    // Never surfaces: a failed fetch here just means the next attach still
+    // reads the flag as off, same as a cold cache. `loadLiveHlsConfig`
+    // itself deletes a failed attempt from its cache, so a later mount
+    // (or the config's own callers elsewhere in the app) can still retry.
+    loadLiveHlsConfig().catch(() => {});
+  }, []);
   // What the LL governor (`LlLatencyGovernor`, created per attach) is doing
   // right now, for the effects OUTSIDE the attach effect that need it: the
   // behind-live badge and LL-lite's catch-up read the target, "jump to live"
@@ -921,7 +976,10 @@ export function HlsWatchPlayer({
       if (options.forceRebuild) {
         // A person pressed "try again": always give them a visible restart,
         // on the freshest URL this check turned up (B1.3: "stays a rebuild").
-        if (next) {
+        // A URL identical to the one playing is no state change at all, so
+        // `setActiveSrc` alone would re-attach nothing and the button would
+        // do nothing; that case is a same-URL rebuild.
+        if (next && next !== activeSrc) {
           setActiveSrc(next);
         } else {
           setAttempt((n) => n + 1);
@@ -974,6 +1032,39 @@ export function HlsWatchPlayer({
     watchRef.current.reset(Date.now());
     void reconnect({ forceRebuild: true });
   }, [reconnect]);
+  const retryFromDeadRef = useRef(retryFromDead);
+  retryFromDeadRef.current = retryFromDead;
+  // Automatic retries since the last painted frame (`DEAD_RETRY_MAX_DOUBLINGS`).
+  const deadRetriesRef = useRef(0);
+  // Bumped by every automatic retry, so the effect below re-arms after each
+  // one whatever `phase` did in between. Today every retry passes through
+  // "reconnecting" (`reconnect` sets it before its first await), but the
+  // retry must not depend on that staying true (Farol, PR 824).
+  const [deadRetryNonce, setDeadRetryNonce] = useState(0);
+
+  // See `DEAD_RETRY_MIN_MS`. Re-armed each time the player lands on "dead"
+  // again, so a stream that keeps failing keeps being retried for as long as
+  // the server says it is live, further apart each time.
+  useEffect(() => {
+    if (phase !== "dead" || isVod || sessionOver !== null) {
+      return;
+    }
+    const doublings = Math.min(deadRetriesRef.current, DEAD_RETRY_MAX_DOUBLINGS);
+    const timer = window.setTimeout(
+      () => {
+        deadRetriesRef.current += 1;
+        setDeadRetryNonce((n) => n + 1);
+        retryFromDeadRef.current();
+      },
+      uniformJitterMs(DEAD_RETRY_MIN_MS, DEAD_RETRY_MAX_MS) * 2 ** doublings,
+    );
+    return () => window.clearTimeout(timer);
+  }, [phase, isVod, sessionOver, deadRetryNonce]);
+  useEffect(() => {
+    if (hasFrame) {
+      deadRetriesRef.current = 0;
+    }
+  }, [hasFrame]);
 
   const getVideo = useCallback(
     () => videoRef?.current ?? innerRef.current,
@@ -1417,12 +1508,24 @@ export function HlsWatchPlayer({
     // a `/ws` deploy drain (CLAUDE.md pitfall 10/11), just against
     // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
     // own tick cadence (`STALL_TICK_MS`, unchanged below).
+    // Which decision `reconnectJitterTimer` is carrying out. A `"rebuild"` is
+    // COMMITTED once decided: the ladder behind it is spent, and the stall
+    // tick below does not walk that ladder again over it (see there).
+    let pendingJittered: "rebuild" | "reconnect" | null = null;
     let reconnectJitterTimer: number | null = null;
+    let startDelayTimer: number | null = null;
     const clearPendingReconnect = () => {
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
         reconnectJitterTimer = null;
+        if (pendingJittered === "rebuild") {
+          // Only real recovery gets here now (the picture moved, or the
+          // restart hold ended): give the decision back, since no instance
+          // was ever torn down for it.
+          watchRef.current.cancelRebuild();
+        }
       }
+      pendingJittered = null;
     };
     // BROADCAST_PIPELINE B0.3/B0.5. Set on every `FRAG_CHANGED` so a later
     // periodic sample can turn "what media time is painted right now" into
@@ -1433,6 +1536,16 @@ export function HlsWatchPlayer({
     let currentRung: string | null = null;
     /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
     let lastPartHoldBack: number | null = null;
+    let lastTargetDuration: number | null = null;
+    /**
+     * The highest segment sequence number `governor.onSegmentDuration` has
+     * already been fed, so a part-driven `LEVEL_UPDATED` firing (this event
+     * fires once per part under the blocking reload) never re-feeds the
+     * same segment twice, and a gap between two firings still feeds every
+     * segment the manifest gained in between -- see the comment where it is
+     * read. A no-op unless `llSegmentCadenceDecay` is on.
+     */
+    let lastSeenSegmentSn: number | null = null;
     // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
     // milliseconds, hole skips and visibility, per sample window
     // (`HlsStallMeter`); fatal hls.js details seen since the last sample.
@@ -1683,6 +1796,16 @@ export function HlsWatchPlayer({
         ? new LlLatencyGovernor({
             delivery: llPartsOptedIn() ? "parts" : "segments",
             now: Date.now(),
+            // A LIVE READ, not a snapshot (Farol, this PR): the deployment
+            // config is very likely still cold on a first attach (the fetch
+            // that warms it is fire-and-forget from a mount effect), so a
+            // value captured here once would leave decay off for this
+            // governor's whole life even after the fetch resolves a moment
+            // later. `settledDeploymentLiveHlsConfig()` reads the live cache
+            // each time the governor actually checks, so the flag takes
+            // effect mid-session, no rebuild needed.
+            segmentCadenceDecay: () =>
+              settledDeploymentLiveHlsConfig()?.llSegmentCadenceDecay ?? false,
           })
         : null;
     let appliedTarget: number | null = null;
@@ -1898,6 +2021,18 @@ export function HlsWatchPlayer({
         governor.tick(Date.now(), stallMeter.isStalled);
         applyGovernor();
       }
+      if (pendingJittered === "rebuild") {
+        // A REBUILD IS ON ITS WAY; DO NOT WALK THE LADDER OVER IT (rehearsal
+        // D, 2026-09-25). `gateRebuild` resets the ladder when it decides, so
+        // the very next tick used to come back `"start-load"`, and the
+        // in-place branch below clears any pending jittered work. The rebuild
+        // waits 0.5 to 4 s and the tick is 1 s, so it survived about one time
+        // in seven: a viewer froze for four minutes logging "rebuilding the
+        // player" every seven seconds with no new instance ever made, and
+        // each cancelled one still counted toward `"dead"`. Nudging a loader
+        // that is about to be thrown away buys nothing; wait for it.
+        return;
+      }
       let decision = watch.tick(Date.now());
       if (decision === "jump-live") {
         // A "stall" episode's first rung, on an attach that has never
@@ -1936,15 +2071,25 @@ export function HlsWatchPlayer({
         return;
       }
       if (decision === "hold") {
-        // Conventional restart dead window: stop the 1 Hz playlist /
-        // last-segment loop, keep the restarting overlay up, and let the
-        // next ticks' `"reconnect"` polls find a fresh master. No seek and
-        // no startLoad — those are what made the dead window look broken.
+        // Conventional restart dead window: keep the restarting overlay up,
+        // and let the next ticks' `"reconnect"` polls ask what is live. No
+        // seek and no startLoad: those are what made the dead window look
+        // broken.
+        //
+        // The loader stops only for a playlist that is GONE (404/410, the
+        // old session). A playlist that is merely FROZEN is, since the
+        // server keeps the session through a transcode restart, a seam that
+        // resumes on the same URL behind an `EXT-X-DISCONTINUITY`: hls.js
+        // keeps polling it at its own cadence (no 1 Hz loop, that was the
+        // ladder), sees the sequence move the moment it does, and plays on
+        // with no reconnect round trip in between.
         clearPendingReconnect();
         console.warn(
           `[hls] stream stalled (${watch.lastReason}), holding for restart`,
         );
-        hlsRef.current?.stopLoad?.();
+        if (watch.lastReason !== "sequence-stuck") {
+          hlsRef.current?.stopLoad?.();
+        }
         return;
       }
       if (
@@ -2047,8 +2192,10 @@ export function HlsWatchPlayer({
           watch.describeContext(),
         ),
       );
+      pendingJittered = decision;
       reconnectJitterTimer = window.setTimeout(() => {
         reconnectJitterTimer = null;
+        pendingJittered = null;
         if (cancelled) {
           return;
         }
@@ -2095,6 +2242,9 @@ export function HlsWatchPlayer({
         nativeHls: video.canPlayType("application/vnd.apple.mpegurl"),
         mseSupported: Hls.isSupported(),
       });
+      // The native engine shows the watchdog no playlist, so its stall rule
+      // must outlast a seam on its own (`NATIVE_LIVE_STALL_MS`).
+      watch.setNativeLiveEngine(engine === "native" && !isVod);
       if (engine === "native") {
         video.src = activeSrc;
         void play();
@@ -2470,7 +2620,24 @@ export function HlsWatchPlayer({
         // sees a session and after every API restart, while a dead egress
         // is one that stops APPENDING (`livePlaylistProgress`). This is how
         // the watchdog tells a dead egress apart from a slow network.
+        const wasHolding = watch.isHoldingForRestart;
         watch.onMediaSequence(livePlaylistProgress(data.details), Date.now());
+        if (wasHolding && !watch.isHoldingForRestart && !cancelled) {
+          // THE SEAM IS OVER, SAME SESSION. The playlist moved again, so a
+          // reconnect still waiting out its jitter would only answer a
+          // question that no longer applies (and its "nothing fresher"
+          // fall-through would put the player back on "reconnecting").
+          clearPendingReconnect();
+          // A buffer that outlasted the seam never fires `playing` again,
+          // which is the only other thing that takes the restarting copy
+          // down; a player that did freeze clears it on its `playing`.
+          if (!video.paused && video.readyState >= HAVE_FUTURE_DATA) {
+            restarting = false;
+            setStallReason(null);
+            setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+            setPhase("playing");
+          }
+        }
         // LL only, and a SEPARATE signal from the media-sequence one above
         // (Farol review, this PR): under LL's blocking reload, hls.js fires
         // this same event once per PART, not only once per segment --
@@ -2504,14 +2671,48 @@ export function HlsWatchPlayer({
           }
           // THE GOVERNOR HEARS WHAT THE MANIFEST ASKS FOR: a parts viewer
           // never sits closer than the manifest's own `PART-HOLD-BACK`, and
-          // never closer than its own floor either. Re-applied only when the
-          // value changes -- this event fires once per PART under the
-          // blocking reload.
+          // never closer than its own floor either; a segments viewer never
+          // sits closer than the longest segment plus a fetch
+          // (`LL_SEGMENTS_FETCH_MARGIN_SECONDS`), because it cannot load the
+          // one still being written. Re-applied only when a value changes --
+          // this event fires once per PART under the blocking reload.
           const holdBack = data.details.partHoldBack;
-          if (governor && holdBack !== lastPartHoldBack) {
+          const targetDuration = data.details.targetduration;
+          if (
+            governor &&
+            (holdBack !== lastPartHoldBack || targetDuration !== lastTargetDuration)
+          ) {
             lastPartHoldBack = holdBack;
-            governor.onManifest({ partHoldBackSeconds: holdBack });
+            lastTargetDuration = targetDuration;
+            governor.onManifest({
+              partHoldBackSeconds: holdBack,
+              targetDurationSeconds: targetDuration,
+            });
             applyGovernor();
+          }
+          // THE GOVERNOR HEARS WHAT ACTUALLY HAPPENED TOO, not only the
+          // manifest's own worst-ever number: every listed segment's real
+          // EXTINF since the last one it was fed (`onSegmentDuration`, a
+          // no-op unless `llSegmentCadenceDecay` is on) --
+          // `newSegmentDurationsSince` in `hls-live-edge.ts` is what walks
+          // the manifest for that; see its own comment for why `.at(-1)`
+          // alone would miss a segment. `seen.reset` fires on a remux
+          // restart or a new run's media-sequence base (pitfall 20): the
+          // governor's cadence window is pre-restart evidence at that
+          // point and has to earn a fresh one, never averaged with what
+          // comes next.
+          if (governor) {
+            const seen = newSegmentDurationsSince(
+              data.details.fragments,
+              lastSeenSegmentSn,
+            );
+            if (seen.reset) {
+              governor.resetSegmentCadence();
+            }
+            for (const duration of seen.durations) {
+              governor.onSegmentDuration(duration);
+            }
+            lastSeenSegmentSn = seen.lastSeenSn;
           }
         }
         // Conventional only. This is exactly the override §4 warns against
@@ -2606,7 +2807,7 @@ export function HlsWatchPlayer({
     // issued, and nothing in the console but an unhandled rejection the
     // stall overlay then covers with "reconectando". Pitfall 16's rule --
     // something that refuses has to say why -- applied to our own attach.
-    void attach().catch((error) => {
+    const startAttach = () => void attach().catch((error) => {
       console.error("[hls] attach failed", error);
       if (cancelled) {
         return;
@@ -2624,6 +2825,32 @@ export function HlsWatchPlayer({
         now: Date.now(),
       });
     });
+    // A SEGMENTS VIEWER JOINING AT GO-LIVE WAITS ONCE (`llStartDelayMs`)
+    // behind the "starting" screen instead of freezing four times while its
+    // cushion builds. The watchdog's clocks start again when the attach
+    // really does, so the wait never reads as a stall or a stuck sequence.
+    const startDelayMs = governor
+      ? llStartDelayMs({
+          delivery: governor.state().delivery,
+          sessionStartedAtMs: hlsSessionStartedAtMs(activeSrc),
+          now: Date.now(),
+        })
+      : 0;
+    if (startDelayMs > 0) {
+      console.warn(
+        `[hls] LL session just went live, starting in ${(startDelayMs / 1000).toFixed(1)}s to build a cushion`,
+      );
+      startDelayTimer = window.setTimeout(() => {
+        startDelayTimer = null;
+        if (cancelled) {
+          return;
+        }
+        watch.onSourceChanged(Date.now());
+        startAttach();
+      }, startDelayMs);
+    } else {
+      startAttach();
+    }
     // `reconnect` lives on reconnectRef: listing it here re-created hls.js
     // on every restamp of the callback. `videoRef` is a parent object whose
     // identity must not tear the session down either; the element is always
@@ -2634,6 +2861,9 @@ export function HlsWatchPlayer({
       window.clearInterval(stallTimer);
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
+      }
+      if (startDelayTimer !== null) {
+        window.clearTimeout(startDelayTimer);
       }
       if (telemetrySampleTimer !== null) {
         window.clearInterval(telemetrySampleTimer);
@@ -2688,9 +2918,23 @@ export function HlsWatchPlayer({
   const reducedMotion = usePrefersReducedMotion();
   const [barHovered, setBarHovered] = useState(false);
   const [barFocused, setBarFocused] = useState(false);
+  // The layout picker's menu is portalled out of the bar, so neither hover
+  // nor focus inside it reaches the bar's own handlers: it holds the chrome
+  // up itself while it is open, the way the quality menu does.
+  const [cameraLayoutOpen, setCameraLayoutOpen] = useState(false);
+  // The QUICK cluster's own menu-open flag (below), read by nothing --
+  // `Menu` wants a setter to report into, and this deliberately does NOT
+  // feed `useIdleChrome`'s `pinned` the way `cameraLayoutOpen` above does.
+  // That pin exists to keep the FADING bar up while its own menu is open,
+  // and the quick cluster is never part of the fading bar: wiring this in
+  // too would flip `chrome.hidden` back to false the instant the quick
+  // layout menu opened, which is also this cluster's own visibility
+  // condition (see below) -- the button a person just pressed would vanish
+  // under their pointer.
+  const [, setQuickCameraLayoutOpen] = useState(false);
   const chrome = useIdleChrome(
     layout === "cinema" && hasFrame,
-    qualityOpen || barHovered || barFocused,
+    qualityOpen || cameraLayoutOpen || barHovered || barFocused,
   );
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
@@ -2762,27 +3006,43 @@ export function HlsWatchPlayer({
         : undefined;
 
   /**
-   * THE PRESENTER'S CAMERA, FLOATING OVER THEIR FILM.
+   * THE PRESENTER'S CAMERA, BESIDE OR OVER THEIR FILM.
    *
-   * A second, muted hls.js on a second playlist (`WatchCameraPip`), and a pure
-   * module deciding which of the two pictures gets the stage and which gets
-   * the corner (`lib/watch-camera-pip.ts`). Swapping moves the CLASSES, never
-   * the players: neither instance is re-attached, so nobody rebuffers to look
-   * at a webcam, and the control bar stays where it is because it belongs to
-   * the stage rather than to a picture.
+   * A second hls.js on a second playlist (`WatchCameraPip`), and a pure
+   * module deciding which picture gets which box for the viewer's chosen
+   * layout (`lib/watch-camera-pip.ts`: the corner, side by side, the film
+   * alone, the camera alone). A layout change moves the CLASSES, never the
+   * players: neither instance is re-attached, so nobody rebuffers to look at
+   * a webcam, and the control bar stays where it is because it belongs to
+   * the stage rather than to a picture. The one exception is "hide webcam",
+   * which unmounts the camera's player outright so it stops downloading.
    */
   const [cameraPip, setCameraPip] = useState<CameraPipPref>(readCameraPipPref);
   const [cameraFrame, setCameraFrame] = useState(false);
+  const cameraLayout = effectiveCameraLayout({
+    pref: cameraPip,
+    cameraHasVideo,
+  });
   const cameraMounted = cameraPipMounted({
     cameraSrc,
-    fullscreen: Boolean(fullscreen?.active),
     cinema,
+    layout: cameraLayout,
+    hasVoiceAudio: cameraHasVoiceAudio,
   });
   const boxes = cameraPipBoxes({
     mounted: cameraMounted,
     hasFrame: cameraFrame,
     pref: cameraPip,
+    layout: cameraLayout,
   });
+  const layoutOffered = cameraLayoutOffered({ cameraSrc, cameraHasVideo, cinema });
+  const layoutIcon: Record<CameraLayout, LucideIcon> = {
+    pip: PictureInPicture,
+    side: Columns2,
+    stream: Monitor,
+    camera: Webcam,
+  };
+  const LayoutGlyph = layoutIcon[cameraLayout];
   const updateCameraPip = useCallback((next: CameraPipPref) => {
     setCameraPip(next);
     writeCameraPipPref(next);
@@ -2811,7 +3071,9 @@ export function HlsWatchPlayer({
   return (
     <div
       className={cn(
-        "relative h-full w-full bg-black",
+        // `@container/watch`: side by side stacks by the PLAYER's width, not
+        // the window's (`CAMERA_SIDE_*_CLASS`).
+        "@container/watch relative h-full w-full bg-black",
         cinema && fullscreen?.active && chrome.hidden && "cursor-none",
         !cinema && "group",
         className,
@@ -2865,39 +3127,44 @@ export function HlsWatchPlayer({
       {cameraMounted && cameraSrc ? (
         <WatchCameraPip
           src={cameraSrc}
-          hasVideo={cameraHasVideo}
+          hasVideo={cameraHasVideo && !boxes.cameraVoiceOnly}
           hasVoiceAudio={cameraHasVoiceAudio}
-          className={cn(boxes.camera ?? "", videoFitClass("cover"))}
+          className={boxes.camera ?? ""}
+          fit={boxes.cameraFit}
           onFrame={setCameraFrame}
         />
       ) : null}
-      {/* THE CONTROLS SIT OVER WHICHEVER PICTURE IS IN THE CORNER, which is
-          why there is one of them rather than one per player: the corner is a
-          box, and what is in it changes. `tileControls` in `lib/stage-layers.ts`
-          is above the pictures and below the chrome, so the control bar is never behind
-          webcam. */}
+      {/* THE CORNER CONTROL SITS OVER THE CORNER PICTURE, in the same box.
+          The box lets every press through (the picture underneath may carry
+          the presenter's voice slider, and a tap on the stage still wakes the
+          chrome); only the button takes one, and it comes and goes with the
+          player's own chrome. `tileControls` is above the pictures and below
+          the chrome, so the control bar is never behind a webcam. The old
+          click-to-swap is gone: "hide stream" in the layout picker is what
+          puts the camera on the stage now. */}
       {boxes.corner ? (
         <div
           data-testid="watch-camera-pip-controls"
-          data-camera-on-stage={cameraPip.onStage ? "" : undefined}
-          className={cn(boxes.corner, "group/pip", STAGE_LAYER.tileControls)}
+          className={cn(
+            boxes.corner,
+            "pointer-events-none",
+            STAGE_LAYER.tileControls,
+          )}
         >
-          <button
-            type="button"
-            data-testid="watch-camera-pip-swap"
-            aria-label={t("voice.hls.cameraSwap")}
-            title={t("voice.hls.cameraSwap")}
-            className="absolute inset-0 h-full w-full rounded-[var(--radius-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
-            onClick={() =>
-              updateCameraPip({ ...cameraPip, onStage: !cameraPip.onStage })
-            }
-          />
           <button
             type="button"
             data-testid="watch-camera-pip-corner"
             aria-label={t("voice.hls.cameraCorner")}
             title={t("voice.hls.cameraCorner")}
-            className="absolute right-1 top-1 rounded bg-black/60 p-1 text-paper opacity-0 transition-opacity hover:bg-black/85 focus-visible:opacity-100 motion-reduce:transition-none group-hover/pip:opacity-100"
+            className={cn(
+              "absolute right-1 top-1 rounded bg-black/60 p-1 text-paper transition-opacity hover:bg-black/85 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal motion-reduce:transition-none",
+              // Hidden with the chrome, and not pressable while hidden: the
+              // first tap on a resting player wakes it, it does not move a
+              // webcam nobody could see a button on.
+              chrome.hidden
+                ? "pointer-events-none opacity-0"
+                : "pointer-events-auto opacity-100",
+            )}
             onClick={() =>
               updateCameraPip({
                 ...cameraPip,
@@ -2907,6 +3174,81 @@ export function HlsWatchPlayer({
           >
             <Move className="h-3 w-3" aria-hidden="true" />
           </button>
+        </div>
+      ) : null}
+      {/* THE QUICK CLUSTER: mute, and the camera layout picker beside it,
+          reachable with NO hover and NO tap-to-reveal.
+          A 108-viewer watch party on 2026-09-26 asked "how do I mute?" three
+          times in chat, and once asked to hide the host's webcam and was told
+          "only in fullscreen, but then you lose chat" -- both controls
+          already live in the ordinary (non-fullscreen) stage, inside the
+          Twitch-style bar below, but that bar fades after
+          `IDLE_CHROME_DELAY_MS` of no pointer movement and a touch viewer has
+          no pointer to rest: nothing ever wakes it back up for them, so a
+          control that exists reads as a control that does not.
+          Shown exactly opposite the fading bar (`chrome.hidden`), never
+          alongside it, so there is only ever one mute button on screen: the
+          quick pair the instant the bar is not there, the full bar's own the
+          moment a person hovers, taps the stage, or opens this cluster's
+          own menu. */}
+      {cinema && !forceMuted ? (
+        <div
+          data-testid="watch-quick-controls"
+          className={cn(
+            "absolute bottom-3 left-3 flex items-center gap-1.5",
+            STAGE_LAYER.chrome,
+            reducedMotion ? "transition-none" : "transition-opacity duration-200",
+            chrome.hidden
+              ? "pointer-events-auto opacity-100"
+              : "pointer-events-none opacity-0",
+          )}
+        >
+          <button
+            type="button"
+            data-testid="watch-quick-mute"
+            aria-pressed={silenced}
+            aria-label={
+              silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+            }
+            title={silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")}
+            tabIndex={chrome.hidden ? 0 : -1}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+            onClick={() => {
+              if (silenced) {
+                restoreSound();
+                return;
+              }
+              updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+            }}
+          >
+            <VolumeGlyph volume={volumePref.volume} muted={silenced} />
+          </button>
+          {layoutOffered ? (
+            <Menu
+              align="start"
+              side="top"
+              onOpenChange={setQuickCameraLayoutOpen}
+              items={CAMERA_LAYOUTS.map((option) => ({
+                id: `camera-layout-quick-${option}`,
+                label: t(`voice.hls.cameraLayout.${option}`),
+                icon: layoutIcon[option],
+                checked: cameraLayout === option,
+                onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+              }))}
+            >
+              <button
+                type="button"
+                data-testid="watch-quick-camera-layout"
+                data-camera-layout={cameraLayout}
+                aria-label={t("voice.hls.cameraLayout")}
+                title={t("voice.hls.cameraLayout")}
+                tabIndex={chrome.hidden ? 0 : -1}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+              >
+                <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Menu>
+          ) : null}
         </div>
       ) : null}
       {holdingReason === "over" || holdingReason === "awaiting" ? (
@@ -3178,6 +3520,38 @@ export function HlsWatchPlayer({
             )}
           </div>
           <div className="pointer-events-auto flex shrink-0 items-center gap-0.5">
+            {layoutOffered ? (
+              /* THE LAYOUT PICKER, only while the presenter's camera is on
+                 the stream. One small control in the chrome rather than a
+                 panel: the four layouts are a choice made once per party,
+                 remembered per browser, and a party with no webcam shows
+                 exactly the bar it always had. A plain `Menu`, so the
+                 keyboard, focus return and Escape are Radix's, and it
+                 portals into the fullscreen element when there is one. */
+              <Menu
+                align="end"
+                side="top"
+                onOpenChange={setCameraLayoutOpen}
+                items={CAMERA_LAYOUTS.map((option) => ({
+                  id: `camera-layout-${option}`,
+                  label: t(`voice.hls.cameraLayout.${option}`),
+                  icon: layoutIcon[option],
+                  checked: cameraLayout === option,
+                  onSelect: () => updateCameraPip({ ...cameraPip, layout: option }),
+                }))}
+              >
+                <button
+                  type="button"
+                  data-testid="watch-camera-layout"
+                  data-camera-layout={cameraLayout}
+                  aria-label={t("voice.hls.cameraLayout")}
+                  title={t("voice.hls.cameraLayout")}
+                  className={iconBtn}
+                >
+                  <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Menu>
+            ) : null}
             {hasFrame ? (
               <Tooltip
                 label={whole ? t("call.fit.fill") : t("call.fit.whole")}

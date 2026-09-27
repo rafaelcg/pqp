@@ -17,7 +17,17 @@ the whole room is on that box.
   `VOICE_REGISTRY=postgres`, which production runs; an in-process map always).
   Everybody in the room is sent to that box. LiveKit single nodes do not relay
   to each other, so there is no other correct answer.
-- **The signal is the first joiner's `CF-IPCountry`**, captured from the
+- **The signal is where the server's people are** (since 2026-09-24). Every
+  account's last seen country (two letters, never an IP) is recorded at WS
+  auth, throttled to once per 6 h unless it changes. A room opens on the
+  region that at least 60% of its server's members seen in the last 30 days
+  map to, given at least 5 of them; with 5 or more but no such majority it
+  opens on `LIVEKIT_REGION_DEFAULT` (home unless set). Only a server with
+  fewer than 5 known members falls back to the first joiner's
+  `CF-IPCountry`, which is how it worked before: one visitor from London
+  first into a Brazilian server's channel used to move the whole call to
+  London. See `server/src/voice/region-audience.ts`.
+- **The country comes from `CF-IPCountry`**, captured from the
   WebSocket upgrade. Cloudflare adds it on every proxied request; Caddy passes
   it through unchanged (verified locally against the `(upstreams)` snippet of
   `tools/api-host/Caddyfile`, on plain HTTP and on the `/ws` upgrade).
@@ -38,21 +48,25 @@ the whole room is on that box.
   box, so a `watch_party` channel is always pinned home, ahead of the operator
   override, and `pushLiveHls` refuses (and logs `voice.hlsRefusedRemoteRegion`)
   for any room that got elsewhere anyway.
-- **Old clients keep rooms home.** A room is only moved off home when its first
-  joiner declared the `sfu-region` capability on `auth`. Web and Electron
-  declare it from this release. iOS and Android do not yet (see below), so a
-  room a phone opens stays in São Paulo, and a phone that joins a room somebody
-  else opened in Miami still works, because it dials the URL it is handed.
+- **Every client is trusted to follow the URL** (since 2026-09-24). A room a
+  phone opens follows the same policy as one a browser opens, with no app
+  update, because every build of every client dials the `url` the server
+  answers (see "Clients" below). `LIVEKIT_REGION_REQUIRE_CAP=true` is the
+  rollback: a room is then only moved off home when its first joiner declared
+  the `sfu-region` capability on `auth` (`reason=old-client` otherwise).
 - **Moderation asks every box.** Kicks, bans, server mutes and publish-grant
   changes (`voice/admin.ts`) list the room on every configured box and act
   where the participant is. A banned account's LiveKit connection outlives its
   WebSocket, so the boxes themselves are the authority, not the pin.
 - **Mesh rooms carry a region too**, so a mid-call promotion onto the SFU goes
-  to the box the first joiner chose.
+  to the box decided when the room opened.
 
 Decision order (`decideSfuRegion` in `server/src/voice/regions.ts`): single
 region, conversation (home), watch party (home), first joiner without the cap
-(home), operator override, country map, `LIVEKIT_REGION_DEFAULT`.
+(home, only with `LIVEKIT_REGION_REQUIRE_CAP=true`), operator override, the
+server's members (`server-majority`, or `server-mixed` to the default), and
+only with too few known members the first joiner's country through the map,
+then `LIVEKIT_REGION_DEFAULT`.
 
 ## Configuration
 
@@ -67,6 +81,7 @@ at call time; a rolling restart applies a change.
 | `LIVEKIT_API_KEY_<ID>` / `LIVEKIT_API_SECRET_<ID>` | That box's own key pair (`_MIA`, `_LON`). Falls back to the home pair when unset. |
 | `LIVEKIT_REGION_COUNTRIES` | `US:mia,CA:mia,MX:mia,GB:lon,IE:lon`. ISO country to region. **This is the switch that routes people.** Regions configured with no country map route nobody anywhere new. |
 | `LIVEKIT_REGION_DEFAULT` | Where unlisted countries (and requests with no country) go. Default: home. |
+| `LIVEKIT_REGION_REQUIRE_CAP` | Default off: every client may open a room off home. `true` is the rollback to the old caution, where only a first joiner that declared `sfu-region` can. |
 
 **Key pairs: one per box (decided).** `tools/sfu/install.sh` generates a pair
 when none is given, and a separate pair means a leaked Miami key cannot mint a
@@ -150,11 +165,19 @@ restart, and rooms already open stay on the box they are on until they empty.
 
 1. **Stop routing a country** (or all of them): remove it from
    `LIVEKIT_REGION_COUNTRIES` (or unset the variable). New rooms go home.
-2. **A box is down:** remove its countries as above. Rooms already pinned
+2. **A phone build turns out not to follow the URL** (a room it opened off
+   home, with its own media on the wrong box): set
+   `LIVEKIT_REGION_REQUIRE_CAP=true`. Rooms opened by a client that did not
+   declare `sfu-region` (every iOS build up to 1.0 (103101), every Android
+   APK before this change) go home again, with `reason=old-client` on
+   `voice.regionPinned`; web, Electron and the phone builds that declare the
+   cap keep routing. Read on every decision, so the rolling restart that
+   picks up the `.env` edit is all it takes.
+3. **A box is down:** remove its countries as above. Rooms already pinned
    there lose media; people rejoining after the room empties land at home.
    There is no automatic failover in v1: an unreachable region is reported
    (`/ready`, dashboard, status page) but not avoided.
-3. **Turn regions off entirely:** first do step 1 and wait for the rooms
+4. **Turn regions off entirely:** first do step 1 and wait for the rooms
    pinned outside home to empty (dashboard, pinned rooms per region, or
    `SELECT sfu_region, COUNT(*) FROM voice_rooms GROUP BY 1` read-only). Only
    then unset `LIVEKIT_REGIONS`: while it is unset the API has no credentials
@@ -170,25 +193,33 @@ restart, and rooms already open stay on the box they are on until they empty.
 |---|---|---|---|
 | Web (`client/src/lib/livekit-session.ts`) | Yes, `room.connect(session.url, ...)` | Yes, from this release | Opens rooms in its region; joins any room anywhere. |
 | Electron | Loads the web client | Yes, when the bundle reloads | Same as web. No host allowlist in the shell. |
-| iOS (`ios/pqp/Sources/Voice/LiveKitVoiceClient.swift`) | Yes, `room.connect(url: info.url, ...)`; ATS has no host restriction | No | A room it opens stays in São Paulo. It joins a Miami room correctly. |
-| Android (`android/.../voice/LiveKitEngine.kt`) | Yes, `credentials.url`; release network config has no host pinning | No | Same as iOS. |
+| iOS (`ios/pqp/Sources/Voice/LiveKitVoiceClient.swift`) | Yes, `room.connect(url: info.url, ...)`; ATS has no host restriction | From the build after 1.0 (103101); not needed | Opens rooms by the policy, like web. |
+| Android (`android/.../voice/LiveKitEngine.kt`) | Yes, `credentials.url`; release network config has no host pinning | From the next APK; not needed | Same as iOS. |
 
-No shipped client hardcodes `sfu.pqp.gg` (checked: the only hits are comments
-and tests). The `sfu-region` capability is caution rather than a known break:
-it lets the server keep old builds exactly where they have always been.
-
-**To opt the phones in** (one line each, ship with the next store build): add
-`"sfu-region"` to the capability list each app sends in its WebSocket `auth`
-frame, `RealtimeClient.wireCaps` in `ios/pqp/Sources/Core/RealtimeClient.swift`
-and `WIRE_CAPS` in `android/app/src/main/kotlin/gg/pqp/app/core/RealtimeClient.kt`,
-and update the handshake test beside each. Nothing else changes: both already
-pass the token's `url` straight to `Room.connect`.
+**Audit, 2026-09-24**, over the whole git history of `ios/` and `android/`
+since LiveKit support landed (#243 iOS, #248 Android) and of the web session:
+every version of every client passes the `url` of a `POST /api/voice/token`
+answer straight to `Room.connect` (iOS `room.connect(url: info.url, ...)`,
+unchanged since #243; Android `created.connect(credentials.url, ...)`,
+unchanged since #248; web `room.connect(session.url, ...)`). The token is
+minted fresh for every connect: iOS on every `connectSfu` (first join, a
+mid-call promotion, a cold rejoin after a refused resume), Android inside
+every attempt of `connectWithRetries`, presenting the resume token so a mint
+on the other replica works. `GET /api/voice/backend` is read only for its
+`backend` field (whether to declare `resume`), never for a host, and no
+client ever hardcoded `sfu.pqp.gg` or a region host (only comments and
+tests). A resume keeps the LiveKit connection it already has to the box the
+room is pinned to; a resume the server turns into a cold join mints a new
+token, whose `url` is the room's box. LiveKit's own reconnects reuse the URL
+they were given, which is the pinned box for the room's whole life. That is
+why the cap gate is off by default: it protected against a break no build
+has.
 
 ## Known limits (v1)
 
 - **First joiner decides.** A Brazilian admin opening a European community's
   channel pins it home. The per-channel override is the workaround.
-- **No automatic failover** from a dead region (roll back step 2).
+- **No automatic failover** from a dead region (roll back step 3).
 - **A box that hangs slows moderation everywhere.** Moderation asks every box
   and waits for all of them, so an unreachable Miami box delays a server mute
   in a São Paulo room by the SDK's request timeout. Evictions are

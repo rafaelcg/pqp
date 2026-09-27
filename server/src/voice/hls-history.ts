@@ -63,7 +63,6 @@ import {
   hlsRetentionMinutes,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
-  micArchiveObjectKey,
   MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
 import {
@@ -74,7 +73,22 @@ import {
 } from "./hls-ladder.js";
 import { HlsPlaylistNotFound, HlsPlaylistUnavailable } from "./hls-playlist-proxy.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import {
+  type HlsRun,
+  parseHlsRuns,
+  stitchRunPlaylists,
+} from "./hls-runs.js";
 import { firstPts, TsTimestampShift } from "./ts-timestamp-shift.js";
+import {
+  newOggStitchState,
+  oggSilenceBytes,
+  oggSilencePages,
+  OPUS_SILENCE_SAMPLES,
+  OggRunRewriter,
+  readOggRunEnd,
+  readOggRunHead,
+  type OggRunRewrite,
+} from "./ogg-stitch.js";
 
 const LADDER_RUNG_NAMES = Object.keys(LADDER_RUNGS);
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -628,8 +642,8 @@ export async function buildReplaySignedPlaylist(
     throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
   const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
-  const session = await getPool().query(
-    `SELECT 1 FROM hls_sessions
+  const session = await getPool().query<{ runs: unknown }>(
+    `SELECT runs FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
        AND ${availablePredicate(3, 4)}`,
@@ -641,12 +655,62 @@ export async function buildReplaySignedPlaylist(
       `No replay ${objectPrefix} for channel ${channelId}`,
     );
   }
-  const body = await fetchReplayPlaylistBody(config, channelId, startedAt, rung);
+  const runs = parseHlsRuns(session.rows[0]?.runs ?? null);
+  const body =
+    runs.length === 1 && runs[0]!.suffix === ""
+      ? await fetchReplayPlaylistBody(config, channelId, startedAt, rung)
+      : await stitchedReplayBody(config, objectPrefix, runs);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
   const rewritten = await signPlaylistObjects(body, prefixDir, config, now);
   pruneStale(replayBodyCache, now);
   replayBodyCache.set(cacheKey, { body: rewritten, at: now });
   return rewritten;
+}
+
+/**
+ * A rung whose egress restarted in place (`hls-runs.ts`): every run's
+ * `-index.m3u8`, in start order, stitched into one VOD playlist. A run whose
+ * playlist is gone or lists nothing is left out (a restart that failed before
+ * its first segment writes neither); when none is left, the same error a
+ * single run's missing playlist raises.
+ */
+async function stitchedReplayBody(
+  config: ReplayStorageConfig,
+  objectPrefix: string,
+  runs: readonly HlsRun[],
+): Promise<string> {
+  const bodies = await mapWithConcurrency(
+    runs,
+    CAMERA_PLAN_CONCURRENCY,
+    async (run) => {
+      const response = await fetchPlaylistObject(
+        config,
+        `${objectPrefix}${run.suffix}-index.m3u8`,
+      );
+      if (response.status === 404) {
+        return "";
+      }
+      if (!response.ok) {
+        // A transient failure is not a missing run: a replay cached with a
+        // hole in it would be served for REPLAY_CACHE_TTL_MS.
+        throw new HlsPlaylistUnavailable(
+          `Storage returned HTTP ${response.status} for the replay playlist`,
+        );
+      }
+      return response.text();
+    },
+  );
+  const caps = runs.map((run, index) => {
+    const next = runs[index + 1];
+    return next ? next.base - run.base : null;
+  });
+  const stitched = stitchRunPlaylists(bodies, caps);
+  if (stitched === null) {
+    throw new HlsPlaylistUnavailable(
+      "Storage returned HTTP 404 for the replay playlist",
+    );
+  }
+  return stitched;
 }
 
 // --------------------------------------------------------------------------
@@ -941,8 +1005,17 @@ export interface WatchPartyDownloadPlan {
   keys: string[];
   /** Per key, 90 kHz ticks to move that object's MPEG-TS timestamps by
    * (`ts-timestamp-shift.ts`). Absent, or 0, means byte for byte. Set for a
-   * camera with more than one run, so the runs play one after another. */
+   * camera or a film rung with more than one run, so the runs play one after
+   * another. */
   ptsOffsets?: number[];
+  /** The voice archive over more than one run (`buildMicRunsDownloadPlan`):
+   * per key, how its Ogg pages are rewritten into the first run's stream,
+   * and how many 20 ms silence packets go in front of it so it plays where it
+   * happened. Absent for a single run, which is streamed byte for byte. */
+  ogg?: {
+    rewrites: OggRunRewrite[];
+    silenceBefore: { packets: number; startGranule: number }[];
+  };
   /** Exact: every object the download concatenates was priced by the same
    * listing that proved it is there, so this is a `Content-Length` the
    * browser can hold us to. */
@@ -1105,6 +1178,9 @@ export function resetWatchPartyDownloadCacheForTests(): void {
 
 interface BroadcastRungRow {
   rung: string | null;
+  /** `hls_sessions.runs`. On the `mic` row: when each voice run started, see
+   * `micRunsWithStart` in hls-egress.ts. */
+  runs?: unknown;
   mode: string | null;
   object_prefix: string;
   ended_at: Date | null;
@@ -1118,7 +1194,7 @@ async function broadcastRungRows(
   startedAtMs: number,
 ): Promise<BroadcastRungRow[]> {
   const result = await getPool().query<BroadcastRungRow>(
-    `SELECT rung, mode, object_prefix, ended_at,
+    `SELECT rung, mode, object_prefix, ended_at, runs,
             (${availablePredicate(3, 4)}) AS available
      FROM hls_sessions
      WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)`,
@@ -1218,17 +1294,15 @@ async function objectSizes(
   return sizes;
 }
 
-/** Where one kind's objects live: the mic archive is a single object, every
- * other kind is a rung's prefix. */
+/** Where one kind's objects live: a rung's prefix. The voice archive's is
+ * `...-mic`, which lists its first run (`-mic.ogg`) and every run after a
+ * restart in place (`-mic-r<ms>.ogg`). */
 function downloadPrefix(
   channelId: string,
   startedAtMs: number,
-  kind: WatchPartyDownloadKind,
   rung: string,
 ): string {
-  return kind === "voice"
-    ? micArchiveObjectKey(channelId, startedAtMs)
-    : hlsObjectPrefix(channelId, startedAtMs, rung);
+  return hlsObjectPrefix(channelId, startedAtMs, rung);
 }
 
 /**
@@ -1273,7 +1347,7 @@ export async function watchPartyDownloadSizes(
     }
     let total = 0;
     for (const [key, size] of await objectSizes(
-      downloadPrefix(channelId, startedAtMs, kind, rung),
+      downloadPrefix(channelId, startedAtMs, rung),
       config,
     )) {
       // Playlists are a rounding error next to the segments, but counting
@@ -1344,25 +1418,32 @@ export async function buildWatchPartyDownloadPlan(
   if (!rung) {
     return null;
   }
-  const prefix = downloadPrefix(channelId, startedAtMs, kind, rung);
+  const prefix = downloadPrefix(channelId, startedAtMs, rung);
   // The same listing the panel already paid for, memoised: opening the panel
   // and then downloading from it must not scan the prefix twice.
   const sizes = await objectSizes(prefix, config);
   if (kind === "camera") {
-    return buildCameraDownloadPlan(prefix, sizes, config);
+    return buildRunsDownloadPlan(kind, prefix, sizes, config);
   }
   if (kind === "voice") {
-    const size = sizes.get(prefix);
-    if (size === undefined) {
-      return null;
-    }
-    return {
-      kind,
-      contentType: DOWNLOAD_CONTENT_TYPE[kind],
-      extension: "ogg",
-      keys: [prefix],
-      bytes: size,
-    };
+    const micRow = rows.find((row) => row.rung === MIC_ARCHIVE_RUNG);
+    return buildMicRunsDownloadPlan(
+      prefix,
+      sizes,
+      config,
+      firstMicRunStartMs(startedAtMs, micRow?.runs),
+    );
+  }
+  // A rung whose egress restarted in place wrote one run per egress, the
+  // camera's name shape exactly, so it is planned the camera's way. Read from
+  // the listing rather than the row's `runs`: the objects are what the file
+  // is made of. One run (the legacy index alone) stays byte for byte.
+  if (
+    cameraRunPlaylistKeys(prefix, sizes.keys()).some(
+      (key) => key !== `${prefix}-index.m3u8`,
+    )
+  ) {
+    return buildRunsDownloadPlan(kind, prefix, sizes, config);
   }
   const keys = playlistKeys(
     await fetchReplayPlaylistBody(config, channelId, startedAtMs, rung),
@@ -1391,11 +1472,12 @@ export async function buildWatchPartyDownloadPlan(
 }
 
 // --------------------------------------------------------------------------
-// The presenter's camera, every run of it.
+// The presenter's camera, every run of it (and a ladder rung's, the same way).
 //
 // The camera stops and starts inside a broadcast (turned off and on, a device
 // switch, a dead egress coming back), and every run is its own egress writing
-// under its own names (`cameraRunNames` in hls-egress.ts): the first run as
+// under its own names (`cameraRunNames` in hls-egress.ts). A film rung that
+// restarted in place (`hls-runs.ts`) writes the same shape: the first run as
 // `<prefix>_NNNNN.ts` with `<prefix>-index.m3u8`, every later one as
 // `<prefix>-r<its start, ms>_NNNNN.ts` with `<prefix>-r<ms>-index.m3u8`. All
 // of them sit under the one row's prefix, so the listing that prices the
@@ -1414,7 +1496,8 @@ export async function buildWatchPartyDownloadPlan(
 const CAMERA_RUN_INDEX = /-r(\d{1,16})-index\.m3u8$/;
 /** How much of a segment's head is read to find its first PTS. */
 const CAMERA_PTS_PROBE_BYTES = 64 * 1024;
-/** Storage requests in flight at once while planning a camera download. */
+/** Storage requests in flight at once while planning a download over runs
+ * (or stitching a replay over them). */
 const CAMERA_PLAN_CONCURRENCY = 4;
 
 /** `items.map(fn)`, at most `limit` at a time, results in input order. */
@@ -1438,7 +1521,9 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** The camera's run playlists under `prefix`, first run first. */
+/** The run playlists under `prefix` (a camera or a restarted rung), first run
+ * first. Only `<prefix>-index.m3u8` and `<prefix>-r<digits>-index.m3u8`
+ * count, so another run's live playlist or a segment never does. */
 export function cameraRunPlaylistKeys(
   prefix: string,
   keys: Iterable<string>,
@@ -1484,6 +1569,17 @@ async function segmentFirstPts(
   config: ReplayStorageConfig,
   key: string,
 ): Promise<number | null> {
+  return firstPts(
+    await readObjectRange(config, key, `bytes=0-${CAMERA_PTS_PROBE_BYTES - 1}`),
+  );
+}
+
+/** A `Range` read of one object, whole bytes in memory: only ever a probe. */
+async function readObjectRange(
+  config: ReplayStorageConfig,
+  key: string,
+  range: string,
+): Promise<Uint8Array> {
   const url = signRequest({
     method: "GET",
     key,
@@ -1495,7 +1591,7 @@ async function segmentFirstPts(
   try {
     response = await fetch(url, {
       cache: "no-store",
-      headers: { range: `bytes=0-${CAMERA_PTS_PROBE_BYTES - 1}` },
+      headers: { range },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -1508,10 +1604,11 @@ async function segmentFirstPts(
       `Storage returned HTTP ${response.status} for ${key}`,
     );
   }
-  return firstPts(new Uint8Array(await response.arrayBuffer()));
+  return new Uint8Array(await response.arrayBuffer());
 }
 
-async function buildCameraDownloadPlan(
+async function buildRunsDownloadPlan(
+  kind: "camera" | "film",
   prefix: string,
   sizes: Map<string, number>,
   config: ReplayStorageConfig,
@@ -1588,12 +1685,183 @@ async function buildCameraDownloadPlan(
     }
   }
   return {
-    kind: "camera",
-    contentType: DOWNLOAD_CONTENT_TYPE.camera,
+    kind,
+    contentType: DOWNLOAD_CONTENT_TYPE[kind],
     extension: "ts",
     keys,
     ...(ptsOffsets.some((offset) => offset !== 0) ? { ptsOffsets } : {}),
     bytes: total,
+  };
+}
+
+// --------------------------------------------------------------------------
+// The host's voice, every run of it.
+//
+// The archive is one Track Egress per run: `<prefix>.ogg` first, then
+// `<prefix>-r<its start, ms>.ogg` for every restart in place (an egress that
+// ended, a mic track replaced, the presenter back on a new socket). One run is
+// handed back byte for byte, as it always was. More than one become ONE Ogg
+// Opus stream (`ogg-stitch.ts`): later runs' pages rewritten into the first
+// run's stream and silence where the archive was down, so the voice after a
+// restart plays at the moment it was spoken and a clip can still be laid
+// against the film.
+//
+// WHERE A RUN GOES comes from the wall clock the runs were started at: a
+// later run's name carries it, and the first run's is on the `mic` row
+// (`hls_sessions.runs`, written by the restart). A run whose start is not
+// known follows the previous one with no gap; never earlier than the previous
+// run ended, whatever the clocks say.
+// --------------------------------------------------------------------------
+
+const MIC_RUN_KEY = /-r(\d{1,16})\.ogg$/;
+/** How much of a run is read to find its header pages and its last page. */
+const MIC_PROBE_BYTES = 64 * 1024;
+/** No gap is ever filled past this: a clock that is off by a day must not
+ * turn into a day of silence. */
+const MIC_MAX_GAP_SAMPLES = 6 * 60 * 60 * 48_000;
+
+/** The voice runs under `prefix`, first run first, each with its start (ms)
+ * when its name carries one. */
+export function micArchiveRunKeys(
+  prefix: string,
+  keys: Iterable<string>,
+): { key: string; startMs: number | null }[] {
+  const first = `${prefix}.ogg`;
+  let hasFirst = false;
+  const later: { key: string; startMs: number }[] = [];
+  for (const key of keys) {
+    if (key === first) {
+      hasFirst = true;
+      continue;
+    }
+    const run = MIC_RUN_KEY.exec(key);
+    if (run && key === `${prefix}-r${run[1]}.ogg`) {
+      later.push({ key, startMs: Number(run[1]) });
+    }
+  }
+  later.sort((a, b) => a.startMs - b.startMs);
+  return [...(hasFirst ? [{ key: first, startMs: null }] : []), ...later];
+}
+
+/** When the first (unsuffixed) voice run started, from the `mic` row's runs,
+ * or null when the row does not say (every row before restarts existed). */
+function firstMicRunStartMs(startedAtMs: number, raw: unknown): number | null {
+  const first = parseHlsRuns(raw ?? null)[0];
+  return first && first.suffix === "" && first.base > 0
+    ? startedAtMs + first.base
+    : null;
+}
+
+async function buildMicRunsDownloadPlan(
+  prefix: string,
+  sizes: Map<string, number>,
+  config: ReplayStorageConfig,
+  firstRunStartMs: number | null,
+): Promise<WatchPartyDownloadPlan | null> {
+  const listed = micArchiveRunKeys(prefix, sizes.keys())
+    .map((run) => ({
+      ...run,
+      startMs: run.key === `${prefix}.ogg` ? firstRunStartMs : run.startMs,
+      size: sizes.get(run.key) ?? 0,
+    }))
+    .filter((run) => run.size > 0);
+  if (listed.length === 0) {
+    return null;
+  }
+  const single = (run: (typeof listed)[number]): WatchPartyDownloadPlan => ({
+    kind: "voice",
+    contentType: DOWNLOAD_CONTENT_TYPE.voice,
+    extension: "ogg",
+    keys: [run.key],
+    bytes: run.size,
+  });
+  if (listed.length === 1) {
+    return single(listed[0]!);
+  }
+  const probed = await mapWithConcurrency(
+    listed,
+    CAMERA_PLAN_CONCURRENCY,
+    async (run) => {
+      const head = readOggRunHead(
+        await readObjectRange(config, run.key, `bytes=0-${MIC_PROBE_BYTES - 1}`),
+      );
+      return {
+        head,
+        end: head
+          ? readOggRunEnd(
+              await readObjectRange(config, run.key, `bytes=-${MIC_PROBE_BYTES}`),
+              head.serial,
+            )
+          : null,
+      };
+    },
+  );
+  // A run with no audio page (an egress that died before the first packet)
+  // adds nothing but a second set of headers: left out.
+  const runs = listed
+    .map((run, index) => ({ ...run, ...probed[index]! }))
+    .filter(
+      (run): run is typeof run & { head: NonNullable<typeof run.head> } =>
+        run.head !== null &&
+        Number.isSafeInteger(Number(run.head.origin)) &&
+        (run.end === null || Number.isSafeInteger(Number(run.end))),
+    );
+  if (runs.length === 0) {
+    // Nothing readable as Ogg Opus: hand back the first run as it is rather
+    // than nothing, which is what a single run always got.
+    return single(listed[0]!);
+  }
+  if (runs.length === 1) {
+    return single(runs[0]!);
+  }
+  const keys: string[] = [];
+  const rewrites: OggRunRewrite[] = [];
+  const silenceBefore: { packets: number; startGranule: number }[] = [];
+  let bytes = 0;
+  // Output granule where the previous run ended, and the first run with a
+  // known start: the wall-clock reference every later run is placed by.
+  let outEnd = 0;
+  let anchor: { outStart: number; startMs: number } | null = null;
+  for (const [index, run] of runs.entries()) {
+    const origin = Number(run.head.origin);
+    const last = index === runs.length - 1;
+    let outStart: number;
+    let packets = 0;
+    if (index === 0) {
+      outStart = origin;
+    } else {
+      let desired = outEnd;
+      if (anchor && run.startMs !== null) {
+        desired = anchor.outStart + (run.startMs - anchor.startMs) * 48;
+      }
+      const gap = Math.min(Math.max(0, desired - outEnd), MIC_MAX_GAP_SAMPLES);
+      packets = Math.floor(gap / OPUS_SILENCE_SAMPLES);
+      outStart = outEnd + packets * OPUS_SILENCE_SAMPLES;
+    }
+    if (!anchor && run.startMs !== null) {
+      anchor = { outStart, startMs: run.startMs };
+    }
+    silenceBefore.push({ packets, startGranule: outEnd });
+    rewrites.push({
+      dropPages: index === 0 ? 0 : run.head.headerPages,
+      granuleDelta: outStart - origin,
+      clearEos: !last,
+    });
+    keys.push(run.key);
+    bytes +=
+      oggSilenceBytes(packets) +
+      run.size -
+      (index === 0 ? 0 : run.head.headerBytes);
+    const end = run.end === null ? origin : Number(run.end);
+    outEnd = outStart + Math.max(0, end - origin);
+  }
+  return {
+    kind: "voice",
+    contentType: DOWNLOAD_CONTENT_TYPE.voice,
+    extension: "ogg",
+    keys,
+    ogg: { rewrites, silenceBefore },
+    bytes,
   };
 }
 
@@ -1638,9 +1906,12 @@ export async function streamWatchPartyDownload(
   // still there; a chunk arriving from storage is the proof for the other
   // half. Nothing else counts as progress.
   target.on("drain", noteProgress);
+  // One logical Ogg stream across every voice run (`buildMicRunsDownloadPlan`).
+  const ogg = plan.ogg ? newOggStitchState() : null;
   try {
     for (const [index, key] of plan.keys.entries()) {
       const shift = plan.ptsOffsets?.[index] ?? 0;
+      const rewrite = plan.ogg?.rewrites[index];
       // Checked between objects as well as on the tick below: a download of
       // many small segments can finish each one inside a single tick and
       // never be examined at all.
@@ -1667,6 +1938,23 @@ export async function streamWatchPartyDownload(
         Math.max(250, Math.min(DOWNLOAD_PROGRESS_TICK_MS, idleMs, maxMs)),
       );
       try {
+        const silence = plan.ogg?.silenceBefore[index];
+        if (ogg && silence && silence.packets > 0) {
+          // Generated here, never fetched: the time the archive was down.
+          await pipeline(
+            Readable.from(
+              oggSilencePages(ogg, silence.packets, silence.startGranule),
+            ),
+            new Transform({
+              transform(chunk, _encoding, done) {
+                noteProgress();
+                done(null, chunk);
+              },
+            }),
+            target,
+            { end: false, signal: controller.signal },
+          );
+        }
         let response: Response;
         try {
           response = await fetch(url, {
@@ -1698,7 +1986,11 @@ export async function streamWatchPartyDownload(
               done(null, chunk);
             },
           }),
-          shift === 0 ? new PassThrough() : new TsTimestampShift(shift),
+          ogg && rewrite
+            ? new OggRunRewriter(ogg, rewrite)
+            : shift === 0
+              ? new PassThrough()
+              : new TsTimestampShift(shift),
           target,
           { end: false, signal: controller.signal },
         );

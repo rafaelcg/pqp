@@ -373,10 +373,14 @@ export function createHlsViewerCounter(
     }
     lastPruneAt = at;
     try {
+      // The counter's own clock, not the database's: every row here was
+      // stamped from `now()`, so a cutoff from NOW() would disagree with it
+      // whenever the two clocks do (an injected clock in a test, or skew).
       await pool().query(
         `DELETE FROM hls_session_viewers
-          WHERE last_seen_at < NOW() - ($1 || ' hours')::interval`,
-        [String(HLS_VIEWER_ROW_RETENTION_HOURS)],
+          WHERE last_seen_at < to_timestamp($1::float8 / 1000.0)
+                               - ($2 || ' hours')::interval`,
+        [at, String(HLS_VIEWER_ROW_RETENTION_HOURS)],
       );
     } catch {
       // The next hour tries again.

@@ -4,6 +4,7 @@ import {
   type HlsViewerCounterStats,
   type LiveHlsViewerSession,
 } from "../voice/hls-viewer-counts.js";
+import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
@@ -33,6 +34,10 @@ import {
   localVoicePeerCount,
 } from "../ws/voice.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
+import {
+  watchPartyWaitlistMetrics,
+  type WatchPartyWaitlistMetrics,
+} from "./watch-party-waitlist.js";
 import {
   watchPartyDraftTtlMinutes,
   watchPartyHostGoneMinutes,
@@ -268,6 +273,15 @@ export interface AdminMetrics {
    * as `sfu`. `pinnedRooms` is this process's pins per region.
    */
   sfuRegions: SfuRegionsReport;
+  /**
+   * Runtime feature flags (`lib/flags.ts`): every flag's answer on the
+   * process that served this request and where it came from (a row, the
+   * environment, the code default), how many per-server overrides it has,
+   * flips (this process since boot, and the whole cluster over 24 h from the
+   * audit trail) and the cache's own health. Live, never from the 30 s cache:
+   * the one question this block answers is "did my click take".
+   */
+  flags: FeatureFlagMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -613,6 +627,15 @@ export interface AdminMetrics {
     draftTtlMinutes: number;
     hostGoneMinutes: number;
   };
+  /**
+   * The watch party waitlist (`services/watch-party-waitlist.ts`): rows ever,
+   * rows in the last seven days, how many are requests (somebody who manages
+   * a server asking for it) versus interest (a member saying they would
+   * watch), servers with somebody still waiting, and rows approved. Null when
+   * the read failed; the dashboard's "Lista de espera" has the per-server
+   * detail.
+   */
+  watchPartyWaitlist: WatchPartyWaitlistMetrics | null;
   liveHls: {
     enabled: boolean;
     configured: boolean;
@@ -732,6 +755,20 @@ export interface AdminMetrics {
      * confirm the box has actually released.
      */
     llStopFailures: number;
+    /**
+     * LL sessions kept across a presenter track change instead of replaced
+     * (`voice.hlsLlRebound`), in total and by reason: `presenter-reconnected`
+     * (the same person under a new peer id) and `screen-track-replaced` (a
+     * republish). The LL twin of the ladder's in-place restarts.
+     */
+    llRebindsTotal: number;
+    llRebindsByReason: Record<string, number>;
+    /**
+     * Rebinds the box could not do, by why (`voice.hlsLlRebindFailed`):
+     * `unsupported`, `session-gone`, `demoted`, `control-api-error`. Belongs
+     * at zero once the box carries the rebind route.
+     */
+    llRebindFailuresByWhy: Record<string, number>;
     /**
      * An LL session was demoted back to the conventional ladder by `L1.6`'s
      * watchdog, which does not exist yet -- this reads zero on every
@@ -908,6 +945,15 @@ export interface AdminMetrics {
        */
       joinsByRef7d: Record<string, number>;
     };
+    /**
+     * Every server join in the last 7 days, by door
+     * (`server_members.join_source`: invite / sso / community_address /
+     * community_directory / qg_hint / default_placement). Instance-wide, not
+     * per server; a join whose door was not recorded (NULL, mostly rows made
+     * before this column existed) does not appear here. See
+     * tools/admin-dashboard/README.md for a per-server breakdown query.
+     */
+    serverJoins: { bySource7d: Record<string, number> };
     push: { web: number; apns: number; fcm: number };
     /**
      * PUSH SEND OUTCOMES per platform since boot (cumulative, per instance),
@@ -1035,6 +1081,7 @@ type CachedMetrics = Omit<
   | "instanceId"
   | "instanceCount"
   | "cluster"
+  | "flags"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1173,6 +1220,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
   const hlsViewers = await liveHlsViewerSessions().catch(() => null);
+  const waitlist = await watchPartyWaitlistMetrics().catch(() => null);
 
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same
@@ -1198,6 +1246,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     statusHistory,
     importCounts,
     joinRefs,
+    joinSources,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ private_text: string; dm: string; grp: string }>(
@@ -1451,6 +1500,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY COUNT(*) DESC, join_ref
         LIMIT 10`,
     ),
+    () => pool.query<{ source: string; n: string }>(
+      `SELECT join_source AS source, COUNT(*)::text AS n
+         FROM server_members
+        WHERE join_source IS NOT NULL
+          AND joined_at >= now() - interval '7 days'
+        GROUP BY join_source
+        ORDER BY COUNT(*) DESC, join_source`,
+    ),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1531,6 +1588,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       draftTtlMinutes: watchPartyDraftTtlMinutes(),
       hostGoneMinutes: watchPartyHostGoneMinutes(),
     },
+    watchPartyWaitlist: waitlist,
     liveHls: {
       enabled: hlsFlag.enabled,
       configured: isLiveHlsEnabled(),
@@ -1564,6 +1622,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       llStartFailures: llActivity.startFailures,
       llStopFailures: llActivity.stopFailures,
       llDemoted: llActivity.demoted,
+      llRebindsTotal: llActivity.rebindsTotal,
+      llRebindsByReason: llActivity.rebindsByReason,
+      llRebindFailuresByWhy: llActivity.rebindFailuresByWhy,
       startsTotal: hlsActivity.startsTotal,
       stopsTotal: hlsActivity.stopsTotal,
       restartsScheduled: hlsActivity.restartsScheduledTotal,
@@ -1650,6 +1711,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         uses: Number(productCounts.rows[0]?.invite_uses ?? 0),
         joinsByRef7d: Object.fromEntries(
           joinRefs.rows.map((row) => [row.ref, Number(row.n)]),
+        ),
+      },
+      serverJoins: {
+        bySource7d: Object.fromEntries(
+          joinSources.rows.map((row) => [row.source, Number(row.n)]),
         ),
       },
       push: {
@@ -1760,11 +1826,12 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions] = await Promise.all([
+  const [payload, ready, sfu, sfuRegions, flags] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
     readSfuStats(),
     sfuRegionsReport(),
+    featureFlagMetrics(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -1777,6 +1844,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    flags,
   };
 }
 

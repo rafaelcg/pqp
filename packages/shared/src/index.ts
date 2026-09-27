@@ -44,4 +44,5 @@ export * from "./music.js";
 export * from "./live-reactions.js";
 export * from "./watch-party-channel.js";
 export * from "./watch-party-session.js";
+export * from "./watch-party-waitlist.js";
 export * from "./automod.js";

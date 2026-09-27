@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReplyExcerpt,
   normalizeJoinRef,
+  normalizeCommunityJoinVia,
   createChannelSchema,
   extractMentions,
   extractMentionUsernames,
@@ -643,5 +644,23 @@ describe("normalizeJoinRef", () => {
     expect(normalizeJoinRef("a b")).toBeNull();
     expect(normalizeJoinRef("rafa@example.com")).toBeNull();
     expect(normalizeJoinRef("x".repeat(33))).toBeNull();
+  });
+});
+
+describe("normalizeCommunityJoinVia", () => {
+  it("keeps the doors a client may claim", () => {
+    expect(normalizeCommunityJoinVia("community_address")).toBe("community_address");
+    expect(normalizeCommunityJoinVia("community_directory")).toBe("community_directory");
+    expect(normalizeCommunityJoinVia("qg_hint")).toBe("qg_hint");
+  });
+
+  it("drops anything else, including a door only the server may write", () => {
+    expect(normalizeCommunityJoinVia(undefined)).toBeNull();
+    expect(normalizeCommunityJoinVia(null)).toBeNull();
+    expect(normalizeCommunityJoinVia(42)).toBeNull();
+    expect(normalizeCommunityJoinVia("")).toBeNull();
+    expect(normalizeCommunityJoinVia("invite")).toBeNull();
+    expect(normalizeCommunityJoinVia("default_placement")).toBeNull();
+    expect(normalizeCommunityJoinVia("Community_Address")).toBeNull();
   });
 });

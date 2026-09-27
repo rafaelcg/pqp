@@ -19,6 +19,13 @@ import {
 } from "../voice/transport-policy.js";
 import { getRoomTransport, isRoomPinnedLocally } from "../ws/voice.js";
 import { pinnedRoomRegion, sfuRegions } from "../voice/regions.js";
+import {
+  isLiveHlsLLEnabled,
+  liveHlsLLAllowlist,
+  liveHlsLLAvailable,
+  llPlaylistFrontConfigured,
+} from "../voice/hls-remux.js";
+import { approveWatchPartyWaitlist } from "./watch-party-waitlist.js";
 
 /**
  * The operator dashboard's WRITE surface: the two levers somebody running an
@@ -71,17 +78,32 @@ export const OPERATOR_CHANNEL_TRANSPORT_PATH =
   "/api/admin/channel-voice-transport";
 export const OPERATOR_CHANNEL_SFU_REGION_PATH = "/api/admin/channel-sfu-region";
 
-export const setServerLiveHlsSchema = z.object({
-  serverId: z.string().uuid(),
-  /**
-   * `true` on, `false` off, `null` back to "nobody has decided", which hands
-   * the answer back to `LIVE_HLS_SERVER_ALLOWLIST`. Three states because two
-   * would make the off switch indistinguishable from never having touched it,
-   * and off has to beat the environment variable or there is no kill switch
-   * that works without a deploy.
-   */
-  enabled: z.boolean().nullable(),
-});
+export const setServerLiveHlsSchema = z
+  .object({
+    serverId: z.string().uuid(),
+    /**
+     * `true` on, `false` off, `null` back to "nobody has decided", which hands
+     * the answer back to `LIVE_HLS_SERVER_ALLOWLIST`. Three states because two
+     * would make the off switch indistinguishable from never having touched it,
+     * and off has to beat the environment variable or there is no kill switch
+     * that works without a deploy.
+     *
+     * OMITTED leaves the column as it is, so a body that only moves low
+     * latency does not touch availability. Every body the dashboard sent
+     * before `lowLatency` existed carries this field, so it means what it
+     * always meant.
+     */
+    enabled: z.boolean().nullable().optional(),
+    /**
+     * `servers.live_hls_ll_enabled`, the same three states against
+     * `LIVE_HLS_LL_ALLOWLIST`. Omitted leaves it as it is.
+     */
+    lowLatency: z.boolean().nullable().optional(),
+  })
+  .refine(
+    (body) => body.enabled !== undefined || body.lowLatency !== undefined,
+    { message: "Nothing to change" },
+  );
 
 export const setChannelVoiceTransportSchema = z.object({
   channelId: z.string().uuid(),
@@ -115,6 +137,12 @@ export interface OperatorServerSummary {
   liveHlsEffective: boolean;
   /** Which of the three inputs produced `liveHlsEffective`. */
   liveHlsSource: "master-off" | "server" | "allowlist" | "open";
+  /** `servers.live_hls_ll_enabled`: the low latency decision, or null. */
+  liveHlsLlOverride: boolean | null;
+  /** What `liveHlsLLAvailable` answers right now for this server. */
+  liveHlsLlEffective: boolean;
+  /** Same four sources, against `LIVE_HLS_LL` and `LIVE_HLS_LL_ALLOWLIST`. */
+  liveHlsLlSource: "master-off" | "server" | "allowlist" | "open";
   /** Watch party channels in this server, so the list says where a party can run. */
   watchPartyChannels: number;
   /** This process is running an egress in one of this server's channels. */
@@ -177,6 +205,33 @@ function liveHlsSourceFor(override: boolean | null): OperatorServerSummary["live
   return liveHlsServerAllowlist() === null ? "open" : "allowlist";
 }
 
+function liveHlsLlSourceFor(
+  override: boolean | null,
+): OperatorServerSummary["liveHlsLlSource"] {
+  if (!isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
+    return "master-off";
+  }
+  if (override !== null) {
+    return "server";
+  }
+  return liveHlsLLAllowlist() === null ? "open" : "allowlist";
+}
+
+/** The four low latency fields of a summary, from the row's override. */
+function lowLatencyFields(
+  serverId: string,
+  override: boolean | null,
+): Pick<
+  OperatorServerSummary,
+  "liveHlsLlOverride" | "liveHlsLlEffective" | "liveHlsLlSource"
+> {
+  return {
+    liveHlsLlOverride: override,
+    liveHlsLlEffective: liveHlsLLAvailable(serverId, override),
+    liveHlsLlSource: liveHlsLlSourceFor(override),
+  };
+}
+
 /**
  * The set of server ids this process is streaming for.
  *
@@ -231,10 +286,11 @@ export async function listOperatorServers(
       name: string;
       is_community: boolean;
       live_hls_enabled: boolean | null;
+      live_hls_ll_enabled: boolean | null;
       member_count: string;
       watch_party_channels: string;
     }>(
-      `SELECT s.id, s.name, s.is_community, s.live_hls_enabled,
+      `SELECT s.id, s.name, s.is_community, s.live_hls_enabled, s.live_hls_ll_enabled,
               (SELECT COUNT(*) FROM server_members m WHERE m.server_id = s.id) AS member_count,
               (SELECT COUNT(*) FROM channels c
                 WHERE c.server_id = s.id AND c.type = 'watch_party') AS watch_party_channels
@@ -268,6 +324,7 @@ export async function listOperatorServers(
       liveHlsOverride: row.live_hls_enabled,
       liveHlsEffective: resolveLiveHlsForServer(row.id, row.live_hls_enabled),
       liveHlsSource: liveHlsSourceFor(row.live_hls_enabled),
+      ...lowLatencyFields(row.id, row.live_hls_ll_enabled),
       watchPartyChannels: Number(row.watch_party_channels),
       streaming: streaming.has(row.id),
     })),
@@ -391,39 +448,63 @@ export class OperatorTargetMissing extends Error {}
  */
 export async function setServerLiveHls(
   serverId: string,
-  enabled: boolean | null,
+  change: { enabled?: boolean | null; lowLatency?: boolean | null },
   actorId: string | null,
 ): Promise<OperatorServerSummary> {
+  const setEnabled = change.enabled !== undefined;
+  const setLowLatency = change.lowLatency !== undefined;
   const result = await getPool().query<{
     id: string;
     name: string;
     is_community: boolean;
     live_hls_enabled: boolean | null;
+    live_hls_ll_enabled: boolean | null;
     previous: boolean | null;
+    previous_ll: boolean | null;
   }>(
     `UPDATE servers s
-        SET live_hls_enabled = $2
-       FROM (SELECT id, live_hls_enabled FROM servers WHERE id = $1) old
+        SET live_hls_enabled = CASE WHEN $3 THEN $2::boolean ELSE s.live_hls_enabled END,
+            live_hls_ll_enabled = CASE WHEN $5 THEN $4::boolean ELSE s.live_hls_ll_enabled END
+       FROM (SELECT id, live_hls_enabled, live_hls_ll_enabled FROM servers WHERE id = $1) old
       WHERE s.id = old.id
-      RETURNING s.id, s.name, s.is_community, s.live_hls_enabled,
-                old.live_hls_enabled AS previous`,
-    [serverId, enabled],
+      RETURNING s.id, s.name, s.is_community, s.live_hls_enabled, s.live_hls_ll_enabled,
+                old.live_hls_enabled AS previous, old.live_hls_ll_enabled AS previous_ll`,
+    [
+      serverId,
+      change.enabled ?? null,
+      setEnabled,
+      change.lowLatency ?? null,
+      setLowLatency,
+    ],
   );
   const row = result.rows[0];
   if (!row) {
     throw new OperatorTargetMissing("Server not found");
   }
 
-  if (row.previous !== enabled) {
+  const changes: { key: string; old: boolean | null; new: boolean | null }[] = [];
+  if (setEnabled && row.previous !== row.live_hls_enabled) {
+    changes.push({
+      key: "liveHlsEnabled",
+      old: row.previous,
+      new: row.live_hls_enabled,
+    });
+  }
+  if (setLowLatency && row.previous_ll !== row.live_hls_ll_enabled) {
+    changes.push({
+      key: "liveHlsLowLatency",
+      old: row.previous_ll,
+      new: row.live_hls_ll_enabled,
+    });
+  }
+  if (changes.length > 0) {
     await logAudit({
       serverId: row.id,
       actorId,
       action: "server.live_hls_update",
       targetType: "server",
       targetId: row.id,
-      changes: [
-        { key: "liveHlsEnabled", old: row.previous, new: enabled },
-      ],
+      changes,
     }).catch((error: unknown) => {
       // Best effort, like every other call site of logAudit. A trail that
       // failed to write must not undo the change the operator just made and
@@ -432,12 +513,37 @@ export async function setServerLiveHls(
     });
   }
 
-  logEvent("operator.liveHlsServerSet", {
-    serverId: row.id,
-    enabled,
-    previous: row.previous,
-    actorId,
-  });
+  if (setEnabled) {
+    logEvent("operator.liveHlsServerSet", {
+      serverId: row.id,
+      enabled: row.live_hls_enabled,
+      previous: row.previous,
+      actorId,
+    });
+  }
+  if (setLowLatency) {
+    logEvent("operator.liveHlsLlServerSet", {
+      serverId: row.id,
+      enabled: row.live_hls_ll_enabled,
+      previous: row.previous_ll,
+      actorId,
+    });
+  }
+
+  // THE WAITLIST FOLLOWS THE SWITCH, and never the other way round. A server
+  // that can now actually run a party has nobody left to wait for it, so its
+  // waiting rows are approved and those people told. Gated on the EFFECTIVE
+  // answer, not the column: with the master switch off a TRUE row runs
+  // nothing, and telling people "liberada" then would be a lie.
+  //
+  // After the column is written, so nothing the party needs waits on it. The
+  // approval UPDATE is allowed to fail the request: the flip is idempotent,
+  // so an operator who sees an error presses it again and the rows are
+  // approved then, rather than a success that left them waiting forever.
+  // The notifications inside it are best effort on their own.
+  if (resolveLiveHlsForServer(row.id, row.live_hls_enabled)) {
+    await approveWatchPartyWaitlist(row.id);
+  }
 
   const counts = await getPool().query<{
     member_count: string;
@@ -458,6 +564,7 @@ export async function setServerLiveHls(
     liveHlsOverride: row.live_hls_enabled,
     liveHlsEffective: resolveLiveHlsForServer(row.id, row.live_hls_enabled),
     liveHlsSource: liveHlsSourceFor(row.live_hls_enabled),
+    ...lowLatencyFields(row.id, row.live_hls_ll_enabled),
     watchPartyChannels: Number(counts.rows[0]?.watch_party_channels ?? 0),
     streaming: streaming.has(row.id),
   };

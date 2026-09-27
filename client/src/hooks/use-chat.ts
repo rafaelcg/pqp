@@ -424,6 +424,17 @@ export function createChatController(
   let newestLoadedId: string | null = null;
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
+  /**
+   * `getTypingUsers()` used to build a brand-new array on every call, even
+   * when nobody's typing state had actually changed — and it is called on
+   * every render of whatever reads it, which in a busy channel is every
+   * render of the whole app (a message, a reaction, a roster tick). A fresh
+   * array is a new prop reference downstream, which is exactly what defeats
+   * `memo()`. This caches the last built list and its keys, and only builds
+   * again when the active typers actually differ.
+   */
+  let typingUsersCache: TypingUser[] = [];
+  let typingUsersCacheKey = "";
   const sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
@@ -1044,9 +1055,30 @@ export function createChatController(
 
     getTypingUsers(): TypingUser[] {
       const now = Date.now();
-      return [...typing.entries()]
-        .filter(([, entry]) => entry.expiresAt > now)
-        .map(([userId, entry]) => ({ userId, displayName: entry.displayName }));
+      const active = [...typing.entries()].filter(
+        ([, entry]) => entry.expiresAt > now,
+      );
+      // Sorted by userId so the key does not depend on Map iteration order;
+      // displayName rides along so a rename mid-typing invalidates the cache
+      // too, not just a change in who is active. JSON.stringify rather than
+      // a joined string: a display name may itself contain the separator
+      // (a comma, say), and two different active sets could then stringify
+      // to the same joined text. `JSON.stringify` on the tuple array escapes
+      // each field, so no display name can forge a collision.
+      const key = JSON.stringify(
+        active
+          .map(([userId, entry]) => [userId, entry.displayName] as const)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      );
+      if (key === typingUsersCacheKey) {
+        return typingUsersCache;
+      }
+      typingUsersCacheKey = key;
+      typingUsersCache = active.map(([userId, entry]) => ({
+        userId,
+        displayName: entry.displayName,
+      }));
+      return typingUsersCache;
     },
 
     getChannelId() {
@@ -1657,6 +1689,14 @@ export function createChatController(
             );
             if (index >= 0) {
               revokeLocalPreviews(messages[index]!);
+              // Carry the nonce onto the confirmed row: `message-list.tsx`
+              // keys `MessageRow` by it when present, precisely so this swap
+              // (the optimistic `pending:<nonce>` id becoming the server's
+              // real one) updates the existing DOM node instead of unmounting
+              // it and mounting a new one. Losing this here would only cost a
+              // later, unrelated update its stable key back to the id — the
+              // swap itself is the one every send goes through.
+              incoming.nonce = message.nonce;
               messages = [
                 ...messages.slice(0, index),
                 incoming,

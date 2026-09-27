@@ -1,6 +1,9 @@
 package gg.pqp.app.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -35,11 +38,20 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
 import gg.pqp.app.bau.ui.BauScreen
+import gg.pqp.app.core.Permission
+import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.RealtimeClient
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.channelBits
+import gg.pqp.app.core.hasPermission
+import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.push.DeepLinkTarget
+import gg.pqp.app.core.Landing
+import gg.pqp.app.onboarding.shouldRunOnboarding
+import gg.pqp.app.onboarding.ui.ArrivalBanner
+import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
@@ -60,11 +72,20 @@ import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
-import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
+import gg.pqp.app.voice.voiceRefusalStringRes
 import gg.pqp.app.watch.WatchLiveStore
-import gg.pqp.app.watch.mayTakeWatchPartySeat
+import gg.pqp.app.watch.WatchPartyHostController
+import gg.pqp.app.watch.liveHlsConfig
+import gg.pqp.app.watch.mayJoinWatchPartyRoom
+import gg.pqp.app.watch.mayManageWatchPartyWithoutASeat
+import gg.pqp.app.watch.needsHlsHostAck
+import gg.pqp.app.watch.confirmHlsHostAck
+import gg.pqp.app.watch.watchPartyHostGate
 import gg.pqp.app.watch.ui.WatchChannelPane
+import gg.pqp.app.watch.ui.WatchPartyHostControls
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -101,6 +122,14 @@ import kotlinx.serialization.Serializable
     val serverId: String? = null,
     /** A server voice room's text transcript. Media remains opt-in in its header. */
     val isVoiceChannel: Boolean = false,
+    /**
+     * `channel.type == "watch_party"`, as opposed to an ordinary voice room.
+     * Both answer [isVoiceChannel] true, so this is what tells the chat
+     * header to draw the watch-party stage — with its idle card and its own
+     * "Entrar na call" — rather than the bare HLS pane an ordinary voice
+     * room gets (which draws nothing at all while no party is running).
+     */
+    val isWatchParty: Boolean = false,
 )
 
 @Serializable object YouRoute
@@ -112,6 +141,7 @@ fun PqpApp(
     push: PushController,
     calls: CallController,
     watch: WatchLiveStore,
+    watchPartyHost: WatchPartyHostController,
 ) {
     val phase by session.phase.collectAsStateWithLifecycle()
 
@@ -121,13 +151,26 @@ fun PqpApp(
     ) {
         AnimatedContent(
             targetState = phaseKey(phase),
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            transitionSpec = {
+                // First run rises into place once, from the gate or the
+                // sign-in; everything else is the plain cross-fade it was.
+                if (targetState == PhaseKey.Onboarding) {
+                    (fadeIn(tween(320)) + slideInVertically(spring(dampingRatio = 0.85f, stiffness = 300f)) { it / 12 })
+                        .togetherWith(fadeOut(tween(160)))
+                } else {
+                    fadeIn() togetherWith fadeOut()
+                }
+            },
             label = "session-phase",
         ) { key ->
             when (key) {
                 PhaseKey.Launching -> Box(Modifier.fillMaxSize())
-                PhaseKey.SignedOut -> SignInScreen(session)
-                PhaseKey.AgeGate -> AgeGateScreen(session)
+                PhaseKey.SignedOut -> SignInScreen(session, push)
+                PhaseKey.AgeGate -> AgeGateScreen(
+                    session = session,
+                    arrivedOnInvite = push.pendingTarget.value is DeepLinkTarget.Invite,
+                )
+                PhaseKey.Onboarding -> OnboardingFlow(session, push)
                 PhaseKey.Failed -> FailedScreen(
                     reason = (phase as? SessionPhase.Failed)?.reason.orEmpty(),
                     onRetry = session::restore,
@@ -136,7 +179,7 @@ fun PqpApp(
                     reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
                     onRetry = null,
                 )
-                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch)
+                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch, watchPartyHost)
             }
         }
     }
@@ -147,13 +190,16 @@ fun PqpApp(
  * account. Without this projection every profile refresh would be a new target
  * state and cross-fade the whole app.
  */
-private enum class PhaseKey { Launching, SignedOut, AgeGate, Ready, Failed, Blocked }
+private enum class PhaseKey { Launching, SignedOut, AgeGate, Onboarding, Ready, Failed, Blocked }
 
 private fun phaseKey(phase: SessionPhase): PhaseKey = when (phase) {
     is SessionPhase.Launching -> PhaseKey.Launching
     is SessionPhase.SignedOut -> PhaseKey.SignedOut
     is SessionPhase.AgeGate -> PhaseKey.AgeGate
-    is SessionPhase.Ready -> PhaseKey.Ready
+    // First run is a phase of its own rather than a dialog over the app: on a
+    // phone the wizard is the whole screen, and the app behind it would only
+    // be something to mount, load and throw away.
+    is SessionPhase.Ready -> if (shouldRunOnboarding(phase.me)) PhaseKey.Onboarding else PhaseKey.Ready
     is SessionPhase.Failed -> PhaseKey.Failed
     is SessionPhase.Blocked -> PhaseKey.Blocked
 }
@@ -165,6 +211,7 @@ private fun SignedInNav(
     push: PushController,
     calls: CallController,
     watch: WatchLiveStore,
+    watchPartyHost: WatchPartyHostController,
 ) {
     val nav = rememberNavController()
     val voiceState by voice.state.collectAsStateWithLifecycle()
@@ -189,15 +236,21 @@ private fun SignedInNav(
     // like the microphone refusal above, because there is no scaffold at this
     // level to host a snackbar. The frame's own sentence is shown verbatim for
     // a notice: the server already wrote and translated it.
-    val roomFull = stringResource(R.string.voice_room_full)
-    val unsupported = stringResource(R.string.voice_transport_unsupported)
-    val screenDenied = stringResource(R.string.voice_screen_share_denied)
-    val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
-    val tokenRefused = stringResource(R.string.voice_token_refused)
-    val transportMismatch = stringResource(R.string.voice_transport_mismatch)
-    val backendTimedOut = stringResource(R.string.voice_backend_timeout)
-    val joinRefused = stringResource(R.string.voice_join_refused)
-    val joinTimedOut = stringResource(R.string.voice_join_timeout)
+    //
+    // Which SENTENCE a refusal gets is `voiceRefusalStringRes`'s call, not
+    // this composable's: a watch party's own room fails the way a stream
+    // fails ("could not connect to the stream"), never the way a call does
+    // ("the voice server", "this call"), because a broadcast is not one. Fed
+    // by whether the room this refusal came from is currently hosting or
+    // being watched as a party -- `WatchLiveStore.parties` keyed by the
+    // refusal's own `voiceState.channelId`, not by the screen on top, since
+    // this toast is shown above the whole nav graph and may outlive the
+    // screen that started the join.
+    val parties by watch.parties.collectAsStateWithLifecycle()
+    val inWatchPartyRefusalContext = voiceState.channelId?.let(parties::containsKey) == true
+    val refusalText = voiceState.refusal?.let {
+        stringResource(voiceRefusalStringRes(it, inWatchPartyRefusalContext))
+    }
     // One sentence per failure class, and the four SFU ones are not
     // interchangeable: a refused token, a room the server says is peer-to-peer,
     // a media box nothing can reach and a handshake that ran out of time have
@@ -205,18 +258,7 @@ private fun SignedInNav(
     // `SfuFailureKind` split them, which made every report of "voice does not
     // work on Android" unactionable.
     LaunchedEffect(voiceState.refusal) {
-        val text = when (voiceState.refusal) {
-            Refusal.RoomFull -> roomFull
-            Refusal.TransportUnsupported -> unsupported
-            Refusal.ScreenShareDenied -> screenDenied
-            Refusal.VoiceBackendUnreachable -> backendUnreachable
-            Refusal.VoiceTokenRefused -> tokenRefused
-            Refusal.VoiceTransportMismatch -> transportMismatch
-            Refusal.VoiceBackendTimedOut -> backendTimedOut
-            Refusal.JoinRefused -> joinRefused
-            Refusal.JoinTimedOut -> joinTimedOut
-            null -> return@LaunchedEffect
-        }
+        val text = refusalText ?: return@LaunchedEffect
         android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
         voice.dismissRefusal()
     }
@@ -224,6 +266,19 @@ private fun SignedInNav(
         val notice = voiceState.notice ?: return@LaunchedEffect
         android.widget.Toast.makeText(context, notice, android.widget.Toast.LENGTH_LONG).show()
         voice.dismissNotice()
+    }
+
+    // A watch-party hosting action (Criar, Ir ao vivo, Encerrar) that did not
+    // land clean. Read here, above the per-channel UI, rather than inside
+    // `WatchPartyHostControls`: an Encerrar failure is reported AFTER
+    // `voice.leave()` has already dropped `canStartWatchParty`, which is
+    // what unmounts that composable, so an inline message there would never
+    // be seen. Same toast pattern as the two effects above.
+    val hostState by watchPartyHost.state.collectAsStateWithLifecycle()
+    LaunchedEffect(hostState.error) {
+        val message = hostState.error ?: return@LaunchedEffect
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        watchPartyHost.dismissError()
     }
 
     // A tapped notification, routed only once the app is signed in and has a
@@ -260,6 +315,17 @@ private fun SignedInNav(
                 }
             },
         )
+    }
+
+    // Where first run handed over: open that room, and greet the person in it.
+    // Consumed once, so a later recomposition cannot navigate a second time.
+    var arrival by remember { mutableStateOf<Landing?>(null) }
+    LaunchedEffect(Unit) {
+        session.landing.filterNotNull().collect { landing ->
+            session.consumeLanding()
+            nav.navigate(ChannelsRoute(landing.serverId, landing.serverName))
+            arrival = landing
+        }
     }
 
     // The live connection, app-wide. It used to be a strip inside the chat
@@ -357,6 +423,7 @@ private fun SignedInNav(
                                     channel.slowmodeSeconds,
                                     serverId = route.serverId,
                                     isVoiceChannel = channel.isVoice,
+                                    isWatchParty = channel.type == "watch_party",
                                 ),
                             )
                         },
@@ -376,6 +443,99 @@ private fun SignedInNav(
                 }
                 composable<ChatRoute> { entry ->
                     val route = entry.toRoute<ChatRoute>()
+
+                    // Offered only while this room is not already the call.
+                    // Once joining or connected, the call bar above the
+                    // NavHost owns every voice control, and a second `join`
+                    // mid-connect would tear the session down and rebuild it.
+                    val inThisRoom = voiceState.channelId == route.channelId && voiceState.isActive
+                    // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
+                    //
+                    // `Channel.isVoice` answers true for `watch_party` as well
+                    // as `voice`, so a blanket join button would be offered to
+                    // a watch party's audience: five hundred people invited
+                    // onto the media box for something the pane right below
+                    // them plays for free. Watching is already the whole offer
+                    // on this screen, and it is one tap and no seat, so a
+                    // viewer who is not shown this loses nothing and is not
+                    // sent anywhere else.
+                    //
+                    // The rule is the one the server refuses the join with,
+                    // and it answers TRUE for a channel with no active party,
+                    // so an ordinary voice room is untouched. See
+                    // `WatchPartySeat.kt`.
+                    val seats by watch.seats.collectAsStateWithLifecycle()
+                    val parties by watch.parties.collectAsStateWithLifecycle()
+                    val activeParty = parties[route.channelId]
+                    // `welcome.canStream` in this channel, already resolved by
+                    // the server to START_WATCH_PARTY for a `watch_party`
+                    // channel type (`SpeakRule.kt`), and only known once this
+                    // phone has actually joined the channel's own room -- see
+                    // `WatchPartyHostGate.kt`'s doc for why that is the honest
+                    // answer rather than a gap.
+                    val canStartWatchParty = inThisRoom && voiceState.screenShareSupported
+                    val maySit = mayJoinWatchPartyRoom(
+                        canStartWatchParty = canStartWatchParty,
+                        party = seats[route.channelId],
+                    )
+                    val onJoinVoice: () -> Unit = {
+                        withMicrophone { voice.join(route.channelId, route.channelName) }
+                    }
+
+                    // Watch party hosting. `serverId` is null only for a
+                    // notification tap that has not resolved a channel record
+                    // yet, in which case there is nothing to host onto and
+                    // this reads as "off", same direction every other gate
+                    // here defaults to.
+                    var liveHlsEnabled by remember(route.serverId) { mutableStateOf(false) }
+                    var lowLatencyAvailable by remember(route.serverId) { mutableStateOf(false) }
+                    var permissions by remember(route.serverId) { mutableStateOf(PermissionsSnapshot()) }
+                    LaunchedEffect(route.serverId, route.isWatchParty) {
+                        val serverId = route.serverId
+                        if (!route.isWatchParty || serverId == null) return@LaunchedEffect
+                        // Two independent GETs, run concurrently rather than
+                        // one after the other: neither reads the other's
+                        // answer, and awaiting them in sequence would make
+                        // landing on a watch_party channel wait for both
+                        // round trips added together for no reason.
+                        coroutineScope {
+                            val configDeferred = async {
+                                runCatching { session.api.liveHlsConfig(serverId) }.getOrNull()
+                            }
+                            val permissionsDeferred = async {
+                                runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+                            }
+                            val config = configDeferred.await()
+                            liveHlsEnabled = config?.enabled == true
+                            lowLatencyAvailable = config?.lowLatency?.available == true
+                            permissions = permissionsDeferred.await() ?: PermissionsSnapshot()
+                        }
+                    }
+                    // A watch party is a broadcast, not a call: setting one
+                    // up -- seeing "Criar watch party" with nothing running,
+                    // or "Ir ao vivo" on a party this account already hosts
+                    // -- must never require a voice-room join first
+                    // (`docs/WATCH_PARTY.md` "A watch party has no voice by
+                    // default"). `mayManageWatchPartyWithoutASeat` is that
+                    // seatless path, fed by `Permission.START_WATCH_PARTY`
+                    // (`gg.pqp.app.core.Permissions.kt`) and by [activeParty]
+                    // 's own server-resolved `viewerRole`; it never widens
+                    // `maySit` above, which still reads the bare
+                    // `canStartWatchParty` unchanged -- holding the bit, or
+                    // being this party's host, is not by itself a seat in
+                    // the room.
+                    val mayStartWatchParty = route.isWatchParty &&
+                        hasPermission(permissions.channelBits(route.channelId), Permission.START_WATCH_PARTY)
+                    val hostGate = watchPartyHostGate(
+                        isWatchPartyChannel = route.isWatchParty,
+                        serverWatchPartyEnabled = liveHlsEnabled,
+                        canStartWatchParty = canStartWatchParty ||
+                            mayManageWatchPartyWithoutASeat(mayStartWatchParty, activeParty),
+                        party = activeParty,
+                    )
+                    // `hostState` itself is collected once, above, at
+                    // `SignedInNav` level -- see the toast effect there.
+
                     ChatScreen(
                         session = session,
                         channelId = route.channelId,
@@ -384,53 +544,101 @@ private fun SignedInNav(
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
                         // The watch party, above the transcript, for anybody
-                        // who may see the channel. It draws nothing at all
-                        // unless the server says a stream is live, so an
-                        // ordinary voice channel is untouched.
+                        // who may see the channel. A `watch_party` channel
+                        // gets the full stage — a card even while nothing is
+                        // live, and "Entrar na call" on the stage itself
+                        // rather than only in the app bar. An ordinary voice
+                        // channel gets the bare pane, which draws nothing at
+                        // all unless the server says a stream is live (it
+                        // never will, off `watch_party`) and is therefore
+                        // untouched.
                         header = {
                             if (route.isVoiceChannel) {
                                 WatchChannelPane(
                                     session = session,
                                     store = watch,
                                     channelId = route.channelId,
+                                    isWatchPartyChannel = route.isWatchParty,
+                                    canJoinCall = route.isWatchParty && !inThisRoom && maySit,
+                                    onJoinCall = onJoinVoice,
+                                    hostControls = if (route.isWatchParty &&
+                                        (hostGate.canCreate || hostGate.canManage)
+                                    ) {
+                                        {
+                                            WatchPartyHostControls(
+                                                gate = hostGate,
+                                                party = activeParty,
+                                                hostState = hostState,
+                                                lowLatencyAvailable = lowLatencyAvailable,
+                                                selfMuted = voiceState.muted,
+                                                sharingScreen = voiceState.sharingScreen,
+                                                checkNeedsAck = {
+                                                    val serverId = route.serverId
+                                                    if (serverId == null) {
+                                                        false
+                                                    } else {
+                                                        // FAIL CLOSED: a lookup that could not be
+                                                        // answered must not be read as "already
+                                                        // acknowledged". Showing the disclosure one
+                                                        // extra time costs a tap; skipping it costs
+                                                        // the one thing it exists to guarantee (a
+                                                        // Farol finding on the first cut, which
+                                                        // defaulted to `false` here).
+                                                        runCatching { session.api.needsHlsHostAck(serverId) }
+                                                            .getOrDefault(true)
+                                                    }
+                                                },
+                                                confirmAck = {
+                                                    // No `runCatching` here: a failure must reach
+                                                    // the caller (`HostAckDialog`'s `onConfirm` in
+                                                    // `WatchPartyHostPanel.kt`), which keeps the
+                                                    // sheet open rather than silently starting the
+                                                    // capture without a saved ack (another Farol
+                                                    // finding on the first cut).
+                                                    val serverId = route.serverId
+                                                        ?: error("no server to acknowledge for")
+                                                    session.api.confirmHlsHostAck(serverId)
+                                                },
+                                                onCreate = { name ->
+                                                    watchPartyHost.create(route.channelId, name)
+                                                },
+                                                onGoLive = { lowLatency, consent ->
+                                                    val id = activeParty?.id
+                                                    if (id != null) {
+                                                        withMicrophone {
+                                                            watchPartyHost.goLive(
+                                                                channelId = route.channelId,
+                                                                channelName = route.channelName,
+                                                                partyId = id,
+                                                                lowLatency = lowLatency,
+                                                                consent = consent,
+                                                            )
+                                                        }
+                                                    }
+                                                },
+                                                onRetryShare = { consent ->
+                                                    withMicrophone { watchPartyHost.retryShare(consent) }
+                                                },
+                                                onEnd = {
+                                                    activeParty?.id?.let(watchPartyHost::end)
+                                                },
+                                                onUnmute = { voice.setMuted(false) },
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
                                 )
                             }
                         },
                         actions = {
-                            // Offered only while this room is not already the
-                            // call. Once joining or connected, the call bar
-                            // above the NavHost owns every voice control, and a
-                            // second `join` mid-connect would tear the session
-                            // down and rebuild it.
-                            val inThisRoom =
-                                voiceState.channelId == route.channelId && voiceState.isActive
-                            // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
-                            //
-                            // `Channel.isVoice` answers true for `watch_party`
-                            // as well as `voice`, so this button was offered to
-                            // a watch party's audience: five hundred people
-                            // invited onto the media box for something the pane
-                            // right below them plays for free. Watching is
-                            // already the whole offer on this screen, and it is
-                            // one tap and no seat, so a viewer who is not shown
-                            // this loses nothing and is not sent anywhere else.
-                            //
-                            // The rule is the one the server refuses the join
-                            // with, and it answers TRUE for a channel with no
-                            // active party, so an ordinary voice room is
-                            // untouched. See `WatchPartySeat.kt`.
-                            val seats by watch.seats.collectAsStateWithLifecycle()
-                            val maySit = mayTakeWatchPartySeat(
-                                canStartWatchParty = false,
-                                party = seats[route.channelId],
-                            )
-                            if (route.isVoiceChannel && !inThisRoom && maySit) {
+                            // A watch party's join lives on the stage now (see
+                            // above); the app bar icon stays only for an
+                            // ordinary voice room, which has no stage to put
+                            // it on.
+                            if (route.isVoiceChannel && !route.isWatchParty && !inThisRoom && maySit) {
                                 IconButton(
-                                    onClick = {
-                                        withMicrophone {
-                                            voice.join(route.channelId, route.channelName)
-                                        }
-                                    },
+                                    onClick = onJoinVoice,
                                     modifier = Modifier.testTag("chat.joinVoice"),
                                 ) {
                                     Icon(
@@ -446,6 +654,27 @@ private fun SignedInNav(
                 composable<YouRoute> {
                     YouScreen(session = session, onBack = nav::popBackStack)
                 }
+            }
+
+            arrival?.let { landing ->
+                ArrivalBanner(
+                    session = session,
+                    landing = landing,
+                    onOpenChannel = { channel ->
+                        arrival = null
+                        nav.navigate(
+                            ChatRoute(
+                                channel.id,
+                                channel.name,
+                                channel.slowmodeSeconds,
+                                serverId = landing.serverId,
+                                isVoiceChannel = channel.isVoice,
+                                isWatchParty = channel.type == "watch_party",
+                            ),
+                        )
+                    },
+                    onDismiss = { arrival = null },
+                )
             }
         }
     }
@@ -489,6 +718,7 @@ private suspend fun navigateToPush(
                     channel?.name.orEmpty(),
                     serverId = target.serverId,
                     isVoiceChannel = channel?.isVoice == true,
+                    isWatchParty = channel?.type == "watch_party",
                 ),
             )
         }

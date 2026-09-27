@@ -21,6 +21,8 @@ import {
   liveHlsRungsFor,
   liveHlsServerAllowlist,
   micArchiveObjectKey,
+  setMicArchiveCooldownMsForTests,
+  adoptLiveHlsMicArchive,
   resolveLiveHlsForServer,
   setLiveHlsSfuLoadReader,
   liveHlsStreamFor,
@@ -166,6 +168,8 @@ describe("live HLS egress", () => {
       voiceTrack: false,
       // `LIVE_HLS_LL` is unset too: the switch stays hidden.
       lowLatency: { available: false },
+      cameraHeight: 480,
+      llSegmentCadenceDecay: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -325,7 +329,7 @@ describe("live HLS egress", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("restarts on a new screen track sid from the same presenter", async () => {
+  it("restarts IN PLACE on a new screen track sid from the same presenter: same session, a new run", async () => {
     enableHls();
     let egressN = 0;
     const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
@@ -352,8 +356,29 @@ describe("live HLS egress", () => {
       expect.objectContaining({ videoTrackId: "TR_V2" }),
     );
     expect(second?.presenterPeerId).toBe("peer-1");
-    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    // THE SAME SESSION: same playlist URL, same `startedAt`, so no viewer
+    // re-attaches. The new egress writes under its own run names.
+    expect(second?.hlsUrl).toBe(first?.hlsUrl);
+    expect(second?.startedAt).toBe(first?.startedAt);
+    const run = start.mock.calls[1]![1] as {
+      filenamePrefix: string;
+      livePlaylistName: string;
+      playlistName: string;
+    };
+    expect(run.livePlaylistName).toMatch(
+      new RegExp(`^${first!.startedAt}-720p30-r\\d+\\.m3u8$`),
+    );
+    expect(run.playlistName).toMatch(
+      new RegExp(`^${first!.startedAt}-720p30-r\\d+-index\\.m3u8$`),
+    );
+    expect(run.filenamePrefix).toMatch(
+      new RegExp(`/${first!.startedAt}-720p30-r\\d+$`),
+    );
     expect(liveHlsStreamFor(CHANNEL)).toEqual(second);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsRungRestartedInPlace",
+      expect.objectContaining({ reason: "screen-track-replaced" }),
+    );
 
     // Same sid again: nothing moves.
     const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
@@ -404,7 +429,9 @@ describe("live HLS egress", () => {
     expect(start.mock.calls[1]![2]).toEqual(
       expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A1" }),
     );
-    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    // In place: the audience keeps its URL.
+    expect(second?.hlsUrl).toBe(first?.hlsUrl);
+    expect(second?.hasAudio).toBe(true);
 
     // Same audio sid again: nothing moves, same as the video-sid case.
     const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
@@ -422,7 +449,7 @@ describe("live HLS egress", () => {
     expect(start.mock.calls[2]![2]).toEqual(
       expect.objectContaining({ videoTrackId: "TR_V1", audioTrackId: "TR_A2" }),
     );
-    expect(fourth?.hlsUrl).not.toBe(second?.hlsUrl);
+    expect(fourth?.hlsUrl).toBe(second?.hlsUrl);
   });
 
   it("keeps the egress when the SFU cannot be asked which sid is live", async () => {
@@ -580,6 +607,8 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -589,6 +618,8 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -598,6 +629,8 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
     });
 
@@ -646,6 +679,27 @@ describe("live HLS egress", () => {
       delete process.env.LIVE_HLS_LL;
       delete process.env.LIVE_HLS_LL_ALLOWLIST;
       delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    });
+
+    it("llSegmentCadenceDecay follows LIVE_HLS_LL_SEGMENT_CADENCE_DECAY, off by default, same on every server", async () => {
+      enableHls();
+      // Unset (every deployment today) reads as off, byte-for-byte the
+      // governor's behaviour before this existed.
+      expect(liveHlsConfig().llSegmentCadenceDecay).toBe(false);
+      expect((await liveHlsConfigForServer(SERVER)).llSegmentCadenceDecay).toBe(
+        false,
+      );
+      process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY = "true";
+      // A deployment-wide switch, not per-server: unlike `micArchive`/
+      // `lowLatency`, no allowlist or override gates it.
+      expect(liveHlsConfig().llSegmentCadenceDecay).toBe(true);
+      expect((await liveHlsConfigForServer(SERVER)).llSegmentCadenceDecay).toBe(
+        true,
+      );
+      expect(
+        (await liveHlsConfigForServer(OTHER_SERVER)).llSegmentCadenceDecay,
+      ).toBe(true);
+      delete process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY;
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {
@@ -1624,7 +1678,7 @@ describe("live HLS egress", () => {
       vi.useRealTimers();
     });
 
-    it("restarts an egress that ended abnormally, once, with a new playlist URL", async () => {
+    it("restarts an egress that ended abnormally, once, IN PLACE: same playlist URL", async () => {
       enableHls();
       const lk = fakeLiveKit();
       setLiveHlsTestHooks({
@@ -1645,9 +1699,10 @@ describe("live HLS egress", () => {
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "scheduled" },
       ]);
-      // The room is gone right away (viewers must not be handed the dead
-      // URL), the restart itself waits for the backoff.
-      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+      // THE SESSION STAYS: the audience holds on the same URL through the
+      // backoff (the proxy serves the last run's tail), and the restart
+      // itself waits for the backoff.
+      expect(liveHlsStreamFor(CHANNEL)).toEqual(first);
       expect(heard).toEqual([]);
       await advance(2_000);
       expect(heard).toEqual(["egress-ended"]);
@@ -1655,7 +1710,13 @@ describe("live HLS egress", () => {
 
       const second = liveHlsStreamFor(CHANNEL);
       expect(second).not.toBeNull();
-      expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+      expect(second?.hlsUrl).toBe(first?.hlsUrl);
+      expect(second?.startedAt).toBe(first?.startedAt);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsRungRestartedInPlace",
+        expect.objectContaining({ reason: "egress-ended", startedAt: first!.startedAt }),
+      );
+      expect(liveHlsActivity().restartsInPlaceTotal).toBe(1);
       expect(lk.start).toHaveBeenCalledTimes(2);
       // The dead one is not "stopped" again: it is already gone.
       expect(lk.stop).not.toHaveBeenCalled();
@@ -2249,9 +2310,18 @@ describe("live HLS egress", () => {
 
         await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
+        // A restart in place, narrated as one: the session was not stopped.
         expect(logEvent).toHaveBeenCalledWith(
-          "voice.hlsStopped",
+          "voice.hlsRungRestartingInPlace",
           expect.objectContaining({ reason: "screen-track-replaced" }),
+        );
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsRungRestartedInPlace",
+          expect.objectContaining({ reason: "screen-track-replaced" }),
+        );
+        expect(logEvent).not.toHaveBeenCalledWith(
+          "voice.hlsStopped",
+          expect.anything(),
         );
       });
 
@@ -2966,6 +3036,344 @@ describe("LIVE_HLS_MIC_ARCHIVE", () => {
       process.env.LIVE_HLS_MIC_ARCHIVE = "true";
       await checkLiveHlsHealth();
       expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("restarts in place", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-24T16:22:00Z"));
+      logEvent.mockClear();
+      query.mockClear();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      setMicArchiveCooldownMsForTests();
+    });
+
+    function inPlaceLogs() {
+      return logEvent.mock.calls.filter(
+        ([name]) => name === "voice.hlsMicArchiveRestartedInPlace",
+      );
+    }
+
+    /**
+     * 2026-09-24, channel ad99074f: `voice.hlsMicArchiveStopped
+     * reason=egress-ended` seven minutes into a show that ran seven more, and
+     * nothing after it. The ladder and the camera came back; the voice did not.
+     */
+    it("brings an archive whose egress ended back as a new run, 3 s later", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      const first = (await lk.startTrack.mock.results[0]!.value).egressId;
+      await vi.advanceTimersByTimeAsync(20_000);
+      lk.kill(first);
+      await checkLiveHlsHealth();
+
+      expect(liveHlsActivity().micArchives).toBe(0);
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3_100);
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+      const [, output, trackId] = lk.startTrack.mock.calls[1]!;
+      expect(trackId).toBe("TR_M");
+      // A NEW NAME beside the first run's, never over it, and still under the
+      // row's prefix so retention and keep_replay cover it.
+      const base = `live/${CHANNEL}/${stream!.startedAt}-mic`;
+      expect(output!.filepath).toMatch(new RegExp(`^${base}-r\\d+\\.ogg$`));
+      expect(output!.filepath).not.toBe(`${base}.ogg`);
+      expect(liveHlsActivity().micArchives).toBe(1);
+      expect(inPlaceLogs()).toHaveLength(1);
+      expect(inPlaceLogs()[0]![1]).toMatchObject({
+        channelId: CHANNEL,
+        reason: "egress-ended",
+        startedAt: stream!.startedAt,
+      });
+      // The row the death closed is reopened for the new run.
+      const reopen = query.mock.calls.find(
+        ([sql, params]) =>
+          String(sql).includes("ON CONFLICT (object_prefix) DO UPDATE") &&
+          (params as unknown[])[4] === "mic",
+      );
+      expect(reopen).toBeDefined();
+    });
+
+    it("waits the cooldown when the new run dies again inside five minutes", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+      await checkLiveHlsHealth();
+      await vi.advanceTimersByTimeAsync(3_100);
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+
+      lk.kill((await lk.startTrack.mock.results[1]!.value).egressId);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await checkLiveHlsHealth();
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsMicArchiveDied",
+        expect.objectContaining({ retryInMs: 120_000 }),
+      );
+
+      // Not at 3 s this time, and not on the monitor's next ticks either.
+      await vi.advanceTimersByTimeAsync(3_100);
+      await checkLiveHlsHealth();
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(lk.startTrack).toHaveBeenCalledTimes(3);
+      expect(liveHlsActivity().micArchives).toBe(1);
+    });
+
+    it("restarts at once, no cooldown, when the host's mic track is replaced", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let micSid = "TR_M";
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: micSid,
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      const first = (await lk.startTrack.mock.results[0]!.value).egressId;
+
+      micSid = "TR_M2";
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The old run is stopped (it is bound to a dead track), the new one
+      // recorded under its own name.
+      expect(lk.stop).toHaveBeenCalledWith(first);
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+      expect(lk.startTrack.mock.calls[1]![2]).toBe("TR_M2");
+      expect(lk.startTrack.mock.calls[1]![1]!.filepath).toMatch(/-mic-r\d+\.ogg$/);
+      expect(inPlaceLogs()[0]![1]).toMatchObject({ reason: "mic-track-replaced" });
+      expect(liveHlsActivity().micArchives).toBe(1);
+    });
+
+    it("says presenter-reconnected when the same person comes back on a new peer", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let micSid = "TR_M";
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: micSid,
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      // A reconnect that kept the screen (same video sid) but republished
+      // the archive track under a fresh sid.
+      micSid = "TR_M_AFTER";
+      await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+      expect(inPlaceLogs()[0]![1]).toMatchObject({ reason: "presenter-reconnected" });
+    });
+
+    it("gives a run up when its row cannot be reopened, and tries again", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      setMicArchiveCooldownMsForTests(10_000);
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+      const normal = query.getMockImplementation()!;
+      let failReopen = false;
+      query.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (
+          failReopen &&
+          sql.includes("DO UPDATE") &&
+          (params as unknown[] | undefined)?.[4] === "mic"
+        ) {
+          throw new Error("connection terminated");
+        }
+        return normal(sql, params);
+      });
+      try {
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        await vi.advanceTimersByTimeAsync(20_000);
+        lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+        await checkLiveHlsHealth();
+
+        failReopen = true;
+        await vi.advanceTimersByTimeAsync(3_100);
+        // Started, then stopped: a run whose row reads ended would be swept
+        // by retention while it records.
+        expect(lk.startTrack).toHaveBeenCalledTimes(2);
+        const orphan = (await lk.startTrack.mock.results[1]!.value).egressId;
+        expect(lk.stop).toHaveBeenCalledWith(orphan);
+        expect(liveHlsActivity().micArchives).toBe(0);
+
+        failReopen = false;
+        await vi.advanceTimersByTimeAsync(10_100);
+        expect(lk.startTrack).toHaveBeenCalledTimes(3);
+        expect(liveHlsActivity().micArchives).toBe(1);
+      } finally {
+        query.mockImplementation(normal);
+      }
+    });
+
+    it("stays off for the session once the flag went off, even on a roster event", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      delete process.env.LIVE_HLS_MIC_ARCHIVE;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await checkLiveHlsHealth();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+      expect(liveHlsActivity().micArchives).toBe(0);
+    });
+
+    it("an inherited archive confirmed by its first probe still restarts on a later replacement", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let micSid: string | undefined;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          ...(micSid ? { micArchiveTrackId: micSid } : {}),
+        }),
+      });
+
+      const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(
+        adoptLiveHlsMicArchive({
+          channelId: CHANNEL,
+          egressId: "MIC_ADOPTED",
+          startedAt: stream!.startedAt,
+          trackId: "TR_M",
+        }),
+      ).toBe(true);
+
+      micSid = "TR_M";
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lk.startTrack).not.toHaveBeenCalled();
+
+      micSid = "TR_M2";
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lk.stop).toHaveBeenCalledWith("MIC_ADOPTED");
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+      expect(lk.startTrack.mock.calls[0]![2]).toBe("TR_M2");
+      expect(lk.startTrack.mock.calls[0]![1]!.filepath).toMatch(/-mic-r\d+\.ogg$/);
+    });
+
+    it("does not lose a mic replacement that lands while a restart is starting", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let micSid = "TR_M";
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: micSid,
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+      await checkLiveHlsHealth();
+
+      // The retry's StartTrackEgress hangs on LiveKit for a moment...
+      const real = lk.startTrack.getMockImplementation()!;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      lk.startTrack.mockImplementationOnce(async (...args) => {
+        await held;
+        return real(...args);
+      });
+      await vi.advanceTimersByTimeAsync(3_100);
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+
+      // ...and the host switches microphones meanwhile.
+      micSid = "TR_M2";
+      const roster = reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await roster;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(3);
+      expect(lk.startTrack.mock.calls[2]![2]).toBe("TR_M2");
+      expect(liveHlsActivity().micArchives).toBe(1);
+    });
+
+    it("does not come back after the share ends", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+      await checkLiveHlsHealth();
+      await reconcileLiveHls(CHANNEL, null, SERVER);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+      expect(liveHlsActivity().micArchives).toBe(0);
     });
   });
 });

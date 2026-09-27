@@ -1,0 +1,484 @@
+import AVKit
+import SwiftUI
+
+/**
+ THE PRESENTER'S CAMERA, FLOATING OVER THEIR FILM.
+
+ Mirrors `client/src/lib/watch-camera-pip.ts` and `watch-camera-pip.tsx`. A
+ watch party's audience is seatless, so a camera published into the room
+ reaches nobody on the playlist; the server runs a second, video-only egress
+ beside the ladder and states its playlist as `LiveHlsStream.cameraHlsUrl`.
+ This file is the iOS half: where the picture-in-picture sits, whether it is
+ showing at all, and which of the two pictures owns the stage.
+
+ DELIBERATELY MUCH SIMPLER THAN THE FILM'S PLAYER (`WatchStageView`,
+ `WatchVideoSurface`). The camera carries one rendition, no ladder, no
+ fullscreen, no system Picture-in-Picture of its own, and a failure whose
+ correct response is to disappear rather than to tell anybody anything. See
+ `WatchCameraSurface`.
+ */
+
+// MARK: - Layout
+
+/// Mirrors `CAMERA_LAYOUTS` in `client/src/lib/watch-camera-pip.ts`, Rafael's
+/// four: the default corner, side by side, hide the camera, hide the film.
+enum CameraLayout: String, CaseIterable, Codable, Equatable, Sendable {
+    /// The default. The film on the stage, the camera small in a corner.
+    case pip
+    /// The two next to each other (stacked in portrait, film on top; side by
+    /// side once the stage is wider than it is tall).
+    case side
+    /// "Hide camera". The film alone. The camera's player is unmounted,
+    /// UNLESS it also carries the presenter's voice, which a hidden webcam
+    /// must not silence: then it stays, drawn as a voice-only corner.
+    case stream
+    /// "Hide stream". The camera on the stage, alone. The film keeps playing
+    /// underneath, covered rather than torn down, because it is the one
+    /// carrying the party's audio and switching back has to be instant.
+    case camera
+}
+
+/// Mirrors `CAMERA_PIP_CORNERS`. `Alignment` is what `ZStack` wants; the raw
+/// cases are what gets persisted and compared.
+enum CameraPipCorner: String, CaseIterable, Codable, Equatable, Sendable {
+    case topLeading, topTrailing, bottomLeading, bottomTrailing
+
+    var alignment: Alignment {
+        switch self {
+        case .topLeading: return .topLeading
+        case .topTrailing: return .topTrailing
+        case .bottomLeading: return .bottomLeading
+        case .bottomTrailing: return .bottomTrailing
+        }
+    }
+
+    /// The corner closest to a drag's release point inside a stage of the
+    /// given size. Pure so a drag gesture's end can be asserted on without a
+    /// running view.
+    static func nearest(to point: CGPoint, in bounds: CGSize) -> CameraPipCorner {
+        let leading = point.x < bounds.width / 2
+        let top = point.y < bounds.height / 2
+        switch (top, leading) {
+        case (true, true): return .topLeading
+        case (true, false): return .topTrailing
+        case (false, true): return .bottomLeading
+        case (false, false): return .bottomTrailing
+        }
+    }
+
+    /// The next corner, clockwise. Four presses is where you started.
+    /// Mirrors `nextCameraPipCorner`; VoiceOver's "move to another corner"
+    /// action uses this, since a drag gesture is not reachable that way.
+    func clockwise() -> CameraPipCorner {
+        switch self {
+        case .topLeading: return .topTrailing
+        case .topTrailing: return .bottomTrailing
+        case .bottomTrailing: return .bottomLeading
+        case .bottomLeading: return .topLeading
+        }
+    }
+}
+
+/// What the viewer asked for, remembered per phone. Bottom trailing (the
+/// corner every video call on the platform already uses) and `pip`, the
+/// default, film on the stage.
+///
+/// DELIBERATELY NOT `Codable` ITSELF. The standard library gives any type
+/// that is both `Codable` and `RawRepresentable` with an `Encodable`
+/// `RawValue` a DEFAULT `encode(to:)`/`init(from:)` built out of
+/// `rawValue`/`init?(rawValue:)` -- and this type's `rawValue` is built out
+/// of `JSONEncoder`, so the two defaults call each other. Confirmed the hard
+/// way: a `SIGSEGV` stack overflow pinned on `CameraPipPref.rawValue.getter`
+/// calling itself through `JSONEncoder.encode`, every time a test actually
+/// exercised the round trip. `StoredCameraPipPref` below is the `Codable`
+/// half instead, so the two conformances never meet.
+struct CameraPipPref: Equatable, Sendable {
+    var corner: CameraPipCorner
+    var layout: CameraLayout
+
+    static let `default` = CameraPipPref(corner: .bottomTrailing, layout: .pip)
+
+    /**
+     EXPLICIT ON PURPOSE -- WITHOUT THIS, `==` COMPARES SERIALIZED JSON,
+     NOT THE PREFERENCE.
+
+     A struct that conforms to both `Equatable` (declared right here) and
+     `RawRepresentable` (declared below, in the extension) has TWO
+     candidate implementations of `==`: the compiler's own memberwise
+     synthesis, and the standard library's `RawRepresentable where
+     RawValue: Equatable` default, which is `lhs.rawValue == rhs.rawValue`.
+     Retroactively adding `RawRepresentable` in a separate extension is
+     enough to make the compiler pick the library's version over
+     synthesizing its own -- confirmed by reproducing it standalone,
+     outside this app, with nothing else in play.
+
+     That default reduces two `CameraPipPref` values to their `rawValue`
+     STRINGS first. `rawValue` is `JSONEncoder` output, and Foundation does
+     not promise a stable key order between separate `encode` calls for the
+     same two-field struct; it was observed to differ often enough that
+     `testGarbageFallsBackToTheDefault` failed on every one of 50 straight
+     iterations on one machine and passed clean on another run entirely --
+     `{"corner":...,"layout":...}` against `{"layout":...,"corner":...}` for
+     the exact same preference, so `.default == .default` came back false.
+     `String(describing:)` (what a failed assertion prints) shows the
+     DECODED fields, which matched every time, making the two sides of the
+     failure look identical while the JSON blobs behind them did not.
+
+     A deterministic encoder (`.sortedKeys`) would have hidden this specific
+     trigger, but the actual defect is upstream of that: this preference's
+     equality should never have been "do the two serializations happen to
+     match", so it is pinned here as ordinary memberwise comparison instead,
+     which is what `Equatable` on a corner/layout pair is supposed to mean
+     regardless of anything JSON does on any given day.
+     */
+    static func == (lhs: CameraPipPref, rhs: CameraPipPref) -> Bool {
+        lhs.corner == rhs.corner && lhs.layout == rhs.layout
+    }
+}
+
+/// The JSON shape alone, with no `RawRepresentable` in sight.
+private struct StoredCameraPipPref: Codable {
+    var corner: CameraPipCorner
+    var layout: CameraLayout
+}
+
+/**
+ `@AppStorage`-backed via JSON, the same shape `readCameraPipPref` /
+ `writeCameraPipPref` give the web's `localStorage`. Defensive by
+ construction: a value that fails to decode (nothing stored yet, a future
+ format) reads as `.default` rather than crashing the stage over a
+ preference nobody would notice missing.
+ */
+extension CameraPipPref: RawRepresentable {
+    init?(rawValue: String) {
+        guard let data = rawValue.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(StoredCameraPipPref.self, from: data)
+        else {
+            self = .default
+            return
+        }
+        self.init(corner: decoded.corner, layout: decoded.layout)
+    }
+
+    var rawValue: String {
+        let stored = StoredCameraPipPref(corner: corner, layout: layout)
+        guard let data = try? JSONEncoder().encode(stored),
+              let string = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return string
+    }
+}
+
+/// Whether the viewer is offered the layout menu at all: only for a camera
+/// that is actually a picture. Mirrors `cameraLayoutOffered`.
+func cameraLayoutOffered(cameraSrc: String?, cameraHasVideo: Bool) -> Bool {
+    cameraSrc != nil && cameraHasVideo
+}
+
+/// The layout in force. A camera with no picture (the audio-only "separada"
+/// shape) has nothing to lay out and always reads as the corner box, which is
+/// also where the voice-only indicator lives. Mirrors `effectiveCameraLayout`.
+func effectiveCameraLayout(pref: CameraPipPref, cameraHasVideo: Bool) -> CameraLayout {
+    cameraHasVideo ? pref.layout : .pip
+}
+
+/**
+ THE URL WORTH A LIVE CONNECTION FOR, GIVEN WHAT THE VIEWER CAN ACTUALLY SEE
+ OR HEAR RIGHT NOW.
+
+ "Hide camera" (`.stream`) with nothing to hear either is nothing worth
+ streaming: `nil` here is what makes `WatchCameraStreamSwap` detach a camera
+ the viewer explicitly hid, instead of leaving it running invisibly for as
+ long as that layout stays picked (Farol review, PR 833). A camera that DOES
+ carry the presenter's voice keeps streaming even hidden -- the corner still
+ shows the voice-only indicator for it, in every layout but this one.
+ */
+func cameraUrlWorthStreaming(
+    cameraHlsUrl: String?,
+    hasVoiceAudio: Bool,
+    layoutOffered: Bool,
+    layout: CameraLayout
+) -> String? {
+    let hiddenAndSilent = layoutOffered && layout == .stream && !hasVoiceAudio
+    return hiddenAndSilent ? nil : cameraHlsUrl
+}
+
+// MARK: - The swap rule
+
+/// What the camera player currently holds, so the swap rule can tell a
+/// restamp from a restart. Keyed on the playlist's own path rather than on
+/// `LiveHlsStream.startedAt`: the camera shares its parent broadcast's
+/// session and never mints an identity of its own on the wire.
+struct CameraAttachedStream: Equatable, Sendable {
+    let sessionKey: String
+    let attachedAt: Date
+}
+
+enum CameraPlayerMove: Equatable, Sendable {
+    case keep
+    case attach(hlsUrl: String)
+    case detach
+}
+
+/// The camera's own `hlsSessionKey`: everything before the `?`, which is
+/// where the server's per-viewer, per-keyframe `?t=` restamp lives. Mirrors
+/// `hlsSessionKey` in `client/src/lib/hls-playback.ts`.
+func cameraSessionKey(_ url: String) -> String {
+    guard let query = url.firstIndex(of: "?") else { return url }
+    return String(url[url.startIndex..<query])
+}
+
+/**
+ WHEN TO HAND THE CAMERA'S `AVPlayer` A DIFFERENT URL, AND, MOSTLY, WHEN NOT
+ TO.
+
+ Same shape as `WatchStreamSwap`, and the same bug it exists to avoid: the
+ server restamps `cameraHlsUrl`'s `?t=` on the same audience-keyframe clock as
+ the film's, about every 30 seconds, for a camera that has not moved at all.
+ Rebuilding the player on every restamp would tear it down, drop the buffer
+ and blank the corner on that cadence for the whole party.
+
+ A camera with no picture and no voice track is not drawn at all
+ (`.detach`); the caller decides whether to even ask (see
+ `cameraLayoutOffered`), this only decides the URL once it has.
+ */
+enum WatchCameraStreamSwap {
+    /// Same margin as `WatchStreamSwap.renewAfter`: the viewer token lives an
+    /// hour, and this refreshes comfortably inside it rather than at the
+    /// edge of expiry.
+    static let renewAfter: TimeInterval = 50 * 60
+
+    static func next(
+        attached: CameraAttachedStream?,
+        latestUrl: String?,
+        hasVideo: Bool,
+        hasVoiceAudio: Bool,
+        failed: Bool,
+        now: Date
+    ) -> CameraPlayerMove {
+        guard let latestUrl, hasVideo || hasVoiceAudio else { return .detach }
+        let key = cameraSessionKey(latestUrl)
+        guard let attached else { return .attach(hlsUrl: latestUrl) }
+        if attached.sessionKey != key { return .attach(hlsUrl: latestUrl) }
+        if failed { return .attach(hlsUrl: latestUrl) }
+        if now.timeIntervalSince(attached.attachedAt) >= renewAfter {
+            return .attach(hlsUrl: latestUrl)
+        }
+        return .keep
+    }
+}
+
+// MARK: - Recovering from a failed camera item
+
+/**
+ HOW LONG TO WAIT BEFORE REBUILDING A CAMERA THAT KEEPS FAILING (Farol
+ review, PR 833, second pass).
+
+ `WatchStageView.checkCameraHealth()` force-reattaches a camera whose
+ `AVPlayerItem` reports `.failed`, on the theory that a fresh item past
+ whatever segment killed the last one is the whole fix. That is true for a
+ one-off blip and false for a genuinely broken egress, where the
+ replacement fails again immediately: without a real backoff, that reattach
+ happens again on the very next ~1s watchdog tick, and the one after that,
+ hammering the same HLS endpoint roughly once a second for as long as it
+ stays broken. This is the schedule that stops that: doubling from
+ `baseSeconds`, capped at `maxSeconds`, jittered so a run of viewers whose
+ cameras failed together do not all retry in the same instant.
+
+ Pure and `Date`-free (`isDue`) or randomness-injected (`delay`), same shape
+ as `WatchDeadRetry`, so both can be asserted on without a running player or
+ a real clock.
+ */
+enum WatchCameraFailureBackoff {
+    static let baseSeconds: TimeInterval = 2
+    static let maxSeconds: TimeInterval = 60
+    /// Consecutive ~1s watchdog ticks of confirmed ADVANCING playback (not
+    /// merely a non-failed status -- a decoder can wedge while still
+    /// reporting one) before a run of failures counts as over and the
+    /// attempt counter resets.
+    static let healthyTicksToReset = 10
+
+    /// The wait before acting on failure number `attempt` (0-based).
+    /// `jitter` returns a value in `0...1`; production passes
+    /// `Double.random(in: 0...1)`, a test passes a fixed one.
+    static func delay(attempt: Int, jitter: () -> Double) -> TimeInterval {
+        let raw = baseSeconds * pow(2, Double(max(attempt, 0)))
+        let capped = min(raw, maxSeconds)
+        // +/- 20%: enough to spread a synchronized failure across viewers,
+        // not enough to make the schedule unrecognisable in a test.
+        return capped * (0.8 + jitter() * 0.4)
+    }
+
+    /// Whether a failed item observed at `now` is due for another forced
+    /// reattach. `nil` means nothing has been acted on yet -- always due,
+    /// same as the very first failure always was before this backoff
+    /// existed.
+    static func isDue(nextRetryAt: Date?, now: Date) -> Bool {
+        guard let nextRetryAt else { return true }
+        return now >= nextRetryAt
+    }
+}
+
+// MARK: - A frozen camera that never failed
+
+/**
+ THE CAMERA FREEZES WITHOUT FAILING, SO FAILURE IS NOT ENOUGH TO WATCH FOR.
+
+ TestFlight 1.0.6: side by side, the film played and the webcam sat on one
+ frame, while the camera egress ran clean on the server for the whole party.
+ `checkCameraHealth` only ever acted on `AVPlayerItem.status == .failed`, and a
+ live playlist that stops advancing under the player is not a failure: the
+ item stays `.readyToPlay`, waiting at a position the window has moved past,
+ forever. The film has `WatchStallWatch` and `WatchLiveEdge` for exactly that;
+ the camera had nothing. The web met the same thing in rehearsal D and fixed it
+ with `CameraStallWatch` (`client/src/lib/camera-stall.ts`, #826). This is that
+ rule, on the watchdog's one second tick:
+
+ 1. `nudge` once per episode after `stallSeconds` with the playhead still: seek
+    back into the live window and play. Clears a player that fell out of the
+    window or paused on its own, without dropping anything.
+ 2. `rebuild` if the nudge has not got it moving `nudgeCheckSeconds` later,
+    and for every later stall until the camera has played `healthySeconds`
+    straight. The caller spends these on `WatchCameraFailureBackoff`, the same
+    schedule a failed item uses, so a camera that will not play costs one
+    rebuild per backoff step and never a tight loop.
+
+ Measured on the playhead, which is what AVFoundation offers. A camera that
+ carries the presenter's voice can keep the clock moving over a frozen
+ picture; the web counts decoded frames for that shape and this does not.
+
+ Pure and clock-injected, like `WatchCameraFailureBackoff`.
+ */
+struct WatchCameraStallWatch: Equatable, Sendable {
+    enum Action: Equatable, Sendable {
+        case none
+        case nudge
+        case rebuild
+    }
+
+    /// Two camera segments of silence. Mirrors `CAMERA_STALL_MS`.
+    static let stallSeconds: TimeInterval = 8
+    /// One segment's worth of loading at the live edge. `CAMERA_NUDGE_CHECK_MS`.
+    static let nudgeCheckSeconds: TimeInterval = 4
+    /// Forward play for this long ends the episode. `CAMERA_HEALTHY_MS`.
+    static let healthySeconds: TimeInterval = 10
+    /// Smaller than any real frame step, larger than float noise.
+    static let movedEpsilon = 0.01
+
+    private var lastPosition: Double?
+    private var lastMovedAt = Date.distantPast
+    private var advancingSince: Date?
+    private var nudged = false
+    private var verifyingSince: Date?
+
+    /// One watchdog sample. `eligible` is false while nothing should be
+    /// moving (no camera, the app in the background): the stall clock starts
+    /// over from the next eligible sample, the episode is kept.
+    mutating func observe(position: Double, eligible: Bool, now: Date) -> Action {
+        guard eligible, position.isFinite else {
+            lastPosition = nil
+            advancingSince = nil
+            verifyingSince = nil
+            return .none
+        }
+        guard let previous = lastPosition else {
+            lastPosition = position
+            lastMovedAt = now
+            return .none
+        }
+        lastPosition = position
+        if abs(position - previous) > Self.movedEpsilon {
+            lastMovedAt = now
+            if position > previous {
+                let since = advancingSince ?? now
+                advancingSince = since
+                // Two forward samples in a row is playback, not the one step
+                // the nudge's own seek reads as: the nudge took, so its
+                // verdict is over and a later freeze waits the full stall
+                // window again from this movement (Farol, PR 845).
+                if now > since { verifyingSince = nil }
+                if now.timeIntervalSince(since) >= Self.healthySeconds {
+                    nudged = false
+                    verifyingSince = nil
+                }
+            } else {
+                // Backwards: a rebuilt player's fresh timeline, or a seek.
+                // Movement, not proof of health.
+                advancingSince = nil
+            }
+            return .none
+        }
+        advancingSince = nil
+        // The nudge's verdict. Its own seek reads as one step of movement,
+        // and that step must not buy a frozen face another full stall.
+        if let verifyingSince {
+            guard now.timeIntervalSince(verifyingSince) >= Self.nudgeCheckSeconds else { return .none }
+            self.verifyingSince = nil
+            lastMovedAt = now
+            return .rebuild
+        }
+        guard now.timeIntervalSince(lastMovedAt) >= Self.stallSeconds else { return .none }
+        if !nudged {
+            nudged = true
+            verifyingSince = now
+            return .nudge
+        }
+        lastMovedAt = now
+        return .rebuild
+    }
+
+    /// A new player: its timeline is not comparable with the last one's.
+    mutating func forgetPosition() {
+        lastPosition = nil
+        advancingSince = nil
+        // A new player earns its own stall window; a nudge verdict aimed at
+        // the old one must not rebuild it before it has had time to start.
+        verifyingSince = nil
+    }
+}
+
+// MARK: - The surface
+
+/// One `AVPlayerLayer`, drawn plain. No PiP hookup, no fullscreen, no
+/// autoresizing dance across a theater move: the camera never leaves its box.
+final class CameraPlayerCanvas: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    var player: AVPlayer? {
+        get { playerLayer.player }
+        set { playerLayer.player = newValue }
+    }
+}
+
+/// The camera's rectangle. `fit` is `.resizeAspectFill` in the corner box
+/// (a face fills a small circle better than it letterboxes in one) and
+/// `.resizeAspect` when the camera IS the stage (`side`, `camera` layouts),
+/// mirroring the web's `cameraPipBoxes` fit choice.
+struct WatchCameraSurface: UIViewRepresentable {
+    let player: AVPlayer?
+    var fit: AVLayerVideoGravity = .resizeAspectFill
+
+    func makeUIView(context: Context) -> CameraPlayerCanvas {
+        let canvas = CameraPlayerCanvas()
+        canvas.backgroundColor = .black
+        canvas.playerLayer.videoGravity = fit
+        canvas.player = player
+        return canvas
+    }
+
+    func updateUIView(_ canvas: CameraPlayerCanvas, context: Context) {
+        canvas.playerLayer.videoGravity = fit
+        if canvas.player !== player { canvas.player = player }
+    }
+
+    /// Let go of the player on the way out. Every layout switch (corner to
+    /// side by side and back) makes a new box for the same `AVPlayer`, and a
+    /// box SwiftUI has dropped but not yet freed must not stay a second
+    /// render target for it: an `AVPlayer` shown on two layers can leave the
+    /// visible one on a still frame (see `WatchPicture`).
+    static func dismantleUIView(_ canvas: CameraPlayerCanvas, coordinator: ()) {
+        canvas.player = nil
+    }
+}

@@ -199,6 +199,17 @@ test("the X dismisses only that card, leaving a sibling untouched (criterion 17)
   const toastCid = anaPage.locator(`[data-dm-toast="${convCid.channelId}"]`);
   await expect(toastCid).toBeVisible({ timeout: 15_000 });
 
+  // Regaining focus re-arms EVERY card to a short, equal `VISIBILITY_RESUME_MS`
+  // window (3s — see `thawToastCards`), not back to the full 6s: correct
+  // product behaviour (a stale hour-old countdown should not resume as-is),
+  // but it means the `bringToFront()` above is a clock the rest of this test
+  // has to beat, and `toastCid`'s own `toBeVisible` wait already spent part of
+  // it. Bringing Ana's page forward again right here starts that 3s window
+  // fresh at the latest possible moment, so the assertions below — the one
+  // thing this test exists to prove, dismissing Cid's card leaves Bia's alone
+  // — get the full window instead of whatever was left over.
+  await anaPage.bringToFront();
+
   // The X on Cid's card dismisses only that one; Bia's is untouched.
   // (The ~6s natural expiry and the pause/resume/freeze timer math it rests
   // on are pinned exactly, with fake time, in dm-toast-queue.test.ts —

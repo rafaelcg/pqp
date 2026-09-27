@@ -237,6 +237,10 @@ class WireProtocolTest {
         // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
         // individually per subscriber. No reminders surface on the phone yet.
         "channel-session-reminder" to "no watch party scheduling surface on the phone",
+        // The watch party waitlist's "liberado" notice, sent per person when
+        // the operator turns on a server they waited for. The waitlist lives
+        // on the web; the push that goes out with it reaches the phone.
+        "watch-party-waitlist-approved" to "no waitlist surface on the phone; the push covers it",
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
@@ -528,6 +532,17 @@ class WireProtocolTest {
             )
         }
 
+        // `sfu-region` is not a frame type, so it is pinned against the two
+        // other places that spell it instead of the signaling schema.
+        assertTrue(
+            "server/src/voice/regions.ts no longer names \"sfu-region\" (SFU_REGION_CAP).",
+            RepoSources.read("server/src/voice/regions.ts").contains("\"sfu-region\""),
+        )
+        assertTrue(
+            "client/src/lib/realtime.ts no longer declares \"sfu-region\".",
+            RepoSources.read("client/src/lib/realtime.ts").contains("\"sfu-region\""),
+        )
+
         assertTrue(
             "server/src/ws/index.ts no longer reads `caps` off the auth frame, so nothing " +
                 "this handshake declares is heard at all.",
@@ -537,7 +552,7 @@ class WireProtocolTest {
         assertEquals(
             "RealtimeClient.WIRE_CAPS is the promise this build makes about which frames " +
                 "it can apply. Add an entry only alongside its handler.",
-            caps,
+            caps + "sfu-region",
             RealtimeClient.WIRE_CAPS,
         )
     }

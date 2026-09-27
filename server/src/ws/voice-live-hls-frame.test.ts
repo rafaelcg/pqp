@@ -17,7 +17,7 @@ import type { LiveHlsStream } from "@pqp/shared";
  * Pure, so none of this needs a room, a socket or a transcode.
  */
 
-const { liveHlsFrameChanged } = await import("./voice.js");
+const { liveHlsCameraUntold, liveHlsFrameChanged } = await import("./voice.js");
 
 function stream(overrides: Partial<LiveHlsStream> = {}): LiveHlsStream {
   return {
@@ -92,5 +92,41 @@ describe("liveHlsFrameChanged", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("liveHlsCameraUntold", () => {
+  const cam = "/api/voice/hls-playlist/chan/1757865600000/cam360p30";
+
+  it("is true when the audience was told the session without the camera it now has", () => {
+    // The 2026-09-25 shape: the room's own stream already carries the camera
+    // (so `liveHlsFrameChanged(prev, next)` is false), the audience does not.
+    const told = stream();
+    const next = stream({ cameraHlsUrl: cam, cameraHasVideo: true });
+    expect(liveHlsFrameChanged(next, next)).toBe(false);
+    expect(liveHlsCameraUntold(told, next)).toBe(true);
+  });
+
+  it("is true when the camera went away and the audience still holds it", () => {
+    expect(liveHlsCameraUntold(stream({ cameraHlsUrl: cam }), stream())).toBe(true);
+  });
+
+  it("is true when only the camera's shape moved (voice attached)", () => {
+    expect(
+      liveHlsCameraUntold(
+        stream({ cameraHlsUrl: cam, cameraHasVoiceAudio: false }),
+        stream({ cameraHlsUrl: cam, cameraHasVoiceAudio: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false once told, and for a start, an end or another session", () => {
+    const withCam = stream({ cameraHlsUrl: cam });
+    expect(liveHlsCameraUntold(withCam, withCam)).toBe(false);
+    expect(liveHlsCameraUntold(null, withCam)).toBe(false);
+    expect(liveHlsCameraUntold(withCam, null)).toBe(false);
+    expect(
+      liveHlsCameraUntold(stream(), stream({ startedAt: 1, cameraHlsUrl: cam })),
+    ).toBe(false);
   });
 });

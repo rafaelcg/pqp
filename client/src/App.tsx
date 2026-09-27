@@ -198,7 +198,10 @@ import {
 } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
-import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
+import {
+  watchPartyHistoryCandidates,
+  type WatchPartyHistoryChannel,
+} from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
@@ -351,16 +354,35 @@ import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  INTENT_PARAM,
   peekCreateIntent,
   stashCreateIntent,
   stashInviteRef,
+  stashWaitlistIntent,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
   takeInviteRef,
   takeJoinIntent,
+  peekJoinIntent,
+  takeWaitlistIntent,
+  waitlistIntentFromSearch,
   type CreateIntent,
 } from "@/lib/handle-intent";
+import {
+  ackWatchPartyApproval,
+  fetchWatchPartyApprovals,
+  loadWatchPartyWaitlist,
+  setWatchPartyWaitlistOwner,
+  shouldOfferWatchPartyTeaser,
+  useWatchPartyWaitlist,
+} from "@/lib/watch-party-waitlist";
+import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
+import { startConfigRefresh } from "@/lib/config-refresh";
+import {
+  WatchPartyApprovedToasts,
+  type WatchPartyApprovedCard,
+} from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
 import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
@@ -436,6 +458,7 @@ import {
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
+import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -464,6 +487,7 @@ import {
   setSoundOutput,
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
+import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
@@ -518,6 +542,7 @@ import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
 import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
+import { feedAudienceCount } from "@/lib/watch-party-activity";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
@@ -552,6 +577,11 @@ const HEADER_ACTION_TILE =
  * `scheduleReconnectMessagesRefetch` below.
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
+
+/** A stable empty array, so "no favorites" is the same reference every
+ * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
+ * `ChannelList` only ever reads this prop. */
+const EMPTY_FAVORITE_CHANNEL_IDS: string[] = [];
 
 interface AppProps {
   devBypass?: boolean;
@@ -1315,6 +1345,20 @@ function MainAppContent({
     "pending" | "failed" | { serverId: string } | null
   >(null);
   /**
+   * The same two facts for a community's public link (`/c/<slug>`, which
+   * reaches the app as `?join=<slug>`). That person came for one room, so the
+   * first run takes the invite's shape: two screens, the room named on the
+   * first, and no "create your own server" door. On 2026-09-26, 7 of the 93
+   * accounts MoonKase's link created mid-show made a server of their own in
+   * that step and were moved into it, away from the party they came for.
+   * A failed join is not an invite that died, so it never borrows that copy:
+   * `communityJoin === "failed"` hands the wizard a plain first screen.
+   */
+  const [arrivedOnCommunityLink, setArrivedOnCommunityLink] = useState(false);
+  const [communityJoin, setCommunityJoin] = useState<
+    "pending" | "failed" | { serverId: string } | null
+  >(null);
+  /**
    * Servers this account made in this session. The arrival banner says "your
    * room is ready, bring the crew" to their owner rather than "say oi", and
    * the empty channel offers the invite, while nobody else has come.
@@ -1545,6 +1589,46 @@ function MainAppContent({
    * both the sidebar and the transcript pips update from the same map.
    */
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
+  /**
+   * A burst of presence frames — a busy watch party's audience joining and
+   * leaving the channel — used to bump `memberRosterNudge` once PER FRAME,
+   * and every bump is a `setState` that re-renders this entire component.
+   * `useMemberRosterRefresh` already debounces the read the nudge triggers,
+   * but that debounce runs downstream of the re-render, not in front of it:
+   * a hundred presence frames in a few seconds was a hundred full renders of
+   * the whole app — sidebar, member list, the open channel's transcript —
+   * before even one of them did anything. This coalesces same-window bumps
+   * into one, leading-edge immediately and then at most once per
+   * `PRESENCE_NUDGE_COALESCE_MS`, so a burst costs one render instead of
+   * one per frame while a lone frame still lands right away.
+   */
+  const presenceNudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const presenceNudgePendingRef = useRef(false);
+  const PRESENCE_NUDGE_COALESCE_MS = 250;
+  const bumpMemberRosterNudge = useCallback(() => {
+    if (presenceNudgeTimerRef.current !== null) {
+      presenceNudgePendingRef.current = true;
+      return;
+    }
+    setMemberRosterNudge((n) => n + 1);
+    presenceNudgeTimerRef.current = setTimeout(() => {
+      presenceNudgeTimerRef.current = null;
+      if (presenceNudgePendingRef.current) {
+        presenceNudgePendingRef.current = false;
+        setMemberRosterNudge((n) => n + 1);
+      }
+    }, PRESENCE_NUDGE_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (presenceNudgeTimerRef.current !== null) {
+        clearTimeout(presenceNudgeTimerRef.current);
+      }
+    },
+    [],
+  );
   // Bumped on `community-home-update` for the OPEN server only — Baú refetches
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
@@ -1582,6 +1666,18 @@ function MainAppContent({
   );
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  // Stable identity for `MessageList`'s `onReportMessage`: an inline arrow
+  // here was rebuilt on every render of this (huge) component, which read
+  // as "this row's props changed" to `MessageRow`'s `memo()` for every row
+  // on every unrelated re-render — see the row-callback cache in
+  // message-list.tsx for the other half of this fix.
+  const handleReportMessage = useCallback((message: ChatMessage) => {
+    setReportTarget({
+      kind: "message",
+      messageId: message.id,
+      subjectName: message.authorName,
+    });
+  }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
   // Watch party scheduling: the one upcoming/live session for the selected
   // voice channel and every voice channel's sidebar hint, both derived from
@@ -1686,6 +1782,16 @@ function MainAppContent({
     selection.kind === "server" ? selectionServerId(selection) : null,
   );
   const [createWatchPartyOpen, setCreateWatchPartyOpen] = useState(false);
+  /**
+   * The watch party waitlist (`docs/WATCH_PARTY.md` §"The waitlist"). The
+   * dialog, a `?intent=watch-party-waitlist` waiting for onboarding to finish,
+   * and the "liberada" cards for servers the operator has since turned on.
+   */
+  const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
+  const [pendingWaitlist, setPendingWaitlist] = useState(false);
+  const [waitlistApprovals, setWaitlistApprovals] = useState<
+    WatchPartyApprovedCard[]
+  >([]);
   /**
    * The draft THIS TAB opened and has not published yet, plus whether its
    * setup surface was ever actually on screen. See `watch-party-draft.ts`:
@@ -1821,6 +1927,11 @@ function MainAppContent({
   );
   const unreadCursorByChannelRef = useRef<Record<string, string>>({});
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
+  // arrow here defeated `MessageList`'s own `memo()` on every render of this
+  // component, which is the single biggest thing that was left rebuilding
+  // JSX for all ~250 rows on ticks that touched nothing this list reads.
+  const clearEditMessageId = useCallback(() => setEditMessageId(null), []);
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
@@ -2076,6 +2187,28 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  /**
+   * Asked ONLY where the server has already said no. A server whose config
+   * answered `enabled: true` (it runs watch parties) or has not answered yet
+   * makes no waitlist request at all, so nothing here can reach a server
+   * where a party can run.
+   */
+  // A different account gets an empty waitlist store (its rows are private).
+  const waitlistOwnerId = user?.id ?? null;
+  useEffect(() => {
+    setWatchPartyWaitlistOwner(waitlistOwnerId);
+  }, [waitlistOwnerId]);
+  // Runtime flags reach an open tab: the live-hls config and the waitlist
+  // answers are re-asked on focus and on a slow timer, so an operator's flip
+  // (the teaser, the camera size, a server switched on) shows without a
+  // reload. See `lib/config-refresh.ts`.
+  useEffect(() => startConfigRefresh(), []);
+  const watchPartyWaitlist = useWatchPartyWaitlist(
+    selectedServerId,
+    isWatchPartyChannelsEnabled() &&
+      selectedServerId !== null &&
+      liveHlsConfig?.enabled === false,
+  );
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
   const screenFrameRateRef = useRef(localSettings.screenFrameRate);
@@ -2189,9 +2322,32 @@ function MainAppContent({
       perms.can(Permission.START_WATCH_PARTY, channelId) ||
       perms.can(Permission.MANAGE_CHANNELS, channelId),
   );
-  const watchPartyHistoryChannels = useWatchPartyHistoryAvailability(
+  const watchPartyHistoryChannelsRaw = useWatchPartyHistoryAvailability(
     watchPartyHistoryCandidateChannels,
   );
+  // The hook deliberately filters fresh every render (see its own comment) —
+  // correct for it, but a brand-new array on every render regardless of
+  // content is exactly what defeats a memoized child's prop comparison.
+  // Stabilized here, one layer up, by content rather than reference: this
+  // list changes rarely (a broadcast confirming, a channel losing access),
+  // so almost every render can hand the sidebar back the SAME array.
+  const watchPartyHistoryChannelsKeyRef = useRef("");
+  const watchPartyHistoryChannelsRef = useRef<
+    readonly WatchPartyHistoryChannel[]
+  >(watchPartyHistoryChannelsRaw);
+  // JSON.stringify of the tuple list, not a joined string: `channel.name` is
+  // user-controlled text and can itself contain the separator, so two
+  // different channel lists could otherwise stringify to the same key (the
+  // same class of bug Farol found in the typing-users cache — see
+  // use-chat.ts).
+  const watchPartyHistoryChannelsKey = JSON.stringify(
+    watchPartyHistoryChannelsRaw.map((channel) => [channel.id, channel.name]),
+  );
+  if (watchPartyHistoryChannelsKey !== watchPartyHistoryChannelsKeyRef.current) {
+    watchPartyHistoryChannelsKeyRef.current = watchPartyHistoryChannelsKey;
+    watchPartyHistoryChannelsRef.current = watchPartyHistoryChannelsRaw;
+  }
+  const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -2242,7 +2398,261 @@ function MainAppContent({
     void voice.setCameraDevice(localSettings.cameraDeviceId);
   }, [localSettings.cameraDeviceId, voice]);
 
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  /**
+   * `chat.onChange` / `threadChat.onChange` call this on EVERY frame either
+   * controller applies — a message, a reaction, an edit, a typing broadcast —
+   * and it used to bump `tick` unconditionally, which re-renders this whole
+   * component. A busy watch party fires `typing-broadcast` and
+   * `message-broadcast` several times a second, and profiling one (the same
+   * harness as the presence-nudge fix above) found this was the single
+   * biggest remaining source of full-app re-renders: worse than presence,
+   * because nothing downstream of it was throttled at all. Coalesced the
+   * same way — leading edge fires immediately, so a deliberate one-off call
+   * (selecting a channel, sending your own message) still reads as instant;
+   * a burst inside `REFRESH_COALESCE_MS` collapses to one trailing render
+   * instead of one per frame.
+   *
+   * 30ms, not the 250ms `bumpMemberRosterNudge` uses: this path also carries
+   * the swap of YOUR OWN message from its optimistic `pending:<nonce>` row to
+   * the server-confirmed one (`use-chat.ts`'s message-broadcast handler),
+   * which changes that row's React key and forces a real remount — losing
+   * any transient DOM state tied to the old node, an open context menu among
+   * it. A 100ms window widened the gap between "server confirmed" and "the
+   * DOM actually reflects it" enough to land inside a keyboard/mouse
+   * interaction with that same row on a loaded CI runner (`element was
+   * detached from the DOM, retrying` on `message-keyboard-accessibility` /
+   * `message-quick-reactions`). 30ms still collapses a genuine same-tick
+   * burst (several WS frames arriving together) without meaningfully
+   * widening that pre-existing race.
+   */
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshPendingRef = useRef(false);
+  const REFRESH_COALESCE_MS = 30;
+  const refresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    setTick((t) => t + 1);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        setTick((t) => t + 1);
+      }
+    }, REFRESH_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  /**
+   * `ChannelList` (the whole left sidebar: channels, voice occupancy, watch
+   * party affordances) is wrapped in `memo()`, but nearly every one of these
+   * was an inline arrow rebuilt on every render of `MainAppContent` — or a
+   * plain `function handleX()` that was never itself a `useCallback` — so
+   * the memo comparison failed on essentially every prop, every render,
+   * which is the same "memoized child, unmemoized props" shape the message
+   * list had (see message-list.tsx). `useStableCallback` gives each one a
+   * permanent identity without re-auditing every handler's own dependency
+   * list; see that hook's own comment for why that trade is safe here.
+   *
+   * Deliberately placed here, ahead of the `bootstrapError` /
+   * `ageGate` / `!bootstrapReady` / `needsOnboarding` early returns further
+   * down: a hook has to run on every render regardless of what this
+   * component goes on to display, and closures over names declared later in
+   * this function body (`handleThreadMembership`, `toggleChannelSidebar`,
+   * etc.) are still safe here — they resolve those bindings when the
+   * returned callback is actually CALLED, by which point the whole
+   * function body has long since finished running, not when this line
+   * itself executes.
+   */
+  const stableOnOpenThread = useStableCallback((thread: ThreadSummary) =>
+    void openThreadFromSidebar(thread),
+  );
+  const stableOnLeaveThread = useStableCallback((thread: ThreadSummary) =>
+    void handleThreadMembership(thread, false),
+  );
+  const stableOnMarkThreadRead = useStableCallback((thread: ThreadSummary) =>
+    void clearUnread(thread.channelId),
+  );
+  const stableOnMobileClose = useStableCallback(() => setMobileNavOpen(false));
+  const stableOnSelectChannel = useStableCallback((id: string) =>
+    void selectChannel(id),
+  );
+  const stableOnJoinVoice = useStableCallback((channelId: string) =>
+    handleJoinVoiceFromList(channelId),
+  );
+  const stableOnWatchLiveParty = useStableCallback((channelId: string) =>
+    void handleWatchLiveParty(channelId),
+  );
+  const stableOnCreateWatchParty = useStableCallback(() =>
+    setCreateWatchPartyOpen(true),
+  );
+  const stableOnOpenWatchPartyHistory = useStableCallback(
+    (channelId: string) => setWatchPartyHistoryChannelId(channelId),
+  );
+  const stableCanMoveIn = useStableCallback((channelId: string) =>
+    perms.can(moveMembersBit(), channelId),
+  );
+  const stableCanConnectIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.CONNECT, channelId),
+  );
+  const stableCanMuteIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.MUTE_MEMBERS, channelId),
+  );
+  const stableCanKickUser = useStableCallback((userId: string) =>
+    canKickOccupant(userId),
+  );
+  const stableOnMoveVoiceOccupant = useStableCallback(
+    (userId: string, channelId: string) =>
+      void handleMoveVoiceOccupant(userId, channelId),
+  );
+  const stableOnDisconnectVoiceOccupant = useStableCallback((userId: string) =>
+    void handleDisconnectVoiceOccupant(userId),
+  );
+  const stableOnServerMuteOccupant = useStableCallback(
+    (userId: string, muted: boolean) =>
+      void handleServerMuteOccupant(userId, muted),
+  );
+  const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
+    void handleLowerOccupantHand(userId),
+  );
+  const stableOnKickOccupant = useStableCallback(
+    (userId: string, name: string) => void handleKickOccupant(userId, name),
+  );
+  const stableOnSetPeerVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setPeerVolume(userId, volume),
+  );
+  const stableOnSetScreenVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
+  );
+  const stableOnCreateChannel = useStableCallback(
+    (type: ChannelType, isPrivate: boolean) =>
+      setChannelPrompt({ mode: "create", type, isPrivate }),
+  );
+  const stableOnRenameChannel = useStableCallback((channel: Channel) =>
+    setChannelPrompt({ mode: "rename", channel }),
+  );
+  const stableOnOpenChannelSettings = useStableCallback(
+    (
+      channel: Channel,
+      section: ChannelSettingsSectionId,
+      options?: { forceAdvanced?: boolean },
+    ) =>
+      setChannelSettings({
+        channelId: channel.id,
+        section,
+        forceAdvanced: options?.forceAdvanced ?? false,
+      }),
+  );
+  const stableOnDeleteChannel = useStableCallback((id: string) =>
+    void handleDeleteChannel(id),
+  );
+  const stableOnPurgeChannel = useStableCallback(
+    (channel: Pick<Channel, "id" | "name">) =>
+      setPurgeChannel({ id: channel.id, name: channel.name }),
+  );
+  const stableOnMoveChannel = useStableCallback(
+    (id: string, parentId: string | null, index: number) =>
+      void handleMoveChannel(id, parentId, index),
+  );
+  const stableOnFavoriteChannelIdsChange = useStableCallback(
+    (ids: string[]) => handleFavoriteChannelIdsChange(ids),
+  );
+  const stableOnInvite = useStableCallback(() => setInviteMode("create"));
+  const stableOnOpenMembers = useStableCallback(() => setMembersOpen(true));
+  const stableOnOpenServerSettings = useStableCallback(() =>
+    setServerSettingsOpen(true),
+  );
+  const stableOnExpand = useStableCallback(() => toggleChannelSidebar());
+  const stableOnSelectCommunityHome = useStableCallback(() => {
+    if (selectedServerId) {
+      setWhatsNewOpen(false);
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+    }
+  });
+  // `favoriteChannelIds` is memoized by hand rather than with `useMemo`: it
+  // depends on `selectedServer`, declared further down this function (after
+  // the `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
+  // early returns), so a `useMemo` call here would read it before its
+  // declaration. Declaring the REF here (which needs no dependency, so no
+  // ordering problem) and doing the actual comparison down where that value
+  // exists keeps this hook call unconditional while the memoization itself
+  // still runs after everything it needs is in scope. Its key is the joined
+  // list of ids themselves, which is exactly what the output is derived
+  // from, so there is nothing it can miss.
+  //
+  // `channelListFooter` (`sidebarFooter()`'s output) was given the same
+  // treatment once and it was wrong: that function also reads `voiceState`,
+  // `musicInComposer`, `liveAttachedHint` and more, none of which were in
+  // its cache key (`sidebarIconsOnly` alone), so the voice status bar, the
+  // music mini player and the download hint banner all went stale the
+  // moment any of THAT changed without `sidebarIconsOnly` also changing —
+  // a call ending, a track changing, a hint appearing, none of it repainted
+  // this footer. It showed up as a layout shift landing mid-interaction
+  // elsewhere on the page (a stale "Get the app" banner appearing or
+  // disappearing under a click it had no business being under), which is
+  // what `e2e/user-status-menu.spec.ts` caught. `sidebarFooter()`'s two
+  // other call sites were never touched and call it fresh every render —
+  // this one now matches them instead of trying to cache a value with this
+  // many true inputs by a key that named only one of them.
+  const favoriteChannelIdsKeyRef = useRef("");
+  const favoriteChannelIdsRef = useRef<string[]>(EMPTY_FAVORITE_CHANNEL_IDS);
+
+  /**
+   * `MemberSidebar` (the right-hand roster) is also wrapped in `memo()`, and
+   * had the exact same shape of problem: every callback prop was an inline
+   * arrow rebuilt on every render of this component, which — with a
+   * hundred-member server — meant re-rendering the whole roster on every
+   * unrelated tick. Same fix, same reasoning about closures resolving their
+   * captured bindings at call time as the `ChannelList` block above.
+   */
+  const stableOnMemberNickname = useStableCallback(
+    (userId: string, nickname: string | null) => {
+      setServerMembers((prev) =>
+        prev.map((row) => (row.id === userId ? { ...row, nickname } : row)),
+      );
+    },
+  );
+  const stableOnMention = useStableCallback((username: string) =>
+    setComposerInsert(`@${username}`),
+  );
+  const stableOnBlockUser = useStableCallback((userId: string) =>
+    void handleBlockUser(userId),
+  );
+  const stableOnUnblockUser = useStableCallback((userId: string) =>
+    void handleUnblockUser(userId),
+  );
+  const stableOnReportUser = useStableCallback((member: ServerMember) =>
+    setReportTarget({
+      kind: "user",
+      userId: member.id,
+      subjectName: member.displayName,
+      serverId: selectedServerId,
+    }),
+  );
+  const stableOnOpenMembersPanel = useStableCallback(() =>
+    setMembersOpen(true),
+  );
+  // A real `useMemo`, not the hand-rolled ref pattern above: `channels` is
+  // declared well before this point (line ~1153), so there is no ordering
+  // problem to work around.
+  const memberSidebarVoiceChannels = useMemo(
+    () =>
+      channels
+        .filter((c) => isVoiceRoomChannelType(c.type))
+        .map((c) => ({ id: c.id, name: c.name })),
+    [channels],
+  );
+
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
@@ -3641,6 +4051,17 @@ function MainAppContent({
         setBootstrapReady(true);
 
         transport.onMessage((message) => {
+          if (message.type === "watch-party-waitlist-approved") {
+            setWaitlistApprovals((current) =>
+              current.some((card) => card.serverId === message.serverId)
+                ? current
+                : [
+                    ...current,
+                    { serverId: message.serverId, serverName: message.serverName },
+                  ],
+            );
+            return;
+          }
           if (message.type === "channel-session-reminder") {
             emitChannelSessionReminderToast({
               sessionId: message.sessionId,
@@ -3778,7 +4199,7 @@ function MainAppContent({
             message.type === "presence-update" ||
             message.type === "presence-delta"
           ) {
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
           }
 
           if (
@@ -3817,7 +4238,7 @@ function MainAppContent({
               return;
             }
             permsRef.current.refresh(message.version);
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(
@@ -4553,7 +4974,15 @@ function MainAppContent({
   }, [loadConversations, syncRoute]);
 
   const loadChannels = useCallback(
-    async (serverId: string) => {
+    async (
+      serverId: string,
+      /**
+       * Pick the landing from what this server has on right now rather than
+       * from its layout: `refreshAfterJoin` passes the watch parties it
+       * fetched, so a join during a show opens the show.
+       */
+      liveParties?: readonly WatchParty[],
+    ) => {
       setChannelsLoading(true);
       try {
         const { channels: list } = await fetchChannels(serverId);
@@ -4561,11 +4990,16 @@ function MainAppContent({
         setChannels(list);
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
-        const land = pickServerLandingTarget(
-          list,
-          communityHomeOn() && server?.communityHomeEnabled === true,
-          server?.isCommunity === true,
-        );
+        const liveParty = liveParties
+          ? pickLivePartyChannel(liveParties, list)
+          : null;
+        const land = liveParty
+          ? { id: liveParty }
+          : pickServerLandingTarget(
+              list,
+              communityHomeOn() && server?.communityHomeEnabled === true,
+              server?.isCommunity === true,
+            );
         if (land) {
           await selectChannel(land.id, serverId);
         } else {
@@ -5300,7 +5734,12 @@ function MainAppContent({
     const decision = decideGoLiveMicPrompt({
       wentOut,
       requestedPartyId: partyId,
-      party: watchParties.byChannel[channelId],
+      // `current`, NOT `byChannel`: this runs after the go-live's awaits, and
+      // the closure it was called from holds the render from BEFORE that
+      // go-live's own `put`, where the party is still a draft. Read that way
+      // every immediate go-live was "party-gone" and the mic prompt never
+      // armed (production rehearsal C, 2026-09-25).
+      party: watchParties.current(channelId),
       isMuted: voice.getState().isMuted,
     });
     if (!decision.arm) {
@@ -6063,12 +6502,40 @@ function MainAppContent({
     void voice.applyScreenFrameRate(shareMaxFrameRate());
   }
 
+  /**
+   * Open a server this account just joined (or made).
+   *
+   * A JOIN DURING A SHOW OPENS THE SHOW. Every join path ends here: the
+   * community link's `?join=`, an invite link, the directory card, the
+   * wizard's typed invite. When a watch party is live in the server, the
+   * person lands on it instead of the Overview or `#general`. On 2026-09-26
+   * every newcomer who reached MoonKase's party went through the Overview
+   * first and spent a median 45 s finding it; see `lib/live-party-landing.ts`.
+   * The party list is asked for beside the server list and a failure reads
+   * as "nothing live", so this can only ever fall back to the old landing,
+   * never cost the join.
+   */
   const refreshAfterJoin = useCallback(
     async (serverId: string) => {
-      const { servers: serverList } = await fetchServers();
+      const [{ servers: serverList }, liveParties] = await Promise.all([
+        fetchServers(),
+        // Capped: the party only picks the landing, so a slow answer must
+        // never hold up a join that already succeeded.
+        isWatchPartyChannelsEnabled()
+          ? Promise.race([
+              apiFetchServerWatchParties(serverId).then(
+                (answer) => answer.parties,
+                () => [] as WatchParty[],
+              ),
+              new Promise<WatchParty[]>((resolve) =>
+                window.setTimeout(() => resolve([]), 3_000),
+              ),
+            ])
+          : Promise.resolve([] as WatchParty[]),
+      ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId);
+      await loadChannels(serverId, liveParties);
     },
     [loadChannels],
   );
@@ -6576,6 +7043,67 @@ function MainAppContent({
   }, [bootstrapReady, needsOnboarding, pendingCreate]);
 
   /**
+   * `?intent=watch-party-waitlist` (the public `/watch-party` page's button):
+   * the waitlist dialog, once the account exists and onboarding is done, on
+   * whatever server is open. Only while the deployment runs the campaign: a
+   * build that cannot turn a server on must not collect a request for one.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || needsOnboarding || !pendingWaitlist) {
+      return;
+    }
+    setPendingWaitlist(false);
+    // No cleanup cancelling this: clearing `pendingWaitlist` above re-runs
+    // the effect, and a cancel there threw away the very answer it waited on.
+    // The stash is spent only once the answer is in, so a failed read leaves
+    // it for the next load instead of losing what the person came for.
+    void loadWatchPartyWaitlist(selectedServerId)
+      .then((answer) => {
+        takeWaitlistIntent(browserStorage());
+        if (answer.campaign) {
+          setWaitlistDialogOpen(true);
+        }
+      })
+      .catch(() => {
+        // Still stashed: a reload within the hour tries again.
+      });
+  }, [bootstrapReady, needsOnboarding, pendingWaitlist, selectedServerId]);
+
+  /**
+   * "Watch party liberada!" for anybody who was offline when the operator
+   * pressed Ativar. Read once per load; the live frame covers the rest.
+   */
+  useEffect(() => {
+    if (!bootstrapReady) {
+      return;
+    }
+    let cancelled = false;
+    void fetchWatchPartyApprovals()
+      .then(({ approvals }) => {
+        if (!cancelled && approvals.length > 0) {
+          setWaitlistApprovals((current) => {
+            const known = new Set(current.map((card) => card.serverId));
+            return [
+              ...current,
+              ...approvals
+                .filter((approval) => !known.has(approval.serverId))
+                .map((approval) => ({
+                  serverId: approval.serverId,
+                  serverName: approval.serverName,
+                })),
+            ];
+          });
+        }
+      })
+      .catch(() => {
+        // A missed card is shown on the next load; not worth a banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapReady]);
+
+  /**
    * The three intentions somebody arrived with, acted on exactly once.
    *
    * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
@@ -6614,6 +7142,7 @@ function MainAppContent({
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
     const stashedCreate = takeCreateIntent(storage);
+    const stashedWaitlist = takeWaitlistIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
@@ -6621,6 +7150,13 @@ function MainAppContent({
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    const waitlistIntent =
+      waitlistIntentFromSearch(location.search) || stashedWaitlist;
+    if (waitlistIntent) {
+      setPendingWaitlist(true);
+      // Kept until the dialog opens, like the create intent above.
+      stashWaitlistIntent(storage);
+    }
     /**
      * Create community, for somebody who came to make one (a `/vem` CTA, a
      * `?import=discord` link). The import also tells the onboarding to skip
@@ -6639,11 +7175,15 @@ function MainAppContent({
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
+      waitlistIntentFromSearch(location.search) ||
       CREATE_INTENT_PARAMS.some((name) => params.has(name))
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
+      if (waitlistIntentFromSearch(location.search)) {
+        params.delete(INTENT_PARAM);
+      }
       for (const name of CREATE_INTENT_PARAMS) {
         params.delete(name);
       }
@@ -6739,9 +7279,12 @@ function MainAppContent({
        * already in is not an arrival.
        */
       if (join) {
+        setArrivedOnCommunityLink(true);
+        setCommunityJoin("pending");
         try {
           const { community } = await lookupCommunityBySlug(join);
-          const result = await joinCommunityApi(community.id);
+          const result = await joinCommunityApi(community.id, "community_address");
+          setCommunityJoin({ serverId: community.id });
           if (result.joinedNow) {
             const storage = browserStorage();
             if (!hasArrived(storage, community.id)) {
@@ -6761,6 +7304,7 @@ function MainAppContent({
           // purpose — see rule 3 in services/communities.ts — so this says one
           // thing for all of them.
           setAppError(t("handle.join.failed"));
+          setCommunityJoin("failed");
         }
       }
     })();
@@ -7111,9 +7655,17 @@ function MainAppContent({
    * gate have to agree with the dots on the wizard.
    */
   const firstRunPath = onboardingPath({
+    // A community's link is an invite in every way the first run cares
+    // about: the person already has a room. Three places again (the state
+    // after the arrival effect spent the intent, the URL, the stash). A join
+    // that FAILED gave them no room, so it gets the ordinary first run.
     invite:
       arrivedOnInviteLink ||
-      parseAppRoute(location.pathname)?.kind === "invite",
+      parseAppRoute(location.pathname)?.kind === "invite" ||
+      (communityJoin !== "failed" &&
+        (arrivedOnCommunityLink ||
+          joinIntentFromSearch(location.search) !== null ||
+          peekJoinIntent(browserStorage()) !== null)),
     // Three places, because each is the only one that knows at some moment:
     // the URL (a `/vem` CTA is a client-side navigation, so the boot-time
     // stash never saw it), the stash (a sign-in redirect dropped the query),
@@ -7163,9 +7715,11 @@ function MainAppContent({
    * join path in the app needs.
    */
   if (needsOnboarding && user) {
+    const roomJoin =
+      inviteJoin ?? (communityJoin === "failed" ? null : communityJoin);
     const joinedServer =
-      inviteJoin && typeof inviteJoin === "object"
-        ? servers.find((server) => server.id === inviteJoin.serverId)
+      roomJoin && typeof roomJoin === "object"
+        ? servers.find((server) => server.id === roomJoin.serverId)
         : undefined;
     return (
       <OnboardingFlow
@@ -7183,7 +7737,9 @@ function MainAppContent({
                     name: joinedServer.name,
                     iconUrl: joinedServer.iconUrl ?? null,
                   }
-                : "pending"
+                : inviteJoin === null && communityJoin === "failed"
+                  ? null
+                  : "pending"
         }
         // Keep an intent that is already waiting: a `?import=<code>` link
         // carries the template to pre-fill, and the door must not wipe it.
@@ -7240,6 +7796,10 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  /** The open channel is a watch party that is on air right now. */
+  const selectedPartyLive =
+    selectedChannel?.kind === "server" &&
+    watchParties.byChannel[selectedChannel.id]?.state === "live";
 
   /** True while the open server is one this account made and is alone in. */
   const ownerAloneHere =
@@ -7531,17 +8091,26 @@ function MainAppContent({
       communityHomePostToast &&
         communityHomePostToast.serverId === selectedServerId,
     ),
-    qg: qgHintWanted,
+    // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
+    // cargos and shortcuts all wait until the person is not watching a film.
+    // The phone-app card is the sharp one, being a way out of the page: 8 of
+    // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
+    // went to /android instead of the party. Holding only that one would hand
+    // the corner to the next card in line, so the whole tail yields. The
+    // update notice, a Baú post and the voice nudge are not campaigns.
+    qg: qgHintWanted && !selectedPartyLive,
     voiceClean: wantsVoiceCleanHint,
-    mobileBeta: wantsMobileBeta,
-    whatsNew: wantsWhatsNew,
+    mobileBeta: wantsMobileBeta && !selectedPartyLive,
+    whatsNew: wantsWhatsNew && !selectedPartyLive,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
+      !selectedPartyLive &&
       Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
+      !selectedPartyLive &&
       attachedFeatureHint === null,
   });
   // A DM arrival card and the bottom-right onboarding queue would collide on
@@ -8072,11 +8641,15 @@ function MainAppContent({
           />
         )}
       {renderArrivalBanner(
-        selectedChannel.kind === "server" && selectedChannel.type === "text"
-          ? "text"
-          : selectedChannel.kind === "server" && selectedChannel.type === "voice"
-            ? "voice"
-            : "other",
+        // A live party first, whatever kind of room it is running in.
+        selectedPartyLive
+          ? "party"
+          : selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? "text"
+            : selectedChannel.kind === "server" &&
+                selectedChannel.type === "voice"
+              ? "voice"
+              : "other",
         selectedChannel.kind === "server" && selectedChannel.type === "text"
           ? selectedChannel.name
           : null,
@@ -8187,7 +8760,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8504,7 +9079,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8757,17 +9334,15 @@ function MainAppContent({
         highlightMessageId={highlightMessageId}
         onHighlightHandled={clearHighlight}
         onReplyTo={setReplyTarget}
-        onToggleReaction={(messageId, emoji) =>
-          chat.toggleReaction(messageId, emoji)
-        }
-        onVotePoll={(messageId, optionId) => chat.votePoll(messageId, optionId)}
-        onClosePoll={(messageId) => chat.closePoll(messageId)}
-        onLoadOlder={() => chat.loadOlder()}
+        onToggleReaction={chat.toggleReaction}
+        onVotePoll={chat.votePoll}
+        onClosePoll={chat.closePoll}
+        onLoadOlder={chat.loadOlder}
         onLoadNewer={loadNewerHistory}
         onJumpToMessage={jumpToMessage}
         onJumpToPresent={jumpToPresent}
-        onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
-        onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        onEditMessage={chat.editMessage}
+        onDeleteMessage={chat.deleteMessage}
         // Server channels only: a conversation has no moderators, and the
         // endpoint refuses one. Offering the mode there would be a menu entry
         // whose confirm ends in a 404.
@@ -8776,29 +9351,26 @@ function MainAppContent({
             ? handleBulkDeleteSelected
             : undefined
         }
-        onPinMessage={(messageId) => chat.pinMessage(messageId)}
-        onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
-        onReportMessage={(message) =>
-          setReportTarget({
-            kind: "message",
-            messageId: message.id,
-            subjectName: message.authorName,
-          })
-        }
-        onRetryMessage={(nonce) => chat.retryMessage(nonce)}
-        onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
+        onPinMessage={chat.pinMessage}
+        onUnpinMessage={chat.unpinMessage}
+        onReportMessage={handleReportMessage}
+        onRetryMessage={chat.retryMessage}
+        onDiscardMessage={chat.discardMessage}
         showLinkEmbeds={localSettings.showLinkEmbeds}
         // --- threads --- offered only inside a server: a conversation already
-        // is the scoped side-conversation a thread would create.
+        // is the scoped side-conversation a thread would create. Both
+        // handlers are already stable `useCallback`s (see their own
+        // definitions); the ternary below only ever resolves to one of two
+        // stable values — the handler or `undefined` — so it does not
+        // reintroduce the fresh-closure-per-render problem a wrapper arrow
+        // function here would.
         onStartThread={
           selectedChannel.kind === "server" && selectedChannel.type === "text"
-            ? (message) => void handleStartThread(message)
+            ? handleStartThread
             : undefined
         }
         onOpenThread={
-          selectedChannel.kind === "server"
-            ? (thread, message) => void openThreadPanel(thread, message)
-            : undefined
+          selectedChannel.kind === "server" ? openThreadPanel : undefined
         }
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
@@ -8807,7 +9379,7 @@ function MainAppContent({
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
         editMessageId={editMessageId}
-        onEditMessageHandled={() => setEditMessageId(null)}
+        onEditMessageHandled={clearEditMessageId}
         onForward={setForwardMessage}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
@@ -8825,7 +9397,7 @@ function MainAppContent({
             collapsible
             className="shrink-0"
             channelId={selectedChannel.id}
-            audienceCount={watchAudienceCount(
+            audienceCount={feedAudienceCount(
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
@@ -8925,6 +9497,22 @@ function MainAppContent({
       </CallDockProvider>
     </div>
   ) : null;
+
+  // The second half of the hand-rolled memoization declared near the top of
+  // this function (see the comment there): plain code, not a hook, so it is
+  // fine for it to run down here — after the early returns, where
+  // `selectedServer` actually exists.
+  {
+    const favoriteChannelIdsRaw = selectedServer
+      ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
+      : EMPTY_FAVORITE_CHANNEL_IDS;
+    const favoriteChannelIdsKey = favoriteChannelIdsRaw.join(",");
+    if (favoriteChannelIdsKey !== favoriteChannelIdsKeyRef.current) {
+      favoriteChannelIdsKeyRef.current = favoriteChannelIdsKey;
+      favoriteChannelIdsRef.current = favoriteChannelIdsRaw;
+    }
+  }
+  const favoriteChannelIds = favoriteChannelIdsRef.current;
 
   return (
     // The friends snapshot, published to everything that draws a relationship:
@@ -9082,6 +9670,36 @@ function MainAppContent({
         />
       )}
 
+      {/* The waitlist: at the root, because the public page's intent opens it
+          wherever the person lands, including with no server open. */}
+      <WatchPartyWaitlistDialog
+        open={waitlistDialogOpen}
+        onClose={() => setWaitlistDialogOpen(false)}
+        servers={servers.map((server) => ({ id: server.id, name: server.name }))}
+        initialServerId={selectedServerId}
+      />
+      <WatchPartyApprovedToasts
+        cards={waitlistApprovals}
+        onOpen={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          // A full load, not a selection: the server's live-hls answer is
+          // cached for the page's lifetime and still says no.
+          void ackWatchPartyApproval(serverId)
+            .catch(() => {})
+            .finally(() => {
+              window.location.assign(`/app/server/${serverId}`);
+            });
+        }}
+        onDismiss={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          void ackWatchPartyApproval(serverId).catch(() => {});
+        }}
+      />
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -9222,9 +9840,9 @@ function MainAppContent({
           server={selectedServer ?? null}
           threadsByChannel={threadsByChannel}
           unreadThreadIds={unreadThreadIds}
-          onOpenThread={(thread) => void openThreadFromSidebar(thread)}
-          onLeaveThread={(thread) => void handleThreadMembership(thread, false)}
-          onMarkThreadRead={(thread) => void clearUnread(thread.channelId)}
+          onOpenThread={stableOnOpenThread}
+          onLeaveThread={stableOnLeaveThread}
+          onMarkThreadRead={stableOnMarkThreadRead}
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}
@@ -9247,9 +9865,9 @@ function MainAppContent({
               : undefined
           }
           mobileOpen={mobileNavOpen}
-          onMobileClose={() => setMobileNavOpen(false)}
-          onSelectChannel={(id) => void selectChannel(id)}
-          onJoinVoice={handleJoinVoiceFromList}
+          onMobileClose={stableOnMobileClose}
+          onSelectChannel={stableOnSelectChannel}
+          onJoinVoice={stableOnJoinVoice}
           liveParties={watchParties.live}
           recoveringChannelId={
             voiceState.sharePublishRecovering
@@ -9264,7 +9882,7 @@ function MainAppContent({
                 (party.viewerRole === "host" || party.viewerRole === "cohost"),
             ) ?? null
           }
-          onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
+          onWatchLiveParty={stableOnWatchLiveParty}
           canStartWatchParty={canOfferWatchPartyCreate({
             // The rollout gate, not a capability check. See
             // `canOfferWatchPartyCreate`: the bit alone is on thousands of
@@ -9275,93 +9893,56 @@ function MainAppContent({
             hlsEnabled: liveHlsConfig?.enabled ?? null,
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
-          onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
-          watchPartyHistoryChannels={watchPartyHistoryChannels}
-          onOpenWatchPartyHistory={(channelId) =>
-            setWatchPartyHistoryChannelId(channelId)
+          onCreateWatchParty={stableOnCreateWatchParty}
+          watchPartyTeaser={
+            shouldOfferWatchPartyTeaser({
+              hlsEnabled: liveHlsConfig?.enabled ?? null,
+              state: watchPartyWaitlist,
+            })
+              ? {
+                  onList: watchPartyWaitlist?.entry?.status === "waiting",
+                  onOpen: () => setWaitlistDialogOpen(true),
+                }
+              : null
           }
+          watchPartyHistoryChannels={watchPartyHistoryChannels}
+          onOpenWatchPartyHistory={stableOnOpenWatchPartyHistory}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
           screenVolumes={voiceState.screenVolumes}
           screenAudioUserIds={screenAudioUserIds}
-          canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
-          canConnectIn={(channelId) =>
-            perms.can(Permission.CONNECT, channelId)
-          }
-          canMuteIn={(channelId) =>
-            perms.can(Permission.MUTE_MEMBERS, channelId)
-          }
-          canKickUser={canKickOccupant}
-          onMoveVoiceOccupant={(userId, channelId) =>
-            void handleMoveVoiceOccupant(userId, channelId)
-          }
-          onDisconnectVoiceOccupant={(userId) =>
-            void handleDisconnectVoiceOccupant(userId)
-          }
-          onServerMuteOccupant={(userId, muted) =>
-            void handleServerMuteOccupant(userId, muted)
-          }
-          onLowerOccupantHand={(userId) =>
-            void handleLowerOccupantHand(userId)
-          }
-          onKickOccupant={(userId, name) =>
-            void handleKickOccupant(userId, name)
-          }
-          onSetPeerVolume={(userId, volume) =>
-            voice.setPeerVolume(userId, volume)
-          }
-          onSetScreenVolume={(userId, volume) =>
-            voice.setScreenVolume(userId, volume)
-          }
-          onCreateChannel={(type, isPrivate) =>
-            setChannelPrompt({ mode: "create", type, isPrivate })
-          }
-          onRenameChannel={(channel) =>
-            setChannelPrompt({ mode: "rename", channel })
-          }
-          onOpenChannelSettings={(channel, section, options) =>
-            setChannelSettings({
-              channelId: channel.id,
-              section,
-              forceAdvanced: options?.forceAdvanced ?? false,
-            })
-          }
-          onDeleteChannel={(id) => void handleDeleteChannel(id)}
-          onPurgeChannel={(channel) =>
-            setPurgeChannel({ id: channel.id, name: channel.name })
-          }
-          onMoveChannel={(id, parentId, index) =>
-            void handleMoveChannel(id, parentId, index)
-          }
-          favoriteChannelIds={
-            selectedServer
-              ? favoritesForServer(
-                  user?.preferences?.favoriteChannels,
-                  selectedServer.id,
-                )
-              : []
-          }
-          onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
-          onInvite={() => setInviteMode("create")}
-          onOpenMembers={() => setMembersOpen(true)}
-          onOpenServerSettings={() => setServerSettingsOpen(true)}
+          canMoveIn={stableCanMoveIn}
+          canConnectIn={stableCanConnectIn}
+          canMuteIn={stableCanMuteIn}
+          canKickUser={stableCanKickUser}
+          onMoveVoiceOccupant={stableOnMoveVoiceOccupant}
+          onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
+          onServerMuteOccupant={stableOnServerMuteOccupant}
+          onLowerOccupantHand={stableOnLowerOccupantHand}
+          onKickOccupant={stableOnKickOccupant}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
+          onCreateChannel={stableOnCreateChannel}
+          onRenameChannel={stableOnRenameChannel}
+          onOpenChannelSettings={stableOnOpenChannelSettings}
+          onDeleteChannel={stableOnDeleteChannel}
+          onPurgeChannel={stableOnPurgeChannel}
+          onMoveChannel={stableOnMoveChannel}
+          favoriteChannelIds={favoriteChannelIds}
+          onFavoriteChannelIdsChange={stableOnFavoriteChannelIdsChange}
+          onInvite={stableOnInvite}
+          onOpenMembers={stableOnOpenMembers}
+          onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
-          onExpand={toggleChannelSidebar}
+          onExpand={stableOnExpand}
           footer={sidebarFooter(sidebarIconsOnly)}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
-          onSelectCommunityHome={() => {
-            if (selectedServerId) {
-              setWhatsNewOpen(false);
-              markCommunityHomeRowSeen(selectedServerId);
-              setCommunityHomeRowNew(false);
-              void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
-            }
-          }}
+          onSelectCommunityHome={stableOnSelectCommunityHome}
         />
       )}
 
@@ -9729,32 +10310,17 @@ function MainAppContent({
           showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
           members={serverMembers}
-          onMemberNickname={(userId, nickname) => {
-            setServerMembers((prev) =>
-              prev.map((row) =>
-                row.id === userId ? { ...row, nickname } : row,
-              ),
-            );
-          }}
-          onMention={(username) => setComposerInsert(`@${username}`)}
-          onBlockUser={(userId) => void handleBlockUser(userId)}
-          onUnblockUser={(userId) => void handleUnblockUser(userId)}
-          onReportUser={(member) =>
-            setReportTarget({
-              kind: "user",
-              userId: member.id,
-              subjectName: member.displayName,
-              serverId: selectedServerId,
-            })
-          }
-          onOpenMembersPanel={() => setMembersOpen(true)}
+          onMemberNickname={stableOnMemberNickname}
+          onMention={stableOnMention}
+          onBlockUser={stableOnBlockUser}
+          onUnblockUser={stableOnUnblockUser}
+          onReportUser={stableOnReportUser}
+          onOpenMembersPanel={stableOnOpenMembersPanel}
           // The same context the profile card gets, so the row's menu and the
           // card cannot disagree about what this account may do to somebody.
           moderation={cardModeration}
           voiceOccupancy={voiceState.occupancy}
-          voiceChannels={channels
-            .filter((c) => isVoiceRoomChannelType(c.type))
-            .map((c) => ({ id: c.id, name: c.name }))}
+          voiceChannels={memberSidebarVoiceChannels}
           roles={serverRoles}
           friendIds={memberSidebarFriendIds}
         />

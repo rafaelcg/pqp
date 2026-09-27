@@ -178,6 +178,7 @@ interface MetricsBody {
     pendingFriendRequests: number;
     attachments: { total: number; last24h: number };
     invites: { created24h: number; uses: number; joinsByRef7d: Record<string, number> };
+    serverJoins: { bySource7d: Record<string, number> };
     push: { web: number; apns: number; fcm: number };
     pushDelivery: Record<
       "web" | "apns" | "fcm",
@@ -414,6 +415,7 @@ describeDb("GET /api/admin/metrics", () => {
       pendingFriendRequests: 0,
       attachments: { total: 0, last24h: 0 },
       invites: { created24h: 0, uses: 0, joinsByRef7d: {} },
+      serverJoins: { bySource7d: {} },
       push: { web: 0, apns: 0, fcm: 0 },
       pushDelivery: {
         web: { sent: 0, failed: 0, pruned: 0 },
@@ -518,6 +520,47 @@ describeDb("GET /api/admin/metrics", () => {
     // Every tagged join in 7 days, largest first; the webhook's row counts
     // here because the tag table is about links, not people.
     expect(body.product.invites.joinsByRef7d).toEqual({ discord: 3, convite: 2 });
+  });
+
+  it("counts server joins by door in the last 7 days", async () => {
+    const pool = getPool();
+    const created = await pool.query<{ id: string }>(
+      `INSERT INTO servers (name, owner_id) VALUES ('Portas', $1) RETURNING id`,
+      [ana.id],
+    );
+    const serverId = created.rows[0]!.id;
+    const people = await Promise.all(
+      ["fil", "gil", "hel", "ivo", "joy"].map((name) =>
+        upsertUser({ clerkId: `clerk-${name}`, displayName: name, avatarUrl: null }),
+      ),
+    );
+    const [fil, gil, hel, ivo, joy] = people.map((one) => one as Actor) as [
+      Actor,
+      Actor,
+      Actor,
+      Actor,
+      Actor,
+    ];
+    // The owner's row (NULL) is not a join. One join is 9 days old, outside
+    // the 7-day window, and must not be counted.
+    await pool.query(
+      `INSERT INTO server_members (server_id, user_id, role, join_source, joined_at) VALUES
+         ($1, $2, 'owner', NULL, now()),
+         ($1, $3, 'member', 'invite', now()),
+         ($1, $4, 'member', 'community_address', now()),
+         ($1, $5, 'member', 'community_directory', now()),
+         ($1, $6, 'member', 'community_directory', now()),
+         ($1, $7, 'member', 'invite', now() - interval '9 days')`,
+      [serverId, ana.id, fil.id, gil.id, hel.id, ivo.id, joy.id],
+    );
+
+    const { status, body } = await call<MetricsBody>(operator, "/api/admin/metrics");
+    expect(status).toBe(200);
+    expect(body.product.serverJoins.bySource7d).toEqual({
+      community_directory: 2,
+      invite: 1,
+      community_address: 1,
+    });
   });
 
   it("names the room's transport and open time in the rooms table, from the registry pin", async () => {

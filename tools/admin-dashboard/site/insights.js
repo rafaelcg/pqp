@@ -419,6 +419,88 @@
     return { tone: "on", label: "ligado", why: "está na variável" };
   }
 
+  /**
+   * The audience-size bucket a waitlist request picked, in the operator's
+   * words. Five buckets, matching the survey the requester filled in; an
+   * unrecognized or missing bucket (somebody skipped the question, or an API
+   * older than this field) renders as "" rather than a guess, and the caller
+   * decides what an empty string means in its own layout.
+   */
+  var AUDIENCE_BUCKET_LABELS = {
+    "under-20": "até 20",
+    "20-50": "20 a 50",
+    "50-150": "50 a 150",
+    "150-500": "150 a 500",
+    "500-plus": "mais de 500"
+  };
+  var AUDIENCE_BUCKET_ORDER = ["under-20", "20-50", "50-150", "150-500", "500-plus"];
+
+  function audienceBucketLabel(bucket) {
+    return AUDIENCE_BUCKET_LABELS[bucket] || "";
+  }
+
+  /**
+   * One server's waitlist as a single compact line, e.g. "50 a 150 ×2 · 20 a
+   * 50 ×1". Biggest group first so the line answers "who is asking" at a
+   * glance; ties break by the survey's own order, so the same counts always
+   * print in the same order rather than depending on key iteration. A bucket
+   * with a zero count is left out, and a missing or all-zero map is "": the
+   * caller says "sem resposta" or similar, this function never invents one.
+   */
+  function waitlistBucketHistogram(buckets) {
+    if (!buckets) return "";
+    var entries = AUDIENCE_BUCKET_ORDER
+      .map(function (key) { return { key: key, count: buckets[key] || 0 }; })
+      .filter(function (e) { return e.count > 0; });
+    entries.sort(function (a, b) {
+      if (b.count !== a.count) return b.count - a.count;
+      return AUDIENCE_BUCKET_ORDER.indexOf(a.key) - AUDIENCE_BUCKET_ORDER.indexOf(b.key);
+    });
+    return entries.map(function (e) {
+      return audienceBucketLabel(e.key) + " ×" + e.count;
+    }).join(" · ");
+  }
+
+  /** The three states a waitlist request or server can be in, in Portuguese. */
+  var WAITLIST_STATUS_LABELS = {
+    waiting: "esperando",
+    approved: "liberado",
+    declined: "recusado"
+  };
+  function waitlistStatusLabel(status) {
+    return WAITLIST_STATUS_LABELS[status] || String(status == null ? "" : status);
+  }
+
+  /**
+   * Why a server's LOW LATENCY switch is on or off, in the operator's words.
+   * Same shape and the same four sources as `liveHlsState` above (see its
+   * comment for why each exists): master-off / server / allowlist / open.
+   * A separate function rather than a shared one because the two switches
+   * read different fields on the row and can disagree with each other (watch
+   * party on, low latency still following an allowlist that does not name
+   * this server, for instance), and collapsing them into one function would
+   * hide exactly the disagreement an operator needs to see.
+   */
+  function liveHlsLlState(row) {
+    var source = row && row.liveHlsLlSource;
+    if (!row || !row.liveHlsLlEffective) {
+      if (source === "master-off") {
+        return { tone: "off", label: "sem baixa latência", why: "watch party desligado ou sem suporte" };
+      }
+      if (source === "server") {
+        return { tone: "off", label: "desligada", why: "decisão desta página" };
+      }
+      return { tone: "off", label: "desligada", why: "não está na variável" };
+    }
+    if (source === "server") {
+      return { tone: "on", label: "ligada", why: "decisão desta página" };
+    }
+    if (source === "open") {
+      return { tone: "on", label: "ligada", why: "sem allowlist: todo servidor" };
+    }
+    return { tone: "on", label: "ligada", why: "está na variável" };
+  }
+
   /** The three, in incident order, always three, always in these slots. */
   function buildInsights(input) {
     return [
@@ -437,6 +519,10 @@
     poolInsight: poolInsight,
     voiceInsight: voiceInsight,
     buildInsights: buildInsights,
-    liveHlsState: liveHlsState
+    liveHlsState: liveHlsState,
+    liveHlsLlState: liveHlsLlState,
+    audienceBucketLabel: audienceBucketLabel,
+    waitlistBucketHistogram: waitlistBucketHistogram,
+    waitlistStatusLabel: waitlistStatusLabel
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

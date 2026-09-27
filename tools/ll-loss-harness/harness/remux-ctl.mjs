@@ -9,6 +9,8 @@
 //   node remux-ctl.mjs start [sessionId]   POST /sessions, prints SESSION <id>
 //   node remux-ctl.mjs stop <sessionId>    DELETE /sessions/:id
 //   node remux-ctl.mjs list                GET /sessions
+//   node remux-ctl.mjs rebind <sessionId> <identity>
+//                                           POST /sessions/:id/rebind
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { loadHarnessEnv, assertLocalUrl } from "./env.mjs";
 
@@ -39,8 +41,16 @@ async function call(method, path, body) {
   return { status: r.status, text };
 }
 
-export async function startSession({ sessionId = randomUUID(), room, channelId = randomUUID(), keyframePolicy = "natural" } = {}) {
+export async function startSession({
+  sessionId = randomUUID(),
+  room,
+  channelId = randomUUID(),
+  keyframePolicy = "natural",
+  presenterIdentity = process.env.PRESENTER || "ramp-presenter",
+} = {}) {
   const { status, text } = await call("POST", "/sessions", {
+    // The publisher's identity, as pqp-api names the presenter's peer id.
+    presenterIdentity,
     sessionId,
     room,
     channelId,
@@ -61,6 +71,12 @@ export async function stopSession(sessionId) {
   return { status };
 }
 
+export async function rebindSession(sessionId, presenterIdentity) {
+  const { status, text } = await call("POST", `/sessions/${sessionId}/rebind`, { presenterIdentity });
+  if (status !== 200) throw new Error(`rebind session: ${status} ${text}`);
+  return JSON.parse(text);
+}
+
 export async function listSessions() {
   const { status, text } = await call("GET", "/sessions");
   if (status !== 200) throw new Error(`list sessions: ${status} ${text}`);
@@ -77,10 +93,14 @@ async function main() {
     if (!arg) throw new Error("usage: remux-ctl.mjs stop <sessionId>");
     const out = await stopSession(arg);
     console.log("STOPPED", out.status);
+  } else if (cmd === "rebind") {
+    const identity = process.argv[4];
+    if (!arg || !identity) throw new Error("usage: remux-ctl.mjs rebind <sessionId> <identity>");
+    console.log("REBOUND", JSON.stringify(await rebindSession(arg, identity)));
   } else if (cmd === "list") {
     console.log(JSON.stringify(await listSessions(), null, 2));
   } else {
-    console.error("usage: remux-ctl.mjs start|stop|list [arg]");
+    console.error("usage: remux-ctl.mjs start|stop|list|rebind [arg]");
     process.exit(2);
   }
 }
