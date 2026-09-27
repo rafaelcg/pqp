@@ -9478,18 +9478,26 @@ function operatorFeedbackQuery(params: URLSearchParams) {
   };
 }
 
+// 18 digits, not 19: a 19-digit string can overflow `::bigint` and turn a
+// bad id into a 500 instead of a 400.
 const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
-  id: z.string().regex(/^[0-9]{1,19}$/),
+  id: z.string().regex(/^[0-9]{1,18}$/),
 });
 
-/** Confirm or close from the dashboard. Same transaction and badge rule. */
+/**
+ * Confirm or close from the dashboard. Same transaction and badge rule. The
+ * answer is deliberately narrow: `resolveFeedback` returns the author's
+ * account id, and this route is on the machine token, which never carries one.
+ */
 async function operatorResolveFeedback(req: IncomingMessage) {
   const body = operatorResolveFeedbackSchema.parse(await readJsonBody(req));
   const resolved = await resolveFeedback(body.id, body.status);
   if (!resolved) {
     throw new NotFound("Feedback not found");
   }
-  return { feedback: resolved };
+  return {
+    feedback: { id: resolved.id, kind: resolved.kind, status: resolved.status },
+  };
 }
 
 router.get(ADMIN_FEEDBACK_PATH, async ({ url, user }) => {

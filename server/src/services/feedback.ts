@@ -213,7 +213,8 @@ export async function listOperatorFeedback(options: {
     params.push(options.kind);
     clauses.push(`f.kind = $${params.length}`);
   }
-  if (options.before && /^[0-9]{1,19}$/.test(options.before)) {
+  // 18 digits so a hostile cursor cannot overflow `::bigint` into a 500.
+  if (options.before && /^[0-9]{1,18}$/.test(options.before)) {
     params.push(options.before);
     clauses.push(`f.id < $${params.length}::bigint`);
   }

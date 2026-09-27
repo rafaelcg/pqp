@@ -2880,6 +2880,10 @@ CREATE INDEX IF NOT EXISTS idx_feedback_status_id
 -- dashboard only.
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS context JSONB;
 
+-- The dashboard counts each author's items per row it shows, and an account
+-- deletion nulls this column; both want it indexed.
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback (user_id);
+
 -- Earned marks, keyed by a stable badge slug ('caca-bugs', 'turma-1000').
 -- Deliberately generic — the next achievement is one INSERT away — and
 -- deliberately NOT the community-membership "badges" on the public profile,

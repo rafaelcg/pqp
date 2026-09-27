@@ -4592,7 +4592,7 @@
     confirmed: { label: "confirmado", cls: "badge bad" },
     closed: { label: "fechado", cls: "badge ok" }
   };
-  var fbq = { status: "open", kind: "", items: [], next: null, asked: false, busy: false, seq: 0 };
+  var fbq = { status: "open", kind: "", items: [], next: null, asked: false, busy: false, seq: 0, loading: false };
 
   function fbMsg(text, cls) {
     var e = $("fbMsg");
@@ -4716,7 +4716,12 @@
   }
 
   function fbLoad(append) {
+    // "carregar mais" while a filter change is still loading would append the
+    // new filter's page onto the old filter's list with the old cursor.
+    if (append && fbq.loading) return Promise.resolve();
+    if (!append) { fbq.items = []; fbq.next = null; }
     var seq = ++fbq.seq;
+    fbq.loading = true;
     var q = "status=" + encodeURIComponent(fbq.status) + "&limit=25" +
       (fbq.kind ? "&kind=" + encodeURIComponent(fbq.kind) : "") +
       (append && fbq.next ? "&before=" + encodeURIComponent(fbq.next) : "");
@@ -4724,6 +4729,7 @@
     return fetchJson("/operator/feedback?" + q).then(function (r) {
       // A filter changed while this was in flight: its answer is stale.
       if (seq !== fbq.seq) return;
+      fbq.loading = false;
       if (!r || !Array.isArray(r.items)) throw new Error("payload inesperado");
       sectionRestore("secFeedback");
       fbq.items = append ? fbq.items.concat(r.items) : r.items;
@@ -4733,6 +4739,7 @@
       fbRender();
     }).catch(function (e) {
       if (seq !== fbq.seq) return;
+      fbq.loading = false;
       var reason = e && e.message ? e.message : String(e);
       if (reason.indexOf("404") !== -1 || reason.indexOf("401") !== -1) {
         setText("fbNote", "esta api ainda não tem a fila completa");

@@ -48,7 +48,10 @@ export type FeedbackContext = z.infer<typeof feedbackContextSchema>;
 
 export const createFeedbackSchema = z.object({
   kind: z.enum(FEEDBACK_KINDS),
-  context: feedbackContextSchema.optional(),
+  // A context this build cannot read (a future field, a transport it does not
+  // know) is dropped, never a reason to refuse the feedback itself: the person
+  // reporting a bug must not get a "sending failed" because of the metadata.
+  context: feedbackContextSchema.optional().catch(undefined),
   body: z
     .string()
     .trim()

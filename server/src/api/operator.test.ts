@@ -906,6 +906,8 @@ describeDb("the operator's two levers", () => {
       );
       expect(confirmed.status).toBe(200);
       expect(confirmed.body.feedback.status).toBe("confirmed");
+      // The machine token never carries an account id, on writes either.
+      expect(JSON.stringify(confirmed.body)).not.toContain(ana.id);
       const badge = await getPool().query(
         `SELECT 1 FROM user_badges WHERE user_id = $1 AND badge = 'caca-bugs'`,
         [ana.id],
@@ -922,6 +924,27 @@ describeDb("the operator's two levers", () => {
         status: "closed",
       });
       expect(junk.status).toBe(400);
+      const overflow = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "9999999999999999999",
+        status: "closed",
+      });
+      expect(overflow.status).toBe(400);
+      const cursor = await asMachine("GET", "/api/admin/feedback?before=9999999999999999999");
+      expect(cursor.status).toBe(200);
+    });
+
+    it("saves the feedback when the context is unreadable, and drops only the context", async () => {
+      const sent = await asUser(ana, "POST", "/api/feedback", {
+        kind: "bug",
+        body: "contexto de um build futuro",
+        context: { platform: "web", voice: { inCall: true, transport: "quantum" } },
+      });
+      expect(sent.status).toBe(201);
+      const page = await asMachine<{ items: { context: Record<string, unknown> | null }[] }>(
+        "GET",
+        "/api/admin/feedback",
+      );
+      expect(page.body.items[0]!.context).toEqual({ userAgent: expect.any(String) });
     });
 
     it("is 404 for an ordinary account and for a wrong token", async () => {
