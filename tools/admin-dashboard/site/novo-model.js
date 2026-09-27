@@ -384,11 +384,43 @@
     return { rows: rows, total: total };
   }
 
+  /**
+   * What an operator should be watching right now: every watch party with a
+   * live audience, and every voice room at `min` people or more. A watch
+   * party's stage (the voice room of the same channel) and its audience (HLS
+   * viewers) are joined by server and channel name, because the metrics
+   * payload names rooms and never carries ids.
+   */
+  var BIG_ROOM = 20;
+  function liveNow(m, min) {
+    min = min || BIG_ROOM;
+    var rooms = ((m && m.voice) || {}).rooms || [];
+    var parties = (((m && m.liveHls) || {}).viewers || {}).live || [];
+    var key = function (server, channel) { return (server || "") + "\u0000" + (channel || ""); };
+    var byKey = {};
+    var all = [];
+    parties.forEach(function (p) {
+      var e = { kind: "party", channel: p.channel, server: p.server, inCall: 0, audience: num(p.liveViewers), peak: p.peakViewers != null ? num(p.peakViewers) : null,
+        since: p.startedAt ? new Date(p.startedAt).toISOString() : null, sharing: 0, transport: null };
+      byKey[key(p.server, p.channel)] = e; all.push(e);
+    });
+    rooms.forEach(function (r) {
+      var stage = (r.server || r.channel) ? byKey[key(r.server, r.channel)] : null;
+      if (stage) { stage.inCall = num(r.participants); stage.sharing = num(r.sharingScreen); stage.transport = r.transport || null; return; }
+      all.push({ kind: "voice", channel: r.channel, server: r.server, inCall: num(r.participants), audience: 0, peak: null, since: r.openedAt || null, sharing: num(r.sharingScreen), transport: r.transport || null });
+    });
+    all.forEach(function (e) { e.total = e.inCall + e.audience; });
+    all.sort(function (a, b) { return b.total - a.total; });
+    var watch = all.filter(function (e) { return e.kind === "party" ? e.audience > 0 || e.inCall > 0 : e.total >= min; });
+    var largest = all.filter(function (e) { return e.kind === "voice"; })[0] || null;
+    return { min: min, rows: watch, largest: largest };
+  }
+
   var api = {
     fmt: fmt, dec: dec, pct: pct, fmtPct: fmtPct, deltaLabel: deltaLabel, shortDay: shortDay,
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
     attention: attention, systemStatus: systemStatus, groupFeedback: groupFeedback, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
-    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution
+    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow
   };
   root.PQPNovo = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

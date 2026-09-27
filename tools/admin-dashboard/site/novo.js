@@ -404,7 +404,9 @@
         if (evs.length) S.feed = evs.map(function (e) { e.fresh = true; return e; }).concat(S.feed.map(function (e) { e.fresh = false; return e; })).slice(0, 8);
       }
       S.prevMetrics = S.metrics; S.metrics = d;
-      $("readAt").textContent = "lido " + stamp(d.generatedAt || at) + " · relê a cada 30 s";
+      var readAt = new Date(d.generatedAt || at);
+      $("readAt").textContent = "lido às " + (function () { try { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(readAt); } catch { return ""; } })();
+      $("readAt").title = "lido " + stamp(readAt.toISOString()) + " · relê a cada 30 s";
     });
     var healthReq = fetchJson("/health").then(function (d) { S.health = d; }).catch(function () { /* the card says so */ });
     if (!S.occupancy || Date.now() - S.occupancyAt > OCC_REFRESH_MS) {
@@ -497,12 +499,22 @@
     var voice = m.voice || {}, msgs = m.messages || {};
     var d = M.deltaLabel(msgs.last24h, msgs.previous24h);
     var hl = $("hHeadline"); clear(hl);
+    // A watch party's audience watches the stream and is not in the call, so
+    // it gets its own clause instead of vanishing from the sentence.
+    var liveParties = M.liveNow(m).rows.filter(function (r) { return r.kind === "party"; });
+    var parties = liveParties.length;
+    var watching = liveParties.reduce(function (n, r) { return n + r.audience; }, 0);
     var msgPart = fmt(msgs.last24h) + (msgs.last24h === 1 ? "\u00a0mensagem" : "\u00a0mensagens") + " em 24\u00a0h" + (d.text !== "estável" && d.text !== "novo" ? ", " + d.text + " contra o dia anterior." : ".");
     if (voice.participants) {
       hl.appendChild(h("em", { text: fmt(voice.participants) + (voice.participants === 1 ? "\u00a0pessoa" : "\u00a0pessoas") }));
-      hl.appendChild(document.createTextNode(" em chamada agora, em " + fmt(voice.activeRooms) + (voice.activeRooms === 1 ? "\u00a0sala" : "\u00a0salas") + ". " + msgPart));
+      hl.appendChild(document.createTextNode(" em chamada agora, em " + fmt(voice.activeRooms) + (voice.activeRooms === 1 ? "\u00a0sala" : "\u00a0salas") + (watching ? ", e " : ". ")));
+      if (watching) {
+        hl.appendChild(h("em", { text: fmt(watching) + "\u00a0assistindo" }));
+        hl.appendChild(document.createTextNode(" " + (parties === 1 ? "uma watch\u00a0party" : fmt(parties) + " watch\u00a0parties") + ". "));
+      }
+      hl.appendChild(document.createTextNode(msgPart));
     } else {
-      hl.appendChild(document.createTextNode("Ninguém em chamada agora. "));
+      hl.appendChild(document.createTextNode(watching ? "Ninguém em chamada, mas " + fmt(watching) + " assistindo " + (parties === 1 ? "uma watch\u00a0party" : fmt(parties) + " watch\u00a0parties") + ". " : "Ninguém em chamada agora. "));
       hl.appendChild(h("em", { text: msgPart.charAt(0).toUpperCase() + msgPart.slice(1) }));
     }
     var pressing = attn.filter(function (a) { return a.tone === "bad" || a.tone === "warn"; });
@@ -510,7 +522,8 @@
       ? (pressing.length === 1 ? "Uma coisa pede atenção: " : pressing.length + " coisas pedem atenção: ") + pressing.slice(0, 3).map(function (a) { return a.title.charAt(0).toLowerCase() + a.title.slice(1); }).join("; ") + "."
       : "Nada pede atenção agora. O sistema, as filas e as chamadas estão dentro do normal.";
 
-    renderKpis($("hKpis"), M.hojeKpis(m, S.occupancy, S.activity && !S.activity._err ? S.activity : null), "hk-");
+    renderLive(m);
+    renderKpis($("hKpis"), M.hojeKpis(m, S.occupancy, S.activity), "hk-");
 
     var at = clear($("hAttn"));
     var anim = firstTime("attn");
@@ -550,6 +563,37 @@
     }
     renderHeat();
     hojeDetails(m);
+  }
+
+  function renderLive(m) {
+    var live = M.liveNow(m);
+    var card = $("hLive"), rowsHost = clear($("hLiveRows"));
+    var on = live.rows.length > 0;
+    var parties = live.rows.filter(function (r) { return r.kind === "party"; }).length;
+    card.classList.toggle("on", on);
+    card.classList.toggle("quiet", !on);
+    $("hLiveDot").className = "dot" + (on ? " live" : "");
+    $("hLiveDot").style.color = on ? "var(--accent)" : "var(--faint)";
+    $("hLiveTitle").textContent = on
+      ? "ao vivo agora · " + [parties ? parties + (parties === 1 ? " watch party" : " watch parties") : null, live.rows.length - parties ? (live.rows.length - parties) + (live.rows.length - parties === 1 ? " sala" : " salas") + " com " + live.min + "+ pessoas" : null].filter(Boolean).join(" e ")
+      : "ao vivo agora · nenhuma watch party e nenhuma sala com " + live.min + "+ pessoas";
+    $("hLiveAside").textContent = on ? "relê a cada 30 s" : live.largest ? "a maior sala tem " + fmt(live.largest.total) + (live.largest.total === 1 ? " pessoa" : " pessoas") : "";
+    live.rows.forEach(function (r) {
+      var party = r.kind === "party";
+      var who = party
+        ? [r.inCall ? fmt(r.inCall) + " na chamada" : null, fmt(r.audience) + " assistindo", r.peak ? "pico " + fmt(r.peak) : null].filter(Boolean).join(" · ")
+        : "na chamada";
+      rowsHost.appendChild(h("div", { class: "live-row" }, [
+        h("span", { class: "badge kind " + (party ? "accent" : "flat"), text: party ? "watch party" : "sala de voz" }),
+        h("span", { class: "where" }, [h("b", { text: r.channel ? "#\u00a0" + r.channel : "conversa direta" }), h("span", { text: r.server || "sem servidor" })]),
+        h("span", { class: "people" }, [h("span", { class: "n num", text: fmt(r.total) }), h("span", { text: who })]),
+        h("span", { class: "meta" }, [
+          r.since ? h("span", { text: "no ar " + ago(r.since) }) : null,
+          r.sharing ? h("span", { text: r.sharing === 1 ? "compartilhando tela" : fmt(r.sharing) + " compartilhando tela" }) : null,
+          r.transport ? h("span", { text: r.transport === "livekit" ? "servidor de mídia" : "ponto a ponto" }) : null
+        ])
+      ]));
+    });
   }
 
   function renderHeat() {

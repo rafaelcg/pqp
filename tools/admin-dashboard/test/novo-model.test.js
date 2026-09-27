@@ -216,3 +216,30 @@ test("a failed activity read says so instead of loading forever", () => {
   assert.equal(M.activityHeadline(failed).badge.text, "leitura falhou");
   assert.equal(M.costPerActive(failed).badge.text, "leitura falhou");
 });
+
+test("live now lists every watch party with an audience and voice rooms of 20 or more", () => {
+  const m = metrics({
+    voice: { rooms: [
+      { server: "Cinemoon", channel: "sessão", participants: 4, sharingScreen: 1, transport: "livekit", openedAt: null },
+      { server: "Os Crias", channel: "geral", participants: 23, sharingScreen: 0, transport: "livekit", openedAt: "2026-09-27T20:00:00Z" },
+      { server: "Resenha", channel: "papo", participants: 19, sharingScreen: 0, transport: "livekit", openedAt: null }
+    ] },
+    liveHls: { viewers: { live: [
+      { server: "Cinemoon", channel: "sessão", startedAt: Date.parse("2026-09-27T19:30:00Z"), liveViewers: 140, peakViewers: 180, uniqueViewers: 300 },
+      { server: "Resenha", channel: "cinema", startedAt: 1, liveViewers: 0, peakViewers: 3, uniqueViewers: 3 }
+    ] } }
+  });
+  const live = M.liveNow(m);
+  assert.deepEqual(live.rows.map((r) => r.kind + ":" + r.channel), ["party:sessão", "voice:geral"]);
+  assert.equal(live.rows[0].inCall, 4);
+  assert.equal(live.rows[0].audience, 140);
+  assert.equal(live.rows[0].total, 144);
+  assert.equal(live.rows[0].sharing, 1);
+  assert.equal(live.largest.channel, "geral");
+});
+
+test("live now is empty, and names the biggest room, when nothing is big", () => {
+  const live = M.liveNow(metrics({ voice: { rooms: [{ server: "Resenha", channel: "papo", participants: 6 }] }, liveHls: { viewers: { live: null } } }));
+  assert.equal(live.rows.length, 0);
+  assert.equal(live.largest.total, 6);
+});
