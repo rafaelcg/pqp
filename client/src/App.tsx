@@ -1563,6 +1563,46 @@ function MainAppContent({
    * both the sidebar and the transcript pips update from the same map.
    */
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
+  /**
+   * A burst of presence frames — a busy watch party's audience joining and
+   * leaving the channel — used to bump `memberRosterNudge` once PER FRAME,
+   * and every bump is a `setState` that re-renders this entire component.
+   * `useMemberRosterRefresh` already debounces the read the nudge triggers,
+   * but that debounce runs downstream of the re-render, not in front of it:
+   * a hundred presence frames in a few seconds was a hundred full renders of
+   * the whole app — sidebar, member list, the open channel's transcript —
+   * before even one of them did anything. This coalesces same-window bumps
+   * into one, leading-edge immediately and then at most once per
+   * `PRESENCE_NUDGE_COALESCE_MS`, so a burst costs one render instead of
+   * one per frame while a lone frame still lands right away.
+   */
+  const presenceNudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const presenceNudgePendingRef = useRef(false);
+  const PRESENCE_NUDGE_COALESCE_MS = 250;
+  const bumpMemberRosterNudge = useCallback(() => {
+    if (presenceNudgeTimerRef.current !== null) {
+      presenceNudgePendingRef.current = true;
+      return;
+    }
+    setMemberRosterNudge((n) => n + 1);
+    presenceNudgeTimerRef.current = setTimeout(() => {
+      presenceNudgeTimerRef.current = null;
+      if (presenceNudgePendingRef.current) {
+        presenceNudgePendingRef.current = false;
+        setMemberRosterNudge((n) => n + 1);
+      }
+    }, PRESENCE_NUDGE_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (presenceNudgeTimerRef.current !== null) {
+        clearTimeout(presenceNudgeTimerRef.current);
+      }
+    },
+    [],
+  );
   // Bumped on `community-home-update` for the OPEN server only — Baú refetches
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
@@ -3834,7 +3874,7 @@ function MainAppContent({
             message.type === "presence-update" ||
             message.type === "presence-delta"
           ) {
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
           }
 
           if (
@@ -3873,7 +3913,7 @@ function MainAppContent({
               return;
             }
             permsRef.current.refresh(message.version);
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(

@@ -920,6 +920,46 @@ describe("typing indicators", () => {
     } as never);
     expect(chat.getTypingUsers()).toEqual([]);
   });
+
+  // Regression for the busy-watch-party freeze: `getTypingUsers()` is read on
+  // every render of whatever displays it, which in a live channel can be
+  // dozens of times a second. Rebuilding the array every call hands the
+  // caller a new reference each time even when nobody's typing state moved,
+  // which defeats a `memo()` boundary downstream (see message-list.tsx's
+  // `MessageList`). It must return the SAME array when the active typers are
+  // unchanged, and a genuinely new array only when they differ.
+  it("returns the same array reference across calls when typers have not changed", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    const second = chat.getTypingUsers();
+    expect(second).toBe(first);
+
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u2",
+      displayName: "Beto",
+    } as never);
+    const third = chat.getTypingUsers();
+    expect(third).not.toBe(first);
+    expect(third).toEqual([
+      { userId: "u1", displayName: "Ana" },
+      { userId: "u2", displayName: "Beto" },
+    ]);
+
+    vi.advanceTimersByTime(6_000);
+    const fourth = chat.getTypingUsers();
+    expect(fourth).toEqual([]);
+    expect(fourth).not.toBe(third);
+    // Empty stays stable too, once settled.
+    expect(chat.getTypingUsers()).toBe(fourth);
+  });
 });
 
 describe("history pagination", () => {
