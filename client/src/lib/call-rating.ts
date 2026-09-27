@@ -1,4 +1,4 @@
-import type { CallTransport } from "@pqp/shared";
+import type { CallTransport, MediaQualitySummary } from "@pqp/shared";
 
 /**
  * When to ask how a call went, as pure functions.
@@ -29,6 +29,17 @@ export interface RatableCall {
   transport: CallTransport;
   hadScreenShare: boolean;
   channelId: string | null;
+  /**
+   * What the media actually did, sampled while the call was live and frozen
+   * here at the end -- same reasoning as every other field on this type, and
+   * why it is not read off `sampleVoiceStats()` at this point: the
+   * connections are already gone. Attached by `useCallRating`, which is the
+   * caller with access to the running accumulator; `finishCall` itself knows
+   * nothing about media quality and leaves this undefined. Undefined (not
+   * null) when the caller has nothing to attach, so a test exercising only
+   * the timing rules never has to fake a quality reading.
+   */
+  mediaQuality?: MediaQualitySummary;
 }
 
 /** What is accumulated while a call runs, because none of it survives the end. */

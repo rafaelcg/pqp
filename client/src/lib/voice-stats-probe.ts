@@ -112,6 +112,14 @@ export interface VideoReceiverSample {
   decoder: string | null;
   /** Times the picture froze, which is the receiver's own quality complaint. */
   freezeCount: number | null;
+  /** Total seconds spent frozen, lifetime. Names follow the spec field so a
+   *  call-rating summary reading this alongside a raw `getStats()` dump never
+   *  has to translate between the two. */
+  totalFreezesDuration: number | null;
+  /** Frames the jitter buffer had but never rendered. Distinct from a freeze:
+   *  a dropped frame can pass unnoticed, a freeze is the picture visibly
+   *  stopping. Both are worth keeping because they answer different reports. */
+  framesDropped: number | null;
   packetsLost: number | null;
   /**
    * True when the transport itself vouches that this track is flowing.
@@ -364,6 +372,8 @@ export function summariseStats(
       framesDecoded: num(stat.framesDecoded),
       decoder: str(stat.decoderImplementation),
       freezeCount: num(stat.freezeCount),
+      totalFreezesDuration: num(stat.totalFreezesDuration),
+      framesDropped: num(stat.framesDropped),
       packetsLost: num(stat.packetsLost),
     });
   }

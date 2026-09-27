@@ -55,6 +55,7 @@ export function CallRatingPrompt({
           transport: call.transport,
           hadScreenShare: call.hadScreenShare,
           channelId: call.channelId ?? undefined,
+          mediaQuality: call.mediaQuality,
         }),
       });
     } catch {

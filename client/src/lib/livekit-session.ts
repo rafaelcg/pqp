@@ -100,6 +100,9 @@ interface ReceiverStatsLike {
   frameHeight?: number;
   decoderImplementation?: string;
   packetsLost?: number;
+  freezeCount?: number;
+  totalFreezesDuration?: number;
+  framesDropped?: number;
 }
 interface SenderStatsLike {
   timestamp: number;
@@ -1027,7 +1030,13 @@ export async function connectLiveKit({
           kbps: measureKbps(key, stats?.bytesReceived ?? null, timestamp),
           framesDecoded,
           decoder: stats?.decoderImplementation ?? null,
-          freezeCount: null,
+          // `livekit-client`'s `getReceiverStats()` wraps the same
+          // `RTCInboundRtpStreamStats` the mesh path reads off raw
+          // `getStats()`, so these are read straight through rather than
+          // hardcoded null the way `freezeCount` used to be here.
+          freezeCount: stats?.freezeCount ?? null,
+          totalFreezesDuration: stats?.totalFreezesDuration ?? null,
+          framesDropped: stats?.framesDropped ?? null,
           packetsLost: stats?.packetsLost ?? null,
           attached: true,
         });

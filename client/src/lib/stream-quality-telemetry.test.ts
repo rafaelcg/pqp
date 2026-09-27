@@ -38,6 +38,8 @@ const baseReceiver: VideoReceiverSample = {
   framesDecoded: 200,
   decoder: "libvpx",
   freezeCount: 0,
+  totalFreezesDuration: 0,
+  framesDropped: 0,
   packetsLost: 0,
 };
 

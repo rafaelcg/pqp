@@ -117,6 +117,44 @@ describeDb("call ratings", () => {
     expect(summary.recentNotes).toHaveLength(1);
   });
 
+  it("stores mediaQuality and returns it on the note it rides beside", async () => {
+    // The dashboard only ever sees media quality next to a note, because a
+    // note only exists on a rating of 3 or less -- see `callRatingSummary`.
+    const user = await rater("clerk-f");
+    const mediaQuality = {
+      outboundScreenShare: {
+        frameRateMedian: 18,
+        frameRateP10: 6,
+        frameHeightMedian: 720,
+        frameHeightP10: 360,
+        bandwidthLimitedSeconds: 42,
+        cpuLimitedSeconds: 0,
+      },
+      inboundScreenShare: null,
+      packetLossPercent: 2.5,
+      rttMsMedian: 80,
+      relayed: true,
+      reconnectCount: 1,
+    };
+    await recordCallRating(
+      user.id,
+      input(2, { note: "tela travando", mediaQuality }),
+    );
+
+    const summary = await callRatingSummary(7);
+    expect(summary.recentNotes).toHaveLength(1);
+    expect(summary.recentNotes[0]!.mediaQuality).toEqual(mediaQuality);
+  });
+
+  it("stores a rating with no mediaQuality as null, not an error", async () => {
+    const user = await rater("clerk-g");
+    await recordCallRating(user.id, input(1, { note: "sem dados" }));
+
+    const summary = await callRatingSummary(7);
+    expect(summary.recentNotes).toHaveLength(1);
+    expect(summary.recentNotes[0]!.mediaQuality).toBeNull();
+  });
+
   it("ignores ratings older than the window", async () => {
     const user = await rater("clerk-e");
     await recordCallRating(user.id, input(5));

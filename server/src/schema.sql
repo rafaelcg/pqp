@@ -2925,6 +2925,16 @@ CREATE TABLE IF NOT EXISTS call_ratings (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- What the media actually did during the call: frame rate and frame height
+-- (median + p10) for the local outbound screen share and the inbound screen
+-- share watched the most, freeze/drop counts, qualityLimitationReason
+-- seconds, packet loss, RTT and whether the path was relayed. Validated by
+-- `mediaQualitySchema` in @pqp/shared before it ever reaches this insert --
+-- bounded numbers and one boolean, never a peer id or an address. Nullable
+-- because most rows predate this column and a call with nothing to sample
+-- (audio-only, or a build that has not shipped the sampler) still rates.
+ALTER TABLE call_ratings ADD COLUMN IF NOT EXISTS media_quality JSONB;
+
 -- The dashboard reads "everything since <time>", grouped. Nothing reads a
 -- single row by id, so the index follows the only query that exists.
 CREATE INDEX IF NOT EXISTS idx_call_ratings_created_at

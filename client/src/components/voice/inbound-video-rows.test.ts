@@ -25,6 +25,8 @@ function row(over: Partial<VideoReceiverSample>): VideoReceiverSample {
     framesDecoded: null,
     decoder: null,
     freezeCount: null,
+    totalFreezesDuration: null,
+    framesDropped: null,
     packetsLost: null,
     ...over,
   };
