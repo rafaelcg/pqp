@@ -100,6 +100,7 @@ import {
   llHlsConfig,
   LL_HLS_STARTUP_GRACE_MS,
   mediaSeekableEnd,
+  newSegmentDurationsSince,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
   validPartTargetMs,
@@ -1537,11 +1538,12 @@ export function HlsWatchPlayer({
     let lastPartHoldBack: number | null = null;
     let lastTargetDuration: number | null = null;
     /**
-     * The newest listed segment's own sequence number, so
-     * `governor.onSegmentDuration` is fed once per REAL segment rather than
-     * once per part-driven `LEVEL_UPDATED` firing (this event fires once
-     * per part under the blocking reload -- see the comment where it is
-     * read). A no-op unless `llSegmentCadenceDecay` is on.
+     * The highest segment sequence number `governor.onSegmentDuration` has
+     * already been fed, so a part-driven `LEVEL_UPDATED` firing (this event
+     * fires once per part under the blocking reload) never re-feeds the
+     * same segment twice, and a gap between two firings still feeds every
+     * segment the manifest gained in between -- see the comment where it is
+     * read. A no-op unless `llSegmentCadenceDecay` is on.
      */
     let lastSeenSegmentSn: number | null = null;
     // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
@@ -1794,7 +1796,15 @@ export function HlsWatchPlayer({
         ? new LlLatencyGovernor({
             delivery: llPartsOptedIn() ? "parts" : "segments",
             now: Date.now(),
-            segmentCadenceDecay:
+            // A LIVE READ, not a snapshot (Farol, this PR): the deployment
+            // config is very likely still cold on a first attach (the fetch
+            // that warms it is fire-and-forget from a mount effect), so a
+            // value captured here once would leave decay off for this
+            // governor's whole life even after the fetch resolves a moment
+            // later. `settledDeploymentLiveHlsConfig()` reads the live cache
+            // each time the governor actually checks, so the flag takes
+            // effect mid-session, no rebuild needed.
+            segmentCadenceDecay: () =>
               settledDeploymentLiveHlsConfig()?.llSegmentCadenceDecay ?? false,
           })
         : null;
@@ -2681,22 +2691,21 @@ export function HlsWatchPlayer({
             applyGovernor();
           }
           // THE GOVERNOR HEARS WHAT ACTUALLY HAPPENED TOO, not only the
-          // manifest's own worst-ever number: the newest listed segment's
-          // real EXTINF (`onSegmentDuration`, a no-op unless
-          // `llSegmentCadenceDecay` is on). Fed once per new segment, off
-          // its own sequence number rather than every part-driven firing of
-          // this event.
-          const newestFragment = data.details.fragments.at(-1);
-          if (
-            governor &&
-            newestFragment &&
-            newestFragment.sn !== lastSeenSegmentSn &&
-            typeof newestFragment.sn === "number"
-          ) {
-            lastSeenSegmentSn = newestFragment.sn;
-            if (Number.isFinite(newestFragment.duration)) {
-              governor.onSegmentDuration(newestFragment.duration);
+          // manifest's own worst-ever number: every listed segment's real
+          // EXTINF since the last one it was fed (`onSegmentDuration`, a
+          // no-op unless `llSegmentCadenceDecay` is on) --
+          // `newSegmentDurationsSince` in `hls-live-edge.ts` is what walks
+          // the manifest for that; see its own comment for why `.at(-1)`
+          // alone would miss a segment.
+          if (governor) {
+            const seen = newSegmentDurationsSince(
+              data.details.fragments,
+              lastSeenSegmentSn,
+            );
+            for (const duration of seen.durations) {
+              governor.onSegmentDuration(duration);
             }
+            lastSeenSegmentSn = seen.lastSeenSn;
           }
         }
         // Conventional only. This is exactly the override §4 warns against

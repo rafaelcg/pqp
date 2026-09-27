@@ -1554,3 +1554,53 @@ export function hasSafariPresentationMode(video: unknown): boolean {
     ).webkitSupportsPresentationMode("picture-in-picture")
   );
 }
+
+/** Just the two fields `newSegmentDurationsSince` reads off an hls.js `Fragment`. */
+export interface FragSnDuration {
+  sn: number | "initSegment";
+  duration: number;
+}
+
+/**
+ * Every REAL duration a `LEVEL_UPDATED` firing adds beyond what this player
+ * has already fed the LL governor (`LlLatencyGovernor.onSegmentDuration`),
+ * oldest first, plus the newest sequence number seen so the caller can hold
+ * it for the next call.
+ *
+ * WHY THIS EXISTS, NOT JUST `.at(-1)` (Farol, this PR). `LEVEL_UPDATED`
+ * fires once per part under the blocking reload, but nothing guarantees
+ * this process sees every single firing -- a delayed tick, a missed one, a
+ * rebuild that reattaches mid-window -- so between two calls the manifest
+ * can legitimately list several segments this player has not fed yet.
+ * Reading only the last fragment would silently skip a long one sitting
+ * earlier in that gap while a short one right after it still fills the
+ * cadence window, which is exactly the false "all clear" the decay's
+ * safety margin (`LL_SEGMENT_CADENCE_WINDOW`) exists to prevent.
+ *
+ * `fragments` is hls.js's own oldest-first order, so the result is too.
+ * `lastSeenSn === null` (a fresh attach) takes every currently-listed
+ * fragment as real, recent evidence -- there is nothing before it to miss.
+ */
+export function newSegmentDurationsSince(
+  fragments: readonly FragSnDuration[],
+  lastSeenSn: number | null,
+): { durations: number[]; lastSeenSn: number | null } {
+  const durations: number[] = [];
+  let newestSn = lastSeenSn;
+  for (const fragment of fragments) {
+    const sn = fragment.sn;
+    if (typeof sn !== "number") {
+      continue;
+    }
+    if (lastSeenSn !== null && sn <= lastSeenSn) {
+      continue;
+    }
+    if (Number.isFinite(fragment.duration)) {
+      durations.push(fragment.duration);
+    }
+    if (newestSn === null || sn > newestSn) {
+      newestSn = sn;
+    }
+  }
+  return { durations, lastSeenSn: newestSn };
+}

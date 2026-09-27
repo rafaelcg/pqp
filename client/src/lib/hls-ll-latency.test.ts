@@ -202,7 +202,7 @@ describe("LlLatencyGovernor on segments: the manifest's segment length is a floo
 
 // The flag is off by default, and off means BYTE FOR BYTE the ratchet
 // above ("gives decayed room back only down to that floor" never moves
-// `floorSeconds`). On (`segmentCadenceDecay: true`), a manifest that once
+// `floorSeconds`). On (`segmentCadenceDecay: () => true`), a manifest that once
 // recorded a slow segment may still give room back, but never past what
 // recent REAL segments prove is happening now, and never faster than the
 // ordinary decay step.
@@ -223,7 +223,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "segments",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onManifest({ targetDurationSeconds: 13 });
     const stuckFloor = 13 + LL_SEGMENTS_FETCH_MARGIN_SECONDS;
@@ -238,7 +238,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "segments",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onManifest({ targetDurationSeconds: 13 });
     const stuckFloor = 13 + LL_SEGMENTS_FETCH_MARGIN_SECONDS; // 16
@@ -262,7 +262,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "segments",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onManifest({ targetDurationSeconds: 13 });
     for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
@@ -278,7 +278,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "segments",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onManifest({ targetDurationSeconds: 13 });
     for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
@@ -298,7 +298,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "segments",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onManifest({ targetDurationSeconds: 13 });
     // One slow segment, then enough short ones to push it out of the window.
@@ -317,7 +317,7 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     const g = new LlLatencyGovernor({
       delivery: "parts",
       now: T0,
-      segmentCadenceDecay: true,
+      segmentCadenceDecay: () => true,
     });
     g.onSegmentDuration(4.1);
     g.onSegmentDuration(Number.NaN);
@@ -326,6 +326,93 @@ describe("LlLatencyGovernor's segment-cadence decay (LIVE_HLS_LL_SEGMENT_CADENCE
     // Still parts-mode behaviour, untouched.
     g.onManifest({ partHoldBackSeconds: 7 });
     expect(g.state().targetSeconds).toBe(7);
+  });
+
+  // Farol, this PR: an observed segment longer than the CURRENT floor must
+  // raise it immediately, not only bound how far a later decay may lower
+  // it -- otherwise a genuinely slow segment sitting inside an
+  // already-decayed window is invisible until the next `onManifest` call
+  // happens to catch up (and `EXT-X-TARGETDURATION` is an integer that can
+  // stay unchanged while real segments already got longer).
+  it("raises the floor the instant an observed segment needs more room than the floor currently gives", () => {
+    const g = new LlLatencyGovernor({
+      delivery: "segments",
+      now: T0,
+      segmentCadenceDecay: () => true,
+    });
+    // No onManifest call at all: the floor starts at its bare minimum.
+    expect(g.state().targetSeconds).toBe(LL_SEGMENTS_TARGET_SECONDS);
+    g.onSegmentDuration(10);
+    expect(g.state().targetSeconds).toBe(10 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+    // A shorter reading right after does not undo the raise.
+    g.onSegmentDuration(4);
+    expect(g.state().targetSeconds).toBe(10 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+  });
+
+  it("the exact Farol scenario: 10 s segments after the floor decayed to 9 s on 6 s segments", () => {
+    const g = new LlLatencyGovernor({
+      delivery: "segments",
+      now: T0,
+      segmentCadenceDecay: () => true,
+    });
+    g.onManifest({ targetDurationSeconds: 13 }); // stuck floor 16
+    for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
+      g.onSegmentDuration(6);
+    }
+    let tickN = 1;
+    for (let i = 0; i < 30; i += 1) {
+      g.tick(T0 + tickN * LL_TARGET_DECAY_AFTER_MS);
+      tickN += 1;
+    }
+    // Decayed all the way to the 6 s evidence, exactly as the earlier test
+    // already pins.
+    expect(g.state().targetSeconds).toBe(6 + LL_SEGMENTS_FETCH_MARGIN_SECONDS); // 9
+    // Cadence slows to 10 s. `EXT-X-TARGETDURATION` (13 in this scenario)
+    // does not change -- 10 s segments still fit under it -- so `onManifest`
+    // alone would never raise the floor back up. The observation itself
+    // must.
+    g.onSegmentDuration(10);
+    expect(g.state().targetSeconds).toBe(10 + LL_SEGMENTS_FETCH_MARGIN_SECONDS); // 13
+    // And it does not decay back down on the next clean tick either: the
+    // evidence in the window (six 6 s readings plus a fresh 10 s one) has a
+    // max of 10, so the evidenced floor IS 13 -- nothing to give back yet.
+    g.tick(T0 + tickN * LL_TARGET_DECAY_AFTER_MS);
+    expect(g.state().targetSeconds).toBe(10 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
+  });
+
+  it("a live getter: turning the flag on mid-session (no reconstruction) is enough, no rebuild needed", () => {
+    let flagOn = false;
+    const g = new LlLatencyGovernor({
+      delivery: "segments",
+      now: T0,
+      // A FUNCTION READ FRESH EACH TIME, exactly like
+      // `settledDeploymentLiveHlsConfig()?.llSegmentCadenceDecay` in
+      // `hls-watch-player.tsx` -- this is the property that construction-
+      // time snapshot did not have (Farol, this PR): the SAME governor
+      // instance has to notice the flag turning on mid-attach.
+      segmentCadenceDecay: () => flagOn,
+    });
+    g.onManifest({ targetDurationSeconds: 13 }); // floor 16
+    // While the flag reads false: byte-for-byte today's shipped
+    // behaviour. `onSegmentDuration` is a complete no-op (not even
+    // recorded into the window), same as construction never having
+    // received `segmentCadenceDecay` at all.
+    g.onSegmentDuration(6);
+    g.tick(T0 + LL_TARGET_DECAY_AFTER_MS);
+    expect(g.state().targetSeconds).toBe(16);
+    // The deployment config settles true (`loadLiveHlsConfig()` resolving
+    // in the real caller) -- no new governor, no attach rebuild, same
+    // instance, same closure.
+    flagOn = true;
+    let tickN = 2;
+    for (let i = 0; i < LL_SEGMENT_CADENCE_WINDOW; i += 1) {
+      g.onSegmentDuration(6);
+    }
+    for (let i = 0; i < 30; i += 1) {
+      g.tick(T0 + tickN * LL_TARGET_DECAY_AFTER_MS);
+      tickN += 1;
+    }
+    expect(g.state().targetSeconds).toBe(6 + LL_SEGMENTS_FETCH_MARGIN_SECONDS);
   });
 });
 

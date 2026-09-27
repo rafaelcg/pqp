@@ -72,6 +72,7 @@ import {
   llLatencyCeilingSeconds,
   llMaxLatencySeconds,
   mediaSeekableEnd,
+  newSegmentDurationsSince,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
@@ -1218,5 +1219,70 @@ describe("the governor's target reaches the edge helpers (2026-09-23)", () => {
     };
     expect(m.bufferAheadSeconds({ currentTime: 3, buffered })).toBe(2);
     expect(m.bufferAheadSeconds({ currentTime: 5.5, buffered })).toBe(0);
+  });
+});
+
+describe("newSegmentDurationsSince", () => {
+  it("feeds every fragment on a fresh attach (lastSeenSn null), oldest first", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 },
+      { sn: 11, duration: 4.3 },
+      { sn: 12, duration: 9.0 },
+    ];
+    expect(newSegmentDurationsSince(fragments, null)).toEqual({
+      durations: [4.1, 4.3, 9.0],
+      lastSeenSn: 12,
+    });
+  });
+
+  it("feeds nothing already seen, even across several fragments in one call", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 },
+      { sn: 11, duration: 4.3 },
+      { sn: 12, duration: 4.2 },
+    ];
+    expect(newSegmentDurationsSince(fragments, 10)).toEqual({
+      durations: [4.3, 4.2],
+      lastSeenSn: 12,
+    });
+    expect(newSegmentDurationsSince(fragments, 12)).toEqual({
+      durations: [],
+      lastSeenSn: 12,
+    });
+  });
+
+  // Farol, this PR: reading only the LAST fragment silently drops a long
+  // segment sitting earlier in a gap between two `LEVEL_UPDATED` firings,
+  // which is exactly the false "all clear" the cadence window exists to
+  // prevent -- pin the whole gap, not just its tail.
+  it("does not drop a long segment buried earlier in a multi-segment gap", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 }, // already seen
+      { sn: 11, duration: 9.0 }, // a slow one, missed in the gap
+      { sn: 12, duration: 4.2 }, // short again right after it
+    ];
+    expect(newSegmentDurationsSince(fragments, 10)).toEqual({
+      durations: [9.0, 4.2],
+      lastSeenSn: 12,
+    });
+  });
+
+  it("skips the init segment and any fragment with a non-finite duration, and still advances past a finite one", () => {
+    const fragments = [
+      { sn: "initSegment" as const, duration: 0 },
+      { sn: 10, duration: Number.NaN },
+      { sn: 11, duration: 4.1 },
+    ];
+    expect(newSegmentDurationsSince(fragments, null)).toEqual({
+      durations: [4.1],
+      lastSeenSn: 11,
+    });
+  });
+
+  it("an empty fragment list changes nothing", () => {
+    expect(newSegmentDurationsSince([], 5)).toEqual({
+      durations: [],
+      lastSeenSn: 5,
+    });
   });
 });
