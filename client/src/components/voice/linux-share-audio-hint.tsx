@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@/lib/i18n";
 import {
   rememberLinuxShareAudioHint,
@@ -14,9 +14,8 @@ import { cn } from "@/lib/utils";
  * all (loopback capture is Windows-only in Chromium, and there is no tab to
  * fall back to inside Electron's picker). See `lib/linux-share-audio-hint.ts`.
  *
- * Same shape as `CinemaHint`: dismissed once, remembered in the shared hint
- * store, gone until `visible` goes true again in a session that never
- * dismissed it.
+ * Remembered only when the person dismisses it: merely showing it does not
+ * count, so a call that ends before they read it shows it again next time.
  */
 export function LinuxShareAudioHint({
   visible,
@@ -32,12 +31,6 @@ export function LinuxShareAudioHint({
   const [eligible] = useState(() => shouldShowLinuxShareAudioHint());
   const [open, setOpen] = useState(true);
   const show = eligible && visible && open;
-
-  useEffect(() => {
-    if (show) {
-      rememberLinuxShareAudioHint();
-    }
-  }, [show]);
 
   if (!show) {
     return null;
@@ -66,7 +59,10 @@ export function LinuxShareAudioHint({
         type="button"
         aria-label={t("voice.share.linuxAudioHint.dismiss")}
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-paper-muted hover:bg-ink-3 hover:text-paper"
-        onClick={() => setOpen(false)}
+        onClick={() => {
+          rememberLinuxShareAudioHint();
+          setOpen(false);
+        }}
       >
         <X className="h-3.5 w-3.5" />
       </button>
