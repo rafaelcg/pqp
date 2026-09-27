@@ -555,6 +555,23 @@ through `PUT /operator/watch-party-waitlist-decline`:
 - Server side: `server/src/services/watch-party-waitlist.ts`, the same route
   table as above
 
+Live, from `GET /api/admin/flags` (proxied as `/operator/flags`), and written
+back through `PUT /operator/flags` and `PUT /operator/flag-overrides`:
+
+- **interruptores** (runtime feature flags, `docs/FEATURE_FLAGS.md`): every
+  flag in the registry with its effective value and where it came from (a
+  decision here, the environment variable, or the code default), what the
+  environment alone would answer (the "sem decisão (env)" column, so an
+  operator can see what **seguir a variável** would return to), per-server
+  overrides where the flag allows them, and the last 50 changes with who made
+  them ("painel" for this Worker's token). **ligar** / **desligar** write the
+  global row, **seguir a variável** clears it, and per-server overrides are set
+  by searching a server by name inside the flag's row. A flip reaches both API
+  instances at once over the cluster bus. The one confirmation: switching a
+  `live_hls_*` / `hls_*` flag OFF while a transmission is on air.
+- Server side: `server/src/lib/flags.ts`, tests in `server/src/lib/flags*.test.ts`
+  and `server/src/api/operator.test.ts`
+
 Live, from this Worker (merged onto `/metrics`, never stored on the API):
 
 - **Android APK button clicks**: `POST /apk-click` from the hosted `/android`
@@ -647,7 +664,7 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the four `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |

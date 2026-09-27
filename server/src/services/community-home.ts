@@ -19,6 +19,7 @@ import {
   type PublicUser,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
+import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
 import {
   deleteObject,
@@ -66,7 +67,8 @@ const EXTENSION_BY_CONTENT_TYPE: Record<CommunityHomeContentType, string> = {
  * sweep stays idle, and the client hides the row. Default off.
  */
 export function isCommunityHomeEnabled(): boolean {
-  return process.env.COMMUNITY_HOME_ENABLED === "true";
+  // Runtime flag `community_home`; `COMMUNITY_HOME_ENABLED` is its default.
+  return isEnabled("community_home");
 }
 
 /**
@@ -77,7 +79,8 @@ export function isCommunityHomeEnabled(): boolean {
  * "preview as" inspector. Requires the main flag; on its own it does nothing.
  */
 export function isCommunityHomeVipEnabled(): boolean {
-  return isCommunityHomeEnabled() && process.env.COMMUNITY_HOME_VIP_ENABLED === "true";
+  // Runtime flag `community_home_vip`; `COMMUNITY_HOME_VIP_ENABLED` is its default.
+  return isCommunityHomeEnabled() && isEnabled("community_home_vip");
 }
 
 export function isCommunityHomeMediaConfigured(): boolean {

@@ -9,6 +9,7 @@ import {
   type WatchPartyWaitlistStatus,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { bindFlagDefault, isEnabled } from "../lib/flags.js";
 import { publishToCluster, isBusEnabled, subscribeToCluster } from "../lib/bus.js";
 import { HttpError } from "../lib/http.js";
 import { logEvent } from "../lib/log.js";
@@ -40,17 +41,20 @@ import { getMemberRole } from "./users.js";
  * the default for a self-host is off without anybody having to know the
  * variable exists; the hosted deployment runs parties, so it is on there
  * until somebody sets `off`.
+ *
+ * Runtime flag `watch_party_waitlist` now (`lib/flags.ts`): the variable
+ * above is its default, the dashboard can flip it globally or for one
+ * server, and `serverId` is what a per-server override is looked up by.
  */
-export function watchPartyWaitlistCampaignEnabled(): boolean {
-  const raw = (process.env.WATCH_PARTY_WAITLIST ?? "").trim().toLowerCase();
-  if (raw === "on" || raw === "true" || raw === "1") {
-    return true;
-  }
-  if (raw === "off" || raw === "false" || raw === "0") {
-    return false;
-  }
-  return isLiveHlsEnabled();
+export function watchPartyWaitlistCampaignEnabled(
+  serverId: string | null = null,
+): boolean {
+  return isEnabled("watch_party_waitlist", { serverId });
 }
+
+// The waitlist's code default, for the runtime flag: with no row and no
+// `WATCH_PARTY_WAITLIST`, it follows whether this deployment can run a party.
+bindFlagDefault("watch_party_waitlist", isLiveHlsEnabled);
 
 interface WaitlistRow {
   server_id: string | null;
@@ -140,7 +144,7 @@ export async function getWatchPartyWaitlistState(
     readEntry(userId, serverId),
   ]);
   return {
-    campaign: watchPartyWaitlistCampaignEnabled(),
+    campaign: watchPartyWaitlistCampaignEnabled(serverId),
     canRequest,
     available,
     entry,
@@ -167,7 +171,7 @@ export async function joinWatchPartyWaitlist(
     streamChannel: string | null;
   },
 ): Promise<WatchPartyWaitlistEntry> {
-  if (!watchPartyWaitlistCampaignEnabled()) {
+  if (!watchPartyWaitlistCampaignEnabled(input.serverId)) {
     throw new HttpError(404, "Not found");
   }
   let kind: WatchPartyWaitlistKind = "interest";

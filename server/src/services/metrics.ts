@@ -4,6 +4,7 @@ import {
   type HlsViewerCounterStats,
   type LiveHlsViewerSession,
 } from "../voice/hls-viewer-counts.js";
+import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
@@ -272,6 +273,15 @@ export interface AdminMetrics {
    * as `sfu`. `pinnedRooms` is this process's pins per region.
    */
   sfuRegions: SfuRegionsReport;
+  /**
+   * Runtime feature flags (`lib/flags.ts`): every flag's answer on the
+   * process that served this request and where it came from (a row, the
+   * environment, the code default), how many per-server overrides it has,
+   * flips (this process since boot, and the whole cluster over 24 h from the
+   * audit trail) and the cache's own health. Live, never from the 30 s cache:
+   * the one question this block answers is "did my click take".
+   */
+  flags: FeatureFlagMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1062,6 +1072,7 @@ type CachedMetrics = Omit<
   | "instanceId"
   | "instanceCount"
   | "cluster"
+  | "flags"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1792,11 +1803,12 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions] = await Promise.all([
+  const [payload, ready, sfu, sfuRegions, flags] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
     readSfuStats(),
     sfuRegionsReport(),
+    featureFlagMetrics(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -1809,6 +1821,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    flags,
   };
 }
 

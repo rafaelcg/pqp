@@ -374,6 +374,7 @@ import {
   useWatchPartyWaitlist,
 } from "@/lib/watch-party-waitlist";
 import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
+import { startConfigRefresh } from "@/lib/config-refresh";
 import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
@@ -2115,6 +2116,11 @@ function MainAppContent({
   useEffect(() => {
     setWatchPartyWaitlistOwner(waitlistOwnerId);
   }, [waitlistOwnerId]);
+  // Runtime flags reach an open tab: the live-hls config and the waitlist
+  // answers are re-asked on focus and on a slow timer, so an operator's flip
+  // (the teaser, the camera size, a server switched on) shows without a
+  // reload. See `lib/config-refresh.ts`.
+  useEffect(() => startConfigRefresh(), []);
   const watchPartyWaitlist = useWatchPartyWaitlist(
     selectedServerId,
     isWatchPartyChannelsEnabled() &&

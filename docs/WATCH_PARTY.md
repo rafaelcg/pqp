@@ -4248,6 +4248,12 @@ never teases one and the hosted deployment has it on until somebody sets
 also sits behind the existing `VITE_WATCH_PARTY_CHANNELS` build flag, like
 everything else in the sidebar block.
 
+Since the runtime flags landed the variable is only the default: the
+`watch_party_waitlist` flag (dashboard, **controles → interruptores**) turns
+the campaign on or off globally, or for one server, with no restart, and an
+open tab drops or shows the teaser on its next focus. See
+`docs/FEATURE_FLAGS.md`.
+
 **Counters.** `watchPartyWaitlist` on `GET /api/admin/metrics`: `joinsTotal`,
 `joins7d`, `requestsTotal`, `interestTotal`, `serversWaiting`,
 `approvedTotal`.

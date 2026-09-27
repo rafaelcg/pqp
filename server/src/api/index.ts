@@ -623,6 +623,15 @@ import {
   listWatchPartyWaitlistForOperator,
 } from "../services/watch-party-waitlist.js";
 import {
+  ADMIN_FLAG_OVERRIDE_PATH,
+  ADMIN_FLAGS_PATH,
+  listFeatureFlags,
+  setFeatureFlagOverrideSchema,
+  setFeatureFlagSchema,
+  setGlobalFlag,
+  setServerFlagOverride,
+} from "../lib/flags.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -2117,6 +2126,44 @@ router.put(OPERATOR_CHANNEL_SFU_REGION_PATH, async ({ req, user }) => {
   return operatorSetChannelSfuRegion(body.channelId, body.region, user.id);
 });
 
+// ------------------------------------------------- runtime feature flags
+//
+// `lib/flags.ts` and `docs/FEATURE_FLAGS.md`. One read (every flag, its
+// effective value and where it came from, the overrides, the last flips) and
+// two writes (a global decision, a per-server override). Same gate and the
+// same two ways in as the levers above. Neither write is destructive and both
+// are one click to undo (`enabled: null` hands the answer back to the
+// environment), so neither carries a server-side confirmation.
+
+router.get(ADMIN_FLAGS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listFeatureFlags();
+});
+
+router.put(ADMIN_FLAGS_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setFeatureFlagSchema.parse(await readJsonBody(req));
+  return setGlobalFlag(body.key, body.enabled, {
+    kind: "moderator",
+    userId: user.id,
+  });
+});
+
+router.put(ADMIN_FLAG_OVERRIDE_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setFeatureFlagOverrideSchema.parse(await readJsonBody(req));
+  return setServerFlagOverride(body.key, body.serverId, body.enabled, {
+    kind: "moderator",
+    userId: user.id,
+  });
+});
+
 /**
  * EVERYTHING the operator dashboard's machine token can reach, and nothing
  * else, as a flat table of exact (method, pathname) pairs.
@@ -2199,6 +2246,32 @@ const ADMIN_MACHINE_ROUTES: {
     run: async (req) => {
       const body = setChannelSfuRegionSchema.parse(await readJsonBody(req));
       return operatorSetChannelSfuRegion(body.channelId, body.region, null);
+    },
+  },
+  // Runtime feature flags: the list, a global decision, a per-server
+  // override. Only keys in the registry (`FEATURE_FLAGS`) parse, so the token
+  // can flip a known switch and cannot invent one.
+  {
+    method: "GET",
+    path: ADMIN_FLAGS_PATH,
+    run: async () => listFeatureFlags(),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_FLAGS_PATH,
+    run: async (req) => {
+      const body = setFeatureFlagSchema.parse(await readJsonBody(req));
+      return setGlobalFlag(body.key, body.enabled, { kind: "dashboard" });
+    },
+  },
+  {
+    method: "PUT",
+    path: ADMIN_FLAG_OVERRIDE_PATH,
+    run: async (req) => {
+      const body = setFeatureFlagOverrideSchema.parse(await readJsonBody(req));
+      return setServerFlagOverride(body.key, body.serverId, body.enabled, {
+        kind: "dashboard",
+      });
     },
   },
 ];

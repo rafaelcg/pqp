@@ -4732,3 +4732,49 @@ CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_status
 
 CREATE INDEX IF NOT EXISTS idx_watch_party_waitlist_user
   ON watch_party_waitlist (user_id);
+
+-- Runtime feature flags (`server/src/lib/flags.ts`, `docs/FEATURE_FLAGS.md`).
+-- A flag is only a row here once an operator has decided something about it:
+-- no row, or `enabled` NULL, means "follow the environment variable, then the
+-- code default", which is exactly how the switch behaved before this table
+-- existed. So a self-host that never opens the dashboard never has a row and
+-- never notices. `updated_by` is the moderator's own id, NULL for the
+-- dashboard's machine token (the same convention as `audit_log.actor_id`).
+-- `key` is not constrained here on purpose: the registry in flags.ts is the
+-- list of flags, and the write path refuses a key it does not know, while a
+-- row left behind by a flag since removed from the code is simply ignored.
+CREATE TABLE IF NOT EXISTS feature_flags (
+  key        TEXT PRIMARY KEY,
+  enabled    BOOLEAN,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- One server's decision about one flag, above the global row. Only for flags
+-- the registry marks `perServer`. Clearing an override deletes its row.
+CREATE TABLE IF NOT EXISTS feature_flag_overrides (
+  key        TEXT NOT NULL,
+  server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  enabled    BOOLEAN NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  PRIMARY KEY (key, server_id)
+);
+
+-- Who flipped what, and when. Its own table because `audit_log` is
+-- server-scoped (`server_id` NOT NULL) and a global flip belongs to no server.
+-- `server_id` carries no foreign key so the trail outlives a deleted server;
+-- `previous` / `next` NULL mean "no decision" (the environment default).
+CREATE TABLE IF NOT EXISTS feature_flag_audit (
+  id         BIGSERIAL PRIMARY KEY,
+  key        TEXT NOT NULL,
+  server_id  UUID,
+  previous   BOOLEAN,
+  next       BOOLEAN,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('dashboard', 'moderator')),
+  actor_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feature_flag_audit_created
+  ON feature_flag_audit (created_at DESC);

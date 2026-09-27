@@ -18,11 +18,12 @@
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Seven `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Three reads (find a server, list its voice channels, the watch
- *     party waitlist) and four PUTs (watch party availability and low
- *     latency per server, a channel's transport pin, a channel's SFU region,
- *     declining a server's waitlist). They are in `OPERATOR_ROUTES` below, an
+ *     Ten `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Four reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags) and six PUTs (watch party
+ *     availability and low latency per server, a channel's transport pin, a
+ *     channel's SFU region, declining a server's waitlist, a feature flag
+ *     globally, a feature flag for one server). They are in `OPERATOR_ROUTES` below, an
  *     exact (method, path) table for the same reason the API keeps one: the
  *     blast radius of the password plus the machine token should be readable
  *     in one glance, and a prefix is a thing somebody widens by accident.
@@ -353,6 +354,24 @@ const OPERATOR_ROUTES: {
     method: "PUT",
     path: "/operator/channel-sfu-region",
     forward: (_url, origin) => `${origin}/api/admin/channel-sfu-region`,
+  },
+  // Runtime feature flags ("interruptores"): the list with effective values,
+  // overrides and the audit trail; a global decision; a per-server override.
+  // The API only parses keys in its own registry, so this cannot invent one.
+  {
+    method: "GET",
+    path: "/operator/flags",
+    forward: (_url, origin) => `${origin}/api/admin/flags`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/flags",
+    forward: (_url, origin) => `${origin}/api/admin/flags`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/flag-overrides",
+    forward: (_url, origin) => `${origin}/api/admin/flag-overrides`,
   },
 ];
 

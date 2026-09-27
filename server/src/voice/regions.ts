@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { isWatchPartyChannelType, type ChannelKind } from "@pqp/shared";
+import { isEnabled } from "../lib/flags.js";
 
 /**
  * SFU REGIONS: which LiveKit box a voice room's media lives on.
@@ -335,8 +336,9 @@ export interface SfuRegionPolicyInput {
  * disagree, without a code revert.
  */
 export function regionCapRequired(): boolean {
-  const raw = (process.env.LIVEKIT_REGION_REQUIRE_CAP ?? "").trim().toLowerCase();
-  return raw === "true" || raw === "1" || raw === "on";
+  // Runtime flag `livekit_region_require_cap`; the variable is its default,
+  // so the rollback is a dashboard click now rather than an env edit.
+  return isEnabled("livekit_region_require_cap");
 }
 
 /**

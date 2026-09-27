@@ -1,4 +1,5 @@
 import type { IceServerConfig } from "@pqp/shared";
+import { isEnabled } from "../lib/flags.js";
 
 interface CachedIceServers {
   servers: IceServerConfig[];
@@ -194,7 +195,9 @@ export async function getIceServers(): Promise<IceServerConfig[]> {
    * revert, no CI run and no wait. Rolling back a voice regression should not
    * require a deploy pipeline.
    */
-  if (staticTurn && process.env.TURN_PREFER_STATIC === "true") {
+  // Runtime flag `turn_prefer_static` now, with the variable as its default:
+  // the rollback is a dashboard click, not even a restart.
+  if (staticTurn && isEnabled("turn_prefer_static")) {
     return [...STUN_SERVERS, ...staticTurn];
   }
 

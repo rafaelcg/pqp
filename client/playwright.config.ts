@@ -25,6 +25,8 @@ import { MEDIA_SPEC } from "./e2e/media-spec";
  * `E2E_API_URL` (which the specs read for their own `fetch` calls) has to move
  * with `E2E_SERVER_PORT`; the default below keeps the two in step.
  */
+/** Shared with `e2e/watch-party-waitlist.spec.ts`; not a secret. */
+export const E2E_ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
 const CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 5273);
 const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
 const DATABASE_URL =
@@ -170,6 +172,11 @@ export default defineConfig({
         // `watch-party-waitlist.spec.ts` would test nothing. The flag-off
         // answers are pinned in `server/src/api/watch-party-waitlist.test.ts`.
         WATCH_PARTY_WAITLIST: "on",
+        // The operator dashboard's machine token, so a spec can flip a runtime
+        // feature flag (`server/src/lib/flags.ts`) the way the dashboard does
+        // and watch an open tab follow it. A throwaway value for this local
+        // server only; production's lives in the Worker's secrets.
+        ADMIN_METRICS_TOKEN: E2E_ADMIN_TOKEN,
         // Object storage, passed through rather than pinned.
         //
         // The webServer `env` REPLACES the environment rather than extending
