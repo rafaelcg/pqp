@@ -3096,9 +3096,17 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS join_source TEXT
     'invite', 'sso', 'community_address', 'community_directory', 'qg_hint',
     'default_placement'
   ));
--- Per-server "joins by source" is the query this exists to make cheap.
+-- Per-server "joins by source" is the query this exists to make cheap: the
+-- documented query in tools/admin-dashboard/README.md filters on server_id
+-- first, so that is the leading column.
 CREATE INDEX IF NOT EXISTS idx_server_members_join_source
   ON server_members (server_id, joined_at) WHERE join_source IS NOT NULL;
+-- The instance-wide 7-day aggregate metrics.ts reads for
+-- `product.serverJoins.bySource7d` has no server_id predicate, so the index
+-- above (server_id-leading) cannot narrow it by joined_at: same shape as
+-- idx_server_members_join_ref just above, joined_at-leading and nothing else.
+CREATE INDEX IF NOT EXISTS idx_server_members_join_source_joined_at
+  ON server_members (joined_at) WHERE join_source IS NOT NULL;
 
 -- Servers that began as a Discord Guild Template copy. The audit row is the
 -- only record of that, and the operator dashboard counts it every 30 seconds,
