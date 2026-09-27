@@ -198,7 +198,10 @@ import {
 } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
-import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
+import {
+  watchPartyHistoryCandidates,
+  type WatchPartyHistoryChannel,
+} from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
@@ -484,6 +487,7 @@ import {
   setSoundOutput,
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
+import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
@@ -573,6 +577,11 @@ const HEADER_ACTION_TILE =
  * `scheduleReconnectMessagesRefetch` below.
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
+
+/** A stable empty array, so "no favorites" is the same reference every
+ * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
+ * `ChannelList` only ever reads this prop. */
+const EMPTY_FAVORITE_CHANNEL_IDS: string[] = [];
 
 interface AppProps {
   devBypass?: boolean;
@@ -1657,6 +1666,18 @@ function MainAppContent({
   );
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  // Stable identity for `MessageList`'s `onReportMessage`: an inline arrow
+  // here was rebuilt on every render of this (huge) component, which read
+  // as "this row's props changed" to `MessageRow`'s `memo()` for every row
+  // on every unrelated re-render — see the row-callback cache in
+  // message-list.tsx for the other half of this fix.
+  const handleReportMessage = useCallback((message: ChatMessage) => {
+    setReportTarget({
+      kind: "message",
+      messageId: message.id,
+      subjectName: message.authorName,
+    });
+  }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
   // Watch party scheduling: the one upcoming/live session for the selected
   // voice channel and every voice channel's sidebar hint, both derived from
@@ -1906,6 +1927,11 @@ function MainAppContent({
   );
   const unreadCursorByChannelRef = useRef<Record<string, string>>({});
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
+  // arrow here defeated `MessageList`'s own `memo()` on every render of this
+  // component, which is the single biggest thing that was left rebuilding
+  // JSX for all ~250 rows on ticks that touched nothing this list reads.
+  const clearEditMessageId = useCallback(() => setEditMessageId(null), []);
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
@@ -2296,9 +2322,27 @@ function MainAppContent({
       perms.can(Permission.START_WATCH_PARTY, channelId) ||
       perms.can(Permission.MANAGE_CHANNELS, channelId),
   );
-  const watchPartyHistoryChannels = useWatchPartyHistoryAvailability(
+  const watchPartyHistoryChannelsRaw = useWatchPartyHistoryAvailability(
     watchPartyHistoryCandidateChannels,
   );
+  // The hook deliberately filters fresh every render (see its own comment) —
+  // correct for it, but a brand-new array on every render regardless of
+  // content is exactly what defeats a memoized child's prop comparison.
+  // Stabilized here, one layer up, by content rather than reference: this
+  // list changes rarely (a broadcast confirming, a channel losing access),
+  // so almost every render can hand the sidebar back the SAME array.
+  const watchPartyHistoryChannelsKeyRef = useRef("");
+  const watchPartyHistoryChannelsRef = useRef<
+    readonly WatchPartyHistoryChannel[]
+  >(watchPartyHistoryChannelsRaw);
+  const watchPartyHistoryChannelsKey = watchPartyHistoryChannelsRaw
+    .map((channel) => `${channel.id}:${channel.name}`)
+    .join(",");
+  if (watchPartyHistoryChannelsKey !== watchPartyHistoryChannelsKeyRef.current) {
+    watchPartyHistoryChannelsKeyRef.current = watchPartyHistoryChannelsKey;
+    watchPartyHistoryChannelsRef.current = watchPartyHistoryChannelsRaw;
+  }
+  const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -9069,17 +9113,15 @@ function MainAppContent({
         highlightMessageId={highlightMessageId}
         onHighlightHandled={clearHighlight}
         onReplyTo={setReplyTarget}
-        onToggleReaction={(messageId, emoji) =>
-          chat.toggleReaction(messageId, emoji)
-        }
-        onVotePoll={(messageId, optionId) => chat.votePoll(messageId, optionId)}
-        onClosePoll={(messageId) => chat.closePoll(messageId)}
-        onLoadOlder={() => chat.loadOlder()}
+        onToggleReaction={chat.toggleReaction}
+        onVotePoll={chat.votePoll}
+        onClosePoll={chat.closePoll}
+        onLoadOlder={chat.loadOlder}
         onLoadNewer={loadNewerHistory}
         onJumpToMessage={jumpToMessage}
         onJumpToPresent={jumpToPresent}
-        onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
-        onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        onEditMessage={chat.editMessage}
+        onDeleteMessage={chat.deleteMessage}
         // Server channels only: a conversation has no moderators, and the
         // endpoint refuses one. Offering the mode there would be a menu entry
         // whose confirm ends in a 404.
@@ -9088,29 +9130,26 @@ function MainAppContent({
             ? handleBulkDeleteSelected
             : undefined
         }
-        onPinMessage={(messageId) => chat.pinMessage(messageId)}
-        onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
-        onReportMessage={(message) =>
-          setReportTarget({
-            kind: "message",
-            messageId: message.id,
-            subjectName: message.authorName,
-          })
-        }
-        onRetryMessage={(nonce) => chat.retryMessage(nonce)}
-        onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
+        onPinMessage={chat.pinMessage}
+        onUnpinMessage={chat.unpinMessage}
+        onReportMessage={handleReportMessage}
+        onRetryMessage={chat.retryMessage}
+        onDiscardMessage={chat.discardMessage}
         showLinkEmbeds={localSettings.showLinkEmbeds}
         // --- threads --- offered only inside a server: a conversation already
-        // is the scoped side-conversation a thread would create.
+        // is the scoped side-conversation a thread would create. Both
+        // handlers are already stable `useCallback`s (see their own
+        // definitions); the ternary below only ever resolves to one of two
+        // stable values — the handler or `undefined` — so it does not
+        // reintroduce the fresh-closure-per-render problem a wrapper arrow
+        // function here would.
         onStartThread={
           selectedChannel.kind === "server" && selectedChannel.type === "text"
-            ? (message) => void handleStartThread(message)
+            ? handleStartThread
             : undefined
         }
         onOpenThread={
-          selectedChannel.kind === "server"
-            ? (thread, message) => void openThreadPanel(thread, message)
-            : undefined
+          selectedChannel.kind === "server" ? openThreadPanel : undefined
         }
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
@@ -9119,7 +9158,7 @@ function MainAppContent({
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
         editMessageId={editMessageId}
-        onEditMessageHandled={() => setEditMessageId(null)}
+        onEditMessageHandled={clearEditMessageId}
         onForward={setForwardMessage}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
@@ -9237,6 +9276,136 @@ function MainAppContent({
       </CallDockProvider>
     </div>
   ) : null;
+
+  /**
+   * `ChannelList` (the whole left sidebar: channels, voice occupancy, watch
+   * party affordances) is wrapped in `memo()`, but nearly every one of these
+   * was an inline arrow rebuilt on every render of `MainAppContent` — or a
+   * plain `function handleX()` that was never itself a `useCallback` — so
+   * the memo comparison failed on essentially every prop, every render,
+   * which is the same "memoized child, unmemoized props" shape the message
+   * list had (see message-list.tsx). `useStableCallback` gives each one a
+   * permanent identity without re-auditing every handler's own dependency
+   * list; see that hook's own comment for why that trade is safe here.
+   */
+  const stableOnOpenThread = useStableCallback((thread: ThreadSummary) =>
+    void openThreadFromSidebar(thread),
+  );
+  const stableOnLeaveThread = useStableCallback((thread: ThreadSummary) =>
+    void handleThreadMembership(thread, false),
+  );
+  const stableOnMarkThreadRead = useStableCallback((thread: ThreadSummary) =>
+    void clearUnread(thread.channelId),
+  );
+  const stableOnMobileClose = useStableCallback(() => setMobileNavOpen(false));
+  const stableOnSelectChannel = useStableCallback((id: string) =>
+    void selectChannel(id),
+  );
+  const stableOnJoinVoice = useStableCallback((channelId: string) =>
+    handleJoinVoiceFromList(channelId),
+  );
+  const stableOnWatchLiveParty = useStableCallback((channelId: string) =>
+    void handleWatchLiveParty(channelId),
+  );
+  const stableOnCreateWatchParty = useStableCallback(() =>
+    setCreateWatchPartyOpen(true),
+  );
+  const stableOnOpenWatchPartyHistory = useStableCallback(
+    (channelId: string) => setWatchPartyHistoryChannelId(channelId),
+  );
+  const stableCanMoveIn = useStableCallback((channelId: string) =>
+    perms.can(moveMembersBit(), channelId),
+  );
+  const stableCanConnectIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.CONNECT, channelId),
+  );
+  const stableCanMuteIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.MUTE_MEMBERS, channelId),
+  );
+  const stableCanKickUser = useStableCallback((userId: string) =>
+    canKickOccupant(userId),
+  );
+  const stableOnMoveVoiceOccupant = useStableCallback(
+    (userId: string, channelId: string) =>
+      void handleMoveVoiceOccupant(userId, channelId),
+  );
+  const stableOnDisconnectVoiceOccupant = useStableCallback((userId: string) =>
+    void handleDisconnectVoiceOccupant(userId),
+  );
+  const stableOnServerMuteOccupant = useStableCallback(
+    (userId: string, muted: boolean) =>
+      void handleServerMuteOccupant(userId, muted),
+  );
+  const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
+    void handleLowerOccupantHand(userId),
+  );
+  const stableOnKickOccupant = useStableCallback(
+    (userId: string, name: string) => void handleKickOccupant(userId, name),
+  );
+  const stableOnSetPeerVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setPeerVolume(userId, volume),
+  );
+  const stableOnSetScreenVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
+  );
+  const stableOnCreateChannel = useStableCallback(
+    (type: ChannelType, isPrivate: boolean) =>
+      setChannelPrompt({ mode: "create", type, isPrivate }),
+  );
+  const stableOnRenameChannel = useStableCallback((channel: Channel) =>
+    setChannelPrompt({ mode: "rename", channel }),
+  );
+  const stableOnOpenChannelSettings = useStableCallback(
+    (
+      channel: Channel,
+      section: ChannelSettingsSectionId,
+      options?: { forceAdvanced?: boolean },
+    ) =>
+      setChannelSettings({
+        channelId: channel.id,
+        section,
+        forceAdvanced: options?.forceAdvanced ?? false,
+      }),
+  );
+  const stableOnDeleteChannel = useStableCallback((id: string) =>
+    void handleDeleteChannel(id),
+  );
+  const stableOnPurgeChannel = useStableCallback(
+    (channel: Pick<Channel, "id" | "name">) =>
+      setPurgeChannel({ id: channel.id, name: channel.name }),
+  );
+  const stableOnMoveChannel = useStableCallback(
+    (id: string, parentId: string | null, index: number) =>
+      void handleMoveChannel(id, parentId, index),
+  );
+  const stableOnFavoriteChannelIdsChange = useStableCallback(
+    (ids: string[]) => handleFavoriteChannelIdsChange(ids),
+  );
+  const stableOnInvite = useStableCallback(() => setInviteMode("create"));
+  const stableOnOpenMembers = useStableCallback(() => setMembersOpen(true));
+  const stableOnOpenServerSettings = useStableCallback(() =>
+    setServerSettingsOpen(true),
+  );
+  const stableOnExpand = useStableCallback(() => toggleChannelSidebar());
+  const stableOnSelectCommunityHome = useStableCallback(() => {
+    if (selectedServerId) {
+      setWhatsNewOpen(false);
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+    }
+  });
+  const favoriteChannelIds = useMemo(
+    () =>
+      selectedServer
+        ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
+        : EMPTY_FAVORITE_CHANNEL_IDS,
+    [selectedServer, user?.preferences?.favoriteChannels],
+  );
+  const channelListFooter = useMemo(
+    () => sidebarFooter(sidebarIconsOnly),
+    [sidebarIconsOnly],
+  );
 
   return (
     // The friends snapshot, published to everything that draws a relationship:
@@ -9564,9 +9733,9 @@ function MainAppContent({
           server={selectedServer ?? null}
           threadsByChannel={threadsByChannel}
           unreadThreadIds={unreadThreadIds}
-          onOpenThread={(thread) => void openThreadFromSidebar(thread)}
-          onLeaveThread={(thread) => void handleThreadMembership(thread, false)}
-          onMarkThreadRead={(thread) => void clearUnread(thread.channelId)}
+          onOpenThread={stableOnOpenThread}
+          onLeaveThread={stableOnLeaveThread}
+          onMarkThreadRead={stableOnMarkThreadRead}
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}
@@ -9589,9 +9758,9 @@ function MainAppContent({
               : undefined
           }
           mobileOpen={mobileNavOpen}
-          onMobileClose={() => setMobileNavOpen(false)}
-          onSelectChannel={(id) => void selectChannel(id)}
-          onJoinVoice={handleJoinVoiceFromList}
+          onMobileClose={stableOnMobileClose}
+          onSelectChannel={stableOnSelectChannel}
+          onJoinVoice={stableOnJoinVoice}
           liveParties={watchParties.live}
           recoveringChannelId={
             voiceState.sharePublishRecovering
@@ -9606,7 +9775,7 @@ function MainAppContent({
                 (party.viewerRole === "host" || party.viewerRole === "cohost"),
             ) ?? null
           }
-          onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
+          onWatchLiveParty={stableOnWatchLiveParty}
           canStartWatchParty={canOfferWatchPartyCreate({
             // The rollout gate, not a capability check. See
             // `canOfferWatchPartyCreate`: the bit alone is on thousands of
@@ -9617,7 +9786,7 @@ function MainAppContent({
             hlsEnabled: liveHlsConfig?.enabled ?? null,
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
-          onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
+          onCreateWatchParty={stableOnCreateWatchParty}
           watchPartyTeaser={
             shouldOfferWatchPartyTeaser({
               hlsEnabled: liveHlsConfig?.enabled ?? null,
@@ -9630,91 +9799,43 @@ function MainAppContent({
               : null
           }
           watchPartyHistoryChannels={watchPartyHistoryChannels}
-          onOpenWatchPartyHistory={(channelId) =>
-            setWatchPartyHistoryChannelId(channelId)
-          }
+          onOpenWatchPartyHistory={stableOnOpenWatchPartyHistory}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
           screenVolumes={voiceState.screenVolumes}
           screenAudioUserIds={screenAudioUserIds}
-          canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
-          canConnectIn={(channelId) =>
-            perms.can(Permission.CONNECT, channelId)
-          }
-          canMuteIn={(channelId) =>
-            perms.can(Permission.MUTE_MEMBERS, channelId)
-          }
-          canKickUser={canKickOccupant}
-          onMoveVoiceOccupant={(userId, channelId) =>
-            void handleMoveVoiceOccupant(userId, channelId)
-          }
-          onDisconnectVoiceOccupant={(userId) =>
-            void handleDisconnectVoiceOccupant(userId)
-          }
-          onServerMuteOccupant={(userId, muted) =>
-            void handleServerMuteOccupant(userId, muted)
-          }
-          onLowerOccupantHand={(userId) =>
-            void handleLowerOccupantHand(userId)
-          }
-          onKickOccupant={(userId, name) =>
-            void handleKickOccupant(userId, name)
-          }
-          onSetPeerVolume={(userId, volume) =>
-            voice.setPeerVolume(userId, volume)
-          }
-          onSetScreenVolume={(userId, volume) =>
-            voice.setScreenVolume(userId, volume)
-          }
-          onCreateChannel={(type, isPrivate) =>
-            setChannelPrompt({ mode: "create", type, isPrivate })
-          }
-          onRenameChannel={(channel) =>
-            setChannelPrompt({ mode: "rename", channel })
-          }
-          onOpenChannelSettings={(channel, section, options) =>
-            setChannelSettings({
-              channelId: channel.id,
-              section,
-              forceAdvanced: options?.forceAdvanced ?? false,
-            })
-          }
-          onDeleteChannel={(id) => void handleDeleteChannel(id)}
-          onPurgeChannel={(channel) =>
-            setPurgeChannel({ id: channel.id, name: channel.name })
-          }
-          onMoveChannel={(id, parentId, index) =>
-            void handleMoveChannel(id, parentId, index)
-          }
-          favoriteChannelIds={
-            selectedServer
-              ? favoritesForServer(
-                  user?.preferences?.favoriteChannels,
-                  selectedServer.id,
-                )
-              : []
-          }
-          onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
-          onInvite={() => setInviteMode("create")}
-          onOpenMembers={() => setMembersOpen(true)}
-          onOpenServerSettings={() => setServerSettingsOpen(true)}
+          canMoveIn={stableCanMoveIn}
+          canConnectIn={stableCanConnectIn}
+          canMuteIn={stableCanMuteIn}
+          canKickUser={stableCanKickUser}
+          onMoveVoiceOccupant={stableOnMoveVoiceOccupant}
+          onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
+          onServerMuteOccupant={stableOnServerMuteOccupant}
+          onLowerOccupantHand={stableOnLowerOccupantHand}
+          onKickOccupant={stableOnKickOccupant}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
+          onCreateChannel={stableOnCreateChannel}
+          onRenameChannel={stableOnRenameChannel}
+          onOpenChannelSettings={stableOnOpenChannelSettings}
+          onDeleteChannel={stableOnDeleteChannel}
+          onPurgeChannel={stableOnPurgeChannel}
+          onMoveChannel={stableOnMoveChannel}
+          favoriteChannelIds={favoriteChannelIds}
+          onFavoriteChannelIdsChange={stableOnFavoriteChannelIdsChange}
+          onInvite={stableOnInvite}
+          onOpenMembers={stableOnOpenMembers}
+          onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
-          onExpand={toggleChannelSidebar}
-          footer={sidebarFooter(sidebarIconsOnly)}
+          onExpand={stableOnExpand}
+          footer={channelListFooter}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
-          onSelectCommunityHome={() => {
-            if (selectedServerId) {
-              setWhatsNewOpen(false);
-              markCommunityHomeRowSeen(selectedServerId);
-              setCommunityHomeRowNew(false);
-              void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
-            }
-          }}
+          onSelectCommunityHome={stableOnSelectCommunityHome}
         />
       )}
 

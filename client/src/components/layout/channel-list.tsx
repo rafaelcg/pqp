@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import {
   forwardRef,
+  memo,
   useEffect,
   useId,
   useMemo,
@@ -372,7 +373,34 @@ export function liveStateForChannel(
     : liveStateFromRoster(participants);
 }
 
-export function ChannelList({
+let __dbgChannelListLogsLeft = 30;
+if (typeof window !== "undefined") {
+  (
+    window as unknown as { __resetDbgChannelListLogsLeft: () => void }
+  ).__resetDbgChannelListLogsLeft = () => {
+    __dbgChannelListLogsLeft = 30;
+  };
+}
+function __debugCompareChannelListProps(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  const diffs: string[] = [];
+  for (const key of keys) {
+    if (!Object.is(prev[key], next[key])) {
+      diffs.push(key);
+    }
+  }
+  if (diffs.length > 0 && __dbgChannelListLogsLeft > 0) {
+    __dbgChannelListLogsLeft--;
+    // eslint-disable-next-line no-console
+    console.warn(`[ChannelList memo diff] diffs=${diffs.join(",")}`);
+  }
+  return diffs.length === 0;
+}
+
+export const ChannelList = memo(function ChannelList({
   server,
   threadsByChannel = {},
   unreadThreadIds = EMPTY_THREAD_IDS,
@@ -1748,7 +1776,7 @@ export function ChannelList({
       {footer}
     </aside>
   );
-}
+}, __debugCompareChannelListProps);
 
 /**
  * Icon, name and chevron: the one control that opens the server menu.

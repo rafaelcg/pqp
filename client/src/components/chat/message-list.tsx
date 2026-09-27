@@ -428,7 +428,18 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
   return "rounded-md";
 }
 
-export function MessageList({
+/**
+ * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
+ * of the parent (`App` — a presence tick, a typing broadcast, an unrelated
+ * bit of app state) re-runs this entire function regardless of whether
+ * anything it reads actually changed, which rebuilds JSX for every row even
+ * when `MessageRow`'s own memo would go on to skip every one of them. Only
+ * pays off because the callback props above are now genuinely stable
+ * (`chat.method` references and `useCallback`s in `App.tsx`, not fresh
+ * arrows per render) — memoizing a component whose props are rebuilt every
+ * render buys nothing.
+ */
+export const MessageList = memo(function MessageList({
   messages,
   onCopyOwnerInvite,
   currentUserId,
@@ -1688,7 +1699,7 @@ export function MessageList({
       )}
     </div>
   );
-}
+});
 
 const FAILED_ACTION_TILE =
   "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
