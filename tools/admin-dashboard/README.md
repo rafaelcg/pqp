@@ -522,6 +522,32 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 - Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
   minute resolution and forever for the daily peaks
 
+Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
+`/activity`, same machine token, only `days` and `weeks` forwarded):
+
+- **quem usa e quem volta**, under **ao longo do tempo**. Daily, weekly and
+  monthly actives (DAU, WAU, MAU), DAU/MAU, a 90-day chart, and retention by
+  signup week (day 1, days 7 to 13, days 30 to 36 after the signup day).
+- "Active" means the person opened the app that São Paulo day (an
+  authenticated WebSocket on web, desktop, iOS or Android) or sent a message.
+  Watch party viewers and voice-only users count. The API notes it at WS auth
+  and on any frame except the keepalive, and writes one row per person per day
+  to `user_activity_days`, batched once a minute per process.
+- Two measures are shown side by side and never blended. "Escreveram" (sent a
+  message) goes back to the first message. "Ativos" only exists from the day
+  tracking started (`trackingSince`). A window that reaches back before that
+  day is null, not a low number, so the chart does not jump on deploy day.
+- A cohort bracket only counts once it is over. A recent week shows "ainda
+  não" or "de N" instead of a low rate.
+- Headline numbers are yesterday's, the last complete day.
+- **custo por ativo · mês** divides `MONTHLY_COST_USD` (a Worker secret, see
+  below) by MAU. Unset, the card asks for it. The Worker adds the figure to
+  the response as `operatingCost`, so it never reaches the API.
+- Read the first time the section is opened, then at most every five minutes
+  while it has been opened. The API caches the report for five minutes because
+  it scans months of messages.
+- Server side: `server/src/services/user-activity.ts`.
+
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
 and written back through `PUT /operator/server-live-hls`,
@@ -695,7 +721,7 @@ the "most active" tables carry the **names of private servers and channels**,
 and the call-rating notes and feedback entries are **free text people wrote**.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
-the Worker gates the page, `/metrics`, `/occupancy`, `/health` and every
+the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every
 `/operator/*` route behind HTTP Basic Auth, compared in constant time, and
 refuses to serve anything at all (503) while the password is unset. The
 `/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
@@ -720,8 +746,9 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
+| Worker | `MONTHLY_COST_USD` | secret | What the hosted instance costs a month, in US dollars, for "custo por ativo". A secret only because the repo is public. Unset: the card asks for it. |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
 | API (Fly) | `ADMIN_METRICS_TOKEN` | secret | The same value. At least 16 characters or the API treats it as unset. |
@@ -803,6 +830,7 @@ Test the API side directly, with the token:
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/user-activity?days=90&weeks=12" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```

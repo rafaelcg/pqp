@@ -1476,6 +1476,80 @@
     </div>
   </section>
 
+  <!-- ============ ACTIVES AND RETENTION ============
+       Who opened the app, and whether people who signed up came back. Its own
+       read (/activity), fetched the first time this section is shown and at
+       most every five minutes after, never on the 30 s poll. Two measures
+       side by side and never blended: "abriram o app" only exists from the
+       day tracking started, "escreveram" goes back to the first message. -->
+  <section id="secActivity" aria-label="quem usa e quem volta">
+    <div class="sec-head">
+      <h2>quem usa e quem volta</h2>
+      <span class="rule"></span>
+      <span class="note" id="actNote">abre quando você entra nesta seção</span>
+    </div>
+    <div class="grid g-1">
+      <div class="card pad">
+        <div class="stat-row">
+          <div class="stat-mini">
+            <span class="k">ativos ontem · dau</span>
+            <span class="v num" id="actDau">—</span>
+            <span class="k" style="color:var(--faint)" id="actDauNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">ativos 7 dias · wau</span>
+            <span class="v num" id="actWau">—</span>
+            <span class="k" style="color:var(--faint)" id="actWauNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">ativos 30 dias · mau</span>
+            <span class="v num" id="actMau">—</span>
+            <span class="k" style="color:var(--faint)" id="actMauNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">dau / mau</span>
+            <span class="v num" id="actSticky">—</span>
+            <span class="k" style="color:var(--faint)" id="actStickyNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">custo por ativo · mês</span>
+            <span class="v num" id="actCost">—</span>
+            <span class="k" style="color:var(--faint)" id="actCostNote">—</span>
+          </div>
+        </div>
+        <p class="subtle-title" id="actChartTitle" style="margin:6px 0 4px">ativos por dia</p>
+        <div class="chart-scroll" id="actChart"><!-- injected --></div>
+        <div class="legend" id="actLegend"><!-- injected --></div>
+        <p class="m-note" id="actCaveat" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+          "ativo" é quem abriu o app (web, desktop, iphone ou android) ou mandou mensagem naquele dia, fuso são paulo. quem só assiste uma watch party ou só fala na chamada conta. "escreveram" é só quem mandou mensagem, e é a única medida que existe antes do rastreio começar.
+        </p>
+      </div>
+    </div>
+
+    <div class="grid g-1" style="margin-top:18px">
+      <div class="card pad">
+        <p class="subtle-title">retenção por semana de cadastro</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>semana</th>
+                <th class="r">cadastros</th>
+                <th class="r" id="actHeadD1">dia 1</th>
+                <th class="r" id="actHeadD7">semana 1</th>
+                <th class="r" id="actHeadD30">mês 1</th>
+              </tr>
+            </thead>
+            <tbody id="actCohortBody"><!-- injected --></tbody>
+          </table>
+        </div>
+        <p class="m-note" id="actCohortNote" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+          carregando
+        </p>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ VOICE OCCUPANCY OVER TIME ============
        Everything else on this page is "agora" or "últimas 24 h". This is the
        one block with a memory: a sampler on the api writes one row a minute,
@@ -2709,14 +2783,20 @@
          happened or dip below zero on a 0, 0, 41 run. Same reason barChart
          stopped being an area chart. */
       series.forEach(function (s) {
-        var d = "", peakI = 0, peakV = -1;
+        // A null is "not measured", not zero: the line breaks there instead
+        // of diving to the axis and climbing back.
+        var d = "", peakI = 0, peakV = -1, pen = false;
         for (var i = 0; i < s.values.length; i++) {
+          if (s.values[i] == null) { pen = false; continue; }
           var v = s.values[i] || 0;
-          d += (i ? " L " : "M ") + xMid(i).toFixed(1) + " " + yOf(v).toFixed(1);
+          d += (pen ? " L " : (d ? " M " : "M ")) + xMid(i).toFixed(1) + " " + yOf(v).toFixed(1);
+          pen = true;
           if (v > peakV) { peakV = v; peakI = i; }
         }
+        if (!d) return;
         svg.appendChild(svgEl("path", {
           d: d, fill: "none", stroke: s.color, "stroke-width": "1.8",
+          "stroke-dasharray": s.dashed ? "4 4" : "0",
           "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.95"
         }));
         if (peakV > 0) {
@@ -4291,6 +4371,195 @@
     if (back) back.addEventListener("click", occBackToDays);
   })();
 
+  /* ---------------- actives and retention ----------------
+     Reads /activity (the api's /api/admin/user-activity, plus the operator's
+     monthly cost the worker adds). The first read happens the first time
+     "ao longo do tempo" is shown; after that at most every five minutes, and
+     only while somebody has opened the section. The api caches the report
+     for the same five minutes, because it scans months of messages.
+
+     The headline numbers are YESTERDAY's, the last complete day. Today's row
+     is a day in progress and would read as a drop every morning. */
+  var ACT_REFRESH_MS = 300000;
+  var ACT_SERIES = [
+    { key: "dau", label: "ativos no dia", color: "var(--accent)" },
+    { key: "mau", label: "ativos em 30 dias", color: "var(--series-2)" },
+    { key: "postedDau", label: "escreveram no dia", color: "var(--accent)", dashed: true },
+    { key: "postedMau", label: "escreveram em 30 dias", color: "var(--series-2)", dashed: true }
+  ];
+  var act = { report: null, loadedAt: 0, inflight: false, asked: false };
+
+  var usd = (typeof Intl !== "undefined" && Intl.NumberFormat)
+    ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", maximumFractionDigits: 2 })
+    : null;
+  function fmtUsd(n) {
+    return usd ? usd.format(n) : "US$ " + n.toFixed(2);
+  }
+
+  /** "37% (de 120)", or a dash when nobody in the cohort has had the chance. */
+  function actRate(retained, eligible, size) {
+    if (!eligible) return "—";
+    var out = fmtPct(retained, eligible);
+    if (eligible < size) out += ' <span style="color:var(--faint)">de ' + fmt(eligible) + "</span>";
+    return out;
+  }
+
+  function actCell(b, size) {
+    // "abriram o app" first when it exists for this bracket, messages under it.
+    var main = b.activeEligible ? actRate(b.active, b.activeEligible, size) : null;
+    var posted = actRate(b.posted, b.eligible, size);
+    if (main) {
+      return main + '<br><span style="color:var(--faint);font-size:11.5px">escreveram ' + posted + "</span>";
+    }
+    if (!b.eligible) return '<span style="color:var(--faint)">ainda não</span>';
+    return '<span style="color:var(--faint);font-size:11.5px">escreveram</span> ' + posted;
+  }
+
+  function actRender(r) {
+    var days = r.days || [];
+    var y = days.length >= 2 ? days[days.length - 2] : null;
+    var t = days.length ? days[days.length - 1] : null;
+    var since = r.trackingSince;
+
+    function tile(id, active, posted) {
+      setText(id, active == null ? "—" : fmt(active));
+      setText(id + "Note", (active == null ? "sem rastreio suficiente · " : "") +
+        "escreveram " + (posted == null ? "—" : fmt(posted)));
+    }
+    tile("actDau", y && y.dau, y && y.postedDau);
+    if (y && y.dau != null && t && t.dau != null) {
+      setText("actDauNote", "escreveram " + fmt(y.postedDau) + " · hoje até agora " + fmt(t.dau));
+    }
+    tile("actWau", y && y.wau, y && y.postedWau);
+    tile("actMau", y && y.mau, y && y.postedMau);
+
+    // Stickiness: the average day of the last week over the month. A single
+    // day is too noisy (a watch party Saturday doubles it).
+    var week = days.slice(-8, -1);
+    var weekDau = week.filter(function (d) { return d.dau != null; });
+    if (y && y.mau && weekDau.length === week.length && week.length) {
+      var avg = sum(weekDau.map(function (d) { return d.dau; })) / weekDau.length;
+      setText("actSticky", fmtPct(avg, y.mau));
+      setText("actStickyNote", "média de 7 dias sobre o mau");
+    } else {
+      setText("actSticky", "—");
+      setText("actStickyNote", "precisa de 30 dias de rastreio");
+    }
+
+    var cost = r.operatingCost && r.operatingCost.monthlyUsd;
+    if (!cost) {
+      setText("actCost", "—");
+      setText("actCostNote", "defina MONTHLY_COST_USD no worker");
+    } else if (y && y.mau) {
+      setText("actCost", fmtUsd(cost / y.mau));
+      setText("actCostNote", fmtUsd(cost) + "/mês ÷ " + fmt(y.mau) + " ativos");
+    } else if (y && y.wau) {
+      // Interim, and labelled as such: a week's actives are fewer than a
+      // month's, so this overstates the real figure.
+      setText("actCost", fmtUsd(cost / y.wau));
+      setText("actCostNote", "sobre o wau até haver 30 dias de rastreio");
+    } else {
+      setText("actCost", "—");
+      setText("actCostNote", fmtUsd(cost) + "/mês · sem ativos rastreados ainda");
+    }
+
+    setText("actChartTitle", "ativos por dia · " + fmt(days.length) + " dias" +
+      (since ? " · rastreio desde " + fmtDayNamed(since) : " · rastreio ainda não começou"));
+    var box = $("actChart");
+    if (box) {
+      box.innerHTML = "";
+      var n = days.length;
+      var ticks = [];
+      for (var i = n - 1; i >= 0; i -= 14) ticks.push([i, fmtDayShort(days[i].day)]);
+      // The oldest day too, unless the walk landed close enough that the two
+      // labels would overlap.
+      if (ticks.length && ticks[ticks.length - 1][0] >= 7) ticks.push([0, fmtDayShort(days[0].day)]);
+      box.appendChild(seriesChart(ACT_SERIES.map(function (s) {
+        return {
+          label: s.label, color: s.color, dashed: s.dashed,
+          values: days.map(function (d) { return d[s.key] == null ? null : Number(d[s.key]); })
+        };
+      }), {
+        mode: "lines",
+        label: "pessoas ativas por dia e em 30 dias",
+        caption: "linha cheia: abriram o app · tracejada: escreveram · o último dia está em curso",
+        ticks: ticks,
+        hitTitle: function (a, b) {
+          var d = days[b];
+          function v(x) { return x == null ? "—" : fmt(x); }
+          return fmtDayNamed(d.day) + "\nativos " + v(d.dau) + " · 7 dias " + v(d.wau) + " · 30 dias " + v(d.mau) +
+            "\nescreveram " + v(d.postedDau) + " · 7 dias " + v(d.postedWau) + " · 30 dias " + v(d.postedMau);
+        }
+      }));
+    }
+    var legend = $("actLegend");
+    if (legend) {
+      legend.innerHTML = ACT_SERIES.map(function (s) {
+        return '<span><i class="swatch" style="background:' + s.color + (s.dashed ? ";opacity:0.5" : "") +
+          '"></i>' + esc(s.label) + "</span>";
+      }).join("");
+    }
+
+    var br = r.brackets || {};
+    function head(id, label, pair) {
+      if (pair) setText(id, label + " · " + (pair[0] === pair[1] ? "dia " + pair[0] : "dias " + pair[0] + "–" + pair[1]));
+    }
+    head("actHeadD1", "dia 1", br.d1);
+    head("actHeadD7", "semana 1", br.d7);
+    head("actHeadD30", "mês 1", br.d30);
+
+    var body = $("actCohortBody");
+    if (body) {
+      var cohorts = (r.cohorts || []).slice().reverse();
+      body.innerHTML = cohorts.length ? cohorts.map(function (c) {
+        return "<tr><td>" + esc(fmtDayShort(c.week)) + "</td>" +
+          '<td class="r num">' + fmt(c.size) + "</td>" +
+          '<td class="r num">' + actCell(c.d1, c.size) + "</td>" +
+          '<td class="r num">' + actCell(c.d7, c.size) + "</td>" +
+          '<td class="r num">' + actCell(c.d30, c.size) + "</td></tr>";
+      }).join("") : '<tr><td colspan="5" style="color:var(--faint)">nenhum cadastro na janela</td></tr>';
+    }
+    setText("actCohortNote",
+      "de quem se cadastrou naquela semana (segunda a domingo), quantos voltaram em cada janela, contada a partir do dia do cadastro. " +
+      "em cima, quem abriu o app; embaixo, quem escreveu. uma janela só conta depois de terminar, então uma semana recente mostra \"ainda não\" " +
+      "ou \"de N\" em vez de uma taxa baixa. \"abriram o app\" só aparece para janelas que começaram depois do início do rastreio" +
+      (since ? " (" + fmtDayNamed(since) + ")." : ", que ainda não começou."));
+  }
+
+  function actFail(e) {
+    var reason = e && e.message ? e.message : String(e);
+    if (reason.indexOf("404") !== -1) {
+      setText("actNote", "esta api ainda não tem esse relatório");
+      sectionUnavailable("secActivity", "ativos e retenção");
+      return;
+    }
+    setText("actNote", "a leitura falhou · " + reason);
+  }
+
+  function actLoad(force) {
+    if (act.inflight) return;
+    if (!force && act.report && (Date.now() - act.loadedAt) < ACT_REFRESH_MS) return;
+    act.inflight = true;
+    setText("actNote", act.report ? "atualizando" : "carregando");
+    fetchJson("/activity?days=90&weeks=12").then(function (r) {
+      act.inflight = false;
+      if (!r || !Array.isArray(r.days)) { actFail(new Error("payload inesperado")); return; }
+      sectionRestore("secActivity");
+      act.report = r;
+      act.loadedAt = Date.now();
+      setText("actNote", "90 dias · 12 semanas · fuso são paulo");
+      actRender(r);
+    }).catch(function (e) {
+      act.inflight = false;
+      actFail(e);
+    });
+  }
+
+  function actOnShown() {
+    act.asked = true;
+    actLoad(false);
+  }
+
   /* ---------------- render: user detail ---------------- */
   function renderUserDetail(d) {
     if (!d.userDetail) return sectionUnavailable("secUserDetail", "o perfil da base de usuários");
@@ -5588,7 +5857,7 @@
     // "agora" needs the same numbers for its voice verdict, so occupancy is
     // fetched once on load (see wireOccupancy) and refreshed at most every
     // five minutes, whichever section is showing.
-    if (name === "tempo") occOnShown();
+    if (name === "tempo") { occOnShown(); actOnShown(); }
     if (name === "controles") ctlOnShown();
     if (!opts || !opts.silent) {
       try {
@@ -6109,6 +6378,7 @@
     // Fired, never awaited, and never part of the promise below: a slow
     // occupancy read must not delay the numbers an incident is read from.
     occTick(false);
+    if (act.asked) actLoad(false);
     var metricsReq = fetchJson("/metrics").then(function (d) {
       if (!d || typeof d !== "object" || !d.users) throw new Error("payload inesperado");
       applyMetrics(d);
@@ -6155,6 +6425,7 @@
     if (refreshBtn) {
       refreshBtn.addEventListener("click", function () {
         occTick(true);
+        if (act.asked) actLoad(true);
         // The controls section does not poll, so this button is the only way
         // to re-read it without a write. Only when it has been opened at all.
         if (ctlLoaded) ctlLoadServers();

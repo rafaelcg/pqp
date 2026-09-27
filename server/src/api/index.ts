@@ -591,6 +591,12 @@ import {
   voiceOccupancyReport,
 } from "../services/voice-occupancy.js";
 import {
+  ADMIN_USER_ACTIVITY_PATH,
+  clampActivityDays,
+  clampCohortWeeks,
+  userActivityReport,
+} from "../services/user-activity.js";
+import {
   ADMIN_METRICS_PATH,
   getAdminMetrics,
   isAdminMetricsTokenValid,
@@ -2048,6 +2054,28 @@ router.get(ADMIN_VOICE_OCCUPANCY_PATH, async ({ url, user }) => {
 });
 
 /**
+ * Daily / weekly / monthly actives and signup-cohort retention, counts only.
+ * The dashboard's "quem volta" section. Same two ways in as the occupancy
+ * history above. See services/user-activity.ts for what "active" means.
+ */
+function userActivityQuery(params: URLSearchParams): {
+  days: number;
+  weeks: number;
+} {
+  return {
+    days: clampActivityDays(params.get("days")),
+    weeks: clampCohortWeeks(params.get("weeks")),
+  };
+}
+
+router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return userActivityReport(userActivityQuery(url.searchParams));
+});
+
+/**
  * Aggregate counts for the operator dashboard. Same gate, same 404. The other
  * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
  * this handler only ever sees a signed-in moderator. See services/metrics.ts
@@ -2198,6 +2226,11 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_VOICE_OCCUPANCY_PATH,
     run: async (_req, query) => voiceOccupancyReport(occupancyQuery(query)),
+  },
+  {
+    method: "GET",
+    path: ADMIN_USER_ACTIVITY_PATH,
+    run: async (_req, query) => userActivityReport(userActivityQuery(query)),
   },
   {
     method: "GET",

@@ -4817,3 +4817,23 @@ CREATE TABLE IF NOT EXISTS feature_flag_audit (
 
 CREATE INDEX IF NOT EXISTS idx_feature_flag_audit_created
   ON feature_flag_audit (created_at DESC);
+
+-- Which days each account opened the app. One row per (account, São Paulo
+-- day), written when a WebSocket authenticates, so somebody who only reads,
+-- only talks in voice or only watches a party counts as active. Before this
+-- table a message was the only per-person activity the database kept, and
+-- every retention number on the dashboard undercounted by everyone who never
+-- posts.
+--
+-- Counts only ever leave the server (`services/user-activity.ts`); no id is
+-- in any report. Kept for as long as the account exists: the cascade is what
+-- removes it with an art. 18 deletion. About 16 bytes a row, so a year of
+-- 5,000 daily actives is a few tens of megabytes.
+CREATE TABLE IF NOT EXISTS user_activity_days (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day     DATE NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
+  ON user_activity_days (day);

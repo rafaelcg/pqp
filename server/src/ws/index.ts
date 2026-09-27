@@ -5,6 +5,7 @@ import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
 import { recordUserCountry } from "../voice/region-audience.js";
+import { userActivity } from "../services/user-activity.js";
 import { socketCountry } from "../voice/regions.js";
 import { createFrameBudget } from "./frame-budget.js";
 import {
@@ -344,6 +345,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       // servers' voice rooms (`voice/region-audience.ts`). Country only,
       // throttled, never throws, and a no-op without `LIVEKIT_REGIONS`.
       void recordUserCountry(resolved.user.id, socketCountry(socket));
+      // Opened the app today, for the dashboard's actives and retention
+      // (`services/user-activity.ts`). A Map.set; flushed once a minute.
+      userActivity.note(resolved.user.id);
       void onHostSocketOpened(resolved.user.id).catch((error) => {
         console.error("[watch-party] host reconnect failed:", error);
       });
@@ -372,6 +376,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     if (!session) {
       return;
     }
+    // Any frame but the keepalive is somebody using the app, which is what
+    // counts a tab left open across midnight on the day it is used again.
+    userActivity.note(session.user.id);
 
     if (CHAT_MESSAGE_TYPES.has(type)) {
       await handleChatMessage(session, parsed);

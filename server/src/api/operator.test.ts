@@ -115,10 +115,11 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the twelve routes, and account deletion is not one of them", () => {
+  it("is exactly the thirteen routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
+      ["GET", "/api/admin/user-activity"],
       ["GET", "/api/admin/servers"],
       ["GET", "/api/admin/server-channels"],
       ["PUT", "/api/admin/server-live-hls"],

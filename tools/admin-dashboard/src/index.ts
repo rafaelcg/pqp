@@ -14,7 +14,9 @@
  *     machine token, then merged with the Android distribution block this
  *     Worker owns (button clicks in KV, GitHub `download_count`);
  *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
- *     token and only the `days` and `day` parameters forwarded; `/health`
+ *     token and only the `days` and `day` parameters forwarded;
+ *     `/activity` is `${API_ORIGIN}/api/admin/user-activity` the same way
+ *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
@@ -69,6 +71,13 @@ export interface Env {
   GITHUB_REPO?: string;
   /** Click counter. Unset: /apk-click is a no-op and the tile says so. */
   APK_CLICKS?: KVNamespace;
+  /**
+   * What the hosted instance costs a month, in US dollars, for "custo por
+   * pessoa ativa" on the /activity card. A secret rather than a var only
+   * because this repository is public: `wrangler secret put
+   * MONTHLY_COST_USD`. Unset, the card asks for it instead of guessing.
+   */
+  MONTHLY_COST_USD?: string;
 }
 
 const DEFAULT_USER = "operador";
@@ -375,6 +384,12 @@ const OPERATOR_ROUTES: {
   },
 ];
 
+/** A positive number of dollars, or null for unset and anything else. */
+export function parseMonthlyCost(raw: string | undefined): number | null {
+  const n = Number((raw ?? "").trim());
+  return raw && Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function matchOperatorRoute(method: string, path: string) {
   return (
     OPERATOR_ROUTES.find(
@@ -462,6 +477,32 @@ export default {
       if (day) upstream.searchParams.set("day", day);
       return proxyJson(upstream.toString(), {
         Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+    }
+
+    // Actives and signup retention (`/api/admin/user-activity`), fetched when
+    // "ao longo do tempo" opens. Only `days` and `weeks` are forwarded. The
+    // operator's monthly cost is added here, next to the counts it divides,
+    // so it never has to reach the API or the page source.
+    if (path === "/activity") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "activity not configured" });
+      }
+      const upstream = new URL(`${origin}/api/admin/user-activity`);
+      const days = url.searchParams.get("days");
+      const weeks = url.searchParams.get("weeks");
+      if (days) upstream.searchParams.set("days", days);
+      if (weeks) upstream.searchParams.set("weeks", weeks);
+      const response = await proxyJson(upstream.toString(), {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+      if (!response.ok) {
+        return response;
+      }
+      const report = (await response.json()) as Record<string, unknown>;
+      return json(200, {
+        ...report,
+        operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
       });
     }
 
