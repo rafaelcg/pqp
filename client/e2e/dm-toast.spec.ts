@@ -183,7 +183,15 @@ test("the X dismisses only that card, leaving a sibling untouched (criterion 17)
   // that setup time is ever charged against a card's countdown, so the final
   // assertion no longer races the clock. Time only moves when this test
   // explicitly asks it to (`clock.runFor`, below).
-  await anaPage.clock.install();
+  //
+  // `clock.install()` alone does NOT pause anything — Playwright's clock
+  // resumes real-time tracking the moment it is installed unless told
+  // otherwise (`ClockController._replayLogOnce` calls `_innerResume()`), so
+  // Date/setTimeout on this page would have kept advancing in lockstep with
+  // real CI wall-clock time exactly as before. `pauseAt` is what actually
+  // stops the clock (and installs it if needed); pinning it to the current
+  // moment is what makes the setup below free.
+  await anaPage.clock.pauseAt(Date.now());
 
   async function sendFrom(suffix: string, channelId: string, body: string) {
     const context = await browser.newContext();
