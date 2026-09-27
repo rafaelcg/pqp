@@ -1060,11 +1060,16 @@ export function createChatController(
       );
       // Sorted by userId so the key does not depend on Map iteration order;
       // displayName rides along so a rename mid-typing invalidates the cache
-      // too, not just a change in who is active.
-      const key = active
-        .map(([userId, entry]) => `${userId}:${entry.displayName}`)
-        .sort()
-        .join(",");
+      // too, not just a change in who is active. JSON.stringify rather than
+      // a joined string: a display name may itself contain the separator
+      // (a comma, say), and two different active sets could then stringify
+      // to the same joined text. `JSON.stringify` on the tuple array escapes
+      // each field, so no display name can forge a collision.
+      const key = JSON.stringify(
+        active
+          .map(([userId, entry]) => [userId, entry.displayName] as const)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      );
       if (key === typingUsersCacheKey) {
         return typingUsersCache;
       }

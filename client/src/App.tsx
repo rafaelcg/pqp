@@ -2349,7 +2349,45 @@ function MainAppContent({
     void voice.setCameraDevice(localSettings.cameraDeviceId);
   }, [localSettings.cameraDeviceId, voice]);
 
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  /**
+   * `chat.onChange` / `threadChat.onChange` call this on EVERY frame either
+   * controller applies — a message, a reaction, an edit, a typing broadcast —
+   * and it used to bump `tick` unconditionally, which re-renders this whole
+   * component. A busy watch party fires `typing-broadcast` and
+   * `message-broadcast` several times a second, and profiling one (the same
+   * harness as the presence-nudge fix above) found this was the single
+   * biggest remaining source of full-app re-renders: worse than presence,
+   * because nothing downstream of it was throttled at all. Coalesced the
+   * same way — leading edge fires immediately, so a deliberate one-off call
+   * (selecting a channel, sending your own message) still reads as instant;
+   * a burst inside `REFRESH_COALESCE_MS` collapses to one trailing render
+   * instead of one per frame.
+   */
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshPendingRef = useRef(false);
+  const REFRESH_COALESCE_MS = 100;
+  const refresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    setTick((t) => t + 1);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        setTick((t) => t + 1);
+      }
+    }, REFRESH_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);

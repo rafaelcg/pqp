@@ -303,9 +303,58 @@ interface Row {
   dayLabel: string | null;
 }
 
-function buildRows(messages: ChatMessage[]): Row[] {
-  return messages.map((message, index) => {
+/**
+ * One row's cached build, keyed by message id: the `Row` object itself, and
+ * the neighbor it was built against — `startsGroup`/`dayLabel` depend on the
+ * PREVIOUS message too, so a cache hit has to confirm that one has not moved
+ * as well, not just this message.
+ */
+interface RowCacheEntry {
+  row: Row;
+  message: ChatMessage;
+  previous: ChatMessage | undefined;
+}
+
+/**
+ * `messages.map()` used to build a brand-new `{ message, startsGroup,
+ * dayLabel }` object for every row on every call — which runs on every new
+ * message, reaction, edit, anything that gives `messages` a new array
+ * reference. `MessageRow` is `memo()`'d, but `row` is one of its props, so a
+ * fresh `Row` object for an UNCHANGED message still reads as "this row's
+ * props changed" and defeats the memo for the other 200+ rows a live
+ * message did not touch, every single time one arrives. Profiling a busy
+ * watch party (see message-list.tsx's PR history) found this was the
+ * largest remaining cost: hundreds of rows re-running their full render,
+ * including two `Intl` timestamp formats each, on every new message.
+ *
+ * `cache` persists across calls (a `useRef` in `MessageList`) and hands back
+ * the SAME `Row` object for a message whose own data and immediate
+ * predecessor have not changed — which, for ordinary appends (the normal
+ * shape of live chat: new messages land at the end, older ones do not move),
+ * is every row except the new one. An edit or a reaction still gets a fresh
+ * `Row`, correctly, because the message object itself is a new reference.
+ */
+function buildRows(
+  messages: readonly ChatMessage[],
+  cache: Map<string, RowCacheEntry>,
+): Row[] {
+  const rows: Row[] = new Array(messages.length);
+  const seen = new Set<string>();
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
     const previous = index > 0 ? messages[index - 1] : undefined;
+    seen.add(message.id);
+
+    const cached = cache.get(message.id);
+    if (
+      cached &&
+      cached.message === message &&
+      cached.previous === previous
+    ) {
+      rows[index] = cached.row;
+      continue;
+    }
+
     const newDay =
       !previous || !isSameDay(previous.createdAt, message.createdAt);
     const withinWindow =
@@ -315,14 +364,27 @@ function buildRows(messages: ChatMessage[]): Row[] {
         new Date(previous.createdAt).getTime() <
         GROUP_WINDOW_MS;
 
-    return {
+    const row: Row = {
       message,
       // A reply always opens a block: its quote header needs the author line
       // above it to read as an answer rather than a stray fragment.
       startsGroup: newDay || !withinWindow || Boolean(message.replyTo),
       dayLabel: newDay ? formatDayLabel(message.createdAt) : null,
     };
-  });
+    cache.set(message.id, { row, message, previous });
+    rows[index] = row;
+  }
+
+  // A message that scrolled out of the loaded window (pagination, a bulk
+  // delete) should not keep its entry forever — same reasoning as the row
+  // callback cache below.
+  for (const id of cache.keys()) {
+    if (!seen.has(id)) {
+      cache.delete(id);
+    }
+  }
+
+  return rows;
 }
 
 /** Consecutive pings in a group share one wash, not a stack of rounded cards. */
@@ -522,7 +584,11 @@ export function MessageList({
   /** A short, one-line heads-up for new arrivals — never the message itself. */
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
 
-  const rows = useMemo(() => buildRows(messages), [messages]);
+  const rowCache = useRef(new Map<string, RowCacheEntry>());
+  const rows = useMemo(
+    () => buildRows(messages, rowCache.current),
+    [messages],
+  );
   const mentionMask = useMemo(
     () =>
       rows.map((row) =>
@@ -531,6 +597,16 @@ export function MessageList({
     [rows, currentUsername, currentUserId],
   );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  // `rows` (the array, not its contents) gets a new reference on every
+  // message arrival even when almost every `Row` inside it is the cached,
+  // reused one, so `rowIds` does too. `handleRowNavigate` below only reads
+  // this to answer "where is this row / what's next", never during render,
+  // so it takes it from a ref instead of closing over it directly — keeping
+  // the callback's own identity stable is what lets `MessageRow`'s memo()
+  // actually skip re-rendering the ~250 other rows a single new message
+  // does not touch.
+  const rowIdsRef = useRef(rowIds);
+  rowIdsRef.current = rowIds;
 
   // A message scrolled out of history (bulk delete, forget-on-report, a page
   // that fell off the loaded window) should not keep its handler entry
@@ -738,6 +814,7 @@ export function MessageList({
       if (event.target !== event.currentTarget) {
         return;
       }
+      const rowIds = rowIdsRef.current;
       const index = rowIds.indexOf(messageId);
       if (index === -1) {
         return;
@@ -774,7 +851,7 @@ export function MessageList({
         });
       }
     },
-    [rowIds, prefersReducedMotion],
+    [prefersReducedMotion],
   );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {

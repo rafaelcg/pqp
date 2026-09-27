@@ -988,6 +988,48 @@ describe("typing indicators", () => {
     expect(second).not.toBe(first);
     expect(second).toEqual([{ userId: "u1", displayName: "Ana Paula" }]);
   });
+
+  // A second Farol pass on the same fix: the cache key used to join
+  // "userId:displayName" pairs with a plain comma, so a comma inside a
+  // display name could make two DIFFERENT active sets stringify to the same
+  // key. Concretely, under the old scheme, one user named "1,b:2" and two
+  // users named "1" / "2" both joined to the literal string "a:1,b:2" —
+  // proof by construction, not just a suspicion.
+  it("does not collide when a display name contains the old separator", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1,b:2",
+    } as never);
+    const oneUserCommaName = chat.getTypingUsers();
+    expect(oneUserCommaName).toEqual([{ userId: "a", displayName: "1,b:2" }]);
+
+    // Switch to the OTHER active set that collided under the old scheme:
+    // "a" typing "1" and "b" typing "2".
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1",
+    } as never);
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "b",
+      displayName: "2",
+    } as never);
+    const twoUsersSplit = chat.getTypingUsers();
+    expect(twoUsersSplit).not.toBe(oneUserCommaName);
+    expect(twoUsersSplit).toEqual(
+      expect.arrayContaining([
+        { userId: "a", displayName: "1" },
+        { userId: "b", displayName: "2" },
+      ]),
+    );
+    expect(twoUsersSplit).toHaveLength(2);
+  });
 });
 
 describe("history pagination", () => {
