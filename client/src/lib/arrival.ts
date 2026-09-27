@@ -120,11 +120,17 @@ export function browserStorage(): Storage | null {
  *   has nothing left to say and goes (`null`).
  * - `home`: the community home (Baú) is open, which is where a server with it
  *   on lands a new member. It names a text channel to start in.
- * - `generic`: anything else (a watch party, a forum). The old copy.
+ * - `generic`: anything else (a party not on air yet, a forum). The old copy.
+ *
+ * A watch party that is LIVE gets no banner at all (`party` surface). Its
+ * copy was "pick a channel on the left and say something", which is the
+ * wrong instruction to somebody who just landed on the film, and on a phone
+ * the strip took the height the picture needed. The party and its chat are
+ * the welcome.
  */
 export type ArrivalVariant = "owner" | "text" | "voice" | "home" | "generic";
 
-export type ArrivalSurface = "text" | "voice" | "home" | "other";
+export type ArrivalSurface = "text" | "voice" | "home" | "party" | "other";
 
 export function arrivalVariant({
   createdHere,
@@ -156,6 +162,8 @@ export function arrivalVariant({
       return inCall ? null : "voice";
     case "home":
       return "home";
+    case "party":
+      return null;
     default:
       return "generic";
   }
