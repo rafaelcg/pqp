@@ -111,6 +111,19 @@ export function postSummary(post: BlogPost, reader: BlogReadLocale): string {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "watch-party-mais-redonda",
+    date: "2026-09-27",
+    title: {
+      "pt-BR": "Watch party mais redonda no celular",
+      en: "A smoother watch party on your phone",
+    },
+    summary: {
+      "pt-BR":
+        "O filme não fica mais preto ao virar o iPhone, a câmera de quem apresenta não trava, ninguém ouve a voz em dobro e o botão de som fica sempre à vista.",
+      en: "The movie no longer goes black when you turn your iPhone, the host's camera stops freezing, nobody hears the voice twice, and the mute button stays on screen.",
+    },
+  },
+  {
     slug: "servidores-de-voz-miami-e-londres",
     date: "2026-09-24",
     title: {
