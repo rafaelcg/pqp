@@ -1691,6 +1691,8 @@
   "settings.voice.permissionNeeded": "Precisa liberar o microfone pra listar os dispositivos e mostrar o nível de entrada.",
   "settings.voice.inputDevice": "Microfone",
   "settings.voice.cameraDevice": "Câmera",
+  "settings.voice.obsVirtualCameraHint": "Usando a câmera virtual do OBS? Para mandar só o seu rosto, no OBS abra as configurações da Câmera Virtual e escolha Tipo de saída: Fonte, com a sua webcam.",
+  "settings.voice.obsVirtualCameraHint.dismiss": "Dispensar",
   "settings.voice.systemDefault": "Padrão do sistema",
   "settings.voice.inputVolume": "Volume de entrada",
   "settings.voice.inputLevel": "Nível de entrada",
