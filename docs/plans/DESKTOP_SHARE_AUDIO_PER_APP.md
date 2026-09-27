@@ -56,7 +56,11 @@ ScreenCaptureKit (macOS 13+): `SCStreamConfiguration.capturesAudio = true`, `exc
 
 ### Linux
 
-PipeWire: capture the shared app's audio node (per-app), or the default sink's monitor minus our own stream. A research agent is on this today (report: `~/.config/pqp/linux-share-audio-2026-09-27.md`); fold its findings in here before starting. PulseAudio-only systems likely stay "tab share in Chrome" with an explanation.
+**Prototype exists: draft PR #866** (branch `linux-desktop-system-audio`, `restarts-api`, flag `linux_desktop_system_audio` default off). The desktop app uses `pactl` to create a null sink, moves every other app's sound into it, loops it on to the speakers so the sharer still hears it, and exposes the sink's monitor as a remapped input the page opens after the picker. The call is never moved, the default output never changes, a watcher tears it all down and cleans up after a crash. No native module.
+
+Proven in Docker with real Electron 44 on PulseAudio 16.1 and PipeWire 1.0.5: the other app is captured and the call is absent (-136 to -145 dB), including new apps mid-share and a device switch. Ruled out: `audio: "loopback"` on Linux records the call too; `restrictOwnAudio` is a no-op on Linux; `getUserMedia` never lists monitor devices. Browser users on Linux stay on "share a Chrome tab".
+
+Needs: AppImage or .deb (Flatpak cannot reach `pactl`), a Pulse or PipeWire session. Left: QA on real GNOME and KDE (Wayland and X11), the watch party setup preview, hiding the `pqp-share-audio` device from the mic picker while sharing, and a ~250 ms echo risk if something makes the share sink the default output. Report: `~/.config/pqp/linux-share-audio-2026-09-27.md`, rig: `~/.config/pqp/linux-share-audio-rig-2026-09-27/`.
 
 ### Renderer side (shared by all three)
 
@@ -92,7 +96,7 @@ For every row: probe tones present in the share, call audio absent (the probe's 
 | Windows proof of concept (add-on, one window share, one screen share, probe) | 1 to 2 days |
 | Windows production (build/sign/arm64, PID resolution for browsers, flag, tests) | +1 week |
 | macOS | ~1 week, or ~1 day if Electron already does it |
-| Linux | ~1 week, depends on the research |
+| Linux | ~1 to 2 days of QA and gaps on top of draft #866, plus a desktop release |
 
 The bottleneck is machines, not code: Windows 10 and Windows 11 with real audio, a Mac, a Linux box.
 
@@ -101,7 +105,7 @@ The bottleneck is machines, not code: Windows 10 and Windows 11 with real audio,
 1. Ship the quick win.
 2. Answer the Windows 10 build question with the proof of concept on a Windows 10 22H2 machine.
 3. If yes: Windows production behind the flag, turn it on for QG, then Macacolandia (cap1tao's server).
-4. macOS, then Linux.
+4. Linux (#866) in parallel with Windows, since it is mostly QA now; then macOS.
 
 ## Open questions
 
