@@ -1106,6 +1106,7 @@
   "voice.control.shareSound": "Compartir el audio de esta computadora",
   "voice.control.shareWithoutSound": "Compartir sin sonido",
   "voice.control.shareSoundDetail": "Juegos, música, lo que esté sonando. Solo en Windows 11. La llamada no se incluye.",
+  "voice.control.shareSoundDetailLinux": "Juegos, música, lo que esté sonando. La llamada no se incluye. Necesita PulseAudio o PipeWire, que casi todo Linux tiene.",
   "voice.control.shareDetail": "¿Quieres mandar el audio del juego o la música? En el siguiente paso, marca Compartir audio del sistema. La llamada no se incluye.",
   "voice.control.shareDetail_desktop": "¿Quieres mandar el audio del juego o la música? Marca la casilla en la siguiente ventana. La llamada no se incluye.",
   "voice.control.hideCursor": "Ocultar el puntero del mouse",

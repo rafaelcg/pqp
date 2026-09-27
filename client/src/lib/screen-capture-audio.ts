@@ -68,6 +68,10 @@ import {
 } from "./screen-capture-cursor";
 import type { Platform } from "./downloads";
 import type { MessageKey } from "@/lib/i18n";
+import {
+  linuxShellShareAudioReady,
+  shellCanBuildLinuxShareAudio,
+} from "./linux-shell-share-audio";
 
 /**
  * The display-capture options the DOM lib does not know about yet.
@@ -258,6 +262,17 @@ export interface ScreenCaptureEnvironment {
    * reads as false, which is every environment built before it existed.
    */
   shellNativeShareAudio?: boolean;
+  /**
+   * The LINUX shell will build its "everything but pqp" bus for this share:
+   * the shell can, the runtime flag is on, and a sound server answered
+   * (`lib/linux-shell-share-audio.ts`). The exclusion is the shell's routing,
+   * not `restrictOwnAudio`, and the sound arrives on a second capture the
+   * page opens after the picker, never on the display stream. False
+   * everywhere else, and false on Linux until all three say yes. Optional so
+   * an environment built without it (every test fixture before it) reads as
+   * the old behaviour.
+   */
+  shellLinuxShareAudio?: boolean;
 }
 
 /**
@@ -289,6 +304,9 @@ export interface ScreenCaptureEnvironment {
 export function shellCarriesScreenAudio(env: ScreenCaptureEnvironment): boolean {
   if (!env.isDesktopShell) {
     return false;
+  }
+  if (env.shellLinuxShareAudio) {
+    return true;
   }
   // The shell's own answer wins where it gave one. The platform test stays for
   // every build that never said, which is every build before 0.1.6.
@@ -332,6 +350,7 @@ export function screenCaptureEnvironment(
     shellRestrictOwnAudio?: boolean | null;
     osCanExcludeCallAudio?: boolean;
     shellNativeShareAudio?: boolean;
+    shellLinuxShareAudio?: boolean;
   } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
@@ -354,6 +373,7 @@ export function screenCaptureEnvironment(
     shellSystemAudio: extras.shellSystemAudio ?? null,
     shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
     shellNativeShareAudio: isDesktopShell && extras.shellNativeShareAudio === true,
+    shellLinuxShareAudio: isDesktopShell && extras.shellLinuxShareAudio === true,
   };
 }
 
@@ -375,10 +395,16 @@ export function liveScreenCaptureEnvironment(
   scoped: Pick<ScreenCaptureIntent, "nativeShareAudio"> = {},
 ): ScreenCaptureEnvironment {
   const capabilities = desktopShareCapabilities();
+  const linux = shellCanBuildLinuxShareAudio() && linuxShellShareAudioReady();
   return screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null, {
-    sharePickerOffersAudio:
-      capabilities?.pickerOffersAudio === true ||
-      getDesktop()?.sharePickerOffersAudio === true,
+    // Linux: the shell's picker never asks about sound (on Wayland it never
+    // even opens), whatever the legacy `sharePickerOffersAudio` flag says, so
+    // the page asks first (`needsShareAudioPrompt`).
+    sharePickerOffersAudio: linux
+      ? false
+      : capabilities?.pickerOffersAudio === true ||
+        getDesktop()?.sharePickerOffersAudio === true,
+    shellLinuxShareAudio: linux,
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
     osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
@@ -609,6 +635,12 @@ export function resetConfirmedOldWindowsForTests(): void {
 export function canExcludeCallFromSystemAudio(
   env: ScreenCaptureEnvironment,
 ): boolean {
+  // The Linux shell keeps the call out by routing, not by the constraint:
+  // pqp's own streams never reach the bus it captures. Measured on
+  // PulseAudio and PipeWire; `restrictOwnAudio` itself is a no-op there.
+  if (env.isDesktopShell && env.shellLinuxShareAudio) {
+    return true;
+  }
   if (!env.supportsRestrictOwnAudio) {
     return false;
   }
