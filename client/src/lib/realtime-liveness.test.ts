@@ -100,11 +100,11 @@ describe("keepaliveAction", () => {
 });
 
 describe("reconnectCauseForClose", () => {
-  it("maps deploy closes, network closes and refusals", () => {
+  it("maps deploy closes, abnormal closes and refusals", () => {
     expect(reconnectCauseForClose(1001)).toBe("drain");
     expect(reconnectCauseForClose(1012)).toBe("drain");
-    expect(reconnectCauseForClose(1006)).toBe("network");
-    expect(reconnectCauseForClose(1005)).toBe("network");
+    expect(reconnectCauseForClose(1006)).toBe("abnormal");
+    expect(reconnectCauseForClose(1005)).toBe("abnormal");
     expect(reconnectCauseForClose(4401)).toBe("refused");
     expect(reconnectCauseForClose(4429)).toBe("refused");
     expect(reconnectCauseForClose(1000)).toBe("refused");
@@ -117,6 +117,32 @@ describe("reconnectDelayMs", () => {
       const delay = reconnectDelayMs(0, "network", 0);
       expect(delay).toBeGreaterThanOrEqual(0);
       expect(delay).toBeLessThanOrEqual(250);
+    }
+  });
+
+  it("spreads the first retry after a 1006 across 0 to 1.5s, full jitter", () => {
+    // A crash sends 1006 to every tab at once (docs/plans/RELOAD_STORM.md).
+    const delays: number[] = [];
+    for (let i = 0; i < 400; i++) {
+      const delay = reconnectDelayMs(0, "abnormal", 0);
+      expect(delay).toBeGreaterThanOrEqual(0);
+      expect(delay).toBeLessThanOrEqual(1_500);
+      delays.push(delay);
+    }
+    // Spread across the whole window, not bunched at one end.
+    expect(delays.some((d) => d < 300)).toBe(true);
+    expect(delays.some((d) => d > 1_200)).toBe(true);
+  });
+
+  it("puts a 1006's later retries on the same capped schedule as a network loss", () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    for (let attempt = 1; attempt < 20; attempt++) {
+      expect(reconnectDelayMs(attempt, "abnormal", 10_000)).toBeCloseTo(
+        reconnectDelayMs(attempt, "network", 10_000),
+      );
+      expect(reconnectDelayMs(attempt, "abnormal", 10_000)).toBeLessThanOrEqual(
+        FAST_RECONNECT_CAP_MS,
+      );
     }
   });
 

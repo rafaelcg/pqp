@@ -736,16 +736,32 @@ describe("fast recovery from a network blip", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("retries an abnormal close (1006) within 250ms, not behind the deploy spread", async () => {
+  it("retries an abnormal close (1006) within 1.5s, not behind the deploy spread", async () => {
+    // A crash or a Caddy / Cloudflare blip sends 1006 to every tab at once:
+    // spread across 1.5s, still fast for one person (median 0.75s).
     vi.spyOn(Math, "random").mockReturnValue(1); // the slowest the jitter can be
     await online(true);
 
     sockets[0]!.close(1006);
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(1_499);
     await flush();
     expect(sockets).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(sockets).toHaveLength(2);
+  });
+
+  it("retries a loss the keepalive found itself within 250ms", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const listeners = captureWindowListeners();
+    await online(false);
+    // An online probe that goes unanswered: this tab's link, nobody else's.
+    listeners.online?.();
+    await vi.advanceTimersByTimeAsync(4_000);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(250);
     await flush();
     expect(sockets).toHaveLength(2);
   });
@@ -847,10 +863,12 @@ describe("fast recovery from a network blip", () => {
     await online(true);
 
     sockets[0]!.close(1006);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_500);
     await flush();
-    // The retry fails too: the next one waits (up to 1s at attempt 1).
-    sockets[1]!.close(1006);
+    expect(sockets).toHaveLength(2);
+    // The retry never opens (the network is still down): the next one is a
+    // network wait of up to 1s at attempt 1.
+    await vi.advanceTimersByTimeAsync(6_000);
     await vi.advanceTimersByTimeAsync(100);
     await flush();
     expect(sockets).toHaveLength(2);
@@ -858,6 +876,24 @@ describe("fast recovery from a network blip", () => {
     emitNetworkHint("up");
     await flush();
     expect(sockets).toHaveLength(3);
+  });
+
+  it("lets the browser's online cut a 1006 spread short, but not a media hint", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    const listeners = captureWindowListeners();
+    await online(true);
+
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(100);
+    // Every tab in a call hears the same media hint after a crash.
+    emitNetworkHint("up");
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    // `online` is this machine alone.
+    listeners.online?.();
+    await flush();
+    expect(sockets).toHaveLength(2);
   });
 
   it("never cuts a drain spread or a refusal backoff short", async () => {

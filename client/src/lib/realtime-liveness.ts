@@ -247,27 +247,39 @@ export const STALE_CONNECT_MS = 1_500;
  * - `drain`: the server said so (1001 going away, 1012 service restart). Every
  *   open tab on that process got the same close at the same moment; spread
  *   the first attempt across `drainJitterMs()` (pitfall 11, postmortem C7).
- * - `network`: this tab's link. An abnormal close (1005 / 1006), a keepalive
+ * - `network`: this tab's link, as this tab found out on its own: a keepalive
  *   or probe that timed out, a connect attempt that never opened, a send on
- *   a closed socket, a token fetch that hung. Retry at once, then quickly.
+ *   a closed socket, a token fetch that hung. Nobody else's clock is on
+ *   these, so retry at once, then quickly.
+ * - `abnormal`: a close with no close frame (1005 / 1006). That is what one
+ *   person's blip looks like, and also what EVERY tab on a container sees at
+ *   the same instant when the process crashes or Caddy / Cloudflare blinks,
+ *   hundreds at once during a party (docs/plans/RELOAD_STORM.md). The first
+ *   retry is spread over `ABNORMAL_FIRST_RETRY_MAX_MS` so that herd does not
+ *   hit auth and Clerk in one instant; after that it is the network schedule.
  * - `refused`: the server answered and said no (4401 auth, 4429 rate limit),
  *   or closed on purpose (1000, 1008, 1011, anything else). Retrying faster
  *   cannot help and a rate limit must not be hammered: the old schedule.
  */
-export type ReconnectCause = "drain" | "network" | "refused";
+export type ReconnectCause = "drain" | "network" | "abnormal" | "refused";
 
 export function reconnectCauseForClose(code: number): ReconnectCause {
   if (code === 1001 || code === 1012) {
     return "drain";
   }
   if (code === 1005 || code === 1006) {
-    return "network";
+    return "abnormal";
   }
   return "refused";
 }
 
-/** First retry after a network loss lands in [0, this]. */
+/** First retry after a loss this tab detected itself lands in [0, this]. */
 export const NETWORK_FIRST_RETRY_MAX_MS = 250;
+/**
+ * First retry after a 1005 / 1006 close lands in [0, this]: median 0.75 s for
+ * one person, and a crash's worth of tabs spread across 1.5 s.
+ */
+export const ABNORMAL_FIRST_RETRY_MAX_MS = 1_500;
 /** For this long after the loss, network retries stay under the fast cap. */
 export const FAST_RECONNECT_WINDOW_MS = 60_000;
 export const FAST_RECONNECT_CAP_MS = 5_000;
@@ -294,9 +306,14 @@ export function reconnectDelayMs(
   if (attempt === 0 && cause === "drain") {
     return drainJitterMs();
   }
-  if (cause === "network") {
+  if (cause === "network" || cause === "abnormal") {
     if (attempt === 0) {
-      return Math.random() * NETWORK_FIRST_RETRY_MAX_MS;
+      return (
+        Math.random() *
+        (cause === "abnormal"
+          ? ABNORMAL_FIRST_RETRY_MAX_MS
+          : NETWORK_FIRST_RETRY_MAX_MS)
+      );
     }
     if (sinceLossMs < FAST_RECONNECT_WINDOW_MS) {
       const cap = Math.min(

@@ -337,13 +337,20 @@ export function createRealtimeTransport(): RealtimeTransport {
    * recovering says nothing about the server that closed us, and every tab
    * in a call would otherwise hear the same hint and reconnect together.
    */
-  function networkIsUp() {
+  function networkIsUp(source: "browser" | "media") {
     if (manualClose) {
       return;
     }
     const ws = socket;
     if (!ws) {
-      if (reconnectTimer && pendingCause === "network") {
+      // The browser's own `online` / visible is about this machine alone, so
+      // it may cut an abnormal-close spread short too. A media hint may not:
+      // every tab in a call hears one, and the spread is what keeps a crash's
+      // worth of tabs from reaching auth together.
+      const skippable =
+        pendingCause === "network" ||
+        (source === "browser" && pendingCause === "abnormal");
+      if (reconnectTimer && skippable) {
         clearReconnectTimer();
         void connectSocket();
       }
@@ -371,8 +378,10 @@ export function createRealtimeTransport(): RealtimeTransport {
 
   /**
    * `cause` picks the schedule in `reconnectDelayMs`: a drain gets the deploy
-   * spread, a network loss retries at once and then quickly, and a refusal
-   * (auth, rate limit, a deliberate close) keeps the slow backoff.
+   * spread, a loss this tab detected retries at once, a 1005 / 1006 close
+   * within 1.5 s (a crash sends it to every tab at once), both then quickly,
+   * and a refusal (auth, rate limit, a deliberate close) keeps the slow
+   * backoff.
    */
   function scheduleReconnect(cause: ReconnectCause = "refused") {
     if (manualClose || reconnectTimer) {
@@ -399,7 +408,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     // backoff is left alone (`networkIsUp`).
     // A socket that looks open may be the pre-outage one, dead on an address
     // this machine no longer has: probe it.
-    networkIsUp();
+    networkIsUp("browser");
     probe();
   }
 
@@ -415,13 +424,13 @@ export function createRealtimeTransport(): RealtimeTransport {
     if (keepalive) {
       resetInFlight(keepalive);
     }
-    networkIsUp();
+    networkIsUp("browser");
     probe();
   }
 
   function handleNetworkHint(hint: "up" | "suspect") {
     if (hint === "up") {
-      networkIsUp();
+      networkIsUp("media");
     } else {
       probe();
     }
