@@ -5427,7 +5427,10 @@ function removePeer(peerId: string) {
     peerId,
     userId: peer.userId,
     voiceChannelId,
-    roomSize: getLiveRoomPeers(voiceChannelId).length,
+    // This instance's live seats left in the room, NOT the room: with the
+    // registry on, seats held on another machine are not in this map (see
+    // the `voice.join` log for the cluster-wide count).
+    localPeers: getLiveRoomPeers(voiceChannelId).length,
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId, { kind: "left", peerId });
@@ -5721,7 +5724,7 @@ function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
     peerId,
     userId: row.userId,
     voiceChannelId: channelId,
-    roomSize: getLiveRoomPeers(channelId).length,
+    localPeers: getLiveRoomPeers(channelId).length,
     foreign: true,
     reason,
   });
@@ -6986,10 +6989,16 @@ function adoptMusicFromRow(
   }
 }
 
+/**
+ * Returns how many OTHER live peers the welcome listed. With the registry on
+ * that is the whole room across every instance (the rows), which is the only
+ * honest room size a join log can report: this process's own map holds just
+ * the seats whose sockets landed here.
+ */
 async function welcomeVoicePeer(
   peer: VoicePeer,
   resumed: boolean,
-): Promise<void> {
+): Promise<number> {
   const transport = getRoomTransport(peer.voiceChannelId);
   const resumeToken = mintVoiceResumeToken({
     userId: peer.userId,
@@ -7127,6 +7136,7 @@ async function welcomeVoicePeer(
   );
   noteConversationCallJoin(peer.voiceChannelId, peer.userId);
   await broadcastRoster(peer.voiceChannelId, { kind: "joined", peer: self });
+  return existingPeers.length;
 }
 
 async function reattachVoicePeer(
@@ -8128,6 +8138,8 @@ export async function handleVoiceMessage(
           resume.kind === "reconstruct" || resume.kind === "adopt"
             ? "resume"
             : (openingRegion?.reason ?? "adopted"),
+        // Same meaning as on `voice.transportPinned`: the row decided first.
+        adopted: pinPredatesThisJoin,
         country: socketCountry(socket),
         // The server tally behind `server-majority` / `server-mixed`.
         ...(openingRegion?.sample && resume.kind === "cold"
@@ -8150,6 +8162,12 @@ export async function handleVoiceMessage(
           resume.kind === "reconstruct" || resume.kind === "adopt"
             ? "resume"
             : opening?.reason,
+        // True when `voice_rooms` already held the pin (another machine, or
+        // this one before a restart, opened the room): this line is then the
+        // local copy of that decision, not a second one. `reason` is still
+        // this join's own opinion, which the stored pin agreed with or
+        // overrode (`voice.transportAdopted`).
+        adopted: pinPredatesThisJoin,
       });
     }
     // Connected: a peer is seated (a fresh join or a resume reattaching a
@@ -8169,22 +8187,32 @@ export async function handleVoiceMessage(
     // repeat (the in-process memo skips the DB after this user's first join),
     // which matters on the path a watch party runs several hundred times a night.
     await recordActivationStep(user.id, "first_voice");
-    logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
-      peerId,
-      userId: user.id,
-      voiceChannelId: payload.voiceChannelId,
-      roomSize: getRoomPeers(payload.voiceChannelId).length,
-      resumed: resume.kind === "reconstruct" || resume.kind === "adopt",
-    });
+    // Read before the welcome's awaits, so it is the map this join landed in.
+    const localPeers = getRoomPeers(payload.voiceChannelId).length;
     // After the pin so the row carries the room's transport. For an adopted
     // seat this re-writes the row the adopt just claimed with the same
     // content plus whatever the permission re-check changed.
     writePeerRow(peer);
 
-    await welcomeVoicePeer(
+    const othersWelcomed = await welcomeVoicePeer(
       peer,
       resume.kind === "reconstruct" || resume.kind === "adopt",
     );
+    // TWO NUMBERS, BECAUSE ONE OF THEM USED TO BE MISREAD. This line said
+    // `roomSize=` and counted this process's map, so with two API machines a
+    // host on one and a co-host on the other both logged `roomSize=1` while
+    // sharing one room, one roster and one LiveKit room (2026-09-26, channel
+    // 318a0954). `localPeers` is this instance's seats in the room, this one
+    // included; `roomPeers` is the room the joiner was just welcomed into,
+    // read from the rows when the registry is on, so it spans machines.
+    logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
+      peerId,
+      userId: user.id,
+      voiceChannelId: payload.voiceChannelId,
+      localPeers,
+      roomPeers: othersWelcomed + 1,
+      resumed: resume.kind === "reconstruct" || resume.kind === "adopt",
+    });
     return;
   }
 
