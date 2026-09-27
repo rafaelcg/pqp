@@ -173,6 +173,17 @@ test("the X dismisses only that card, leaving a sibling untouched (criterion 17)
   await anaPage.addInitScript((s) => localStorage.setItem("pqp:dev-user-suffix", s), ana);
   await anaPage.goto(`/app/server/${server.id}?lang=en`);
   await expect(anaPage.getByRole("button", { name: "Send" })).toBeVisible({ timeout: 20_000 });
+  // Ana's page gets its own frozen clock from here. What this test proves is
+  // that the X's dismiss is scoped to one card (criterion 17), not that a
+  // card survives a real 3-6s wall-clock window — that math (TOAST_MS,
+  // VISIBILITY_RESUME_MS, pause/resume/freeze) is already pinned exactly,
+  // with fake time, in dm-toast-queue.test.ts. Below, spinning up two more
+  // browser contexts (sendFrom) is real work that can take longer in CI than
+  // a card's own budget; with Date/setTimeout frozen on this page, none of
+  // that setup time is ever charged against a card's countdown, so the final
+  // assertion no longer races the clock. Time only moves when this test
+  // explicitly asks it to (`clock.runFor`, below).
+  await anaPage.clock.install();
 
   async function sendFrom(suffix: string, channelId: string, body: string) {
     const context = await browser.newContext();
@@ -187,9 +198,9 @@ test("the X dismisses only that card, leaving a sibling untouched (criterion 17)
 
   await sendFrom(bia, convBia.channelId, "oi da bia");
   // Opening and closing Bia's own context can steal the OS-level foreground
-  // window from Ana's page, which the toast's own tab-hidden freeze (§3.4)
-  // correctly reacts to — bring it back so the 6s countdown below is timed
-  // against a genuinely visible+focused tab, the same as a person would see.
+  // window from Ana's page. A card only gets created while Ana's tab is
+  // genuinely visible and focused (`shouldShowArrivalToast`) — bring it back
+  // so the arrival is not silently dropped to the OS-banner path instead.
   await anaPage.bringToFront();
   const toastBia = anaPage.locator(`[data-dm-toast="${convBia.channelId}"]`);
   await expect(toastBia).toBeVisible({ timeout: 15_000 });
@@ -199,23 +210,15 @@ test("the X dismisses only that card, leaving a sibling untouched (criterion 17)
   const toastCid = anaPage.locator(`[data-dm-toast="${convCid.channelId}"]`);
   await expect(toastCid).toBeVisible({ timeout: 15_000 });
 
-  // Regaining focus re-arms EVERY card to a short, equal `VISIBILITY_RESUME_MS`
-  // window (3s — see `thawToastCards`), not back to the full 6s: correct
-  // product behaviour (a stale hour-old countdown should not resume as-is),
-  // but it means the `bringToFront()` above is a clock the rest of this test
-  // has to beat, and `toastCid`'s own `toBeVisible` wait already spent part of
-  // it. Bringing Ana's page forward again right here starts that 3s window
-  // fresh at the latest possible moment, so the assertions below — the one
-  // thing this test exists to prove, dismissing Cid's card leaves Bia's alone
-  // — get the full window instead of whatever was left over.
-  await anaPage.bringToFront();
-
-  // The X on Cid's card dismisses only that one; Bia's is untouched.
-  // (The ~6s natural expiry and the pause/resume/freeze timer math it rests
-  // on are pinned exactly, with fake time, in dm-toast-queue.test.ts —
-  // asserting a real 6-second wall-clock wait here would only add flakiness
-  // a live two-browser-context CI run does not need to prove twice.)
+  // The X on Cid's card dismisses only that one; Bia's is untouched. Both
+  // cards' countdowns are frozen (see the `clock.install()` above), so this
+  // is not a race against either card's own expiry.
   await toastCid.getByRole("button", { name: "Dismiss" }).click();
+  // The exit animation's own unmount timer (`LEAVE_MS`, 200ms in
+  // dm-toasts.tsx) is a real `setTimeout` too, now running on the frozen
+  // clock — nudge it forward explicitly rather than polling wall-clock time
+  // for a fake timer that will never fire on its own.
+  await anaPage.clock.runFor(250);
   await expect(toastCid).toHaveCount(0, { timeout: 3_000 });
   await expect(toastBia).toBeVisible();
 
