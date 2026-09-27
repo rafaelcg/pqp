@@ -55,7 +55,11 @@ export function CallRatingPrompt({
           transport: call.transport,
           hadScreenShare: call.hadScreenShare,
           channelId: call.channelId ?? undefined,
-          mediaQuality: call.mediaQuality,
+          // Same rule as the note above, and the server enforces it too
+          // (`recordCallRating`) rather than trusting this: a quality
+          // reading on a good call is not diagnostic, so there is nothing to
+          // send.
+          mediaQuality: score <= 3 ? call.mediaQuality : undefined,
         }),
       });
     } catch {

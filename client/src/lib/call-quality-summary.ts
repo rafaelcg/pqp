@@ -1,5 +1,6 @@
 import type { MediaQualitySummary } from "@pqp/shared";
 import type { VoiceStatsSnapshot } from "./voice-stats-probe";
+import { isLiveReceiver } from "@/components/voice/inbound-video-rows";
 
 /**
  * Turns the sampler both quality readouts already poll (`sampleVoiceStats()`
@@ -63,13 +64,21 @@ function median(values: readonly number[]): number | null {
  * above. Nearest-rank rather than interpolated -- this is a diagnostic, not
  * a statistics package, and the extra precision would not change what an
  * operator does with it.
+ *
+ * `ceil(n * 0.1) - 1`, not `floor(n * 0.1)`. Nearest-rank defines the k-th
+ * percentile as the `ceil(n * k)`-th smallest of n (1-indexed); `floor`
+ * quietly skips the true worst reading whenever n is divisible by ten --
+ * for ten samples it picked index 1 (the SECOND lowest) rather than index 0,
+ * and for twenty it picked index 2 rather than 1, systematically reporting a
+ * better-than-actual lower tail on exactly the sample counts a two-second
+ * poll produces most often (a 20s, 40s, 60s... call).
  */
 function p10(values: readonly number[]): number | null {
   if (values.length === 0) {
     return null;
   }
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.1));
+  const index = Math.max(0, Math.ceil(sorted.length * 0.1) - 1);
   return sorted[index]!;
 }
 
@@ -133,6 +142,18 @@ export function sampleQuality(
     if (receiver.role !== "screen") {
       continue;
     }
+    // A mesh `getStats()` report carries one `inbound-rtp` row per video
+    // m-line whether or not anything is actually arriving on it -- the same
+    // fact `isLiveReceiver` exists to filter for the readout. Without this,
+    // an idle screen m-line (nobody sharing, or a share that ended) can win
+    // "watched most" by sample count alone, or pull the chosen peer's rates
+    // toward zero with readings that were never really there. An SFU row is
+    // exempt the same way the readout exempts it: `attached: true` is the
+    // server's own word that the picture is flowing, true from the first
+    // sample before the decoder has reported anything.
+    if (!isLiveReceiver(receiver)) {
+      continue;
+    }
     let candidate = acc.inbound.get(receiver.peerId);
     if (!candidate) {
       candidate = {
@@ -176,11 +197,58 @@ export function sampleQuality(
   }
 }
 
+/**
+ * `sampleQuality`, but dropped when it no longer belongs to the call it was
+ * meant for.
+ *
+ * WHY A CALL "GENERATION" AT ALL. `subscribeVoiceStats` reading its
+ * `listeners` set fresh at delivery time already keeps an UNSUBSCRIBED
+ * caller from being handed a late sample -- but a call-rating accumulator is
+ * reset and reused (`createQualityAccumulator()` starts a fresh one) rather
+ * than reconstructed per call, and a subscription can, in principle, still
+ * be live across the exact moment a call ends and a new one begins (a fast
+ * hangup-and-rejoin inside one poll tick). Without a generation check, a
+ * sample that was in flight for the OLD call would fold into the NEW call's
+ * `QualityAccumulator`, understating or overstating a rating that has
+ * nothing to do with what actually happened on it.
+ *
+ * `sampleGeneration` is the generation the caller captured when it started
+ * listening for this call; `currentGeneration` is read live at the moment
+ * this runs. A caller bumps its generation counter each time a fresh call
+ * starts (see `useCallRating`), so a mismatch here means exactly one thing:
+ * the call this sample was meant for is not the call in progress anymore.
+ */
+export function sampleQualityIfCurrent(
+  acc: QualityAccumulator,
+  snapshot: VoiceStatsSnapshot,
+  sampleGeneration: number,
+  currentGeneration: number,
+): void {
+  if (sampleGeneration !== currentGeneration) {
+    return;
+  }
+  sampleQuality(acc, snapshot);
+}
+
 /** One more reconnect happened during this call. Callers drive this from
  *  whatever the transport already tracks (see `trackReconnects` below for
  *  the shared-across-transports version fed from `RemotePeer.connectionState`). */
 export function noteReconnect(acc: QualityAccumulator): void {
   acc.reconnectCount += 1;
+}
+
+/**
+ * `frameHeightFieldSchema` in `@pqp/shared` requires an integer -- a real
+ * `getStats()` `frameHeight` always is one, but `median()` averages the two
+ * middle readings on an even-sized sample and can land on a `.5`, which
+ * would fail validation and lose the whole rating over one field. `p10`
+ * always returns an original sampled value (nearest-rank, not interpolated),
+ * so this is a no-op there in practice; rounding it too costs nothing and
+ * keeps both height fields under the same rule rather than one being an
+ * accident of how the other is computed.
+ */
+function roundHeight(value: number | null): number | null {
+  return value === null ? null : Math.round(value);
 }
 
 function finishOutbound(
@@ -193,8 +261,8 @@ function finishOutbound(
   return {
     frameRateMedian: median(acc.outbound.fps),
     frameRateP10: p10(acc.outbound.fps),
-    frameHeightMedian: median(acc.outbound.height),
-    frameHeightP10: p10(acc.outbound.height),
+    frameHeightMedian: roundHeight(median(acc.outbound.height)),
+    frameHeightP10: roundHeight(p10(acc.outbound.height)),
     bandwidthLimitedSeconds: durations?.bandwidth ?? null,
     cpuLimitedSeconds: durations?.cpu ?? null,
   };
@@ -215,8 +283,8 @@ function finishInbound(
   return {
     frameRateMedian: median(best.fps),
     frameRateP10: p10(best.fps),
-    frameHeightMedian: median(best.height),
-    frameHeightP10: p10(best.height),
+    frameHeightMedian: roundHeight(median(best.height)),
+    frameHeightP10: roundHeight(p10(best.height)),
     freezeCount: best.freezeCount,
     freezeSeconds: best.totalFreezesDuration,
     framesDropped: best.framesDropped,

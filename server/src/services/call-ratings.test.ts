@@ -155,6 +155,29 @@ describeDb("call ratings", () => {
     expect(summary.recentNotes[0]!.mediaQuality).toBeNull();
   });
 
+  it("drops mediaQuality on a good score, the same rule and the same enforcement point as the note", async () => {
+    // A reading on a good call is not diagnostic -- the dashboard never shows
+    // it (it rides beside a note, which the client does not even ask for
+    // above 3), and this rule is enforced here rather than trusted from a
+    // client that could send it anyway.
+    const user = await rater("clerk-h");
+    const mediaQuality = {
+      outboundScreenShare: null,
+      inboundScreenShare: null,
+      packetLossPercent: 0,
+      rttMsMedian: 20,
+      relayed: false,
+      reconnectCount: 0,
+    };
+    await recordCallRating(user.id, input(5, { mediaQuality }));
+
+    const row = await getPool().query<{ media_quality: unknown }>(
+      `SELECT media_quality FROM call_ratings WHERE user_id = $1`,
+      [user.id],
+    );
+    expect(row.rows[0]!.media_quality).toBeNull();
+  });
+
   it("ignores ratings older than the window", async () => {
     const user = await rater("clerk-e");
     await recordCallRating(user.id, input(5));

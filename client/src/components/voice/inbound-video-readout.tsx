@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n";
 import { useHlsPlaybackStats } from "@/lib/hls-playback";
 import {
-  sampleVoiceStats,
+  subscribeVoiceStats,
   type VideoReceiverSample,
 } from "@/lib/voice-stats-probe";
 import { liveReceiverRows } from "@/components/voice/inbound-video-rows";
@@ -43,8 +43,12 @@ import { liveReceiverRows } from "@/components/voice/inbound-video-rows";
  * the server for this side to ask for.
  *
  * Which rows count as live, and their order, live in `inbound-video-rows.ts`.
+ *
+ * `subscribeVoiceStats` rather than its own timer, for the same reason the
+ * outbound readout switched: this, the outbound readout, and the call-rating
+ * accumulator used to each run an independent `sampleVoiceStats()` poll at
+ * the same cadence, tripling the actual `getStats()` scan every tick.
  */
-const SAMPLE_INTERVAL_MS = 2000;
 
 export function InboundVideoReadout({
   usingSfu = false,
@@ -65,26 +69,11 @@ export function InboundVideoReadout({
   const [rows, setRows] = useState<VideoReceiverSample[] | null>(null);
 
   useEffect(() => {
-    let live = true;
-    // Polling for the same reason the outbound readout polls: `getStats()` has
-    // no change event, and two seconds is well under the rate at which a person
-    // reads a line of text.
-    const tick = () => {
-      void sampleVoiceStats().then((snapshot) => {
-        if (!live) {
-          return;
-        }
-        setRows(
-          liveReceiverRows(snapshot.receivers, { hideScreen: watchingHls }),
-        );
-      });
-    };
-    tick();
-    const id = setInterval(tick, SAMPLE_INTERVAL_MS);
-    return () => {
-      live = false;
-      clearInterval(id);
-    };
+    return subscribeVoiceStats((snapshot) => {
+      setRows(
+        liveReceiverRows(snapshot.receivers, { hideScreen: watchingHls }),
+      );
+    });
   }, [watchingHls]);
 
   const hlsLine =

@@ -4,6 +4,7 @@ import {
   createReconnectTracker,
   finishQuality,
   sampleQuality,
+  sampleQualityIfCurrent,
   trackReconnects,
 } from "./call-quality-summary";
 import type {
@@ -102,11 +103,42 @@ describe("sampleQuality / finishQuality", () => {
     const result = finishQuality(acc);
     expect(result.outboundScreenShare).not.toBeNull();
     expect(result.outboundScreenShare!.frameRateMedian).toBe(30);
-    // Nearest-rank 10th percentile of ten sorted readings is index 1 -- with
+    // Nearest-rank 10th percentile of ten sorted readings is index 0 -- with
     // two bad readings that index lands on the bad reading, which is the
     // whole point of tracking it separately from the median.
     expect(result.outboundScreenShare!.frameRateP10).toBe(6);
     expect(result.outboundScreenShare!.frameHeightMedian).toBe(720);
+  });
+
+  it("p10 is the ceil(n*0.1)-1'th smallest reading, not floor(n*0.1)'th", () => {
+    // Pins the exact rank Farol's review caught: for a count divisible by
+    // ten, `floor` skips the true worst reading. Ten ascending readings
+    // 1..10 -> index 0 (the single worst); twenty ascending readings 1..20
+    // -> index 1 (the second worst), matching the nearest-rank definition
+    // ceil(n * 0.1) - 1.
+    const ten = createQualityAccumulator();
+    for (let fps = 1; fps <= 10; fps += 1) {
+      sampleQuality(ten, snapshot({ senders: [sender({ fps, height: 720 })] }));
+    }
+    expect(finishQuality(ten).outboundScreenShare!.frameRateP10).toBe(1);
+
+    const twenty = createQualityAccumulator();
+    for (let fps = 1; fps <= 20; fps += 1) {
+      sampleQuality(twenty, snapshot({ senders: [sender({ fps, height: 720 })] }));
+    }
+    expect(finishQuality(twenty).outboundScreenShare!.frameRateP10).toBe(2);
+  });
+
+  it("rounds a frame height median to an integer, which the schema requires", () => {
+    // An even sample count can average two adjacent even heights to a .5,
+    // which `frameHeightFieldSchema` (an integer field) would reject outright
+    // -- losing the whole rating over one derived field.
+    const acc = createQualityAccumulator();
+    sampleQuality(acc, snapshot({ senders: [sender({ fps: 30, height: 720 })] }));
+    sampleQuality(acc, snapshot({ senders: [sender({ fps: 30, height: 721 })] }));
+    const median = finishQuality(acc).outboundScreenShare!.frameHeightMedian;
+    expect(median).toBe(721); // (720 + 721) / 2 = 720.5, rounds to 721
+    expect(Number.isInteger(median)).toBe(true);
   });
 
   it("reads bandwidth/cpu limited seconds off the latest cumulative reading, not a sum across ticks", () => {
@@ -156,6 +188,64 @@ describe("sampleQuality / finishQuality", () => {
     expect(result.inboundScreenShare).not.toBeNull();
     expect(result.inboundScreenShare!.frameRateMedian).toBe(30);
     expect(result.inboundScreenShare!.frameHeightMedian).toBe(1080);
+  });
+
+  it("ignores an idle mesh screen receiver row when picking 'watched most'", () => {
+    // A mesh `getStats()` report carries one `inbound-rtp` row per video
+    // m-line whether or not anything is arriving -- peer "b" never actually
+    // shared, but its idle row would otherwise win on sample count alone (six
+    // ticks vs peer "a"'s three) or drag the chosen peer's rates toward zero.
+    const acc = createQualityAccumulator();
+    const idle = receiver({ peerId: "b", framesDecoded: 0, kbps: 0, fps: null, height: null });
+    for (let i = 0; i < 6; i += 1) {
+      sampleQuality(acc, snapshot({ receivers: [idle] }));
+    }
+    for (let i = 0; i < 3; i += 1) {
+      sampleQuality(
+        acc,
+        snapshot({ receivers: [receiver({ peerId: "a", fps: 30, height: 1080 })] }),
+      );
+    }
+    const result = finishQuality(acc);
+    expect(result.inboundScreenShare).not.toBeNull();
+    expect(result.inboundScreenShare!.frameRateMedian).toBe(30);
+    expect(result.inboundScreenShare!.frameHeightMedian).toBe(1080);
+  });
+
+  it("keeps an SFU row with attached:true even before the decoder has reported anything", () => {
+    // The SFU is the opposite case from mesh idleness: the server only hands
+    // a client a subscription it is actually forwarding, so `attached: true`
+    // is live from the first sample, before `framesDecoded`/`kbps` have
+    // anything to say. Excluding it the same way an idle mesh row is excluded
+    // would reproduce the exact "nobody is sending you video" bug
+    // `isLiveReceiver` already exists to prevent for the readout.
+    const acc = createQualityAccumulator();
+    sampleQuality(
+      acc,
+      snapshot({
+        receivers: [
+          receiver({
+            framesDecoded: null,
+            kbps: null,
+            fps: null,
+            height: null,
+            attached: true,
+          }),
+        ],
+      }),
+    );
+    expect(finishQuality(acc).inboundScreenShare).not.toBeNull();
+  });
+
+  it("reports no inbound screen share when every row sampled was idle", () => {
+    const acc = createQualityAccumulator();
+    sampleQuality(
+      acc,
+      snapshot({
+        receivers: [receiver({ framesDecoded: 0, kbps: 0, fps: null, height: null })],
+      }),
+    );
+    expect(finishQuality(acc).inboundScreenShare).toBeNull();
   });
 
   it("carries freezeCount, freezeSeconds and framesDropped off the latest reading for the chosen inbound peer", () => {
@@ -213,6 +303,50 @@ describe("sampleQuality / finishQuality", () => {
     sampleQuality(acc, snapshot({ paths: [path({ relayed: false })] }));
     sampleQuality(acc, snapshot({ paths: [path({ relayed: true })] }));
     expect(finishQuality(acc).relayed).toBe(false);
+  });
+});
+
+describe("sampleQualityIfCurrent", () => {
+  it("folds a sample whose generation matches the current one", () => {
+    const acc = createQualityAccumulator();
+    sampleQualityIfCurrent(
+      acc,
+      snapshot({ senders: [sender({ fps: 30, height: 720 })] }),
+      1,
+      1,
+    );
+    expect(finishQuality(acc).outboundScreenShare!.frameRateMedian).toBe(30);
+  });
+
+  it("drops a sample tagged with an older generation than the current one", () => {
+    // The scenario this guards: a `sampleVoiceStats()` request was still in
+    // flight for a call that has since ended, and a NEW call has already
+    // started and reset the accumulator by the time it resolves. Folding it
+    // in would silently mix the old call's reading into the new call's
+    // rating.
+    const acc = createQualityAccumulator();
+    sampleQualityIfCurrent(
+      acc,
+      snapshot({ senders: [sender({ fps: 30, height: 720 })] }),
+      1, // this sample belongs to generation 1 (the call that ended)
+      2, // a new call, generation 2, is already in progress
+    );
+    expect(finishQuality(acc).outboundScreenShare).toBeNull();
+  });
+
+  it("drops a sample tagged with a NEWER generation than the current one too", () => {
+    // Should not happen in practice (a sample cannot be scheduled before its
+    // own generation exists), but the check is symmetric on purpose: it is a
+    // mismatch test, not a staleness test, so it cannot silently accept the
+    // one direction it was not written to catch.
+    const acc = createQualityAccumulator();
+    sampleQualityIfCurrent(
+      acc,
+      snapshot({ senders: [sender({ fps: 30, height: 720 })] }),
+      2,
+      1,
+    );
+    expect(finishQuality(acc).outboundScreenShare).toBeNull();
   });
 });
 

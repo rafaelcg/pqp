@@ -651,6 +651,66 @@ export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
   return sampleAll();
 }
 
+/** How often the shared poll below samples, matching what every consumer
+ *  (the two quality readouts, the call-rating accumulator) already polled at
+ *  independently before this existed. */
+const SHARED_POLL_INTERVAL_MS = 2000;
+
+type VoiceStatsListener = (snapshot: VoiceStatsSnapshot) => void;
+const sharedListeners = new Set<VoiceStatsListener>();
+let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Subscribe to ONE shared `sampleVoiceStats()` poll rather than starting a
+ * new one.
+ *
+ * WHY THIS EXISTS. The outbound readout, the inbound readout and the
+ * call-rating accumulator each used to run their own two-second
+ * `setInterval` calling `sampleVoiceStats()`, which is a real scan --
+ * `getStats()` per `RTCPeerConnection` plus, for the SFU, `getStats()` per
+ * publication -- so three consumers meant three passes over the same
+ * connections every tick. This runs the scan once per tick regardless of
+ * subscriber count and hands every listener the same snapshot.
+ *
+ * The interval starts on the first subscriber and stops on the last, so an
+ * app with no readout mounted and no call being rated never polls at all.
+ *
+ * A pending sample naturally cannot reach a listener that has already
+ * unsubscribed: `listeners` is read fresh at delivery time, inside the
+ * `.then()`, not captured when the tick was scheduled, so a caller that
+ * unsubscribes (a component unmounting, a call ending) before the in-flight
+ * `getStats()` resolves is simply not in the set by the time it would be
+ * called.
+ */
+export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
+  sharedListeners.add(listener);
+  if (!sharedPollTimer) {
+    const tick = () => {
+      sampleAll()
+        .then((snapshot) => {
+          for (const l of sharedListeners) {
+            l(snapshot);
+          }
+        })
+        .catch(() => {
+          // A sample failing (a transport torn down mid-scan, an unexpected
+          // getStats() rejection `sampleAll`'s own per-registration try/catch
+          // did not already absorb) must not stop the shared poll or become
+          // an unhandled rejection -- the next tick tries again.
+        });
+    };
+    tick();
+    sharedPollTimer = setInterval(tick, SHARED_POLL_INTERVAL_MS);
+  }
+  return () => {
+    sharedListeners.delete(listener);
+    if (sharedListeners.size === 0 && sharedPollTimer) {
+      clearInterval(sharedPollTimer);
+      sharedPollTimer = null;
+    }
+  };
+}
+
 /**
  * Turn one `RTCStatsReport` into the flat rows `summariseStats` reads.
  *

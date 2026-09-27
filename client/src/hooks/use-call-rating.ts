@@ -11,12 +11,12 @@ import {
   createQualityAccumulator,
   createReconnectTracker,
   finishQuality,
-  sampleQuality,
+  sampleQualityIfCurrent,
   trackReconnects,
   type QualityAccumulator,
   type ReconnectTracker,
 } from "@/lib/call-quality-summary";
-import { sampleVoiceStats } from "@/lib/voice-stats-probe";
+import { subscribeVoiceStats } from "@/lib/voice-stats-probe";
 
 /**
  * The React shell around `lib/call-rating.ts`: watch a call, ask once when it
@@ -75,12 +75,6 @@ interface VoiceShape {
 
 export type { RatableCall };
 
-/** Same cadence the outbound/inbound video readouts poll `sampleVoiceStats()`
- *  at (`voice-stats-probe.ts` consumers) -- this hook shares their sampler
- *  rather than reading it at a different rate that could tell a different
- *  story about the same call. */
-const QUALITY_SAMPLE_INTERVAL_MS = 2000;
-
 export function useCallRating(voice: VoiceShape): {
   pending: RatableCall | null;
   dismiss: () => void;
@@ -94,11 +88,12 @@ export function useCallRating(voice: VoiceShape): {
   // refs rather than state for the same reason `progress` is.
   const quality = useRef<QualityAccumulator>(createQualityAccumulator());
   const reconnects = useRef<ReconnectTracker>(createReconnectTracker());
-  // The hook's own render is not an effect, so the interval closure below
-  // cannot see a fresh `voice.remotePeers` without this: written every render,
-  // read only from inside the interval tick.
-  const remotePeersRef = useRef<VoiceShapePeer[]>(voice.remotePeers);
-  remotePeersRef.current = voice.remotePeers;
+  // Bumped every time a fresh call starts. A sample tagged with an older
+  // generation than this is folded from a call that has already ended --
+  // see `sampleQualityIfCurrent`'s own doc comment for why that is possible
+  // even with `subscribeVoiceStats` reading its listener set fresh at
+  // delivery time, and why the check is still worth having.
+  const generation = useRef(0);
 
   const connected = voice.status === "connected";
   const snapshot: CallSnapshot = {
@@ -115,6 +110,7 @@ export function useCallRating(voice: VoiceShape): {
         // previous call happened to leave in these accumulators.
         quality.current = createQualityAccumulator();
         reconnects.current = createReconnectTracker();
+        generation.current += 1;
       }
       progress.current = progress.current
         ? advanceCall(progress.current, snapshot)
@@ -151,22 +147,39 @@ export function useCallRating(voice: VoiceShape): {
     snapshot.channelId,
   ]);
 
-  // Polling rather than pushing, for the same reason the readouts poll:
-  // `getStats()` has no change event. Only runs while a call is connected, so
-  // an idle app never touches `getStats()` at all.
+  // Reconnects are counted from the connection-state EVENTS `voice` already
+  // carries, not from a poll. `voiceState` in App.tsx is re-published on every
+  // `onStateChange` -- which fires on every `RTCPeerConnection` state
+  // transition -- so `voice.remotePeers` here changes identity exactly when a
+  // peer's connection actually flips, and this effect runs on exactly those
+  // transitions rather than catching up to them up to two seconds later on
+  // the quality poll's own cadence.
   useEffect(() => {
     if (!connected) {
       return;
     }
-    const tick = () => {
-      trackReconnects(reconnects.current, remotePeersRef.current);
-      void sampleVoiceStats().then((snap) => {
-        sampleQuality(quality.current, snap);
-      });
-    };
-    tick();
-    const id = setInterval(tick, QUALITY_SAMPLE_INTERVAL_MS);
-    return () => clearInterval(id);
+    trackReconnects(reconnects.current, voice.remotePeers);
+    // `voice.remotePeers` is a fresh array only on a real state change (see
+    // above), so depending on it directly -- not its `.length` -- is exactly
+    // the signal this effect wants.
+  }, [connected, voice.remotePeers]);
+
+  // Subscribes to the ONE shared `sampleVoiceStats()` poll both quality
+  // readouts already run, rather than starting a second independent scan of
+  // every peer connection and video track on the same two-second cadence.
+  useEffect(() => {
+    if (!connected) {
+      return;
+    }
+    const myGeneration = generation.current;
+    return subscribeVoiceStats((snap) => {
+      sampleQualityIfCurrent(
+        quality.current,
+        snap,
+        myGeneration,
+        generation.current,
+      );
+    });
   }, [connected]);
 
   return { pending, dismiss: () => setPending(null) };

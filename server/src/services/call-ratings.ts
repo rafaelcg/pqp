@@ -38,7 +38,15 @@ export async function recordCallRating(
       input.peerCount,
       input.transport,
       input.hadScreenShare,
-      input.mediaQuality ? JSON.stringify(input.mediaQuality) : null,
+      // Same rule, same reason, same enforcement point as the note above: a
+      // media quality reading on a good call is not diagnostic, it is a
+      // measurement nobody will ever read, and the dashboard only ever shows
+      // this next to a note -- which only exists on a rating of 3 or less.
+      // Keeping a good call's sample around anyway would be the note rule
+      // with a loophole in it.
+      input.rating <= 3 && input.mediaQuality
+        ? JSON.stringify(input.mediaQuality)
+        : null,
     ],
   );
 }
