@@ -106,6 +106,10 @@ import {
   type HlsLLPlayerConfig,
   type HlsMode,
 } from "@/lib/hls-live-edge";
+import {
+  loadLiveHlsConfig,
+  settledDeploymentLiveHlsConfig,
+} from "@/hooks/use-live-hls-config";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
@@ -591,6 +595,22 @@ export function HlsWatchPlayer({
   // re-render on.
   const pinnedToConventionalRef = useRef(false);
   const [pinnedToConventional, setPinnedToConventional] = useState(false);
+  // Warms the deployment-wide `GET /api/live-hls/config` cache
+  // (fire-and-forget; `loadLiveHlsConfig` itself dedupes an in-flight or
+  // already-settled fetch) so an LL attach below can read
+  // `llSegmentCadenceDecay` SYNCHRONOUSLY (`settledDeploymentLiveHlsConfig`)
+  // when it builds the governor, instead of blocking construction on a
+  // network round trip. An attach that starts before this resolves gets the
+  // flag off for that one attach and picks it up on the next rebuild --
+  // this component reconnects and rebuilds often enough over a party's
+  // length that the race costs at most the first few seconds of one.
+  useEffect(() => {
+    // Never surfaces: a failed fetch here just means the next attach still
+    // reads the flag as off, same as a cold cache. `loadLiveHlsConfig`
+    // itself deletes a failed attempt from its cache, so a later mount
+    // (or the config's own callers elsewhere in the app) can still retry.
+    loadLiveHlsConfig().catch(() => {});
+  }, []);
   // What the LL governor (`LlLatencyGovernor`, created per attach) is doing
   // right now, for the effects OUTSIDE the attach effect that need it: the
   // behind-live badge and LL-lite's catch-up read the target, "jump to live"
@@ -1516,6 +1536,14 @@ export function HlsWatchPlayer({
     /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
     let lastPartHoldBack: number | null = null;
     let lastTargetDuration: number | null = null;
+    /**
+     * The newest listed segment's own sequence number, so
+     * `governor.onSegmentDuration` is fed once per REAL segment rather than
+     * once per part-driven `LEVEL_UPDATED` firing (this event fires once
+     * per part under the blocking reload -- see the comment where it is
+     * read). A no-op unless `llSegmentCadenceDecay` is on.
+     */
+    let lastSeenSegmentSn: number | null = null;
     // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
     // milliseconds, hole skips and visibility, per sample window
     // (`HlsStallMeter`); fatal hls.js details seen since the last sample.
@@ -1766,6 +1794,8 @@ export function HlsWatchPlayer({
         ? new LlLatencyGovernor({
             delivery: llPartsOptedIn() ? "parts" : "segments",
             now: Date.now(),
+            segmentCadenceDecay:
+              settledDeploymentLiveHlsConfig()?.llSegmentCadenceDecay ?? false,
           })
         : null;
     let appliedTarget: number | null = null;
@@ -2649,6 +2679,24 @@ export function HlsWatchPlayer({
               targetDurationSeconds: targetDuration,
             });
             applyGovernor();
+          }
+          // THE GOVERNOR HEARS WHAT ACTUALLY HAPPENED TOO, not only the
+          // manifest's own worst-ever number: the newest listed segment's
+          // real EXTINF (`onSegmentDuration`, a no-op unless
+          // `llSegmentCadenceDecay` is on). Fed once per new segment, off
+          // its own sequence number rather than every part-driven firing of
+          // this event.
+          const newestFragment = data.details.fragments.at(-1);
+          if (
+            governor &&
+            newestFragment &&
+            newestFragment.sn !== lastSeenSegmentSn &&
+            typeof newestFragment.sn === "number"
+          ) {
+            lastSeenSegmentSn = newestFragment.sn;
+            if (Number.isFinite(newestFragment.duration)) {
+              governor.onSegmentDuration(newestFragment.duration);
+            }
           }
         }
         // Conventional only. This is exactly the override §4 warns against

@@ -58,6 +58,18 @@ export function settledLiveHlsConfig(serverId: string | null): LiveHlsConfig | n
 }
 
 /**
+ * The deployment-wide answer (no server id), if it has already arrived.
+ * Never fetches -- a caller that wants it warm calls `loadLiveHlsConfig()`
+ * itself, fire-and-forget, the way `hls-watch-player.tsx` does for
+ * `llSegmentCadenceDecay`: a session that starts before that resolves
+ * simply reads null here and treats it as "off", the same tolerance every
+ * other cold-cache read in this codebase already has.
+ */
+export function settledDeploymentLiveHlsConfig(): LiveHlsConfig | null {
+  return settled.get("") ?? null;
+}
+
+/**
  * `null` until the server has answered (or while there is no server: a DM
  * call has no allowlist to consult). Refetches when the server changes.
  */

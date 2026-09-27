@@ -169,6 +169,7 @@ describe("live HLS egress", () => {
       // `LIVE_HLS_LL` is unset too: the switch stays hidden.
       lowLatency: { available: false },
       cameraHeight: 480,
+      llSegmentCadenceDecay: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -607,6 +608,7 @@ describe("live HLS egress", () => {
         voiceTrack: false,
         lowLatency: { available: false },
         cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -617,6 +619,7 @@ describe("live HLS egress", () => {
         voiceTrack: false,
         lowLatency: { available: false },
         cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -627,6 +630,7 @@ describe("live HLS egress", () => {
         voiceTrack: false,
         lowLatency: { available: false },
         cameraHeight: 480,
+        llSegmentCadenceDecay: false,
       });
     });
 
@@ -675,6 +679,27 @@ describe("live HLS egress", () => {
       delete process.env.LIVE_HLS_LL;
       delete process.env.LIVE_HLS_LL_ALLOWLIST;
       delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    });
+
+    it("llSegmentCadenceDecay follows LIVE_HLS_LL_SEGMENT_CADENCE_DECAY, off by default, same on every server", async () => {
+      enableHls();
+      // Unset (every deployment today) reads as off, byte-for-byte the
+      // governor's behaviour before this existed.
+      expect(liveHlsConfig().llSegmentCadenceDecay).toBe(false);
+      expect((await liveHlsConfigForServer(SERVER)).llSegmentCadenceDecay).toBe(
+        false,
+      );
+      process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY = "true";
+      // A deployment-wide switch, not per-server: unlike `micArchive`/
+      // `lowLatency`, no allowlist or override gates it.
+      expect(liveHlsConfig().llSegmentCadenceDecay).toBe(true);
+      expect((await liveHlsConfigForServer(SERVER)).llSegmentCadenceDecay).toBe(
+        true,
+      );
+      expect(
+        (await liveHlsConfigForServer(OTHER_SERVER)).llSegmentCadenceDecay,
+      ).toBe(true);
+      delete process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY;
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {

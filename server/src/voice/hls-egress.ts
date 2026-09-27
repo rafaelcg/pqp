@@ -71,6 +71,7 @@ import {
   llPlaylistFrontConfigured,
   llPlaylistUrl,
   forgetLlResumeDecisions,
+  liveHlsLLSegmentCadenceDecayEnabled,
   llAdoptedAt,
   llStreamFor,
   rebindLlForReplacedTrack,
@@ -1845,6 +1846,17 @@ export interface LiveHlsConfig {
    * (an older API) holds the presenter at 360, the old behaviour.
    */
   cameraHeight: 360 | 480;
+  /**
+   * `LIVE_HLS_LL_SEGMENT_CADENCE_DECAY` (off by default): whether an LL
+   * viewer's `LlLatencyGovernor` may let its manifest-driven hold-back
+   * floor shrink again once several real segments in a row prove the
+   * remux's cadence is tighter than the worst one `EXT-X-TARGETDURATION`
+   * has ever recorded. Absent or false on an older/unset API reads as off,
+   * which is exactly the ratchet-forever behaviour every LL viewer has had
+   * since LL-lite shipped. See `liveHlsLLSegmentCadenceDecayEnabled` in
+   * `hls-remux.ts` and `LlLatencyGovernor.decayFloorToRecentCadence`.
+   */
+  llSegmentCadenceDecay: boolean;
 }
 
 /**
@@ -1862,6 +1874,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     voiceTrack: isLiveHlsEnabled() && liveHlsVoiceTrackEnabled(),
     lowLatency: { available: liveHlsLLAvailable(null) },
     cameraHeight: liveHlsCamera480Enabled() ? 480 : 360,
+    llSegmentCadenceDecay: liveHlsLLSegmentCadenceDecayEnabled(),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,

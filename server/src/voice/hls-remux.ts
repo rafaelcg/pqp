@@ -195,6 +195,38 @@ export function liveHlsLLAvailable(
 }
 
 /**
+ * `LIVE_HLS_LL_SEGMENT_CADENCE_DECAY`: **off by default**, and off is
+ * byte-for-byte the governor's behaviour before this existed --
+ * `GET /api/live-hls/config`'s `llSegmentCadenceDecay` reaching the client
+ * as `undefined`/`false` is what keeps `LlLatencyGovernor`'s
+ * `cadenceDecayEnabled` off, so nothing here changes anything until it is
+ * turned on.
+ *
+ * On, a segments-mode ("LL-lite") viewer's hold-back floor may ALSO shrink
+ * once several segments in a row prove the remux's real cadence is tighter
+ * than the worst segment `EXT-X-TARGETDURATION` has ever recorded --
+ * `EXT-X-TARGETDURATION` can only grow for a manifest's whole life (HLS's
+ * own rule), so today one slow segment (a presenter reconnect, a keyframe
+ * request that took a few retries) taxes the REST of the party at that
+ * floor even once the remux is back to closing 4-5 s segments. See
+ * `LlLatencyGovernor.decayFloorToRecentCadence` in
+ * `client/src/lib/hls-ll-latency.ts` for the bound: it never gives back
+ * more than the last `LL_SEGMENT_CADENCE_WINDOW` REAL segment durations
+ * justify, and a single slow segment reappearing raises the floor again on
+ * the very next manifest update, same as today.
+ *
+ * Read per call like every other switch in this file, so it can be turned
+ * on for one deployment (or rolled back) with no client rebuild -- a
+ * viewer already mid-party picks it up on this browser's next
+ * `GET /api/live-hls/config` fetch (today: the next page load or fresh
+ * player mount, since that answer is cached for the tab's lifetime, same
+ * as `lowLatency.available` itself; see `use-live-hls-config.ts`).
+ */
+export function liveHlsLLSegmentCadenceDecayEnabled(): boolean {
+  return process.env.LIVE_HLS_LL_SEGMENT_CADENCE_DECAY === "true";
+}
+
+/**
  * `servers.live_hls_ll_enabled` for one server: TRUE / FALSE when an operator
  * decided from the dashboard, NULL when nobody has.
  *
