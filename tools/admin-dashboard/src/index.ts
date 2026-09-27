@@ -265,6 +265,9 @@ async function metricsWithDistribution(
     });
   }
   body.distribution = distributionBlock(clicks.state, clicks.configured, github);
+  // Which API this Worker reads, so a page pointed at staging or a local API
+  // says so next to its numbers.
+  body.apiHost = new URL(url).host;
   return json(200, body);
 }
 

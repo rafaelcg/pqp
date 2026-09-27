@@ -148,9 +148,15 @@
     var out = [];
     var tone = { bad: 0, warn: 1, info: 2, ok: 3 };
     (verdicts || []).forEach(function (v) {
-      if (v && (v.state === "bad" || v.state === "warn")) {
-        out.push({ tone: v.state, title: v.head, detail: clip(stripTags(v.body), 150), action: "ver leitura", target: "hoje:leituras" });
+      if (!v || (v.state !== "bad" && v.state !== "warn")) return;
+      // A pool peak that has passed is history, not an alarm: the pool is
+      // calm now and the counter only goes back to the last restart.
+      if (isPastPoolPeak(v, m.runtime)) {
+        var since = m.runtime && m.runtime.peakTrackedSince ? hhmm(m.runtime.peakTrackedSince) : null;
+        out.push({ tone: "info", title: "O banco chegou ao limite de conexões " + (since ? "desde as " + since : "desde o último reinício"), detail: "agora está calmo, sem fila · o pico conta desde o último reinício", action: "ver leitura", target: "hoje:leituras" });
+        return;
       }
+      out.push({ tone: v.state, title: v.head, detail: clip(stripTags(v.body), 150), action: "ver leitura", target: "hoje:leituras" });
     });
     var comps = health && Array.isArray(health.components) ? health.components : [];
     comps.forEach(function (c) {
@@ -187,6 +193,53 @@
       out.push({ tone: "ok", title: "Nada pedindo atenção", detail: "sistema, filas e chamadas dentro do normal", action: "", target: "" });
     }
     return out;
+  }
+
+  function isPastPoolPeak(v, runtime) {
+    var pool = runtime && runtime.pool;
+    return v.key === "pool" && v.state === "warn" && pool && !(pool.waiting > 0);
+  }
+  function hhmm(iso) {
+    try { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); } catch { return null; }
+  }
+
+  /**
+   * The system half of the header: only what is wrong right now. Queue
+   * workload and passed peaks are not "the system is unwell", and mixing
+   * them in is how a status light learns to cry wolf.
+   */
+  function systemStatus(m, verdicts, health) {
+    var comps = (health && health.components) || [];
+    var down = comps.filter(function (c) { return c.state === "down"; });
+    var degraded = comps.filter(function (c) { return c.state === "degraded"; });
+    var breaker = m && m.runtime && m.runtime.db && m.runtime.db.breaker;
+    var now = (verdicts || []).filter(function (v) { return v && (v.state === "bad" || v.state === "warn") && !isPastPoolPeak(v, m && m.runtime); });
+    if (down.length || (breaker && breaker.state === "open") || now.some(function (v) { return v.state === "bad"; })) {
+      return { tone: "bad", text: down.length ? down.map(function (c) { return c.label; }).join(", ") + " fora do ar" : breaker && breaker.state === "open" ? "banco recusando consultas" : "sistema com problema" };
+    }
+    if (degraded.length || (breaker && breaker.state === "half-open") || now.length) {
+      return { tone: "warn", text: degraded.length ? degraded.map(function (c) { return c.label; }).join(", ") + " instável" : "sistema pedindo atenção" };
+    }
+    return { tone: "ok", text: "sistema ok" };
+  }
+
+  /**
+   * Feedback items that say the same thing, grouped so "it is too loud"
+   * sent three times reads as one problem three people have. Same kind and
+   * the same text once case, accents, punctuation and spacing are ignored.
+   */
+  function groupFeedback(items) {
+    var norm = function (t) {
+      return String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+    };
+    var groups = [], byKey = {};
+    (items || []).forEach(function (it) {
+      var k = it.kind + "|" + norm(it.body);
+      if (byKey[k]) { byKey[k].others.push(it); return; }
+      var g = { item: it, others: [] };
+      byKey[k] = g; groups.push(g);
+    });
+    return groups;
   }
 
   /** Shorten at a word boundary, with an ellipsis, never mid-word. */
@@ -329,7 +382,7 @@
   var api = {
     fmt: fmt, dec: dec, pct: pct, fmtPct: fmtPct, deltaLabel: deltaLabel, shortDay: shortDay,
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
-    attention: attention, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
+    attention: attention, systemStatus: systemStatus, groupFeedback: groupFeedback, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
     activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution
   };
   root.PQPNovo = api;

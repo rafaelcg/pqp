@@ -170,3 +170,33 @@ test("one open feedback is singular", () => {
   const m = metrics({ moderation: { reports: { open: 0 }, feedback: { open: 1, confirmed: 0, last24h: 0 } }, callRatings: null });
   assert.ok(M.attention(m, [], { components: [] }).some((a) => a.title === "1 feedback aberto"));
 });
+
+test("a pool peak that has passed is history, and the system reads ok", () => {
+  const m = metrics({ runtime: { db: { breaker: { state: "closed" } }, pool: { waiting: 0, busy: 1, max: 10 }, peakTrackedSince: "2026-09-27T22:09:00Z" } });
+  const verdicts = [{ key: "pool", state: "warn", head: "o pool encostou no teto hoje", body: "..." }];
+  const list = M.attention(m, verdicts, { components: [] });
+  const pool = list.find((a) => /limite de conexões/.test(a.title));
+  assert.equal(pool.tone, "info");
+  assert.match(pool.title, /desde as 19:09/);
+  assert.deepEqual(M.systemStatus(m, verdicts, { components: [] }), { tone: "ok", text: "sistema ok" });
+});
+
+test("a pool queue right now, a down service or an open breaker is not ok", () => {
+  const busy = metrics({ runtime: { db: { breaker: { state: "closed" } }, pool: { waiting: 3, busy: 10, max: 10 } } });
+  assert.equal(M.systemStatus(busy, [{ key: "pool", state: "bad", head: "x" }], { components: [] }).tone, "bad");
+  assert.equal(M.systemStatus(metrics(), [], { components: [{ label: "Database", state: "down" }] }).text, "Database fora do ar");
+  const open = metrics({ runtime: { db: { breaker: { state: "open" } }, pool: {} } });
+  assert.equal(M.systemStatus(open, [], { components: [] }).text, "banco recusando consultas");
+});
+
+test("the same report sent three times is one group of three", () => {
+  const g = M.groupFeedback([
+    { id: "14", kind: "bug", body: "it is too loud" },
+    { id: "13", kind: "idea", body: "make it louder" },
+    { id: "8", kind: "bug", body: "It is too loud!" },
+    { id: "2", kind: "bug", body: "it  is too loud" }
+  ]);
+  assert.equal(g.length, 2);
+  assert.equal(g[0].item.id, "14");
+  assert.deepEqual(g[0].others.map((x) => x.id), ["8", "2"]);
+});

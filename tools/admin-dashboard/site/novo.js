@@ -87,6 +87,8 @@
   /** A latency, with a sub-millisecond reading shown as such rather than as 0. */
   function ms(v) { return v == null ? "—" : v < 1 ? "<1 ms" : fmt(v) + " ms"; }
   function clear(el) { while (el && el.firstChild) el.removeChild(el.firstChild); return el; }
+  /** "toque" on touch screens, "passe o mouse" where there is a mouse. */
+  var POINT = window.matchMedia && window.matchMedia("(hover: none)").matches ? "toque" : "passe o mouse";
   function firstTime(key) { if (S.firstDraw[key]) return false; S.firstDraw[key] = true; return !reduceMotion; }
 
   /** Tween a number in place. First sight counts up from zero; a change flashes once. */
@@ -359,7 +361,10 @@
     S.screen = name;
     SCREENS.forEach(function (n) { $("screen-" + n).hidden = n !== name; });
     document.querySelectorAll(".tabs a").forEach(function (a) {
-      if (a.getAttribute("data-tab") === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+      if (a.getAttribute("data-tab") === name) {
+        a.setAttribute("aria-current", "page");
+        if (a.scrollIntoView && a.parentNode.scrollWidth > a.parentNode.clientWidth) a.scrollIntoView({ block: "nearest", inline: "center" });
+      } else a.removeAttribute("aria-current");
     });
     try { localStorage.setItem("pqp-admin-view", "novo"); } catch { /* storage blocked */ }
     if (!S.visited[name]) {
@@ -462,12 +467,20 @@
     var m = S.metrics; if (!m) return;
     var verdicts = I ? I.buildInsights({ runtime: m.runtime, components: S.health && S.health.components, history: m.statusHistory, names: NAMES, occupancy: S.occupancy && S.occupancy.points }) : [];
     S.verdicts = verdicts;
-    var bad = verdicts.some(function (v) { return v.state === "bad"; }) || (S.health && S.health.components || []).some(function (c) { return c.state === "down"; });
-    var warn = verdicts.some(function (v) { return v.state === "warn"; }) || (S.health && S.health.components || []).some(function (c) { return c.state === "degraded"; });
-    $("status").className = "status " + (bad ? "bad" : warn ? "warn" : "");
-    $("statusText").textContent = bad ? "algo fora do normal" : warn ? "pedindo atenção" : "tudo operacional";
+    // The pill is the system and nothing else: queue workload has the Fila
+    // tab count, and a pool peak that has passed is history, not a fault.
+    var st = M.systemStatus(m, verdicts, S.health);
+    $("status").className = "status " + (st.tone === "ok" ? "" : st.tone);
+    $("statusText").textContent = st.text;
     var open = ((m.moderation || {}).feedback || {}).open + ((m.moderation || {}).reports || {}).open;
     $("tabCount").hidden = !open; $("tabCount").textContent = String(open || 0);
+    var env = $("envChip");
+    if (m.apiHost) {
+      env.hidden = false;
+      env.textContent = m.apiHost === "api.pqp.gg" ? "produção" : m.apiHost;
+      env.title = "lendo " + m.apiHost;
+      env.classList.toggle("other", m.apiHost !== "api.pqp.gg");
+    }
   }
   var NAMES = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
 
@@ -559,7 +572,7 @@
     var hours = h("div", { class: "hours" });
     for (var i = 0; i < 24; i++) hours.appendChild(h("span", { text: i % 6 === 0 ? String(i) : "" }));
     grid.appendChild(hours);
-    grid.addEventListener("mouseleave", function () { cap.textContent = "passe o mouse num quadrado"; });
+    grid.addEventListener("mouseleave", function () { cap.textContent = POINT + " num quadrado"; });
     host.appendChild(grid);
     $("hHeatAside").textContent = fmt(hm._days || 0) + (hm._wanted && hm._days < hm._wanted ? " de " + fmt(hm._wanted) : "") + " dias lidos" + (S.heatFailed ? " · " + fmt(S.heatFailed) + " falharam" : "");
   }
@@ -618,8 +631,8 @@
     var tracked = y && y.dau != null;
     var kpis = [
       { key: "dau", label: act.label, value: act.value, badge: act.badge, note: act.note, series: act.series, color: "accent" },
-      { key: "wau", label: tracked ? "ativos 7 dias · wau" : "escreveram · 7 dias", value: y ? (tracked ? y.wau : y.postedWau) : null, badge: null, note: "janela móvel de 7 dias", series: days.map(function (x) { return tracked ? x.wau : x.postedWau; }).filter(function (v) { return v != null; }), color: "accent" },
-      { key: "mau", label: y && y.mau != null ? "ativos 30 dias · mau" : "escreveram · 30 dias", value: y ? (y.mau != null ? y.mau : y.postedMau) : null, badge: null, note: y && y.mau != null ? "janela móvel de 30 dias" : "ativos a partir de 30 dias de rastreio", series: y && y.mau != null ? days.map(function (x) { return x.mau; }).filter(function (v) { return v != null; }) : days.map(function (x) { return x.postedMau; }), color: "series" },
+      { key: "wau", label: tracked ? "ativos na semana" : "escreveram na semana", value: y ? (tracked ? y.wau : y.postedWau) : null, badge: null, note: "últimos 7 dias, até ontem (wau)", series: days.map(function (x) { return tracked ? x.wau : x.postedWau; }).filter(function (v) { return v != null; }), color: "accent" },
+      { key: "mau", label: y && y.mau != null ? "ativos no mês" : "escreveram no mês", value: y ? (y.mau != null ? y.mau : y.postedMau) : null, badge: null, note: y && y.mau != null ? "últimos 30 dias, até ontem (mau)" : "ativos no mês depois de 30 dias de rastreio", series: y && y.mau != null ? days.map(function (x) { return x.mau; }).filter(function (v) { return v != null; }) : days.map(function (x) { return x.postedMau; }), color: "series" },
       { key: "signups", label: "cadastros · 30 dias", value: m && m.activation ? m.activation.window30d.signup : null, badge: m && m.activation ? { text: fmt(m.activation.window7d.signup) + " em 7 dias", tone: "flat" } : null, note: "contas humanas novas · linha dos últimos " + (m && m.userDetail ? m.userDetail.signupsByDay.length : 14) + " dias", series: m && m.userDetail ? m.userDetail.signupsByDay.map(function (x) { return x.n; }) : null, color: "series" }
     ];
     renderKpis($("cKpis"), kpis, "ck-");
@@ -682,7 +695,9 @@
       ch._key = cohortKey; clear(ch);
       var cAnim = firstTime("cohort");
       var grid = h("div", { style: "display:grid;grid-template-columns:70px 80px repeat(3, minmax(0, 1fr));gap:6px;align-items:center" });
-      ["semana", "cadastros", "dia 1", "semana 1", "mês 1"].forEach(function (t, i) { grid.appendChild(h("span", { style: "font-size:11px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:0.06em;text-align:" + (i === 1 ? "right" : i > 1 ? "center" : "left"), text: t })); });
+      [["semana", ""], ["cadastros", ""], ["dia 1", "o dia seguinte"], ["semana 1", "dias 7 a 13"], ["mês 1", "dias 30 a 36"]].forEach(function (t, i) {
+        grid.appendChild(h("span", { style: "display:flex;flex-direction:column;gap:1px;font-size:11px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:0.06em;text-align:" + (i === 1 ? "right" : i > 1 ? "center" : "left") }, [t[0], t[1] ? h("span", { style: "text-transform:none;letter-spacing:0;font-weight:500", text: t[1] }) : null]));
+      });
       var brackets = ["no dia 1", "na semana 1 (dias 7 a 13)", "no mês 1 (dias 30 a 36)"];
       a.cohorts.slice().reverse().forEach(function (c, r) {
         grid.appendChild(h("span", { style: "font-size:13px;color:var(--muted)", text: M.shortDay(c.week) }));
@@ -797,7 +812,7 @@
     var tAnim = firstTime("topchannels");
     if (!top.length) chh.appendChild(h("p", { class: "empty", text: "Nenhuma mensagem em canais de texto nas últimas 24 h." }));
     top.forEach(function (c, i) {
-      chh.appendChild(h("div", { class: "rowlink", style: "display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) 110px 100px;gap:14px" }, [
+      chh.appendChild(h("div", { class: "rowlink chanrow", style: "display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) 110px 100px;gap:14px" }, [
         h("span", { style: "font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis", text: c.channel }),
         h("span", { style: "color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis", text: c.server }),
         h("span", { class: "meter" }, [h("i", { class: tAnim ? "growx" : null, style: "width:" + (c.messages24h / mx * 100).toFixed(1) + "%;animation-delay:" + (500 + i * 60) + "ms" })]),
@@ -853,40 +868,74 @@
   function renderFila(paneChanged) {
     var fb = S.fb, m = S.metrics;
     var c = fb.counts;
-    $("fLede").textContent = c ? fmt(c.open) + " abertos · " + fmt(c.confirmed) + " confirmados · " + fmt(c.closed) + " fechados · " + fmt(c.last24h) + " novos em 24 h" : (fb.error ? "a leitura falhou · " + fb.error : "lendo a fila…");
+    $("fLede").textContent = c
+      ? fmt(c.open) + (c.open === 1 ? " aberto" : " abertos") + " esperando você · além deles, " + fmt(c.confirmed) + " já confirmados e " + fmt(c.closed) + " fechados · " + fmt(c.last24h) + " novos em 24 h"
+      : (fb.error ? "a leitura falhou · " + fb.error : "lendo a fila…");
     var chips = clear($("fChips"));
+    // What to look at: open items or all of them. A two-option switch says
+    // what each click does; a single toggle chip only said the current state.
+    var seg = h("div", { class: "seg small", role: "group", "aria-label": "quais itens" });
+    [["open", "abertos"], ["all", "todos"]].forEach(function (o) {
+      seg.appendChild(h("button", { type: "button", "aria-pressed": fb.status === o[0] ? "true" : "false", text: o[1], onclick: function () { if (fb.status !== o[0]) { fb.status = o[0]; fb.sel = null; loadFeedback(false); } } }));
+    });
+    var sortSeg = h("div", { class: "seg small", role: "group", "aria-label": "ordem" });
+    [["recent", "mais recentes"], ["most", "mais relatados"]].forEach(function (o) {
+      sortSeg.appendChild(h("button", { type: "button", "aria-pressed": (fb.sort || "recent") === o[0] ? "true" : "false", text: o[1], onclick: function () { fb.sort = o[0]; renderFila(false); } }));
+    });
+    chips.appendChild(h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;width:100%" }, [seg, sortSeg]));
+    // Kind filters. Their counts are open items, so they only show numbers
+    // while open items are what is listed.
     var byKind = c ? c.openByKind : { bug: 0, idea: 0, other: 0 };
     [["", "tudo", c ? c.open : 0], ["bug", "bugs", byKind.bug], ["idea", "ideias", byKind.idea], ["other", "outros", byKind.other]].forEach(function (k) {
-      chips.appendChild(h("button", { type: "button", class: "chip", "aria-pressed": fb.kind === k[0] ? "true" : "false", text: k[1] + " · " + fmt(k[2]), onclick: function () { fb.kind = k[0]; fb.sel = null; loadFeedback(false); } }));
+      chips.appendChild(h("button", { type: "button", class: "chip", "aria-pressed": fb.kind === k[0] ? "true" : "false", text: k[1] + (fb.status === "open" ? " · " + fmt(k[2]) : ""), onclick: function () { if (fb.kind !== k[0]) { fb.kind = k[0]; fb.sel = null; loadFeedback(false); } } }));
     });
-    chips.appendChild(h("button", { type: "button", class: "chip", "aria-pressed": fb.status === "all" ? "true" : "false", text: fb.status === "all" ? "mostrando todos" : "só abertos", onclick: function () { fb.status = fb.status === "all" ? "open" : "all"; fb.sel = null; loadFeedback(false); } }));
     var list = clear($("fItems"));
     var anim = firstTime("fila-items");
-    fb.items.forEach(function (it, i) {
+    var visible = fb.items.filter(function (it) { return !(S.pendingResolve && S.pendingResolve.ids.indexOf(it.id) >= 0); });
+    visible.sort(function (a, b) { return Date.parse(b.createdAt) - Date.parse(a.createdAt); });
+    var groups = M.groupFeedback(visible);
+    if ((fb.sort || "recent") === "most") groups.sort(function (a, b) { return b.others.length - a.others.length; });
+    fb.groups = groups;
+    if (!groups.some(function (g) { return g.item.id === fb.sel; })) fb.sel = groups.length ? groups[0].item.id : null;
+    groups.forEach(function (g, i) {
+      var it = g.item, n = g.others.length + 1;
       list.appendChild(h("button", { type: "button", class: "item" + (anim ? " rise" : ""), role: "option", "aria-current": it.id === fb.sel ? "true" : "false", "aria-selected": it.id === fb.sel ? "true" : "false", "data-id": it.id, style: "animation-delay:" + (150 + i * 40) + "ms",
-        onclick: function () { if (fb.sel !== it.id) { fb.sel = it.id; renderFila(true); } } }, [
-        h("span", { class: "im" }, [h("span", { class: "badge kind " + it.kind, text: KIND[it.kind] || it.kind }), it.status !== "open" ? h("span", { class: "badge " + (it.status === "confirmed" ? "accent" : ""), text: it.status === "confirmed" ? "confirmado" : "fechado" }) : null, "#" + it.id + " · " + ago(it.createdAt)]),
+        onclick: function () { fb.sel = it.id; renderFila(true); showPaneOnPhone(); } }, [
+        h("span", { class: "im" }, [
+          h("span", { class: "badge kind " + it.kind, text: KIND[it.kind] || it.kind }),
+          n > 1 ? h("span", { class: "badge warn", text: n + " relatos" }) : null,
+          it.status !== "open" ? h("span", { class: "badge " + (it.status === "confirmed" ? "accent" : ""), text: it.status === "confirmed" ? "confirmado" : "fechado" }) : null,
+          "#" + it.id + " · " + ago(it.createdAt)
+        ]),
         h("span", { class: "it", text: it.body })
       ]));
     });
-    if (!fb.items.length && fb.loaded) list.appendChild(h("p", { class: "empty", text: "Nada aqui com esse filtro. Fila limpa." }));
+    if (!groups.length && fb.loaded) list.appendChild(h("p", { class: "empty", text: "Nada aqui com esse filtro. Fila limpa." }));
     $("fMore").hidden = !fb.next;
     var rep = (m && m.moderation) || {};
     var rr = rep.reports || {};
     var reports = clear($("fReports"));
-    reports.appendChild(h("div", { class: "nh" }, [h("b", { style: "font-size:13px", text: "Denúncias" }), h("span", { class: "badge " + (rr.open ? "warn" : "ok"), text: fmt(rr.open) + " abertas" })]));
+    reports.appendChild(h("div", { class: "nh" }, [h("b", { style: "font-size:13px", text: "Denúncias" }), h("span", { class: "badge " + (rr.open ? "warn" : "ok"), text: fmt(rr.open) + (rr.open === 1 ? " aberta" : " abertas") })]));
     reports.appendChild(h("p", { text: fmt(rr.last24h) + " novas em 24 h · " + fmt(rep.bans) + " bans · " + fmt(rep.activeTimeouts) + " castigos em vigor" }));
     reports.appendChild(h("a", { href: "https://pqp.gg/app?modAllReports=1", target: "_blank", rel: "noopener", style: "font-size:12.5px;font-weight:600;text-decoration:none", text: "abrir a fila completa, todos os servidores →" }));
     if (paneChanged) renderPane();
   }
+  function isNarrow() { return window.matchMedia && window.matchMedia("(max-width: 760px)").matches; }
+  /** On a phone the detail sits under the list: bring it into view. */
+  function showPaneOnPhone() {
+    if (!isNarrow()) return;
+    $("fPane").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  }
   function renderPane() {
     var fb = S.fb, pane = clear($("fPane"));
-    var it = fb.items.filter(function (x) { return x.id === fb.sel; })[0];
+    var g = (fb.groups || []).filter(function (x) { return x.item.id === fb.sel; })[0];
+    var it = g && g.item;
     if (!it) {
       pane.appendChild(h("div", { class: reduceMotion ? null : "panein", style: "padding-top:60px" }, [h("div", { style: "font-family:var(--display);font-size:26px;font-weight:600", text: fb.loaded ? "Fila limpa." : "Lendo…" }), h("p", { class: "lede", text: fb.loaded ? "Nada esperando por você neste filtro." : "" })]));
       return;
     }
     var wrap = h("div", { class: reduceMotion ? null : "panein", style: "display:flex;flex-direction:column;gap:20px" });
+    wrap.appendChild(h("button", { type: "button", class: "ghost back-to-list", text: "← voltar à lista", onclick: function () { $("fItems").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" }); } }));
     wrap.appendChild(h("div", { style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap" }, [
       h("span", { class: "badge kind " + it.kind, text: KIND[it.kind] || it.kind }),
       h("span", { class: "badge " + (it.status === "open" ? "warn" : it.status === "confirmed" ? "accent" : ""), text: { open: "aberto", confirmed: "confirmado", closed: "fechado" }[it.status] }),
@@ -901,13 +950,25 @@
         h("span", { style: "font-size:12.5px;color:var(--muted)", text: [ageText(a.accountCreatedAt), fmt(a.sent) + (a.sent === 1 ? " enviado" : " enviados") + (a.confirmed ? ", " + fmt(a.confirmed) + (a.confirmed === 1 ? " confirmado" : " confirmados") : "")].join(" · ") })
       ] : [h("span", { style: "font-size:14px;color:var(--muted)", text: "conta apagada" })])
     ]));
+    if (g.others.length) {
+      wrap.appendChild(h("div", { class: "note" }, [
+        h("b", { style: "font-size:13px", text: "Também relatado " + (g.others.length === 1 ? "por mais 1 pessoa" : "por mais " + g.others.length + " pessoas") }),
+        h("p", { text: g.others.map(function (o) { return "#" + o.id + " · " + (o.author ? o.author.tag : "conta apagada") + " · " + ago(o.createdAt); }).join("  ·  ") }),
+        h("span", { class: "foot", text: "confirmar ou fechar vale para o grupo inteiro" })
+      ]));
+    }
     var ctx = ctxChips(it.context);
     wrap.appendChild(h("div", { style: "display:flex;flex-direction:column;gap:10px" }, [h("div", { class: "foot", style: "font-weight:600;color:var(--muted);font-size:13px", text: "onde a pessoa estava" }), ctx]));
+    var ids = [it.id].concat(g.others.map(function (o) { return o.id; }));
     var actions = h("div", { class: "actions" });
-    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug · dá o selo" : "confirmar", onclick: function () { resolve(it, "confirmed"); } }));
-    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function () { resolve(it, "closed"); } }));
-    actions.appendChild(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "próximo ↓", onclick: function () { var i = fb.items.indexOf(it); if (fb.items.length > 1) { fb.sel = fb.items[(i + 1) % fb.items.length].id; renderFila(true); } } }));
+    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug" + (ids.length > 1 ? "s" : "") + " · dá o selo" : "confirmar", onclick: function () { resolve(it, ids, "confirmed"); } }));
+    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function () { resolve(it, ids, "closed"); } }));
+    actions.appendChild(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "próximo ↓", onclick: function () {
+      var gs = fb.groups || []; var i = gs.indexOf(g);
+      if (gs.length > 1) { fb.sel = gs[(i + 1) % gs.length].item.id; renderFila(true); }
+    } }));
     wrap.appendChild(actions);
+    wrap.appendChild(h("span", { class: "foot", text: "você tem 8 segundos para desfazer depois de confirmar ou fechar" }));
     pane.appendChild(wrap);
   }
   function ageText(iso) {
@@ -940,31 +1001,56 @@
     list.forEach(function (x, i) { box.appendChild(h("span", { class: anim ? "pop" : null, style: "animation-delay:" + (100 + i * 40) + "ms" }, [h("i", { text: x[0] }), x[1]])); });
     return box;
   }
-  function resolve(it, status) {
-    var fb = S.fb; if (fb.busy) return;
-    fb.busy = true;
-    var pane = $("fPane"); pane.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: String(it.id), status: status }) })
-      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
-      .then(function () {
-        var el = document.querySelector('.item[data-id="' + it.id + '"]');
-        if (el && !reduceMotion) el.classList.add("leaving");
-        toast("#" + it.id + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganhou o selo caça-bugs" : " confirmado") : " fechado"));
-        setTimeout(function () { fb.busy = false; loadFeedback(false); }, reduceMotion ? 0 : 300);
-      })
-      .catch(function (e) {
-        fb.busy = false;
-        pane.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
-        toast("não deu pra gravar: " + (e && e.message ? e.message : "erro"), true);
-      });
+  /**
+   * Confirm or close, with 8 seconds to undo. The API cannot reopen an item
+   * (and confirming a bug grants a badge), so nothing is sent until the undo
+   * window has passed: the item leaves the list at once, the toast offers
+   * "desfazer", and only then do the writes go out. Leaving the page sends
+   * any pending write immediately rather than losing it.
+   */
+  var UNDO_MS = 8000;
+  function resolve(it, ids, status) {
+    var fb = S.fb;
+    flushPending();
+    var label = "#" + it.id + (ids.length > 1 ? " e mais " + (ids.length - 1) : "");
+    S.pendingResolve = { ids: ids, status: status, label: label, kind: it.kind };
+    fb.sel = null;
+    renderFila(true);
+    toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, function () {
+      clearTimeout(S.pendingTimer);
+      S.pendingResolve = null;
+      fb.sel = it.id;
+      renderFila(true);
+      toast(label + " voltou para a fila, nada foi gravado");
+    });
+    clearTimeout(S.pendingTimer);
+    S.pendingTimer = setTimeout(flushPending, UNDO_MS);
   }
-  function toast(text, bad) {
+  function flushPending(keepalive) {
+    var p = S.pendingResolve; if (!p) return;
+    S.pendingResolve = null;
+    clearTimeout(S.pendingTimer);
+    Promise.all(p.ids.map(function (id) {
+      return fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: String(id), status: p.status }) })
+        .then(function (r) { if (!r.ok) throw new Error("http " + r.status); });
+    })).then(function () {
+      if (!keepalive) loadFeedback(false);
+    }).catch(function (e) {
+      toast("não deu pra gravar " + p.label + ": " + (e && e.message ? e.message : "erro"), true);
+      loadFeedback(false);
+    });
+  }
+  window.addEventListener("pagehide", function () { flushPending(true); });
+  function toast(text, bad, undo) {
     var t = $("toast");
     $("toastText").textContent = text;
     t.classList.toggle("bad", !!bad);
+    var u = $("toastUndo");
+    u.hidden = !undo;
+    u.onclick = undo ? function () { u.hidden = true; t.classList.remove("on"); undo(); } : null;
     t.classList.add("on");
     clearTimeout(S.toastTimer);
-    S.toastTimer = setTimeout(function () { t.classList.remove("on"); }, 4200);
+    S.toastTimer = setTimeout(function () { t.classList.remove("on"); u.hidden = true; }, undo ? UNDO_MS : 4200);
   }
 
   // ---------------------------------------------------------------- SISTEMA
@@ -977,8 +1063,9 @@
     var hist = {};
     ((m.statusHistory || {}).components || []).forEach(function (c) { hist[c.key] = c; });
     var cl = m.cluster || {};
-    $("sLede").textContent = "commit " + (m.version ? String(m.version).slice(0, 7) : "—") + " · " + fmt(m.instanceCount || cl.instances || 1) + (m.instanceCount === 1 ? " instância" : " instâncias") + " da api · disjuntor do banco " + ({ closed: "fechado", open: "aberto", "half-open": "testando" }[m.runtime && m.runtime.db && m.runtime.db.breaker.state] || "—");
+    $("sLede").textContent = "commit " + (m.version ? String(m.version).slice(0, 7) : "—") + " · " + fmt(m.instanceCount || cl.instances || 1) + (m.instanceCount === 1 ? " instância" : " instâncias") + " da api · " + ({ closed: "banco ok (disjuntor fechado)", open: "banco recusando consultas (disjuntor aberto)", "half-open": "banco voltando (disjuntor testando)" }[m.runtime && m.runtime.db && m.runtime.db.breaker.state] || "banco: sem leitura");
     var sv = clear($("sServices"));
+    sv.appendChild(h("div", { class: "svc-head", style: "grid-template-columns:minmax(150px,1fr) 150px 70px 70px 80px 70px" }, ["serviço", "últimas 24 h", "agora", "normal", "no ar 24 h", "no ar 7 d"].map(function (t) { return h("span", { text: t }); })));
     comps.forEach(function (c) {
       var hc = hist[c.key];
       var lat = hc ? hc.points.map(function (p) { return p.ms; }) : null;
@@ -998,7 +1085,7 @@
     var blocks = function (on, total, cls) { var b = h("div", { class: "blocks " + (cls || "") }); for (var i = 0; i < total; i++) b.appendChild(h("i", { class: i < on ? "on" : null })); return b; };
     var busy = pool.busy != null ? pool.busy : (pool.total || 0) - (pool.idle || 0);
     var poolCls = pool.pressure === "saturated" ? "bad" : pool.pressure === "tight" ? "warn" : "";
-    cap.appendChild(h("div", null, [h("div", { style: "display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px" }, [h("span", { text: "pool do postgres" }), h("span", { class: "num", text: fmt(busy) + " de " + fmt(pool.max) + " em uso · pico " + fmt(m.runtime.peakPoolBusy) + " · fila " + fmt(pool.waiting) })]), blocks(busy, pool.max || 0, poolCls), h("div", { class: "foot", style: "margin-top:6px", text: "desde " + stamp(m.runtime.peakTrackedSince) + " · " + (cl.instances > 1 ? "nesta instância; " + fmt(cl.poolBusy) + " de " + fmt(cl.poolMax) + " no total" : "uma instância") })]));
+    cap.appendChild(h("div", null, [h("div", { style: "display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px" }, [h("span", { text: "conexões do banco (pool)" }), h("span", { class: "num", text: fmt(busy) + " de " + fmt(pool.max) + " em uso · pico " + fmt(m.runtime.peakPoolBusy) + " · fila " + fmt(pool.waiting) })]), blocks(busy, pool.max || 0, poolCls), h("div", { class: "foot", style: "margin-top:6px", text: "desde " + stamp(m.runtime.peakTrackedSince) + " · " + (cl.instances > 1 ? "nesta instância; " + fmt(cl.poolBusy) + " de " + fmt(cl.poolMax) + " no total" : "uma instância") })]));
     // The bar compares this instance with its own peak; the cluster total,
     // when there is more than one instance, is in the text beside it.
     var here = m.runtime.sockets, peak = Math.max(m.runtime.peakSockets || 0, here, 1);
@@ -1014,6 +1101,33 @@
     renderParty(m);
     sistemaDetails(m);
   }
+  /**
+   * What turning a flag off or on means for people, in one line, for the
+   * switches where a wrong click is felt. The rest say it applies in
+   * seconds; keys come from `server/src/lib/flags.ts`.
+   */
+  var FLAG_RISK = {
+    read_cache: "Desligado, toda leitura repetida vai direto ao banco. Com muita gente on (watch party, deploy), o banco pode chegar ao limite de conexões.",
+    turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
+    voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
+    livekit_region_require_cap: "Ligado, apps que não declararam sfu-region só abrem salas em São Paulo.",
+    watch_party_waitlist: "Mostra ou esconde o convite da lista de espera nos servidores sem watch party.",
+    live_hls_camera: "Vale a partir da próxima transmissão: a câmera do apresentador sobre o filme.",
+    live_hls_camera_480: "Vale a partir da próxima transmissão: câmera em 480p (ligado) ou 360p.",
+    live_hls_voice_track: "Vale a partir da próxima transmissão.",
+    live_hls_mic_archive: "Vale a partir da próxima transmissão.",
+    live_hls_reap_orphans: "Desligado, gravações órfãs no servidor de mídia não são paradas sozinhas.",
+    hls_sharer_resume_hold: "Muda o que acontece quando o apresentador cai: segurar a transmissão ou encerrar em 5 s.",
+    community_home: "Mostra ou esconde o Baú para todo mundo.",
+    community_home_vip: "Mostra ou esconde os posts VIP do Baú (só vale com o Baú ligado)."
+  };
+  function flagName(f) { return String(f.description || f.key).replace(/\s*\([^)]*\)\s*$/, "").replace(/\.$/, ""); }
+  function onOff(v) { return v ? "ligado" : "desligado"; }
+  function flagSource(f) {
+    if (f.stored) return "decidido no painel" + (f.stored.updatedBy ? " por " + f.stored.updatedBy : "") + " · " + ago(f.stored.updatedAt);
+    if (f.envSet) return "vem da variável " + f.env;
+    return "padrão do código" + (f.codeDefaultLabel ? " (" + f.codeDefaultLabel + ")" : "");
+  }
   function renderSwitches(swHost, fl) {
     var sw = clear(swHost);
     if (!fl) sw.appendChild(h("p", { class: "empty", text: "lendo os interruptores…" }));
@@ -1021,25 +1135,43 @@
     else {
       $("sFlagsAside").textContent = fmt(fl.flags.length) + " interruptores";
       // A switch here flips a live production flag for every server, so a
-      // click asks first, in the row, and a flag the dashboard has decided
-      // can go back to following its environment variable.
+      // click asks first, in the row, says what it does and how to undo it,
+      // and a flag the dashboard decided can go back to its default.
       fl.flags.forEach(function (f) {
-        var src = f.stored ? "painel" : f.envSet ? "variável" : "padrão";
         var pending = S.flagPending === f.key;
-        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": f.key, disabled: S.flagBusy ? true : null,
-          onclick: function () { S.flagPending = pending ? null : f.key; renderSistema(); } });
-        var row = h("div", { class: "rowlink", style: "cursor:default" }, [
-          h("span", { class: "t" }, [h("b", { style: "font-size:13.5px", text: f.description }), h("span", { text: f.key + " · segue: " + src + (f.overrides && f.overrides.length ? " · " + f.overrides.length + " servidores com exceção" : "") })]),
+        var toggle = function () { if (S.flagBusy) return; S.flagPending = pending ? null : f.key; renderSistema(); };
+        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": flagName(f), disabled: S.flagBusy ? true : null,
+          onclick: function (ev) { ev.stopPropagation(); toggle(); } });
+        var row = h("div", { class: "rowlink flagrow", onclick: toggle }, [
+          h("span", { class: "t" }, [
+            h("b", { style: "font-size:13.5px", text: flagName(f) }),
+            h("span", { text: onOff(f.effective) + " · " + flagSource(f) + (f.overrides && f.overrides.length ? " · " + f.overrides.length + (f.overrides.length === 1 ? " servidor com exceção" : " servidores com exceção") : "") }),
+            h("span", { class: "key", text: f.key })
+          ]),
           btn
         ]);
         sw.appendChild(row);
         if (pending) {
-          var def = f.envDefault;
-          sw.appendChild(h("div", { class: reduceMotion ? null : "slidein", style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 0 14px;font-size:13px" }, [
-            h("span", { style: "flex:1;min-width:200px;color:var(--muted)", text: (f.effective ? "Desligar" : "Ligar") + " " + f.key + " para todos os servidores? Vale em segundos, sem deploy." }),
-            h("button", { type: "button", class: "btn primary", style: "height:36px;padding:0 14px", disabled: S.flagBusy ? true : null, text: f.effective ? "desligar" : "ligar", onclick: function () { writeFlag(f, !f.effective); } }),
-            f.stored ? h("button", { type: "button", class: "btn", style: "height:36px;padding:0 14px", disabled: S.flagBusy ? true : null, text: "voltar ao padrão (" + (def ? "ligado" : "desligado") + ")", onclick: function () { writeFlag(f, null); } }) : null,
-            h("button", { type: "button", class: "btn", style: "height:36px;padding:0 14px;color:var(--muted)", text: "cancelar", onclick: function () { S.flagPending = null; renderSistema(); } })
+          var target = !f.effective, def = f.envDefault;
+          var backToDefault = !!f.stored && target === def;
+          var defOwner = f.envSet ? "a variável " + f.env : "o padrão do código";
+          var undo = f.stored
+            ? "Para desfazer depois: “voltar ao padrão” devolve o controle para " + defOwner + " (" + onOff(def) + ")."
+            : "Para desfazer depois: volte aqui e use “voltar ao padrão”, que devolve o controle para " + defOwner + " (" + onOff(def) + ").";
+          var buttons = [];
+          if (backToDefault) {
+            buttons.push(h("button", { type: "button", class: "btn primary", disabled: S.flagBusy ? true : null, text: "voltar ao padrão (" + onOff(def) + ")", onclick: function () { writeFlag(f, null); } }));
+            buttons.push(h("button", { type: "button", class: "btn", disabled: S.flagBusy ? true : null, text: "fixar " + onOff(target) + " no painel", onclick: function () { writeFlag(f, target); } }));
+          } else {
+            buttons.push(h("button", { type: "button", class: "btn " + (target ? "primary" : "warn"), disabled: S.flagBusy ? true : null, text: target ? "ligar" : "desligar", onclick: function () { writeFlag(f, target); } }));
+            if (f.stored) buttons.push(h("button", { type: "button", class: "btn", disabled: S.flagBusy ? true : null, text: "voltar ao padrão (" + onOff(def) + ")", onclick: function () { writeFlag(f, null); } }));
+          }
+          buttons.push(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "cancelar", onclick: function () { S.flagPending = null; renderSistema(); } }));
+          sw.appendChild(h("div", { class: "confirm" + (reduceMotion ? "" : " slidein") }, [
+            h("b", { text: (backToDefault ? "Voltar «" + flagName(f) + "» ao padrão?" : (target ? "Ligar" : "Desligar") + " «" + flagName(f) + "» para todos os servidores?") }),
+            h("p", { text: (FLAG_RISK[f.key] ? FLAG_RISK[f.key] + " " : "") + "Vale em segundos, sem deploy." }),
+            h("p", { class: "foot", text: backToDefault ? "O padrão hoje é " + onOff(def) + ", então o valor não muda; só deixa de estar fixado no painel." : undo }),
+            h("div", { class: "actions" }, buttons)
           ]));
         }
       });
@@ -1064,7 +1196,7 @@
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
       .then(function (row) {
         S.flagBusy = false; S.flagPending = null;
-        $("sSwitchMsg").textContent = f.key + ": " + (enabled === null ? "voltou a seguir a variável, e agora está " : "") + (row.effective ? "ligado" : "desligado") + " · vale em segundos nas instâncias";
+        $("sSwitchMsg").textContent = "«" + flagName(f) + "»: " + (enabled === null ? "voltou ao padrão, e agora está " : "") + onOff(row.effective) + " · vale em segundos nas instâncias";
         loadFlags();
       })
       .catch(function (e) { S.flagBusy = false; $("sSwitchMsg").textContent = "não deu pra gravar: " + (e && e.message ? e.message : "erro"); renderSistema(); });
@@ -1088,6 +1220,21 @@
   $("refresh").addEventListener("click", function () { S.occupancyAt = 0; refresh(); if (S.screen === "fila") loadFeedback(false); if (S.screen === "sistema") loadFlags(); if (S.screen === "hoje" || S.screen === "crescimento") loadActivity(true); });
   $("toClassic").addEventListener("click", function () { try { localStorage.setItem("pqp-admin-view", "classico"); } catch { /* storage blocked */ } });
   $("fMore").addEventListener("click", function () { if (!S.fb.loading) loadFeedback(true); });
+  document.querySelectorAll("[data-point]").forEach(function (el) { el.textContent = POINT; });
+  // The status pill answers "why": it opens Hoje at "precisa de você".
+  $("status").addEventListener("click", function () {
+    if (location.hash !== "#hoje") location.hash = "#hoje";
+    setTimeout(function () {
+      var card = $("hAttn").closest(".card");
+      card.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    }, 60);
+  });
+  var gloss = $("gloss"), glossBtn = $("glossBtn");
+  var setGloss = function (open) { gloss.hidden = !open; glossBtn.setAttribute("aria-expanded", open ? "true" : "false"); };
+  glossBtn.addEventListener("click", function (ev) { ev.stopPropagation(); setGloss(gloss.hidden); });
+  document.addEventListener("click", function (ev) { if (!gloss.hidden && !gloss.contains(ev.target)) setGloss(false); });
+  gloss.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { setGloss(false); glossBtn.focus(); } });
+  glossBtn.addEventListener("keydown", function (ev) { if (ev.key === "Escape") setGloss(false); });
   $("cRange").addEventListener("click", function (ev) {
     var b = ev.target.closest("button[data-days]"); if (!b) return;
     var d = Number(b.getAttribute("data-days")); if (d === S.activityDays) return;

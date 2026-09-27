@@ -22,12 +22,28 @@
     <a href="#sistema" data-tab="sistema">Sistema</a>
   </nav>
   <div class="spacer"></div>
-  <div class="status" id="status" role="status"><span class="dot live"></span><span id="statusText">carregando</span></div>
+  <span class="env num" id="envChip" hidden></span>
+  <button type="button" class="status" id="status" title="ver o que pede atenção"><span class="dot live"></span><span id="statusText" role="status">carregando</span></button>
   <span class="read" id="readAt">relê a cada 30 s</span>
+  <button type="button" class="ghost icon" id="glossBtn" aria-expanded="false" aria-controls="gloss" title="o que cada termo quer dizer">?</button>
   <button type="button" class="ghost" id="refresh" title="reler tudo agora">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><polyline points="3 3 3 9 9 9"></polyline></svg><span class="lbl">atualizar</span></button>
-  <a class="ghost" id="toClassic" href="/?classico=1">visão clássica</a>
+  <a class="ghost" id="toClassic" href="/?classico=1"><span class="long">visão clássica</span><span class="short">clássica</span></a>
 </header>
+<aside class="gloss" id="gloss" hidden aria-label="o que cada termo quer dizer">
+  <h2>o que cada termo quer dizer</h2>
+  <dl>
+    <dt>ativos</dt><dd>quem abriu o app (web, desktop, iphone ou android) ou escreveu no dia, no fuso de São Paulo. <b>ativos ontem</b>, <b>na semana</b> e <b>no mês</b> são o mesmo conceito em janelas de 1, 7 e 30 dias (dau, wau e mau).</dd>
+    <dt>escreveram</dt><dd>só quem mandou mensagem. É a medida estrita, e a única que existe antes do rastreio de ativos começar.</dd>
+    <dt>retenção por semana de cadastro</dt><dd>de quem criou a conta numa semana, quantos voltaram no dia seguinte (dia 1), entre o 7º e o 13º dia (semana 1) e entre o 30º e o 36º (mês 1). As janelas são diferentes, então a semana 1 pode ser maior que o dia 1.</dd>
+    <dt>conexões do banco (pool)</dt><dd>quantas consultas ao Postgres a api consegue fazer ao mesmo tempo. Chegar ao limite com fila é o que deixa o app lento.</dd>
+    <dt>disjuntor do banco</dt><dd>proteção que para de mandar consultas quando o banco não responde. <b>Fechado</b> é o normal (banco ok); <b>aberto</b> é o banco recusando consultas.</dd>
+    <dt>normal (p50)</dt><dd>a mediana das últimas 24 h: metade das medições foi mais rápida que isso.</dd>
+    <dt>servidor de mídia (sfu)</dt><dd>o servidor que leva o áudio e o vídeo de salas maiores e das watch parties.</dd>
+    <dt>ponto a ponto (mesh)</dt><dd>chamadas pequenas em que cada pessoa manda o áudio direto para as outras, sem passar pelo servidor de mídia.</dd>
+    <dt>interruptores</dt><dd>opções que ligam ou desligam uma função para todos os servidores em segundos, sem deploy. <b>Padrão</b> é o valor da variável de ambiente ou do código; <b>painel</b> é quando alguém fixou aqui.</dd>
+  </dl>
+</aside>
 
 <main id="root" class="enter">
 
@@ -53,12 +69,12 @@
       <section class="card rise" style="animation-delay:380ms" aria-label="pessoas em chamada, pico por dia">
         <h2>pessoas em chamada · pico por dia, 30 dias<span class="aside" id="hPeaksAside"></span></h2>
         <div class="chart" id="hPeaks"></div>
-        <span class="foot">passe o mouse nas barras · verde: o maior pico da janela · picos independentes, não somam</span>
+        <span class="foot"><span data-point>passe o mouse</span> nas barras · verde: o maior pico da janela · picos independentes, não somam</span>
       </section>
       <section class="card rise" style="animation-delay:440ms" aria-label="quando o pqp enche">
         <h2>quando o pqp enche · média de pessoas em chamada por hora<span class="aside" id="hHeatAside"></span></h2>
         <div id="hHeat"></div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span class="foot" id="hHeatCap">passe o mouse num quadrado</span><span class="scale">vazio<i></i>cheio</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span class="foot" id="hHeatCap"><span data-point>passe o mouse</span> num quadrado</span><span class="scale">vazio<i></i>cheio</span></div>
       </section>
     </div>
     <div id="hDetails"></div>
@@ -96,7 +112,7 @@
       <section class="card rise" style="animation-delay:380ms" aria-label="retenção por semana de cadastro">
         <h2>retenção por semana de cadastro</h2>
         <div id="cCohort"></div>
-        <span class="foot" id="cCohortCap">passe o mouse numa célula · em itálico com contorno: só quem escreveu, porque a janela começou antes do rastreio</span>
+        <span class="foot" id="cCohortCap"><span data-point>passe o mouse</span> numa célula · em itálico com contorno: só quem escreveu, porque a janela começou antes do rastreio</span>
       </section>
       <section class="card rise" style="animation-delay:440ms" aria-label="de onde vêm e quantos ficam">
         <h2>de onde vêm, e quantos ficam</h2>
@@ -165,7 +181,7 @@
     </div>
     <div class="grid g-chart">
       <section class="card rise" style="animation-delay:160ms" aria-label="serviços">
-        <h2>serviços · latência nas últimas 24 h<span class="aside">agora · normal · uptime 24 h · 7 dias</span></h2>
+        <h2>serviços · tempo de resposta nas últimas 24 h</h2>
         <div id="sServices"></div>
       </section>
       <section class="card rise" style="animation-delay:220ms" aria-label="capacidade agora">
