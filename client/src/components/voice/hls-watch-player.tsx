@@ -100,12 +100,17 @@ import {
   llHlsConfig,
   LL_HLS_STARTUP_GRACE_MS,
   mediaSeekableEnd,
+  newSegmentDurationsSince,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
   validPartTargetMs,
   type HlsLLPlayerConfig,
   type HlsMode,
 } from "@/lib/hls-live-edge";
+import {
+  loadLiveHlsConfig,
+  settledDeploymentLiveHlsConfig,
+} from "@/hooks/use-live-hls-config";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
@@ -591,6 +596,22 @@ export function HlsWatchPlayer({
   // re-render on.
   const pinnedToConventionalRef = useRef(false);
   const [pinnedToConventional, setPinnedToConventional] = useState(false);
+  // Warms the deployment-wide `GET /api/live-hls/config` cache
+  // (fire-and-forget; `loadLiveHlsConfig` itself dedupes an in-flight or
+  // already-settled fetch) so an LL attach below can read
+  // `llSegmentCadenceDecay` SYNCHRONOUSLY (`settledDeploymentLiveHlsConfig`)
+  // when it builds the governor, instead of blocking construction on a
+  // network round trip. An attach that starts before this resolves gets the
+  // flag off for that one attach and picks it up on the next rebuild --
+  // this component reconnects and rebuilds often enough over a party's
+  // length that the race costs at most the first few seconds of one.
+  useEffect(() => {
+    // Never surfaces: a failed fetch here just means the next attach still
+    // reads the flag as off, same as a cold cache. `loadLiveHlsConfig`
+    // itself deletes a failed attempt from its cache, so a later mount
+    // (or the config's own callers elsewhere in the app) can still retry.
+    loadLiveHlsConfig().catch(() => {});
+  }, []);
   // What the LL governor (`LlLatencyGovernor`, created per attach) is doing
   // right now, for the effects OUTSIDE the attach effect that need it: the
   // behind-live badge and LL-lite's catch-up read the target, "jump to live"
@@ -1516,6 +1537,15 @@ export function HlsWatchPlayer({
     /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
     let lastPartHoldBack: number | null = null;
     let lastTargetDuration: number | null = null;
+    /**
+     * The highest segment sequence number `governor.onSegmentDuration` has
+     * already been fed, so a part-driven `LEVEL_UPDATED` firing (this event
+     * fires once per part under the blocking reload) never re-feeds the
+     * same segment twice, and a gap between two firings still feeds every
+     * segment the manifest gained in between -- see the comment where it is
+     * read. A no-op unless `llSegmentCadenceDecay` is on.
+     */
+    let lastSeenSegmentSn: number | null = null;
     // Telemetry v2 (2026-09-23): stall EPISODES and their frozen
     // milliseconds, hole skips and visibility, per sample window
     // (`HlsStallMeter`); fatal hls.js details seen since the last sample.
@@ -1766,6 +1796,16 @@ export function HlsWatchPlayer({
         ? new LlLatencyGovernor({
             delivery: llPartsOptedIn() ? "parts" : "segments",
             now: Date.now(),
+            // A LIVE READ, not a snapshot (Farol, this PR): the deployment
+            // config is very likely still cold on a first attach (the fetch
+            // that warms it is fire-and-forget from a mount effect), so a
+            // value captured here once would leave decay off for this
+            // governor's whole life even after the fetch resolves a moment
+            // later. `settledDeploymentLiveHlsConfig()` reads the live cache
+            // each time the governor actually checks, so the flag takes
+            // effect mid-session, no rebuild needed.
+            segmentCadenceDecay: () =>
+              settledDeploymentLiveHlsConfig()?.llSegmentCadenceDecay ?? false,
           })
         : null;
     let appliedTarget: number | null = null;
@@ -2649,6 +2689,30 @@ export function HlsWatchPlayer({
               targetDurationSeconds: targetDuration,
             });
             applyGovernor();
+          }
+          // THE GOVERNOR HEARS WHAT ACTUALLY HAPPENED TOO, not only the
+          // manifest's own worst-ever number: every listed segment's real
+          // EXTINF since the last one it was fed (`onSegmentDuration`, a
+          // no-op unless `llSegmentCadenceDecay` is on) --
+          // `newSegmentDurationsSince` in `hls-live-edge.ts` is what walks
+          // the manifest for that; see its own comment for why `.at(-1)`
+          // alone would miss a segment. `seen.reset` fires on a remux
+          // restart or a new run's media-sequence base (pitfall 20): the
+          // governor's cadence window is pre-restart evidence at that
+          // point and has to earn a fresh one, never averaged with what
+          // comes next.
+          if (governor) {
+            const seen = newSegmentDurationsSince(
+              data.details.fragments,
+              lastSeenSegmentSn,
+            );
+            if (seen.reset) {
+              governor.resetSegmentCadence();
+            }
+            for (const duration of seen.durations) {
+              governor.onSegmentDuration(duration);
+            }
+            lastSeenSegmentSn = seen.lastSeenSn;
           }
         }
         // Conventional only. This is exactly the override §4 warns against

@@ -119,6 +119,19 @@ export const LL_DEGRADE_WINDOW_MS = 60_000;
 export const LL_DEGRADE_PART_ERRORS = 2;
 export const LL_DEGRADE_PART_ERROR_WINDOW_MS = 10_000;
 
+/**
+ * How many of the most recently loaded segments' real durations
+ * `decayFloorToRecentCadence` waits for before it will lower anything.
+ * Five, not one or two: `EXT-X-TARGETDURATION` ratchets on the single
+ * WORST segment a session has ever produced, so giving room back on the
+ * strength of one or two good ones would undo that safety margin on
+ * exactly the kind of one-off spike (a presenter reconnect, a slow PLI
+ * reply) it exists to protect against. Five in a row is the same "three
+ * strikes"-shaped caution `LL_DEGRADE_STALLS` already uses for the
+ * opposite decision.
+ */
+export const LL_SEGMENT_CADENCE_WINDOW = 5;
+
 export interface LlLatencyState {
   delivery: LlDelivery;
   /** Where hls.js should hold the playhead, seconds behind the edge. */
@@ -158,8 +171,53 @@ export class LlLatencyGovernor {
   private lastEventAt: number;
   /** The manifest's `EXT-X-TARGETDURATION`, the longest segment so far. */
   private targetDurationSeconds: number | null = null;
+  /**
+   * The most recent segments' REAL durations (`frag.duration`, segments
+   * mode only), oldest first, capped at `LL_SEGMENT_CADENCE_WINDOW`. Read
+   * by `decayFloorToRecentCadence` (the give-back, bounded by its longest
+   * entry) -- `onManifest`'s ratchet off `EXT-X-TARGETDURATION` never reads
+   * this and stays exactly the instant, one-way-up signal it always was.
+   * Each push also raises the floor on the spot (`onSegmentDuration`), so
+   * this array is never the only thing standing between a genuinely long
+   * segment and a floor that has not caught up yet. Only populated, and
+   * only consulted, while `cadenceDecayEnabled()` answers true
+   * (`LIVE_HLS_LL_SEGMENT_CADENCE_DECAY`, off by default) -- see that
+   * field's own comment.
+   */
+  private recentSegmentDurationsSeconds: number[] = [];
+  /**
+   * A GETTER, not a snapshot (Farol, this PR): the governor is built
+   * synchronously, at attach time, off whatever `GET /api/live-hls/config`
+   * happens to have settled to already -- almost always nothing yet, since
+   * the fetch that warms it is fire-and-forget from a mount effect. A
+   * boolean captured once at construction would leave decay off for the
+   * governor's ENTIRE life on a cold cache, even after the fetch resolves
+   * a moment later, because nothing ever re-reads it. Calling this fresh
+   * on every check (`onSegmentDuration`, the `tick()` decay path) means
+   * the flag takes effect the instant the config answers, no rebuild
+   * required, same session.
+   */
+  private readonly cadenceDecayEnabled: () => boolean;
 
-  constructor(input: { delivery: LlDelivery; now: number }) {
+  constructor(input: {
+    delivery: LlDelivery;
+    now: number;
+    /**
+     * OFF BY DEFAULT, and off is byte-for-byte today's behaviour: every
+     * caller that does not pass this keeps `floorSeconds` exactly the
+     * ratchet it always was (see the class doc comment and the "gives
+     * decayed room back only down to that floor" test). On, a healthy
+     * `tick()` may ALSO lower the manifest-driven part of the floor, never
+     * past what `recentSegmentDurationsSeconds` says is actually happening
+     * right now -- see `decayFloorToRecentCadence`. A FUNCTION, called
+     * live every time it matters, not a value read once -- see
+     * `cadenceDecayEnabled`'s own comment. Threaded from
+     * `GET /api/live-hls/config`'s `llSegmentCadenceDecay`, a runtime
+     * switch with no client rebuild (`liveHlsLLSegmentCadenceDecayEnabled`
+     * in `server/src/voice/hls-remux.ts`).
+     */
+    segmentCadenceDecay?: () => boolean;
+  }) {
     this.delivery = input.delivery;
     this.floorSeconds =
       input.delivery === "parts"
@@ -167,6 +225,66 @@ export class LlLatencyGovernor {
         : LL_SEGMENTS_TARGET_SECONDS;
     this.targetSeconds = this.floorSeconds;
     this.lastEventAt = input.now;
+    this.cadenceDecayEnabled = input.segmentCadenceDecay ?? (() => false);
+  }
+
+  /**
+   * A segment the player just finished loading really took this long
+   * (its own EXTINF, `frag.duration`) -- segments mode only, one call per
+   * newly-listed segment. A parts viewer's own cadence is the manifest's
+   * `PART-HOLD-BACK`, already handled by `onManifest`, so this is a no-op
+   * there.
+   *
+   * RAISES THE FLOOR TOO, not only feeds the decay (Farol, this PR): a
+   * segment this player just measured directly is stronger, fresher
+   * evidence than `EXT-X-TARGETDURATION`, which is an INTEGER (HLS
+   * requires it) maintained separately on the box and can sit unchanged
+   * while real segments have already gotten longer -- 6.9s and 7.9s both
+   * round up to the same "7". Waiting for `onManifest` to eventually
+   * notice would mean this exact real-time reading, the one thing this
+   * method exists to trust, gets ignored the one time it matters most.
+   * `raiseFloor` is the same one-way-up primitive `onManifest` already
+   * uses, and the raise goes through the SAME `segmentsFloorSeconds`
+   * ceiling `onManifest` computes off `EXT-X-TARGETDURATION` (a Farol
+   * finding on this PR's first pass: an uncapped raise here could push
+   * `floorSeconds` past `LL_SEGMENTS_MAX_FLOOR_SECONDS`, which
+   * `onManifest`'s own path can never do), so this can never conflict with
+   * it, only agree or arrive first.
+   */
+  onSegmentDuration(durationSeconds: number): void {
+    if (
+      this.delivery !== "segments" ||
+      !this.cadenceDecayEnabled() ||
+      !Number.isFinite(durationSeconds) ||
+      durationSeconds <= 0
+    ) {
+      return;
+    }
+    this.recentSegmentDurationsSeconds.push(durationSeconds);
+    if (this.recentSegmentDurationsSeconds.length > LL_SEGMENT_CADENCE_WINDOW) {
+      this.recentSegmentDurationsSeconds.shift();
+    }
+    this.raiseFloor(segmentsFloorSeconds(durationSeconds));
+  }
+
+  /**
+   * The live playlist's media sequence just went backward (Farol, this PR):
+   * a remux restart, or a new run's media-sequence base (pitfall 20 in
+   * CLAUDE.md), can make a LATER segment carry a LOWER sequence number
+   * than one this governor already saw. `newSegmentDurationsSince`
+   * (`hls-live-edge.ts`) detects exactly that shape and tells the caller to
+   * call this before feeding the new readings, so every duration recorded
+   * from here on is unambiguously post-restart.
+   *
+   * Clears `recentSegmentDurationsSeconds` ONLY. Never touches
+   * `floorSeconds`/`targetSeconds`: a restart is not evidence the party got
+   * worse (do not raise) or better (do not lower) -- it just means the
+   * decay's evidence window has to earn a fresh full window of real
+   * readings again before it may give anything back, which is the
+   * conservative side of "smooth beats fast" this class already lives by.
+   */
+  resetSegmentCadence(): void {
+    this.recentSegmentDurationsSeconds = [];
   }
 
   /**
@@ -268,10 +386,57 @@ export class LlLatencyGovernor {
       return;
     }
     this.lastEventAt = now;
+    if (this.cadenceDecayEnabled()) {
+      this.decayFloorToRecentCadence();
+    }
     this.targetSeconds = Math.max(
       this.floorSeconds,
       this.targetSeconds - LL_TARGET_DECAY_SECONDS,
     );
+  }
+
+  /**
+   * Lets the MANIFEST-DRIVEN part of `floorSeconds` give room back too,
+   * same slow step and same clean-minute cadence as the ordinary decay
+   * above, and ONLY while `cadenceDecayEnabled` is on.
+   *
+   * WHY THIS IS SAFE TO GIVE BACK AT ALL. `EXT-X-TARGETDURATION` can only
+   * ever grow for a manifest's whole life (HLS's own rule), so
+   * `segmentsFloorSeconds` built off it is a permanent record of the
+   * single worst segment this session has ever produced -- useful as an
+   * instant, one-way-up signal (`onManifest` still reacts to it exactly
+   * as before), useless as a description of what is happening right now.
+   * `recentSegmentDurationsSeconds` is that description: this never lowers
+   * `floorSeconds` past `LL_SEGMENTS_TARGET_SECONDS` (the hard safety
+   * minimum every viewer already respects) NOR past the longest of the
+   * last `LL_SEGMENT_CADENCE_WINDOW` segments plus the same fetch margin
+   * `onManifest` uses -- so it can only ever give back room the remux has
+   * just finished proving it does not need. A single slow segment
+   * reappearing raises the floor again INSTANTLY, on the very same call
+   * that observes it (`onSegmentDuration`'s own `raiseFloor`, and
+   * `onManifest`'s ratchet off `EXT-X-TARGETDURATION` besides), always
+   * before this method could otherwise have given that room away -- this
+   * method only ever runs on the watchdog's own tick, never inline with a
+   * fresh reading.
+   */
+  private decayFloorToRecentCadence(): void {
+    if (
+      this.delivery !== "segments" ||
+      this.recentSegmentDurationsSeconds.length < LL_SEGMENT_CADENCE_WINDOW
+    ) {
+      return;
+    }
+    const recentMaxSeconds = Math.max(...this.recentSegmentDurationsSeconds);
+    const evidencedFloor = Math.max(
+      LL_SEGMENTS_TARGET_SECONDS,
+      recentMaxSeconds + LL_SEGMENTS_FETCH_MARGIN_SECONDS,
+    );
+    if (this.floorSeconds > evidencedFloor) {
+      this.floorSeconds = Math.max(
+        evidencedFloor,
+        this.floorSeconds - LL_TARGET_DECAY_SECONDS,
+      );
+    }
   }
 
   state(): LlLatencyState {

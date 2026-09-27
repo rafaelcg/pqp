@@ -736,6 +736,14 @@ export interface LiveHlsConfig {
    * `presenterCameraQualityFor` in `lib/video-quality.ts`.
    */
   cameraHeight?: number;
+  /**
+   * Whether this deployment's `LlLatencyGovernor` may let a segments-mode
+   * viewer's hold-back floor shrink again once real recent segments prove
+   * the remux's cadence is tighter than `EXT-X-TARGETDURATION`'s all-time
+   * worst (`LIVE_HLS_LL_SEGMENT_CADENCE_DECAY`, off by default). Absent on
+   * an older server, which reads as off -- exactly today's behaviour.
+   */
+  llSegmentCadenceDecay?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
