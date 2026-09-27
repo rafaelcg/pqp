@@ -6,6 +6,7 @@ import type { ReconnectPolicy } from "livekit-client";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
 import type { ReceiveQuality } from "./receive-quality";
 import { drainJitterMs } from "./reconnect-jitter";
+import { emitNetworkHint } from "./network-hints";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
@@ -893,6 +894,13 @@ export async function connectLiveKit({
       qualities.clear();
       snapshot();
     })
+    // The media connection runs its own heartbeat and usually notices a
+    // network change before `/ws` does. Tell the signalling transport, so it
+    // probes (media lost its path) or stops waiting out a backoff (media is
+    // back). Advice only: neither side tears anything down because of it.
+    .on(RoomEvent.Reconnecting, () => emitNetworkHint("suspect"))
+    .on(RoomEvent.SignalReconnecting, () => emitNetworkHint("suspect"))
+    .on(RoomEvent.Reconnected, () => emitNetworkHint("up"))
     .on(RoomEvent.ConnectionStateChanged, (state) => {
       if (state === ConnectionState.Disconnected) {
         streams.clear();
