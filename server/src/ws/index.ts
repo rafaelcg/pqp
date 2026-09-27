@@ -1,5 +1,8 @@
 import type { WebSocket } from "ws";
-import { CHAT_CLIENT_MESSAGE_TYPES } from "@pqp/shared";
+import {
+  CHAT_CLIENT_MESSAGE_TYPES,
+  VOICE_CLIENT_MESSAGE_TYPES,
+} from "@pqp/shared";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
@@ -75,15 +78,18 @@ const CHAT_MESSAGE_TYPES = new Set<string>(CHAT_CLIENT_MESSAGE_TYPES);
 /**
  * Frames that mean a person did something, for daily actives
  * (`services/user-activity.ts`). An allowlist on purpose: signalling
- * (`offer`, `answer`, `ice-candidate`) and resubscribes fire on their own,
- * and would count an idle tab as active every day. The voice half matches
+ * (`offer`, `answer`, `ice-candidate`) and `set-idle` fire on their own, and
+ * would count an idle tab as active every day. The voice half matches
  * `SELF_INITIATED_VOICE_FRAMES` in `ws/voice.ts`, which is what the idle
  * hangup counts as somebody being there.
  */
 const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
+  // Opening a channel or a thread: somebody reading counts, not only
+  // somebody posting. A resubscribe on reconnect also sends these, and that
+  // is already counted at `auth`, so it adds nothing.
+  "join-channel",
+  "thread-join",
   "message-create",
-  "message-update",
-  "message-delete",
   "reaction-toggle",
   "typing",
   "poll-vote",
@@ -101,50 +107,10 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
   "voice-still-here",
 ]);
 
-const VOICE_MESSAGE_TYPES = new Set<string>([
-  "join-voice-room",
-  "leave-voice-room",
-  "set-sharing-screen",
-  "offer",
-  "answer",
-  "ice-candidate",
-  // --- conversation calls ---
-  "call-ring",
-  "call-decline",
-  "set-camera",
-  // --- voice state ---
-  "set-voice-state",
-  // --- raised hands ---
-  // Missing from this hand-kept list from the day the feature shipped (#406):
-  // `voiceClientMessageSchema` in @pqp/shared accepted the frame, and
-  // `handleVoiceMessage`/`voice-raised-hands.test.ts` call straight into the
-  // handler and never through this router, so nothing caught that every real
-  // `set-raised-hand` frame was dropped right here before reaching it. A
-  // browser's hand went up for exactly `HAND_ECHO_MS` (the client's own
-  // optimistic guess) and then silently fell back down with no server ever
-  // having seen it. See the routing doc comment above.
-  "set-raised-hand",
-  // --- watch party ---
-  // A watch party lives inside a voice room, so its one client frame is routed
-  // to the voice handler like every other thing said inside one.
-  "set-watch-party",
-  // --- music queue ---
-  // Same reasoning: the queue is a thing said inside the room.
-  "set-music",
-  "set-music-listening",
-  // --- live reactions ---
-  // Same reasoning as the line above: a reaction is something said inside a
-  // voice room, over the share that room is watching.
-  "live-reaction",
-  // --- live HLS watch mode ---
-  // A viewer without a seat, counted by the voice handler because that is
-  // where the stream and the room live.
-  "watch-live",
-  // --- LIVE_HLS_VOICE_TRACK ---
-  // The presenter's own word for "separada", read alongside their
-  // `voice-track` publication by `reconcileCameraEgress`.
-  "set-voice-track-mode",
-]);
+// Derived from `voiceClientMessageSchema` (see `VOICE_CLIENT_MESSAGE_TYPES`
+// in @pqp/shared). A hand-kept list here dropped `set-raised-hand` and then
+// `voice-still-here` before either reached its handler.
+const VOICE_MESSAGE_TYPES = new Set<string>(VOICE_CLIENT_MESSAGE_TYPES);
 
 /** Every frame type this router acts on, for the flood log's summary. */
 const ROUTED_FRAME_TYPES: ReadonlySet<string> = new Set<string>([

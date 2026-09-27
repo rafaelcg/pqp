@@ -258,6 +258,64 @@ describeDb("user activity", () => {
       expect(second!.d7).toEqual({ eligible: 0, posted: 0, activeEligible: 0, active: 0 });
     });
 
+    it("counts the same rolling windows as a brute-force COUNT(DISTINCT)", async () => {
+      // Random history for 40 people over 70 days, some days opened, some
+      // posted, some both. The report's running-sum spans must agree with the
+      // obvious (and too slow for production) join, day by day.
+      const people: string[] = [];
+      for (let i = 0; i < 40; i += 1) {
+        people.push(await person(`p${i}`, "2026-06-01 12:00"));
+      }
+      let seed = 7;
+      const rand = () => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return seed / 2147483648;
+      };
+      for (const id of people) {
+        for (let d = 0; d < 70; d += 1) {
+          const day = new Date(Date.UTC(2026, 6, 13 + d)).toISOString().slice(0, 10);
+          const r = rand();
+          if (r < 0.2) await opened(id, day);
+          if (r > 0.1 && r < 0.3) await post(id, `${day} 21:30`);
+        }
+      }
+      const report = await computeUserActivityReport(
+        { days: 30, weeks: 4 },
+        { now: Date.parse("2026-09-20T15:00:00Z") },
+      );
+      const expected = await getPool().query(
+        `WITH active AS (
+           SELECT user_id, day, bool_or(posted) AS posted FROM (
+             SELECT user_id, day, FALSE AS posted FROM user_activity_days
+             UNION ALL
+             SELECT author_id, (created_at AT TIME ZONE 'America/Sao_Paulo')::date, TRUE
+               FROM messages) r
+           GROUP BY user_id, day)
+         SELECT to_char(s.day, 'YYYY-MM-DD') AS day,
+                COUNT(DISTINCT a.user_id) FILTER (WHERE a.day = s.day)::int AS dau,
+                COUNT(DISTINCT a.user_id) FILTER (WHERE a.day > s.day - 7)::int AS wau,
+                COUNT(DISTINCT a.user_id)::int AS mau,
+                COUNT(DISTINCT a.user_id) FILTER (WHERE a.day = s.day AND a.posted)::int AS pd,
+                COUNT(DISTINCT a.user_id) FILTER (WHERE a.day > s.day - 7 AND a.posted)::int AS pw,
+                COUNT(DISTINCT a.user_id) FILTER (WHERE a.posted)::int AS pm
+           FROM (SELECT d::date AS day
+                   FROM generate_series('2026-08-22'::date, '2026-09-20'::date, interval '1 day') d) s
+           LEFT JOIN active a ON a.day BETWEEN s.day - 29 AND s.day
+          GROUP BY s.day ORDER BY s.day`,
+      );
+      expect(report.days.map((d) => [d.day, d.postedDau, d.postedWau, d.postedMau])).toEqual(
+        expected.rows.map((r) => [r.day, r.pd, r.pw, r.pm]),
+      );
+      // "Active" is only reported where the window is tracked; compare those.
+      for (const [i, row] of report.days.entries()) {
+        const want = expected.rows[i];
+        if (row.dau !== null) expect(row.dau).toBe(want.dau);
+        if (row.wau !== null) expect(row.wau).toBe(want.wau);
+        if (row.mau !== null) expect(row.mau).toBe(want.mau);
+      }
+      expect(report.days.some((d) => d.mau !== null)).toBe(true);
+    });
+
     it("reports no tracking without inventing zeros", async () => {
       await person("ana", "2026-09-01 12:00");
       const report = await computeUserActivityReport(

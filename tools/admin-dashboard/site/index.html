@@ -4528,7 +4528,9 @@
 
   function actFail(e) {
     var reason = e && e.message ? e.message : String(e);
-    if (reason.indexOf("404") !== -1) {
+    // An API older than this report answers the machine token with 401 on a
+    // path it does not know, not 404: both mean "not deployed yet".
+    if (reason.indexOf("404") !== -1 || reason.indexOf("401") !== -1) {
       setText("actNote", "esta api ainda não tem esse relatório");
       sectionUnavailable("secActivity", "ativos e retenção");
       return;

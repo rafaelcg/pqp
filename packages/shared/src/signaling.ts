@@ -901,3 +901,17 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export type VoiceClientMessage = z.infer<typeof voiceClientMessageSchema>;
+
+/**
+ * Every frame type the voice socket accepts, read off the union above.
+ *
+ * Same reason as `CHAT_CLIENT_MESSAGE_TYPES`: the router in
+ * `server/src/ws/index.ts` dispatches on type before anything parses the
+ * frame, and its hand-kept copy dropped `set-raised-hand` (#406) and then
+ * `voice-still-here`, so the idle hangup's "still here" button reached no
+ * handler and a person alone in a call was disconnected anyway. Handler
+ * tests call the handler directly and never cross the router, so neither
+ * was caught. Deriving the list removes the copy that can drift.
+ */
+export const VOICE_CLIENT_MESSAGE_TYPES: readonly string[] =
+  voiceClientMessageSchema.options.map((option) => option.shape.type.value);

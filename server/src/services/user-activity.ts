@@ -103,7 +103,7 @@ export function createUserActivityRecorder(
   /** Stored by this process today. Cleared when the day turns. */
   let stored = new Set<string>();
   let storedDay = "";
-  let flushing = false;
+  let flushing: Promise<number> | null = null;
   let noted = 0;
   let flushes = 0;
   let flushFailures = 0;
@@ -127,11 +127,20 @@ export function createUserActivityRecorder(
     pending.set(key, { userId, day });
   }
 
-  async function flush(): Promise<number> {
-    if (flushing || pending.size === 0) {
-      return 0;
+  function flush(): Promise<number> {
+    if (flushing) {
+      return flushing;
     }
-    flushing = true;
+    if (pending.size === 0) {
+      return Promise.resolve(0);
+    }
+    flushing = flushBatch().finally(() => {
+      flushing = null;
+    });
+    return flushing;
+  }
+
+  async function flushBatch(): Promise<number> {
     const batch = pending;
     pending = new Map();
     let written = 0;
@@ -141,13 +150,13 @@ export function createUserActivityRecorder(
         const slice = entries.slice(i, i + MAX_ROWS_PER_STATEMENT);
         // Joined to `users` so an account deleted between the note and the
         // flush drops out instead of failing the whole statement on the
-        // foreign key, and so bots and the house cast never count.
+        // foreign key, and so bots, webhooks and the house cast never count.
         const result = await pool().query(
           `INSERT INTO user_activity_days (user_id, day)
            SELECT v.user_id, v.day
              FROM unnest($1::uuid[], $2::date[]) AS v(user_id, day)
              JOIN users u ON u.id = v.user_id
-            WHERE NOT u.is_webhook AND NOT u.is_character
+            WHERE NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
            ON CONFLICT DO NOTHING`,
           [slice.map(([, e]) => e.userId), slice.map(([, e]) => e.day)],
         );
@@ -177,8 +186,6 @@ export function createUserActivityRecorder(
         error: error instanceof Error ? error.message : String(error),
       });
       return written;
-    } finally {
-      flushing = false;
     }
   }
 
@@ -189,6 +196,9 @@ export function createUserActivityRecorder(
     timer.unref?.();
     return async () => {
       clearInterval(timer);
+      // Wait out a tick's flush that is already running, then write whatever
+      // was noted after it started.
+      await flush().catch(() => undefined);
       await flush().catch(() => undefined);
     };
   }
@@ -208,7 +218,7 @@ export function createUserActivityRecorder(
       pending = new Map();
       stored = new Set();
       storedDay = "";
-      flushing = false;
+      flushing = null;
       noted = 0;
       flushes = 0;
       flushFailures = 0;
@@ -315,7 +325,7 @@ const ACTIVE_ROWS_SQL = `
          WHERE m.created_at >= ($1::date)::timestamp AT TIME ZONE '${ACTIVITY_TIMEZONE}'
       ) raw
       JOIN users u ON u.id = raw.user_id
-     WHERE NOT u.is_webhook AND NOT u.is_character
+     WHERE NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
      GROUP BY user_id, day
   )`;
 
@@ -334,25 +344,68 @@ async function readSeries(
     posted_mau: number;
   }[]
 > {
+  // Rolling distinct counts without a 30-way fan-out. Joining every active
+  // person-day to the 30 chart days it falls into multiplies the rows by 30
+  // and sorts them for six COUNT(DISTINCT)s, which spilled a 230 MB sort to
+  // disk at production's size. Instead each person-day contributes the span
+  // of chart days whose window it is in, `[day, day + w)`, cut short at that
+  // person's next active day so one person's spans never overlap. A distinct
+  // count is then a running sum of +1 at a span's start and -1 at its end:
+  // one pass, one hash aggregate, no DISTINCT.
   const result = await pool.query(
     `WITH ${ACTIVE_ROWS_SQL},
-     series AS (
-       SELECT d::date AS day
-         FROM generate_series($2::date, $3::date, interval '1 day') d
+     marked AS (
+       SELECT day, posted,
+              lead(day) OVER (PARTITION BY user_id ORDER BY day) AS next_any,
+              lead(day) OVER (PARTITION BY user_id, posted ORDER BY day) AS next_same
+         FROM active
+     ),
+     windows(w) AS (VALUES (1), (7), (30)),
+     events AS (
+       SELECT m.day AS at, w.w, FALSE AS posted_only, 1 AS delta
+         FROM marked m CROSS JOIN windows w
+       UNION ALL
+       SELECT LEAST(m.day + w.w, COALESCE(m.next_any, m.day + w.w)), w.w, FALSE, -1
+         FROM marked m CROSS JOIN windows w
+       UNION ALL
+       SELECT m.day, w.w, TRUE, 1
+         FROM marked m CROSS JOIN windows w
+        WHERE m.posted
+       UNION ALL
+       SELECT LEAST(m.day + w.w, COALESCE(m.next_same, m.day + w.w)), w.w, TRUE, -1
+         FROM marked m CROSS JOIN windows w
+        WHERE m.posted
+     ),
+     deltas AS (
+       SELECT at,
+              SUM(delta) FILTER (WHERE w = 1 AND NOT posted_only) AS dau,
+              SUM(delta) FILTER (WHERE w = 7 AND NOT posted_only) AS wau,
+              SUM(delta) FILTER (WHERE w = 30 AND NOT posted_only) AS mau,
+              SUM(delta) FILTER (WHERE w = 1 AND posted_only) AS posted_dau,
+              SUM(delta) FILTER (WHERE w = 7 AND posted_only) AS posted_wau,
+              SUM(delta) FILTER (WHERE w = 30 AND posted_only) AS posted_mau
+         FROM events
+        GROUP BY at
+     ),
+     running AS (
+       SELECT s.day,
+              SUM(COALESCE(x.dau, 0)) OVER w AS dau,
+              SUM(COALESCE(x.wau, 0)) OVER w AS wau,
+              SUM(COALESCE(x.mau, 0)) OVER w AS mau,
+              SUM(COALESCE(x.posted_dau, 0)) OVER w AS posted_dau,
+              SUM(COALESCE(x.posted_wau, 0)) OVER w AS posted_wau,
+              SUM(COALESCE(x.posted_mau, 0)) OVER w AS posted_mau
+         FROM (SELECT d::date AS day
+                 FROM generate_series($1::date, $3::date, interval '1 day') d) s
+         LEFT JOIN deltas x ON x.at = s.day
+       WINDOW w AS (ORDER BY s.day)
      )
-     SELECT to_char(s.day, 'YYYY-MM-DD') AS day,
-            COUNT(DISTINCT a.user_id) FILTER (WHERE a.day = s.day)::int AS dau,
-            COUNT(DISTINCT a.user_id) FILTER (WHERE a.day > s.day - 7)::int AS wau,
-            COUNT(DISTINCT a.user_id)::int AS mau,
-            COUNT(DISTINCT a.user_id)
-              FILTER (WHERE a.day = s.day AND a.posted)::int AS posted_dau,
-            COUNT(DISTINCT a.user_id)
-              FILTER (WHERE a.day > s.day - 7 AND a.posted)::int AS posted_wau,
-            COUNT(DISTINCT a.user_id) FILTER (WHERE a.posted)::int AS posted_mau
-       FROM series s
-       LEFT JOIN active a ON a.day BETWEEN s.day - 29 AND s.day
-      GROUP BY s.day
-      ORDER BY s.day`,
+     SELECT to_char(day, 'YYYY-MM-DD') AS day,
+            dau::int, wau::int, mau::int,
+            posted_dau::int, posted_wau::int, posted_mau::int
+       FROM running
+      WHERE day >= $2::date
+      ORDER BY day`,
     [addDays(firstDay, -29), firstDay, lastDay],
   );
   return result.rows;
@@ -385,7 +438,7 @@ async function readCohorts(
      cohort AS (
        SELECT u.id, (u.created_at AT TIME ZONE '${ACTIVITY_TIMEZONE}')::date AS signup_day
          FROM users u
-        WHERE NOT u.is_webhook AND NOT u.is_character
+        WHERE NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
           AND u.created_at >= ($1::date)::timestamp AT TIME ZONE '${ACTIVITY_TIMEZONE}'
      ),
      per_user AS (
@@ -490,9 +543,15 @@ export async function computeUserActivityReport(
  * fine once in a while and wasteful on every open of the tab.
  */
 const REPORT_TTL_MS = 5 * 60_000;
+/**
+ * A failed read is remembered for a minute. Forgetting it at once meant a
+ * dashboard left open retried the scan on every 30 s poll, on both API
+ * processes, exactly while the database was the thing struggling.
+ */
+const FAILURE_TTL_MS = 60_000;
 const reportCache = new Map<
   string,
-  { at: number; report: Promise<UserActivityReport> }
+  { at: number; ttl: number; report: Promise<UserActivityReport> }
 >();
 
 export function userActivityReport(query: {
@@ -502,16 +561,15 @@ export function userActivityReport(query: {
   const key = `${query.days}|${query.weeks}`;
   const cached = reportCache.get(key);
   const at = Date.now();
-  if (cached && at - cached.at < REPORT_TTL_MS) {
+  if (cached && at - cached.at < cached.ttl) {
     return cached.report;
   }
   const report = computeUserActivityReport(query);
-  reportCache.set(key, { at, report });
-  // A failed read is not cached: the next open of the tab retries.
+  const entry = { at, ttl: REPORT_TTL_MS, report };
+  reportCache.set(key, entry);
   report.catch(() => {
-    if (reportCache.get(key)?.report === report) {
-      reportCache.delete(key);
-    }
+    entry.at = Date.now();
+    entry.ttl = FAILURE_TTL_MS;
   });
   return report;
 }

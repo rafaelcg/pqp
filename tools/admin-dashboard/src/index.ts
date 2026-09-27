@@ -499,7 +499,12 @@ export default {
       if (!response.ok) {
         return response;
       }
-      const report = (await response.json()) as Record<string, unknown>;
+      let report: Record<string, unknown>;
+      try {
+        report = (await response.json()) as Record<string, unknown>;
+      } catch {
+        return json(502, { error: "upstream answered with something that is not JSON" });
+      }
       return json(200, {
         ...report,
         operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
