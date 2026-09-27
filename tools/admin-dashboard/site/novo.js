@@ -65,11 +65,10 @@
         return r.json();
       }, function (e) { clearTimeout(timer); throw e; });
   }
-  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function color(key) { return { accent: "var(--accent)", series: "var(--series)", warn: "var(--warn)", bad: "var(--bad)", ok: "var(--ok)", faint: "var(--faint)" }[key] || key; }
   function fmt(n) { return M.fmt(n); }
   function stamp(iso) {
-    try { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); } catch (e) { return ""; }
+    try { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); } catch { return ""; }
   }
   function ago(iso) {
     var s0 = (Date.now() - Date.parse(iso)) / 1000;
@@ -189,12 +188,12 @@
   }
   function table(head, rows, right) {
     right = right || [];
-    return h("table", { class: "t" }, [
+    return h("div", { style: "overflow-x:auto" }, [h("table", { class: "t" }, [
       h("thead", null, [h("tr", null, head.map(function (c, i) { return h("th", { class: right.indexOf(i) >= 0 ? "r" : null, text: c }); }))]),
       h("tbody", null, rows.map(function (r) {
         return h("tr", null, r.map(function (c, i) { return h("td", { class: (right.indexOf(i) >= 0 ? "r num " : "") + (i > 0 && right.indexOf(i) < 0 ? "m" : ""), text: c == null ? "—" : String(c) }); }));
       }))
-    ]);
+    ])]);
   }
   function para(text) { return h("p", { class: "foot", style: "margin:0;font-size:13px;line-height:1.6;color:var(--muted);max-width:900px", text: text }); }
   function classicLink(hash, text) { return h("a", { href: "/?classico=1#" + hash, style: "font-size:13px;font-weight:600;text-decoration:none", text: text + " →" }); }
@@ -318,7 +317,7 @@
     document.querySelectorAll(".tabs a").forEach(function (a) {
       if (a.getAttribute("data-tab") === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
-    try { localStorage.setItem("pqp-admin-view", "novo"); } catch (e) { /* storage blocked */ }
+    try { localStorage.setItem("pqp-admin-view", "novo"); } catch { /* storage blocked */ }
     if (!S.visited[name]) {
       S.visited[name] = true;
       var root = $("root");
@@ -417,7 +416,7 @@
     var attn = M.attention(m, S.verdicts, S.health);
     var now = new Date();
     var eyebrow = "";
-    try { eyebrow = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }).format(now); } catch (e) { eyebrow = ""; }
+    try { eyebrow = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }).format(now); } catch { eyebrow = ""; }
     $("hEyebrow").textContent = eyebrow;
     var voice = m.voice || {}, msgs = m.messages || {};
     var d = M.deltaLabel(msgs.last24h, msgs.previous24h);
@@ -552,7 +551,7 @@
       : "“Ativos” é quem abriu o app ou escreveu no dia.";
     // range control
     var seg = $("cRange"), btns = seg.querySelectorAll("button"), ind = seg.querySelector(".ind");
-    btns.forEach(function (b, i) {
+    btns.forEach(function (b) {
       var on = Number(b.getAttribute("data-days")) === S.activityDays;
       b.setAttribute("aria-pressed", on ? "true" : "false");
       if (on) { ind.style.width = b.offsetWidth + "px"; ind.style.transform = "translateX(" + (b.offsetLeft - 4) + "px)"; }
@@ -819,8 +818,8 @@
     var ctx = ctxChips(it.context);
     wrap.appendChild(h("div", { style: "display:flex;flex-direction:column;gap:10px" }, [h("div", { class: "foot", style: "font-weight:600;color:var(--muted);font-size:13px", text: "onde a pessoa estava" }), ctx]));
     var actions = h("div", { class: "actions" });
-    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug · dá o selo" : "confirmar", onclick: function (ev) { resolve(it, "confirmed", ev.currentTarget); } }));
-    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function (ev) { resolve(it, "closed", ev.currentTarget); } }));
+    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug · dá o selo" : "confirmar", onclick: function () { resolve(it, "confirmed"); } }));
+    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function () { resolve(it, "closed"); } }));
     actions.appendChild(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "próximo ↓", onclick: function () { var i = fb.items.indexOf(it); if (fb.items.length > 1) { fb.sel = fb.items[(i + 1) % fb.items.length].id; renderFila(true); } } }));
     wrap.appendChild(actions);
     pane.appendChild(wrap);
@@ -855,7 +854,7 @@
     list.forEach(function (x, i) { box.appendChild(h("span", { class: anim ? "pop" : null, style: "animation-delay:" + (100 + i * 40) + "ms" }, [h("i", { text: x[0] }), x[1]])); });
     return box;
   }
-  function resolve(it, status, btn) {
+  function resolve(it, status) {
     var fb = S.fb; if (fb.busy) return;
     fb.busy = true;
     var pane = $("fPane"); pane.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
@@ -898,7 +897,7 @@
       var hc = hist[c.key];
       var ms = hc ? hc.points.map(function (p) { return p.ms; }) : null;
       var st = { operational: "ok", degraded: "warn", down: "bad", disabled: "" }[c.state];
-      sv.appendChild(h("div", { class: "rowlink", style: "display:grid;grid-template-columns:minmax(150px,1fr) 150px 70px 70px 80px 70px;gap:14px;cursor:default" }, [
+      sv.appendChild(h("div", { class: "rowlink svc", style: "display:grid;grid-template-columns:minmax(150px,1fr) 150px 70px 70px 80px 70px;gap:14px;cursor:default" }, [
         h("span", { style: "display:flex;align-items:center;gap:10px" }, [h("span", { class: "sev " + (st || "info"), style: st ? null : "background:var(--faint);box-shadow:none" }), h("b", { style: "font-size:14px", text: NAMES[c.key] || c.label })]),
         ms && ms.some(function (v) { return v != null; }) ? sparkline(ms.map(function (v) { return v == null ? 0 : v; }), "svc-" + c.key, st === "warn" ? "warn" : st === "bad" ? "bad" : "series") : h("span", { class: "foot", text: c.state === "disabled" ? "desligado" : "sem histórico" }),
         h("span", { class: "num", style: "text-align:right", text: c.latencyMs != null ? fmt(c.latencyMs) + " ms" : "—" }),
@@ -976,7 +975,7 @@
 
   // ---------------------------------------------------------------- boot
   $("refresh").addEventListener("click", function () { S.occupancyAt = 0; refresh(); if (S.screen === "fila") loadFeedback(false); if (S.screen === "sistema") loadFlags(); if (S.screen === "hoje" || S.screen === "crescimento") loadActivity(true); });
-  $("toClassic").addEventListener("click", function () { try { localStorage.setItem("pqp-admin-view", "classico"); } catch (e) { /* storage blocked */ } });
+  $("toClassic").addEventListener("click", function () { try { localStorage.setItem("pqp-admin-view", "classico"); } catch { /* storage blocked */ } });
   $("fMore").addEventListener("click", function () { if (!S.fb.loading) loadFeedback(true); });
   $("cRange").addEventListener("click", function (ev) {
     var b = ev.target.closest("button[data-days]"); if (!b) return;
