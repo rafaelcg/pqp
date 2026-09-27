@@ -3186,7 +3186,9 @@
   }
 
   /* ---------------- render: charts ---------------- */
+  var lastHourly = null;
   function renderCharts(usersHourly, messagesHourly) {
+    lastHourly = [usersHourly, messagesHourly];
     var cu = $("chartUsers"), cm = $("chartMsgs");
     cu.innerHTML = ""; cm.innerHTML = "";
     cu.appendChild(barChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas", width: cu.clientWidth }));
@@ -4399,6 +4401,21 @@
     occ.asked = true;
     occTick(false);
   }
+
+  /* The charts draw at their card's width (see `seriesChart`), so a window
+     resize redraws them from the last payload instead of leaving a drawing
+     sized for the old width until the next poll. */
+  (function wireChartResize() {
+    var t = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(t);
+      t = setTimeout(function () {
+        if (lastHourly) renderCharts(lastHourly[0], lastHourly[1]);
+        if (occ.report && occ.mode === "days") occRenderDays(occ.report);
+        if (act.report) actRender(act.report);
+      }, 150);
+    });
+  })();
 
   (function wireOccupancy() {
     var sel = $("occDay");

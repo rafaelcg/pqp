@@ -84,7 +84,7 @@
         series: act.series, seriesNote: "por dia", color: "series"
       },
       {
-        key: "cost", label: "custo por ativo · mês", value: null, text: cost.text,
+        key: "cost", label: "custo por ativo", value: null, text: cost.text,
         badge: cost.badge, note: cost.note, series: null, color: "faint"
       }
     ];
@@ -101,7 +101,9 @@
     }
     var days = activity.days;
     var y = days[days.length - 2];
-    var dauSeries = days.map(function (d) { return d.dau; }).filter(function (v) { return v != null; });
+    // The line ends on yesterday, the day the number shows; today is partial.
+    var done = days.slice(0, -1);
+    var dauSeries = done.map(function (d) { return d.dau; }).filter(function (v) { return v != null; });
     if (y.dau != null) {
       return {
         label: "ativos ontem", value: y.dau, text: null,
@@ -114,7 +116,7 @@
       label: "escreveram ontem", value: y.postedDau, text: null,
       badge: { text: "ativos a partir de " + shortDay(activity.trackingSince), tone: "flat" },
       note: "quem abriu o app começa a contar " + (activity.trackingSince ? "em " + shortDay(activity.trackingSince) : "com o rastreio"),
-      series: days.map(function (d) { return d.postedDau; })
+      series: done.map(function (d) { return d.postedDau; })
     };
   }
 
@@ -126,9 +128,10 @@
     var days = activity && Array.isArray(activity.days) ? activity.days : [];
     var y = days.length >= 2 ? days[days.length - 2] : null;
     var usd = function (n) { return "US$ " + dec(n, 2); };
-    if (y && y.mau) return { text: usd(cost / y.mau), badge: { text: usd(cost) + "/mês", tone: "flat" }, note: "÷ " + fmt(y.mau) + " ativos em 30 dias" };
-    if (y && y.wau) return { text: usd(cost / y.wau), badge: { text: usd(cost) + "/mês", tone: "flat" }, note: "÷ ativos em 7 dias, até haver 30 dias" };
-    return { text: "—", badge: { text: usd(cost) + "/mês", tone: "flat" }, note: "sem ativos rastreados ainda" };
+    var whole = "US$ " + (Math.round(cost) === cost ? fmt(cost) : dec(cost, 2));
+    if (y && y.mau) return { text: usd(cost / y.mau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ " + fmt(y.mau) + " ativos em 30 dias" };
+    if (y && y.wau) return { text: usd(cost / y.wau), badge: { text: whole + "/mês", tone: "flat" }, note: "÷ ativos em 7 dias, até haver 30 dias" };
+    return { text: "—", badge: { text: whole + "/mês", tone: "flat" }, note: "sem ativos rastreados ainda" };
   }
 
   function shortDay(iso) {
@@ -166,7 +169,7 @@
     }
     var fb = mod.feedback || {};
     if (num(fb.open) > 0) {
-      out.push({ tone: "warn", title: fmt(fb.open) + " feedbacks abertos", detail: fmt(fb.confirmed) + " confirmados · " + fmt(fb.last24h) + " novos em 24h", action: "abrir a fila", target: "fila" });
+      out.push({ tone: "warn", title: fmt(fb.open) + (fb.open === 1 ? " feedback aberto" : " feedbacks abertos"), detail: fmt(fb.confirmed) + " confirmados · " + fmt(fb.last24h) + " novos em 24h", action: "abrir a fila", target: "fila" });
     }
     var cr = m.callRatings;
     if (cr && cr.distribution) {
@@ -212,10 +215,14 @@
     var sv = d(prev.servers && prev.servers.total, next.servers && next.servers.total);
     if (sv > 0) ev.push({ kind: "server", color: "series", what: sv === 1 ? "servidor criado" : sv + " servidores criados", detail: fmt(next.servers.total) + " no total", at: when });
     var prevRooms = {};
-    ((prev.voice && prev.voice.rooms) || []).forEach(function (r) { prevRooms[(r.server || "") + "/" + (r.channel || "")] = r.participants; });
+    // A room is its server, channel and the moment it opened: DM calls have
+    // no server or channel, and two of them must still be two rooms.
+    var roomKey = function (r) { return (r.server || "") + "/" + (r.channel || "") + "/" + (r.openedAt || ""); };
+    ((prev.voice && prev.voice.rooms) || []).forEach(function (r) { prevRooms[roomKey(r)] = r.participants; });
     ((next.voice && next.voice.rooms) || []).forEach(function (r) {
-      var k = (r.server || "") + "/" + (r.channel || "");
-      if (!(k in prevRooms)) ev.push({ kind: "room", color: "accent", what: "sala aberta", detail: (r.server || "conversa") + " · " + (r.channel || "") + " · " + fmt(r.participants) + (r.participants === 1 ? " pessoa" : " pessoas"), at: when });
+      if (roomKey(r) in prevRooms) return;
+      var where = [r.server, r.channel].filter(Boolean).join(" · ") || "conversa direta";
+      ev.push({ kind: "room", color: "accent", what: r.server ? "sala aberta" : "chamada começou", detail: where + " · " + fmt(r.participants) + (r.participants === 1 ? " pessoa" : " pessoas"), at: when });
     });
     var fb = d(prev.moderation && prev.moderation.feedback && prev.moderation.feedback.last24h, next.moderation && next.moderation.feedback && next.moderation.feedback.last24h);
     if (fb > 0) ev.push({ kind: "feedback", color: "warn", what: fb === 1 ? "feedback novo" : fb + " feedbacks novos", detail: "na fila do caça-bugs", at: when });

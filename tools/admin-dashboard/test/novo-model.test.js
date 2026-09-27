@@ -143,3 +143,30 @@ test("rating distribution sums to the scores that exist", () => {
   assert.equal(r.rows[0].stars, 5);
   assert.equal(r.rows[0].pct, 62.2);
 });
+
+test("two DM calls are two rooms, and a DM call reads cleanly", () => {
+  const one = metrics({ voice: { rooms: [{ server: null, channel: null, participants: 2, openedAt: "2026-09-27T10:00:00Z" }] } });
+  const two = metrics({ voice: { rooms: [
+    { server: null, channel: null, participants: 2, openedAt: "2026-09-27T10:00:00Z" },
+    { server: null, channel: null, participants: 2, openedAt: "2026-09-27T10:05:00Z" }
+  ] } });
+  const ev = M.feedDiff(one, two, "t");
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].detail, "conversa direta · 2 pessoas");
+});
+
+test("the actives trend line ends on yesterday, like the number", () => {
+  const a = activity([
+    { day: "2026-10-27", dau: 800, postedDau: 100 },
+    { day: "2026-10-28", dau: 900, postedDau: 190 },
+    { day: "2026-10-29", dau: 300, postedDau: 90 }
+  ]);
+  const h = M.activityHeadline(a);
+  assert.equal(h.value, 900);
+  assert.equal(h.series[h.series.length - 1], 900);
+});
+
+test("one open feedback is singular", () => {
+  const m = metrics({ moderation: { reports: { open: 0 }, feedback: { open: 1, confirmed: 0, last24h: 0 } }, callRatings: null });
+  assert.ok(M.attention(m, [], { components: [] }).some((a) => a.title === "1 feedback aberto"));
+});

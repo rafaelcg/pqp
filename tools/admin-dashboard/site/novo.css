@@ -162,7 +162,8 @@ main { max-width: 1480px; margin: 0 auto; padding: 30px 28px 64px; display: flex
 .kpi .k-value { font-family: var(--display); font-size: 32px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; border-radius: 6px; padding: 2px 4px; margin: -2px -4px; }
 .kpi .k-value.long { font-size: 24px; white-space: nowrap; }
 .kpi .k-note { font-size: 12px; color: var(--faint); }
-.spark { width: 108px; height: 36px; flex: none; overflow: visible; }
+.kpi .k-spark { flex: 0 1 108px; min-width: 56px; display: flex; justify-content: flex-end; }
+.spark { width: 100%; max-width: 108px; height: 36px; overflow: visible; }
 
 /* ---------- lists ---------- */
 .rowlink {
@@ -306,7 +307,7 @@ table.t .m { color: var(--muted); }
 .toast.bad .ok { background: var(--bad-dim); color: var(--bad); }
 
 /* ---------- switches, blocks, rings ---------- */
-.switch { position: relative; width: 44px; height: 26px; border-radius: 999px; border: 0; background: var(--s4); cursor: pointer; flex: none; transition: background var(--t-ctl); }
+.switch { position: relative; width: 44px; height: 26px; border-radius: 999px; border: 0; background: var(--s3); box-shadow: inset 0 0 0 1px var(--line2); cursor: pointer; flex: none; transition: background var(--t-ctl); }
 .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform var(--t-ctl) var(--ease), background var(--t-ctl); }
 .switch[aria-checked="true"] { background: var(--accent); }
 .switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--accent-ink); }
@@ -347,6 +348,19 @@ table.t .m { color: var(--muted); }
 .panein { animation: panein var(--t-pane) var(--ease) both; }
 
 /* ---------- responsive ---------- */
+/* Laptop widths: the header keeps every control on screen by dropping
+   the least useful text first (the read time, the "operador" tag, the
+   refresh label) and tightening the tabs, before it has to wrap. */
+@media (max-width: 1320px) {
+  .top { gap: 14px; padding: 0 20px; }
+  .read, .brand span { display: none; }
+  .tabs a { padding: 0 11px; }
+  #refresh .lbl { display: none; }
+}
+@media (max-width: 960px) {
+  .top { height: auto; flex-wrap: wrap; gap: 10px; padding: 12px 16px; }
+  .tabs { order: 3; width: 100%; overflow-x: auto; }
+}
 @media (max-width: 1180px) {
   .g5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
