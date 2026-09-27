@@ -1145,6 +1145,44 @@ async function paneBoxes(page: Page) {
   });
 }
 
+/**
+ * "Before you go live" (`HlsHostAckSheet`) shows once per host+server, the
+ * first time a setup surface opens. Its own `checkNeedsAck` GET is still in
+ * flight when the setup surface first renders, so there is no synchronous
+ * truth to read the moment a test would want to check for it.
+ *
+ * NOT `locator.isVisible({ timeout })` -- that call does not retry.
+ * Playwright documents it as an immediate, one-shot read; the `timeout` only
+ * bounds resolving the selector, never waiting for the element's visibility
+ * to change. Written that way, this was really a single sample taken at
+ * whatever instant the line happened to execute, racing the fetch's own
+ * response and the re-render it triggers. Measured directly (a trace off a
+ * failure this shape produced): the GET landed about 3.6s after navigation,
+ * the one-shot check ran about fifteen milliseconds LATER and still read
+ * `false` -- close enough that a build with a few more components mounted
+ * elsewhere in the app (nothing to do with this dialog) can tip the same
+ * race the other way often enough to matter. And nothing else in the test
+ * ever revisits it: a missed dismiss here means the dialog appears moments
+ * later and sits on top of the page, blocking every click for the rest of
+ * the test.
+ *
+ * `expect(locator).toBeVisible()` retries, which is the only version of this
+ * check that is not a coin flip.
+ */
+async function dismissHostAckIfShown(page: Page): Promise<void> {
+  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
+  try {
+    await expect(ack).toBeVisible({ timeout: 5000 });
+  } catch {
+    // Never appeared in the window: this host+server pair already has an ack
+    // on file, or the request is unusually slow and will lose its race with
+    // whatever the test does next -- neither is this function's problem.
+    return;
+  }
+  await ack.getByRole("button", { name: "Got it", exact: true }).click();
+  await expect(ack).toBeHidden({ timeout: 20_000 });
+}
+
 /** Put the chat away from the divider, the way a person does. */
 async function hideTheChat(page: Page): Promise<void> {
   const divider = page.getByTestId("call-split-divider");
@@ -1191,11 +1229,7 @@ test("the setup surface fills the pane when the chat is put away, and after a re
   await expect(page.getByTestId("watch-party-setup")).toBeVisible({
     timeout: 20_000,
   });
-  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
-  if (await ack.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await ack.getByRole("button", { name: "Got it", exact: true }).click();
-    await expect(ack).toBeHidden({ timeout: 20_000 });
-  }
+  await dismissHostAckIfShown(page);
 
   await hideTheChat(page);
   await expect(page.getByPlaceholder(/^Message /)).toBeHidden();
@@ -1267,11 +1301,7 @@ test("a host who has not gone live is told so, in words", async ({ page }) => {
   // one puts the other under the pointer.
   await expect(notLive.locator("[data-watch-party-go-live]")).toBeVisible();
 
-  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
-  if (await ack.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await ack.getByRole("button", { name: "Got it", exact: true }).click();
-    await expect(ack).toBeHidden({ timeout: 20_000 });
-  }
+  await dismissHostAckIfShown(page);
 
   // And it goes the moment it stops being true, which is the half that makes
   // it a state rather than decoration. A picture first: the row says so.

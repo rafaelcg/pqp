@@ -675,21 +675,42 @@ let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
  * The interval starts on the first subscriber and stops on the last, so an
  * app with no readout mounted and no call being rated never polls at all.
  *
- * A pending sample naturally cannot reach a listener that has already
- * unsubscribed: `listeners` is read fresh at delivery time, inside the
- * `.then()`, not captured when the tick was scheduled, so a caller that
- * unsubscribes (a component unmounting, a call ending) before the in-flight
- * `getStats()` resolves is simply not in the set by the time it would be
- * called.
+ * A pending sample cannot reach a listener that has already unsubscribed BY
+ * DELIVERY TIME: this tick's target set is snapshotted from `sharedListeners`
+ * when the tick STARTS and intersected against the live set again once
+ * `sampleAll()` resolves, so a caller that unsubscribes (a component
+ * unmounting, a call ending) anywhere in that window is simply not called.
+ *
+ * THE SAME SNAPSHOT ALSO KEEPS A SAMPLE FROM REACHING A SUBSCRIBER IT WAS
+ * NEVER FOR. `getStats()` is genuinely async -- on a room with several peers
+ * `sampleAll()` awaits one `pc.getStats()` after another -- so a fast
+ * hang-up-and-rejoin can subscribe a NEW listener (the next call's
+ * `useCallRating`, with a freshly reset accumulator) while an OLD tick,
+ * scheduled for the call that just ended, is still in flight. Delivering to
+ * "whoever is currently subscribed" at resolution time would hand that new
+ * listener a sample that was never sampled on its behalf -- readings from
+ * before its call existed, folded into media-quality numbers for a call that
+ * has barely started. Snapshotting the target set at tick start is what
+ * keeps a sample scoped to the subscribers who were there to ask for it.
  */
 export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
   sharedListeners.add(listener);
   if (!sharedPollTimer) {
     const tick = () => {
+      // Who this SPECIFIC tick is for, fixed before the first `await` inside
+      // `sampleAll()` runs. A `Set` copy, not a reference to `sharedListeners`
+      // itself, which keeps mutating (new subscribers, unsubscribes) for as
+      // long as this tick's `getStats()` calls are still out.
+      const targets = new Set(sharedListeners);
       sampleAll()
         .then((snapshot) => {
           for (const l of sharedListeners) {
-            l(snapshot);
+            // Delivered only if this listener was both subscribed when the
+            // sample was taken AND is still subscribed now -- the
+            // intersection is what "this sample is for you" means.
+            if (targets.has(l)) {
+              l(snapshot);
+            }
           }
         })
         .catch(() => {
