@@ -1,10 +1,14 @@
 import type { WebSocket } from "ws";
-import { CHAT_CLIENT_MESSAGE_TYPES } from "@pqp/shared";
+import {
+  CHAT_CLIENT_MESSAGE_TYPES,
+  VOICE_CLIENT_MESSAGE_TYPES,
+} from "@pqp/shared";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
 import { recordUserCountry } from "../voice/region-audience.js";
+import { userActivity } from "../services/user-activity.js";
 import { socketCountry } from "../voice/regions.js";
 import { createFrameBudget } from "./frame-budget.js";
 import {
@@ -71,50 +75,46 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const CHAT_MESSAGE_TYPES = new Set<string>(CHAT_CLIENT_MESSAGE_TYPES);
 
-const VOICE_MESSAGE_TYPES = new Set<string>([
+/**
+ * Frames that mean a person did something, for daily actives
+ * (`services/user-activity.ts`). An allowlist on purpose: signalling
+ * (`offer`, `answer`, `ice-candidate`) and `set-idle` fire on their own, and
+ * would count an idle tab as active every day. The voice half matches
+ * `SELF_INITIATED_VOICE_FRAMES` in `ws/voice.ts`, which is what the idle
+ * hangup counts as somebody being there.
+ */
+const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
+  // Opening a channel or a thread: somebody reading counts, not only
+  // somebody posting. A resubscribe on reconnect also sends these, and that
+  // is already counted at `auth`, so it adds nothing.
+  "join-channel",
+  "thread-join",
+  "message-create",
+  "reaction-toggle",
+  "typing",
+  "poll-vote",
+  "poll-close",
   "join-voice-room",
   "leave-voice-room",
-  "set-sharing-screen",
-  "offer",
-  "answer",
-  "ice-candidate",
-  // --- conversation calls ---
   "call-ring",
   "call-decline",
-  "set-camera",
-  // --- voice state ---
+  "watch-live",
+  "set-voice-track-mode",
   "set-voice-state",
-  // --- raised hands ---
-  // Missing from this hand-kept list from the day the feature shipped (#406):
-  // `voiceClientMessageSchema` in @pqp/shared accepted the frame, and
-  // `handleVoiceMessage`/`voice-raised-hands.test.ts` call straight into the
-  // handler and never through this router, so nothing caught that every real
-  // `set-raised-hand` frame was dropped right here before reaching it. A
-  // browser's hand went up for exactly `HAND_ECHO_MS` (the client's own
-  // optimistic guess) and then silently fell back down with no server ever
-  // having seen it. See the routing doc comment above.
+  "set-sharing-screen",
+  "set-camera",
   "set-raised-hand",
-  // --- watch party ---
-  // A watch party lives inside a voice room, so its one client frame is routed
-  // to the voice handler like every other thing said inside one.
   "set-watch-party",
-  // --- music queue ---
-  // Same reasoning: the queue is a thing said inside the room.
   "set-music",
   "set-music-listening",
-  // --- live reactions ---
-  // Same reasoning as the line above: a reaction is something said inside a
-  // voice room, over the share that room is watching.
   "live-reaction",
-  // --- live HLS watch mode ---
-  // A viewer without a seat, counted by the voice handler because that is
-  // where the stream and the room live.
-  "watch-live",
-  // --- LIVE_HLS_VOICE_TRACK ---
-  // The presenter's own word for "separada", read alongside their
-  // `voice-track` publication by `reconcileCameraEgress`.
-  "set-voice-track-mode",
+  "voice-still-here",
 ]);
+
+// Derived from `voiceClientMessageSchema` (see `VOICE_CLIENT_MESSAGE_TYPES`
+// in @pqp/shared). A hand-kept list here dropped `set-raised-hand` and then
+// `voice-still-here` before either reached its handler.
+const VOICE_MESSAGE_TYPES = new Set<string>(VOICE_CLIENT_MESSAGE_TYPES);
 
 /** Every frame type this router acts on, for the flood log's summary. */
 const ROUTED_FRAME_TYPES: ReadonlySet<string> = new Set<string>([
@@ -344,6 +344,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       // servers' voice rooms (`voice/region-audience.ts`). Country only,
       // throttled, never throws, and a no-op without `LIVEKIT_REGIONS`.
       void recordUserCountry(resolved.user.id, socketCountry(socket));
+      // Opened the app today, for the dashboard's actives and retention
+      // (`services/user-activity.ts`). A Map.set; flushed once a minute.
+      userActivity.note(resolved.user.id);
       void onHostSocketOpened(resolved.user.id).catch((error) => {
         console.error("[watch-party] host reconnect failed:", error);
       });
@@ -371,6 +374,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     const session = getAuthenticatedSocket(socket);
     if (!session) {
       return;
+    }
+    // Somebody doing something counts a tab left open across midnight on the
+    // day it is used again. A Map lookup when already noted today.
+    if (ACTIVITY_FRAME_TYPES.has(type)) {
+      userActivity.note(session.user.id);
     }
 
     if (CHAT_MESSAGE_TYPES.has(type)) {

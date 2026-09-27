@@ -14,16 +14,19 @@
  *     machine token, then merged with the Android distribution block this
  *     Worker owns (button clicks in KV, GitHub `download_count`);
  *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
- *     token and only the `days` and `day` parameters forwarded; `/health`
+ *     token and only the `days` and `day` parameters forwarded;
+ *     `/activity` is `${API_ORIGIN}/api/admin/user-activity` the same way
+ *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Ten `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Four reads (find a server, list its voice channels, the watch
- *     party waitlist, the runtime feature flags) and six PUTs (watch party
- *     availability and low latency per server, a channel's transport pin, a
- *     channel's SFU region, declining a server's waitlist, a feature flag
- *     globally, a feature flag for one server). They are in `OPERATOR_ROUTES` below, an
+ *     Twelve `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Five reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags, the feedback queue) and
+ *     seven PUTs (watch party availability and low latency per server, a
+ *     channel's transport pin, a channel's SFU region, declining a server's
+ *     waitlist, a feature flag globally, a feature flag for one server,
+ *     confirming or closing a feedback item). They are in `OPERATOR_ROUTES` below, an
  *     exact (method, path) table for the same reason the API keeps one: the
  *     blast radius of the password plus the machine token should be readable
  *     in one glance, and a prefix is a thing somebody widens by accident.
@@ -69,6 +72,13 @@ export interface Env {
   GITHUB_REPO?: string;
   /** Click counter. Unset: /apk-click is a no-op and the tile says so. */
   APK_CLICKS?: KVNamespace;
+  /**
+   * What the hosted instance costs a month, in US dollars, for "custo por
+   * pessoa ativa" on the /activity card. A secret rather than a var only
+   * because this repository is public: `wrangler secret put
+   * MONTHLY_COST_USD`. Unset, the card asks for it instead of guessing.
+   */
+  MONTHLY_COST_USD?: string;
 }
 
 const DEFAULT_USER = "operador";
@@ -355,6 +365,26 @@ const OPERATOR_ROUTES: {
     path: "/operator/channel-sfu-region",
     forward: (_url, origin) => `${origin}/api/admin/channel-sfu-region`,
   },
+  // The feedback queue ("moderação"): the whole text, the author's tag and
+  // handle, where they were; and confirm or close, which can grant the
+  // caça-bugs badge. Only these four parameters are forwarded.
+  {
+    method: "GET",
+    path: "/operator/feedback",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/feedback`);
+      for (const name of ["status", "kind", "before", "limit"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
+  },
+  {
+    method: "PUT",
+    path: "/operator/feedback-resolve",
+    forward: (_url, origin) => `${origin}/api/admin/feedback/resolve`,
+  },
   // Runtime feature flags ("interruptores"): the list with effective values,
   // overrides and the audit trail; a global decision; a per-server override.
   // The API only parses keys in its own registry, so this cannot invent one.
@@ -374,6 +404,12 @@ const OPERATOR_ROUTES: {
     forward: (_url, origin) => `${origin}/api/admin/flag-overrides`,
   },
 ];
+
+/** A positive number of dollars, or null for unset and anything else. */
+export function parseMonthlyCost(raw: string | undefined): number | null {
+  const n = Number((raw ?? "").trim());
+  return raw && Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function matchOperatorRoute(method: string, path: string) {
   return (
@@ -462,6 +498,37 @@ export default {
       if (day) upstream.searchParams.set("day", day);
       return proxyJson(upstream.toString(), {
         Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+    }
+
+    // Actives and signup retention (`/api/admin/user-activity`), fetched when
+    // "ao longo do tempo" opens. Only `days` and `weeks` are forwarded. The
+    // operator's monthly cost is added here, next to the counts it divides,
+    // so it never has to reach the API or the page source.
+    if (path === "/activity") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "activity not configured" });
+      }
+      const upstream = new URL(`${origin}/api/admin/user-activity`);
+      const days = url.searchParams.get("days");
+      const weeks = url.searchParams.get("weeks");
+      if (days) upstream.searchParams.set("days", days);
+      if (weeks) upstream.searchParams.set("weeks", weeks);
+      const response = await proxyJson(upstream.toString(), {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+      if (!response.ok) {
+        return response;
+      }
+      let report: Record<string, unknown>;
+      try {
+        report = (await response.json()) as Record<string, unknown>;
+      } catch {
+        return json(502, { error: "upstream answered with something that is not JSON" });
+      }
+      return json(200, {
+        ...report,
+        operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
       });
     }
 

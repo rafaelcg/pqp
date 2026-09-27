@@ -10353,6 +10353,13 @@ function MainAppContent({
         }}
         onUnblockUser={(userId) => void handleUnblockUser(userId)}
         onAudioSettingsLive={handleAudioSettingsLive}
+        feedbackVoice={{
+          inCall: voiceState.status === "connected",
+          transport: voiceState.roomTransport,
+          watchParty:
+            voiceState.voiceChannelId != null &&
+            voiceState.channelLive[voiceState.voiceChannelId]?.stream != null,
+        }}
       />
 
       <ServerSettingsDialog

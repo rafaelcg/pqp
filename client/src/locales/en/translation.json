@@ -1595,6 +1595,7 @@
   "settings.feedback.kind.other": "Other",
   "settings.feedback.placeholder": "What happened, and where? The more detail, the faster the hunt.",
   "settings.feedback.send": "Send it",
+  "settings.feedback.attached": "Sent along with it: your username, the app version, your device and browser, the screen you're on, and whether you're in a call. That's how we reproduce a bug.",
   "settings.feedback.done": "Got it. If the bug checks out, the badge is yours. 🐛",
   "settings.feedback.again": "Send another",
   "settings.feedback.error": "Sending failed. Try again.",

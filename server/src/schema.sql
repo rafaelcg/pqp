@@ -2873,6 +2873,17 @@ CREATE TABLE IF NOT EXISTS feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_status_id
   ON feedback (status, id DESC);
 
+-- Where the person was when they wrote it: platform, build, route, call
+-- state, Faro session (`feedbackContextSchema` in @pqp/shared), plus the user
+-- agent the server read from its own request header. NULL for anything filed
+-- before this column, and for clients that send none. Read by the operator
+-- dashboard only.
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS context JSONB;
+
+-- The dashboard counts each author's items per row it shows, and an account
+-- deletion nulls this column; both want it indexed.
+CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback (user_id);
+
 -- Earned marks, keyed by a stable badge slug ('caca-bugs', 'turma-1000').
 -- Deliberately generic — the next achievement is one INSERT away — and
 -- deliberately NOT the community-membership "badges" on the public profile,
@@ -4817,3 +4828,23 @@ CREATE TABLE IF NOT EXISTS feature_flag_audit (
 
 CREATE INDEX IF NOT EXISTS idx_feature_flag_audit_created
   ON feature_flag_audit (created_at DESC);
+
+-- Which days each account opened the app. One row per (account, São Paulo
+-- day), written when a WebSocket authenticates, so somebody who only reads,
+-- only talks in voice or only watches a party counts as active. Before this
+-- table a message was the only per-person activity the database kept, and
+-- every retention number on the dashboard undercounted by everyone who never
+-- posts.
+--
+-- Counts only ever leave the server (`services/user-activity.ts`); no id is
+-- in any report. Kept for as long as the account exists: the cascade is what
+-- removes it with an art. 18 deletion. About 16 bytes a row, so a year of
+-- 5,000 daily actives is a few tens of megabytes.
+CREATE TABLE IF NOT EXISTS user_activity_days (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day     DATE NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
+  ON user_activity_days (day);

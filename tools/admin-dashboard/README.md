@@ -132,7 +132,7 @@ read as nine equals.
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
-| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The rail carries a count badge when anything is open |
+| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
 ### controles: the only part of this page that writes
@@ -478,9 +478,9 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   payload: all human accounts that exist, not a window and not actives
 - **communities**: totals, per category, and the listed communities with member,
   channel and message counts. Gated on `COMMUNITIES_ENABLED`
-- **moderation**: report and feedback queues by status, bans, unexpired
-  timeouts, and the last eight feedback bodies (truncated by the API, never
-  attributed)
+- **moderation**: report and feedback queues by status, bans and unexpired
+  timeouts. The `recentFeedback` field is still sent for older copies of the
+  page; this page reads the feedback queue from its own route instead
 - the deployed API commit (`APP_VERSION`) and the excluded account kinds
 - **product**: accepted friendships and open friend requests, claimed
   attachments (total and last 24h), invites created in 24h plus cumulative
@@ -521,6 +521,68 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
   read from
 - Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
   minute resolution and forever for the daily peaks
+
+Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
+`/activity`, same machine token, only `days` and `weeks` forwarded):
+
+- **quem usa e quem volta**, under **ao longo do tempo**. Daily, weekly and
+  monthly actives (DAU, WAU, MAU), DAU/MAU, a 90-day chart, and retention by
+  signup week (day 1, days 7 to 13, days 30 to 36 after the signup day).
+- "Active" means the app connected that São Paulo day (an authenticated
+  WebSocket on web, desktop, iOS or Android), the person did something in it
+  (opened a channel, sent, reacted, typed, joined a call or a watch party),
+  or sent a message.
+  Watch party viewers and voice-only users count. Automatic frames such as
+  WebRTC signalling do not. The API writes one row per person per day to
+  `user_activity_days`, batched once a minute per process.
+- Honest limit: an app left open counts again on any day it reconnects, and an
+  API deploy reconnects every open app. Read "ativos" as "had pqp open".
+  "Escreveram" is the strict measure.
+- `trackingSince` is the day after the first row, because the deploy that
+  started tracking landed partway through its day.
+- Two measures are shown side by side and never blended. "Escreveram" (sent a
+  message) goes back to the first message. "Ativos" only exists from the day
+  tracking started (`trackingSince`). A window that reaches back before that
+  day is null, not a low number, so the chart does not jump on deploy day.
+- A cohort bracket only counts once it is over. A recent week shows "ainda
+  não" or "de N" instead of a low rate.
+- Headline numbers are yesterday's, the last complete day.
+- **custo por ativo · mês** divides `MONTHLY_COST_USD` (a Worker secret, see
+  below) by MAU. Unset, the card asks for it. The Worker adds the figure to
+  the response as `operatingCost`, so it never reaches the API.
+- Read the first time the section is opened, then at most every five minutes
+  while it has been opened. The API caches the report for five minutes because
+  it scans months of messages.
+- Server side: `server/src/services/user-activity.ts`.
+
+### The feedback queue
+
+Live, from `GET /api/admin/feedback` (proxied as `/operator/feedback`, only
+`status`, `kind`, `before` and `limit` forwarded), and written back through
+`PUT /api/admin/feedback/resolve` (`/operator/feedback-resolve`):
+
+1. Every item shows the whole text, its kind, status, time and number.
+2. It shows who sent it: display name, tag, @handle linked to the public
+   profile, account age, and how many items that person has sent and had
+   confirmed. No account id and no email.
+3. It shows where they were, from `feedback.context`: platform, app version,
+   browser and OS (parsed from the user agent the API read from its own
+   request header), window size, language, the app route, whether they were
+   in a call and on which media path, whether a watch party was live, and the
+   Grafana Faro session id. Items sent before this change, or from a client
+   that sends none, say so.
+4. Filters: status (open, confirmed, closed, all) and kind. 25 at a time, with
+   "carregar mais".
+5. **confirmar** sets the status to confirmed. On a bug it also grants the
+   author the caça-bugs badge, in the same transaction. **fechar** is for
+   handled, duplicate or not actionable.
+
+The web and desktop feedback box says under the button what travels with it.
+The iOS and Android apps have no feedback box yet.
+
+This is the first route on the machine token that names a person. That is why
+it is its own read, fetched when **moderação** is opened, and not a field on
+`/metrics`.
 
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
@@ -690,12 +752,14 @@ each one.
 ## Why it is behind a password
 
 The repo is open source and a `workers.dev` hostname is guessable. The page is
-aggregate counts and holds no id, handle or email, but it is not *only* counts:
-the "most active" tables carry the **names of private servers and channels**,
-and the call-rating notes and feedback entries are **free text people wrote**.
+mostly aggregate counts and holds no account id or email, but it is not *only*
+counts: the "most active" tables carry the **names of private servers and
+channels**, the call-rating notes and feedback entries are **free text people
+wrote**, and the feedback queue names **who wrote each item** (tag and handle)
+and the device they used.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
-the Worker gates the page, `/metrics`, `/occupancy`, `/health` and every
+the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every
 `/operator/*` route behind HTTP Basic Auth, compared in constant time, and
 refuses to serve anything at all (503) while the password is unset. The
 `/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
@@ -720,8 +784,9 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
+| Worker | `MONTHLY_COST_USD` | secret | What the hosted instance costs a month, in US dollars, for "custo por ativo". A secret only because the repo is public. Unset: the card asks for it. |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
 | API (Fly) | `ADMIN_METRICS_TOKEN` | secret | The same value. At least 16 characters or the API treats it as unset. |
@@ -803,6 +868,7 @@ Test the API side directly, with the token:
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/user-activity?days=90&weeks=12" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```

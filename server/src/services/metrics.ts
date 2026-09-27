@@ -98,7 +98,8 @@ import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
  * are the reason the dashboard has a password on it:
  *  - server, community and channel **names**, in the "most active" tables;
  *  - free text people wrote about the product: call-rating notes and the last
- *    few feedback entries, both truncated, neither attributed to anybody.
+ *    few feedback entries, both truncated, neither attributed to anybody. The
+ *    attributed feedback queue is a separate read, `listOperatorFeedback`.
  * There is still no row here that identifies a person. See
  * tools/admin-dashboard/README.md.
  *

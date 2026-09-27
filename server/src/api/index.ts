@@ -72,6 +72,7 @@ import {
   ackWatchPartyWaitlistApprovalSchema,
   joinWatchPartyWaitlistSchema,
   createReportSchema,
+  FEEDBACK_KINDS,
   FEEDBACK_PAGE_MAX,
   FEEDBACK_PAGE_SIZE,
   createCallRatingSchema,
@@ -573,8 +574,11 @@ import {
   resolveReport,
 } from "../services/reports.js";
 import {
+  ADMIN_FEEDBACK_PATH,
+  ADMIN_FEEDBACK_RESOLVE_PATH,
   createFeedback,
   listFeedback,
+  listOperatorFeedback,
   listUserAchievements,
   resolveFeedback,
 } from "../services/feedback.js";
@@ -590,6 +594,12 @@ import {
   parseOccupancyDay,
   voiceOccupancyReport,
 } from "../services/voice-occupancy.js";
+import {
+  ADMIN_USER_ACTIVITY_PATH,
+  clampActivityDays,
+  clampCohortWeeks,
+  userActivityReport,
+} from "../services/user-activity.js";
 import {
   ADMIN_METRICS_PATH,
   getAdminMetrics,
@@ -2048,6 +2058,28 @@ router.get(ADMIN_VOICE_OCCUPANCY_PATH, async ({ url, user }) => {
 });
 
 /**
+ * Daily / weekly / monthly actives and signup-cohort retention, counts only.
+ * The dashboard's "quem volta" section. Same two ways in as the occupancy
+ * history above. See services/user-activity.ts for what "active" means.
+ */
+function userActivityQuery(params: URLSearchParams): {
+  days: number;
+  weeks: number;
+} {
+  return {
+    days: clampActivityDays(params.get("days")),
+    weeks: clampCohortWeeks(params.get("weeks")),
+  };
+}
+
+router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return userActivityReport(userActivityQuery(url.searchParams));
+});
+
+/**
  * Aggregate counts for the operator dashboard. Same gate, same 404. The other
  * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
  * this handler only ever sees a signed-in moderator. See services/metrics.ts
@@ -2198,6 +2230,25 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_VOICE_OCCUPANCY_PATH,
     run: async (_req, query) => voiceOccupancyReport(occupancyQuery(query)),
+  },
+  {
+    method: "GET",
+    path: ADMIN_USER_ACTIVITY_PATH,
+    run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // The feedback queue: the whole text, the author's tag and handle, and
+  // where they were. The first route on this token that names a person,
+  // which is why it is its own read and not a field on /metrics. And its one
+  // write, confirm or close, which can grant the caça-bugs badge.
+  {
+    method: "GET",
+    path: ADMIN_FEEDBACK_PATH,
+    run: async (_req, query) => listOperatorFeedback(operatorFeedbackQuery(query)),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_FEEDBACK_RESOLVE_PATH,
+    run: async (req) => operatorResolveFeedback(req),
   },
   {
     method: "GET",
@@ -9380,7 +9431,12 @@ router.post("/api/feedback", async ({ req, res, user }) => {
     throw new HttpError(429, "Slow down");
   }
   const body = createFeedbackSchema.parse(await readJsonBody(req));
-  const item = await createFeedback(user.id, body);
+  const agent = req.headers["user-agent"];
+  const item = await createFeedback(
+    user.id,
+    body,
+    typeof agent === "string" ? agent : undefined,
+  );
   return created({ feedback: item });
 });
 
@@ -9401,6 +9457,61 @@ router.get("/api/feedback/instance", async ({ url, user }) => {
       ? (feedbackStatusSchema.safeParse(rawStatus).data ?? undefined)
       : undefined,
   });
+});
+
+/**
+ * The operator dashboard's feedback queue: the whole text, who sent it and
+ * where they were (`listOperatorFeedback`). Same two ways in as the other
+ * admin reads: an instance moderator here, the machine token in `handleApi`.
+ */
+function operatorFeedbackQuery(params: URLSearchParams) {
+  const status = params.get("status");
+  const kind = params.get("kind");
+  return {
+    status:
+      status === "all"
+        ? ("all" as const)
+        : (feedbackStatusSchema.safeParse(status).data ?? ("open" as const)),
+    kind: z.enum(FEEDBACK_KINDS).safeParse(kind).data ?? null,
+    before: params.get("before") ?? undefined,
+    limit: clampLimit(params.get("limit"), FEEDBACK_PAGE_SIZE, FEEDBACK_PAGE_MAX),
+  };
+}
+
+// 18 digits, not 19: a 19-digit string can overflow `::bigint` and turn a
+// bad id into a 500 instead of a 400.
+const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
+  id: z.string().regex(/^[0-9]{1,18}$/),
+});
+
+/**
+ * Confirm or close from the dashboard. Same transaction and badge rule. The
+ * answer is deliberately narrow: `resolveFeedback` returns the author's
+ * account id, and this route is on the machine token, which never carries one.
+ */
+async function operatorResolveFeedback(req: IncomingMessage) {
+  const body = operatorResolveFeedbackSchema.parse(await readJsonBody(req));
+  const resolved = await resolveFeedback(body.id, body.status);
+  if (!resolved) {
+    throw new NotFound("Feedback not found");
+  }
+  return {
+    feedback: { id: resolved.id, kind: resolved.kind, status: resolved.status },
+  };
+}
+
+router.get(ADMIN_FEEDBACK_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listOperatorFeedback(operatorFeedbackQuery(url.searchParams));
+});
+
+router.put(ADMIN_FEEDBACK_RESOLVE_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorResolveFeedback(req);
 });
 
 /**
