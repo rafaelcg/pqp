@@ -73,6 +73,7 @@ import {
   llMaxLatencySeconds,
   mediaSeekableEnd,
   newSegmentDurationsSince,
+  type FragSnDuration,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
@@ -1341,6 +1342,53 @@ describe("newSegmentDurationsSince", () => {
         lastSeenSn: 500,
         reset: false,
       });
+    });
+  });
+
+  // Farol, this PR's third pass: this runs inside `LEVEL_UPDATED`, so a
+  // throw here would take the rest of that handler down for every viewer
+  // on this build, not just skip a cadence reading.
+  describe("never throws out of the hls.js event handler", () => {
+    it("a pathologically large fragments array does not throw (the old Math.max(...array) spread would)", () => {
+      const huge = Array.from({ length: 200_000 }, (_, i) => ({
+        sn: i,
+        duration: 4.1,
+      }));
+      expect(() => newSegmentDurationsSince(huge, null)).not.toThrow();
+      const result = newSegmentDurationsSince(huge, null);
+      // Still correct on the part that matters: the newest fragment is
+      // found and durations are real numbers, even bounded.
+      expect(result.lastSeenSn).toBe(199_999);
+      expect(result.durations.length).toBeGreaterThan(0);
+      expect(result.durations.every((d) => d === 4.1)).toBe(true);
+    });
+
+    it("a fragment whose fields throw on access falls back to 'no new durations', tracker unchanged", () => {
+      const hostile = {
+        get sn(): number {
+          throw new Error("boom");
+        },
+        get duration(): number {
+          throw new Error("boom");
+        },
+      };
+      expect(
+        newSegmentDurationsSince(
+          [hostile as unknown as FragSnDuration],
+          42,
+        ),
+      ).toEqual({ durations: [], lastSeenSn: 42, reset: false });
+    });
+
+    it("a fragments array that throws on iteration falls back the same way", () => {
+      const hostile: Iterable<FragSnDuration> = {
+        [Symbol.iterator]() {
+          throw new Error("boom");
+        },
+      };
+      expect(
+        newSegmentDurationsSince(hostile as readonly FragSnDuration[], 7),
+      ).toEqual({ durations: [], lastSeenSn: 7, reset: false });
     });
   });
 });
