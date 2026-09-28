@@ -993,7 +993,7 @@ export async function joinServerBySso(
       // Widening, so the cost of missing it is a badge the new member does not
       // get for a few seconds rather than one they should not have. Done
       // anyway: "you joined and the server went quiet" is a bad first minute.
-      invalidateServerAudience(serverId);
+      invalidateServerAudience(serverId, { joinedUserId: userId });
       // Funnel step `first_join`, after the commit and on the pool.
       await recordActivationStep(userId, "first_join");
     }
@@ -1298,10 +1298,17 @@ export function invalidateChannelAudience(channelId: string): void {
  * owners and admins into private channels without a `channel_members` row, so
  * a demotion to `member` silently narrows every private channel at once.
  */
-export function invalidateServerAudience(serverId: string): void {
-  invalidateServerAudienceLocally(serverId);
+export function invalidateServerAudience(
+  serverId: string,
+  options: { joinedUserId?: string } = {},
+): void {
+  invalidateServerAudienceLocally(serverId, options.joinedUserId);
   if (isBusEnabled()) {
-    publishToCluster(AUDIENCE_TOPIC, { kind: "server", serverId });
+    publishToCluster(AUDIENCE_TOPIC, {
+      kind: "server",
+      serverId,
+      ...(options.joinedUserId ? { joinedUserId: options.joinedUserId } : {}),
+    });
   }
 }
 
@@ -1316,7 +1323,10 @@ function invalidateChannelAudienceLocally(channelId: string): void {
   notifyAudienceInvalidated({ channelId });
 }
 
-function invalidateServerAudienceLocally(serverId: string): void {
+function invalidateServerAudienceLocally(
+  serverId: string,
+  joinedUserId?: string,
+): void {
   audienceEpoch++;
   for (const [channelId, entry] of audienceCache) {
     if (entry.audience.serverId === serverId) {
@@ -1331,22 +1341,34 @@ function invalidateServerAudienceLocally(serverId: string): void {
   invalidateServerMemberList(serverId);
   invalidateServerMemberRoles(serverId);
   invalidateChannelAccessForServer();
-  notifyAudienceInvalidated({ serverId });
+  notifyAudienceInvalidated({ serverId, joinedUserId });
 }
 
 /**
  * In-process subscribers to "this audience just went stale", channel- or
- * server-scoped. `ws/voice.ts`'s roster-membership cache is the one caller:
- * it already imports this module, so — same reasoning as `onPermissionsUpdate`
+ * server-scoped. `ws/voice.ts`'s roster-membership cache is one caller: it
+ * already imports this module, so — same reasoning as `onPermissionsUpdate`
  * next door in `ws/chat.ts` — this is a listener registry rather than a
  * direct call, so this file does not have to import `ws/voice.ts` back.
+ *
+ * `joinedUserId` is set when the change is one account becoming a member
+ * (an invite, a community join, an SSO domain join). `ws/index.ts` uses it
+ * to send that account's open sockets what `auth` would have sent them for
+ * this server: the rooms, streams, music and watch parties were described
+ * once, at connect, to a socket that could not see them yet.
  */
+export interface AudienceInvalidatedEvent {
+  channelId?: string;
+  serverId?: string;
+  joinedUserId?: string;
+}
+
 const audienceInvalidationListeners = new Set<
-  (event: { channelId?: string; serverId?: string }) => void
+  (event: AudienceInvalidatedEvent) => void
 >();
 
 export function onAudienceInvalidated(
-  listener: (event: { channelId?: string; serverId?: string }) => void,
+  listener: (event: AudienceInvalidatedEvent) => void,
 ): () => void {
   audienceInvalidationListeners.add(listener);
   return () => {
@@ -1354,10 +1376,7 @@ export function onAudienceInvalidated(
   };
 }
 
-function notifyAudienceInvalidated(event: {
-  channelId?: string;
-  serverId?: string;
-}): void {
+function notifyAudienceInvalidated(event: AudienceInvalidatedEvent): void {
   for (const listener of audienceInvalidationListeners) {
     try {
       listener(event);
@@ -1487,7 +1506,10 @@ subscribeToCluster(AUDIENCE_TOPIC, (data) => {
     return;
   }
   if (frame?.kind === "server" && typeof frame.serverId === "string") {
-    invalidateServerAudienceLocally(frame.serverId);
+    invalidateServerAudienceLocally(
+      frame.serverId,
+      typeof frame.joinedUserId === "string" ? frame.joinedUserId : undefined,
+    );
   }
 });
 

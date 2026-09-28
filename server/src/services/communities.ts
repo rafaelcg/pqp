@@ -414,7 +414,7 @@ export async function joinCommunity(
       // Same reasoning as `joinServerBySso`: the cache is widening, so missing
       // it costs a few silent seconds rather than a leak — and "you joined and
       // the room went quiet" is a bad first minute.
-      invalidateServerAudience(serverId);
+      invalidateServerAudience(serverId, { joinedUserId: userId });
       // Funnel step `first_join`, after the commit and on the pool, not inside
       // the transaction. This is also the default-community landing path
       // (services/default-community.ts calls joinCommunity), so a first-run

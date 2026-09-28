@@ -6664,10 +6664,6 @@ export function voiceChannelAccessCacheStats(): {
 }
 
 /**
- * Send current voice occupancy to a newly authenticated socket — but only for
- * the rooms this user is allowed to see.
- */
-/**
  * Every room's roster from this process's memory (`sentRosters`, with the
  * events queued since replayed, not consumed: the coalesced run still owns
  * the queue), for a socket that connects while the rows cannot be read.
@@ -6691,7 +6687,24 @@ function rostersFromMemory(now = Date.now()): Map<string, VoiceParticipant[]> {
   return rooms;
 }
 
-export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
+/**
+ * Send current voice occupancy to a newly authenticated socket — but only for
+ * the rooms this user is allowed to see. Also the live streams and the music
+ * rows those rooms carry.
+ *
+ * `channelIds` narrows all of it to one server's channels, for a socket whose
+ * account just became a member there (`catchUpNewMembership` in
+ * `ws/index.ts`). Without it the socket would hold nothing for that server's
+ * rooms until each one next changed, and a delta for a room it holds nothing
+ * for reads as a gap until the next keyframe.
+ */
+export async function sendAllVoiceRosters(
+  socket: WebSocket,
+  user: DbUser,
+  options: { channelIds?: ReadonlySet<string> } = {},
+) {
+  const wanted = (channelId: string) =>
+    !options.channelIds || options.channelIds.has(channelId);
   const rooms = new Map<
     string,
     {
@@ -6750,6 +6763,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
 
   await Promise.all(
     [...rooms].map(async ([voiceChannelId, room]) => {
+      if (!wanted(voiceChannelId)) {
+        return;
+      }
       try {
         // CACHED, NOT `canAccessChannel` DIRECTLY: this runs once per room this
         // instance or the registry knows about, on EVERY socket that
@@ -6810,7 +6826,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   // having learned something newer than the snapshot: re-read it, and say
   // `ended` rather than shipping a session that is over or an unknown null
   // the client is now written to ignore.
-  const live = hlsAudience.liveChannels().map((channelId) => ({
+  const live = hlsAudience.liveChannels().filter(wanted).map((channelId) => ({
     channelId,
     stream: hlsAudience.stream(channelId),
     generation: streamGeneration.get(channelId) ?? 0,
@@ -6847,6 +6863,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   // Off the audience cache (`getChannelAudience`, one query per channel per
   // TTL, shared by every socket), not one access query per socket per room.
   for (const channelId of musicChannels()) {
+    if (!wanted(channelId)) {
+      continue;
+    }
     const audience = await getChannelAudience(channelId).catch(() => null);
     if (audience?.has(user.id)) {
       send(socket, await channelMusicFrame(channelId));

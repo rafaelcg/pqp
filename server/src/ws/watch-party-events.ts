@@ -503,17 +503,21 @@ export async function broadcastWatchParty(
  * touches something.
  *
  * Scoped to the servers this person is in, and re-checked per channel: a
- * membership row is not VIEW on every channel in it.
+ * membership row is not VIEW on every channel in it. `serverId` narrows it to
+ * one of them, for an account that just joined that server.
  */
 export async function catchUpWatchParties(
   socket: import("ws").WebSocket,
   userId: string,
+  options: { serverId?: string } = {},
 ): Promise<void> {
   const { listServersForUser } = await import("../services/servers.js");
   const { listActiveWatchPartiesForServer } = await import(
     "../services/watch-parties.js"
   );
-  const servers = await listServersForUser(userId);
+  const servers = (await listServersForUser(userId)).filter(
+    (server) => !options.serverId || server.id === options.serverId,
+  );
   for (const server of servers) {
     if (socket.readyState !== 1) {
       return;
