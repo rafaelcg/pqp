@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
 
 const FOOTER_LINK =
@@ -12,6 +13,10 @@ export function MarketingFooter() {
   // Hosted-only: a self-hosted build has no donation links and gets no link
   // to a page that would only redirect home. See `lib/support-links.ts`.
   const supportEnabled = isSupportPageEnabled();
+  // The link always goes to /android; only the label changes, so a self-host
+  // that hides the Play badge with a single space never claims a listing it
+  // does not have.
+  const hasPlay = Boolean(playStoreUrl());
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -68,7 +73,7 @@ export function MarketingFooter() {
               {t("footer.iosBeta")}
             </Link>
             <Link to="/android" className={FOOTER_LINK}>
-              {t("footer.androidBeta")}
+              {t(hasPlay ? "footer.androidBeta.play" : "footer.androidBeta")}
             </Link>
             <Link to="/blog" className={FOOTER_LINK}>
               {t("nav.blog")}

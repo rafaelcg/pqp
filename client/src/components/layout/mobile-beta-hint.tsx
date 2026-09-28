@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { isAutomatedBrowser } from "@/lib/hints";
 import { isAndroidDevice } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import {
   isMobileBetaHintSeen,
   rememberMobileBetaHint,
@@ -35,6 +36,7 @@ export function MobileBetaHint({
   );
   const [open, setOpen] = useState(true);
   const [android] = useState(() => isAndroidDevice());
+  const hasPlay = Boolean(playStoreUrl());
   const close = () => {
     setOpen(false);
     onDismiss?.();
@@ -51,10 +53,14 @@ export function MobileBetaHint({
     ? "mobileBetaHint.android.title"
     : "mobileBetaHint.ios.title";
   const bodyKey = android
-    ? "mobileBetaHint.android.body"
+    ? hasPlay
+      ? "mobileBetaHint.android.body.play"
+      : "mobileBetaHint.android.body"
     : "mobileBetaHint.ios.body";
   const ctaKey = android
-    ? "mobileBetaHint.android.cta"
+    ? hasPlay
+      ? "mobileBetaHint.android.cta.play"
+      : "mobileBetaHint.android.cta"
     : "mobileBetaHint.ios.cta";
   const to = android ? "/android" : "/beta";
   const Mark = android ? AndroidMark : IosMark;

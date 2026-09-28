@@ -35,6 +35,7 @@ import {
   type CreateIntent,
 } from "@/lib/handle-intent";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -1290,6 +1291,9 @@ function useScrollToHash() {
 
 export function VemPage() {
   const { t, locale } = useTranslation();
+  // The footer link always goes to /android; only the label changes, so a
+  // self-host that hides the Play badge never claims a listing it lacks.
+  const hasPlay = Boolean(playStoreUrl());
   const mainRef = useRef<HTMLElement>(null);
   useScrollToHash();
   useScrollReveal(mainRef);
@@ -1632,7 +1636,7 @@ export function VemPage() {
             </Link>{" "}
             {t("vem.footer.android")}{" "}
             <Link to="/android" className={INLINE_LINK}>
-              {t("vem.footer.androidLink")}
+              {t(hasPlay ? "vem.footer.androidLink.play" : "vem.footer.androidLink")}
             </Link>{" "}
             {t("vem.footer.code")}{" "}
             <a

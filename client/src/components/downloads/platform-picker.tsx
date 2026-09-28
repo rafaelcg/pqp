@@ -7,6 +7,7 @@ import {
   IosMark,
 } from "@/components/downloads/platform-marks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,6 +30,7 @@ export function PlatformPicker({
 }) {
   const { t } = useTranslation();
   const { plan, prefetch, href } = useDownloadAssets();
+  const hasPlay = Boolean(playStoreUrl());
 
   useEffect(() => {
     prefetch();
@@ -78,7 +80,7 @@ export function PlatformPicker({
         index={2}
         href="/android"
         label={t("downloadPicker.android")}
-        hint={t("downloadPicker.android.hint")}
+        hint={t(hasPlay ? "downloadPicker.android.hint.play" : "downloadPicker.android.hint")}
         mark={<AndroidMark className="h-8 w-8" />}
         onNavigate={onNavigate}
       />
