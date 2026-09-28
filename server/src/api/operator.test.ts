@@ -933,6 +933,45 @@ describeDb("the operator's two levers", () => {
       expect(cursor.status).toBe(200);
     });
 
+    it("confirms a group of reports in one write, badging every bug author once", async () => {
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "som alto" });
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "som alto!" });
+      await asUser(operator, "POST", "/api/feedback", { kind: "bug", body: "som muito alto" });
+      const ids = (
+        await asMachine<{ items: { id: string }[] }>("GET", "/api/admin/feedback")
+      ).body.items.map((item) => item.id);
+      expect(ids).toHaveLength(3);
+
+      const group = await asMachine<{ feedback: { id: string; status: string }[] }>(
+        "PUT",
+        "/api/admin/feedback/resolve",
+        { ids: [...ids, "999999"], status: "confirmed" },
+      );
+      expect(group.status).toBe(200);
+      expect(group.body.feedback.map((item) => item.status)).toEqual([
+        "confirmed",
+        "confirmed",
+        "confirmed",
+      ]);
+      const badges = await getPool().query(
+        `SELECT user_id FROM user_badges WHERE badge = 'caca-bugs' ORDER BY user_id`,
+      );
+      expect(badges.rows.map((row) => row.user_id).sort()).toEqual([ana.id, operator.id].sort());
+      expect(JSON.stringify(group.body)).not.toContain(ana.id);
+
+      const both = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: ids[0],
+        ids,
+        status: "closed",
+      });
+      expect(both.status).toBe(400);
+      const none = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        ids: ["999998"],
+        status: "closed",
+      });
+      expect(none.status).toBe(404);
+    });
+
     it("saves the feedback when the context is unreadable, and drops only the context", async () => {
       const sent = await asUser(ana, "POST", "/api/feedback", {
         kind: "bug",

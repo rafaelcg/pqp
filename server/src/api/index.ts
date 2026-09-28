@@ -581,6 +581,7 @@ import {
   listOperatorFeedback,
   listUserAchievements,
   resolveFeedback,
+  resolveFeedbackMany,
 } from "../services/feedback.js";
 import { recordCallRating } from "../services/call-ratings.js";
 import { placeInDefaultCommunity } from "../services/default-community.js";
@@ -590,6 +591,7 @@ import {
 } from "../services/acquisition.js";
 import {
   ADMIN_VOICE_OCCUPANCY_PATH,
+  voiceOccupancyHeatmap,
   clampOccupancyDays,
   parseOccupancyDay,
   voiceOccupancyReport,
@@ -2037,10 +2039,12 @@ router.get("/api/admin/acquisition", async ({ url, user }) => {
 export function occupancyQuery(params: URLSearchParams): {
   days: number;
   day: string | null;
+  heatmap: boolean;
 } {
   return {
     days: clampOccupancyDays(params.get("days")),
     day: parseOccupancyDay(params.get("day")),
+    heatmap: params.get("shape") === "weekday-hour",
   };
 }
 
@@ -2054,7 +2058,8 @@ router.get(ADMIN_VOICE_OCCUPANCY_PATH, async ({ url, user }) => {
   if (!isInstanceModerator(user)) {
     throw new NotFound("Not found");
   }
-  return voiceOccupancyReport(occupancyQuery(url.searchParams));
+  const query = occupancyQuery(url.searchParams);
+  return query.heatmap ? voiceOccupancyHeatmap() : voiceOccupancyReport(query);
 });
 
 /**
@@ -2229,7 +2234,10 @@ const ADMIN_MACHINE_ROUTES: {
   {
     method: "GET",
     path: ADMIN_VOICE_OCCUPANCY_PATH,
-    run: async (_req, query) => voiceOccupancyReport(occupancyQuery(query)),
+    run: async (_req, query) => {
+      const q = occupancyQuery(query);
+      return q.heatmap ? voiceOccupancyHeatmap() : voiceOccupancyReport(q);
+    },
   },
   {
     method: "GET",
@@ -9480,9 +9488,18 @@ function operatorFeedbackQuery(params: URLSearchParams) {
 
 // 18 digits, not 19: a 19-digit string can overflow `::bigint` and turn a
 // bad id into a 500 instead of a 400.
-const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
-  id: z.string().regex(/^[0-9]{1,18}$/),
-});
+const feedbackIdSchema = z.string().regex(/^[0-9]{1,18}$/);
+// One `id`, or `ids` for a group of duplicates the dashboard resolves
+// together in one transaction. Exactly one of the two.
+const operatorResolveFeedbackSchema = resolveFeedbackSchema
+  .extend({
+    id: feedbackIdSchema.optional(),
+    // Large enough for any group the dashboard can show; one statement.
+    ids: z.array(feedbackIdSchema).min(1).max(500).optional(),
+  })
+  .refine((body) => (body.id === undefined) !== (body.ids === undefined), {
+    message: "Send exactly one of id or ids",
+  });
 
 /**
  * Confirm or close from the dashboard. Same transaction and badge rule. The
@@ -9491,7 +9508,16 @@ const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
  */
 async function operatorResolveFeedback(req: IncomingMessage) {
   const body = operatorResolveFeedbackSchema.parse(await readJsonBody(req));
-  const resolved = await resolveFeedback(body.id, body.status);
+  if (body.ids) {
+    const resolved = await resolveFeedbackMany([...new Set(body.ids)], body.status);
+    if (resolved.length === 0) {
+      throw new NotFound("Feedback not found");
+    }
+    return {
+      feedback: resolved.map((item) => ({ id: item.id, kind: item.kind, status: item.status })),
+    };
+  }
+  const resolved = await resolveFeedback(body.id!, body.status);
   if (!resolved) {
     throw new NotFound("Feedback not found");
   }

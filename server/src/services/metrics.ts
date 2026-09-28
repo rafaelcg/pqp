@@ -5,6 +5,14 @@ import {
   type LiveHlsViewerSession,
 } from "../voice/hls-viewer-counts.js";
 import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
+import {
+  communityColumns,
+  communityTag,
+  type CommunityColumns,
+  type CommunityTag,
+} from "./community-tag.js";
+
+type RoomNameRow = CommunityColumns & { id: string; channel: string; server: string | null };
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
@@ -571,6 +579,18 @@ export interface AdminMetrics {
       transport: VoiceRoomTransport;
       /** ISO, or null when this process cannot say cheaply (see voice.ts). */
       openedAt: string | null;
+      /**
+       * Set when the room's server is a community (it has a public address),
+       * so the operator can tell a public room from a private server's.
+       * Null for an ordinary server and for a DM call.
+       */
+      community: CommunityTag | null;
+      /**
+       * The voice channel's id. Names are not unique, so the dashboard joins
+       * a watch party's audience (`liveHls.viewers.live`) to its stage room
+       * by this. An operator payload; no user id is ever in it.
+       */
+      channelId: string;
     }[];
   };
   /**
@@ -1425,10 +1445,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     async () => {
       const ids = voice.rooms.map((room) => room.voiceChannelId);
       if (ids.length === 0) {
-        return { rows: [] as { id: string; channel: string; server: string | null }[] };
+        return { rows: [] as RoomNameRow[] };
       }
-      return pool.query<{ id: string; channel: string; server: string | null }>(
-        `SELECT c.id::text AS id, c.name AS channel, s.name AS server
+      return pool.query<RoomNameRow>(
+        `SELECT c.id::text AS id, c.name AS channel, s.name AS server,
+                ${communityColumns("s")}
            FROM channels c
            LEFT JOIN servers s ON s.id = c.server_id
           WHERE c.id = ANY($1::uuid[])`,
@@ -1522,7 +1543,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
 
   const m = messages.rows[0];
   const roomNames = new Map(
-    voiceRoomNames.rows.map((row) => [row.id, { channel: row.channel, server: row.server }]),
+    voiceRoomNames.rows.map((row) => [
+      row.id,
+      { channel: row.channel, server: row.server, community: communityTag(row) },
+    ]),
   );
 
   return {
@@ -1581,6 +1605,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           sharingScreen: room.sharingScreen,
           transport: room.transport,
           openedAt: room.openedAt,
+          community: named?.community ?? null,
+          channelId: room.voiceChannelId,
         };
       }),
     },

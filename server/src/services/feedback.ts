@@ -111,6 +111,22 @@ export async function resolveFeedback(
   id: string,
   status: "confirmed" | "closed",
 ): Promise<FeedbackItem | null> {
+  const [item] = await resolveFeedbackMany([id], status);
+  return item ?? null;
+}
+
+/**
+ * The same flip for several items at once, in ONE transaction: the
+ * dashboard confirms a group of duplicate reports together, and a group must
+ * never end up half confirmed (some authors badged, the rest still open)
+ * because one of N separate writes failed. Ids that no longer exist are
+ * skipped; the answer lists the rows that changed.
+ */
+export async function resolveFeedbackMany(
+  ids: string[],
+  status: "confirmed" | "closed",
+): Promise<FeedbackItem[]> {
+  if (ids.length === 0) return [];
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -119,29 +135,39 @@ export async function resolveFeedback(
       `WITH changed AS (
          UPDATE feedback
             SET status = $2
-          WHERE id = $1::bigint
+          WHERE id = ANY($1::bigint[])
           RETURNING id, user_id, kind, body, status, created_at
        )
        SELECT c.id, c.user_id, u.username, c.kind, c.body, c.status, c.created_at
          FROM changed c
-         LEFT JOIN users u ON u.id = c.user_id`,
-      [id, status],
+         LEFT JOIN users u ON u.id = c.user_id
+        ORDER BY c.id`,
+      [ids, status],
     );
-    const row = updated.rows[0];
-    if (!row) {
+    if (updated.rows.length === 0) {
       await client.query("ROLLBACK");
-      return null;
+      return [];
     }
-    if (status === "confirmed" && row.kind === "bug" && row.user_id) {
+    const badged =
+      status === "confirmed"
+        ? [
+            ...new Set(
+              updated.rows
+                .filter((row) => row.kind === "bug" && row.user_id)
+                .map((row) => row.user_id as string),
+            ),
+          ]
+        : [];
+    if (badged.length > 0) {
       await client.query(
         `INSERT INTO user_badges (user_id, badge)
-         VALUES ($1, $2)
+         SELECT unnest($1::uuid[]), $2
          ON CONFLICT DO NOTHING`,
-        [row.user_id, CACA_BUGS_BADGE],
+        [badged, CACA_BUGS_BADGE],
       );
     }
     await client.query("COMMIT");
-    return toItem(row);
+    return updated.rows.map(toItem);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

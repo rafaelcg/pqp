@@ -144,6 +144,8 @@ interface MetricsBody {
       sharingScreen: number;
       transport: string;
       openedAt: string | null;
+      community: { slug: string | null; listed: boolean; suspended: boolean } | null;
+      channelId: string;
     }[];
   };
   topServers24h: {
@@ -585,10 +587,28 @@ describeDb("GET /api/admin/metrics", () => {
         participants: 2,
         sharingScreen: 1,
         transport: "livekit",
+        community: null,
+        channelId: voiceChannelId,
       });
       expect(Date.parse(room!.openedAt!)).not.toBeNaN();
+
+      // A community's room carries its public address, so the operator can
+      // tell a public lobby from a private server's call.
+      await pool.query(
+        `UPDATE servers SET is_community = TRUE, community_slug = 'clube-teste' WHERE name = 'Clube'`,
+      );
+      resetAdminMetricsCache();
+      const tagged = await call<MetricsBody>(operator, "/api/admin/metrics");
+      expect(tagged.body.voice.rooms.find((r) => r.channel === "voz")!.community).toEqual({
+        slug: "clube-teste",
+        listed: false,
+        suspended: false,
+      });
     } finally {
       delete process.env.VOICE_REGISTRY;
+      await pool.query(
+        `UPDATE servers SET is_community = FALSE, community_slug = NULL WHERE name = 'Clube'`,
+      );
       await pool.query(`DELETE FROM voice_rooms WHERE channel_id = $1`, [voiceChannelId]);
     }
   });

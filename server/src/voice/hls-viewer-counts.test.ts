@@ -251,8 +251,10 @@ describeDb("watch party viewer counts", () => {
     const live = await liveHlsViewerSessions();
     expect(live).toEqual([
       {
+        channelId,
         channel: "cinema",
         server: "Sala",
+        community: null,
         startedAt: STARTED_AT,
         liveViewers: 7,
         peakViewers: 7,
@@ -260,6 +262,14 @@ describeDb("watch party viewer counts", () => {
       },
     ]);
     expect(JSON.stringify(live)).not.toContain(userId(1));
+
+    // A community's broadcast says so, with its public address.
+    await getPool().query(
+      `UPDATE servers SET is_community = TRUE, is_community_listed = TRUE, community_slug = 'sala'
+        WHERE name = 'Sala'`,
+    );
+    const tagged = await liveHlsViewerSessions();
+    expect(tagged[0]!.community).toEqual({ slug: "sala", listed: true, suspended: false });
   });
 
   it("shows no count for a broadcast nobody was counted on", async () => {

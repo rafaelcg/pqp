@@ -749,6 +749,66 @@ name going forward. See the comment on `server_members.join_source` in
 `server/src/schema.sql` for the full list of doors and which service writes
 each one.
 
+## The redesigned view (`/novo`)
+
+A second page, `site/novo.html`, served at `/novo` behind the same password.
+The classic page at `/` is unchanged and stays while both exist.
+
+### Switching between them
+
+1. The classic header has a **visão nova** link. The new header has
+   **visão clássica**.
+2. Each browser remembers its last choice in `localStorage`
+   (`pqp-admin-view`). With "novo" saved, `/` redirects to `/novo` and keeps
+   the section (`#tempo` opens `#crescimento`).
+3. `/?classico=1` always opens the classic page and saves "classico".
+
+### Five screens
+
+| Screen | Leads with | Details layer (closed rows) |
+|---|---|---|
+| **Hoje** | a sentence with the conclusion, five numbers with trend lines, "precisa de você", "nas últimas leituras", call peaks for 30 days, busy hours by weekday | the three verdicts, open rooms, service health, voice today, SFU and regions, idle seats |
+| **Crescimento** | actives (DAU, WAU, MAU) with a 30/90/180-day chart, the activation funnel, cohort retention, sources with the share that stays | the base, the last 24 hours by hour, signups by day, campaigns, landing pages, 7-day returning |
+| **Produto** | call rating and its distribution, low-rating notes, profile completeness rings, top text channels | top servers, communities, game accounts, instance shape, apps and product, calls and rings, Discord imports |
+| **Fila** | the feedback inbox: list on the left, the whole item with author and context on the right, confirm and close | report counts, with a link to the full report queue in the app |
+| **Sistema** | services with 24-hour latency lines and uptime, capacity (pool, WebSockets, SFU), the feature switches | infra, who changed which switch, watch party transmission, and a link to the per-server controls |
+
+### What is real
+
+Every number comes from the same endpoints as the classic page. Nothing is
+illustrative.
+
+- **Trend lines** are drawn only from real series: `messages.byHour`,
+  `users.byHour`, the daily occupancy peaks, `userDetail.signupsByDay` and
+  the `/activity` series. A card with no series has no line.
+- **"Nas últimas leituras"** is the difference between two consecutive
+  `/metrics` reads: new accounts, servers, rooms that opened, feedback,
+  reports and call ratings. There is no event stream behind it.
+- **The busy-hours heatmap** averages the minute samples of the last 21 days
+  (`/occupancy?day=`, three requests at a time, once per session, only when
+  Hoje opens).
+- **Before actives are tracked**, the actives cards show who wrote, and say
+  when actives start.
+- **Writes**: confirm or close a feedback item, and turn a feature switch on
+  or off globally. Per-server watch party, low latency, the waitlist and
+  channel pins stay on the classic page for now, and the new page links there.
+
+### Motion
+
+The motion is CSS, SVG `stroke-dashoffset` and `requestAnimationFrame`, with
+no library. The entrance plays once per screen per session. After it, a 30 s
+poll updates text in place: a number that changed tweens and flashes once,
+and nothing replays. Charts draw at their container's real width and redraw
+on resize. `prefers-reduced-motion` turns all of it off.
+
+### Code
+
+- `site/novo-model.js`: payloads to view models, pure, tested in
+  `test/novo-model.test.js`.
+- `site/novo.js`: fetching, routing and drawing.
+- `site/novo.css`: tokens (the classic palette, dark and light) and motion.
+- The verdicts come from `site/insights.js`, shared with the classic page.
+
 ## Why it is behind a password
 
 The repo is open source and a `workers.dev` hostname is guessable. The page is

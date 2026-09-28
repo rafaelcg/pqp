@@ -1150,6 +1150,23 @@
     * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 </style>
+<script>
+  /* Which view this browser last chose. The redesigned one lives at /novo;
+     "/" stays this page. Opening /novo remembers "novo", and "visão
+     clássica" there links here with ?classico=1, which remembers "classico".
+     Storage can be blocked (private windows): then nothing redirects. */
+  (function () {
+    try {
+      var q = location.search;
+      if (/[?&]classico=1/.test(q)) { if (!/[?&]visita=1/.test(q)) localStorage.setItem("pqp-admin-view", "classico"); return; }
+      if (localStorage.getItem("pqp-admin-view") === "novo") {
+        var map = { agora: "hoje", tempo: "crescimento", pessoas: "produto", moderacao: "fila", controles: "sistema", infra: "sistema" };
+        var h = location.hash.slice(1);
+        location.replace("/novo" + (map[h] ? "#" + map[h] : ""));
+      }
+    } catch (e) { /* storage blocked: stay on the classic view */ }
+  })();
+</script>
 </head>
 <body>
 <div class="app">
@@ -1190,6 +1207,7 @@
         <span class="dot"></span> aguardando a api
       </span>
       <button type="button" class="refresh-btn" id="refreshBtn" title="reler /metrics e /health agora">atualizar</button>
+      <a class="refresh-btn" id="toNovo" href="/novo" style="text-decoration:none">visão nova</a>
       <div class="updated">
         <b id="updatedAt">carregando</b>
         <span id="refreshEvery">atualiza a cada 30 s · fuso são paulo (brt)</span>
@@ -2691,7 +2709,9 @@
    */
   function barChart(values, opts) {
     opts = opts || {};
-    var W = 720, H = 210, padL = 34, padR = 10, padT = 22, padB = 24;
+    // Drawn at the container's real width when the caller passes it, so text
+    // is its real size instead of a 720-wide drawing stretched to fit.
+    var W = Math.max(300, Math.round(opts.width || 720)), H = 210, padL = 34, padR = 10, padT = 22, padB = 24;
     var n = values.length;
     var max = 0;
     for (var i = 0; i < n; i++) max = Math.max(max, values[i] || 0);
@@ -2790,7 +2810,7 @@
    */
   function seriesChart(series, opts) {
     opts = opts || {};
-    var W = 720, H = 240, padL = 34, padR = 10, padT = 22, padB = 26;
+    var W = Math.max(300, Math.round(opts.width || 720)), H = 240, padL = 34, padR = 10, padT = 22, padB = 26;
     var lines = opts.mode === "lines";
     var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
     svg.setAttribute("aria-label", opts.label || "gráfico de séries");
@@ -3166,11 +3186,13 @@
   }
 
   /* ---------------- render: charts ---------------- */
+  var lastHourly = null;
   function renderCharts(usersHourly, messagesHourly) {
+    lastHourly = [usersHourly, messagesHourly];
     var cu = $("chartUsers"), cm = $("chartMsgs");
     cu.innerHTML = ""; cm.innerHTML = "";
-    cu.appendChild(barChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas" }));
-    cm.appendChild(barChart(messagesHourly, { label: "mensagens por hora nas últimas 24 horas" }));
+    cu.appendChild(barChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas", width: cu.clientWidth }));
+    cm.appendChild(barChart(messagesHourly, { label: "mensagens por hora nas últimas 24 horas", width: cm.clientWidth }));
     setText("usersSum", fmt(sum(usersHourly)));
     setText("msgsSum", fmt(sum(messagesHourly)));
   }
@@ -4219,6 +4241,7 @@
     if (!box) return;
     box.innerHTML = "";
     box.appendChild(seriesChart(occSeries(points), {
+      width: box.clientWidth,
       mode: "bars",
       label: "pico diário de pessoas em chamada, por caminho de mídia",
       caption: "pico de " + fmt(peak) + " · picos por dia, fuso são paulo",
@@ -4268,6 +4291,7 @@
     if (!box) return;
     box.innerHTML = "";
     box.appendChild(seriesChart(occSeries(points), {
+      width: box.clientWidth,
       mode: "lines",
       label: "pessoas em chamada minuto a minuto em " + fmtDayNamed(day),
       caption: "pico de " + fmt(peak) + " · amostras de um minuto, fuso são paulo",
@@ -4378,6 +4402,21 @@
     occTick(false);
   }
 
+  /* The charts draw at their card's width (see `seriesChart`), so a window
+     resize redraws them from the last payload instead of leaving a drawing
+     sized for the old width until the next poll. */
+  (function wireChartResize() {
+    var t = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(t);
+      t = setTimeout(function () {
+        if (lastHourly) renderCharts(lastHourly[0], lastHourly[1]);
+        if (occ.report && occ.mode === "days") occRenderDays(occ.report);
+        if (act.report) actRender(act.report);
+      }, 150);
+    });
+  })();
+
   (function wireOccupancy() {
     var sel = $("occDay");
     if (sel) {
@@ -4482,8 +4521,11 @@
       setText("actCostNote", fmtUsd(cost) + "/mês · sem ativos rastreados ainda");
     }
 
+    var trackedYet = days.some(function (d) { return d.dau != null; });
     setText("actChartTitle", "ativos por dia · " + fmt(days.length) + " dias" +
-      (since ? " · rastreio desde " + fmtDayNamed(since) : " · rastreio ainda não começou"));
+      (!since ? " · rastreio ainda não começou"
+        : trackedYet ? " · rastreio desde " + fmtDayNamed(since)
+        : " · os ativos começam a contar em " + fmtDayNamed(since)));
     var box = $("actChart");
     if (box) {
       box.innerHTML = "";
@@ -4500,6 +4542,7 @@
         };
       }), {
         mode: "lines",
+        width: box.clientWidth,
         label: "pessoas ativas por dia e em 30 dias",
         caption: "linha cheia: abriram o app · tracejada: escreveram · o último dia está em curso",
         ticks: ticks,
@@ -4513,10 +4556,12 @@
     }
     var legend = $("actLegend");
     if (legend) {
-      legend.innerHTML = ACT_SERIES.map(function (s) {
+      // Only the lines that are drawn. Before the first full tracked day the
+      // "ativos" lines do not exist yet, and the legend says when they start.
+      legend.innerHTML = ACT_SERIES.filter(function (s) { return trackedYet || s.dashed; }).map(function (s) {
         return '<span><i class="swatch" style="background:' + s.color + (s.dashed ? ";opacity:0.5" : "") +
           '"></i>' + esc(s.label) + "</span>";
-      }).join("");
+      }).join("") + (trackedYet || !since ? "" : '<span style="color:var(--faint)">ativos: a partir de ' + esc(fmtDayNamed(since)) + "</span>");
     }
 
     var br = r.brackets || {};
