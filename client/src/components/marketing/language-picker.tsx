@@ -1,5 +1,5 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, Globe } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { SUPPORTED_LOCALES, setLocalePreference, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
@@ -20,15 +20,11 @@ import { cn } from "@/lib/utils";
  * plus the three `?lang=` alternates — so choosing a language here creates no
  * new indexable URL and does not touch SEO at all.
  *
- * FLAGS: Portuguese gets Brazil's, because `pt-BR` genuinely is one country's
- * catalogue and that flag is unambiguous. English and Spanish do not get a
- * flag. Both catalogues are deliberately regionless — `docs/I18N.md` writes
- * Spanish for "Mexico, Colombia, Argentina, Chile and US Latinos" as one
- * text, and English serves every English-speaking country the same copy — so
- * a Union Jack, a Stars and Stripes, or any single Spanish-speaking country's
- * flag would claim an ownership the product does not have and could read as
- * a small insult to everyone it left out. A globe glyph says "this language,
- * no particular country" without guessing wrong.
+ * FLAGS: one per language, owner's call (2026-09-28): Brazil for Portuguese,
+ * the United Kingdom for English, Spain for Spanish. Drawn as inline SVG
+ * because emoji flags render as bare letters on Windows, and simplified for a
+ * 20px chip (no Spanish coat of arms, no counterchange on the Union Jack's red
+ * diagonals), which is how flags read at that size anyway.
  */
 
 const LOCALE_LABEL_KEY: Record<Locale, MessageKey> = {
@@ -55,7 +51,6 @@ function FlagChip({
       aria-hidden
       className={cn(
         "inline-flex h-3.5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-[3px] border border-ink-4/70",
-        locale !== "pt-BR" && "bg-ink-3 text-paper-muted",
         className,
       )}
     >
@@ -82,8 +77,24 @@ function FlagChip({
             <circle cx="10.4" cy="8.7" r="0.24" />
           </g>
         </svg>
+      ) : locale === "en" ? (
+        <svg
+          viewBox="0 0 60 30"
+          preserveAspectRatio="xMidYMid slice"
+          className="h-full w-full"
+          role="presentation"
+        >
+          <rect width="60" height="30" className="fill-flag-uk-blue" />
+          <path d="M0,0 L60,30 M60,0 L0,30" className="stroke-flag-uk-white" strokeWidth="6" />
+          <path d="M0,0 L60,30 M60,0 L0,30" className="stroke-flag-uk-red" strokeWidth="2.5" />
+          <path d="M30,0 V30 M0,15 H60" className="stroke-flag-uk-white" strokeWidth="10" />
+          <path d="M30,0 V30 M0,15 H60" className="stroke-flag-uk-red" strokeWidth="6" />
+        </svg>
       ) : (
-        <Globe className="h-2.5 w-2.5" strokeWidth={2} />
+        <svg viewBox="0 0 20 14" className="h-full w-full" role="presentation">
+          <rect width="20" height="14" className="fill-flag-es-red" />
+          <rect y="3.5" width="20" height="7" className="fill-flag-es-yellow" />
+        </svg>
       )}
     </span>
   );

@@ -120,7 +120,7 @@
   --color-connection-github: #181717;
 
   /*
-   * Brazil's flag, drawn for the public-site language picker
+   * The language picker's flags (Brazil, UK, Spain), drawn for the public-site language picker
    * (`components/marketing/language-picker.tsx`). Same rule as the
    * connection marks just above: an identifier, not pqp chrome, so it does
    * not retint with the theme.
@@ -129,6 +129,11 @@
   --color-flag-br-yellow: #fedd00;
   --color-flag-br-blue: #08328c;
   --color-flag-br-white: #ffffff;
+  --color-flag-uk-blue: #012169;
+  --color-flag-uk-red: #c8102e;
+  --color-flag-uk-white: #ffffff;
+  --color-flag-es-red: #aa151b;
+  --color-flag-es-yellow: #f1bf00;
 
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   /*
