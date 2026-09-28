@@ -381,6 +381,11 @@ function UserProfileCard({
   const [pendingConfirm, setPendingConfirm] = useState<"remove" | "block" | null>(
     null,
   );
+  /** The same fact, readable from the tap-away listener. */
+  const pendingConfirmRef = useRef(false);
+  useEffect(() => {
+    pendingConfirmRef.current = pendingConfirm !== null;
+  }, [pendingConfirm]);
   const [confirming, setConfirming] = useState<ProfilePrimaryAction | null>(
     null,
   );
@@ -543,6 +548,14 @@ function UserProfileCard({
       // click probably meant "dismiss", but the cost of being wrong is a
       // paragraph somebody typed about a friend. Cancel and Escape still work.
       if (writingRef.current) {
+        return;
+      }
+      // The remove and block confirms are portalled to the body, so every
+      // press on them lands "outside" the card. Closing here unmounted the
+      // confirm between mousedown and click, and a mouse or a tap on
+      // "Bloquear" did nothing. While a confirm is up it owns the pointer:
+      // its own buttons, X and Escape decide.
+      if (pendingConfirmRef.current) {
         return;
       }
       onClose();
