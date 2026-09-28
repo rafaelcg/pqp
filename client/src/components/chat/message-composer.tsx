@@ -743,9 +743,20 @@ export function MessageComposer({
   // Picking a reply from the message list should leave the user typing, not
   // hunting for the box they are meant to type in.
   useEffect(() => {
-    if (replyTarget) {
-      inputRef.current?.focus();
+    if (!replyTarget) {
+      return;
     }
+    inputRef.current?.focus();
+    // "Responder" in the message's context menu runs while the menu's focus
+    // trap is still up, which pulls this focus straight back; the menu is
+    // gone by the next frame, so ask again then.
+    const frame = requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (input && document.activeElement !== input) {
+        input.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [replyTarget]);
 
   useEffect(() => {
