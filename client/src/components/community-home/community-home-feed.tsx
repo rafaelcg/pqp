@@ -895,7 +895,7 @@ export function PostCard({
 
       <div className={cn("p-5", showStaffMenu && "pr-12")}>
         {post.title && (
-          <h2 className="font-display text-2xl font-bold leading-snug tracking-tight text-text">
+          <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
             {post.title}
           </h2>
         )}
@@ -941,7 +941,7 @@ export function PostCard({
         {locked ? (
           <>
             {summary && summary !== post.title?.trim() && (
-              <p className="mt-3 text-sm leading-relaxed text-text">
+              <p className="mt-3 break-words text-sm leading-relaxed text-text">
                 {summary}
               </p>
             )}
