@@ -590,3 +590,45 @@ export function placeCard(
   );
   return { left, top };
 }
+
+/** Space between the Mais tile and its menu. */
+export const MENU_GAP = 4;
+
+export interface MenuPlacement {
+  left: number;
+  top: number;
+  /** The most the menu may grow on the side it opened; it scrolls past this. */
+  maxHeight: number;
+}
+
+/**
+ * Where the card's Mais menu opens, in window coordinates.
+ *
+ * The menu is `position: fixed` because the card scrolls, and a scroller clips
+ * an absolutely positioned child whichever way it opens: upward lost Block,
+ * downward lost Report under the card's bottom edge. The window is the only
+ * box that matters, so this places against the window.
+ *
+ * Below the tile when it fits, above when that fits instead, otherwise on the
+ * roomier side with a height cap so the menu scrolls rather than leaves the
+ * window. Right edges line up with the tile, clamped inside the window.
+ */
+export function placeMenu(
+  trigger: Rect,
+  menu: { width: number; height: number },
+  viewport: { width: number; height: number },
+): MenuPlacement {
+  const below = viewport.height - CARD_GAP - (trigger.bottom + MENU_GAP);
+  const above = trigger.top - MENU_GAP - CARD_GAP;
+  const openDown = menu.height <= below || (menu.height > above && below >= above);
+  const maxHeight = Math.max(0, openDown ? below : above);
+  const height = Math.min(menu.height, maxHeight);
+  const top = openDown
+    ? trigger.bottom + MENU_GAP
+    : trigger.top - MENU_GAP - height;
+  const left = Math.max(
+    CARD_GAP,
+    Math.min(trigger.right - menu.width, viewport.width - CARD_GAP - menu.width),
+  );
+  return { left, top, maxHeight };
+}
