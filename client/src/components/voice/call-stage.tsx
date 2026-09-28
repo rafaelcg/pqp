@@ -40,6 +40,7 @@ import {
   type ReactElement,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
   type RefObject,
   type SyntheticEvent,
 } from "react";
@@ -1542,9 +1543,35 @@ function ActiveCall({
     })()
   ) : null;
 
+  // How far the stage's control row stands above its one-line height: zero
+  // until a narrow stage folds the pill onto a second line (see the pill in
+  // `CallControls`). The strip's reserve for the bar grows by this much,
+  // because the strip is stacked above the bar and would otherwise cover the
+  // pill's top line, which is where mute and raise hand go.
+  const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
+  const controlRowRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      const rem =
+        Number.parseFloat(getComputedStyle(document.documentElement).fontSize) ||
+        16;
+      setControlRowExtraPx(
+        Math.max(0, Math.round(node.offsetHeight - STAGE_CONTROL_ROW_REM * rem)),
+      );
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      setControlRowExtraPx(0);
+    };
+  }, []);
+
   const controls = (
     <CallControls
       voiceState={voiceState}
+      rowRef={controlRowRef}
       collapsed={collapsed || dockComposer}
       leading={collapsedLeading}
       canExpand={hasVideo}
@@ -1966,10 +1993,15 @@ function ActiveCall({
           />
           {/* The bar's own territory. The strip stops here so the hang-up
               button is never under a chip, and the chips are never under the
-              bar's box. Grows with the home indicator, like the bar does. */}
+              bar's box. Grows with the home indicator, like the bar does, and
+              with every line the control row folds onto past its first. */}
           <div
             aria-hidden="true"
-            className="h-[max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))] shrink-0"
+            data-testid="call-stage-bar-reserve"
+            className="h-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] shrink-0"
+            style={
+              { "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties
+            }
           />
           </>
         )}
@@ -2246,7 +2278,11 @@ function ActiveCall({
           watchPartyChrome
             ? "pointer-events-none [&>*]:pointer-events-auto"
             : "bg-gradient-to-t from-ink/80 to-transparent",
-          "absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
+          // `@container`: the controls fold on the STAGE's width, which on a
+          // phone is the screen minus the server rail and on a tablet or a
+          // narrow desktop pane is less than the window says. See the pill
+          // in `CallControls`.
+          "@container absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
           chromeClass,
         )}
         onPointerEnter={(event) => {
@@ -2404,6 +2440,12 @@ function renderCallHints(
 }
 
 /**
+ * One line of the stage's control row: a 2.5rem tile inside the pill's 0.375rem
+ * padding, top and bottom. What the row measures past this is extra lines.
+ */
+const STAGE_CONTROL_ROW_REM = 3.25;
+
+/**
  * The control bar under the stage. Exported for the unit test that pins the
  * audience rule below; `CallStage` is the only runtime caller.
  */
@@ -2439,9 +2481,15 @@ export function CallControls({
   canLowerHands = false,
   onLowerHand,
   leading = null,
+  rowRef,
 }: {
   voiceState: VoiceState;
   collapsed: boolean;
+  /**
+   * Expanded only: the row of tiles, so the stage can see it fold onto a
+   * second line on a narrow screen and keep the strip clear of it.
+   */
+  rowRef?: Ref<HTMLDivElement>;
   /**
    * Collapsed only: the people cell (faces, names, hands, music) that the
    * bar lays out ahead of its controls. Owned by the row so the hold-to-talk
@@ -2546,6 +2594,10 @@ export function CallControls({
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-9 w-9" : "h-10 w-10";
   const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
+  // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
+  // wrapping row one by one. The bell's group keeps its own rule (hidden
+  // below `sm`), which a `contents` here would override.
+  const stageGroup = collapsed ? undefined : "@max-[40rem]:contents";
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from
@@ -2663,6 +2715,7 @@ export function CallControls({
           The pill is capped at 22rem so a 1440px window does not turn it
           into a slab; what it leaves goes to the people. */}
       <div
+        ref={collapsed ? undefined : rowRef}
         className={cn(
           "flex items-center gap-2",
           collapsed
@@ -2719,13 +2772,25 @@ export function CallControls({
         ~238px wide and six 36px tiles fill it to the pixel (mute, hand,
         camera, share, music, leave; cursor, watch party and bell hide
         under 22rem). Anything the width budget did not foresee goes to a
-        second line, where it can still be pressed, instead of off the edge. */}
+        second line, where it can still be pressed, instead of off the edge.
+
+        The stage's pill wraps too. It used to be one unbreakable row of
+        ~33rem centred in a stage that is ~20rem on a 390 phone, and the
+        stage clips, so mute and raise hand sat under the server rail and
+        hang-up past the right edge of the screen. Under 40rem of bar (the
+        whole desktop set with the bell and the hairlines, and some to
+        spare) the clusters dissolve into the pill (`contents` on each
+        `CallControlGroup`), so the tiles fold one at a time rather than a
+        cluster at a time, at the clusters' own 4px gap. The radius is half
+        the one-row height, not `rounded-full`: identical on one row, and a
+        rounded box rather than a stadium that the corner tiles poke out of
+        on two. */}
     <div
       className={cn(
         "flex items-center gap-1",
         collapsed
           ? "w-full flex-wrap justify-end @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
-          : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
+          : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
@@ -2801,7 +2866,7 @@ export function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      <CallControlGroup>
+      <CallControlGroup className={stageGroup}>
       {/* Raising a hand is the one control here that a listen-only seat needs
           MORE than anyone else, so it is never hidden by `listenOnly` and
           never disabled: lowering your own hand has to work whatever else the
@@ -2832,7 +2897,7 @@ export function CallControls({
         container={collapsed}
         className={collapsed ? "my-1" : "my-1.5"}
       />
-      <CallControlGroup>
+      <CallControlGroup className={stageGroup}>
       {!noVideo && (
       <Tooltip
         label={
