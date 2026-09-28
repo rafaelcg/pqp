@@ -19,6 +19,13 @@ let sources = [];
 let selectedId = null;
 /** Guards against a second answer after the window starts closing. */
 let answered = false;
+/**
+ * `"hidden"` (mac/Linux, no sound to talk about), `"checkbox"` (Windows 11,
+ * a real choice) or `"explain"` (Windows 10, where the checkbox would be a
+ * lie). Set once per `render()`, from `pickerAudioState` in main.
+ * @type {"hidden"|"checkbox"|"explain"}
+ */
+let audioState = "hidden";
 
 const el = {
   title: document.getElementById("title"),
@@ -131,9 +138,52 @@ function moveSelection(step) {
   }
 }
 
+/**
+ * Fills in the audio row for the state `render()` was handed.
+ *
+ * Three shapes, not a hidden/shown toggle: see the `audioState` doc comment
+ * up top for why a hidden row on Windows 10 was the bug, not a simplification.
+ */
+function renderAudioRow(strings) {
+  el.shareAudio.checked = false;
+
+  if (audioState === "hidden") {
+    el.audioRow.hidden = true;
+    el.shareAudio.hidden = true;
+    el.shareAudio.disabled = true;
+    return;
+  }
+
+  el.audioRow.hidden = false;
+
+  if (audioState === "explain") {
+    // No real choice to offer: ticking this on Windows 10 could not exclude
+    // the call anyway (Chromium only honours the exclude on Windows 11), so
+    // there is no checkbox here, only the one line saying what to do instead.
+    el.shareAudio.hidden = true;
+    el.shareAudio.disabled = true;
+    el.audioLabel.textContent = strings.shareAudioWin10;
+    el.audioHint.textContent = strings.shareAudioWin10Hint;
+    return;
+  }
+
+  // "checkbox": Windows 11, a real choice. Starts unticked on purpose: a true
+  // `audioRequested` downstream (`captureResponse` in `display-sources.js`)
+  // is a statement that a human ticked something, and defaulting it on would
+  // make that statement for them.
+  el.shareAudio.hidden = false;
+  el.shareAudio.disabled = false;
+  el.audioLabel.textContent = strings.shareAudio;
+  el.audioHint.textContent = strings.shareAudioHint;
+}
+
 function render(payload) {
   const strings = payload.strings;
   sources = payload.sources;
+  audioState =
+    payload.audioState === "checkbox" || payload.audioState === "explain"
+      ? payload.audioState
+      : "hidden";
 
   document.documentElement.setAttribute("data-theme", payload.dark ? "dark" : "light");
   document.title = strings.title;
@@ -144,10 +194,7 @@ function render(payload) {
   el.cancel.textContent = strings.cancel;
   el.confirm.textContent = strings.confirm;
   el.empty.textContent = strings.empty;
-  el.audioLabel.textContent = strings.shareAudio;
-  el.audioHint.textContent = strings.shareAudioHint;
-  el.audioRow.hidden = payload.offersAudio !== true;
-  el.shareAudio.checked = false;
+  renderAudioRow(strings);
 
   const screens = sources.filter((s) => s.kind === "screen");
   const windows = sources.filter((s) => s.kind === "window");

@@ -32,6 +32,40 @@ function windowsBuildAllowsOwnAudioExclude(release) {
   return windowsNtBuild(release) >= WINDOWS_11_NT_BUILD;
 }
 
+/**
+ * What the picker's audio row should show, before any surface is picked.
+ *
+ * THE BUG THIS EXISTS FOR (27 Sep 2026, `cap1tao`, Windows desktop app):
+ * the row used to be `hidden` outright on Windows 10, because
+ * `windowsLoopbackAllowed()` answered a plain boolean and the picker read it
+ * as "show the checkbox or show nothing". A Windows 10 user saw a share
+ * dialog with no mention of sound at all and had no way to learn that the
+ * share genuinely has none to give and why, so they shared blind and then
+ * asked in chat why nobody could hear the game.
+ *
+ * Three states, not two:
+ *
+ * - `"hidden"`: not Windows. There is no Windows loopback tap on macOS or
+ *   Linux, and this row exists to talk about that one tap; a "sound is not
+ *   available here" line under a picker that never offered sound anywhere is
+ *   noise, not an explanation.
+ * - `"checkbox"`: Windows 11 (NT build >= 22000). Chromium can exclude this
+ *   app's own output from the mixer tap, so the checkbox is a real choice.
+ * - `"explain"`: Windows 10 or older. The checkbox would be a lie: ticking it
+ *   cannot exclude the call (Chromium only honours the exclude on Windows
+ *   11), and offering it anyway is how the call ends up back in its own
+ *   share. The picker shows one line saying so, and the one place that
+ *   Windows 10 sound is real: a Chrome tab.
+ */
+function pickerAudioState(platform, windowsRelease) {
+  if (platform !== "win32") {
+    return "hidden";
+  }
+  return windowsBuildAllowsOwnAudioExclude(windowsRelease)
+    ? "checkbox"
+    : "explain";
+}
+
 /** Thumbnail size asked of `desktopCapturer`. */
 const THUMBNAIL_SIZE = { width: 320, height: 200 };
 
@@ -270,6 +304,7 @@ module.exports = {
   WINDOWS_11_NT_BUILD,
   windowsNtBuild,
   windowsBuildAllowsOwnAudioExclude,
+  pickerAudioState,
   kindOf,
   toDataUrl,
   normalizeSources,

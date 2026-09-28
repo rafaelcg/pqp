@@ -27,6 +27,8 @@
   "share.confirm": "Share",
   "share.audio": "Share this computer's audio",
   "share.audioHint": "Games, music, whatever is playing. Windows 11 only. The call itself stays out.",
+  "share.audioWin10Unavailable": "Computer sound isn't available on Windows 10 (the call would leak into the share).",
+  "share.audioWin10UnavailableHint": "To send sound: open pqp in Chrome and share a tab with \"Also share tab audio\".",
   "share.empty": "Nothing to share on this computer.",
   "share.permissionTitle": "pqp cannot see your screen",
   "share.permissionBody": "macOS has not given pqp permission to record the screen, so there is nothing for it to offer you. Turn pqp on under Privacy & Security > Screen & System Audio Recording, quit pqp, open it again, and share once more.",

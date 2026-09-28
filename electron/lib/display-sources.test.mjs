@@ -13,6 +13,7 @@ const {
   captureResponse,
   windowsNtBuild,
   windowsBuildAllowsOwnAudioExclude,
+  pickerAudioState,
 } = require("./display-sources.js");
 
 /** A `NativeImage` as far as this module is concerned. */
@@ -298,6 +299,27 @@ describe("windowsNtBuild", () => {
     assert.equal(windowsBuildAllowsOwnAudioExclude("10.0.22631"), true);
     assert.equal(windowsBuildAllowsOwnAudioExclude(""), false);
     assert.equal(windowsBuildAllowsOwnAudioExclude(undefined), false);
+  });
+});
+
+describe("pickerAudioState", () => {
+  it("hides the row on macOS and Linux: no loopback tap to talk about", () => {
+    assert.equal(pickerAudioState("darwin", "10.0.22631"), "hidden");
+    assert.equal(pickerAudioState("linux", "10.0.22631"), "hidden");
+  });
+
+  it("offers a real checkbox on Windows 11", () => {
+    assert.equal(pickerAudioState("win32", "10.0.22000"), "checkbox");
+    assert.equal(pickerAudioState("win32", "10.0.22631"), "checkbox");
+  });
+
+  it("explains instead of offering a checkbox that would lie on Windows 10", () => {
+    // The live case this exists for: cap1tao, 27 Sep 2026, Windows desktop
+    // app, a picker with no sound row at all.
+    assert.equal(pickerAudioState("win32", "10.0.19045"), "explain");
+    assert.equal(pickerAudioState("win32", "10.0.20348"), "explain");
+    assert.equal(pickerAudioState("win32", ""), "explain");
+    assert.equal(pickerAudioState("win32", undefined), "explain");
   });
 });
 
