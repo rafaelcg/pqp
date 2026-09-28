@@ -1010,8 +1010,10 @@
       if (seq !== fb.seq) return;
       fb.loading = false; fb.loaded = true; fb.error = null;
       // A write the server had finished before this read started is in
-      // these rows; one still in flight, or finished after, is not yet.
-      Object.keys(S.written).forEach(function (id) { var w = S.written[id]; if (w.doneAt && w.doneAt <= startedAt) delete S.written[id]; });
+      // these rows; one still in flight, or finished after, is not yet. Only
+      // a fresh read replaces rows: "carregar mais" appends a page and leaves
+      // the earlier rows as they were, so it must not clear anything.
+      if (!append) Object.keys(S.written).forEach(function (id) { var w = S.written[id]; if (w.doneAt && w.doneAt <= startedAt) delete S.written[id]; });
       fb.items = append ? fb.items.concat(r.items) : r.items;
       fb.next = r.next; fb.counts = r.counts;
       if (!fb.items.some(function (x) { return x.id === fb.sel; })) fb.sel = fb.items.length ? fb.items[0].id : null;
@@ -1194,8 +1196,13 @@
   S.pending = [];
   S.written = {};
   function isPending(id) { return S.pending.some(function (p) { return p.ids.indexOf(id) >= 0; }); }
+  // What `PUT /api/admin/feedback/resolve` takes in one transaction. A
+  // larger group (it would take 20 pages of "carregar mais") is resolved 500
+  // at a time by the operator, each write atomic, and the rest stays listed.
+  var MAX_GROUP_WRITE = 500;
   function resolve(it, ids, status, viaKeyboard) {
     var fb = S.fb;
+    ids = ids.slice(0, MAX_GROUP_WRITE);
     var label = "#" + it.id + (ids.length > 1 ? " e mais " + (ids.length - 1) : "");
     var entry = { ids: ids, status: status, label: label, itemId: it.id, deadline: Date.now() + UNDO_MS };
     entry.timer = setTimeout(function () { writePending(entry, false); }, UNDO_MS);
@@ -1225,16 +1232,12 @@
     var done = function (ok) {
       entry.ids.forEach(function (id) { if (!ok) delete S.written[id]; else if (S.written[id]) S.written[id].doneAt = Date.now(); });
     };
-    // The API takes up to 500 ids per write, applied in one transaction.
-    var chunks = [];
-    for (var c = 0; c < entry.ids.length; c += 500) chunks.push(entry.ids.slice(c, c + 500));
-    chunks.reduce(function (prev, part) {
-      return prev.then(function () {
-        var body = part.length === 1 ? { id: String(part[0]), status: entry.status } : { ids: part.map(String), status: entry.status };
-        return fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-          .then(function (r) { if (!r.ok) throw new Error("http " + r.status); });
-      });
-    }, Promise.resolve())
+    // One request, which the API applies in one transaction: a group is
+    // resolved whole or not at all. `resolve` never hands this more ids than
+    // the API accepts (MAX_GROUP_WRITE).
+    var body = entry.ids.length === 1 ? { id: String(entry.ids[0]), status: entry.status } : { ids: entry.ids.map(String), status: entry.status };
+    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); })
       .then(function () { done(true); if (!keepalive && !S.pending.length) loadFeedback(false); })
       .catch(function (e) {
         done(false);
