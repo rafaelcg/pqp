@@ -280,3 +280,8 @@ test("a watch party's stage is joined by channel id, so two cinemas never merge"
   const rows = M.liveNow(m).rows;
   assert.deepEqual(rows.map((r) => [r.inCall, r.audience]), [[3, 40], [2, 30]]);
 });
+
+test("a room that loses its open time in a registry blip is not announced as new", () => {
+  const room = (openedAt) => metrics({ voice: { rooms: [{ channelId: "c1", server: "Clube", channel: "voz", participants: 4, openedAt }] } });
+  assert.deepEqual(M.feedDiff(room("2026-09-27T10:00:00Z"), room(null), "t"), []);
+});

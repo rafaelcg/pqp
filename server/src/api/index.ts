@@ -9494,10 +9494,11 @@ const feedbackIdSchema = z.string().regex(/^[0-9]{1,18}$/);
 const operatorResolveFeedbackSchema = resolveFeedbackSchema
   .extend({
     id: feedbackIdSchema.optional(),
-    ids: z.array(feedbackIdSchema).min(1).max(50).optional(),
+    // Large enough for any group the dashboard can show; one statement.
+    ids: z.array(feedbackIdSchema).min(1).max(500).optional(),
   })
   .refine((body) => (body.id === undefined) !== (body.ids === undefined), {
-    message: "Send id or ids, not both",
+    message: "Send exactly one of id or ids",
   });
 
 /**

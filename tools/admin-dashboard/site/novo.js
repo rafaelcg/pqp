@@ -1005,9 +1005,13 @@
     var seq = ++fb.seq;
     var q = "status=" + fb.status + "&limit=25" + (fb.kind ? "&kind=" + fb.kind : "") + (append && fb.next ? "&before=" + fb.next : "");
     fb.loading = true;
+    var startedAt = Date.now();
     return fetchJson("/operator/feedback?" + q).then(function (r) {
       if (seq !== fb.seq) return;
       fb.loading = false; fb.loaded = true; fb.error = null;
+      // A write the server had finished before this read started is in
+      // these rows; one still in flight, or finished after, is not yet.
+      Object.keys(S.written).forEach(function (id) { var w = S.written[id]; if (w.doneAt && w.doneAt <= startedAt) delete S.written[id]; });
       fb.items = append ? fb.items.concat(r.items) : r.items;
       fb.next = r.next; fb.counts = r.counts;
       if (!fb.items.some(function (x) { return x.id === fb.sel; })) fb.sel = fb.items.length ? fb.items[0].id : null;
@@ -1049,7 +1053,14 @@
     });
     var list = clear($("fItems"));
     var anim = firstTime("fila-items");
-    var visible = fb.items.filter(function (it) { return !isPending(it.id); });
+    // Pending items are hidden; written ones take their new status (and so
+    // leave the "abertos" view) until a fresh read carries it.
+    var visible = fb.items.filter(function (it) {
+      if (isPending(it.id)) return false;
+      var w = S.written[it.id];
+      if (w) { it.status = w.status; if (fb.status === "open" && w.status !== "open") return false; }
+      return true;
+    });
     visible.sort(function (a, b) { return Date.parse(b.createdAt) - Date.parse(a.createdAt); });
     var groups = M.groupFeedback(visible);
     if ((fb.sort || "recent") === "most") groups.sort(function (a, b) { return b.others.length - a.others.length; });
@@ -1063,7 +1074,7 @@
     if (!groups.some(function (g) { return g.item.id === fb.sel; })) fb.sel = groups.length ? groups[0].item.id : null;
     groups.forEach(function (g, i) {
       var it = g.item, n = g.others.length + 1;
-      list.appendChild(h("button", { type: "button", class: "item" + (anim ? " rise" : ""), role: "option", "aria-current": it.id === fb.sel ? "true" : "false", "aria-selected": it.id === fb.sel ? "true" : "false", "data-id": it.id, style: "animation-delay:" + (150 + i * 40) + "ms",
+      list.appendChild(h("button", { type: "button", class: "item" + (anim ? " rise" : ""), "aria-current": it.id === fb.sel ? "true" : "false", "data-id": it.id, style: "animation-delay:" + (150 + i * 40) + "ms",
         onclick: function () { fb.sel = it.id; renderFila(true); showPaneOnPhone(); } }, [
         h("span", { class: "im" }, [
           h("span", { class: "badge kind " + it.kind, text: KIND[it.kind] || it.kind }),
@@ -1125,10 +1136,10 @@
     wrap.appendChild(h("div", { style: "display:flex;flex-direction:column;gap:10px" }, [h("div", { class: "foot", style: "font-weight:600;color:var(--muted);font-size:13px", text: "onde a pessoa estava" }), ctx]));
     var ids = [it.id].concat(g.others.map(function (o) { return o.id; }));
     var actions = h("div", { class: "actions" });
-    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug" + (ids.length > 1 ? "s" : "") + " · dá o selo" : "confirmar", onclick: function () { resolve(it, ids, "confirmed"); } }));
-    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function () { resolve(it, ids, "closed"); } }));
+    if (it.status !== "confirmed") actions.appendChild(h("button", { type: "button", class: "btn primary", text: it.kind === "bug" ? "confirmar bug" + (ids.length > 1 ? "s" : "") + " · dá o selo" : "confirmar", onclick: function (ev) { resolve(it, ids, "confirmed", ev.detail === 0); } }));
+    if (it.status !== "closed") actions.appendChild(h("button", { type: "button", class: "btn", text: "fechar", onclick: function (ev) { resolve(it, ids, "closed", ev.detail === 0); } }));
     actions.appendChild(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "próximo ↓", onclick: function () {
-      var gs = fb.groups || []; var i = gs.indexOf(g);
+      var gs = fb.groups || []; var i = gs.findIndex(function (x) { return x.item.id === fb.sel; });
       if (gs.length > 1) { fb.sel = gs[(i + 1) % gs.length].item.id; renderFila(true); }
     } }));
     wrap.appendChild(actions);
@@ -1181,8 +1192,9 @@
    * transaction, so a group is never left half resolved.
    */
   S.pending = [];
+  S.written = {};
   function isPending(id) { return S.pending.some(function (p) { return p.ids.indexOf(id) >= 0; }); }
-  function resolve(it, ids, status) {
+  function resolve(it, ids, status, viaKeyboard) {
     var fb = S.fb;
     var label = "#" + it.id + (ids.length > 1 ? " e mais " + (ids.length - 1) : "");
     var entry = { ids: ids, status: status, label: label, itemId: it.id, deadline: Date.now() + UNDO_MS };
@@ -1191,6 +1203,9 @@
     fb.sel = null;
     renderFila(true);
     toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, undoPending);
+    // From the keyboard, "desfazer" must be reachable inside its 8 seconds:
+    // put focus on it (a mouse click reports detail > 0 and is left alone).
+    if (viaKeyboard) $("toastUndo").focus({ preventScroll: true });
   }
   function undoPending() {
     var taken = S.pending; if (!taken.length) return;
@@ -1198,21 +1213,38 @@
     taken.forEach(function (p) { clearTimeout(p.timer); });
     S.fb.sel = taken[taken.length - 1].itemId;
     renderFila(true);
+    // Earlier actions may already be written; show the list as it is now.
+    if (Object.keys(S.written).length) loadFeedback(false);
     toast(taken.length === 1 ? taken[0].label + " voltou para a fila, nada foi gravado" : taken.length + " ações desfeitas, nada foi gravado");
   }
   function writePending(entry, keepalive) {
     var i = S.pending.indexOf(entry); if (i < 0) return;
     S.pending.splice(i, 1);
     clearTimeout(entry.timer);
-    var body = entry.ids.length === 1 ? { id: String(entry.ids[0]), status: entry.status } : { ids: entry.ids.map(String), status: entry.status };
-    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); })
-      .then(function () { if (!keepalive && !S.pending.length) loadFeedback(false); })
+    entry.ids.forEach(function (id) { S.written[id] = { status: entry.status, doneAt: 0 }; });
+    var done = function (ok) {
+      entry.ids.forEach(function (id) { if (!ok) delete S.written[id]; else if (S.written[id]) S.written[id].doneAt = Date.now(); });
+    };
+    // The API takes up to 500 ids per write, applied in one transaction.
+    var chunks = [];
+    for (var c = 0; c < entry.ids.length; c += 500) chunks.push(entry.ids.slice(c, c + 500));
+    chunks.reduce(function (prev, part) {
+      return prev.then(function () {
+        var body = part.length === 1 ? { id: String(part[0]), status: entry.status } : { ids: part.map(String), status: entry.status };
+        return fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+          .then(function (r) { if (!r.ok) throw new Error("http " + r.status); });
+      });
+    }, Promise.resolve())
+      .then(function () { done(true); if (!keepalive && !S.pending.length) loadFeedback(false); })
       .catch(function (e) {
+        done(false);
         toast("não deu pra gravar " + entry.label + ": " + (e && e.message ? e.message : "erro"), true);
         loadFeedback(false);
       });
   }
+  // Back from the back/forward cache after pagehide sent the pending writes:
+  // the list in memory predates them.
+  window.addEventListener("pageshow", function (ev) { if (ev.persisted) { refresh(); if (S.fb.loaded) loadFeedback(false); } });
   window.addEventListener("pagehide", function () { S.pending.slice().forEach(function (p) { writePending(p, true); }); });
   function toast(text, bad, undo) {
     var t = $("toast");

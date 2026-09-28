@@ -286,7 +286,10 @@
     var prevRooms = {};
     // A room is its server, channel and the moment it opened: DM calls have
     // no server or channel, and two of them must still be two rooms.
-    var roomKey = function (r) { return (r.server || "") + "/" + (r.channel || "") + "/" + (r.openedAt || ""); };
+    // By channel id when the API sends it: `openedAt` goes null whenever the
+    // registry read fails, and keying on it would announce every open room
+    // as new during a database blip. Names and open time for an older API.
+    var roomKey = function (r) { return r.channelId ? "id:" + r.channelId : (r.server || "") + "/" + (r.channel || "") + "/" + (r.openedAt || ""); };
     ((prev.voice && prev.voice.rooms) || []).forEach(function (r) { prevRooms[roomKey(r)] = r.participants; });
     ((next.voice && next.voice.rooms) || []).forEach(function (r) {
       if (roomKey(r) in prevRooms) return;
