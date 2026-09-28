@@ -1907,6 +1907,10 @@ function MainAppContent({
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  /** The channel whose history request last failed; see `historyFailed`. */
+  const [historyFailedChannelId, setHistoryFailedChannelId] = useState<
+    string | null
+  >(null);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
@@ -3313,6 +3317,7 @@ function MainAppContent({
       closeThreadPanelRef.current();
       setUnreadSince(null);
       setEditMessageId(null);
+      setHistoryFailedChannelId(null);
 
       // Community Home is a client-only surface, not a channel the API knows.
       if (isCommunityHomeChannelId(channelId)) {
@@ -3344,10 +3349,13 @@ function MainAppContent({
             : null,
         );
         refresh();
-      } catch (error) {
-        setAppError(
-          error instanceof Error ? error.message : "Failed to load messages",
-        );
+      } catch {
+        // Not the app banner: the raw server string ("database_unavailable")
+        // is not copy, and the list below would still say the channel is
+        // empty. The list shows the failure in place, with a retry.
+        if (selectedChannelIdRef.current === channelId) {
+          setHistoryFailedChannelId(channelId);
+        }
       } finally {
         if (selectedChannelIdRef.current === channelId) {
           setMessagesLoading(false);
@@ -3356,6 +3364,40 @@ function MainAppContent({
     },
     [chat, clearUnread, refresh],
   );
+
+  /**
+   * Fetch the open channel's newest page again after a failed load.
+   *
+   * History only, not `openChannel`: that would also close the thread panel,
+   * drop the reply target and re-mark the channel read, none of which failed.
+   */
+  const retryChannelHistory = useCallback(async () => {
+    const channelId = selectedChannelIdRef.current;
+    if (!channelId) {
+      return;
+    }
+    setHistoryFailedChannelId(null);
+    setMessagesLoading(true);
+    try {
+      const page = await fetchMessages(channelId);
+      if (selectedChannelIdRef.current !== channelId) {
+        return;
+      }
+      chat.setMessages(page.messages, page.hasMore);
+      refresh();
+    } catch {
+      if (selectedChannelIdRef.current === channelId) {
+        setHistoryFailedChannelId(channelId);
+      }
+    } finally {
+      if (selectedChannelIdRef.current === channelId) {
+        setMessagesLoading(false);
+      }
+    }
+  }, [chat, refresh]);
+  const handleRetryHistory = useCallback(() => {
+    void retryChannelHistory();
+  }, [retryChannelHistory]);
 
   // ---------------------------------------------------------------- threads
   //
@@ -3871,6 +3913,10 @@ function MainAppContent({
         .then((page) => {
           if (selectedChannelIdRef.current === channelId) {
             chat.setMessages(page.messages, page.hasMore);
+            // A reconnect is also how a failed first load heals itself.
+            setHistoryFailedChannelId((failed) =>
+              failed === channelId ? null : failed,
+            );
             refresh();
           }
         })
@@ -9331,6 +9377,8 @@ function MainAppContent({
         variant={isWatchPartySplit ? "stream" : "default"}
         streamBadges={isWatchPartySplit ? streamBadges : null}
         isLoading={messagesLoading}
+        historyFailed={historyFailedChannelId === selectedChannel.id}
+        onRetryHistory={handleRetryHistory}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
         isLoadingOlder={chat.isLoadingOlder()}
