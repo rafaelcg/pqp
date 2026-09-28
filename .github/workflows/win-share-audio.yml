@@ -63,12 +63,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Server 2022, build 20348, no audio device.
+          # Server 2022, build 20348: activation succeeds, Initialize is
+          # refused with AUDCLNT_E_SERVICE_NOT_RUNNING (the Windows Audio
+          # service is off on this image). Measured on the first run of #873.
           - os: windows-2022
-            expect: ""
-          # Server 2025, build 26100, no audio device.
+            expect: "exclude=error:initialize:0x88890010 include=error:initialize:0x88890010"
+          # Server 2025, build 26100: the service runs, and both modes open
+          # and start a stream (with nothing to hear).
           - os: windows-latest
-            expect: ""
+            expect: "exclude=started:-:0x00000000 include=started:-:0x00000000"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
