@@ -29,6 +29,7 @@ import {
 import { Seo } from "@/components/marketing/seo";
 import { WhereWeRun } from "@/components/marketing/where-we-run";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { useScrollToHash } from "@/hooks/use-scroll-to-hash";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -190,6 +191,8 @@ export function LandingPage() {
   const [overHero, setOverHero] = useState(true);
   const heroRef = useRef<HTMLElement>(null);
   const heroVideo = useRef<HTMLVideoElement>(null);
+  // `/#features` from the header of any other public page.
+  useScrollToHash();
 
   // `autoplay` alone is not enough: a tab that mounts in the background leaves
   // the element idle and Chrome does not revisit that on its own. Ask directly,
