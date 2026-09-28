@@ -4302,7 +4302,28 @@ function MainAppContent({
           // delete. Likes and new comments do not fan out. The frame carries
           // only the serverId, so the client refetches; a member sitting in
           // DMs or another server is not "in" this one and is left alone.
+          //
+          // When the owner flips the server's Baú switch the frame also
+          // carries the new value. It is written onto that server wherever
+          // the member is looking, so the row, the landing and the feed agree
+          // with the owner without a reload.
           if (message.type === "community-home-update") {
+            const enabled = message.enabled;
+            if (typeof enabled === "boolean") {
+              setServers((rows) =>
+                rows.some(
+                  (row) =>
+                    row.id === message.serverId &&
+                    row.communityHomeEnabled !== enabled,
+                )
+                  ? rows.map((row) =>
+                      row.id === message.serverId
+                        ? { ...row, communityHomeEnabled: enabled }
+                        : row,
+                    )
+                  : rows,
+              );
+            }
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }

@@ -4039,6 +4039,16 @@ router.patch(
       await readJsonBody(req),
     );
     const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    // Members with the app open keep their own copy of this flag, so they are
+    // told the new value instead of waiting for a reload.
+    try {
+      await notifyCommunityHomeUpdate(
+        serverId!,
+        server.community_home_enabled ?? false,
+      );
+    } catch (error) {
+      console.error("[community-home] notify failed:", error);
+    }
     return {
       enabled: server.community_home_enabled ?? false,
       server: mapServer(server),

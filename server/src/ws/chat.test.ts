@@ -135,6 +135,7 @@ vi.mock("../services/slow-mode.js", () => ({
 
 const {
   broadcastToChannel,
+  deliverCommunityHomeUpdate,
   deliverPermissionsUpdate,
   handleChatMessage,
   notifyFriendActivity,
@@ -477,6 +478,61 @@ describe("deliverPermissionsUpdate", () => {
     expect(() =>
       deliverPermissionsUpdate(serverId, 1, [member]),
     ).not.toThrow();
+    expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * The Baú nudge doubles as the "owner flipped the switch" message: with
+ * `enabled` set, a member's open app rewrites its copy of the server.
+ */
+describe("deliverCommunityHomeUpdate", () => {
+  const member = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const serverId = "33333333-3333-3333-3333-333333333333";
+  const open: Recorder[] = [];
+
+  function connect(userId: string): Recorder {
+    const recorder = recordingSocket(1);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("carries the new value when the owner flips the switch", () => {
+    const target = connect(member);
+
+    deliverCommunityHomeUpdate(serverId, [member], true);
+    deliverCommunityHomeUpdate(serverId, [member], false);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: true },
+      { type: "community-home-update", serverId, enabled: false },
+    ]);
+  });
+
+  it("leaves the value out for a publish, pin or delete", () => {
+    const target = connect(member);
+
+    deliverCommunityHomeUpdate(serverId, [member]);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId },
+    ]);
+  });
+
+  it("reaches members only", () => {
+    const other = connect(bystander);
+
+    deliverCommunityHomeUpdate(serverId, [member], true);
+
     expect(other.received).toHaveLength(0);
   });
 });

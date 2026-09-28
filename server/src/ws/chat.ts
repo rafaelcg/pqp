@@ -968,25 +968,33 @@ export function deliverPermissionsUpdate(
  */
 export async function notifyCommunityHomeUpdate(
   serverId: string,
+  enabled?: boolean,
 ): Promise<void> {
   const memberIds = await listServerMemberIds(serverId);
-  deliverCommunityHomeUpdate(serverId, memberIds);
+  deliverCommunityHomeUpdate(serverId, memberIds, enabled);
   if (isBusEnabled()) {
     publishToCluster(COMMUNITY_HOME_TOPIC, {
       type: "community-home-update",
       serverId,
+      ...(enabled === undefined ? {} : { enabled }),
     });
   }
 }
 
+/**
+ * `enabled` rides along only when the owner flipped the server's Baú switch,
+ * so members with the app open learn the new value without reloading.
+ */
 export function deliverCommunityHomeUpdate(
   serverId: string,
   memberIds: readonly string[],
+  enabled?: boolean,
 ): void {
   const allowed = new Set(memberIds);
   const payload = encode({
     type: "community-home-update",
     serverId,
+    ...(enabled === undefined ? {} : { enabled }),
   } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
@@ -2362,9 +2370,11 @@ subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
     return;
   }
   const serverId = (data as { serverId: string }).serverId;
+  const relayed = (data as { enabled?: unknown }).enabled;
+  const enabled = typeof relayed === "boolean" ? relayed : undefined;
   void listServerMemberIds(serverId)
     .then((memberIds) => {
-      deliverCommunityHomeUpdate(serverId, memberIds);
+      deliverCommunityHomeUpdate(serverId, memberIds, enabled);
     })
     .catch((error) => {
       console.error("[ws] community-home-update relay failed:", error);
