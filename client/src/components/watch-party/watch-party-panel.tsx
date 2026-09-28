@@ -82,7 +82,13 @@ import {
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
+  wantsNativeShareAudio,
 } from "@/lib/screen-capture-audio";
+import {
+  armNativeShareAudio,
+  attachNativeShareAudio,
+  ensureNativeShareAudio,
+} from "@/lib/native-share-audio";
 import {
   blocksGoLive,
   desktopSharesTabAudio,
@@ -1172,13 +1178,23 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // used to build its own and leave out the shell's picker flag, so a
       // Windows desktop host was asked for a capture with no audio at all while
       // the shell's own picker stood ready to offer the box. One reader now.
-      await ensureOsCanExcludeCallAudio();
-      const options = screenCaptureOptions(
-        false,
-        liveScreenCaptureEnvironment(),
-        { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
-      );
+      await Promise.all([
+        ensureOsCanExcludeCallAudio(),
+        ensureNativeShareAudio(party.serverId ?? null),
+      ]);
+      const captureEnv = liveScreenCaptureEnvironment();
+      const intent = { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate };
+      const options = screenCaptureOptions(false, captureEnv, intent);
+      // The Windows desktop app's own per-process sound, the film without the
+      // call, attached to the preview so go-live broadcasts what was checked.
+      const nativeAudio = wantsNativeShareAudio(false, captureEnv, intent);
+      if (nativeAudio) {
+        await armNativeShareAudio();
+      }
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
+      if (nativeAudio) {
+        await attachNativeShareAudio(picked);
+      }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
       // must clear the preview, not leave a frozen last frame that they then

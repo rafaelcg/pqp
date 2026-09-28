@@ -1333,7 +1333,8 @@
     live_hls_reap_orphans: "Desligado, gravações órfãs no servidor de mídia não são paradas sozinhas.",
     hls_sharer_resume_hold: "Muda o que acontece quando o apresentador cai: segurar a transmissão ou encerrar em 5 s.",
     community_home: "Mostra ou esconde o Baú para todo mundo.",
-    community_home_vip: "Mostra ou esconde os posts VIP do Baú (só vale com o Baú ligado)."
+    community_home_vip: "Mostra ou esconde os posts VIP do Baú (só vale com o Baú ligado).",
+    desktop_share_audio_native: "Vale no próximo compartilhamento, só no app desktop do Windows que já tem o suporte: o som vem por processo, sem a chamada, Windows 10 incluso."
   };
   function flagName(f) { return String(f.description || f.key).replace(/\s*\([^)]*\)\s*$/, "").replace(/\.$/, ""); }
   function onOff(v) { return v ? "ligado" : "desligado"; }

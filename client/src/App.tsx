@@ -527,6 +527,7 @@ import {
   steersAtBrowserTab,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { ensureNativeShareAudio } from "@/lib/native-share-audio";
 import {
   hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
@@ -2287,7 +2288,13 @@ function MainAppContent({
       }
       void (async () => {
         try {
-          await ensureOsCanExcludeCallAudio();
+          // The call's server, not the one on screen: the per-server switch
+          // for native Windows share audio follows where the share goes. A DM
+          // call has none and gets the global answer.
+          await Promise.all([
+            ensureOsCanExcludeCallAudio(),
+            ensureNativeShareAudio(voiceServerIdRef.current),
+          ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
           }

@@ -102,6 +102,15 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`.
 
+Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
+(`desktop_share_audio_native`, default off, **per server**), sound on a screen
+share from the Windows desktop app through WASAPI process loopback, Windows 10
+included, served to the client by `GET /api/share/config?serverId=`. It only
+does anything in a desktop build whose preload publishes
+`capabilities.nativeShareAudio` and whose self-test opened a process loopback
+stream on that machine; see `electron/lib/win-share-audio.js`. With the flag off
+the client never asks the shell anything.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

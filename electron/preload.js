@@ -86,8 +86,67 @@ const SHARE_CAPABILITIES = Object.freeze({
     process.platform === "win32" && canExcludeOwnAudio ? "loopback" : "none",
   restrictOwnAudio: process.platform !== "win32" || canExcludeOwnAudio,
   pickerOffersAudio: process.platform === "win32" && canExcludeOwnAudio,
+  /**
+   * This binary can capture a share's sound itself, per process, through
+   * WASAPI process loopback (`lib/win-share-audio*.js`): the shared window's
+   * app, or everything but pqp for a screen. Windows 10 included, where the
+   * Chromium path above cannot keep the call out. A SEPARATE field from
+   * `systemAudio`, because the sound does not arrive on the display stream:
+   * the page asks Chromium for none and receives PCM on a port instead, so a
+   * client that does not know this field must never be told "loopback".
+   * Whether the add-on loaded and this Windows build can open the stream is
+   * `nativeShareAudioStatus()`; whether it is ON is the runtime flag's.
+   */
+  nativeShareAudio: process.platform === "win32",
   version: shellVersion(),
 });
+
+/**
+ * PCM ports from main, by session, until the page's `claim` collects them.
+ * The port and the `invoke` answer travel separately and may arrive in either
+ * order, so whichever comes second completes the handshake.
+ */
+const shareAudioPorts = new Map();
+const shareAudioWaiters = new Map();
+const SHARE_AUDIO_PORT_WAIT_MS = 3000;
+
+ipcRenderer.on("pqp:native-share-audio-port", (event, payload) => {
+  const port = event.ports?.[0];
+  const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : null;
+  if (!port || !sessionId) {
+    return;
+  }
+  const waiter = shareAudioWaiters.get(sessionId);
+  if (waiter) {
+    shareAudioWaiters.delete(sessionId);
+    waiter(port);
+    return;
+  }
+  // One share at a time: a port nobody claimed belongs to a share that is over.
+  for (const stale of shareAudioPorts.values()) {
+    stale.close();
+  }
+  shareAudioPorts.clear();
+  shareAudioPorts.set(sessionId, port);
+});
+
+function waitForShareAudioPort(sessionId) {
+  const ready = shareAudioPorts.get(sessionId);
+  if (ready) {
+    shareAudioPorts.delete(sessionId);
+    return Promise.resolve(ready);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      shareAudioWaiters.delete(sessionId);
+      resolve(null);
+    }, SHARE_AUDIO_PORT_WAIT_MS);
+    shareAudioWaiters.set(sessionId, (port) => {
+      clearTimeout(timer);
+      resolve(port);
+    });
+  });
+}
 
 contextBridge.exposeInMainWorld("pqpDesktop", {
   platform: process.platform,
@@ -131,6 +190,66 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    * weeks ago and has to keep reading them.
    */
   capabilities: SHARE_CAPABILITIES,
+
+  /**
+   * Native share audio (Windows, `capabilities.nativeShareAudio`). Can this
+   * machine do it: add-on loaded, and this Windows build opened a process
+   * loopback stream when asked. `{ available, reason, stage, hr, build }`.
+   */
+  nativeShareAudioStatus() {
+    return ipcRenderer.invoke("pqp:native-share-audio-status");
+  },
+
+  /**
+   * The next share's picker offers the sound box and, if it is ticked,
+   * captures natively. Call right before `getDisplayMedia({ audio: false })`.
+   */
+  nativeShareAudioArm() {
+    return ipcRenderer.invoke("pqp:native-share-audio-arm");
+  },
+
+  /**
+   * After `getDisplayMedia` resolved: did the share start a capture? When it
+   * did, its PCM port is posted to this window as a `message` event,
+   * `{ type: "pqp:native-share-audio-port", sessionId }` with the port in
+   * `ports[0]`, before this resolves. A port cannot cross the context bridge
+   * as a value, and `window.postMessage` to this same window is how Electron
+   * documents handing one to the page. Resolves
+   * `{ active, sessionId?, target?, reason?, stage?, hr? }`.
+   */
+  nativeShareAudioClaim() {
+    return ipcRenderer.invoke("pqp:native-share-audio-claim").then(async (outcome) => {
+      if (!outcome || outcome.active !== true || typeof outcome.sessionId !== "string") {
+        return outcome ?? { active: false, reason: "none" };
+      }
+      const port = await waitForShareAudioPort(outcome.sessionId);
+      if (!port) {
+        ipcRenderer.invoke("pqp:native-share-audio-stop", outcome.sessionId).catch(() => {});
+        return { active: false, reason: "port-timeout" };
+      }
+      // "*" names no other window: the recipient is this one, the page itself.
+      // `globalThis` is that window here; a preload has no `window` binding
+      // this file's lint environment knows about.
+      globalThis.postMessage(
+        { type: "pqp:native-share-audio-port", sessionId: outcome.sessionId },
+        "*",
+        [port],
+      );
+      return outcome;
+    });
+  },
+
+  /**
+   * The share is over: stop capturing. With the claim's `sessionId`, only
+   * that capture, so ending an old share cannot stop a newer one. Safe to
+   * call when nothing runs.
+   */
+  nativeShareAudioStop(sessionId) {
+    return ipcRenderer.invoke(
+      "pqp:native-share-audio-stop",
+      typeof sessionId === "string" ? sessionId : null,
+    );
+  },
 
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {

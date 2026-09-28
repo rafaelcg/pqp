@@ -38,8 +38,14 @@ import {
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
   stripLeakedSystemAudioTracks,
+  wantsNativeShareAudio,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import {
+  armNativeShareAudio,
+  attachNativeShareAudio,
+  releaseNativeShareAudioFor,
+} from "@/lib/native-share-audio";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -3382,6 +3388,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     rememberShareAudioTrack(null);
+    // Before the tracks stop: the native capture is found by its track, and
+    // stopping it now spares the shell a second of capturing for nobody.
+    releaseNativeShareAudioFor([
+      ...screenCaptureStream.getTracks(),
+      ...(screenCaptureSource?.getTracks() ?? []),
+    ]);
     for (const track of screenCaptureStream.getTracks()) {
       track.stop();
     }
@@ -5866,11 +5878,23 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the intent still wins, so a caller can override it for one share.
       await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
+      const captureEnv = liveScreenCaptureEnvironment();
       const options = screenCaptureOptions(
         shareSystemAudio,
-        liveScreenCaptureEnvironment(),
+        captureEnv,
         { ...intent, hideCursor },
       );
+      // WINDOWS DESKTOP, NATIVE SOUND: Chromium is asked for no audio (see
+      // `wantsNativeShareAudio`) and the shell is told to offer its own box
+      // on the picker that is about to open. A stream the caller already
+      // opened (the watch party preview) attached its sound when it was
+      // picked, so it is not armed again here.
+      const nativeAudio =
+        !intent.stream &&
+        wantsNativeShareAudio(shareSystemAudio, captureEnv, { ...intent, hideCursor });
+      if (nativeAudio) {
+        await armNativeShareAudio();
+      }
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
       // that is a request which can fail on its own; in the shell it is only
@@ -5933,6 +5957,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       // exclude is known not to have applied; undefined settings stay.
       if (stripLeakedSystemAudioTracks(stream)) {
         state.notice = translateMessage("voice.notice.systemAudioStripped");
+      }
+      // The shell's capture joins the stream here, after the strip (it is
+      // not the mixer, so there is nothing in it to strip) and before
+      // anything reads the stream's audio: the probe, the watch party mix,
+      // the publish. Box unticked or capture refused: a silent share, as
+      // before.
+      if (nativeAudio) {
+        await attachNativeShareAudio(stream);
       }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries
