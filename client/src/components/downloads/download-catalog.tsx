@@ -147,20 +147,20 @@ export function DownloadCatalog() {
     note = t("downloadPage.ios.body");
   } else if (onAndroid) {
     // Google Play is the primary action now that the listing is live; `/android`
-    // (sideload steps, honest APK framing) is still where this button goes on a
-    // self-host that never set a Play listing.
+    // (sideload steps, honest APK framing) is still where this button goes, and
+    // what this note says, on a self-host that never set a Play listing.
     primary = (
       <Button asChild className={PRIMARY_CTA}>
         {play ? (
           <a href={play} rel="noopener">
-            {t("downloadPage.android.cta")}
+            {t("downloadPage.android.cta.play")}
           </a>
         ) : (
           <Link to="/android">{t("downloadPage.android.cta")}</Link>
         )}
       </Button>
     );
-    note = t("downloadPage.android.body");
+    note = t(play ? "downloadPage.android.body.play" : "downloadPage.android.body");
   } else if (platform === "mobile") {
     primaryIsBrowser = true;
     primary = (

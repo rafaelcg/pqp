@@ -103,7 +103,7 @@ export function HeroDownload({
         <p className={cn(classes.muted, className)} style={style}>
           {playHref ? (
             <a href={playHref} rel="noopener" className={classes.mobileLink}>
-              {t("download.mobile.android")}
+              {t("download.mobile.android.play")}
             </a>
           ) : (
             <Link to="/android" className={classes.mobileLink}>
