@@ -48,6 +48,10 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     needs: win-share-audio
+    # Runs even when the add-on job failed: macOS and Linux do not carry it,
+    # and the Windows leg still fails, at "Fetch the Windows share-audio
+    # add-on", because there is no artifact to fetch.
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     # 60 minutes was plenty for mac/linux before this PR. Windows, when
     # SignPath is configured, now blocks on a human approving the signing

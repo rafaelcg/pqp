@@ -1112,7 +1112,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // surface never offers the page-owned `shareSystemAudio` prompt that could
   // stand in for one, so "desktop" would point the presenter at a box that is
   // not there. That build gets the same honest answer as macOS.
-  const captureEnv = liveScreenCaptureEnvironment();
+  // Whether the last pick could carry the Windows app's native sound: a
+  // silent pick there means the box was left unticked, the desktop hint.
+  const [nativeShareAudioOffered, setNativeShareAudioOffered] = useState(false);
+  const captureEnv = liveScreenCaptureEnvironment({ nativeShareAudio: nativeShareAudioOffered });
   const silentPickHint = !isDesktopApp()
     ? undefined
     : offersShellSystemAudio(captureEnv) && captureEnv.sharePickerOffersAudio
@@ -1178,19 +1181,26 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // used to build its own and leave out the shell's picker flag, so a
       // Windows desktop host was asked for a capture with no audio at all while
       // the shell's own picker stood ready to offer the box. One reader now.
-      await Promise.all([
+      const [, nativeShareAudio] = await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureNativeShareAudio(party.serverId ?? null),
       ]);
-      const captureEnv = liveScreenCaptureEnvironment();
-      const intent = { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate };
-      const options = screenCaptureOptions(false, captureEnv, intent);
+      const intent = {
+        preferBrowserTab: true,
+        maxFrameRate: props.hlsMaxFrameRate,
+        nativeShareAudio,
+      };
+      let pickEnv = liveScreenCaptureEnvironment(intent);
       // The Windows desktop app's own per-process sound, the film without the
       // call, attached to the preview so go-live broadcasts what was checked.
-      const nativeAudio = wantsNativeShareAudio(false, captureEnv, intent);
-      if (nativeAudio) {
-        await armNativeShareAudio();
+      // A refused arm builds the options the old way instead.
+      let nativeAudio = wantsNativeShareAudio(false, pickEnv, intent);
+      if (nativeAudio && !(await armNativeShareAudio())) {
+        nativeAudio = false;
+        pickEnv = { ...pickEnv, shellNativeShareAudio: false };
       }
+      setNativeShareAudioOffered(nativeAudio);
+      const options = screenCaptureOptions(false, pickEnv, intent);
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
       if (nativeAudio) {
         await attachNativeShareAudio(picked);

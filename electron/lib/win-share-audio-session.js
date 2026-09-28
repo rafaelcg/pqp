@@ -72,7 +72,19 @@ function createShareAudioController({
       log(`host: ${message.message}`);
       return;
     }
-    if (message.type !== "session" || !session || message.sessionId !== session.id) {
+    if (message.type !== "session") {
+      return;
+    }
+    if (!session || message.sessionId !== session.id) {
+      // A capture that started after its share gave up on it (claim timeout,
+      // a newer share): nobody will read it, so it must not keep running.
+      if (message.state === "started") {
+        try {
+          host?.child.postMessage({ type: "stop", sessionId: message.sessionId });
+        } catch {
+          // The host is gone, and took the capture with it.
+        }
+      }
       return;
     }
     if (message.state === "started") {
@@ -100,6 +112,10 @@ function createShareAudioController({
       });
     } else if (message.state === "ended") {
       log(`capture ended ${JSON.stringify(message.stats ?? {})}`);
+      // The host closed its end; the page hears silence from here, as it
+      // would from a share with no sound. Nothing left to stop.
+      settleSession(session, { active: false, reason: "ended", stage: null, hr: null });
+      stop(session.id);
     }
   }
 
@@ -251,6 +267,9 @@ function createShareAudioController({
     current.port = channel.port2;
     current.timer = setTimeout(() => {
       settleSession(current, { active: false, reason: "timeout", stage: null, hr: null });
+      // Told it failed, so it must not go on capturing into a port nobody
+      // reads. A `started` arriving later is stopped by `onHostMessage`.
+      stop(current.id);
     }, CLAIM_TIMEOUT_MS);
     try {
       hostNow.child.postMessage(
@@ -274,11 +293,12 @@ function createShareAudioController({
       return { active: false, reason: "none", stage: null, hr: null };
     }
     const outcome = await current.promise;
+    if (!outcome.active) {
+      stop(current.id);
+      return outcome;
+    }
     if (session !== current) {
       return { active: false, reason: "stopped", stage: null, hr: null };
-    }
-    if (!outcome.active) {
-      return outcome;
     }
     if (current.handed) {
       return { active: false, reason: "claimed", stage: null, hr: null };

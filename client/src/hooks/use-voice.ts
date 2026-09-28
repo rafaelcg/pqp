@@ -5878,23 +5878,23 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the intent still wins, so a caller can override it for one share.
       await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
-      const captureEnv = liveScreenCaptureEnvironment();
-      const options = screenCaptureOptions(
-        shareSystemAudio,
-        captureEnv,
-        { ...intent, hideCursor },
-      );
+      const captureIntent = { ...intent, hideCursor };
+      let captureEnv = liveScreenCaptureEnvironment(intent);
       // WINDOWS DESKTOP, NATIVE SOUND: Chromium is asked for no audio (see
       // `wantsNativeShareAudio`) and the shell is told to offer its own box
       // on the picker that is about to open. A stream the caller already
       // opened (the watch party preview) attached its sound when it was
-      // picked, so it is not armed again here.
-      const nativeAudio =
-        !intent.stream &&
-        wantsNativeShareAudio(shareSystemAudio, captureEnv, { ...intent, hideCursor });
-      if (nativeAudio) {
-        await armNativeShareAudio();
+      // picked, so it is not armed again here. An arm the shell refused
+      // falls back to this share's old path before the options are built:
+      // they would otherwise ask Chromium for no audio with nothing in its
+      // place, which on Windows 11 is sound we used to have.
+      let nativeAudio =
+        !intent.stream && wantsNativeShareAudio(shareSystemAudio, captureEnv, captureIntent);
+      if (nativeAudio && !(await armNativeShareAudio())) {
+        nativeAudio = false;
+        captureEnv = { ...captureEnv, shellNativeShareAudio: false };
       }
+      const options = screenCaptureOptions(shareSystemAudio, captureEnv, captureIntent);
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
       // that is a request which can fail on its own; in the shell it is only
@@ -5962,7 +5962,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       // not the mixer, so there is nothing in it to strip) and before
       // anything reads the stream's audio: the probe, the watch party mix,
       // the publish. Box unticked or capture refused: a silent share, as
-      // before.
+      // before, which the "(sem som)" line already says. A refusal also
+      // sends the NEXT share back to the old path (`failedThisSession`), so
+      // a Windows 11 machine that cannot do this gets Chromium's loopback
+      // back after one silent share instead of every time.
       if (nativeAudio) {
         await attachNativeShareAudio(stream);
       }

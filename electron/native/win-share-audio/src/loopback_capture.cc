@@ -138,7 +138,9 @@ class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler,
   HANDLE done_;
 };
 
-HRESULT ActivateProcessLoopback(DWORD pid, LoopbackMode mode,
+// `stop` interrupts the wait: a share ended while the audio service is slow
+// to answer must not hold the caller of Stop(), who joins this thread.
+HRESULT ActivateProcessLoopback(DWORD pid, LoopbackMode mode, HANDLE stop,
                                 IAudioClient** out) {
   *out = nullptr;
   const ActivateFn activate = LoadActivate();
@@ -169,8 +171,12 @@ HRESULT ActivateProcessLoopback(DWORD pid, LoopbackMode mode,
   HRESULT hr = activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
                         __uuidof(IAudioClient), &prop, handler, &op);
   if (SUCCEEDED(hr)) {
-    if (WaitForSingleObject(handler->done(), kActivateTimeoutMs) !=
-        WAIT_OBJECT_0) {
+    const HANDLE waits[2] = {handler->done(), stop};
+    const DWORD woke =
+        WaitForMultipleObjects(2, waits, FALSE, kActivateTimeoutMs);
+    if (woke == WAIT_OBJECT_0 + 1) {
+      hr = E_ABORT;
+    } else if (woke != WAIT_OBJECT_0) {
       hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
     } else {
       HRESULT activated = E_UNEXPECTED;
@@ -339,7 +345,7 @@ void LoopbackCapture::RunCapture(CaptureEvent& stats) {
   const DWORD baseFlags =
       AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
 
-  HRESULT hr = ActivateProcessLoopback(pid_, mode_, &client);
+  HRESULT hr = ActivateProcessLoopback(pid_, mode_, stop_, &client);
   if (FAILED(hr)) {
     Fail("activate", hr);
     return;
@@ -356,7 +362,7 @@ void LoopbackCapture::RunCapture(CaptureEvent& stats) {
     // whose Initialize failed is not documented as reusable.
     SafeRelease(client);
     autoConvert = false;
-    hr = ActivateProcessLoopback(pid_, mode_, &client);
+    hr = ActivateProcessLoopback(pid_, mode_, stop_, &client);
     if (FAILED(hr)) {
       Fail("activate", hr);
       return;

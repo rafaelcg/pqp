@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 const require = createRequire(import.meta.url);
 const {
   ARM_TTL_MS,
+  CLAIM_TIMEOUT_MS,
   MAX_HOST_CRASHES,
   createShareAudioController,
 } = require("./win-share-audio-session.js");
@@ -176,6 +177,51 @@ describe("a share's capture", () => {
     assert.equal((await api.claim()).reason, "host-unavailable");
     assert.equal((await api.status()).available, false);
     assert.equal(hosts.length, MAX_HOST_CRASHES);
+  });
+
+  it("stops a capture whose claim timed out, and one that starts after that", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const { api, hosts } = controller({ host: { onStart: () => {} } });
+    api.start({ sourceId: "screen:0:0" });
+    const pending = api.claim();
+    t.mock.timers.tick(CLAIM_TIMEOUT_MS);
+    assert.equal((await pending).reason, "timeout");
+    const start = hosts[0].sent.find((s) => s.message.type === "start");
+    const stops = () => hosts[0].sent.filter((s) => s.message.type === "stop");
+    assert.equal(stops().length, 1);
+    assert.equal(start.ports[0].closed, false, "the host's end is the host's to close");
+    // The late start is told to stop rather than capture into a dead port.
+    hosts[0].emit("message", { type: "session", sessionId: start.message.sessionId, state: "started" });
+    assert.equal(stops().length, 2);
+    assert.equal(stops()[1].message.sessionId, start.message.sessionId);
+  });
+
+  it("clears a capture that ended on its own", async () => {
+    let reply;
+    const { api } = controller({
+      host: {
+        onStart: (_message, send) => {
+          reply = send;
+          started(send);
+        },
+      },
+    });
+    api.start({ sourceId: "screen:0:0" });
+    assert.equal((await api.claim()).active, true);
+    reply({ type: "session", state: "ended", stats: {} });
+    assert.equal((await api.claim()).reason, "none");
+  });
+
+  it("stops the host's session when the capture failed", async () => {
+    const { api, hosts } = controller({
+      host: {
+        onStart: (_message, reply) =>
+          reply({ type: "session", state: "failed", stage: "initialize", hr: 1 }),
+      },
+    });
+    api.start({ sourceId: "screen:0:0" });
+    await api.claim();
+    assert.ok(hosts[0].sent.some((s) => s.message.type === "stop"));
   });
 
   it("dispose stops the capture and the process", () => {

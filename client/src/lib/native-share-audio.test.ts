@@ -6,8 +6,8 @@ vi.mock("./api", () => ({ fetchShareConfig: (...args: unknown[]) => fetchShareCo
 import {
   attachNativeShareAudio,
   ensureNativeShareAudio,
+  armNativeShareAudio,
   nativeShareAudioBridge,
-  nativeShareAudioReady,
   releaseNativeShareAudioFor,
   resetNativeShareAudioForTests,
 } from "./native-share-audio";
@@ -132,18 +132,51 @@ describe("ensureNativeShareAudio", () => {
     fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: false });
     expect(await ensureNativeShareAudio("server-1")).toBe(false);
     expect(shell.nativeShareAudioStatus).not.toHaveBeenCalled();
-    expect(nativeShareAudioReady()).toBe(false);
   });
 
   it("is ready when the flag is on for the call's server and the shell self-tested", async () => {
-    fakeWindow.pqpDesktop = bridge({ active: false });
     fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    const shell = bridge({ active: false });
+    fakeWindow.pqpDesktop = shell;
     expect(await ensureNativeShareAudio("server-1")).toBe(true);
     expect(fetchShareConfig).toHaveBeenCalledWith("server-1");
-    expect(nativeShareAudioReady()).toBe(true);
-    // Cached per server: the next share does not ask the API again.
+    // Cached per server, and the self-test once per page.
     await ensureNativeShareAudio("server-1");
     expect(fetchShareConfig).toHaveBeenCalledTimes(1);
+    expect(shell.nativeShareAudioStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers per server, never from another server's check", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false });
+    fetchShareConfig.mockImplementation(async (serverId: string | null) => ({
+      desktopShareAudioNative: serverId === "on",
+    }));
+    const [on, off] = await Promise.all([
+      ensureNativeShareAudio("on"),
+      ensureNativeShareAudio("off"),
+    ]);
+    expect(on).toBe(true);
+    expect(off).toBe(false);
+  });
+
+  it("answers from a stale cache at once and refreshes behind it", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false });
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    await ensureNativeShareAudio("server-1");
+    vi.advanceTimersByTime(61_000);
+    fetchShareConfig.mockReturnValue(new Promise(() => {}));
+    expect(await ensureNativeShareAudio("server-1")).toBe(true);
+    expect(fetchShareConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("goes back to the old path for the rest of the session after the shell refuses", async () => {
+    const shell = bridge({ active: false });
+    shell.nativeShareAudioArm = vi.fn(async () => false);
+    fakeWindow.pqpDesktop = shell;
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(true);
+    expect(await armNativeShareAudio()).toBe(false);
+    expect(await ensureNativeShareAudio(null)).toBe(false);
   });
 
   it("is not ready on a Windows build whose self-test failed", async () => {

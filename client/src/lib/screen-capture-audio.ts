@@ -62,7 +62,6 @@ import {
   isDesktopApp,
   type DesktopShareCapabilities,
 } from "./desktop";
-import { nativeShareAudioReady } from "./native-share-audio";
 import {
   cursorConstraintFor,
   type CursorCaptureConstraint,
@@ -167,6 +166,13 @@ export interface ScreenCaptureIntent {
    * which asked for a share minutes ago is still the one on screen.
    */
   party?: { id: string; channelId: string };
+  /**
+   * `ensureNativeShareAudio`'s answer for THIS share's server, decided before
+   * the picker and carried with the request rather than left in a module
+   * variable, so two shares being set up for two servers cannot read each
+   * other's per-server flag. See `lib/native-share-audio.ts`.
+   */
+  nativeShareAudio?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */
@@ -356,7 +362,9 @@ export function screenCaptureEnvironment(
  * makes every branch in this file reachable from a Node test, which is the only
  * place the shell's branches are ever exercised before a user hits them.
  */
-export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
+export function liveScreenCaptureEnvironment(
+  scoped: Pick<ScreenCaptureIntent, "nativeShareAudio"> = {},
+): ScreenCaptureEnvironment {
   const capabilities = desktopShareCapabilities();
   return screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null, {
     sharePickerOffersAudio:
@@ -365,7 +373,8 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
     osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
-    shellNativeShareAudio: nativeShareAudioReady(),
+    // Only from the caller: a fact about this share's server, never global.
+    shellNativeShareAudio: scoped.nativeShareAudio === true,
   });
 }
 

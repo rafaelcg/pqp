@@ -2291,27 +2291,31 @@ function MainAppContent({
           // The call's server, not the one on screen: the per-server switch
           // for native Windows share audio follows where the share goes. A DM
           // call has none and gets the global answer.
-          await Promise.all([
+          const [, nativeShareAudio] = await Promise.all([
             ensureOsCanExcludeCallAudio(),
             ensureNativeShareAudio(voiceServerIdRef.current),
           ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
           }
-          const env = liveScreenCaptureEnvironment();
+          // Carried on the intent, so the answer for THIS share's server is
+          // the one its capture is built with, however long a prompt or the
+          // HLS disclosure holds it.
+          const shareIntent: ScreenCaptureIntent = { ...intent, nativeShareAudio };
+          const env = liveScreenCaptureEnvironment(shareIntent);
           // "Wants a tab" is only true where tabs exist. In the desktop shell a
           // watch party is a window or a screen, and the machine's sound (minus
           // this app's own output) is the only sound it can carry, so the audio
           // question has to be asked there as it is for any other share.
-          const tabSteer = steersAtBrowserTab(env, intent ?? {});
+          const tabSteer = steersAtBrowserTab(env, shareIntent);
           if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
-            setShareAudioPrompt({ intent });
+            setShareAudioPrompt({ intent: shareIntent });
             return;
           }
           const audio = tabSteer
             ? false
             : env.sharePickerOffersAudio && offersShellSystemAudio(env);
-          startScreenShareGated(audio, intent);
+          startScreenShareGated(audio, shareIntent);
         } finally {
           shareRequestGuardRef.current.end(token);
         }

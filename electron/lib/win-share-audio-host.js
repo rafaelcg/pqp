@@ -185,6 +185,10 @@ function start(message, port) {
           });
           stopSession(sessionId);
         } else if (event.type === "ended") {
+          // Ended on its own (the stream failed, the device went away): close
+          // the port so the page's worklet stops waiting on it, and say so.
+          // After a stop this is a no-op; the session is already gone.
+          stopSession(sessionId);
           send({
             type: "session",
             sessionId,
