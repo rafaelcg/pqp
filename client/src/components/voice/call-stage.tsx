@@ -302,13 +302,27 @@ const PIP_CORNER_CLASS: Record<PipCorner, string> = {
 
 /**
  * The same corners with the listener row underneath: the preview sits above
- * it rather than on top of the last few chips.
+ * it rather than on top of the last few chips. The strip rises with every
+ * line the control row folds onto (`--call-row-extra`), so the preview does.
  */
 const PIP_CORNER_CLASS_WITH_STRIP: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
-  bl: "bottom-28 left-3",
-  br: "bottom-28 right-3",
+  bl: "bottom-[calc(7rem+var(--call-row-extra,0px))] left-3",
+  br: "bottom-[calc(7rem+var(--call-row-extra,0px))] right-3",
+};
+
+/**
+ * No strip, and the control row folded onto more than one line: the pill is
+ * then as wide as the stage, so a bottom corner is on top of hang-up. The
+ * preview sits on the bar's reserve instead, the same height the strip
+ * would stop at.
+ */
+const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
+  tl: "left-3 top-3",
+  tr: "right-3 top-3",
+  bl: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] left-3",
+  br: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] right-3",
 };
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
@@ -1547,7 +1561,8 @@ function ActiveCall({
   // until a narrow stage folds the pill onto a second line (see the pill in
   // `CallControls`). The strip's reserve for the bar grows by this much,
   // because the strip is stacked above the bar and would otherwise cover the
-  // pill's top line, which is where mute and raise hand go.
+  // pill's top line, which is where mute and raise hand go; so does the
+  // self-preview's bottom corner, for the same reason.
   const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
   const controlRowRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || typeof ResizeObserver === "undefined") {
@@ -1728,6 +1743,8 @@ function ActiveCall({
       }}
       onKeyDownCapture={chrome.wake}
       onFocusCapture={chrome.wake}
+      // Read by the strip's reserve and the self-preview's bottom corners.
+      style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
     >
       {/* --- the stage's content -------------------------------------------
           One rule, whatever the transport carried it: a picture is a tile and
@@ -1999,9 +2016,6 @@ function ActiveCall({
             aria-hidden="true"
             data-testid="call-stage-bar-reserve"
             className="h-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] shrink-0"
-            style={
-              { "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties
-            }
           />
           </>
         )}
@@ -2025,7 +2039,9 @@ function ActiveCall({
             !pipDrag &&
               (showStrip
                 ? PIP_CORNER_CLASS_WITH_STRIP
-                : PIP_CORNER_CLASS)[pipCorner],
+                : controlRowExtraPx > 0
+                  ? PIP_CORNER_CLASS_ABOVE_FOLDED_BAR
+                  : PIP_CORNER_CLASS)[pipCorner],
           )}
           style={pipStyle}
           onPointerDown={onPipPointerDown}

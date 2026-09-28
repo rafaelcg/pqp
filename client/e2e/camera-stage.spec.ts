@@ -1,5 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
-import { ensureServer, leaveVoiceIfConnected, openApp } from "./fixtures";
+import { expect, test } from "@playwright/test";
+import {
+  ensureServer,
+  leaveVoiceIfConnected,
+  openApp,
+  unreachableStageControls,
+} from "./fixtures";
 
 /**
  * Turning a camera on in a server voice channel must grow the shared stage,
@@ -158,50 +163,6 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
   });
   await expect(page.getByTestId("call-stage")).toHaveCount(0);
 });
-
-/**
- * Every call control on the expanded stage, and in whose hands a press at
- * its centre lands. The stage clips (`overflow-hidden`), so a tile outside
- * its box is not drawn, and a tile under the server rail or the strip is
- * drawn and cannot be pressed. Both are the same bug to a thumb.
- */
-async function unreachableStageControls(
-  page: Page,
-): Promise<string[]> {
-  return page.evaluate(() => {
-    const stage = document.querySelector('[data-testid="call-stage"]');
-    const bar = document.querySelector('[data-testid="call-controls-bar"]');
-    if (!stage || !bar) {
-      return ["no stage"];
-    }
-    const box = stage.getBoundingClientRect();
-    const out: string[] = [];
-    for (const button of Array.from(bar.querySelectorAll("button"))) {
-      const r = button.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) {
-        continue; // hidden at this width on purpose, like the bell
-      }
-      const name = button.getAttribute("aria-label") ?? "?";
-      if (
-        r.left < box.left - 0.5 ||
-        r.right > box.right + 0.5 ||
-        r.top < box.top - 0.5 ||
-        r.bottom > box.bottom + 0.5
-      ) {
-        out.push(`${name}: outside the stage`);
-        continue;
-      }
-      const hit = document.elementFromPoint(
-        r.left + r.width / 2,
-        r.top + r.height / 2,
-      );
-      if (hit?.closest("button") !== button) {
-        out.push(`${name}: covered`);
-      }
-    }
-    return out;
-  });
-}
 
 test("a phone-width stage keeps every call control on screen", async ({
   page,
