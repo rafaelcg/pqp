@@ -3,6 +3,7 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   formatHomeBytes,
   instagramEmbedSrc,
+  isRealHomeImage,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
   tiktokEmbedSrc,
@@ -63,5 +64,31 @@ describe("community home media helpers", () => {
     ).toBe(
       "https://player.twitch.tv/?channel=moonkaselive&parent=pqp.gg&autoplay=false",
     );
+  });
+});
+
+describe("isRealHomeImage", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+
+  it("accepts a file whose bytes match its declared image type", async () => {
+    const file = new File([png], "a.png", { type: "image/png" });
+    expect(await isRealHomeImage(file)).toBe(true);
+  });
+
+  it("refuses a text file named .png", async () => {
+    const file = new File(["this is not a png"], "notimage.png", {
+      type: "image/png",
+    });
+    expect(await isRealHomeImage(file)).toBe(false);
+  });
+
+  it("refuses real bytes under a different declared image type", async () => {
+    const file = new File([png], "a.jpg", { type: "image/jpeg" });
+    expect(await isRealHomeImage(file)).toBe(false);
+  });
+
+  it("leaves non-image files to their own checks", async () => {
+    const file = new File(["%PDF-1.7"], "a.pdf", { type: "application/pdf" });
+    expect(await isRealHomeImage(file)).toBe(true);
   });
 });

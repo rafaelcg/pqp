@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import {
   COMMUNITY_HOME_COMMENTS_LIMIT,
   COMMUNITY_HOME_FEED_LIMIT,
+  COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeMediaKindFromContentType,
   hasPermission,
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   Permission,
+  sniffCommunityHomeImageType,
   youtubePosterUrl,
   type CommunityHomeAuthorBadge,
   type CommunityHomeComment,
@@ -23,6 +25,7 @@ import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
 import {
   deleteObject,
+  getObjectPrefix,
   headObject,
   isStorageConfigured,
   presignGet,
@@ -1544,6 +1547,36 @@ export async function claimCommunityHomeMediaUpload(input: {
   }
   if (head.contentType !== upload.content_type) {
     throw new CommunityHomeError("not_verified", "Content type mismatch");
+  }
+  if (upload.kind === "image") {
+    // The stored Content-Type is only what the uploader signed for, and the
+    // browser derives that from the file name. Look at the bytes too, so a
+    // text file called `x.png` never becomes a broken image on the feed.
+    let prefix;
+    try {
+      prefix = await getObjectPrefix(
+        upload.storage_key,
+        COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
+      );
+    } catch (error) {
+      console.error(
+        `[community-home] GET prefix failed for ${upload.storage_key}:`,
+        error instanceof Error ? error.message : error,
+      );
+      throw new CommunityHomeError(
+        "not_verified",
+        "Upload could not be verified",
+      );
+    }
+    if (
+      !prefix ||
+      sniffCommunityHomeImageType(prefix) !== upload.content_type
+    ) {
+      throw new CommunityHomeError(
+        "not_verified",
+        "The file is not a valid image of its declared type",
+      );
+    }
   }
   await pool.query(
     `UPDATE community_home_media_uploads

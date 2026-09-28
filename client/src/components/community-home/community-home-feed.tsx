@@ -79,6 +79,7 @@ import {
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
   isPostLockedForViewer,
+  isRealHomeImage,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
   parseCommunityHomeEmbed,
@@ -1204,6 +1205,10 @@ function ComposeCard({
               limit: formatHomeBytes(COMMUNITY_HOME_MAX_BYTES),
             }),
       );
+      return;
+    }
+    if (!(await isRealHomeImage(file))) {
+      setError(t("communityHome.compose.notAnImage"));
       return;
     }
     uploadAbort.current?.abort();

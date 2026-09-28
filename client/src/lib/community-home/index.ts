@@ -52,6 +52,7 @@ export {
   instagramEmbedSrc,
   isHomeImageFile,
   isHomeVideoFile,
+  isRealHomeImage,
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
