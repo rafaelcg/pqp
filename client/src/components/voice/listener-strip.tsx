@@ -177,6 +177,12 @@ function ListenerChip({
           "aria-label": t("voice.audio.title", { name: person.name }),
           onClick: menu.toggle,
           onKeyDown: (event) => {
+            // Keys pressed inside the panel reach here too, because React
+            // bubbles through the portal. Enter on its mute button is that
+            // button's, not a second press of the chip that closes the panel.
+            if (event.target !== event.currentTarget) {
+              return;
+            }
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
               menu.toggle();
@@ -229,7 +235,9 @@ function ListenerChip({
       )}
       {/* Above the chip, because the row itself is one line tall. Opened by a
           click on the chip rather than by hovering it: the row is the surface
-          a phone has, and a phone has no hover. */}
+          a phone has, and a phone has no hover. Portalled by `anchorRef`:
+          this row scrolls inside a stage that hides its overflow, and a panel
+          nested here opened where nobody could see it. */}
       <PeerAudioMenu
         name={person.name}
         open={menu.open}
@@ -244,6 +252,8 @@ function ListenerChip({
         failed={person.failed}
         onRetry={person.onRetry}
         side="top"
+        anchorRef={menu.rootRef}
+        panelRef={menu.panelRef}
       />
     </span>
   );
