@@ -336,19 +336,22 @@
     wrap.appendChild(cross); wrap.appendChild(tip);
     var hit = h("div", { style: "position:absolute;left:0;top:0;width:100%;height:" + H + "px;cursor:crosshair" });
     hit.addEventListener("mousemove", function (ev) {
+      // Measure the chart as displayed: while a window shrinks, the svg is
+      // scaled down until the redraw, and drawn pixels are not screen pixels.
       var r = hit.getBoundingClientRect();
-      var i = Math.max(0, Math.min(n - 1, Math.round((ev.clientX - r.left) / (W / (n - 1)))));
-      var x = X(i);
+      var k = r.width ? r.width / W : 1;
+      var i = Math.max(0, Math.min(n - 1, Math.round((ev.clientX - r.left) / (r.width / (n - 1)))));
+      var x = X(i) * k;
       cross.style.left = x + "px"; cross.style.opacity = 1;
       clear(tip).appendChild(h("span", { class: "tt", text: i === n - 1 ? labels[i] + (opts.lastLabel ? " · " + opts.lastLabel : " · hoje, em curso") : labels[i] }));
       series.forEach(function (sr, si) {
         var v = sr.values[i];
         dots[si].style.opacity = typeof v === "number" ? 1 : 0;
-        if (typeof v === "number") { dots[si].style.left = x + "px"; dots[si].style.top = Y(v) + "px"; }
+        if (typeof v === "number") { dots[si].style.left = x + "px"; dots[si].style.top = Y(v) * k + "px"; }
         tip.appendChild(h("span", null, [h("b", { class: "num", style: "color:" + sr.color, text: typeof v === "number" ? fmt(v) : "—" }), " " + sr.label]));
       });
       tip.classList.add("on");
-      tip.style.left = Math.min(W - 190, x + 14) + "px"; tip.style.top = "8px";
+      tip.style.left = Math.max(0, Math.min(r.width - 190, x + 14)) + "px"; tip.style.top = "8px";
     });
     hit.addEventListener("mouseleave", function () { cross.style.opacity = 0; tip.classList.remove("on"); dots.forEach(function (d) { d.style.opacity = 0; }); });
     wrap.appendChild(hit);
@@ -1046,7 +1049,7 @@
     });
     var list = clear($("fItems"));
     var anim = firstTime("fila-items");
-    var visible = fb.items.filter(function (it) { return !(S.pendingResolve && S.pendingResolve.ids.indexOf(it.id) >= 0); });
+    var visible = fb.items.filter(function (it) { return !isPending(it.id); });
     visible.sort(function (a, b) { return Date.parse(b.createdAt) - Date.parse(a.createdAt); });
     var groups = M.groupFeedback(visible);
     if ((fb.sort || "recent") === "most") groups.sort(function (a, b) { return b.others.length - a.others.length; });
@@ -1170,47 +1173,53 @@
    * any pending write immediately rather than losing it.
    */
   var UNDO_MS = 8000;
+  /**
+   * Confirming or closing waits UNDO_MS before it is written, and each
+   * action keeps its own full window: resolving the next item does not cut
+   * the previous one short. "desfazer" takes back everything still waiting.
+   * A group of duplicates is one write (`ids`), which the API applies in one
+   * transaction, so a group is never left half resolved.
+   */
+  S.pending = [];
+  function isPending(id) { return S.pending.some(function (p) { return p.ids.indexOf(id) >= 0; }); }
   function resolve(it, ids, status) {
     var fb = S.fb;
-    flushPending();
     var label = "#" + it.id + (ids.length > 1 ? " e mais " + (ids.length - 1) : "");
-    S.pendingResolve = { ids: ids, status: status, label: label, kind: it.kind };
+    var entry = { ids: ids, status: status, label: label, itemId: it.id, deadline: Date.now() + UNDO_MS };
+    entry.timer = setTimeout(function () { writePending(entry, false); }, UNDO_MS);
+    S.pending.push(entry);
     fb.sel = null;
     renderFila(true);
-    var undo = function () {
-      clearTimeout(S.pendingTimer);
-      S.pendingResolve = null; S.pendingUndo = null;
-      fb.sel = it.id;
-      renderFila(true);
-      toast(label + " voltou para a fila, nada foi gravado");
-    };
-    S.pendingUndo = undo;
-    S.pendingDeadline = Date.now() + UNDO_MS;
-    toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, undo);
-    clearTimeout(S.pendingTimer);
-    S.pendingTimer = setTimeout(flushPending, UNDO_MS);
+    toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, undoPending);
   }
-  function flushPending(keepalive) {
-    var p = S.pendingResolve; if (!p) return;
-    S.pendingResolve = null; S.pendingUndo = null;
-    clearTimeout(S.pendingTimer);
-    Promise.all(p.ids.map(function (id) {
-      return fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: String(id), status: p.status }) })
-        .then(function (r) { if (!r.ok) throw new Error("http " + r.status); });
-    })).then(function () {
-      if (!keepalive) loadFeedback(false);
-    }).catch(function (e) {
-      toast("não deu pra gravar " + p.label + ": " + (e && e.message ? e.message : "erro"), true);
-      loadFeedback(false);
-    });
+  function undoPending() {
+    var taken = S.pending; if (!taken.length) return;
+    S.pending = [];
+    taken.forEach(function (p) { clearTimeout(p.timer); });
+    S.fb.sel = taken[taken.length - 1].itemId;
+    renderFila(true);
+    toast(taken.length === 1 ? taken[0].label + " voltou para a fila, nada foi gravado" : taken.length + " ações desfeitas, nada foi gravado");
   }
-  window.addEventListener("pagehide", function () { flushPending(true); });
+  function writePending(entry, keepalive) {
+    var i = S.pending.indexOf(entry); if (i < 0) return;
+    S.pending.splice(i, 1);
+    clearTimeout(entry.timer);
+    var body = entry.ids.length === 1 ? { id: String(entry.ids[0]), status: entry.status } : { ids: entry.ids.map(String), status: entry.status };
+    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); })
+      .then(function () { if (!keepalive && !S.pending.length) loadFeedback(false); })
+      .catch(function (e) {
+        toast("não deu pra gravar " + entry.label + ": " + (e && e.message ? e.message : "erro"), true);
+        loadFeedback(false);
+      });
+  }
+  window.addEventListener("pagehide", function () { S.pending.slice().forEach(function (p) { writePending(p, true); }); });
   function toast(text, bad, undo) {
     var t = $("toast");
     // A message about an earlier write must not take away the undo of the
     // one still waiting: keep offering it for the time it has left.
     var left = UNDO_MS;
-    if (!undo && S.pendingResolve && S.pendingUndo) { undo = S.pendingUndo; left = Math.max(1500, S.pendingDeadline - Date.now()); }
+    if (!undo && S.pending && S.pending.length) { undo = undoPending; left = Math.max(1500, S.pending[S.pending.length - 1].deadline - Date.now()); }
     $("toastText").textContent = text;
     t.classList.toggle("bad", !!bad);
     var u = $("toastUndo");

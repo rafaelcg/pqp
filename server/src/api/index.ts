@@ -581,6 +581,7 @@ import {
   listOperatorFeedback,
   listUserAchievements,
   resolveFeedback,
+  resolveFeedbackMany,
 } from "../services/feedback.js";
 import { recordCallRating } from "../services/call-ratings.js";
 import { placeInDefaultCommunity } from "../services/default-community.js";
@@ -9487,9 +9488,17 @@ function operatorFeedbackQuery(params: URLSearchParams) {
 
 // 18 digits, not 19: a 19-digit string can overflow `::bigint` and turn a
 // bad id into a 500 instead of a 400.
-const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
-  id: z.string().regex(/^[0-9]{1,18}$/),
-});
+const feedbackIdSchema = z.string().regex(/^[0-9]{1,18}$/);
+// One `id`, or `ids` for a group of duplicates the dashboard resolves
+// together in one transaction. Exactly one of the two.
+const operatorResolveFeedbackSchema = resolveFeedbackSchema
+  .extend({
+    id: feedbackIdSchema.optional(),
+    ids: z.array(feedbackIdSchema).min(1).max(50).optional(),
+  })
+  .refine((body) => (body.id === undefined) !== (body.ids === undefined), {
+    message: "Send id or ids, not both",
+  });
 
 /**
  * Confirm or close from the dashboard. Same transaction and badge rule. The
@@ -9498,7 +9507,16 @@ const operatorResolveFeedbackSchema = resolveFeedbackSchema.extend({
  */
 async function operatorResolveFeedback(req: IncomingMessage) {
   const body = operatorResolveFeedbackSchema.parse(await readJsonBody(req));
-  const resolved = await resolveFeedback(body.id, body.status);
+  if (body.ids) {
+    const resolved = await resolveFeedbackMany([...new Set(body.ids)], body.status);
+    if (resolved.length === 0) {
+      throw new NotFound("Feedback not found");
+    }
+    return {
+      feedback: resolved.map((item) => ({ id: item.id, kind: item.kind, status: item.status })),
+    };
+  }
+  const resolved = await resolveFeedback(body.id!, body.status);
   if (!resolved) {
     throw new NotFound("Feedback not found");
   }

@@ -236,11 +236,13 @@ describeDb("GET /api/admin/voice-occupancy", () => {
     const map = await call<{
       granularity: string;
       days: number;
+      lastSampleAt: string | null;
       cells: { weekday: number; hour: number; average: number; samples: number }[];
     }>(null, "/api/admin/voice-occupancy?shape=weekday-hour", `Bearer ${TOKEN}`);
     expect(map.status).toBe(200);
     expect(map.body.granularity).toBe("weekday-hour");
     expect(map.body.days).toBe(2);
+    expect(map.body.lastSampleAt).toBe("2026-09-28T15:00:00.000Z");
     expect(map.body.cells).toEqual([
       { weekday: 0, hour: 12, average: 7, samples: 1 },
       { weekday: 5, hour: 22, average: 80, samples: 2 },

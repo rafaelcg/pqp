@@ -479,34 +479,39 @@ export interface VoiceOccupancyHeatmap {
  * page fetching 21 separate days and averaging them itself.
  */
 export async function voiceOccupancyHeatmap(): Promise<VoiceOccupancyHeatmap> {
-  const lastSampleAt = await readLastSampleAt();
+  // One statement, so the freshness stamp and the averages come from the
+  // same snapshot: a sample written in between cannot be counted in one and
+  // missing from the other.
   const result = await getPool().query<{
     weekday: number;
     hour: number;
     average: number;
     samples: number;
     days: number;
+    last_sample_at: Date | null;
   }>(
     `WITH local AS (
-       SELECT bucket_at AT TIME ZONE $1 AS at, participants
+       SELECT bucket_at, bucket_at AT TIME ZONE $1 AS at, participants
          FROM voice_occupancy_samples
      )
      SELECT (EXTRACT(ISODOW FROM at)::int - 1) AS weekday,
             EXTRACT(HOUR FROM at)::int AS hour,
             AVG(participants)::float8 AS average,
             COUNT(*)::int AS samples,
-            (SELECT COUNT(DISTINCT at::date)::int FROM local) AS days
+            (SELECT COUNT(DISTINCT at::date)::int FROM local) AS days,
+            (SELECT MAX(bucket_at) FROM local) AS last_sample_at
        FROM local
       GROUP BY 1, 2
       ORDER BY 1, 2`,
     [OCCUPANCY_TIMEZONE],
   );
+  const first = result.rows[0];
   return {
     generatedAt: new Date().toISOString(),
     timezone: OCCUPANCY_TIMEZONE,
     granularity: "weekday-hour",
-    days: result.rows[0]?.days ?? 0,
-    lastSampleAt,
+    days: first?.days ?? 0,
+    lastSampleAt: first?.last_sample_at ? first.last_sample_at.toISOString() : null,
     cells: result.rows.map((row) => ({
       weekday: row.weekday,
       hour: row.hour,
