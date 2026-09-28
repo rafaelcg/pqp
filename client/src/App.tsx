@@ -5029,6 +5029,12 @@ function MainAppContent({
     [communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
+  /**
+   * A refusal from the API is thrown back to the dialog, which shows it under
+   * the field and stays open. The page banner would sit behind the modal
+   * overlay, where nobody reads it. Only what fails after the dialog closed
+   * still goes to the banner.
+   */
   async function handleChannelPromptConfirm(
     name: string,
     isPrivate?: boolean,
@@ -5038,55 +5044,56 @@ function MainAppContent({
       return;
     }
 
-    try {
-      if (channelPrompt.mode === "create") {
-        if (!selectedServerId || !channelPrompt.type) {
-          setAppError("Select a server before creating a channel");
-          return;
-        }
-        const { channel } = await createChannel(
-          selectedServerId,
-          name,
-          channelPrompt.type,
-          isPrivate ?? channelPrompt.isPrivate ?? false,
-          topic || undefined,
-        );
-        const next = [...channels, channel].sort(
-          (a, b) => a.position - b.position,
-        );
-        setChannels(next);
-        setAppError(null);
-        setChannelPrompt(null);
-        // A category is a grouping header, not a place to be — selecting it
-        // would try to open a message pane for something that can never have
-        // one.
-        if (channel.type !== "category") {
-          await selectChannel(channel.id);
-          if (channel.isPrivate) {
-            setChannelSettings({
-              channelId: channel.id,
-              section: "permissions",
-              forceAdvanced: false,
-            });
-          }
-        }
+    if (channelPrompt.mode === "create") {
+      if (!selectedServerId || !channelPrompt.type) {
+        setAppError("Select a server before creating a channel");
         return;
       }
-
-      if (channelPrompt.channel) {
-        const { channel } = await updateChannel(channelPrompt.channel.id, {
-          name,
-        });
-        setChannels((prev) =>
-          prev.map((c) => (c.id === channel.id ? channel : c)),
-        );
-        setChannelPrompt(null);
-        setAppError(null);
-      }
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Channel action failed",
+      const { channel } = await createChannel(
+        selectedServerId,
+        name,
+        channelPrompt.type,
+        isPrivate ?? channelPrompt.isPrivate ?? false,
+        topic || undefined,
       );
+      const next = [...channels, channel].sort(
+        (a, b) => a.position - b.position,
+      );
+      setChannels(next);
+      setAppError(null);
+      setChannelPrompt(null);
+      // A category is a grouping header, not a place to be — selecting it
+      // would try to open a message pane for something that can never have
+      // one.
+      if (channel.type !== "category") {
+        try {
+          await selectChannel(channel.id);
+        } catch (error) {
+          setAppError(
+            error instanceof Error ? error.message : "Channel action failed",
+          );
+          return;
+        }
+        if (channel.isPrivate) {
+          setChannelSettings({
+            channelId: channel.id,
+            section: "permissions",
+            forceAdvanced: false,
+          });
+        }
+      }
+      return;
+    }
+
+    if (channelPrompt.channel) {
+      const { channel } = await updateChannel(channelPrompt.channel.id, {
+        name,
+      });
+      setChannels((prev) =>
+        prev.map((c) => (c.id === channel.id ? channel : c)),
+      );
+      setChannelPrompt(null);
+      setAppError(null);
     }
   }
 
