@@ -26,7 +26,7 @@
 
   var S = {
     screen: "hoje", visited: {}, metrics: null, prevMetrics: null, health: null,
-    occupancy: null, occupancyAt: 0, activity: null, activityDays: 90, heat: null, heatLoading: false,
+    occupancy: null, occupancyAt: 0, activity: null, activityDays: 90, heat: null, heatLoading: false, heatError: null,
     feed: [], fb: { kind: "", status: "open", items: [], next: null, sel: null, counts: null, busy: false, loaded: false, seq: 0 },
     flags: null, flagBusy: false, open: {}, numbers: {}, firstDraw: {}
   };
@@ -55,12 +55,15 @@
     Object.keys(attrs || {}).forEach(function (k) { if (attrs[k] != null) el.setAttribute(k, attrs[k]); });
     return el;
   }
+  /**
+   * The deadline covers the whole read, body included: a response that
+   * sends its headers and then stalls must not hang a poll forever.
+   */
   function fetchJson(path, init) {
     var ctrl = "AbortController" in window ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 9000);
     return fetch(path, Object.assign({ cache: "no-store", credentials: "same-origin", signal: ctrl ? ctrl.signal : undefined }, init || {}))
       .then(function (r) {
-        clearTimeout(timer);
         if (!r.ok) {
           var err = new Error("http " + r.status);
           err.status = r.status;
@@ -68,7 +71,8 @@
           throw err;
         }
         return r.json();
-      }, function (e) { clearTimeout(timer); throw e; });
+      })
+      .then(function (body) { clearTimeout(timer); return body; }, function (e) { clearTimeout(timer); throw e; });
   }
   function color(key) { return { accent: "var(--accent)", series: "var(--series)", warn: "var(--warn)", bad: "var(--bad)", ok: "var(--ok)", faint: "var(--faint)" }[key] || key; }
   function fmt(n) { return M.fmt(n); }
@@ -408,7 +412,11 @@
       $("readAt").textContent = "lido às " + (function () { try { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(readAt); } catch { return ""; } })();
       $("readAt").title = "lido " + stamp(readAt.toISOString()) + " · relê a cada 30 s";
     });
-    var healthReq = fetchJson("/health").then(function (d) { S.health = d; }).catch(function () { /* the card says so */ });
+    // A failed health read clears the old one: showing the last answer as
+    // current during an outage is worse than saying there is no answer.
+    var healthReq = fetchJson("/health").then(function (d) { S.health = d; }).catch(function (e) {
+      S.health = { _err: e && e.message ? e.message : "erro", components: [] };
+    });
     if (!S.occupancy || Date.now() - S.occupancyAt > OCC_REFRESH_MS) {
       fetchJson("/occupancy?days=30").then(function (r) { S.occupancy = r; S.occupancyAt = Date.now(); renderScreen(S.screen); }).catch(function () {});
     }
@@ -437,36 +445,24 @@
       S.activityRetry = setTimeout(function () { if (S.activity && S.activity._err) loadActivity(true); }, ((e && e.retryAfter) || 15) * 1000);
     });
   }
+  /**
+   * The heatmap is one aggregate read. It is refreshed with the occupancy
+   * history (it changes by the minute, not by the poll), and a failed read
+   * retries after its Retry-After instead of leaving the card loading.
+   */
   function loadHeat() {
-    if (S.heat || S.heatLoading || !S.occupancy) { if (!S.occupancy) setTimeout(loadHeat, 1500); return; }
+    if (S.heatLoading || (S.heat && Date.now() - S.heat._at < OCC_REFRESH_MS)) return;
     S.heatLoading = true;
-    var days = (S.occupancy.points || []).slice(-21).map(function (p) { return p.at; });
-    // Two at a time, and a day that fails (a 429 during a burst, a timeout)
-    // is retried up to three times after its Retry-After, instead of being
-    // silently missing from the map for the whole session.
-    var queue = days.map(function (d) { return { day: d, tries: 0 }; });
-    var got = [], running = 0;
-    var publish = function () {
-      S.heat = M.heatmap(got); S.heat._days = got.length; S.heat._wanted = days.length;
+    fetchJson("/occupancy?shape=weekday-hour").then(function (r) {
+      S.heatLoading = false; S.heatError = null;
+      S.heat = M.heatmap(r); S.heat._at = Date.now();
       if (S.screen === "hoje") renderHeat();
-    };
-    var next = function () {
-      while (running < 2 && queue.length) {
-        var job = queue.shift(); running++;
-        (function (job) {
-          fetchJson("/occupancy?day=" + encodeURIComponent(job.day)).then(function (r) {
-            got.push({ day: r.from, points: r.points || [] });
-            running--; publish(); next();
-          }, function (e) {
-            running--;
-            if (job.tries++ < 3) setTimeout(function () { queue.push(job); next(); }, ((e && e.retryAfter) || 3 + job.tries * 2) * 1000);
-            else { S.heatFailed = (S.heatFailed || 0) + 1; publish(); }
-            next();
-          });
-        })(job);
-      }
-    };
-    next();
+    }, function (e) {
+      S.heatLoading = false; S.heatError = e && e.message ? e.message : "erro";
+      if (S.screen === "hoje") renderHeat();
+      clearTimeout(S.heatRetry);
+      S.heatRetry = setTimeout(loadHeat, ((e && e.retryAfter) || 15) * 1000);
+    });
   }
   function updateStatus() {
     var m = S.metrics; if (!m) return;
@@ -622,7 +618,10 @@
   function renderHeat() {
     var host = $("hHeat"); if (!host) return;
     var hm = S.heat;
-    if (!hm) { if (!host.firstChild) host.appendChild(h("p", { class: "empty", text: "lendo as amostras de um minuto dos últimos 21 dias…" })); return; }
+    if (!hm) {
+      clear(host).appendChild(h("p", { class: "empty", text: S.heatError ? "Não deu para ler o mapa agora (" + S.heatError + "). Tentando de novo sozinho." : "lendo as amostras de um minuto dos últimos 21 dias…" }));
+      return;
+    }
     var names = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
     var animate = firstTime("heat");
     clear(host);
@@ -643,7 +642,7 @@
     grid.appendChild(hours);
     grid.addEventListener("mouseleave", function () { cap.textContent = POINT + " num quadrado"; });
     host.appendChild(grid);
-    $("hHeatAside").textContent = fmt(hm._days || 0) + (hm._wanted && hm._days < hm._wanted ? " de " + fmt(hm._wanted) : "") + " dias lidos" + (S.heatFailed ? " · " + fmt(S.heatFailed) + " falharam" : "");
+    $("hHeatAside").textContent = hm.days ? "média de " + fmt(hm.days) + (hm.days === 1 ? " dia" : " dias") : "sem amostras ainda";
   }
 
   function hojeDetails(m) {
@@ -666,7 +665,7 @@
       { id: "leituras", title: "Leituras do sistema", summary: "pool, latência e voz, com os números por trás de cada frase", openByDefault: true, body: [verdictEls] },
       { id: "salas", title: "Salas abertas agora", summary: fmt(voice.activeRooms) + " salas · " + fmt(voice.participants) + " pessoas · caminho de mídia e há quanto tempo cada uma está no ar",
         body: [rooms.length ? table(["sala", "servidor", "caminho", "pessoas", "compartilhando", "no ar há"], rooms.map(function (r) { return [r.channel || "conversa", (r.server || "—") + (r.community ? " · " + M.communityBadge(r.community).text : ""), r.transport === "livekit" ? "servidor de mídia" : "ponto a ponto", fmt(r.participants), fmt(r.sharingScreen), r.openedAt ? ago(r.openedAt).replace("há ", "") : "—"]; }), [3, 4]) : para("Ninguém em chamada agora.")] },
-      { id: "saude", title: "Saúde dos serviços", summary: (function () { var on = comps.filter(function (c) { return c.state !== "disabled"; }); var ok = on.filter(function (c) { return c.state === "operational"; }).length; var off = comps.length - on.length; return ok + " de " + on.length + " operacionais" + (off ? " · " + off + (off === 1 ? " desligado" : " desligados") : "") + " · latência agora, normal (p50) e uptime"; })(),
+      { id: "saude", title: "Saúde dos serviços", summary: S.health && S.health._err ? "sem leitura agora · " + S.health._err : (function () { var on = comps.filter(function (c) { return c.state !== "disabled"; }); var ok = on.filter(function (c) { return c.state === "operational"; }).length; var off = comps.length - on.length; return ok + " de " + on.length + " operacionais" + (off ? " · " + off + (off === 1 ? " desligado" : " desligados") : "") + " · latência agora, normal (p50) e uptime"; })(),
         body: [table(["componente", "estado", "agora", "normal (p50)", "p95", "uptime 24 h"], comps.map(function (c) { var hc = hist[c.key] || {}; return [NAMES[c.key] || c.label, { operational: "operacional", degraded: "instável", down: "fora do ar", disabled: "desligado" }[c.state] || c.state, ms(c.latencyMs), ms(hc.p50), ms(hc.p95), c.uptime24h != null ? M.dec(c.uptime24h * 100, 2) + "%" : "—"]; }), [2, 3, 4, 5])] },
       { id: "voz", title: "Voz hoje", summary: "maior sala hoje: " + fmt(voice.peakRoomSizeToday) + " · contado desde " + (voice.peakTrackedSince ? stamp(voice.peakTrackedSince) : "—"),
         body: [stats([["pessoas agora", fmt(voice.participants), "em " + fmt(voice.activeRooms) + " salas"], ["maior sala agora", fmt(voice.largestRoomNow), ""], ["maior sala hoje", fmt(voice.peakRoomSizeToday), "zera no deploy"], ["caminho padrão", voice.backend === "livekit" ? "servidor" : "p2p", "salas pequenas ficam p2p"]])] },
@@ -968,7 +967,7 @@
     fb.loading = true;
     return fetchJson("/operator/feedback?" + q).then(function (r) {
       if (seq !== fb.seq) return;
-      fb.loading = false; fb.loaded = true;
+      fb.loading = false; fb.loaded = true; fb.error = null;
       fb.items = append ? fb.items.concat(r.items) : r.items;
       fb.next = r.next; fb.counts = r.counts;
       if (!fb.items.some(function (x) { return x.id === fb.sel; })) fb.sel = fb.items.length ? fb.items[0].id : null;
@@ -976,6 +975,10 @@
     }).catch(function (e) {
       if (seq !== fb.seq) return;
       fb.loading = false; fb.error = e && e.message ? e.message : "erro";
+      // A failed "more" keeps what is already on screen, which still matches
+      // the filter. A failed fresh read drops it: those items belong to the
+      // previous filter or to a state that has changed since.
+      if (!append) { fb.items = []; fb.counts = null; fb.next = null; fb.sel = null; fb.loaded = false; }
       renderFila(true);
     });
   }
@@ -1010,6 +1013,12 @@
     var groups = M.groupFeedback(visible);
     if ((fb.sort || "recent") === "most") groups.sort(function (a, b) { return b.others.length - a.others.length; });
     fb.groups = groups;
+    if (!groups.length && fb.error) {
+      list.appendChild(h("div", { class: "empty", style: "display:flex;flex-direction:column;align-items:flex-start;gap:10px" }, [
+        h("span", { text: "Não deu para ler a fila (" + fb.error + ")." }),
+        h("button", { type: "button", class: "btn", text: "tentar de novo", onclick: function () { fb.error = null; loadFeedback(false); renderFila(true); } })
+      ]));
+    }
     if (!groups.some(function (g) { return g.item.id === fb.sel; })) fb.sel = groups.length ? groups[0].item.id : null;
     groups.forEach(function (g, i) {
       var it = g.item, n = g.others.length + 1;
@@ -1180,6 +1189,7 @@
     $("sLede").textContent = "commit " + (m.version ? String(m.version).slice(0, 7) : "—") + " · " + fmt(m.instanceCount || cl.instances || 1) + (m.instanceCount === 1 ? " instância" : " instâncias") + " da api · " + ({ closed: "banco ok (disjuntor fechado)", open: "banco recusando consultas (disjuntor aberto)", "half-open": "banco voltando (disjuntor testando)" }[m.runtime && m.runtime.db && m.runtime.db.breaker.state] || "banco: sem leitura");
     var sv = clear($("sServices"));
     sv.appendChild(h("div", { class: "svc-head", style: "grid-template-columns:minmax(150px,1fr) 150px 70px 70px 80px 70px" }, ["serviço", "últimas 24 h", "agora", "normal", "no ar 24 h", "no ar 7 d"].map(function (t) { return h("span", { text: t }); })));
+    if (S.health && S.health._err) sv.appendChild(h("p", { class: "empty", text: "Não deu para ler a saúde dos serviços agora (" + S.health._err + "). Tenta de novo a cada 30 s." }));
     comps.forEach(function (c) {
       var hc = hist[c.key];
       var lat = hc ? hc.points.map(function (p) { return p.ms; }) : null;

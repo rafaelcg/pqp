@@ -489,7 +489,7 @@ export default {
     // timeout, same headers as /metrics; a separate route because it is a
     // separate read on a much slower cadence, and because the page asks for a
     // single day at minute resolution when somebody drills into one. Only
-    // `days` and `day` are forwarded: the upstream ignores anything else and
+    // `days`, `day` and `shape` are forwarded: the upstream ignores anything else and
     // an open query passthrough is a proxy nobody asked for.
     if (path === "/occupancy") {
       if (!origin || !env.ADMIN_METRICS_TOKEN) {
@@ -500,6 +500,11 @@ export default {
       const day = url.searchParams.get("day");
       if (days) upstream.searchParams.set("days", days);
       if (day) upstream.searchParams.set("day", day);
+      // The redesigned page's heatmap: one aggregate instead of 21 days of
+      // minutes. Only the one known value passes.
+      if (url.searchParams.get("shape") === "weekday-hour") {
+        upstream.searchParams.set("shape", "weekday-hour");
+      }
       return proxyJson(upstream.toString(), {
         Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
       });

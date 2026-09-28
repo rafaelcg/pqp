@@ -93,15 +93,17 @@ test("the feed reports only real differences between two reads", () => {
   assert.deepEqual(kinds, ["signup", "room", "feedback"]);
 });
 
-test("the heatmap averages minute samples by São Paulo weekday and hour", () => {
-  // 2026-09-26 is a Saturday; 01:30Z is 22:30 in São Paulo.
-  const h = M.heatmap([{ day: "2026-09-26", points: [
-    { at: "2026-09-27T01:30:00Z", participants: 100 },
-    { at: "2026-09-27T01:31:00Z", participants: 60 }
-  ] }]);
+test("the heatmap places the API's weekday-hour averages, and leaves missing cells empty", () => {
+  const h = M.heatmap({ days: 21, cells: [
+    { weekday: 5, hour: 22, average: 80, samples: 2 },
+    { weekday: 0, hour: 12, average: 7, samples: 1 },
+    { weekday: 9, hour: 3, average: 999, samples: 1 }
+  ] });
   assert.equal(h.cells[5][22], 80);
-  assert.equal(h.max, 80);
+  assert.equal(h.cells[0][12], 7);
   assert.equal(h.cells[0][0], null);
+  assert.equal(h.max, 80);
+  assert.equal(h.days, 21);
 });
 
 test("the funnel is shares of the signup cohort, with the drop per step", () => {
@@ -245,4 +247,10 @@ test("live now is empty, and names the biggest room, when nothing is big", () =>
   const live = M.liveNow(metrics({ voice: { rooms: [{ server: "Resenha", channel: "papo", participants: 6 }] }, liveHls: { viewers: { live: null } } }));
   assert.equal(live.rows.length, 0);
   assert.equal(live.largest.total, 6);
+});
+
+test("a failed health read is not a healthy one", () => {
+  const failed = { _err: "http 503", components: [] };
+  assert.deepEqual(M.systemStatus(metrics(), [], failed), { tone: "warn", text: "saúde sem leitura" });
+  assert.ok(M.attention(metrics(), [], failed).some((a) => /saúde dos serviços/.test(a.title)));
 });

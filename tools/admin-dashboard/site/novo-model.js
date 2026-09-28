@@ -151,6 +151,9 @@
   function attention(m, verdicts, health) {
     var out = [];
     var tone = { bad: 0, warn: 1, info: 2, ok: 3 };
+    if (health && health._err) {
+      out.push({ tone: "warn", title: "Não deu para ler a saúde dos serviços", detail: "a última leitura falhou (" + health._err + ") · tenta de novo a cada 30 s", action: "ver serviços", target: "hoje:saude" });
+    }
     (verdicts || []).forEach(function (v) {
       if (!v || (v.state !== "bad" && v.state !== "warn")) return;
       // A pool peak that has passed is history, not an alarm: the pool is
@@ -224,6 +227,8 @@
     if (degraded.length || (breaker && breaker.state === "half-open") || now.length) {
       return { tone: "warn", text: degraded.length ? degraded.map(function (c) { return c.label; }).join(", ") + " instável" : "sistema pedindo atenção" };
     }
+    // No health reading is not a healthy reading.
+    if (health && health._err) return { tone: "warn", text: "saúde sem leitura" };
     return { tone: "ok", text: "sistema ok" };
   }
 
@@ -295,25 +300,22 @@
    * in each cell over the days fetched. `days` is [{ day: "YYYY-MM-DD",
    * points: [{ at, participants }] }]; times are read in São Paulo.
    */
-  function heatmap(days) {
-    var sum = [], n = [];
-    for (var i = 0; i < 7; i++) { sum.push(new Array(24).fill(0)); n.push(new Array(24).fill(0)); }
-    var fmtH = typeof Intl !== "undefined" ? new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23", weekday: "short" }) : null;
-    var wk = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
-    (days || []).forEach(function (d) {
-      (d.points || []).forEach(function (p) {
-        var t = new Date(p.at);
-        if (isNaN(t) || !fmtH) return;
-        var parts = fmtH.formatToParts(t);
-        var w = null, h = null;
-        parts.forEach(function (x) { if (x.type === "weekday") w = wk[x.value]; if (x.type === "hour") h = Number(x.value); });
-        if (w == null || h == null || isNaN(h)) return;
-        sum[w][h] += num(p.participants); n[w][h] += 1;
-      });
-    });
+  /**
+   * The weekday-by-hour map, from the API's own aggregate
+   * (`/occupancy?shape=weekday-hour`): one request and no per-sample work
+   * in the page. Weekday 0 is Monday. A cell with no sample stays null.
+   */
+  function heatmap(report) {
+    var cells = [];
+    for (var i = 0; i < 7; i++) cells.push(new Array(24).fill(null));
     var max = 0;
-    var cells = sum.map(function (row, w) { return row.map(function (s, h) { var v = n[w][h] ? s / n[w][h] : null; if (v != null && v > max) max = v; return v; }); });
-    return { cells: cells, max: max };
+    ((report && report.cells) || []).forEach(function (c) {
+      if (!(c.weekday >= 0 && c.weekday < 7 && c.hour >= 0 && c.hour < 24)) return;
+      var v = num(c.average);
+      cells[c.weekday][c.hour] = v;
+      if (v > max) max = v;
+    });
+    return { cells: cells, max: max, days: report ? num(report.days) : 0 };
   }
 
   /** The activation funnel, as steps with the drop from the previous one. */
