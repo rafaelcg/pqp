@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   Hand,
+  Info,
   LayoutGrid,
   Loader2,
   Maximize2,
@@ -2133,8 +2134,27 @@ function ActiveCall({
                     which is the same question the person asking "why can't I
                     hear it" is trying to answer. */}
                 {!focusedShareHasAudio && (
-                  <span className="ml-1 text-paper-muted">
-                    ({t("voice.share.noAudioShort")})
+                  <span className="ml-1 inline-flex items-center gap-1 text-paper-muted">
+                    <span>({t("voice.share.noAudioShort")})</span>
+                    {/* For a REMOTE presenter only: the local sharer already
+                        knows why (the strip notice, or their own picker,
+                        already said so). A one-line "not a bug" for whoever is
+                        watching, so "sem som" reads as a platform fact rather
+                        than something broken on their end. Kept to an icon
+                        because the overlay is already crowded, and the
+                        Tooltip's own contract is hover/keyboard focus, not a
+                        tap: see `components/ui/tooltip.tsx`. */}
+                    {!focusedIsLocal && (
+                      <Tooltip label={t("voice.share.noAudioTooltip")}>
+                        <button
+                          type="button"
+                          aria-label={t("voice.share.noAudioTooltip")}
+                          className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
+                        >
+                          <Info className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                      </Tooltip>
+                    )}
                   </span>
                 )}
                 {/* Said while it is happening, so the presenter knows the

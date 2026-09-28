@@ -66,6 +66,8 @@ import {
   cursorConstraintFor,
   type CursorCaptureConstraint,
 } from "./screen-capture-cursor";
+import type { Platform } from "./downloads";
+import type { MessageKey } from "@/lib/i18n";
 
 /**
  * The display-capture options the DOM lib does not know about yet.
@@ -860,4 +862,52 @@ export function shareStreamHasAudio(
   audioTracks: readonly { readyState?: string }[],
 ): boolean {
   return audioTracks.some((track) => track.readyState !== "ended");
+}
+
+/**
+ * Which `voice.notice.systemAudioStripped*` line explains a track this
+ * machine just stripped for carrying the call.
+ *
+ * `voice.notice.systemAudioStripped` says WHY (this Windows version cannot
+ * exclude the call) but not HOW to get sound at all. Windows 10 in a BROWSER
+ * is the one case with a real answer, because a Chrome TAB share is a
+ * completely different capture path: it carries that tab's own sound and
+ * `systemAudio` never enters it. This is the live case the quick win in
+ * `docs/plans/DESKTOP_SHARE_AUDIO_PER_APP.md` exists for (27 Sep 2026,
+ * `cap1tao`, "está compartilhando (sem som)" with no way forward).
+ *
+ * SCOPED TO THE BROWSER on purpose. The desktop app's own picker now
+ * explains the same thing before the share even starts
+ * (`electron/picker/picker.js`, `pickerAudioState`), so a shell reaching this
+ * strip path would be repeating a line the person already read once. Every
+ * other platform this sees (macOS, Linux, an old shell) has no better answer
+ * to give than the original notice, so it keeps that one.
+ *
+ * `desktopAppAvailable` is the native per-app capture add-on
+ * (`desktop_share_audio_native`), which is still unshipped work, not a live
+ * feature — see the plan doc's "native audio add-on" section. TODO(desktop
+ * share audio native): once that flag exists and is exposed to the client
+ * through a config read (the pattern `docs/FEATURE_FLAGS.md` describes for a
+ * flag the client needs to know), pass its live value here instead of the
+ * `false` every caller uses today, so a Windows 10 browser is pointed at the
+ * desktop app instead of only a Chrome tab.
+ */
+export function systemAudioStrippedNoticeKey(input: {
+  /** True inside the Electron shell. See the scoping note above. */
+  isDesktopShell: boolean;
+  platform: Platform;
+  /** Windows 11 (NT build >= 22000) can exclude the call; Windows 10 cannot. */
+  osCanExcludeCallAudio: boolean;
+  desktopAppAvailable?: boolean;
+}): MessageKey {
+  const isWindows10Browser =
+    !input.isDesktopShell &&
+    input.platform === "windows" &&
+    !input.osCanExcludeCallAudio;
+  if (!isWindows10Browser) {
+    return "voice.notice.systemAudioStripped";
+  }
+  return input.desktopAppAvailable
+    ? "voice.notice.systemAudioStrippedWin10App"
+    : "voice.notice.systemAudioStrippedWin10Tab";
 }

@@ -40,6 +40,7 @@ const {
   screenPermission,
   captureResponse,
   windowsBuildAllowsOwnAudioExclude,
+  pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
 const {
@@ -99,10 +100,6 @@ function canExcludeOwnAudioOnThisOs() {
     process.platform !== "win32" ||
     windowsBuildAllowsOwnAudioExclude(os.release())
   );
-}
-
-function windowsLoopbackAllowed() {
-  return process.platform === "win32" && canExcludeOwnAudioOnThisOs();
 }
 
 /** @type {BrowserWindow | null} */
@@ -857,7 +854,10 @@ function showSourcePicker(labeled) {
         ? {
             sources: labeled,
             dark,
-            offersAudio: windowsLoopbackAllowed(),
+            // "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice) or
+            // "explain" (Windows 10, where the checkbox would be a lie). See
+            // `pickerAudioState` for why this replaced a plain boolean.
+            audioState: pickerAudioState(process.platform, os.release()),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -869,6 +869,8 @@ function showSourcePicker(labeled) {
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
               shareAudioHint: t("share.audioHint"),
+              shareAudioWin10: t("share.audioWin10Unavailable"),
+              shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
             },
           }
         : null;

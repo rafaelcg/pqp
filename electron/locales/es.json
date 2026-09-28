@@ -27,6 +27,8 @@
   "share.confirm": "Compartir",
   "share.audio": "Compartir el sonido de la computadora",
   "share.audioHint": "El juego, la música, lo que esté sonando. Solo en Windows 11. La llamada en sí no se incluye.",
+  "share.audioWin10Unavailable": "El sonido de la computadora no está disponible en Windows 10 (la llamada se colaría en la transmisión).",
+  "share.audioWin10UnavailableHint": "Para mandar sonido: abre pqp en Chrome y comparte una pestaña con \"Compartir también el audio de la pestaña\".",
   "share.empty": "No hay nada que compartir en esta computadora.",
   "share.permissionTitle": "pqp no puede ver tu pantalla",
   "share.permissionBody": "macOS no le dio a pqp permiso para grabar la pantalla, así que no hay nada que ofrecer. Activa pqp en Privacidad y seguridad > Grabación de pantalla y audio del sistema, cierra pqp, ábrelo de nuevo e intenta compartir otra vez.",

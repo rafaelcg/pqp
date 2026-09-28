@@ -19,6 +19,19 @@ let sources = [];
 let selectedId = null;
 /** Guards against a second answer after the window starts closing. */
 let answered = false;
+/**
+ * `"hidden"` (mac/Linux, no sound to talk about), `"checkbox"` (Windows 11,
+ * a real choice) or `"explain"` (Windows 10, where the checkbox would be a
+ * lie). Set once per `render()`, from `pickerAudioState` in main.
+ * @type {"hidden"|"checkbox"|"explain"}
+ */
+let audioState = "hidden";
+/**
+ * Once a person has touched the checkbox themselves, their choice is final
+ * for this picker session: `select()` stops overwriting it when the tile
+ * selection changes.
+ */
+let audioUserToggled = false;
 
 const el = {
   title: document.getElementById("title"),
@@ -58,12 +71,34 @@ function shareSelected() {
   bridge.choose(selectedId, shareAudioChecked());
 }
 
+/**
+ * The audio checkbox's default follows what is selected: ON for a screen,
+ * OFF for a window.
+ *
+ * WHY. On Windows 11 the tap is the whole machine's mixer minus this app's
+ * own output, so a screen share carrying it is exactly "share my screen,
+ * with the sound that goes with it", the Discord-shaped expectation and safe
+ * by design (`docs/plans/DESKTOP_SHARE_AUDIO_PER_APP.md`, "the quick win").
+ * A window is a narrower promise a person is more likely to be making on
+ * purpose ("just this app"), so it starts unticked rather than assuming they
+ * also want everything else playing on the machine. Either way this is only
+ * ever the DEFAULT: `audioUserToggled` stops it from overriding a choice the
+ * person already made.
+ */
+function defaultShareAudioChecked(kind) {
+  return kind === "screen";
+}
+
 function select(id) {
   selectedId = id;
   for (const tile of document.querySelectorAll(".tile")) {
     tile.setAttribute("aria-pressed", String(tile.dataset.id === id));
   }
   el.confirm.disabled = !id;
+  if (audioState === "checkbox" && !audioUserToggled && el.shareAudio) {
+    const source = sources.find((s) => s.id === id);
+    el.shareAudio.checked = source ? defaultShareAudioChecked(source.kind) : false;
+  }
 }
 
 function buildTile(source, strings) {
@@ -131,9 +166,51 @@ function moveSelection(step) {
   }
 }
 
+/**
+ * Fills in the audio row for the state `render()` was handed.
+ *
+ * Three shapes, not a hidden/shown toggle: see the `audioState` doc comment
+ * up top for why a hidden row on Windows 10 was the bug, not a simplification.
+ */
+function renderAudioRow(strings) {
+  audioUserToggled = false;
+  el.shareAudio.checked = false;
+
+  if (audioState === "hidden") {
+    el.audioRow.hidden = true;
+    el.shareAudio.hidden = true;
+    el.shareAudio.disabled = true;
+    return;
+  }
+
+  el.audioRow.hidden = false;
+
+  if (audioState === "explain") {
+    // No real choice to offer: ticking this on Windows 10 could not exclude
+    // the call anyway (Chromium only honours the exclude on Windows 11), so
+    // there is no checkbox here, only the one line saying what to do instead.
+    el.shareAudio.hidden = true;
+    el.shareAudio.disabled = true;
+    el.audioLabel.textContent = strings.shareAudioWin10;
+    el.audioHint.textContent = strings.shareAudioWin10Hint;
+    return;
+  }
+
+  // "checkbox": Windows 11, a real choice. `select()` sets its default once
+  // the first surface is preselected below.
+  el.shareAudio.hidden = false;
+  el.shareAudio.disabled = false;
+  el.audioLabel.textContent = strings.shareAudio;
+  el.audioHint.textContent = strings.shareAudioHint;
+}
+
 function render(payload) {
   const strings = payload.strings;
   sources = payload.sources;
+  audioState =
+    payload.audioState === "checkbox" || payload.audioState === "explain"
+      ? payload.audioState
+      : "hidden";
 
   document.documentElement.setAttribute("data-theme", payload.dark ? "dark" : "light");
   document.title = strings.title;
@@ -144,10 +221,7 @@ function render(payload) {
   el.cancel.textContent = strings.cancel;
   el.confirm.textContent = strings.confirm;
   el.empty.textContent = strings.empty;
-  el.audioLabel.textContent = strings.shareAudio;
-  el.audioHint.textContent = strings.shareAudioHint;
-  el.audioRow.hidden = payload.offersAudio !== true;
-  el.shareAudio.checked = false;
+  renderAudioRow(strings);
 
   const screens = sources.filter((s) => s.kind === "screen");
   const windows = sources.filter((s) => s.kind === "window");
@@ -196,6 +270,11 @@ document.addEventListener("keydown", (event) => {
 
 el.cancel.addEventListener("click", cancel);
 el.confirm.addEventListener("click", shareSelected);
+// A person who ticks or unticks the box has made their own choice; stop
+// `select()` from overwriting it when they change tiles afterwards.
+el.shareAudio.addEventListener("change", () => {
+  audioUserToggled = true;
+});
 
 // A window closed by its own titlebar button never reaches this script, so the
 // cancel path lives in the main process too. This only covers the reload case.

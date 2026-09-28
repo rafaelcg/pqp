@@ -16,6 +16,7 @@ import {
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
+  systemAudioStrippedNoticeKey,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
 
@@ -571,6 +572,71 @@ describe("shareStreamHasAudio", () => {
     expect(
       shareStreamHasAudio([{ readyState: "ended" }, { readyState: "live" }]),
     ).toBe(true);
+  });
+});
+
+describe("systemAudioStrippedNoticeKey", () => {
+  it("keeps the plain notice off Windows entirely", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "mac",
+        osCanExcludeCallAudio: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "linux",
+        osCanExcludeCallAudio: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("keeps the plain notice on a Windows 11 browser: exclude actually worked, this is not the Windows 10 case", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: true,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("keeps the plain notice inside the desktop shell: the picker already explained it", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: true,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("points a Windows 10 BROWSER at a Chrome tab, the one real answer it has", () => {
+    // The live case this exists for: cap1tao, 27 Sep 2026, "está
+    // compartilhando (sem som)" with no way forward given.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedWin10Tab");
+  });
+
+  it("points at the desktop app instead, once that native capture is available", () => {
+    // Unshipped today (`desktop_share_audio_native`); every caller passes
+    // `false` until the flag exists and is wired through, per the TODO at the
+    // call site in `use-voice.ts`.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        desktopAppAvailable: true,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedWin10App");
   });
 });
 

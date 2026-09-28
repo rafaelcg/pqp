@@ -38,8 +38,10 @@ import {
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
   stripLeakedSystemAudioTracks,
+  systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -5866,9 +5868,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the intent still wins, so a caller can override it for one share.
       await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
+      // Captured once and reused below for the strip notice
+      // (`systemAudioStrippedNoticeKey`): the same read of "what can this
+      // machine actually do" should decide both what we ask for and how we
+      // explain it if the OS could not keep its promise.
+      const captureEnv = liveScreenCaptureEnvironment();
       const options = screenCaptureOptions(
         shareSystemAudio,
-        liveScreenCaptureEnvironment(),
+        captureEnv,
         { ...intent, hideCursor },
       );
       // What was actually asked for, not what was ticked. In a browser this is
@@ -5932,7 +5939,17 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Fail closed before anyone else hears the mixer. Strip only when
       // exclude is known not to have applied; undefined settings stay.
       if (stripLeakedSystemAudioTracks(stream)) {
-        state.notice = translateMessage("voice.notice.systemAudioStripped");
+        state.notice = translateMessage(
+          systemAudioStrippedNoticeKey({
+            isDesktopShell: captureEnv.isDesktopShell,
+            platform: detectPlatform(readPlatformSignals()),
+            osCanExcludeCallAudio: captureEnv.osCanExcludeCallAudio,
+            // TODO(desktop_share_audio_native): once that runtime flag ships
+            // and is exposed to the client (docs/FEATURE_FLAGS.md), read its
+            // live value here instead of the constant `false` below.
+            desktopAppAvailable: false,
+          }),
+        );
       }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries
