@@ -90,6 +90,9 @@ jobs:
           # that tag is Electron). A single space hides the button.
           # Not a secret; a repository variable is enough.
           VITE_ANDROID_APK_URL: ${{ vars.VITE_ANDROID_APK_URL }}
+          # Optional — Google Play listing. Empty uses the code default in
+          # client/src/lib/play-store.ts (our own gg.pqp.app listing). A
+          # single space hides the badge and reverts /android to APK-only.
           VITE_PLAY_STORE_URL: ${{ vars.VITE_PLAY_STORE_URL }}
           # Hosted-only click counter for the /android APK button. Empty on a
           # fork means the build never beacons. Not a secret: the path is

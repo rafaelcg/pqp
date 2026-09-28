@@ -11,6 +11,7 @@ import {
   type AssetId,
 } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { playStoreUrl, playStoreUrlWithLocale } from "@/lib/play-store";
 import { testflightUrl } from "@/lib/testflight";
 
 /**
@@ -36,9 +37,11 @@ const QUIET_LINK =
   "underline decoration-paper-muted/40 underline-offset-4 transition-colors hover:text-paper hover:decoration-paper/60";
 
 export function DownloadCatalog() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { plan, prefetch, href } = useDownloadAssets();
   const beta = testflightUrl();
+  const rawPlay = playStoreUrl();
+  const play = rawPlay ? playStoreUrlWithLocale(rawPlay, locale) : null;
 
   useEffect(() => {
     prefetch();
@@ -143,9 +146,18 @@ export function DownloadCatalog() {
     );
     note = t("downloadPage.ios.body");
   } else if (onAndroid) {
+    // Google Play is the primary action now that the listing is live; `/android`
+    // (sideload steps, honest APK framing) is still where this button goes on a
+    // self-host that never set a Play listing.
     primary = (
       <Button asChild className={PRIMARY_CTA}>
-        <Link to="/android">{t("downloadPage.android.cta")}</Link>
+        {play ? (
+          <a href={play} rel="noopener">
+            {t("downloadPage.android.cta")}
+          </a>
+        ) : (
+          <Link to="/android">{t("downloadPage.android.cta")}</Link>
+        )}
       </Button>
     );
     note = t("downloadPage.android.body");

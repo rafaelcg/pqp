@@ -242,15 +242,15 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/android": {
     canonicalPath: "/android",
     title: {
-      "pt-BR": "Beta do Android · pqp em APK",
-      en: "Android beta · pqp APK",
-      es: "Beta de Android · pqp en APK",
+      "pt-BR": "pqp no Android · Google Play",
+      en: "pqp on Android · Google Play",
+      es: "pqp en Android · Google Play",
     },
     description: {
       "pt-BR":
-        "Acesso antecipado ao pqp no Android. Versão 0.4.0, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
-      en: "Early access to pqp on Android. Version 0.4.0, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
-      es: "Acceso anticipado a pqp en Android. Versión 0.4.0, beta. La voz funciona en todas las salas, de las chiquitas a las watch parties grandes. Descarga el APK, permite la instalación una vez y ya estás dentro. Gratis.",
+        "O pqp já está na Google Play. Baixa, autoriza as permissões de sempre e tá dentro. A voz funciona em toda sala, das pequenas às watch parties grandes. De graça.",
+      en: "pqp is live on Google Play. Download it, allow the usual permissions, and you're in. Voice works in every room, from small ones to big watch parties. Free.",
+      es: "pqp ya está en Google Play. Descárgalo, permite los permisos de siempre y ya estás dentro. La voz funciona en todas las salas, de las chiquitas a las watch parties grandes. Gratis.",
     },
   },
   "/download": {
@@ -262,9 +262,9 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "App de desktop pra Windows, Mac e Linux, um beta de iPhone pelo TestFlight, e um beta de Android em APK. O navegador continua funcionando sem instalar nada.",
-      en: "Desktop app for Windows, Mac, and Linux, an iPhone beta on TestFlight, and an Android beta as an APK. The browser still works with nothing to install.",
-      es: "App de escritorio para Windows, Mac y Linux, una beta para iPhone en TestFlight y una beta para Android en APK. El navegador sigue funcionando sin instalar nada.",
+        "App de desktop pra Windows, Mac e Linux, um beta de iPhone pelo TestFlight, e o app de Android na Google Play. O navegador continua funcionando sem instalar nada.",
+      en: "Desktop app for Windows, Mac, and Linux, an iPhone beta on TestFlight, and the Android app on Google Play. The browser still works with nothing to install.",
+      es: "App de escritorio para Windows, Mac y Linux, una beta para iPhone en TestFlight y la app de Android en Google Play. El navegador sigue funcionando sin instalar nada.",
     },
   },
   "/garanta": {
@@ -370,7 +370,7 @@ export const LANDING_FAQ: Record<
     {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone e Android se preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone se preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -402,7 +402,7 @@ export const LANDING_FAQ: Record<
     {
       question: "Do I need to install anything?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone and Android if you prefer.",
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta if you prefer.",
     },
     {
       question: "How many people fit in one call?",
@@ -434,7 +434,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Tengo que instalar algo?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, y betas para iPhone y Android si lo prefieres.",
+        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone si lo prefieres.",
     },
     {
       question: "¿Cuántas personas caben en una llamada?",
@@ -569,7 +569,7 @@ export const TELA_FAQ: Record<
     {
       question: "Tem no celular?",
       answer:
-        "No Android tem um beta em APK em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois. Ainda não está nas lojas.",
+        "O app de Android já está na Google Play, em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois.",
     },
     {
       question: "O que vocês guardam sobre mim?",
@@ -607,7 +607,7 @@ export const TELA_FAQ: Record<
     {
       question: "Does it work on a phone?",
       answer:
-        "On Android there is an APK beta at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both. Neither is on the stores yet.",
+        "The Android app is live on Google Play, at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both.",
     },
     {
       question: "What do you keep about me?",
@@ -644,7 +644,7 @@ export const TELA_FAQ: Record<
     {
       question: "¿Funciona en el celular?",
       answer:
-        "En Android hay una beta en APK en pqp.gg/android. En iPhone, TestFlight en pqp.gg/beta. El navegador sigue funcionando en los dos. Ninguna está en las tiendas todavía.",
+        "La app de Android ya está en Google Play, en pqp.gg/android. En iPhone, TestFlight en pqp.gg/beta. El navegador sigue funcionando en los dos.",
     },
     {
       question: "¿Qué guardan sobre mí?",
@@ -697,7 +697,7 @@ export const VEM_FAQ: Record<
     {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone (TestFlight) e Android (APK), se você preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se você preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -739,7 +739,7 @@ export const VEM_FAQ: Record<
     {
       question: "Do I have to install anything?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone (TestFlight) and Android (APK), if you prefer.",
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta on TestFlight, if you prefer.",
     },
     {
       question: "How many people fit in a call?",
@@ -781,7 +781,7 @@ export const VEM_FAQ: Record<
     {
       question: "¿Tengo que instalar algo?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay app de escritorio para Mac, Windows y Linux, y beta para iPhone (TestFlight) y Android (APK), si prefieres.",
+        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone en TestFlight, si prefieres.",
     },
     {
       question: "¿Cuántas personas caben en una llamada?",

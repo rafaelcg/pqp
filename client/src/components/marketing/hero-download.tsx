@@ -5,6 +5,7 @@ import { useDownloadAssets } from "@/components/downloads/use-download-assets";
 import { isDesktopApp } from "@/lib/desktop";
 import { DESKTOP_DOCS_URL, RELEASES_PAGE_URL, isAndroidDevice, isIOSDevice } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { playStoreUrl, playStoreUrlWithLocale } from "@/lib/play-store";
 import { testflightUrl } from "@/lib/testflight";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +64,7 @@ export function HeroDownload({
   style,
   tone = "hero",
 }: HeroDownloadProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { plan, prefetch, href } = useDownloadAssets();
   const classes = TONE[tone];
 
@@ -75,8 +76,8 @@ export function HeroDownload({
   if (plan.platform === "mobile") {
     const beta = testflightUrl();
     // The iOS beta is only for iPhones: an Android visitor offered a TestFlight
-    // link has nothing to do with it. Android gets `/android` (the APK).
-    // Anything else on a phone is still the PWA answer (docs/PWA.md).
+    // link has nothing to do with it. Anything else on a phone is still the
+    // PWA answer (docs/PWA.md).
     if (beta && isIOSDevice()) {
       return (
         <p className={cn(classes.muted, className)} style={style}>
@@ -92,14 +93,23 @@ export function HeroDownload({
       );
     }
     if (isAndroidDevice()) {
+      // Straight to the listing, not the `/android` landing: this is the
+      // hero's one-line CTA, and Google Play is the primary action now.
+      // `/android` (with the sideload steps and the honest framing) is still
+      // where this same link goes on a self-host that has no Play listing.
+      const play = playStoreUrl();
+      const playHref = play ? playStoreUrlWithLocale(play, locale) : null;
       return (
         <p className={cn(classes.muted, className)} style={style}>
-          <Link
-            to="/android"
-            className={classes.mobileLink}
-          >
-            {t("download.mobile.android")}
-          </Link>
+          {playHref ? (
+            <a href={playHref} rel="noopener" className={classes.mobileLink}>
+              {t("download.mobile.android")}
+            </a>
+          ) : (
+            <Link to="/android" className={classes.mobileLink}>
+              {t("download.mobile.android")}
+            </Link>
+          )}
         </p>
       );
     }
