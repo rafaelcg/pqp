@@ -138,9 +138,11 @@ const {
   deliverPermissionsUpdate,
   handleChatMessage,
   notifyFriendActivity,
+  notifyServerRemoved,
   postChannelMessage,
   resetChatRateLimits,
 } = await import("./chat.js");
+const bus = await import("../lib/bus.js");
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
@@ -478,6 +480,107 @@ describe("deliverPermissionsUpdate", () => {
       deliverPermissionsUpdate(serverId, 1, [member]),
     ).not.toThrow();
     expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * Kick, ban and delete: addressed to the people who lost the server, on every
+ * socket they hold, here and on the other machine. The addressees ride the bus
+ * frame because after a delete nobody can look them up again.
+ */
+describe("notifyServerRemoved", () => {
+  const removed = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const serverId = "33333333-3333-3333-3333-333333333333";
+  const open: Recorder[] = [];
+
+  function connect(userId: string, readyState = 1): Recorder {
+    const recorder = recordingSocket(readyState);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  /** A transport whose only job is to hand this instance a foreign frame. */
+  function installForeignBus(): (data: unknown) => void {
+    let dispatch: ((frame: {
+      origin: string;
+      topic: string;
+      data: unknown;
+    }) => void) | null = null;
+    bus.setBusTransport({
+      name: "test",
+      publish: () => {},
+      onFrame: (next) => {
+        dispatch = next;
+      },
+      close: async () => {},
+    });
+    return (data) =>
+      dispatch?.({ origin: "another-instance", topic: "chat.membership", data });
+  }
+
+  afterEach(() => {
+    bus.setBusTransport(null);
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("reaches every socket the removed person holds, and nobody else", () => {
+    const laptop = connect(removed);
+    const phone = connect(removed);
+    const other = connect(bystander);
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+
+    for (const recorder of [laptop, phone]) {
+      expect(framesOfType(recorder.received, "server-removed")).toEqual([
+        { type: "server-removed", serverId, reason: "kicked" },
+      ]);
+    }
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("skips a socket that is not open rather than throwing at the route", () => {
+    const closing = connect(removed, 3 /* CLOSED */);
+
+    expect(() => notifyServerRemoved(serverId, "banned", [removed])).not.toThrow();
+    expect(closing.received).toHaveLength(0);
+  });
+
+  it("delivers a frame from another instance to the people it names", () => {
+    const deliver = installForeignBus();
+    const target = connect(removed);
+    const other = connect(bystander);
+
+    deliver({
+      type: "server-removed",
+      serverId,
+      reason: "deleted",
+      userIds: [removed],
+    });
+
+    expect(framesOfType(target.received, "server-removed")).toEqual([
+      { type: "server-removed", serverId, reason: "deleted" },
+    ]);
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("drops a relayed frame with no addressees or a reason clients refuse", () => {
+    const deliver = installForeignBus();
+    const target = connect(removed);
+
+    deliver({ type: "server-removed", serverId, reason: "deleted" });
+    deliver({
+      type: "server-removed",
+      serverId,
+      reason: "vanished",
+      userIds: [removed],
+    });
+
+    expect(target.received).toHaveLength(0);
   });
 });
 

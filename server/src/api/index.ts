@@ -213,6 +213,7 @@ import {
   evictVoiceUsersExcept,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  notifyServerRemoved,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -701,6 +702,7 @@ import {
   getEveryoneRoleId,
   getMemberHierarchy,
   getPermissionsSnapshot,
+  listServerMemberIds,
   memberHasPermission,
   Permission,
   restorePrivateEveryoneViewOverwrite,
@@ -4974,10 +4976,16 @@ router.patch(
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
   await requireOwner(serverId!, user.id);
   const channelIds = await listServerChannelIds(serverId!);
-  await deleteServer(serverId!);
+  // Read before the delete: the membership rows cascade with the server, and
+  // afterwards there is nobody left to tell.
+  const memberIds = await listServerMemberIds(serverId!);
+  const deleted = await deleteServer(serverId!);
   for (const channelId of channelIds) {
     evictVoiceChannel(channelId);
     evictChannelViewers(channelId);
+  }
+  if (deleted) {
+    notifyServerRemoved(serverId!, "deleted", memberIds);
   }
   return { ok: true };
 });
@@ -8131,6 +8139,7 @@ router.delete(
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(userId!, channelIds);
     evictVoiceUser(userId!, channelIds);
+    notifyServerRemoved(serverId!, body.ban ? "banned" : "kicked", [userId!]);
     return { ok: true };
   },
 );
@@ -8573,7 +8582,12 @@ router.post(
     if (!(await getUserById(body.userId))) {
       throw new NotFound("User not found");
     }
-    await requireOutranked(serverId!, user.id, body.userId, "ban");
+    const targetRole = await requireOutranked(
+      serverId!,
+      user.id,
+      body.userId,
+      "ban",
+    );
 
     await banMember(serverId!, body.userId, user.id, body.reason);
     await logAudit({
@@ -8588,6 +8602,10 @@ router.post(
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(body.userId, channelIds);
     evictVoiceUser(body.userId, channelIds);
+    // A pre-emptive ban has no open session to update.
+    if (targetRole) {
+      notifyServerRemoved(serverId!, "banned", [body.userId]);
+    }
     return { ok: true };
   },
 );

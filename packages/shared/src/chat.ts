@@ -20,6 +20,7 @@ import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
+import { serverRemovedSchema } from "./moderation.js";
 import { setIdleMessageSchema } from "./status.js";
 // --- threads ---
 import {
@@ -621,6 +622,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,
+  // Per person too: see `moderation.ts`, and its absence from the list below.
+  serverRemovedSchema,
 ]);
 
 /**
@@ -716,6 +719,11 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  *
  * `community-home-update` is absent for the same reason: server-scoped, no
  * channel, clients refetch Baú. It travels on `chat.community-home`.
+ *
+ * `server-removed` is absent because its addressees are the people who just
+ * lost the server, so no channel could reach them anyway. It names who was
+ * kicked or banned by who receives it, and travels on `chat.membership` keyed
+ * by user id.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",

@@ -9,12 +9,14 @@ import {
   Permission,
   permissionsUpdateSchema,
   profileUpdateSchema,
+  serverRemovedSchema,
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
   type MessageRejectReason,
   type PollRequest,
   type ProfileUpdate,
+  type ServerRemoved,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
@@ -173,6 +175,7 @@ const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
 const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
+const MEMBERSHIP_TOPIC = "chat.membership";
 
 interface PresenceUser {
   id: string;
@@ -851,6 +854,47 @@ function deliverFriendActivity(
   const payload = encode({ type: "friend-activity", kind } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && user.id === userId) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Tell these people, on every socket they hold, that a server just left their
+ * list: they were kicked or banned, or it was deleted.
+ *
+ * The recipients are named by the caller rather than read here, because for a
+ * delete there is nobody left to read: the membership rows cascade with the
+ * server, so the route lists them first. For the same reason the bus frame
+ * carries the ids, and the other instances deliver without asking Postgres.
+ *
+ * Fire-and-forget, like `notifyFriendActivity`: the removal is already
+ * committed, and the route's answer must not wait on who has a tab open.
+ */
+export function notifyServerRemoved(
+  serverId: string,
+  reason: ServerRemoved["reason"],
+  userIds: readonly string[],
+): void {
+  if (userIds.length === 0) {
+    return;
+  }
+  const frame: ServerRemoved = { type: "server-removed", serverId, reason };
+  deliverServerRemoved(frame, userIds);
+  if (isBusEnabled()) {
+    publishToCluster(MEMBERSHIP_TOPIC, { ...frame, userIds: [...userIds] });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. See above. */
+export function deliverServerRemoved(
+  frame: ServerRemoved,
+  userIds: readonly string[],
+): void {
+  const addressed = new Set(userIds);
+  const payload = encode(frame);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && addressed.has(user.id)) {
       socket.send(payload);
     }
   });
@@ -2332,6 +2376,21 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
     return;
   }
   deliverFriendActivity(userId, kind);
+});
+
+/**
+ * A kick, ban or delete raised on another instance. The frame is parsed with
+ * the schema the clients parse it with, and the addressees must survive as a
+ * list of strings: without them the only alternative is a broadcast, which
+ * would tell a whole instance who was just removed from where.
+ */
+subscribeToCluster(MEMBERSHIP_TOPIC, (data) => {
+  const parsed = serverRemovedSchema.safeParse(data);
+  const userIds = asStringArray(asRecord(data)?.userIds);
+  if (!parsed.success || !userIds) {
+    return;
+  }
+  deliverServerRemoved(parsed.data, userIds);
 });
 
 subscribeToCluster(PERMISSIONS_TOPIC, (data) => {

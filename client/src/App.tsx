@@ -50,6 +50,7 @@ import type {
   MemberRole,
   SanctionNotice,
   Server,
+  ServerRemoved,
   ThreadSummary,
   User,
   VoiceRoomTransport,
@@ -416,7 +417,11 @@ import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
-import { translateMessage, useTranslation } from "@/lib/i18n";
+import {
+  translateMessage,
+  useTranslation,
+  type MessageKey,
+} from "@/lib/i18n";
 import {
   conversationChannel,
   conversationSubtitle,
@@ -582,6 +587,14 @@ const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
  * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
  * `ChannelList` only ever reads this prop. */
 const EMPTY_FAVORITE_CHANNEL_IDS: string[] = [];
+
+/** What a `server-removed` frame says, by reason. A map, so every key the
+ * i18n check looks for is written out whole. */
+const SERVER_REMOVED_COPY: Record<ServerRemoved["reason"], MessageKey> = {
+  kicked: "chrome.serverRemoved.kicked",
+  banned: "chrome.serverRemoved.banned",
+  deleted: "chrome.serverRemoved.deleted",
+};
 
 interface AppProps {
   devBypass?: boolean;
@@ -4240,6 +4253,42 @@ function MainAppContent({
             return;
           }
 
+          // A kick, a ban or a delete took this server away while the tab was
+          // open. The server already refuses every read and send that
+          // follows; without this the rail, the channels and a member list
+          // with us still in it stayed up until a reload. Dropped the same
+          // way leaving does, then said once, in the error slot: the drop
+          // clears that slot, so the sentence goes in after it.
+          if (message.type === "server-removed") {
+            const gone = serversRef.current.find(
+              (row) => row.id === message.serverId,
+            );
+            if (!gone) {
+              return;
+            }
+            // The owner's own delete: the settings dialog drops it too, and
+            // telling them what they just did is noise.
+            const quiet = message.reason === "deleted" && gone.role === "owner";
+            if (message.serverId === selectedServerIdRef.current) {
+              setServerSettingsOpen(false);
+              setServerSettingsSection(undefined);
+            }
+            void dropServerRef.current(message.serverId).then(() => {
+              if (quiet) {
+                return;
+              }
+              // An older good-news line (a "you joined" one, say) must not
+              // sit beside the news that the server is gone.
+              setAppNotice(null);
+              setAppError(
+                translateMessage(SERVER_REMOVED_COPY[message.reason], {
+                  server: gone.name,
+                }),
+              );
+            });
+            return;
+          }
+
           if (message.type === "permissions-update") {
             if (message.serverId !== selectedServerIdRef.current) {
               return;
@@ -5288,6 +5337,9 @@ function MainAppContent({
       voiceState.voiceChannelId,
     ],
   );
+
+  const dropServerRef = useRef(dropServer);
+  dropServerRef.current = dropServer;
 
   async function handleLeaveServer(serverId: string) {
     setPendingLeaveServerId(serverId);
