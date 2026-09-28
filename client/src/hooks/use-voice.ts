@@ -34,6 +34,7 @@ import {
 } from "@/lib/desktop";
 import {
   capturesSystemAudio,
+  ensureConfirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
@@ -5939,11 +5940,18 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Fail closed before anyone else hears the mixer. Strip only when
       // exclude is known not to have applied; undefined settings stay.
       if (stripLeakedSystemAudioTracks(stream)) {
+        // A second, separate UA-CH read from `ensureOsCanExcludeCallAudio`
+        // above: that one answers "can I offer computer sound", this one
+        // answers "do I actually KNOW this is old Windows" -- see
+        // `systemAudioStrippedNoticeKey`'s doc comment for why conflating
+        // them once asserted "Windows 10" on a platform nobody confirmed.
+        const confirmedOldWindows = await ensureConfirmedOldWindowsFromUa();
         state.notice = translateMessage(
           systemAudioStrippedNoticeKey({
             isDesktopShell: captureEnv.isDesktopShell,
             platform: detectPlatform(readPlatformSignals()),
             osCanExcludeCallAudio: captureEnv.osCanExcludeCallAudio,
+            confirmedOldWindows,
             // TODO(desktop_share_audio_native): once that runtime flag ships
             // and is exposed to the client (docs/FEATURE_FLAGS.md), read its
             // live value here instead of the constant `false` below.

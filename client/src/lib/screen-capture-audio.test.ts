@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
+  confirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   needsShareAudioPrompt,
@@ -582,6 +583,7 @@ describe("systemAudioStrippedNoticeKey", () => {
         isDesktopShell: false,
         platform: "mac",
         osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
       }),
     ).toBe("voice.notice.systemAudioStripped");
     expect(
@@ -589,16 +591,18 @@ describe("systemAudioStrippedNoticeKey", () => {
         isDesktopShell: false,
         platform: "linux",
         osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
       }),
     ).toBe("voice.notice.systemAudioStripped");
   });
 
-  it("keeps the plain notice on a Windows 11 browser: exclude actually worked, this is not the Windows 10 case", () => {
+  it("keeps the plain notice on a Windows 11 browser: exclude actually worked, this is not the old-Windows case", () => {
     expect(
       systemAudioStrippedNoticeKey({
         isDesktopShell: false,
         platform: "windows",
         osCanExcludeCallAudio: true,
+        confirmedOldWindows: false,
       }),
     ).toBe("voice.notice.systemAudioStripped");
   });
@@ -609,11 +613,12 @@ describe("systemAudioStrippedNoticeKey", () => {
         isDesktopShell: true,
         platform: "windows",
         osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
       }),
     ).toBe("voice.notice.systemAudioStripped");
   });
 
-  it("points a Windows 10 BROWSER at a Chrome tab, the one real answer it has", () => {
+  it("points a CONFIRMED old-Windows browser at a Chrome tab, naming the platform", () => {
     // The live case this exists for: cap1tao, 27 Sep 2026, "está
     // compartilhando (sem som)" with no way forward given.
     expect(
@@ -621,11 +626,28 @@ describe("systemAudioStrippedNoticeKey", () => {
         isDesktopShell: false,
         platform: "windows",
         osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
       }),
     ).toBe("voice.notice.systemAudioStrippedWin10Tab");
   });
 
-  it("points at the desktop app instead, once that native capture is available", () => {
+  it("gives the SAME Chrome-tab answer with GENERIC wording when the version is not confirmed", () => {
+    // `osCanExcludeCallAudio: false` alone does not mean confirmed old
+    // Windows: it is also what a browser with no `userAgentData` (Safari,
+    // Firefox) or a UA-CH probe that merely threw reports. Farol caught the
+    // first pass of this notice asserting "Windows 10" over exactly this
+    // case, which the browser never actually told us.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedGenericTab");
+  });
+
+  it("points at the desktop app instead, once that native capture is available -- confirmed wording", () => {
     // Unshipped today (`desktop_share_audio_native`); every caller passes
     // `false` until the flag exists and is wired through, per the TODO at the
     // call site in `use-voice.ts`.
@@ -634,9 +656,48 @@ describe("systemAudioStrippedNoticeKey", () => {
         isDesktopShell: false,
         platform: "windows",
         osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
         desktopAppAvailable: true,
       }),
     ).toBe("voice.notice.systemAudioStrippedWin10App");
+  });
+
+  it("points at the desktop app instead -- generic wording when the version is not confirmed", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+        desktopAppAvailable: true,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedGenericApp");
+  });
+});
+
+describe("confirmedOldWindowsFromUa", () => {
+  it("is false for anything that is not Windows", () => {
+    expect(confirmedOldWindowsFromUa("macOS", "13.0.0")).toBe(false);
+    expect(confirmedOldWindowsFromUa(undefined, "10.0.19045")).toBe(false);
+  });
+
+  it("is false with no platformVersion at all: a browser with no userAgentData, or a probe that threw", () => {
+    expect(confirmedOldWindowsFromUa("Windows", undefined)).toBe(false);
+    expect(confirmedOldWindowsFromUa("Windows", "")).toBe(false);
+  });
+
+  it("is false for a garbage platformVersion: unparsable is not confirmed", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "not-a-version")).toBe(false);
+  });
+
+  it("is false for a confirmed Windows 11: exclude actually worked", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "13.0.0")).toBe(false);
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.22000")).toBe(false);
+  });
+
+  it("is true only for a Windows build UA-CH confirmed is below 11", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.19045")).toBe(true);
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.20348")).toBe(true);
   });
 });
 
