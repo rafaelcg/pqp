@@ -97,7 +97,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "fb247018",
+      sourceRev: "02f13f1a",
       heading: "Armazenamento local",
       body: (
         <>
@@ -273,7 +273,8 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp:cinema-hint-2026-09</code>,{" "}
               <code>pqp:music-pip-2026-09</code>,{" "}
               <code>pqp:voice-clean-settings-seen</code>,{" "}
-              <code>pqp:obs-virtual-camera-hint-dismissed</code>, toda chave que começa
+              <code>pqp:obs-virtual-camera-hint-dismissed</code>,{" "}
+              <code>pqp:linux-share-audio-hint-2026-09</code>, toda chave que começa
               com <code>pqp:feature-hint-</code>, e{" "}
               <code>pqp:voice-capacity-</code> seguido do id de um canal de voz.
             </li>

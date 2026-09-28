@@ -811,13 +811,11 @@ export function escapeHtml(value: string): string {
  * Every page carries the WebSite node, and now an Organization node beside
  * it: one stable identity for the publisher, independent of which page a
  * crawler landed on first, with `sameAs` pointing at the other place the same
- * product answers for itself: the source repository this codebase lives in.
- * `sameAs` is for pages anyone can already land on, so both stores are
- * absent. TestFlight is a beta enrollment, not a public listing. The Play
- * listing (`gg.pqp.app`) has production access open (`docs/ANDROID_RELEASE.md`)
- * but answered 404 to the public on 2026-09-23, and `/android` itself only
- * shows a Play button once `VITE_PLAY_STORE_URL` is set (`lib/play-store.ts`).
- * Add it back here in the same change that sets that variable.
+ * product answers for itself: the source repository this codebase lives in,
+ * and the Play listing (the same URL as `PLAY_STORE_LISTING_URL` in
+ * `lib/play-store.ts`), public since 2026-09-28.
+ * `sameAs` is for pages anyone can already land on, so the App Store is
+ * absent: TestFlight is a beta enrollment, not a public listing.
  *
  * The landing adds SoftwareApplication — the page is the product — mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
@@ -826,13 +824,16 @@ export function escapeHtml(value: string): string {
  * the page — schema for copy a visitor can read, never schema alone. `/tela`
  * does the same with its own seven.
  */
-const ORGANIZATION_SAME_AS = ["https://github.com/rafaelcg/pqp"];
+const ORGANIZATION_SAME_AS = [
+  "https://github.com/rafaelcg/pqp",
+  "https://play.google.com/store/apps/details?id=gg.pqp.app",
+];
 
 /**
  * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
  * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
  * the Electron builds for all three systems, iPhone the TestFlight beta, and
- * Android the APK. `client/index.html` carries the same string for every page
+ * Android the Google Play app. `client/index.html` carries the same string for every page
  * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
  */
 export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";

@@ -252,7 +252,8 @@ export const cookiesEn: LegalDocument = {
               <code>pqp:cinema-hint-2026-09</code>,{" "}
               <code>pqp:music-pip-2026-09</code>,{" "}
               <code>pqp:voice-clean-settings-seen</code>,{" "}
-              <code>pqp:obs-virtual-camera-hint-dismissed</code>, every key that starts
+              <code>pqp:obs-virtual-camera-hint-dismissed</code>,{" "}
+              <code>pqp:linux-share-audio-hint-2026-09</code>, every key that starts
               with <code>pqp:feature-hint-</code>, and{" "}
               <code>pqp:voice-capacity-</code> followed by a voice channel id.
             </li>

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import es from "../locales/es/translation.json";
+import { PLAY_STORE_LISTING_URL } from "./play-store";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
@@ -564,9 +565,17 @@ describe("structured data", () => {
   it("points sameAs only at pages the public can open", () => {
     for (const node of jsonLdGraph(renderMarketingHead("/", "en"))) {
       for (const url of (node.sameAs as string[] | undefined) ?? []) {
-        // The Play listing 404s until it is published. See ORGANIZATION_SAME_AS.
-        expect(url).not.toContain("play.google.com");
+        // TestFlight is a beta enrollment, not a public listing.
+        expect(url).not.toContain("apps.apple.com");
+        expect(url).not.toContain("testflight");
       }
     }
+  });
+
+  it("names the public Play listing, the same one /android links to", () => {
+    const org = jsonLdGraph(renderMarketingHead("/", "en")).find(
+      (node) => node["@type"] === "Organization",
+    );
+    expect(org?.sameAs).toContain(PLAY_STORE_LISTING_URL);
   });
 });
