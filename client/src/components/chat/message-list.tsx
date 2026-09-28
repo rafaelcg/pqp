@@ -117,8 +117,21 @@ const STICKY_THRESHOLD_PX = 120;
 const LOAD_MORE_THRESHOLD_PX = 240;
 /** How long a jumped-to message stays lit. */
 const HIGHLIGHT_MS = 2_000;
+/**
+ * How long a jump's smooth scroll may take before it is treated as stopped,
+ * for a browser without `scrollend` or a scroll that had nowhere to go (which
+ * fires nothing at all).
+ */
+const JUMP_SETTLE_MS = 1_000;
+/** At most this many re-centring frames once a jump's scroll has stopped. */
+const JUMP_SETTLE_PASSES = 6;
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
+
+/** How far the transcript is scrolled up from its live end, in pixels. */
+function distanceFromBottom(container: HTMLElement): number {
+  return container.scrollHeight - container.scrollTop - container.clientHeight;
+}
 
 /**
  * Skip layout and paint for a row while it is off screen, the cheap half of
@@ -570,6 +583,24 @@ export const MessageList = memo(function MessageList({
   const appendedRef = useRef(0);
   /** Set while a jump back to the live end is in flight. */
   const pendingTailRef = useRef(false);
+  /**
+   * Set while a jump to a message is still travelling there.
+   *
+   * `focusRow` starts a smooth scroll away from the tail, and the first scroll
+   * events of that animation are still within `STICKY_THRESHOLD_PX` of the
+   * bottom, so `handleScroll` used to re-pin the list on its way out. Rows off
+   * screen are `content-visibility: auto` and get laid out as the animation
+   * passes them, the ResizeObserver saw a pinned list growing, and snapped it
+   * back to the bottom: a permalink or a search result to anything already in
+   * the loaded page flashed a row nobody could see. While this is set the
+   * scroll handler neither pins nor pages; it reads the geometry once when
+   * the jump lands.
+   */
+  const jumpingRef = useRef(false);
+  /** The message the jump in flight is going to. */
+  const jumpTargetRef = useRef<string | null>(null);
+  /** Cancels what the jump in flight waits on: `scrollend`, a timer, a frame. */
+  const jumpSettleCleanupRef = useRef<(() => void) | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
 
   /**
@@ -911,6 +942,58 @@ export const MessageList = memo(function MessageList({
   }, []);
 
   /**
+   * The jump's smooth scroll has stopped: put the row where it was meant to
+   * be, then hand the scroll back to `handleScroll`.
+   *
+   * The smooth scroll aimed at a place measured before the rows between here
+   * and there had ever been laid out, and a `content-visibility` row that has
+   * never rendered is its 64px guess until it does. Those rows take their
+   * real height as the animation passes them, so the target drifts, by
+   * several rows on a long jump, sometimes off screen. Each pass re-centres
+   * the row instantly and waits a frame for whatever that brought on screen
+   * to lay out, until a pass has nothing left to move.
+   */
+  const settleJump = useCallback(() => {
+    jumpSettleCleanupRef.current?.();
+    jumpSettleCleanupRef.current = null;
+    if (!jumpingRef.current) {
+      return;
+    }
+    let passes = 0;
+    const pass = () => {
+      const container = scrollRef.current;
+      const node = jumpTargetRef.current
+        ? rowNodes.current.get(jumpTargetRef.current)
+        : undefined;
+      if (container && node && passes < JUMP_SETTLE_PASSES) {
+        passes += 1;
+        const from = container.scrollTop;
+        scrollWithin(container, node, { block: "center" });
+        if (container.scrollTop !== from) {
+          const frame = requestAnimationFrame(pass);
+          jumpSettleCleanupRef.current = () => cancelAnimationFrame(frame);
+          return;
+        }
+      }
+      jumpSettleCleanupRef.current = null;
+      jumpingRef.current = false;
+      jumpTargetRef.current = null;
+      // Once, from where the jump stopped, so a target near the tail follows
+      // it again. Pinning only: paging waits for the reader's own scroll,
+      // because prepending a page right under the message they were sent to
+      // would move it.
+      if (container) {
+        const pinned = distanceFromBottom(container) <= STICKY_THRESHOLD_PX;
+        setIsPinned(pinned);
+        if (pinned) {
+          setMissedCount(0);
+        }
+      }
+    };
+    pass();
+  }, []);
+
+  /**
    * Scroll a rendered message into view and light it up. False when the message
    * is not in the loaded window.
    */
@@ -920,14 +1003,31 @@ export const MessageList = memo(function MessageList({
     if (!node || !container) {
       return false;
     }
+    // A jump parks the reader in history, so the list stops following the
+    // tail now, in the ref as well as the state: the ResizeObserver reads the
+    // ref and can fire before React has re-rendered. See `jumpingRef`.
+    jumpSettleCleanupRef.current?.();
+    jumpingRef.current = true;
+    jumpTargetRef.current = messageId;
+    isPinnedRef.current = false;
+    setIsPinned(false);
     scrollWithin(container, node, { behavior: "smooth", block: "center" });
+    // `scrollend` says the animation has stopped, wherever it stopped: a
+    // scroll it cut short ends too, and `settleJump` corrects the position
+    // either way.
+    const timer = window.setTimeout(settleJump, JUMP_SETTLE_MS);
+    container.addEventListener("scrollend", settleJump);
+    jumpSettleCleanupRef.current = () => {
+      window.clearTimeout(timer);
+      container.removeEventListener("scrollend", settleJump);
+    };
     setFlashId(messageId);
     if (flashTimer.current) {
       window.clearTimeout(flashTimer.current);
     }
     flashTimer.current = window.setTimeout(() => setFlashId(null), HIGHLIGHT_MS);
     return true;
-  }, []);
+  }, [settleJump]);
 
   /**
    * Go to a message wherever it lives: a rendered row is scrolled to directly,
@@ -978,6 +1078,7 @@ export const MessageList = memo(function MessageList({
       if (noticeTimer.current) {
         window.clearTimeout(noticeTimer.current);
       }
+      jumpSettleCleanupRef.current?.();
     },
     [],
   );
@@ -1007,9 +1108,11 @@ export const MessageList = memo(function MessageList({
     const appended = appendedRef.current;
     appendedRef.current = 0;
     // The first page of a visit is not an "arrival". The landing effect below
-    // puts the viewport on the NEW rule (or the tail) without treating the
-    // whole history as missed messages.
-    if (previousCount === 0 && added > 0 && !highlightRef.current) {
+    // puts the viewport on the NEW rule (or the tail), or the permalink jump
+    // puts it on its message, without treating the whole history as missed
+    // messages. Following the tail here for a permalink started a smooth
+    // scroll to the bottom that the jump then had to interrupt.
+    if (previousCount === 0 && added > 0) {
       return;
     }
     const arrived = added - prepended - appended;
@@ -1106,6 +1209,9 @@ export const MessageList = memo(function MessageList({
     setFlashId(null);
     setJumpNotice(false);
     setPendingJumpId(null);
+    jumpSettleCleanupRef.current?.();
+    jumpSettleCleanupRef.current = null;
+    jumpingRef.current = false;
     // A reveal belongs to the conversation it was made in. Carrying it across
     // would re-open a blocked message in the next channel by message id alone.
     setRevealedIds(new Set());
@@ -1130,9 +1236,6 @@ export const MessageList = memo(function MessageList({
   // a later commit with the same message count would skip the real list and
   // leave it at scrollTop 0. That is the refresh-not-at-the-bottom bug.
   useLayoutEffect(() => {
-    if (highlightRef.current) {
-      return;
-    }
     if (pendingTailRef.current) {
       return;
     }
@@ -1144,6 +1247,15 @@ export const MessageList = memo(function MessageList({
     }
     const key = `${channelId ?? ""}::${unreadSince ?? "none"}`;
     if (unreadLandedRef.current === key) {
+      return;
+    }
+    if (highlightRef.current) {
+      // The permalink is this visit's landing. Recorded, not just skipped:
+      // this effect runs again on every change in message count, and by the
+      // time older history pages in or a new message arrives the highlight
+      // has been handled and cleared, so an unrecorded visit would land again
+      // at the tail, away from the message the reader was sent to.
+      unreadLandedRef.current = key;
       return;
     }
     const unreadId = firstUnreadId;
@@ -1283,9 +1395,13 @@ export const MessageList = memo(function MessageList({
     if (!container) {
       return;
     }
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    const pinned = distanceFromBottom <= STICKY_THRESHOLD_PX;
+    // A jump's own animation: `settleJump` reads the geometry when it lands.
+    // Its first frames are still near the bottom and would re-pin the list.
+    if (jumpingRef.current) {
+      return;
+    }
+    const distance = distanceFromBottom(container);
+    const pinned = distance <= STICKY_THRESHOLD_PX;
     setIsPinned(pinned);
     if (pinned) {
       setMissedCount(0);
@@ -1294,7 +1410,7 @@ export const MessageList = memo(function MessageList({
     if (container.scrollTop <= LOAD_MORE_THRESHOLD_PX) {
       loadOlder();
     }
-    if (distanceFromBottom <= LOAD_MORE_THRESHOLD_PX) {
+    if (distance <= LOAD_MORE_THRESHOLD_PX) {
       loadNewer();
     }
   }, [loadNewer, loadOlder]);
