@@ -61,16 +61,19 @@ function FlagChip({
     >
       {locale === "pt-BR" ? (
         <svg viewBox="0 0 20 14" className="h-full w-full" role="presentation">
-          <rect width="20" height="14" fill="#049646" />
-          <polygon points="10,1.4 18.4,7 10,12.6 1.6,7" fill="#FEDD00" />
-          <circle cx="10" cy="7" r="3.1" fill="#08328C" />
+          <rect width="20" height="14" className="fill-flag-br-green" />
+          <polygon
+            points="10,1.4 18.4,7 10,12.6 1.6,7"
+            className="fill-flag-br-yellow"
+          />
+          <circle cx="10" cy="7" r="3.1" className="fill-flag-br-blue" />
           <path
             d="M6.6,5.9 C8.2,7.9 11.8,7.9 13.6,9.4"
-            stroke="#fff"
+            className="stroke-flag-br-white"
             strokeWidth="0.5"
             fill="none"
           />
-          <g fill="#fff">
+          <g className="fill-flag-br-white">
             <circle cx="8.1" cy="5.5" r="0.24" />
             <circle cx="9.4" cy="4.9" r="0.24" />
             <circle cx="11.1" cy="5.2" r="0.24" />
