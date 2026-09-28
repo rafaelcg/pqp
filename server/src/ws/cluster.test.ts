@@ -442,6 +442,25 @@ describe("status across two instances", () => {
     expect(a.status.resolveStatus(userId)).toBe("offline");
   });
 
+  it("tells the account's tab on the other instance what it now is", async () => {
+    // Same routing gap as above, seen from the account's other tabs: the
+    // request is served by A and the tab that must update is held by B.
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const sockets = await import("./sockets.js");
+    const theirTab = recordingSocket();
+    sockets.setAuthenticatedSocket(theirTab.socket, asUser(userId));
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+
+    a.status.applyManualStatus(userId, "away");
+
+    expect(framesOfType(theirTab.received, "own-status")).toEqual([
+      { type: "own-status", status: "away" },
+    ]);
+    sockets.deleteAuthenticatedSocket(theirTab.socket);
+  });
+
   it("hides an invisible viewer from a roster built on the other instance", async () => {
     const channelId = randomUUID();
     const hidden = randomUUID();

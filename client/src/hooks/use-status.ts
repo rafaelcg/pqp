@@ -48,6 +48,11 @@ export interface StatusControls {
   /** Set when the write failed and `manual` was rolled back to the truth. */
   error: string | null;
   setManual: (next: ManualStatus) => void;
+  /**
+   * Adopt a choice another tab or device of this account just made, as told by
+   * the server's `own-status` frame. Never writes anything back.
+   */
+  adoptRemote: (next: ManualStatus) => void;
 }
 
 export interface UseUserStatusOptions {
@@ -173,6 +178,16 @@ export function useUserStatus({
   }, [connected, idle]);
 
   // ----------------------------------------------------------- manual
+  // Only when nothing is in flight, same rule as the `stored` adoption above:
+  // this tab's own write answers for itself, and the frame the server sends
+  // back to every socket of the account, this one included, must not undo a
+  // second pick made before the first response landed.
+  const adoptRemote = useCallback((next: ManualStatus) => {
+    if (!savingRef.current) {
+      setManualState(next);
+    }
+  }, []);
+
   const setManual = useCallback(
     (next: ManualStatus) => {
       setError(null);
@@ -212,6 +227,7 @@ export function useUserStatus({
     saving,
     error,
     setManual,
+    adoptRemote,
   };
 }
 

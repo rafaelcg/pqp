@@ -20,7 +20,7 @@ import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
-import { setIdleMessageSchema } from "./status.js";
+import { ownStatusSchema, setIdleMessageSchema } from "./status.js";
 // --- threads ---
 import {
   threadJoinMessageSchema,
@@ -609,6 +609,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // see the note on `friendActivitySchema`, and its absence from the list
   // below.
   friendActivitySchema,
+  // Addressed to one account's own sockets, like `friend-activity`: it tells
+  // the other tabs and devices what status this account just chose.
+  ownStatusSchema,
   // Same addressing as `friend-activity`: each member's snapshot differs, so
   // this is delivered per socket, never through the channel relay. Listing it
   // in `CHAT_SERVER_MESSAGE_TYPES` would drop it (no channel id) or, worse,
@@ -708,6 +711,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * topic (`chat.friend`) keyed by user id. Listing it here would hand a "you
  * have a friend request" nudge to a whole channel — content-free, so not a
  * disclosure, but a badge appearing on strangers' screens is still a bug.
+ *
+ * `own-status` is absent for the same reason: it is addressed to one account's
+ * own sockets, names no channel, and can carry `invisible`, which the relay
+ * must never be in a position to hand to a channel.
  *
  * `permissions-update` is absent for the same reason as `friend-activity`: it
  * is addressed to a server's members, names no channel, and travels on
