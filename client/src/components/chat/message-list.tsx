@@ -678,8 +678,8 @@ export const MessageList = memo(function MessageList({
   }
 
   const firstUnreadId = useMemo(
-    () => findFirstUnreadMessageId(messages, unreadSince),
-    [messages, unreadSince],
+    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
+    [messages, unreadSince, currentUserId],
   );
   /**
    * The ids a selection may contain, in the order they are on screen.

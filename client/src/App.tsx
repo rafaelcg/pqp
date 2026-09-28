@@ -429,6 +429,7 @@ import {
 } from "@/lib/conversations";
 import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
+import { createLiveReadAck } from "@/lib/live-read-ack";
 import {
   HOME_SELECTION,
   selectionRoutePath,
@@ -1138,6 +1139,9 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // For callbacks that must not change identity when the account loads.
+  const userIdRef = useRef<string | null>(null);
+  userIdRef.current = user?.id ?? null;
   // Composer drafts are kept per account; a sign-out reads as no drafts.
   useEffect(() => {
     setDraftsAccount(user?.id ?? null);
@@ -1926,6 +1930,23 @@ function MainAppContent({
     null,
   );
   const unreadCursorByChannelRef = useRef<Record<string, string>>({});
+  // Messages that arrive in the open channel are read once they are on
+  // screen; see `live-read-ack.ts` for why this is not done on leave alone.
+  const [liveReadAck] = useState(() =>
+    createLiveReadAck({
+      send: (channelId) => markChannelRead(channelId),
+      isVisible: () => document.visibilityState === "visible",
+      isHeld: (channelId) => unreadHoldRef.current.has(channelId),
+    }),
+  );
+  useEffect(() => {
+    const onVisibility = () => liveReadAck.resume();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      liveReadAck.dispose();
+    };
+  }, [liveReadAck]);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
   // arrow here defeated `MessageList`'s own `memo()` on every render of this
@@ -2829,13 +2850,16 @@ function MainAppContent({
       return next;
     });
     try {
+      // An ack from the last visit still in flight would otherwise land after
+      // this and make its cursor the "previous" one we get back.
+      await liveReadAck.settled(channelId);
       const result = await markChannelRead(channelId);
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, []);
+  }, [liveReadAck]);
 
   const loadUnread = useCallback(async (serverId: string) => {
     try {
@@ -3305,6 +3329,10 @@ function MainAppContent({
    */
   const openChannel = useCallback(
     async (channelId: string) => {
+      const leaving = selectedChannelIdRef.current;
+      if (leaving && leaving !== channelId) {
+        liveReadAck.flush(leaving);
+      }
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
       // The reply belongs to the conversation you were in, not the next one.
@@ -3339,7 +3367,11 @@ function MainAppContent({
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
-            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            findFirstUnreadMessageId(
+              page.messages,
+              previousLastReadAt,
+              userIdRef.current,
+            )
             ? previousLastReadAt
             : null,
         );
@@ -3354,7 +3386,7 @@ function MainAppContent({
         }
       }
     },
-    [chat, clearUnread, refresh],
+    [chat, clearUnread, liveReadAck, refresh],
   );
 
   // ---------------------------------------------------------------- threads
@@ -3545,7 +3577,11 @@ function MainAppContent({
         threadChat.setMessages(page.messages, page.hasMore);
         setThreadUnreadSince(
           previousLastReadAt &&
-            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            findFirstUnreadMessageId(
+              page.messages,
+              previousLastReadAt,
+              userIdRef.current,
+            )
             ? previousLastReadAt
             : null,
         );
@@ -4222,6 +4258,17 @@ function MainAppContent({
             message.type === "poll-update" ||
             message.type === "message-rejected"
           ) {
+            // Somebody else's message landed in the channel on screen: it is
+            // read, so the next visit's NEW rule does not sit above it. The
+            // server sends no `channel-activity` for the open channel, which
+            // is why this keys on the broadcast.
+            if (
+              message.type === "message-broadcast" &&
+              message.message.channelId === selectedChannelIdRef.current &&
+              message.message.authorId !== userIdRef.current
+            ) {
+              liveReadAck.note(message.message.channelId);
+            }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
             // keeps only its own channel's, so one frame can never render in
