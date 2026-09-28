@@ -5366,6 +5366,20 @@ function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
   }
 }
 
+/**
+ * Somebody hung up on purpose: `leave-voice-room`, or the tab-close beacon.
+ * Everything `removePeer` does, plus the one thing a reconnect must not do:
+ * an unanswered ring in a call that is now empty ends here, not after the
+ * empty-room grace (see `endRingOnHangup`).
+ */
+function hangUpPeer(peerId: string): void {
+  const voiceChannelId = peers.get(peerId)?.voiceChannelId;
+  removePeer(peerId);
+  if (voiceChannelId) {
+    endRingOnHangup(voiceChannelId);
+  }
+}
+
 function removePeer(peerId: string) {
   const peer = peers.get(peerId);
   if (!peer) {
@@ -5666,7 +5680,7 @@ export async function leaveVoiceByResumeToken(
     ) {
       return false;
     }
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
   if (!registryOn()) {
@@ -5697,7 +5711,7 @@ export async function leaveVoiceByResumeToken(
   // The row may have come home while the read was out (a resume landed
   // here); the map is exact for what this process holds.
   if (peers.has(resumePeerId)) {
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
   releaseForeignPeer(row, "beacon");
@@ -8220,12 +8234,12 @@ export async function handleVoiceMessage(
 
   if (payload.type === "leave-voice-room") {
     if (existingPeerId) {
-      removePeer(existingPeerId);
+      hangUpPeer(existingPeerId);
       return;
     }
     for (const peer of peers.values()) {
       if (peer.socket === socket) {
-        removePeer(peer.id);
+        hangUpPeer(peer.id);
         return;
       }
     }
@@ -9012,6 +9026,12 @@ export const CALL_RING_TIMEOUT_MS = 45_000;
  * moment, and a flappy caller network can empty it for a few seconds; killing
  * the ring on the first empty read would turn every caller hiccup into a
  * "missed call" that nobody missed.
+ *
+ * Only for rooms that emptied by accident. A deliberate hangup
+ * (`leave-voice-room`, the tab-close beacon) is never a reconnect, and every
+ * client sends it only when the person meant to leave, so it skips the grace:
+ * otherwise the callee keeps ringing for five seconds after the caller gave
+ * up, and answering in that window puts them alone in an empty call.
  */
 export const CALL_EMPTY_ROOM_GRACE_MS = 5_000;
 
@@ -9412,7 +9432,8 @@ function declineRing(conversationId: string, userId: string): boolean {
  * The room emptied here. After the grace period, an unanswered ring dies
  * with it. With the registry on the expiry check reads the rows as well,
  * because the caller may have come back on the other machine: an empty
- * local room is not an empty call.
+ * local room is not an empty call. A deliberate hangup does not wait for
+ * this; `endRingOnHangup` ends the ring as soon as the room is empty.
  */
 function noteVoiceRoomEmptied(voiceChannelId: string) {
   const ring = conversationRings.get(voiceChannelId);
@@ -9441,6 +9462,43 @@ function noteVoiceRoomEmptied(voiceChannelId: string) {
         }
       });
   }, CALL_EMPTY_ROOM_GRACE_MS);
+}
+
+/**
+ * The room emptied because somebody hung up, so the ring ends now rather than
+ * after the grace. Nobody in the room means nobody at all, orphans included:
+ * a seat held for its resume window is still in the call, and the grace
+ * timer `noteVoiceRoomEmptied` already armed decides that case as before.
+ *
+ * With the registry on, an empty local room is not an empty call (somebody
+ * may sit on the other machine), so the rows are read once this hangup's own
+ * delete has landed. A failed read ends nothing: the grace timer is still
+ * armed and gets the last word, and a database blip must never hang up a
+ * live call.
+ */
+function endRingOnHangup(voiceChannelId: string): void {
+  const ring = conversationRings.get(voiceChannelId);
+  if (!ring || getRoomPeers(voiceChannelId).length > 0) {
+    return;
+  }
+  if (!registryOn()) {
+    void endConversationRing(voiceChannelId, "cancelled");
+    return;
+  }
+  void settledRowWrites(voiceChannelId)
+    .then(() => listVoicePeersInRoom(voiceChannelId))
+    .then(
+      (rows) => {
+        if (
+          rows.length === 0 &&
+          getRoomPeers(voiceChannelId).length === 0 &&
+          conversationRings.get(voiceChannelId) === ring
+        ) {
+          void endConversationRing(voiceChannelId, "cancelled");
+        }
+      },
+      () => undefined,
+    );
 }
 
 /** Remove the ring without any missed-call record (it was answered). */

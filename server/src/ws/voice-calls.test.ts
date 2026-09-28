@@ -171,6 +171,7 @@ const {
   MISSED_CALL_BODY,
   handleVoiceMessage,
   isConversationRinging,
+  removeVoicePeerBySocket,
   resetConversationCalls,
   resetVoicePeers,
   resetVoiceRateLimits,
@@ -535,7 +536,7 @@ describe("answering, declining, missing", () => {
     expect(stranger.frames).toEqual([]);
   });
 
-  it("the caller hanging up cancels the ring (after the rejoin grace) and records the miss", async () => {
+  it("the caller hanging up cancels the ring at once and records the miss", async () => {
     const caller = authedRecorder(CALLER);
     const callee = authedRecorder(CALLEE);
 
@@ -545,16 +546,36 @@ describe("answering, declining, missing", () => {
       { type: "leave-voice-room" },
     );
 
-    // Inside the grace window the ring survives (a reconnect looks identical).
-    expect(isConversationRinging(CONVERSATION)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(CALL_EMPTY_ROOM_GRACE_MS + 1);
-
+    // No grace: `leave-voice-room` is only ever a deliberate hangup, and a
+    // ring that outlives it lets the callee answer into an empty call.
     expect(isConversationRinging(CONVERSATION)).toBe(false);
     expect(frame(callee, "call-ring-cancelled")?.reason).toBe("cancelled");
+    await vi.advanceTimersByTimeAsync(0);
     expect(fakes.createMessageCalls).toEqual([
       { channelId: CONVERSATION, authorId: CALLER, body: MISSED_CALL_BODY },
     ]);
+
+    // The grace timer the leave armed went with the ring: one record, once.
+    await vi.advanceTimersByTimeAsync(CALL_EMPTY_ROOM_GRACE_MS + 1);
+    expect(framesOf(callee, "call-ring-cancelled")).toHaveLength(1);
+    expect(fakes.createMessageCalls).toHaveLength(1);
+  });
+
+  it("the caller's socket dropping keeps the ring through the grace window", async () => {
+    const caller = authedRecorder(CALLER);
+    const callee = authedRecorder(CALLEE);
+
+    await startCall(caller);
+    // A socket close is what a reconnect looks like; it is not a hangup.
+    removeVoicePeerBySocket(caller.socket);
+
+    await vi.advanceTimersByTimeAsync(CALL_EMPTY_ROOM_GRACE_MS - 1);
+    expect(isConversationRinging(CONVERSATION)).toBe(true);
+    expect(frame(callee, "call-ring-cancelled")).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(2);
+    expect(isConversationRinging(CONVERSATION)).toBe(false);
+    expect(frame(callee, "call-ring-cancelled")?.reason).toBe("cancelled");
   });
 
   it("a caller rejoin inside the grace window keeps the ring alive", async () => {
@@ -920,6 +941,70 @@ describeDb("rings across two instances", () => {
     expect(frame(calleeOnB, "call-incoming")).toBeDefined();
     expect(frame(thirdOnB, "call-incoming")).toBeUndefined();
     expect(fakes.callPushes[0]?.rungUserIds).toEqual([CALLEE]);
+  });
+
+  it("the caller hanging up on A ends the ring before the grace, the callee on B included", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    expect(frame(calleeOnB, "call-incoming")).toBeDefined();
+
+    const hungUpAt = Date.now();
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "leave-voice-room" },
+    );
+
+    // The rows are read (the call may live on B), then it ends: well inside
+    // the grace a reconnect would get.
+    await waitFor(
+      () => frame(calleeOnB, "call-ring-cancelled") !== undefined,
+      "the callee on B to stop ringing",
+    );
+    expect(Date.now() - hungUpAt).toBeLessThan(a.voice.CALL_EMPTY_ROOM_GRACE_MS);
+    expect(frame(calleeOnB, "call-ring-cancelled")).toMatchObject({
+      reason: "cancelled",
+    });
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(false);
+    await waitFor(() => fakes.createMessageCalls.length === 1, "the missed call");
+  });
+
+  it("a hangup on A does not end the ring while somebody is in the call on B", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE, THIRD]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const thirdOnB = authedOn(b, THIRD);
+    const calleeOnB = authedOn(b, CALLEE);
+    await joinOn(b, thirdOnB, THIRD);
+    await b.registry.settleVoiceRegistryWrites();
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    expect(frame(calleeOnB, "call-incoming")).toBeDefined();
+
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "leave-voice-room" },
+    );
+    await a.registry.settleVoiceRegistryWrites();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // A is empty; the call is not. The callee can still answer into it.
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(true);
+    expect(frame(calleeOnB, "call-ring-cancelled")).toBeUndefined();
+    expect(fakes.createMessageCalls).toHaveLength(0);
   });
 
   /**
