@@ -92,12 +92,26 @@ interface LanguagePickerProps {
   className?: string;
 }
 
-/** Drops `?lang=` (it would otherwise outrank the choice just saved) and reloads. */
+/**
+ * Persists the choice and reloads to it.
+ *
+ * `?lang=` would outrank the stored preference on the very reload meant to
+ * apply it, so it is dropped — but only once the preference actually landed.
+ * Storage can be blocked (private mode, an embedded webview): `setLocalePreference`
+ * says so, and when it does, `?lang=` becomes the only way THIS reload can
+ * still honour the pick. It will not survive the next visit — there is
+ * nothing left to survive it with — but a click that visibly does nothing is
+ * worse than a preference that does not stick.
+ */
 function applyChoice(next: Locale): void {
-  setLocalePreference(next);
+  const persisted = setLocalePreference(next);
   try {
     const url = new URL(window.location.href);
-    url.searchParams.delete("lang");
+    if (persisted) {
+      url.searchParams.delete("lang");
+    } else {
+      url.searchParams.set("lang", next);
+    }
     window.location.href = url.toString();
   } catch {
     window.location.reload();

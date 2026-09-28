@@ -131,7 +131,7 @@ describe("setLocalePreference", () => {
     vi.unstubAllGlobals();
   });
 
-  it("writes the choice localStorage will later be read back from", () => {
+  it("writes the choice localStorage will later be read back from, and says so", () => {
     const store = new Map<string, string>();
     vi.stubGlobal("window", {
       localStorage: {
@@ -141,14 +141,21 @@ describe("setLocalePreference", () => {
       },
     });
 
-    setLocalePreference("es");
+    expect(setLocalePreference("es")).toBe(true);
     expect(store.get("pqp:locale")).toBe("es");
 
-    setLocalePreference(null);
+    expect(setLocalePreference(null)).toBe(true);
     expect(store.has("pqp:locale")).toBe(false);
   });
 
-  it("does not throw when storage is blocked (private mode, embedded webview)", () => {
+  /**
+   * The Farol finding on PR #868: a picker that reloads right after this call
+   * needs to know the write didn't land, or it drops `?lang=` on the strength
+   * of a preference that was never actually saved and the choice reverts to
+   * the browser/served locale on that very reload. See `applyChoice` in
+   * `components/marketing/language-picker.tsx`.
+   */
+  it("reports false, without throwing, when storage is blocked", () => {
     vi.stubGlobal("window", {
       localStorage: {
         getItem: () => {
@@ -163,6 +170,6 @@ describe("setLocalePreference", () => {
       },
     });
 
-    expect(() => setLocalePreference("en")).not.toThrow();
+    expect(setLocalePreference("en")).toBe(false);
   });
 });

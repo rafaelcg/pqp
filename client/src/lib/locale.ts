@@ -148,16 +148,27 @@ export function detectLocale(): Locale {
   return DEFAULT_LOCALE;
 }
 
-/** Persist a choice, or clear it to go back to following the browser. */
-export function setLocalePreference(locale: Locale | null): void {
+/**
+ * Persist a choice, or clear it to go back to following the browser.
+ *
+ * Returns whether the write actually landed. Storage can be blocked (private
+ * mode, an embedded webview), and a caller that reloads right after this —
+ * every picker does — needs to know: if the preference didn't persist,
+ * `?lang=` is the only way that *next* load can still reflect the choice, so
+ * dropping it unconditionally would silently revert to the browser/served
+ * locale. See `language-picker.tsx`'s `applyChoice`.
+ */
+export function setLocalePreference(locale: Locale | null): boolean {
   try {
     if (locale) {
       window.localStorage.setItem(STORAGE_KEY, locale);
     } else {
       window.localStorage.removeItem(STORAGE_KEY);
     }
+    return true;
   } catch {
     // A preference we cannot store is not worth failing a click over.
+    return false;
   }
 }
 
