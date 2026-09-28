@@ -210,6 +210,19 @@ fun ChannelsScreen(
     LaunchedEffect(serverId) {
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
     }
+    // A channel on this server was created, renamed, moved or deleted. The
+    // frame names no channel, so the list is refetched; the server filters it
+    // per viewer. A failed refetch keeps the list already on screen.
+    LaunchedEffect(serverId) {
+        session.realtime.frames.collect { frame ->
+            when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                "channels-update" -> {
+                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+                    runCatching { session.api.channels(serverId) }.getOrNull()?.let { channels = it }
+                }
+            }
+        }
+    }
 
     // The Baú's unread count, for the badge on its row.
     //

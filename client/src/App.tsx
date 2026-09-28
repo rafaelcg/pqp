@@ -443,6 +443,7 @@ import {
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { vanishedChannelFallback } from "@/lib/channel-list-refresh";
 import {
   onConnectionCheckRequest,
   onSettingsRequest,
@@ -1633,6 +1634,10 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // Tokens the `channels-update` refetch, so two quick frames (a create and
+  // a rename a second apart) cannot land out of order and leave the older
+  // list on screen.
+  const channelsRefetchRef = useRef(0);
   // The instance's Baú flags, resolved once before the first landing so the
   // bootstrap can choose between Home and the first text channel. Off until
   // the API answers; a ref mirrors it for the callbacks that pick a landing.
@@ -4289,6 +4294,50 @@ function MainAppContent({
                   if (next) {
                     setSelectedChannelId(next.id);
                     selectedChannelIdRef.current = next.id;
+                  }
+                }
+              })
+              .catch(() => {
+                // Next navigation will refetch.
+              });
+            return;
+          }
+
+          // A channel on the open server was created, renamed, edited, moved
+          // or deleted. The frame names no channel, so the list is refetched;
+          // the server filters it per viewer, which is what keeps a private
+          // channel off the sidebars of people who cannot see it. A member in
+          // DMs or on another server loads the list fresh when they get here.
+          if (message.type === "channels-update") {
+            if (message.serverId !== selectedServerIdRef.current) {
+              return;
+            }
+            const request = ++channelsRefetchRef.current;
+            void fetchChannels(message.serverId)
+              .then(({ channels: list }) => {
+                if (
+                  channelsRefetchRef.current !== request ||
+                  selectedServerIdRef.current !== message.serverId
+                ) {
+                  return;
+                }
+                setChannels(list);
+                // Deleted under the person reading it: open another channel
+                // the same way a click would, so the transcript and the
+                // composer follow, not just the highlighted row.
+                const fallback = vanishedChannelFallback(
+                  list,
+                  selectedChannelIdRef.current,
+                );
+                if (fallback.vanished) {
+                  if (fallback.nextId) {
+                    void selectChannelRef.current(
+                      fallback.nextId,
+                      message.serverId,
+                    );
+                  } else {
+                    setSelectedChannelId(null);
+                    selectedChannelIdRef.current = null;
                   }
                 }
               })

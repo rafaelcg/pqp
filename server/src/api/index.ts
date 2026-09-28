@@ -213,6 +213,7 @@ import {
   evictVoiceUsersExcept,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  notifyChannelsUpdate,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -5037,6 +5038,9 @@ router.post(
       targetId: channel.id,
       changes: [{ key: "name", old: null, new: channel.name }],
     });
+    // After the creator's own access row, so their other tabs' refetch
+    // already includes a private channel.
+    pingChannels(serverId!);
     return created({ channel: mapChannel(channel) });
   },
 );
@@ -5109,7 +5113,9 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   if (!updated.is_private && channel.is_private) {
     void cancelPrivateVoiceResweep(channelId!);
   }
-  if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
+  const privacyChanged =
+    body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
+  if (privacyChanged) {
     pingPermissions(channel.server_id);
   }
 
@@ -5127,6 +5133,12 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   )
     .filter(([, oldValue, newValue]) => oldValue !== newValue)
     .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+  // A privacy flip already sent `permissions-update`, and every client
+  // refetches its channel list on that frame; a second nudge would only be a
+  // second refetch.
+  if (changes.length > 0 && !privacyChanged) {
+    pingChannels(channel.server_id);
+  }
   if (changes.length > 0) {
     await logAudit({
       serverId: channel.server_id,
@@ -5151,6 +5163,7 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);
+  pingChannels(channel.server_id);
   await logAudit({
     serverId: channel.server_id,
     actorId: user.id,
@@ -5164,12 +5177,9 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
 
 /**
  * Reorder or re-parent one channel. Answers with the whole server's fresh
- * channel list rather than a delta, matching how create/rename/delete already
- * behave here: none of the three broadcast live either, so the actor's own
- * client updates from its own response and everyone else sees the new order
- * on their next load. Adding a live broadcast for reorders only, while the
- * other three mutations stay silent, would be an inconsistency worth its own
- * change rather than a side effect of this one.
+ * channel list rather than a delta, so the actor's own client updates from
+ * its own response. Everyone else hears `channels-update`, like create,
+ * rename and delete, and refetches.
  */
 router.patch(
   "/api/channels/:channelId/move",
@@ -5202,6 +5212,7 @@ router.patch(
         { key: "index", old: channel.position, new: body.index },
       ],
     });
+    pingChannels(channel.server_id);
 
     return {
       channels: (await listChannels(channel.server_id, user.id)).map(mapChannel),
@@ -7788,6 +7799,13 @@ async function evictViewersOutsideAudience(channelId: string): Promise<void> {
 function pingPermissions(serverId: string): void {
   void notifyPermissionsUpdate(serverId).catch((error) => {
     console.error("[api] permissions-update failed:", error);
+  });
+}
+
+/** Members' sidebars refetch the channel list. See `notifyChannelsUpdate`. */
+function pingChannels(serverId: string): void {
+  void notifyChannelsUpdate(serverId).catch((error) => {
+    console.error("[api] channels-update failed:", error);
   });
 }
 

@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import {
+  channelsUpdateSchema,
   chatClientMessageSchema,
   extractMentions,
   extractMentionUsernames,
@@ -173,6 +174,7 @@ const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
 const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
+const CHANNELS_TOPIC = "chat.channels";
 
 interface PresenceUser {
   id: string;
@@ -988,6 +990,58 @@ export function deliverCommunityHomeUpdate(
     type: "community-home-update",
     serverId,
   } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && allowed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Tell every connected member of a server that its channel list changed: a
+ * channel was created, renamed, edited, moved or deleted. Content-free, like
+ * `permissions-update`: the frame names no channel, and each client refetches
+ * `GET /api/servers/:id/channels`, which is where privacy and VIEW_CHANNEL
+ * overwrites are applied per viewer. So a private channel reaches only the
+ * people who may see it, and a member who cannot see it learns nothing but
+ * that something changed. Addressing the channel's audience instead would
+ * miss the one case that needs everybody: a delete, after which there is no
+ * row left to compute an audience from. Fire-and-forget.
+ */
+export async function notifyChannelsUpdate(serverId: string): Promise<void> {
+  const memberIds = await listServerMemberIds(serverId);
+  deliverChannelsUpdate(serverId, memberIds);
+  if (isBusEnabled()) {
+    // No member ids on the bus: NOTIFY caps a payload at 8000 bytes, and the
+    // receiving instance resolves membership itself, as the two topics above
+    // do.
+    publishToCluster(CHANNELS_TOPIC, {
+      type: "channels-update",
+      serverId,
+    });
+  }
+}
+
+/**
+ * The half that runs on EVERY instance: the origin calls it directly and
+ * `subscribeToCluster(CHANNELS_TOPIC, ...)` calls it on the others. The
+ * channel list read cache (`servers.ts`) is per process, so each instance
+ * drops its own copy here, before the frame goes out, or a member whose
+ * socket and refetch both land on a sibling would read the list from before
+ * the write. Guarded for the same reason as in `deliverPermissionsUpdate`:
+ * this file's tests mock `servers.js` without the export.
+ */
+export function deliverChannelsUpdate(
+  serverId: string,
+  memberIds: readonly string[],
+): void {
+  try {
+    invalidateServerChannelList(serverId);
+  } catch {
+    // Mocked without the export; see above.
+  }
+  const allowed = new Set(memberIds);
+  const payload = encode({ type: "channels-update", serverId } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
       socket.send(payload);
@@ -2368,6 +2422,20 @@ subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
     })
     .catch((error) => {
       console.error("[ws] community-home-update relay failed:", error);
+    });
+});
+
+subscribeToCluster(CHANNELS_TOPIC, (data) => {
+  const parsed = channelsUpdateSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  void listServerMemberIds(parsed.data.serverId)
+    .then((memberIds) => {
+      deliverChannelsUpdate(parsed.data.serverId, memberIds);
+    })
+    .catch((error) => {
+      console.error("[ws] channels-update relay failed:", error);
     });
 });
 

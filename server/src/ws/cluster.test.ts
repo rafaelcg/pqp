@@ -64,9 +64,28 @@ vi.mock("../services/blocks.js", () => ({
   listBlockersOf: async () => new Set<string>(),
 }));
 
+/**
+ * One timeline for both instances: the channel list cache drops and the
+ * socket sends land here in the order they happen, so a test can say "the
+ * sibling dropped its cache before it told anybody to refetch".
+ */
+const timeline: string[] = [];
+/** Who `listServerMemberIds` answers with, on either instance. */
+let serverMembers: string[] = [];
+
 vi.mock("../services/servers.js", () => ({
   getChannelAudience: async () => null,
   getChannel: async () => ({ kind: "dm", server_id: null }),
+  invalidateServerChannelList: (serverId: string) => {
+    timeline.push(`invalidate:${serverId}`);
+  },
+}));
+
+// Only the member list is faked; everything else in the module stays real,
+// as it was before this mock existed.
+vi.mock("../services/permissions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/permissions.js")>()),
+  listServerMemberIds: async () => serverMembers,
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -613,6 +632,58 @@ describeDb("chat over the postgres bus", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(a.status.resolveStatus(userId)).toBe("offline");
+  });
+});
+
+/**
+ * The channel list nudge. Production runs two API containers with the bus on,
+ * so a create on A must reach a member whose socket is on B, and B must drop
+ * its own copy of the list first: the read cache is per process, and the
+ * member's refetch can land on B.
+ */
+describe("channels-update across two instances", () => {
+  it("reaches a member on the other instance after that instance drops its cached list", async () => {
+    const serverId = randomUUID();
+    serverMembers = ["member", "owner"];
+    timeline.length = 0;
+    const a = await bootInstance();
+    // B is only ever reached through its own socket table, imported from the
+    // graph `bootInstance` just built.
+    await bootInstance();
+    const bSockets = await import("./sockets.js");
+    const received: string[] = [];
+    const socket = {
+      readyState: 1,
+      send: (payload: string) => {
+        received.push(payload);
+        timeline.push(`send:${(JSON.parse(payload) as { type: string }).type}`);
+      },
+      on: () => {},
+    } as unknown as WebSocket;
+    bSockets.setAuthenticatedSocket(socket, asUser("member"));
+    const stranger = recordingSocket();
+    bSockets.setAuthenticatedSocket(stranger.socket, asUser("stranger"));
+
+    await a.chat.notifyChannelsUpdate(serverId);
+
+    await vi.waitFor(() => {
+      expect(framesOfType(received, "channels-update")).toEqual([
+        { type: "channels-update", serverId },
+      ]);
+    });
+    expect(stranger.received).toEqual([]);
+    // Once on A (the origin) and once on B, and on B before the send.
+    expect(timeline).toEqual([
+      `invalidate:${serverId}`,
+      `invalidate:${serverId}`,
+      "send:channels-update",
+    ]);
+    // Membership only; the frame on the bus carries no user ids.
+    expect(
+      onTheWire.filter((frame) => frame.topic === "chat.channels"),
+    ).toHaveLength(1);
+    bSockets.deleteAuthenticatedSocket(socket);
+    bSockets.deleteAuthenticatedSocket(stranger.socket);
   });
 });
 
