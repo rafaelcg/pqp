@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { LanguagePicker } from "@/components/marketing/language-picker";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
@@ -29,6 +30,13 @@ export function MarketingFooter() {
           <p className="mt-2 max-w-xs text-sm text-paper-muted">
             {t("footer.tagline")}
           </p>
+          {/* The header's picker sits in a cramped mobile bar next to the
+              nav's beta tag and Join button; the footer gives a mobile
+              visitor a second, roomier place to find it. Hidden from `sm`
+              up, where the header copy is already there. */}
+          <div className="mt-4 sm:hidden">
+            <LanguagePicker />
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-x-10 gap-y-6 text-sm">

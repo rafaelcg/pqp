@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { LanguagePicker } from "@/components/marketing/language-picker";
 import { MarketingAuthCtas } from "@/components/marketing/marketing-auth-ctas";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { useTranslation } from "@/lib/i18n";
@@ -59,7 +60,10 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
         </a>
       </nav>
 
-      <MarketingAuthCtas appearance={isHero ? "nav-hero" : "nav-solid"} />
+      <div className="flex items-center gap-3">
+        <LanguagePicker variant={isHero ? "hero" : "solid"} />
+        <MarketingAuthCtas appearance={isHero ? "nav-hero" : "nav-solid"} />
+      </div>
     </header>
   );
 }

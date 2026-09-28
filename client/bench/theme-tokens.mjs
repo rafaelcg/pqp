@@ -331,6 +331,10 @@ function cssRoleTokens(css) {
     if (!name.startsWith("--color-")) continue;
     if (aliases.has(name)) continue;
     if (name.startsWith("--color-connection-")) continue;
+    // Brazil's flag in the language picker: an identifier like the
+    // connection marks above, not a themed role, so it is exempt the same
+    // way.
+    if (name.startsWith("--color-flag-br-")) continue;
     names.add(name);
   }
   for (const [, name] of css.matchAll(/(--[\w-]+)\s*:/g)) {
