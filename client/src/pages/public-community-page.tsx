@@ -301,12 +301,12 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
                 </span>
                 {t(`communities.category.${community.category}` as never)}
               </span>
-              <h1 className="mt-2 font-display text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+              <h1 className="mt-2 font-display text-3xl font-extrabold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                 {community.name}
               </h1>
               <p className="mt-1 font-mono text-sm text-signal">{url}</p>
               {community.tagline && (
-                <p className="mt-3 text-lg leading-snug text-paper-muted">
+                <p className="mt-3 text-lg leading-snug text-paper-muted [overflow-wrap:anywhere]">
                   {community.tagline}
                 </p>
               )}
