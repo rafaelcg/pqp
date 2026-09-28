@@ -703,6 +703,9 @@ export function PostCard({
   const interactive = mode === "feed" && post.status === "published";
   const showLockPlate = locked && post.hasMedia;
   const showMedia = !locked && post.media;
+  // A file post opens with a one-line row, not a picture: the menu sits in
+  // that row beside the download link instead of floating over it.
+  const fileRow = Boolean(showMedia && post.media?.kind === "file");
   const posterUrl =
     post.posterUrl ??
     (post.media?.kind === "youtube"
@@ -760,14 +763,21 @@ export function PostCard({
       data-home-post-locked={locked ? "1" : "0"}
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
-      {showMedia && post.media ? <UnlockedMedia media={post.media} flush /> : null}
+      {showMedia && post.media ? (
+        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+      ) : null}
       {showStaffMenu && (
-        <div className="absolute right-3 top-3 z-10">
+        <div
+          className={cn(
+            "absolute z-10",
+            fileRow ? "right-2 top-1" : "right-3 top-3",
+          )}
+        >
           <button
             type="button"
             className={cn(
               "inline-flex h-8 w-8 items-center justify-center rounded-md",
-              showLockPlate || showMedia
+              showLockPlate || (showMedia && !fileRow)
                 ? "bg-ink/65 text-paper hover:bg-ink/85"
                 : "text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
