@@ -1647,6 +1647,7 @@
   "settings.profile.banner.failed": "Could not upload that banner.",
   "settings.profile.banner.removeFailed": "Could not remove the banner.",
   "settings.profile.displayName": "Display name",
+  "settings.profile.displayNameRequired": "Enter a display name.",
   "settings.profile.username": "Username",
   "settings.profile.usernamePlaceholder": "cool_name",
   "settings.profile.usernameHint": "Becomes username#1234, discriminator auto-assigned if taken.",

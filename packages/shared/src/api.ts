@@ -1140,8 +1140,17 @@ export const acquisitionSchema = z
 
 export type AcquisitionInput = z.infer<typeof acquisitionSchema>;
 
+/**
+ * The longest display name anywhere a person can type one: onboarding,
+ * Settings, the API, and the two native clients. It was 32 in onboarding and
+ * Android, 100 here, and nothing in Settings, so a name that one screen
+ * refused another saved. Names that predate the limit (a Clerk full name can
+ * be longer) still display in full; only writing a new one is bound by it.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 32;
+
 export const updateProfileSchema = z.object({
-  displayName: z.string().min(1).max(100).optional(),
+  displayName: z.string().trim().min(1).max(DISPLAY_NAME_MAX_LENGTH).optional(),
   username: usernameSchema.optional(),
   avatarUrl: z
     .string()
