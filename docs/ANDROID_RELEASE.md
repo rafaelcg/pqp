@@ -595,6 +595,12 @@ scanned; answer from it rather than from optimism.
 
 ---
 
+## 8b. Getting a tagged build to production (the one-line rule)
+
+**Promote, never re-run.** A pushed `android-vX.Y.Z` tag builds, signs and uploads that `versionCode` to the **internal** track. To ship it to everyone, open Play Console → Testing → Internal testing → that release → **Promote release → Production**, paste the "What's new" text, and start the rollout.
+
+Do **not** run the workflow with `track=production` for a version the tag already uploaded: it rebuilds the same `versionCode` and Play refuses it with `Version code N has already been used` (what happened with 0.4.2 on 2026-09-28, run 36423076492). A `workflow_dispatch` run to production is only for a `versionCode` that has never been uploaded to any track.
+
 ## 9. What's new text, per release
 
 There is no `fastlane/metadata` directory in this repo, and
@@ -612,6 +618,12 @@ automatically**. Paste it by hand into either:
 - Play Console → Release → the release's "What's new" fields, once a build
   from the internal track is being promoted to production, since Play asks
   for one string per locale there regardless of what the upload carried.
+
+### 0.4.2 (`versionCode` 9)
+
+Watch party no celular: tela do filme com a câmera de quem apresenta, dá pra apresentar direto do celular, e a lista de canais mostra só a watch party ao vivo ou o botão pra criar uma.
+
+Since 0.4.1: watch-party stage and camera PiP (#832), hosting from the phone (#834, #836), the channel list follows the web (#840), setup without joining the call (#844).
 
 ### 0.4.0 (`versionCode` 7)
 
