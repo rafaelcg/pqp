@@ -585,6 +585,12 @@ export interface AdminMetrics {
        * Null for an ordinary server and for a DM call.
        */
       community: CommunityTag | null;
+      /**
+       * The voice channel's id. Names are not unique, so the dashboard joins
+       * a watch party's audience (`liveHls.viewers.live`) to its stage room
+       * by this. An operator payload; no user id is ever in it.
+       */
+      channelId: string;
     }[];
   };
   /**
@@ -1600,6 +1606,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           transport: room.transport,
           openedAt: room.openedAt,
           community: named?.community ?? null,
+          channelId: room.voiceChannelId,
         };
       }),
     },

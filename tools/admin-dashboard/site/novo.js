@@ -234,7 +234,9 @@
     ])]);
   }
   function para(text) { return h("p", { class: "foot", style: "margin:0;font-size:13px;line-height:1.6;color:var(--muted);max-width:900px", text: text }); }
-  function classicLink(hash, text) { return h("a", { href: "/?classico=1#" + hash, style: "font-size:13px;font-weight:600;text-decoration:none", text: text + " →" }); }
+  // A deep link visits the classic view once; only the header's "visão
+  // clássica" button changes which view "/" opens.
+  function classicLink(hash, text) { return h("a", { href: "/?classico=1&visita=1#" + hash, style: "font-size:13px;font-weight:600;text-decoration:none", text: text + " →" }); }
 
   // ---------------------------------------------------------------- charts
 
@@ -386,7 +388,35 @@
   }
   window.addEventListener("hashchange", function () { show(location.hash.slice(1)); });
 
+  /**
+   * Lists here are rebuilt on every 30 s poll and after every action, which
+   * would drop keyboard focus to the page each time. Remember what had focus
+   * (its list, its tag, and its id or label with the numbers taken out, since
+   * counts change between polls) and put focus back on the rebuilt twin.
+   */
+  function focusKey(el) {
+    if (!el || el === document.body || !el.closest) return null;
+    var host = el.id ? null : el.closest("[id]");
+    var label = el.getAttribute("data-id") || el.getAttribute("aria-label") || (el.textContent || "").trim().replace(/\d[\d.,]*/g, "#").slice(0, 80);
+    return { id: el.id || null, hostId: host ? host.id : null, tag: el.tagName, label: label };
+  }
+  function withFocus(fn) {
+    var a = document.activeElement, k = focusKey(a);
+    fn();
+    // The render may have placed focus itself (a confirm step opening).
+    if (!k || (a && document.contains(a)) || (document.activeElement && document.activeElement !== document.body)) return;
+    var target = null;
+    if (k.id) target = document.getElementById(k.id);
+    else if (k.hostId && document.getElementById(k.hostId)) {
+      var list = document.getElementById(k.hostId).querySelectorAll(k.tag);
+      for (var i = 0; i < list.length && !target; i++) { var c = focusKey(list[i]); if (c && c.label === k.label) target = list[i]; }
+    }
+    if (target) target.focus({ preventScroll: true });
+  }
   function renderScreen(name) {
+    withFocus(function () { renderScreenNow(name); });
+  }
+  function renderScreenNow(name) {
     try {
       if (name === "hoje") renderHoje();
       else if (name === "crescimento") renderCrescimento();
@@ -414,6 +444,11 @@
     });
     // A failed health read clears the old one: showing the last answer as
     // current during an outage is worse than saying there is no answer.
+    // Activity changes once a day; loadActivity itself limits how often it
+    // actually reads, so calling it every poll is what lets "ontem" roll
+    // over at midnight on a page left open.
+    if (S.screen === "hoje" || S.screen === "crescimento") loadActivity(false);
+    if (S.screen === "hoje") loadHeat();
     var healthReq = fetchJson("/health").then(function (d) { S.health = d; }).catch(function (e) {
       S.health = { _err: e && e.message ? e.message : "erro", components: [] };
     });
@@ -439,8 +474,10 @@
       r._days = days; r._at = Date.now(); S.activity = r; renderScreen(S.screen);
     }).catch(function (e) {
       if (days !== S.activityDays) return;
-      S.activity = { _err: e && e.message ? e.message : "erro", _days: days, _at: Date.now() };
-      renderScreen(S.screen);
+      // Keep a good report for the same window on screen, and try again
+      // later; only an empty screen turns into an error.
+      if (S.activity && !S.activity._err && S.activity._days === days) { S.activity._at = Date.now() - OCC_REFRESH_MS + 60000; }
+      else { S.activity = { _err: e && e.message ? e.message : "erro", _days: days, _at: Date.now() }; renderScreen(S.screen); }
       clearTimeout(S.activityRetry);
       S.activityRetry = setTimeout(function () { if (S.activity && S.activity._err) loadActivity(true); }, ((e && e.retryAfter) || 15) * 1000);
     });
@@ -982,7 +1019,8 @@
       renderFila(true);
     });
   }
-  function renderFila(paneChanged) {
+  function renderFila(paneChanged) { withFocus(function () { renderFilaNow(paneChanged); }); }
+  function renderFilaNow(paneChanged) {
     var fb = S.fb, m = S.metrics;
     var c = fb.counts;
     $("fLede").textContent = c
@@ -1139,19 +1177,22 @@
     S.pendingResolve = { ids: ids, status: status, label: label, kind: it.kind };
     fb.sel = null;
     renderFila(true);
-    toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, function () {
+    var undo = function () {
       clearTimeout(S.pendingTimer);
-      S.pendingResolve = null;
+      S.pendingResolve = null; S.pendingUndo = null;
       fb.sel = it.id;
       renderFila(true);
       toast(label + " voltou para a fila, nada foi gravado");
-    });
+    };
+    S.pendingUndo = undo;
+    S.pendingDeadline = Date.now() + UNDO_MS;
+    toast(label + (status === "confirmed" ? (it.kind === "bug" ? " confirmado · o autor ganha o selo caça-bugs" : " confirmado") : " fechado"), false, undo);
     clearTimeout(S.pendingTimer);
     S.pendingTimer = setTimeout(flushPending, UNDO_MS);
   }
   function flushPending(keepalive) {
     var p = S.pendingResolve; if (!p) return;
-    S.pendingResolve = null;
+    S.pendingResolve = null; S.pendingUndo = null;
     clearTimeout(S.pendingTimer);
     Promise.all(p.ids.map(function (id) {
       return fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: String(id), status: p.status }) })
@@ -1166,6 +1207,10 @@
   window.addEventListener("pagehide", function () { flushPending(true); });
   function toast(text, bad, undo) {
     var t = $("toast");
+    // A message about an earlier write must not take away the undo of the
+    // one still waiting: keep offering it for the time it has left.
+    var left = UNDO_MS;
+    if (!undo && S.pendingResolve && S.pendingUndo) { undo = S.pendingUndo; left = Math.max(1500, S.pendingDeadline - Date.now()); }
     $("toastText").textContent = text;
     t.classList.toggle("bad", !!bad);
     var u = $("toastUndo");
@@ -1173,14 +1218,15 @@
     u.onclick = undo ? function () { u.hidden = true; t.classList.remove("on"); undo(); } : null;
     t.classList.add("on");
     clearTimeout(S.toastTimer);
-    S.toastTimer = setTimeout(function () { t.classList.remove("on"); u.hidden = true; }, undo ? UNDO_MS : 4200);
+    S.toastTimer = setTimeout(function () { t.classList.remove("on"); u.hidden = true; }, undo ? left : 4200);
   }
 
   // ---------------------------------------------------------------- SISTEMA
   function loadFlags() {
     fetchJson("/operator/flags").then(function (r) { S.flags = r; renderSistema(); }).catch(function (e) { S.flags = { _err: e && e.message ? e.message : "erro" }; renderSistema(); });
   }
-  function renderSistema() {
+  function renderSistema() { withFocus(renderSistemaNow); }
+  function renderSistemaNow() {
     var m = S.metrics; if (!m) return;
     var comps = (S.health && S.health.components) || [];
     var hist = {};
@@ -1263,8 +1309,8 @@
       // and a flag the dashboard decided can go back to its default.
       fl.flags.forEach(function (f) {
         var pending = S.flagPending === f.key;
-        var toggle = function () { if (S.flagBusy) return; S.flagPending = pending ? null : f.key; renderSistema(); };
-        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": flagName(f), disabled: S.flagBusy ? true : null,
+        var toggle = function () { if (S.flagBusy) return; S.flagPending = pending ? null : f.key; S.flagFocus = pending ? "sw:" + f.key : "confirm"; renderSistema(); };
+        var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": f.effective ? "true" : "false", "aria-label": flagName(f), "aria-expanded": pending ? "true" : "false", "data-id": "sw:" + f.key, disabled: S.flagBusy ? true : null,
           onclick: function (ev) { ev.stopPropagation(); toggle(); } });
         var row = h("div", { class: "rowlink flagrow", onclick: toggle }, [
           h("span", { class: "t" }, [
@@ -1290,13 +1336,18 @@
             buttons.push(h("button", { type: "button", class: "btn " + (target ? "primary" : "warn"), disabled: S.flagBusy ? true : null, text: target ? "ligar" : "desligar", onclick: function () { writeFlag(f, target); } }));
             if (f.stored) buttons.push(h("button", { type: "button", class: "btn", disabled: S.flagBusy ? true : null, text: "voltar ao padrão (" + onOff(def) + ")", onclick: function () { writeFlag(f, null); } }));
           }
-          buttons.push(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "cancelar", onclick: function () { S.flagPending = null; renderSistema(); } }));
-          sw.appendChild(h("div", { class: "confirm" + (reduceMotion ? "" : " slidein") }, [
-            h("b", { text: (backToDefault ? "Voltar «" + flagName(f) + "» ao padrão?" : (target ? "Ligar" : "Desligar") + " «" + flagName(f) + "» para todos os servidores?") }),
+          buttons.push(h("button", { type: "button", class: "btn", style: "color:var(--muted)", text: "cancelar", onclick: function () { S.flagPending = null; S.flagFocus = "sw:" + f.key; renderSistema(); } }));
+          var others = f.overrides && f.overrides.length ? f.overrides.length : 0;
+          var confirmBox = h("div", { class: "confirm" + (reduceMotion ? "" : " slidein"), role: "group", "aria-label": "confirmar " + flagName(f) }, [
+            h("b", { text: (backToDefault ? "Voltar «" + flagName(f) + "» ao padrão?" : (target ? "Ligar" : "Desligar") + " «" + flagName(f) + "» para todos os servidores" + (others ? ", menos " + (others === 1 ? "o servidor que tem" : "os " + others + " que têm") + " exceção própria?" : "?")) }),
             h("p", { text: (FLAG_RISK[f.key] ? FLAG_RISK[f.key] + " " : "") + "Vale em segundos, sem deploy." }),
             h("p", { class: "foot", text: backToDefault ? "O padrão hoje é " + onOff(def) + ", então o valor não muda; só deixa de estar fixado no painel." : undo }),
             h("div", { class: "actions" }, buttons)
-          ]));
+          ]);
+          sw.appendChild(confirmBox);
+          if (S.flagFocus === "confirm") { S.flagFocus = null; buttons[0].focus({ preventScroll: true }); }
+        } else if (S.flagFocus === "sw:" + f.key) {
+          S.flagFocus = null; btn.focus({ preventScroll: true });
         }
       });
     }

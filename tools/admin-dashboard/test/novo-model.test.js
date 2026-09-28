@@ -254,3 +254,29 @@ test("a failed health read is not a healthy one", () => {
   assert.deepEqual(M.systemStatus(metrics(), [], failed), { tone: "warn", text: "saúde sem leitura" });
   assert.ok(M.attention(metrics(), [], failed).some((a) => /saúde dos serviços/.test(a.title)));
 });
+
+test("reports that normalize to nothing, or differ in status, are never grouped", () => {
+  const g = M.groupFeedback([
+    { id: "1", kind: "bug", body: "😭😭", status: "open" },
+    { id: "2", kind: "bug", body: "???", status: "open" },
+    { id: "3", kind: "bug", body: "пропал звук", status: "open" },
+    { id: "4", kind: "bug", body: "it is too loud", status: "open" },
+    { id: "5", kind: "bug", body: "It is too loud!", status: "confirmed" }
+  ]);
+  assert.equal(g.length, 5);
+});
+
+test("a watch party's stage is joined by channel id, so two cinemas never merge", () => {
+  const m = metrics({
+    voice: { rooms: [
+      { channelId: "a", server: "Clube", channel: "cinema", participants: 3 },
+      { channelId: "b", server: "Clube", channel: "cinema", participants: 2 }
+    ] },
+    liveHls: { viewers: { live: [
+      { channelId: "a", server: "Clube", channel: "cinema", startedAt: 1, liveViewers: 40 },
+      { channelId: "b", server: "Clube", channel: "cinema", startedAt: 2, liveViewers: 30 }
+    ] } }
+  });
+  const rows = M.liveNow(m).rows;
+  assert.deepEqual(rows.map((r) => [r.inCall, r.audience]), [[3, 40], [2, 30]]);
+});

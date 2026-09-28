@@ -1158,7 +1158,7 @@
   (function () {
     try {
       var q = location.search;
-      if (/[?&]classico=1/.test(q)) { localStorage.setItem("pqp-admin-view", "classico"); return; }
+      if (/[?&]classico=1/.test(q)) { if (!/[?&]visita=1/.test(q)) localStorage.setItem("pqp-admin-view", "classico"); return; }
       if (localStorage.getItem("pqp-admin-view") === "novo") {
         var map = { agora: "hoje", tempo: "crescimento", pessoas: "produto", moderacao: "fila", controles: "sistema", infra: "sistema" };
         var h = location.hash.slice(1);

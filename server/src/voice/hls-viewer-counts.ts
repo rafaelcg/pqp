@@ -483,6 +483,8 @@ export function noteHlsViewer(
 }
 
 export interface LiveHlsViewerSession {
+  /** The channel's id, the join key to `voice.rooms`; never a user id. */
+  channelId: string;
   channel: string | null;
   server: string | null;
   /** Set when the server is a community; see `services/community-tag.ts`. */
@@ -497,12 +499,13 @@ export interface LiveHlsViewerSession {
 /**
  * Broadcasts with a viewer seen in the last few minutes, across every API
  * process (read from the shared tables, so up to one flush interval behind).
- * For `GET /api/admin/metrics`. Names, never ids.
+ * For `GET /api/admin/metrics`. Names and the channel id, never a user id.
  */
 export async function liveHlsViewerSessions(
   limit = 20,
 ): Promise<LiveHlsViewerSession[]> {
   const result = await getPool().query<CommunityColumns & {
+    channel_id: string;
     channel: string | null;
     server: string | null;
     started_at_ms: string;
@@ -510,7 +513,8 @@ export async function liveHlsViewerSessions(
     peak_viewers: number;
     unique_viewers: number;
   }>(
-    `SELECT c.name AS channel,
+    `SELECT st.channel_id::text AS channel_id,
+            c.name AS channel,
             srv.name AS server,
             ${communityColumns("srv")},
             st.started_at_ms::text AS started_at_ms,
@@ -529,6 +533,7 @@ export async function liveHlsViewerSessions(
     [limit, String(HLS_VIEWER_LIVE_WINDOW_MS)],
   );
   return result.rows.map((row) => ({
+    channelId: row.channel_id,
     channel: row.channel,
     server: row.server,
     community: communityTag(row),

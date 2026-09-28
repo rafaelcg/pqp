@@ -145,6 +145,7 @@ interface MetricsBody {
       transport: string;
       openedAt: string | null;
       community: { slug: string | null; listed: boolean; suspended: boolean } | null;
+      channelId: string;
     }[];
   };
   topServers24h: {
@@ -587,6 +588,7 @@ describeDb("GET /api/admin/metrics", () => {
         sharingScreen: 1,
         transport: "livekit",
         community: null,
+        channelId: voiceChannelId,
       });
       expect(Date.parse(room!.openedAt!)).not.toBeNaN();
 

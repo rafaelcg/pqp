@@ -251,6 +251,7 @@ describeDb("watch party viewer counts", () => {
     const live = await liveHlsViewerSessions();
     expect(live).toEqual([
       {
+        channelId,
         channel: "cinema",
         server: "Sala",
         community: null,

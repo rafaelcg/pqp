@@ -243,7 +243,14 @@
     };
     var groups = [], byKey = {};
     (items || []).forEach(function (it) {
-      var k = it.kind + "|" + norm(it.body);
+      var text = norm(it.body);
+      // Emoji, punctuation or another script normalize to nothing; those
+      // are not "the same report", and confirming a group gives every
+      // author the badge. Short texts stay single for the same reason.
+      // Status is part of the key so one action never flips a confirmed
+      // or closed duplicate along with an open one.
+      if (text.length < 3) { groups.push({ item: it, others: [] }); return; }
+      var k = (it.status || "") + "|" + it.kind + "|" + text;
       if (byKey[k]) { byKey[k].others.push(it); return; }
       var g = { item: it, others: [] };
       byKey[k] = g; groups.push(g);
@@ -398,16 +405,18 @@
     min = min || BIG_ROOM;
     var rooms = ((m && m.voice) || {}).rooms || [];
     var parties = (((m && m.liveHls) || {}).viewers || {}).live || [];
-    var key = function (server, channel) { return (server || "") + "\u0000" + (channel || ""); };
+    // The channel id when the API sends it; names only for an older API,
+    // since two servers can both have a "cinema".
+    var key = function (x) { return x.channelId ? "id:" + x.channelId : "name:" + (x.server || "") + "\u0000" + (x.channel || ""); };
     var byKey = {};
     var all = [];
     parties.forEach(function (p) {
       var e = { kind: "party", channel: p.channel, server: p.server, inCall: 0, audience: num(p.liveViewers), peak: p.peakViewers != null ? num(p.peakViewers) : null,
         since: p.startedAt ? new Date(p.startedAt).toISOString() : null, sharing: 0, transport: null, community: p.community || null };
-      byKey[key(p.server, p.channel)] = e; all.push(e);
+      byKey[key(p)] = e; all.push(e);
     });
     rooms.forEach(function (r) {
-      var stage = (r.server || r.channel) ? byKey[key(r.server, r.channel)] : null;
+      var stage = (r.channelId || r.server || r.channel) ? byKey[key(r)] : null;
       if (stage) { stage.inCall = num(r.participants); stage.sharing = num(r.sharingScreen); stage.transport = r.transport || null; stage.community = stage.community || r.community || null; return; }
       all.push({ kind: "voice", channel: r.channel, server: r.server, inCall: num(r.participants), audience: 0, peak: null, since: r.openedAt || null, sharing: num(r.sharingScreen), transport: r.transport || null, community: r.community || null });
     });
