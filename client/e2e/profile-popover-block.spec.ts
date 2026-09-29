@@ -210,7 +210,9 @@ test("Remove friend from the card, confirmed with a mouse click, removes", async
   const confirm = page.getByRole("dialog", { name: "Remove friend" });
   await expect(confirm).toBeVisible();
 
-  // Escape backs out of the confirm and leaves the card where it was.
+  // Escape backs out of the confirm only. The confirm's Dialog takes it, and
+  // the card's own Escape handler stands down while a confirm is pending, so
+  // the card stays where it was.
   await page.keyboard.press("Escape");
   await expect(confirm).toBeHidden();
   await expect(card).toBeVisible();
