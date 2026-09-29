@@ -47,6 +47,35 @@ export function applyCommunityHomeSwitch<T extends SwitchRow>(
 }
 
 /**
+ * Write a fresh read of `GET /api/servers/:id/home/config` onto the row. With
+ * a version it goes through the same guard as a frame. Without one (an API
+ * instance that predates the version, mid rolling deploy) the answer is still
+ * the value persisted when it was read, so it is applied and the row keeps
+ * its version: a later versioned frame still has to be newer than that.
+ * Callers apply only the newest read they issued, so an older answer that
+ * arrives last never lands here.
+ */
+export function applyCommunityHomeRead<T extends SwitchRow>(
+  rows: T[],
+  serverId: string,
+  read: { enabled: boolean; version?: number },
+): T[] {
+  if (read.version !== undefined) {
+    return applyCommunityHomeSwitch(rows, serverId, {
+      enabled: read.enabled,
+      version: read.version,
+    });
+  }
+  const index = rows.findIndex((row) => row.id === serverId);
+  if (index === -1 || rows[index]!.communityHomeEnabled === read.enabled) {
+    return rows;
+  }
+  const next = rows.slice();
+  next[index] = { ...rows[index]!, communityHomeEnabled: read.enabled };
+  return next;
+}
+
+/**
  * Merge a settings write's `server` into the viewer's row. The write returns
  * the server row, not this viewer's membership, so role and the profile
  * opt-out stay as they were. The Baú switch keeps whichever copy has the

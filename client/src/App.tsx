@@ -449,6 +449,7 @@ import {
   onSettingsRequest,
 } from "@/lib/settings-request";
 import {
+  applyCommunityHomeRead,
   applyCommunityHomeSwitch,
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
@@ -2188,27 +2189,28 @@ function MainAppContent({
    * refetch of the whole server list.
    */
   const communityHomeUnverifiedRef = useRef(new Set<string>());
+  /** The newest re-read issued per server; an older answer that lands last is dropped. */
+  const communityHomeReadSeqRef = useRef(new Map<string, number>());
   const reconcileCommunityHomeSwitch = useCallback(
     (serverId: string) => {
       communityHomeUnverifiedRef.current.delete(serverId);
       if (!communityHomeOn()) {
         return;
       }
+      const seqs = communityHomeReadSeqRef.current;
+      const seq = (seqs.get(serverId) ?? 0) + 1;
+      seqs.set(serverId, seq);
       fetchServerCommunityHomeConfig(serverId).then(
         (config) => {
-          const version = config.version;
-          if (version === undefined) {
+          if (seqs.get(serverId) !== seq) {
             return;
           }
-          setServers((rows) =>
-            applyCommunityHomeSwitch(rows, serverId, {
-              enabled: config.enabled,
-              version,
-            }),
-          );
+          setServers((rows) => applyCommunityHomeRead(rows, serverId, config));
         },
         () => {
-          communityHomeUnverifiedRef.current.add(serverId);
+          if (seqs.get(serverId) === seq) {
+            communityHomeUnverifiedRef.current.add(serverId);
+          }
         },
       );
     },
@@ -4359,6 +4361,10 @@ function MainAppContent({
                   version,
                 }),
               );
+            } else if (typeof enabled === "boolean") {
+              // A flip from an API instance without versions (mid rolling
+              // deploy): its order is unknown, so ask for the persisted value.
+              reconcileCommunityHomeSwitchRef.current(message.serverId);
             }
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);

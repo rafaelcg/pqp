@@ -31,6 +31,7 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  applyCommunityHomeRead,
   applyCommunityHomeSwitch,
   mergeServerUpdate,
   type CommunityHomeSwitchState,

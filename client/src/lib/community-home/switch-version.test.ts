@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Server } from "@pqp/shared";
 import {
+  applyCommunityHomeRead,
   applyCommunityHomeSwitch,
   mergeServerUpdate,
 } from "./switch-version";
@@ -79,6 +80,36 @@ describe("applyCommunityHomeSwitch", () => {
       version: 3,
     });
     expect(next[1]).toBe(other);
+  });
+});
+
+describe("applyCommunityHomeRead", () => {
+  it("guards a versioned read like a frame", () => {
+    const rows = [server({ communityHomeEnabled: true, communityHomeVersion: 5 })];
+    expect(
+      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 4 }),
+    ).toBe(rows);
+    expect(
+      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 6 })[0],
+    ).toMatchObject({ communityHomeEnabled: false, communityHomeVersion: 6 });
+  });
+
+  it("applies a read from an API without versions and keeps the row's version", () => {
+    const rows = [server({ communityHomeEnabled: false, communityHomeVersion: 2 })];
+    const next = applyCommunityHomeRead(rows, "s1", { enabled: true });
+    expect(next[0]).toMatchObject({
+      communityHomeEnabled: true,
+      communityHomeVersion: 2,
+    });
+    // A later versioned frame still has to be newer than the row's version.
+    expect(
+      applyCommunityHomeSwitch(next, "s1", { enabled: false, version: 2 }),
+    ).toBe(next);
+  });
+
+  it("returns the same array when an unversioned read agrees", () => {
+    const rows = [server({ communityHomeEnabled: true })];
+    expect(applyCommunityHomeRead(rows, "s1", { enabled: true })).toBe(rows);
   });
 });
 
