@@ -131,6 +131,10 @@ const JUMP_NOTICE_MS = 3_000;
  * the size lets the browser remember each row's real height after its first
  * render, so a row that scrolls back into view does not jump; the `64px`
  * fallback is only a guess for the very first paint.
+ *
+ * It implies paint containment, which clips everything at the box edge. A row
+ * with the hover toolbar puts it on an inner wrapper, not the `<article>`,
+ * because the toolbar hangs 12px above the article on purpose.
  */
 const ROW_CONTENT_VISIBILITY: CSSProperties = {
   contentVisibility: "auto",
@@ -2720,7 +2724,6 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
           )}
-          style={ROW_CONTENT_VISIBILITY}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
@@ -2749,247 +2752,256 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {stream ? null : startsGroup && !compact ? (
-            <div className="flex w-14 shrink-0 items-start justify-end pr-2">
-              <div className="relative h-9 w-9 shrink-0">
-                <AuthorButton
-                  message={message}
-                  author={authorInfo}
-                  tabIndex={controlTabIndex}
-                  onOpenProfile={openProfile}
-                  className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
-                >
-                  {message.isAutomod ? (
-                    <span
-                      className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
-                      title={t("chat.automodPosted")}
-                    >
-                      <ShieldCheck className="h-5 w-5" aria-hidden />
-                    </span>
-                  ) : (
-                    <UserAvatar
-                      name={message.authorName}
-                      avatarUrl={message.authorAvatarUrl}
-                      rounded="lg"
-                      className="h-9 w-9"
-                      fallbackClassName="bg-ink-3 text-sm"
-                    />
-                  )}
-                </AuthorButton>
-                {!message.isWebhook && authorInfo?.status && (
-                  <StatusDot
-                    status={authorInfo.status}
-                    className="absolute -bottom-0.5 -right-0.5"
-                    ringClassName="rounded-full bg-channel ring-2 ring-channel"
-                  />
-                )}
-              </div>
-            </div>
-          ) : (
-            <time
-              className={cn(
-                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-              )}
-              dateTime={message.createdAt}
-              title={formatFullTimestamp(message.createdAt)}
-            >
-              {formatTime(message.createdAt)}
-            </time>
-          )}
-
-          <div className="min-w-0 flex-1">
-            {stream && !message.body && !isEditing && (
-              <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
-                {streamAuthor}
-              </div>
-            )}
-            {message.replyTo && (
-              <ReplyQuote
-                replyTo={message.replyTo}
-                onJump={onJumpToMessage}
-                tabIndex={controlTabIndex}
-              />
-            )}
-            {startsGroup && !stream && (
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="inline-flex items-baseline gap-1">
+          {/* Containment lives on this wrapper and not on the <article>: paint
+              containment clips at the box edge, and the hover toolbar below
+              overhangs the row's top edge on purpose. The toolbar and the
+              select overlay stay outside it, everything expensive is inside. */}
+          <div
+            className="flex min-w-0 flex-1 items-start"
+            style={ROW_CONTENT_VISIBILITY}
+          >
+            {stream ? null : startsGroup && !compact ? (
+              <div className="flex w-14 shrink-0 items-start justify-end pr-2">
+                <div className="relative h-9 w-9 shrink-0">
                   <AuthorButton
                     message={message}
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className={cn(
-                      "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
-                      !roleColor && (isMine ? "text-signal" : "text-paper"),
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                  >
+                    {message.isAutomod ? (
+                      <span
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        title={t("chat.automodPosted")}
+                      >
+                        <ShieldCheck className="h-5 w-5" aria-hidden />
+                      </span>
+                    ) : (
+                      <UserAvatar
+                        name={message.authorName}
+                        avatarUrl={message.authorAvatarUrl}
+                        rounded="lg"
+                        className="h-9 w-9"
+                        fallbackClassName="bg-ink-3 text-sm"
+                      />
                     )}
-                    style={roleColor ? { color: roleColor } : undefined}
-                  >
-                    {message.authorName}
                   </AuthorButton>
-                  {/* The name#1234 tag is a lookup key, not reading material:
-                      it lives on the profile card. Rank is a quiet glyph;
-                      the role-coloured name is the primary signal. */}
-                  <RankMarks
-                    marks={identityMarks({
-                      rank: authorInfo?.rank,
-                      isWebhook: message.isWebhook,
-                      isCharacter: authorInfo?.isCharacter,
-                      ...rankBadges(authorInfo?.roleIds, roles),
-                    })}
-                  />
-                </span>
-                {message.isAutomod ? (
-                  <span
-                    className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
-                    title={t("chat.automodPosted")}
-                  >
-                    AutoMod
-                  </span>
-                ) : (
-                  message.isWebhook && (
-                    <span
-                      className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
-                      title={t("chat.webhookPosted")}
-                    >
-                      Webhook
-                    </span>
-                  )
-                )}
-                {!compact && (
-                  <time
-                    className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
-                    dateTime={message.createdAt}
-                    title={formatFullTimestamp(message.createdAt)}
-                  >
-                    {formatTime(message.createdAt)}
-                  </time>
-                )}
-                {isMessagePinned && (
-                  <span
-                    className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
-                    title={
-                      message.pinnedBy
-                        ? t("chat.pinnedBy", {
-                            name: message.pinnedBy.displayName,
-                          })
-                        : t("chat.pinned")
-                    }
-                  >
-                    <Pin className="h-3 w-3" aria-hidden />
-                    <span className="sr-only">{t("chat.pinned")}</span>
-                  </span>
-                )}
-              </div>
-            )}
-
-            {isEditing ? (
-              <EditComposer
-                initialValue={message.body}
-                allowEmpty={attachments.length > 0}
-                onCancel={onCancelEdit}
-                onSubmit={onSubmitEdit}
-              />
-            ) : gifMedia ? (
-              <div>
-                <GifAttachment media={gifMedia} />
-                <EditedMarker editedAt={message.editedAt} />
+                  {!message.isWebhook && authorInfo?.status && (
+                    <StatusDot
+                      status={authorInfo.status}
+                      className="absolute -bottom-0.5 -right-0.5"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                    />
+                  )}
+                </div>
               </div>
             ) : (
-              <>
-                {/* A message carrying attachments is allowed to say nothing, so
-                    an empty body renders as nothing rather than an empty line. */}
-                {message.chance ? (
-                  <ChanceCard result={message.chance} />
-                ) : message.poll ? (
-                  <PollCard
-                    poll={message.poll}
-                    canManage={canModerate}
-                    onVote={(optionId) => onVotePoll?.(message.id, optionId)}
-                    onClose={() => onClosePoll?.(message.id)}
-                  />
-                ) : message.body ? (
-                  <div
-                    className={cn(
-                      "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
-                      stream && "[&>p]:inline",
-                    )}
-                  >
-                    {streamAuthor}
-                    <MessageBody
-                      body={message.body}
-                      currentUsername={currentUsername}
+              <time
+                className={cn(
+                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                )}
+                dateTime={message.createdAt}
+                title={formatFullTimestamp(message.createdAt)}
+              >
+                {formatTime(message.createdAt)}
+              </time>
+            )}
+
+            <div className="min-w-0 flex-1">
+              {stream && !message.body && !isEditing && (
+                <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
+                  {streamAuthor}
+                </div>
+              )}
+              {message.replyTo && (
+                <ReplyQuote
+                  replyTo={message.replyTo}
+                  onJump={onJumpToMessage}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+              {startsGroup && !stream && (
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="inline-flex items-baseline gap-1">
+                    <AuthorButton
+                      message={message}
+                      author={authorInfo}
+                      tabIndex={controlTabIndex}
+                      onOpenProfile={openProfile}
+                      className={cn(
+                        "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
+                        !roleColor && (isMine ? "text-signal" : "text-paper"),
+                      )}
+                      style={roleColor ? { color: roleColor } : undefined}
+                    >
+                      {message.authorName}
+                    </AuthorButton>
+                    {/* The name#1234 tag is a lookup key, not reading material:
+                        it lives on the profile card. Rank is a quiet glyph;
+                        the role-coloured name is the primary signal. */}
+                    <RankMarks
+                      marks={identityMarks({
+                        rank: authorInfo?.rank,
+                        isWebhook: message.isWebhook,
+                        isCharacter: authorInfo?.isCharacter,
+                        ...rankBadges(authorInfo?.roleIds, roles),
+                      })}
                     />
-                    {attachments.length === 0 && (
-                      <EditedMarker editedAt={message.editedAt} />
-                    )}
-                  </div>
-                ) : null}
-                {attachments.length > 0 && (
-                  <div>
-                    <AttachmentGrid attachments={attachments} />
-                    <EditedMarker editedAt={message.editedAt} />
-                  </div>
-                )}
-                {/* Says nothing and carries nothing. The server refuses to
-                    create that for an ordinary send, so reaching it means the
-                    attachments were withheld on read — which is what a
-                    deployment whose storage config went missing serves for an
-                    attachment-only message. A webhook message is the one other
-                    way to get here honestly: Discord's own webhooks allow an
-                    embed with no `content` at all, which is why this also
-                    checks for one before naming it a problem. */}
-                {!message.body &&
-                  attachments.length === 0 &&
-                  message.webhookEmbeds.length === 0 && (
-                    <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
-                      {t("chat.attachmentUnavailable")}
-                    </p>
+                  </span>
+                  {message.isAutomod ? (
+                    <span
+                      className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
+                      title={t("chat.automodPosted")}
+                    >
+                      AutoMod
+                    </span>
+                  ) : (
+                    message.isWebhook && (
+                      <span
+                        className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                        title={t("chat.webhookPosted")}
+                      >
+                        Webhook
+                      </span>
+                    )
                   )}
-                {showLinkEmbeds && message.embeds?.[0] && (
-                  <EmbedCard embed={message.embeds[0]} />
-                )}
-                {message.webhookEmbeds.map((embed, index) => (
-                  <WebhookEmbedCard key={index} embed={embed} />
-                ))}
-              </>
-            )}
+                  {!compact && (
+                    <time
+                      className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                      dateTime={message.createdAt}
+                      title={formatFullTimestamp(message.createdAt)}
+                    >
+                      {formatTime(message.createdAt)}
+                    </time>
+                  )}
+                  {isMessagePinned && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
+                      title={
+                        message.pinnedBy
+                          ? t("chat.pinnedBy", {
+                              name: message.pinnedBy.displayName,
+                            })
+                          : t("chat.pinned")
+                      }
+                    >
+                      <Pin className="h-3 w-3" aria-hidden />
+                      <span className="sr-only">{t("chat.pinned")}</span>
+                    </span>
+                  )}
+                </div>
+              )}
 
-            {message.failed && (
-              <FailedSendFooter
-                message={message}
-                tabIndex={controlTabIndex}
-                onRetry={onRetry}
-                onDiscard={onDiscard}
-              />
-            )}
-            {message.pending && message.queued && (
-              <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
-            )}
+              {isEditing ? (
+                <EditComposer
+                  initialValue={message.body}
+                  allowEmpty={attachments.length > 0}
+                  onCancel={onCancelEdit}
+                  onSubmit={onSubmitEdit}
+                />
+              ) : gifMedia ? (
+                <div>
+                  <GifAttachment media={gifMedia} />
+                  <EditedMarker editedAt={message.editedAt} />
+                </div>
+              ) : (
+                <>
+                  {/* A message carrying attachments is allowed to say nothing, so
+                      an empty body renders as nothing rather than an empty line. */}
+                  {message.chance ? (
+                    <ChanceCard result={message.chance} />
+                  ) : message.poll ? (
+                    <PollCard
+                      poll={message.poll}
+                      canManage={canModerate}
+                      onVote={(optionId) => onVotePoll?.(message.id, optionId)}
+                      onClose={() => onClosePoll?.(message.id)}
+                    />
+                  ) : message.body ? (
+                    <div
+                      className={cn(
+                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                        stream && "[&>p]:inline",
+                      )}
+                    >
+                      {streamAuthor}
+                      <MessageBody
+                        body={message.body}
+                        currentUsername={currentUsername}
+                      />
+                      {attachments.length === 0 && (
+                        <EditedMarker editedAt={message.editedAt} />
+                      )}
+                    </div>
+                  ) : null}
+                  {attachments.length > 0 && (
+                    <div>
+                      <AttachmentGrid attachments={attachments} />
+                      <EditedMarker editedAt={message.editedAt} />
+                    </div>
+                  )}
+                  {/* Says nothing and carries nothing. The server refuses to
+                      create that for an ordinary send, so reaching it means the
+                      attachments were withheld on read — which is what a
+                      deployment whose storage config went missing serves for an
+                      attachment-only message. A webhook message is the one other
+                      way to get here honestly: Discord's own webhooks allow an
+                      embed with no `content` at all, which is why this also
+                      checks for one before naming it a problem. */}
+                  {!message.body &&
+                    attachments.length === 0 &&
+                    message.webhookEmbeds.length === 0 && (
+                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
+                        {t("chat.attachmentUnavailable")}
+                      </p>
+                    )}
+                  {showLinkEmbeds && message.embeds?.[0] && (
+                    <EmbedCard embed={message.embeds[0]} />
+                  )}
+                  {message.webhookEmbeds.map((embed, index) => (
+                    <WebhookEmbedCard key={index} embed={embed} />
+                  ))}
+                </>
+              )}
 
-            {isReal && !stream && (
-              <ReactionBar
-                reactions={reactions}
-                currentUserId={currentUserId}
-                isPickerOpen={isPickerOpen}
-                onToggle={(emoji) => onToggleReaction(message.id, emoji)}
-                onOpenPicker={onOpenPicker}
-                onClosePicker={onClosePicker}
-                tabIndex={controlTabIndex}
-              />
-            )}
+              {message.failed && (
+                <FailedSendFooter
+                  message={message}
+                  tabIndex={controlTabIndex}
+                  onRetry={onRetry}
+                  onDiscard={onDiscard}
+                />
+              )}
+              {message.pending && message.queued && (
+                <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
+              )}
 
-            {/* --- threads --- the chip under the origin message. */}
-            {isReal && message.thread && onOpenThread && (
-              <ThreadChip
-                thread={message.thread}
-                originBody={message.body}
-                unread={threadUnread}
-                isOpen={isThreadOpen}
-                onOpen={onOpenThread}
-                tabIndex={controlTabIndex}
-              />
-            )}
+              {isReal && !stream && (
+                <ReactionBar
+                  reactions={reactions}
+                  currentUserId={currentUserId}
+                  isPickerOpen={isPickerOpen}
+                  onToggle={(emoji) => onToggleReaction(message.id, emoji)}
+                  onOpenPicker={onOpenPicker}
+                  onClosePicker={onClosePicker}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+
+              {/* --- threads --- the chip under the origin message. */}
+              {isReal && message.thread && onOpenThread && (
+                <ThreadChip
+                  thread={message.thread}
+                  originBody={message.body}
+                  unread={threadUnread}
+                  isOpen={isThreadOpen}
+                  onOpen={onOpenThread}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+            </div>
           </div>
 
           {/* Right-click and long-press aren't available on every input, so
