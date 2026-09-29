@@ -612,6 +612,14 @@ export const serverSchema = z.object({
   /** Whether this server has opted into the rollout-gated Baú / Home feed. */
   communityHomeEnabled: z.boolean().default(false),
   /**
+   * Bumped by every flip of `communityHomeEnabled` (the owner's switch). A
+   * copy of the flag only ever moves to a higher version, so a late or
+   * duplicated `community-home-update` frame cannot undo a newer flip.
+   * Optional so a response from an API that predates it still parses; read a
+   * missing value as 0.
+   */
+  communityHomeVersion: z.number().int().nonnegative().optional(),
+  /**
    * In-app Overview identity. Defaulted so a payload from an API that
    * predates them still parses. Featured lives only on the public `/c/`
    * poster, not here — in-app the pinned Baú post is the featured moment.
@@ -634,9 +642,13 @@ export const serverSchema = z.object({
   showOnProfile: z.boolean().default(true),
 });
 
-/** `GET /api/servers/:id/home/config`: this server's own Baú opt-in. */
+/**
+ * `GET /api/servers/:id/home/config`: this server's own Baú opt-in, with the
+ * version of that value (see `communityHomeVersion` on the server).
+ */
 export const serverCommunityHomeConfigSchema = z.object({
   enabled: z.boolean(),
+  version: z.number().int().nonnegative().optional(),
 });
 export type ServerCommunityHomeConfig = z.infer<
   typeof serverCommunityHomeConfigSchema
@@ -1156,8 +1168,17 @@ export const acquisitionSchema = z
 
 export type AcquisitionInput = z.infer<typeof acquisitionSchema>;
 
+/**
+ * The longest display name anywhere a person can type one: onboarding,
+ * Settings, the API, and the two native clients. It was 32 in onboarding and
+ * Android, 100 here, and nothing in Settings, so a name that one screen
+ * refused another saved. Names that predate the limit (a Clerk full name can
+ * be longer) still display in full; only writing a new one is bound by it.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 32;
+
 export const updateProfileSchema = z.object({
-  displayName: z.string().min(1).max(100).optional(),
+  displayName: z.string().trim().min(1).max(DISPLAY_NAME_MAX_LENGTH).optional(),
   username: usernameSchema.optional(),
   avatarUrl: z
     .string()

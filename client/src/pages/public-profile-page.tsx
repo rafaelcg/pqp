@@ -286,7 +286,11 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
               fallbackClassName="bg-signal text-4xl text-ink"
             />
             <div className="mt-3 min-w-0 flex-1 sm:mt-0 sm:pb-1">
-              <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+              {/* `anywhere`, not `break-words`: this h1 is centred in a column
+                  flex on a phone, so it is sized by its min-content, and only
+                  `anywhere` lets a 60-letter word shrink that. Otherwise the
+                  name overflows the card on BOTH sides and is clipped. */}
+              <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                 {profile.displayName}
               </h1>
               <p className="mt-1 font-mono text-sm text-signal">

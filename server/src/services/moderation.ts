@@ -28,12 +28,18 @@ export async function kickMember(
   await removeMembership(serverId, userId);
 }
 
+/**
+ * Ban somebody from a server, member or not, and answer whether they were a
+ * member when the ban landed: the one case with an open session to tell.
+ * Answered from the delete itself rather than a read before it, so a join
+ * that lands between the caller's checks and the ban is still counted.
+ */
 export async function banMember(
   serverId: string,
   userId: string,
   bannedBy: string,
   reason?: string | null,
-): Promise<void> {
+): Promise<boolean> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -44,7 +50,7 @@ export async function banMember(
        DO UPDATE SET banned_by = EXCLUDED.banned_by, reason = EXCLUDED.reason`,
       [serverId, userId, bannedBy, reason ?? null],
     );
-    await client.query(
+    const removed = await client.query(
       `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
       [serverId, userId],
     );
@@ -62,6 +68,7 @@ export async function banMember(
     // `removeMembership` left a kicked member evicted from the cache and a
     // *banned* one still in it, which is the wrong way round.
     invalidateServerAudience(serverId);
+    return (removed.rowCount ?? 0) > 0;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

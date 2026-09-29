@@ -246,8 +246,13 @@ export function FriendsView({
   ];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-ink-4/60 px-4">
+    // `@container`: the header breaks on its OWN width, not the window's. One
+    // row needs about 580px; at 390px the column is 318px, and at 768px the
+    // sidebar leaves it 440px even though the viewport is `md`. Below `@2xl`
+    // the tabs drop to a second row that scrolls sideways instead of clipping,
+    // so "Pendentes (3)" and "Adicionar amigo" stay on the screen.
+    <div className="@container flex min-h-0 flex-1 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ink-4/60 px-4 py-2 @2xl:h-14 @2xl:flex-nowrap @2xl:py-0">
         {onOpenNav && (
           <button
             type="button"
@@ -258,15 +263,18 @@ export function FriendsView({
             <Menu className="h-5 w-5" />
           </button>
         )}
-        <Users aria-hidden="true" className="h-5 w-5 shrink-0 text-paper-muted" />
-        <h1 className="font-display text-base font-bold">
+        <Users
+          aria-hidden="true"
+          className="hidden h-5 w-5 shrink-0 text-paper-muted @sm:block"
+        />
+        <h1 className="min-w-0 truncate font-display text-base font-bold">
           {t("friends.title")}
         </h1>
 
         <div
           role="tablist"
           aria-label={t("friends.title")}
-          className="ml-2 flex items-center gap-1"
+          className="order-last -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 py-0.5 [scrollbar-width:thin] @2xl:order-none @2xl:mx-0 @2xl:ml-2 @2xl:w-auto @2xl:overflow-visible @2xl:p-0"
         >
           {tabs.map((one) => (
             <button
@@ -276,7 +284,7 @@ export function FriendsView({
               aria-selected={tab === one.id}
               aria-controls={panelId}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm",
+                "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm @2xl:py-1",
                 tab === one.id
                   ? "bg-ink-3 text-paper"
                   : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
@@ -290,7 +298,7 @@ export function FriendsView({
 
         <Button
           size="sm"
-          className="ml-auto"
+          className="ml-auto shrink-0"
           aria-expanded={adding}
           onClick={() => {
             setAdding((open) => !open);

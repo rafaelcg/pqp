@@ -21,7 +21,8 @@ import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
-import { setIdleMessageSchema } from "./status.js";
+import { serverRemovedSchema } from "./moderation.js";
+import { ownStatusSchema, setIdleMessageSchema } from "./status.js";
 // --- threads ---
 import {
   threadJoinMessageSchema,
@@ -318,7 +319,7 @@ export const channelActivitySchema = z.object({
    * instance's copy across `CLUSTER_BUS` carries neither key at all.
    *
    * Already redacted and truncated to 140 chars server-side
-   * (`server/src/services/dm-preview.ts`). Never raw markdown, never sent for
+   * (`packages/shared/src/dm-preview.ts`). Never raw markdown, never sent for
    * a server channel.
    */
   preview: z.string().max(140).optional(),
@@ -610,6 +611,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // see the note on `friendActivitySchema`, and its absence from the list
   // below.
   friendActivitySchema,
+  // Addressed to one account's own sockets, like `friend-activity`: it tells
+  // the other tabs and devices what status this account just chose.
+  ownStatusSchema,
   // Same addressing as `friend-activity`: each member's snapshot differs, so
   // this is delivered per socket, never through the channel relay. Listing it
   // in `CHAT_SERVER_MESSAGE_TYPES` would drop it (no channel id) or, worse,
@@ -624,6 +628,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,
+  // Per person too: see `moderation.ts`, and its absence from the list below.
+  serverRemovedSchema,
 ]);
 
 /**
@@ -712,6 +718,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * have a friend request" nudge to a whole channel — content-free, so not a
  * disclosure, but a badge appearing on strangers' screens is still a bug.
  *
+ * `own-status` is absent for the same reason: it is addressed to one account's
+ * own sockets, names no channel, and can carry `invisible`, which the relay
+ * must never be in a position to hand to a channel.
+ *
  * `permissions-update` is absent for the same reason as `friend-activity`: it
  * is addressed to a server's members, names no channel, and travels on
  * `chat.permissions`. The payload is a version number; each client refetches
@@ -723,6 +733,11 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * `channels-update` is absent for the same reason again: server-scoped, no
  * channel, clients refetch their own channel list. It travels on
  * `chat.channels`.
+ *
+ * `server-removed` is absent because its addressees are the people who just
+ * lost the server, so no channel could reach them anyway. It names who was
+ * kicked or banned by who receives it, and travels on `chat.membership` keyed
+ * by user id.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",

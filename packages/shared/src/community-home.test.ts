@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   communityHomeMediaSchema,
+  communityHomeUpdateSchema,
   communityHomePostSchema,
   instagramCanonicalUrl,
   instagramEmbedSrc,
@@ -344,5 +345,37 @@ describe("youtubePosterUrl", () => {
     );
     expect(youtubePosterUrl("https://example.com/watch")).toBeNull();
     expect(youtubePosterUrl(null)).toBeNull();
+  });
+});
+
+describe("communityHomeUpdateSchema", () => {
+  const serverId = "33333333-3333-3333-3333-333333333333";
+
+  it("accepts the old shape with no value", () => {
+    expect(
+      communityHomeUpdateSchema.parse({ type: "community-home-update", serverId }),
+    ).toEqual({ type: "community-home-update", serverId });
+  });
+
+  it("carries the switch's new value and its version when the owner flips it", () => {
+    const frame = communityHomeUpdateSchema.parse({
+      type: "community-home-update",
+      serverId,
+      enabled: true,
+      version: 3,
+    });
+    expect(frame.enabled).toBe(true);
+    expect(frame.version).toBe(3);
+  });
+
+  it("refuses a version that is not a whole number", () => {
+    expect(
+      communityHomeUpdateSchema.safeParse({
+        type: "community-home-update",
+        serverId,
+        enabled: true,
+        version: 1.5,
+      }).success,
+    ).toBe(false);
   });
 });

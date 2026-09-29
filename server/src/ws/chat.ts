@@ -2,6 +2,7 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 import {
   channelsUpdateSchema,
+  buildMessagePreview,
   chatClientMessageSchema,
   extractMentions,
   extractMentionUsernames,
@@ -11,16 +12,20 @@ import {
   Permission,
   permissionsUpdateSchema,
   profileUpdateSchema,
+  serverRemovedSchema,
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
+  type MessagePreview,
   type MessageRejectReason,
   type PollRequest,
   type ProfileUpdate,
+  type ServerRemoved,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
 import {
+  isBusConnected,
   isBusEnabled,
   publishToCluster,
   subscribeToCluster,
@@ -46,7 +51,6 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
-import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
@@ -78,6 +82,7 @@ import { getThreadInfo } from "../services/threads.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
+  listCurrentMemberships,
 } from "../services/users.js";
 import {
   revokeHlsAccess,
@@ -177,6 +182,7 @@ const FRIEND_TOPIC = "chat.friend";
 const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
 const CHANNELS_TOPIC = "chat.channels";
+const MEMBERSHIP_TOPIC = "chat.membership";
 
 interface PresenceUser {
   id: string;
@@ -861,6 +867,188 @@ function deliverFriendActivity(
 }
 
 /**
+ * Tell these people, on every socket they hold, that a server just left their
+ * list: they were kicked or banned, or it was deleted.
+ *
+ * The recipients are named by the caller rather than read here, because for a
+ * delete there is nobody left to read: the membership rows cascade with the
+ * server, so `deleteServer` reads them under the same lock as the delete and
+ * hands them back. For the same reason the bus frame
+ * carries the ids, and the other instances deliver without asking Postgres.
+ *
+ * Fire-and-forget, like `notifyFriendActivity`: the removal is already
+ * committed, and the route's answer must not wait on who has a tab open.
+ * Unlike a friend's status, though, it is ONE-SHOT: nothing sends it again,
+ * so a publish made while the bus was down is queued and republished once the
+ * bus is back (see `queueServerRemovedRetry`).
+ */
+export function notifyServerRemoved(
+  serverId: string,
+  reason: ServerRemoved["reason"],
+  userIds: readonly string[],
+): void {
+  if (userIds.length === 0) {
+    return;
+  }
+  // Canonical (lowercase) ids from here on. A route parameter is whatever the
+  // caller typed, and Postgres matches an uppercase UUID happily, but every
+  // comparison after this one is a string compare: the socket's user id, the
+  // client's server list, the retry's rejoin check.
+  const frame: ServerRemoved = {
+    type: "server-removed",
+    serverId: serverId.toLowerCase(),
+    reason,
+  };
+  const addressees = userIds.map((id) => id.toLowerCase());
+  deliverServerRemoved(frame, addressees);
+  if (isBusEnabled()) {
+    publishServerRemoved({ frame, userIds: addressees, firstAt: Date.now() });
+  }
+}
+
+interface PendingServerRemoved {
+  frame: ServerRemoved;
+  userIds: string[];
+  /** When the removal was first published: bounds how long it is retried. */
+  firstAt: number;
+}
+
+/**
+ * How often a queued notice is tried again while the bus is down. The same
+ * figure the watch party reminders use, for the same reason: long enough for
+ * the Postgres transport's own reconnect to have landed on an ordinary blip.
+ */
+export const SERVER_REMOVED_REPUBLISH_MS = 3_000;
+/**
+ * How long a notice keeps being retried. Past this the bus has been down long
+ * enough that the tabs on the other instance have almost certainly
+ * reconnected (or reloaded) and read their server list afresh, which is the
+ * same truth arriving by the ordinary road, and an old notice is more likely
+ * to be wrong than useful.
+ */
+export const SERVER_REMOVED_RETRY_WINDOW_MS = 2 * 60_000;
+const MAX_QUEUED_SERVER_REMOVED = 1_000;
+const pendingServerRemoved: PendingServerRemoved[] = [];
+let serverRemovedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function publishServerRemoved(entry: PendingServerRemoved): void {
+  publishToCluster(MEMBERSHIP_TOPIC, { ...entry.frame, userIds: entry.userIds });
+  if (isBusConnected()) {
+    return;
+  }
+  queueServerRemovedRetry(entry);
+}
+
+/**
+ * The bus DROPS while it reconnects (`BusTransport.connected`), which is fine
+ * for presence and wrong for this: the removal was committed once and will
+ * never be published again, so the sockets on the other instances would keep
+ * the server until a reload. Held here instead and republished once the
+ * transport says it is up. A duplicate is harmless (the client ignores a
+ * notice for a server it no longer holds).
+ */
+function queueServerRemovedRetry(entry: PendingServerRemoved): void {
+  pendingServerRemoved.push(entry);
+  if (pendingServerRemoved.length > MAX_QUEUED_SERVER_REMOVED) {
+    pendingServerRemoved.shift();
+  }
+  if (serverRemovedRetryTimer) {
+    return;
+  }
+  serverRemovedRetryTimer = setTimeout(() => {
+    void flushServerRemovedRetries();
+  }, SERVER_REMOVED_REPUBLISH_MS);
+  // A pending retry must never be why a process refuses to exit.
+  serverRemovedRetryTimer.unref?.();
+}
+
+/**
+ * Republish what the bus dropped. Exported for tests; the timer above is the
+ * only production caller.
+ *
+ * A kick or a ban is checked against the table first: somebody kicked while
+ * the bus was down may have come back through a fresh invite before it
+ * recovered, and a late "you were removed" would take away a server they are
+ * in again. One query covers the whole backlog, so a long outage does not turn
+ * into a queue of round trips in front of the notices. A delete needs no
+ * check, because nobody can rejoin a server that no longer exists. If the
+ * check itself fails the notices go out as they were: the removals did
+ * happen, and a tab that keeps a server it lost is the bug this frame exists
+ * to fix.
+ */
+export async function flushServerRemovedRetries(
+  now = Date.now(),
+): Promise<void> {
+  if (serverRemovedRetryTimer) {
+    clearTimeout(serverRemovedRetryTimer);
+    serverRemovedRetryTimer = null;
+  }
+  const batch = pendingServerRemoved
+    .splice(0)
+    .filter((entry) => now - entry.firstAt <= SERVER_REMOVED_RETRY_WINDOW_MS);
+  if (!isBusEnabled()) {
+    return;
+  }
+  if (!isBusConnected()) {
+    // Still down: hold everything that is not yet too old for another round.
+    for (const entry of batch) {
+      queueServerRemovedRetry(entry);
+    }
+    return;
+  }
+  const pairs = batch
+    .filter((entry) => entry.frame.reason !== "deleted")
+    .flatMap((entry) =>
+      entry.userIds.map((userId) => ({
+        serverId: entry.frame.serverId,
+        userId,
+      })),
+    );
+  let back = new Set<string>();
+  if (pairs.length > 0) {
+    try {
+      back = await listCurrentMemberships(pairs);
+    } catch {
+      // See above: send them as they were.
+    }
+  }
+  for (const entry of batch) {
+    const userIds =
+      entry.frame.reason === "deleted"
+        ? entry.userIds
+        : entry.userIds.filter(
+            (id) => !back.has(`${entry.frame.serverId}:${id}`),
+          );
+    if (userIds.length > 0) {
+      publishServerRemoved({ ...entry, userIds });
+    }
+  }
+}
+
+/** Test seam: forget anything queued, and the timer with it. */
+export function resetServerRemovedRetries(): void {
+  pendingServerRemoved.length = 0;
+  if (serverRemovedRetryTimer) {
+    clearTimeout(serverRemovedRetryTimer);
+    serverRemovedRetryTimer = null;
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. See above. */
+export function deliverServerRemoved(
+  frame: ServerRemoved,
+  userIds: readonly string[],
+): void {
+  const addressed = new Set(userIds);
+  const payload = encode(frame);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && addressed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
  * Tell every connected member of a server that their resolved bits may have
  * changed. Bumps `permissions_version` first so the frame is always newer
  * than the snapshot the client already holds; a same-version ping would be
@@ -983,14 +1171,157 @@ export async function notifyCommunityHomeUpdate(
   }
 }
 
+/**
+ * The owner flipped the server's Baú switch: the new value and its
+ * `servers.community_home_version`, bumped in the same UPDATE.
+ */
+export interface CommunityHomeSwitch {
+  enabled: boolean;
+  version: number;
+}
+
+/**
+ * Waits between attempts to reach members after a failed member lookup or a
+ * bus that was down. Bounded: past the last one the member's app still
+ * catches up on its next reconnect (it re-reads the config then).
+ */
+export const COMMUNITY_HOME_SWITCH_RETRY_MS: readonly number[] = [
+  2_000, 10_000, 30_000,
+];
+
+/**
+ * The newest switch version this process was asked to deliver, per server. A
+ * retry for an older version stands down once a newer one exists: the client
+ * would ignore it anyway, so it is only saved work. One small integer per
+ * server whose switch moved since boot, so it is never pruned.
+ */
+const newestCommunityHomeSwitch = new Map<string, number>();
+
+function noteCommunityHomeSwitch(serverId: string, version: number): void {
+  const newest = newestCommunityHomeSwitch.get(serverId);
+  if (newest === undefined || version > newest) {
+    newestCommunityHomeSwitch.set(serverId, version);
+  }
+}
+
+function isSupersededSwitch(serverId: string, version: number): boolean {
+  return (newestCommunityHomeSwitch.get(serverId) ?? version) > version;
+}
+
+function retryLater(delayMs: number, run: () => void): void {
+  const timer = setTimeout(run, delayMs);
+  // A pending retry must never be why a process refuses to exit.
+  timer.unref?.();
+}
+
+/**
+ * Tell every connected member the switch's new value, on this instance and
+ * (with `CLUSTER_BUS`) on every other one.
+ *
+ * Never rejects, and retries what failed in the background: the owner's write
+ * has already committed, and a member who misses this frame would otherwise
+ * keep the old value until a reload. Retrying is safe because the client
+ * applies a value only when its version is higher than the one it holds, so a
+ * frame delivered twice, late or out of order changes nothing.
+ *
+ * Resolves after the first local attempt, so the owner's response waits for
+ * one member lookup at most, never for the retries.
+ */
+export async function notifyCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+): Promise<void> {
+  noteCommunityHomeSwitch(serverId, change.version);
+  if (isBusEnabled()) {
+    publishCommunityHomeSwitch(serverId, change, 0);
+  }
+  await deliverCommunityHomeSwitch(serverId, change, 0);
+}
+
+/**
+ * `publishToCluster` swallows a failed publish, so the bus's own connection
+ * state is what says whether the other instances heard this. Same one-shot
+ * reasoning as the watch party reminders in `services/channel-sessions.ts`.
+ */
+function publishCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+  attempt: number,
+): void {
+  if (isSupersededSwitch(serverId, change.version)) {
+    return;
+  }
+  publishToCluster(COMMUNITY_HOME_TOPIC, {
+    type: "community-home-update",
+    serverId,
+    enabled: change.enabled,
+    version: change.version,
+  });
+  if (isBusConnected()) {
+    return;
+  }
+  const delayMs = COMMUNITY_HOME_SWITCH_RETRY_MS[attempt];
+  if (delayMs === undefined) {
+    console.error(
+      `[ws] community-home switch publish gave up for server ${serverId}`,
+    );
+    return;
+  }
+  retryLater(delayMs, () => {
+    publishCommunityHomeSwitch(serverId, change, attempt + 1);
+  });
+}
+
+/**
+ * This instance's members. Used for the local half and for a frame relayed
+ * from another instance, so a failed lookup on either side is retried.
+ */
+async function deliverCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+  attempt: number,
+): Promise<void> {
+  if (isSupersededSwitch(serverId, change.version)) {
+    return;
+  }
+  try {
+    const memberIds = await listServerMemberIds(serverId);
+    deliverCommunityHomeUpdate(serverId, memberIds, change);
+  } catch (error) {
+    const delayMs = COMMUNITY_HOME_SWITCH_RETRY_MS[attempt];
+    if (delayMs === undefined) {
+      console.error(
+        `[ws] community-home switch delivery gave up for server ${serverId}:`,
+        error,
+      );
+      return;
+    }
+    console.error(
+      `[ws] community-home switch delivery failed for server ${serverId}, retrying in ${delayMs}ms:`,
+      error,
+    );
+    retryLater(delayMs, () => {
+      void deliverCommunityHomeSwitch(serverId, change, attempt + 1);
+    });
+  }
+}
+
+/**
+ * `change` rides along only when the owner flipped the server's Baú switch,
+ * so members with the app open learn the new value without reloading.
+ */
 export function deliverCommunityHomeUpdate(
   serverId: string,
   memberIds: readonly string[],
+  change?: CommunityHomeSwitch,
 ): void {
   const allowed = new Set(memberIds);
   const payload = encode({
     type: "community-home-update",
     serverId,
+    ...(change === undefined
+      ? {}
+      : { enabled: change.enabled, version: change.version }),
   } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
@@ -2518,6 +2849,21 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
   deliverFriendActivity(userId, kind);
 });
 
+/**
+ * A kick, ban or delete raised on another instance. The frame is parsed with
+ * the schema the clients parse it with, and the addressees must survive as a
+ * list of strings: without them the only alternative is a broadcast, which
+ * would tell a whole instance who was just removed from where.
+ */
+subscribeToCluster(MEMBERSHIP_TOPIC, (data) => {
+  const parsed = serverRemovedSchema.safeParse(data);
+  const userIds = asStringArray(asRecord(data)?.userIds);
+  if (!parsed.success || !userIds) {
+    return;
+  }
+  deliverServerRemoved(parsed.data, userIds);
+});
+
 subscribeToCluster(PERMISSIONS_TOPIC, (data) => {
   const parsed = permissionsUpdateSchema.safeParse(data);
   if (!parsed.success) {
@@ -2546,6 +2892,17 @@ subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
     return;
   }
   const serverId = (data as { serverId: string }).serverId;
+  const { enabled, version } = data as { enabled?: unknown; version?: unknown };
+  if (
+    typeof enabled === "boolean" &&
+    typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 0
+  ) {
+    noteCommunityHomeSwitch(serverId, version);
+    void deliverCommunityHomeSwitch(serverId, { enabled, version }, 0);
+    return;
+  }
   void listServerMemberIds(serverId)
     .then((memberIds) => {
       deliverCommunityHomeUpdate(serverId, memberIds);

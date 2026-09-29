@@ -850,6 +850,29 @@ export async function isServerMember(
   return (await getMemberRole(serverId, userId)) !== null;
 }
 
+/**
+ * Which of these (server, person) pairs are memberships right now, read
+ * straight from the table in one query, answered as `serverId:userId` keys.
+ * Deliberately not through `getMemberRole`'s cache: the caller is deciding
+ * whether removal notices are still true, and a role cached on this instance
+ * before the removal is exactly the stale answer that question cannot take.
+ */
+export async function listCurrentMemberships(
+  pairs: readonly { serverId: string; userId: string }[],
+): Promise<Set<string>> {
+  if (pairs.length === 0) {
+    return new Set();
+  }
+  const result = await getPool().query<{ server_id: string; user_id: string }>(
+    `SELECT m.server_id, m.user_id
+     FROM server_members m
+     JOIN unnest($1::uuid[], $2::uuid[]) AS p(server_id, user_id)
+       ON m.server_id = p.server_id AND m.user_id = p.user_id`,
+    [pairs.map((pair) => pair.serverId), pairs.map((pair) => pair.userId)],
+  );
+  return new Set(result.rows.map((row) => `${row.server_id}:${row.user_id}`));
+}
+
 export async function listServerMemberIds(serverId: string): Promise<string[]> {
   const result = await getPool().query<{ user_id: string }>(
     `SELECT user_id FROM server_members WHERE server_id = $1`,

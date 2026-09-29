@@ -10,6 +10,7 @@ import {
   needsConfirmation,
   offersDecline,
   placeCard,
+  placeMenu,
   primaryAction,
   primaryIsInert,
   resolveFriendshipState,
@@ -295,6 +296,54 @@ describe("placeCard", () => {
       { width: 1280, height: 300 },
     );
     expect(at.top).toBe(8);
+  });
+});
+
+describe("placeMenu", () => {
+  // The Mais menu of a friend: Remover amigo, Bloquear, Denunciar.
+  const MENU = { width: 192, height: 106 };
+  const VIEWPORT = { width: 1440, height: 900 };
+
+  it("opens under the tile when it fits", () => {
+    const at = placeMenu(
+      { left: 642, right: 706, top: 409, bottom: 447 },
+      MENU,
+      VIEWPORT,
+    );
+    expect(at.top).toBe(447 + 4);
+    expect(at.left).toBe(706 - 192);
+    expect(at.maxHeight).toBe(900 - 8 - 451);
+  });
+
+  it("opens above the tile when the window ends under it", () => {
+    const at = placeMenu(
+      { left: 642, right: 706, top: 800, bottom: 838 },
+      MENU,
+      VIEWPORT,
+    );
+    expect(at.top).toBe(800 - 4 - 106);
+    expect(at.maxHeight).toBe(800 - 4 - 8);
+  });
+
+  it("takes the roomier side, capped, when neither side fits", () => {
+    const at = placeMenu(
+      { left: 642, right: 706, top: 100, bottom: 138 },
+      { width: 192, height: 240 },
+      { width: 1440, height: 300 },
+    );
+    expect(at.top).toBe(138 + 4);
+    expect(at.maxHeight).toBe(300 - 8 - 142);
+    expect(at.top + at.maxHeight).toBeLessThanOrEqual(300 - 8);
+  });
+
+  it("stays inside a narrow window", () => {
+    const at = placeMenu(
+      { left: 20, right: 90, top: 400, bottom: 438 },
+      MENU,
+      { width: 390, height: 844 },
+    );
+    expect(at.left).toBe(8);
+    expect(at.left + MENU.width).toBeLessThanOrEqual(390 - 8);
   });
 });
 

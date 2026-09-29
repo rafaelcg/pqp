@@ -1,6 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import { Volume1, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useFullscreenPortalHost } from "@/components/ui/tooltip";
+import {
+  placeAnchoredPanel,
+  type AnchoredPanelPlacement,
+} from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +49,13 @@ import { cn } from "@/lib/utils";
  * chrome, so the panel cannot own the element that opens it. What the hook
  * does own is the dismissal contract every menu in this app shares: a press
  * outside, or Escape.
+ *
+ * A SURFACE THAT CLIPS PASSES `anchorRef`. The panel normally hangs off its
+ * trigger with `position: absolute`, which is invisible inside a scrolling
+ * row: the listener strip under the stage is `overflow-x-auto` inside an
+ * `overflow-hidden` stage, and the panel opened there, in the DOM, where
+ * nobody could see it. With an anchor it is portalled out instead, fixed to
+ * the viewport beside that anchor.
  */
 
 export interface PeerAudioTrack {
@@ -44,17 +68,23 @@ export interface PeerAudioTrack {
  * Open state plus the dismissal contract. Put `rootRef` on the element that
  * wraps BOTH the trigger and the panel, so a press on the trigger is the
  * trigger's own toggle rather than an outside-close followed by a re-open.
+ * A portalled panel is not inside that element, so it takes `panelRef` too.
  */
 export function usePeerAudioMenu<T extends HTMLElement = HTMLDivElement>() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<T>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) {
       return;
     }
     function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     }
@@ -73,7 +103,7 @@ export function usePeerAudioMenu<T extends HTMLElement = HTMLDivElement>() {
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);
-  return { open, setOpen, toggle, close, rootRef };
+  return { open, setOpen, toggle, close, rootRef, panelRef };
 }
 
 /** The glyph says the level, so a turned-down person reads as one at a glance. */
@@ -179,6 +209,8 @@ export function PeerAudioMenu({
   onRetry,
   side = "top",
   align = "start",
+  anchorRef,
+  panelRef,
   className,
 }: {
   name: string;
@@ -191,6 +223,13 @@ export function PeerAudioMenu({
   onRetry?: () => void;
   side?: PeerAudioMenuSide;
   align?: PeerAudioMenuAlign;
+  /**
+   * The trigger, for a surface whose ancestors clip. Given, the panel is
+   * portalled and placed beside it; `align` and `className` positioning then
+   * do not apply. Pair it with the hook's `panelRef`.
+   */
+  anchorRef?: RefObject<HTMLElement | null>;
+  panelRef?: RefObject<HTMLDivElement | null>;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -201,24 +240,9 @@ export function PeerAudioMenu({
   if (!hasAnything) {
     return null;
   }
-  return (
-    <div
-      role="dialog"
-      data-testid="peer-audio-menu"
-      aria-label={t("voice.audio.title", { name })}
-      className={cn(
-        "absolute z-50 w-56 max-w-[80vw] cursor-default rounded-lg border border-ink-4 bg-ink-2 p-1 text-left shadow-[var(--shadow-popover)] animate-fade-in",
-        SIDE_CLASS[side],
-        ALIGN_CLASS[align],
-        className,
-      )}
-      // A drag on the slider must not become a drag of the row underneath it,
-      // and a click in here must not also be the chip's own click.
-      onClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-      draggable={false}
-      onDragStart={(event) => event.preventDefault()}
-    >
+  const label = t("voice.audio.title", { name });
+  const body = (
+    <>
       <p className="truncate px-2 pb-0.5 pt-1 text-[13px] font-semibold text-paper">
         {name}
       </p>
@@ -254,7 +278,181 @@ export function PeerAudioMenu({
           </Button>
         </div>
       )}
+    </>
+  );
+  if (anchorRef) {
+    return (
+      <AnchoredPanel
+        label={label}
+        anchorRef={anchorRef}
+        panelRef={panelRef}
+        side={side}
+        className={className}
+      >
+        {body}
+      </AnchoredPanel>
+    );
+  }
+  return (
+    <div
+      role="dialog"
+      data-testid="peer-audio-menu"
+      aria-label={label}
+      className={cn(
+        PANEL_CLASS,
+        "absolute",
+        SIDE_CLASS[side],
+        ALIGN_CLASS[align],
+        className,
+      )}
+      {...PANEL_GUARDS}
+    >
+      {body}
     </div>
+  );
+}
+
+const PANEL_CLASS =
+  "z-50 w-56 max-w-[80vw] cursor-default rounded-lg border border-ink-4 bg-ink-2 p-1 text-left shadow-[var(--shadow-popover)] animate-fade-in";
+
+const PANEL_GUARDS = {
+  // A drag on the slider must not become a drag of the row underneath it,
+  // and a click in here must not also be the chip's own click. React bubbles
+  // through a portal by component tree, so the portalled panel needs these
+  // exactly as much as the nested one.
+  onClick: (event: ReactMouseEvent) => event.stopPropagation(),
+  onPointerDown: (event: ReactPointerEvent) => event.stopPropagation(),
+  draggable: false,
+  onDragStart: (event: DragEvent) => event.preventDefault(),
+};
+
+function samePlacement(
+  a: AnchoredPanelPlacement | null,
+  b: AnchoredPanelPlacement,
+): boolean {
+  return (
+    a !== null &&
+    a.top === b.top &&
+    a.left === b.left &&
+    a.maxHeight === b.maxHeight &&
+    a.maxWidth === b.maxWidth
+  );
+}
+
+/**
+ * The panel portalled out of a clipping surface, fixed beside its anchor.
+ *
+ * Into the fullscreen element when there is one, for the reason `Menu` gives:
+ * a body portal behind a fullscreen stage is the same invisible panel again.
+ * Placed after it has been measured (the height depends on which rows it
+ * carries), and placed again on every render, resize and scroll, because the
+ * strip scrolls sideways and reflows as people come and go.
+ *
+ * It takes focus when it appears and gives it back to the anchor when it goes,
+ * so the keyboard still reaches a panel that now sits at the end of the page.
+ */
+function AnchoredPanel({
+  label,
+  anchorRef,
+  panelRef,
+  side,
+  className,
+  children,
+}: {
+  label: string;
+  anchorRef: RefObject<HTMLElement | null>;
+  panelRef?: RefObject<HTMLDivElement | null>;
+  side: PeerAudioMenuSide;
+  className?: string;
+  children: ReactNode;
+}) {
+  const host = useFullscreenPortalHost();
+  const ownRef = useRef<HTMLDivElement | null>(null);
+  const [placement, setPlacement] = useState<AnchoredPanelPlacement | null>(
+    null,
+  );
+
+  const place = useCallback(() => {
+    const anchor = anchorRef.current;
+    const panel = ownRef.current;
+    if (!anchor || !panel) {
+      return;
+    }
+    const next = placeAnchoredPanel(
+      anchor.getBoundingClientRect(),
+      { width: panel.offsetWidth, height: panel.scrollHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+      side === "top" ? "above" : "below",
+    );
+    setPlacement((current) => (samePlacement(current, next) ? current : next));
+  }, [anchorRef, side]);
+
+  // No dependency list on purpose: a row appearing, or the chip moving
+  // because somebody joined, re-renders this and must re-place it.
+  useLayoutEffect(place);
+
+  useEffect(() => {
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
+    };
+  }, [place]);
+
+  // Layout, not passive: the cleanup has to run while the panel is still in
+  // the document, or the focus has already fallen to the body.
+  const placed = placement !== null;
+  useLayoutEffect(() => {
+    if (!placed) {
+      return;
+    }
+    const panel = ownRef.current;
+    panel?.focus({ preventScroll: true });
+    const anchor = anchorRef.current;
+    return () => {
+      // Only when the focus is still ours: a press elsewhere closes the panel
+      // and must keep whatever it pressed.
+      if (panel?.contains(document.activeElement)) {
+        anchor?.focus({ preventScroll: true });
+      }
+    };
+  }, [placed, anchorRef]);
+
+  const setRefs = useCallback(
+    (node: HTMLDivElement | null) => {
+      ownRef.current = node;
+      if (panelRef) {
+        panelRef.current = node;
+      }
+    },
+    [panelRef],
+  );
+
+  return createPortal(
+    <div
+      ref={setRefs}
+      role="dialog"
+      data-testid="peer-audio-menu"
+      aria-label={label}
+      tabIndex={-1}
+      style={{
+        position: "fixed",
+        top: placement?.top ?? 0,
+        left: placement?.left ?? 0,
+        maxHeight: placement?.maxHeight,
+        visibility: placed ? "visible" : "hidden",
+      }}
+      className={cn(
+        PANEL_CLASS,
+        "z-[100] overflow-y-auto overscroll-contain focus:outline-none",
+        className,
+      )}
+      {...PANEL_GUARDS}
+    >
+      {children}
+    </div>,
+    host ?? document.body,
   );
 }
 

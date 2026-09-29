@@ -67,7 +67,7 @@ export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private,
  * NOT here — it lives on `server_members`, so only reads that join a
  * membership can select it.
  */
-export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_tagline, community_about, community_links, community_slug`;
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_home_version, community_tagline, community_about, community_links, community_slug`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -759,7 +759,23 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
   }
 }
 
-export async function deleteServer(serverId: string): Promise<boolean> {
+/**
+ * Delete a server and answer with the ids of everybody who was a member at
+ * the moment it went, or null when there was no such server.
+ *
+ * The member list is read in the same transaction as the delete, after
+ * `FOR UPDATE` on the server row, because the rows cascade away with it and
+ * the caller has to tell those people. The lock is what makes the list
+ * complete: a join inserts into `server_members`, whose foreign key check
+ * takes `FOR KEY SHARE` on this same row, and the two locks conflict. So a
+ * join still in flight is waited for and then read here, and a join that
+ * starts after the lock waits for the delete and then fails on the missing
+ * server. Read in a separate statement before the delete, a join landing in
+ * between was cascaded away and never told.
+ */
+export async function deleteServer(
+  serverId: string,
+): Promise<string[] | null> {
   const keys = await serverAttachmentKeys(serverId);
   // The icon and banner ride along on the same list, and for the same reason
   // the attachments do: their only mention anywhere is a column on the row this
@@ -769,10 +785,30 @@ export async function deleteServer(serverId: string): Promise<boolean> {
 
   // channels / members / invites / bans all cascade from servers — and so do
   // the attachment rows, which is why their keys are already in hand.
-  const result = await getPool().query(`DELETE FROM servers WHERE id = $1`, [
-    serverId,
-  ]);
-  const deleted = (result.rowCount ?? 0) > 0;
+  let memberIds: string[] | null = null;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query(
+      `SELECT 1 FROM servers WHERE id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    if ((locked.rowCount ?? 0) > 0) {
+      const members = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM server_members WHERE server_id = $1`,
+        [serverId],
+      );
+      await client.query(`DELETE FROM servers WHERE id = $1`, [serverId]);
+      memberIds = members.rows.map((row) => row.user_id);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  const deleted = memberIds !== null;
 
   if (deleted) {
     // The channels cascaded away, so every one of their cached audiences is
@@ -781,7 +817,7 @@ export async function deleteServer(serverId: string): Promise<boolean> {
     invalidateServerChannelList(serverId);
     deleteObjectsInBackground(keys);
   }
-  return deleted;
+  return memberIds;
 }
 
 export async function renameServer(
@@ -809,7 +845,10 @@ export async function setCommunityHomeEnabled(
   enabled: boolean,
 ): Promise<DbServer> {
   const result = await getPool().query<DbServer>(
-    `UPDATE servers SET community_home_enabled = $2 WHERE id = $1
+    `UPDATE servers
+        SET community_home_enabled = $2,
+            community_home_version = community_home_version + 1
+      WHERE id = $1
      RETURNING ${SERVER_COLUMNS}`,
     [serverId, enabled],
   );
@@ -993,7 +1032,7 @@ export async function joinServerBySso(
       // Widening, so the cost of missing it is a badge the new member does not
       // get for a few seconds rather than one they should not have. Done
       // anyway: "you joined and the server went quiet" is a bad first minute.
-      invalidateServerAudience(serverId);
+      invalidateServerAudience(serverId, { joinedUserId: userId });
       // Funnel step `first_join`, after the commit and on the pool.
       await recordActivationStep(userId, "first_join");
     }
@@ -1298,10 +1337,17 @@ export function invalidateChannelAudience(channelId: string): void {
  * owners and admins into private channels without a `channel_members` row, so
  * a demotion to `member` silently narrows every private channel at once.
  */
-export function invalidateServerAudience(serverId: string): void {
-  invalidateServerAudienceLocally(serverId);
+export function invalidateServerAudience(
+  serverId: string,
+  options: { joinedUserId?: string } = {},
+): void {
+  invalidateServerAudienceLocally(serverId, options.joinedUserId);
   if (isBusEnabled()) {
-    publishToCluster(AUDIENCE_TOPIC, { kind: "server", serverId });
+    publishToCluster(AUDIENCE_TOPIC, {
+      kind: "server",
+      serverId,
+      ...(options.joinedUserId ? { joinedUserId: options.joinedUserId } : {}),
+    });
   }
 }
 
@@ -1316,7 +1362,10 @@ function invalidateChannelAudienceLocally(channelId: string): void {
   notifyAudienceInvalidated({ channelId });
 }
 
-function invalidateServerAudienceLocally(serverId: string): void {
+function invalidateServerAudienceLocally(
+  serverId: string,
+  joinedUserId?: string,
+): void {
   audienceEpoch++;
   for (const [channelId, entry] of audienceCache) {
     if (entry.audience.serverId === serverId) {
@@ -1331,22 +1380,34 @@ function invalidateServerAudienceLocally(serverId: string): void {
   invalidateServerMemberList(serverId);
   invalidateServerMemberRoles(serverId);
   invalidateChannelAccessForServer();
-  notifyAudienceInvalidated({ serverId });
+  notifyAudienceInvalidated({ serverId, joinedUserId });
 }
 
 /**
  * In-process subscribers to "this audience just went stale", channel- or
- * server-scoped. `ws/voice.ts`'s roster-membership cache is the one caller:
- * it already imports this module, so — same reasoning as `onPermissionsUpdate`
+ * server-scoped. `ws/voice.ts`'s roster-membership cache is one caller: it
+ * already imports this module, so — same reasoning as `onPermissionsUpdate`
  * next door in `ws/chat.ts` — this is a listener registry rather than a
  * direct call, so this file does not have to import `ws/voice.ts` back.
+ *
+ * `joinedUserId` is set when the change is one account becoming a member
+ * (an invite, a community join, an SSO domain join). `ws/index.ts` uses it
+ * to send that account's open sockets what `auth` would have sent them for
+ * this server: the rooms, streams, music and watch parties were described
+ * once, at connect, to a socket that could not see them yet.
  */
+export interface AudienceInvalidatedEvent {
+  channelId?: string;
+  serverId?: string;
+  joinedUserId?: string;
+}
+
 const audienceInvalidationListeners = new Set<
-  (event: { channelId?: string; serverId?: string }) => void
+  (event: AudienceInvalidatedEvent) => void
 >();
 
 export function onAudienceInvalidated(
-  listener: (event: { channelId?: string; serverId?: string }) => void,
+  listener: (event: AudienceInvalidatedEvent) => void,
 ): () => void {
   audienceInvalidationListeners.add(listener);
   return () => {
@@ -1354,10 +1415,7 @@ export function onAudienceInvalidated(
   };
 }
 
-function notifyAudienceInvalidated(event: {
-  channelId?: string;
-  serverId?: string;
-}): void {
+function notifyAudienceInvalidated(event: AudienceInvalidatedEvent): void {
   for (const listener of audienceInvalidationListeners) {
     try {
       listener(event);
@@ -1487,7 +1545,10 @@ subscribeToCluster(AUDIENCE_TOPIC, (data) => {
     return;
   }
   if (frame?.kind === "server" && typeof frame.serverId === "string") {
-    invalidateServerAudienceLocally(frame.serverId);
+    invalidateServerAudienceLocally(
+      frame.serverId,
+      typeof frame.joinedUserId === "string" ? frame.joinedUserId : undefined,
+    );
   }
 });
 
@@ -1673,6 +1734,7 @@ export function mapServer(s: DbServer) {
     bannerUrl: s.banner_url ?? null,
     isCommunity: s.is_community ?? false,
     communityHomeEnabled: s.community_home_enabled ?? false,
+    communityHomeVersion: s.community_home_version ?? 0,
     communityTagline: s.community_tagline ?? null,
     communityAbout: s.community_about ?? null,
     communityLinks: parseStoredCommunityLinks(s.community_links ?? []),
