@@ -99,6 +99,18 @@ describe("HlsWatchPlayer with party_fast_start", () => {
     expect(container.querySelector("video[data-decorative]")).toBeNull();
   });
 
+  it("flag on AFTER the player mounted: the mount adopts it (mount-before-config)", async () => {
+    await mount();
+    expect(container.textContent).toContain("The stream stalled, reconnecting");
+    await act(async () => {
+      setPartyFastStart(true);
+    });
+    expect(container.textContent).toContain("Connecting to the stream");
+    expect(container.textContent).not.toContain("stalled");
+    // Adopted without a remount: hls.js was attached once, not rebuilt.
+    expect(loadSource).toHaveBeenCalledTimes(1);
+  });
+
   it("flag on: a slow start counts out loud", async () => {
     setPartyFastStart(true);
     vi.useFakeTimers({ shouldAdvanceTime: true });

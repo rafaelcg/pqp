@@ -12,6 +12,7 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { brotliCompressSync } from "node:zlib";
 import { extname, join } from "node:path";
+import { resolveInside } from "./static-path.mjs";
 
 const require = createRequire(new URL("../../client/package.json", import.meta.url));
 const { chromium } = require("@playwright/test");
@@ -109,7 +110,7 @@ function startMediaServer(log, ladderName) {
     res.writeHead(404);
     res.end();
   });
-  return new Promise((resolve) => server.listen(MEDIA_PORT, () => resolve(server)));
+  return new Promise((resolve) => server.listen(MEDIA_PORT, "127.0.0.1", () => resolve(server)));
 }
 
 // ------------------------------------------------------------ static app
@@ -123,7 +124,11 @@ function startAppServer() {
   const cache = new Map();
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
-    let file = join(DIST, decodeURIComponent(url.pathname));
+    let file = resolveInside(DIST, url.pathname);
+    if (file === null) {
+      res.writeHead(403);
+      return res.end();
+    }
     if (!existsSync(file) || statSync(file).isDirectory()) file = join(DIST, "index.html");
     const type = TYPES[extname(file)] ?? "application/octet-stream";
     const compressible = /^(text|application\/(json|javascript))|javascript|svg/.test(type);
@@ -140,7 +145,7 @@ function startAppServer() {
     res.writeHead(200, { ...headers, "Content-Length": size });
     createReadStream(file).pipe(res);
   });
-  return new Promise((resolve) => server.listen(APP_PORT, () => resolve(server)));
+  return new Promise((resolve) => server.listen(APP_PORT, "127.0.0.1", () => resolve(server)));
 }
 
 // -------------------------------------------------------------- accounts
@@ -278,6 +283,7 @@ async function main() {
     for (const ladder of LADDER) {
       const log = [];
       const media = await startMediaServer(log, ladder);
+      try {
       const stream = {
         hlsUrl: `http://localhost:${MEDIA_PORT}/master.m3u8?t=bench`,
         startedAt: Date.now() - 60_000,
@@ -296,7 +302,9 @@ async function main() {
           console.log(JSON.stringify(results.at(-1)));
         }
       }
-      media.close();
+      } finally {
+        media.close();
+      }
     }
   } finally {
     await browser.close();

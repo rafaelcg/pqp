@@ -171,7 +171,7 @@ import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import {
-  partyFastStartActive,
+  usePartyFastStart,
   startupCaption,
   type StartupStage,
 } from "@/lib/party-fast-start";
@@ -516,9 +516,8 @@ export function HlsWatchPlayer({
   // rebuild could never show that.
   const rebuildCountRef = useRef(0);
   const [hasFrame, setHasFrame] = useState(false);
-  // `party_fast_start` (server config, read once per mount: it does not flip
-  // mid-watch). Gates every change this flag makes in this component.
-  const [fastStart] = useState(partyFastStartActive);
+  // `party_fast_start` (server config, subscribed: a mount that beats the answer adopts it). Gates every change this flag makes in this component.
+  const fastStart = usePartyFastStart();
   // Where the FIRST attach is, and how long it has taken, so the holding
   // screen can say so instead of "the stream stalled, reconnecting" about a
   // stream that has not started yet.

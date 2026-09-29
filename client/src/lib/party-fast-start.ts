@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { isSlowConnection, type ConnectionLike } from "@/lib/hls-slow-start";
 
 /**
@@ -23,19 +24,53 @@ import { isSlowConnection, type ConnectionLike } from "@/lib/hls-slow-start";
  *
  * The flag reaches the player through this module rather than a prop: the
  * player is mounted from five places and none of them knows the server's
- * config. `App.tsx` writes the selected server's answer here and the player
- * reads it once per attach.
+ * config. `App.tsx` writes the selected server's answer here and readers
+ * subscribe (`usePartyFastStart`), so a mount that beats the config adopts it.
  */
 
 let active = false;
+const listeners = new Set<() => void>();
 
 /** Written by the app shell whenever the selected server's config changes. */
 export function setPartyFastStart(on: boolean): void {
+  if (active === on) {
+    return;
+  }
   active = on;
+  for (const listener of [...listeners]) {
+    listener();
+  }
 }
 
 export function partyFastStartActive(): boolean {
   return active;
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/**
+ * The flag as a subscription, not a snapshot: a player or holding screen that
+ * mounted before the config answer landed (or in the same render) adopts it
+ * the moment it does, instead of keeping the default for the whole watch.
+ */
+export function usePartyFastStart(): boolean {
+  return useSyncExternalStore(subscribe, partyFastStartActive, () => false);
+}
+
+/**
+ * Preload the player chunk only for somebody on, or entering, a watch party
+ * view. Everyone else on an enabled server never pays for it.
+ */
+export function shouldPreloadHlsEngine(
+  fastStart: boolean,
+  channelIsWatchParty: boolean,
+): boolean {
+  return fastStart && channelIsWatchParty;
 }
 
 // ------------------------------------------------------------- engine chunk
@@ -59,6 +94,7 @@ export function preloadHlsEngine(): void {
 /** Test seam. */
 export function resetPartyFastStartForTests(): void {
   active = false;
+  listeners.clear();
   enginePreload = null;
 }
 

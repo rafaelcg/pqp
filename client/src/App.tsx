@@ -530,7 +530,11 @@ import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
-import { preloadHlsEngine, setPartyFastStart } from "@/lib/party-fast-start";
+import {
+  preloadHlsEngine,
+  setPartyFastStart,
+  shouldPreloadHlsEngine,
+} from "@/lib/party-fast-start";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -2437,17 +2441,20 @@ function MainAppContent({
   const partyFastStartOn = liveHlsConfig?.fastStart === true;
   useEffect(() => {
     setPartyFastStart(partyFastStartOn);
-    if (!partyFastStartOn) {
-      return;
-    }
-    const idle = window.requestIdleCallback;
-    if (typeof idle === "function") {
-      const handle = idle(() => preloadHlsEngine(), { timeout: 1_500 });
-      return () => window.cancelIdleCallback?.(handle);
-    }
-    const timer = window.setTimeout(preloadHlsEngine, 300);
-    return () => window.clearTimeout(timer);
   }, [partyFastStartOn]);
+  // The player chunk is fetched only for somebody on, or entering, a watch
+  // party channel (never for the rest of an enabled server's chat).
+  const openChannelType =
+    selection.kind === "server"
+      ? channels.find((c) => c.id === selectedChannelId)?.type
+      : undefined;
+  const onPartyChannel =
+    openChannelType !== undefined && isWatchPartyChannelType(openChannelType);
+  useEffect(() => {
+    if (shouldPreloadHlsEngine(partyFastStartOn, onPartyChannel)) {
+      preloadHlsEngine();
+    }
+  }, [partyFastStartOn, onPartyChannel]);
   /**
    * Asked ONLY where the server has already said no. A server whose config
    * answered `enabled: true` (it runs watch parties) or has not answered yet

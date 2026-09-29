@@ -3,7 +3,7 @@ import { browserConnection } from "@/lib/hls-slow-start";
 import {
   BUBBLES_FILM_DEFER_MS,
   bubblesFilmAllowed,
-  partyFastStartActive,
+  usePartyFastStart,
   startingSoonLineKeys,
 } from "@/lib/party-fast-start";
 import {
@@ -58,17 +58,18 @@ export function StreamStartingSoon({
   // first segment for the same link, so it stays a 36 KB poster for the first
   // seconds (and for good on a link the browser calls slow). Read once per
   // mount: the flag is server config and does not flip mid-wait.
-  const [fastStart] = useState(partyFastStartActive);
-  const [filmDue, setFilmDue] = useState(!fastStart);
+  const fastStart = usePartyFastStart();
+  const [filmDue, setFilmDue] = useState(false);
   useEffect(() => {
-    if (filmDue) {
+    if (!fastStart || filmDue) {
       return;
     }
     const timer = window.setTimeout(() => setFilmDue(true), BUBBLES_FILM_DEFER_MS);
     return () => window.clearTimeout(timer);
-  }, [filmDue]);
+  }, [fastStart, filmDue]);
   const showFilm =
-    !reducedMotion && filmDue && (!fastStart || bubblesFilmAllowed(browserConnection()));
+    !reducedMotion &&
+    (!fastStart || (filmDue && bubblesFilmAllowed(browserConnection())));
   const lineKeys = startingSoonLineKeys(STARTING_SOON_LINE_KEYS, fastStart);
   const activeIndex = useRotatingLineIndex(lineKeys.length);
 

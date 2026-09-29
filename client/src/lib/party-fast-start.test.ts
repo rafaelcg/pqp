@@ -5,6 +5,7 @@ import {
   partyFastStartActive,
   resetPartyFastStartForTests,
   setPartyFastStart,
+  shouldPreloadHlsEngine,
   startingSoonLineKeys,
   startupCaption,
 } from "./party-fast-start";
@@ -19,6 +20,15 @@ describe("party_fast_start state", () => {
     expect(partyFastStartActive()).toBe(true);
     setPartyFastStart(false);
     expect(partyFastStartActive()).toBe(false);
+  });
+});
+
+describe("shouldPreloadHlsEngine", () => {
+  it("preloads only with the flag on AND a watch party channel open", () => {
+    expect(shouldPreloadHlsEngine(true, true)).toBe(true);
+    expect(shouldPreloadHlsEngine(true, false)).toBe(false);
+    expect(shouldPreloadHlsEngine(false, true)).toBe(false);
+    expect(shouldPreloadHlsEngine(false, false)).toBe(false);
   });
 });
 
