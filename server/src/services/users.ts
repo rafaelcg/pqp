@@ -850,6 +850,28 @@ export async function isServerMember(
   return (await getMemberRole(serverId, userId)) !== null;
 }
 
+/**
+ * Which of these people are members of this server right now, read straight
+ * from the table. Deliberately not through `getMemberRole`'s cache: the
+ * caller is deciding whether a removal notice is still true, and a role
+ * cached on this instance before the removal is exactly the stale answer
+ * that question cannot take.
+ */
+export async function listCurrentMembersAmong(
+  serverId: string,
+  userIds: readonly string[],
+): Promise<string[]> {
+  if (userIds.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM server_members
+     WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
+    [serverId, [...userIds]],
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
 export async function listServerMemberIds(serverId: string): Promise<string[]> {
   const result = await getPool().query<{ user_id: string }>(
     `SELECT user_id FROM server_members WHERE server_id = $1`,

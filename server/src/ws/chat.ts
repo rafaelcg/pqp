@@ -21,6 +21,7 @@ import {
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
 import {
+  isBusConnected,
   isBusEnabled,
   publishToCluster,
   subscribeToCluster,
@@ -77,6 +78,7 @@ import { getThreadInfo } from "../services/threads.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
+  listCurrentMembersAmong,
 } from "../services/users.js";
 import {
   revokeHlsAccess,
@@ -865,11 +867,15 @@ function deliverFriendActivity(
  *
  * The recipients are named by the caller rather than read here, because for a
  * delete there is nobody left to read: the membership rows cascade with the
- * server, so the route lists them first. For the same reason the bus frame
+ * server, so `deleteServer` reads them under the same lock as the delete and
+ * hands them back. For the same reason the bus frame
  * carries the ids, and the other instances deliver without asking Postgres.
  *
  * Fire-and-forget, like `notifyFriendActivity`: the removal is already
  * committed, and the route's answer must not wait on who has a tab open.
+ * Unlike a friend's status, though, it is ONE-SHOT: nothing sends it again,
+ * so a publish made while the bus was down is queued and republished once the
+ * bus is back (see `queueServerRemovedRetry`).
  */
 export function notifyServerRemoved(
   serverId: string,
@@ -882,7 +888,125 @@ export function notifyServerRemoved(
   const frame: ServerRemoved = { type: "server-removed", serverId, reason };
   deliverServerRemoved(frame, userIds);
   if (isBusEnabled()) {
-    publishToCluster(MEMBERSHIP_TOPIC, { ...frame, userIds: [...userIds] });
+    publishServerRemoved({ frame, userIds: [...userIds], firstAt: Date.now() });
+  }
+}
+
+interface PendingServerRemoved {
+  frame: ServerRemoved;
+  userIds: string[];
+  /** When the removal was first published: bounds how long it is retried. */
+  firstAt: number;
+}
+
+/**
+ * How often a queued notice is tried again while the bus is down. The same
+ * figure the watch party reminders use, for the same reason: long enough for
+ * the Postgres transport's own reconnect to have landed on an ordinary blip.
+ */
+export const SERVER_REMOVED_REPUBLISH_MS = 3_000;
+/**
+ * How long a notice keeps being retried. Past this the bus has been down long
+ * enough that the tabs on the other instance have almost certainly
+ * reconnected (or reloaded) and read their server list afresh, which is the
+ * same truth arriving by the ordinary road, and an old notice is more likely
+ * to be wrong than useful.
+ */
+export const SERVER_REMOVED_RETRY_WINDOW_MS = 2 * 60_000;
+const MAX_QUEUED_SERVER_REMOVED = 1_000;
+const pendingServerRemoved: PendingServerRemoved[] = [];
+let serverRemovedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function publishServerRemoved(entry: PendingServerRemoved): void {
+  publishToCluster(MEMBERSHIP_TOPIC, { ...entry.frame, userIds: entry.userIds });
+  if (isBusConnected()) {
+    return;
+  }
+  queueServerRemovedRetry(entry);
+}
+
+/**
+ * The bus DROPS while it reconnects (`BusTransport.connected`), which is fine
+ * for presence and wrong for this: the removal was committed once and will
+ * never be published again, so the sockets on the other instances would keep
+ * the server until a reload. Held here instead and republished once the
+ * transport says it is up. A duplicate is harmless (the client ignores a
+ * notice for a server it no longer holds).
+ */
+function queueServerRemovedRetry(entry: PendingServerRemoved): void {
+  pendingServerRemoved.push(entry);
+  if (pendingServerRemoved.length > MAX_QUEUED_SERVER_REMOVED) {
+    pendingServerRemoved.shift();
+  }
+  if (serverRemovedRetryTimer) {
+    return;
+  }
+  serverRemovedRetryTimer = setTimeout(() => {
+    void flushServerRemovedRetries();
+  }, SERVER_REMOVED_REPUBLISH_MS);
+  // A pending retry must never be why a process refuses to exit.
+  serverRemovedRetryTimer.unref?.();
+}
+
+/**
+ * Republish what the bus dropped. Exported for tests; the timer above is the
+ * only production caller.
+ *
+ * A kick or a ban is checked against the table first: somebody kicked while
+ * the bus was down may have come back through a fresh invite before it
+ * recovered, and a late "you were removed" would take away a server they are
+ * in again. A delete needs no check, because nobody can rejoin a server that
+ * no longer exists. If the check itself fails the notice goes out as it was:
+ * the removal did happen, and a tab that keeps a server it lost is the bug
+ * this frame exists to fix.
+ */
+export async function flushServerRemovedRetries(
+  now = Date.now(),
+): Promise<void> {
+  if (serverRemovedRetryTimer) {
+    clearTimeout(serverRemovedRetryTimer);
+    serverRemovedRetryTimer = null;
+  }
+  const batch = pendingServerRemoved.splice(0);
+  if (!isBusEnabled()) {
+    return;
+  }
+  if (!isBusConnected()) {
+    // Still down: hold everything that is not yet too old for another round.
+    for (const entry of batch) {
+      if (now - entry.firstAt <= SERVER_REMOVED_RETRY_WINDOW_MS) {
+        queueServerRemovedRetry(entry);
+      }
+    }
+    return;
+  }
+  for (const entry of batch) {
+    if (now - entry.firstAt > SERVER_REMOVED_RETRY_WINDOW_MS) {
+      continue;
+    }
+    let userIds = entry.userIds;
+    if (entry.frame.reason !== "deleted") {
+      try {
+        const back = new Set(
+          await listCurrentMembersAmong(entry.frame.serverId, userIds),
+        );
+        userIds = userIds.filter((id) => !back.has(id));
+      } catch {
+        // See above: send it as it was.
+      }
+    }
+    if (userIds.length > 0) {
+      publishServerRemoved({ ...entry, userIds });
+    }
+  }
+}
+
+/** Test seam: forget anything queued, and the timer with it. */
+export function resetServerRemovedRetries(): void {
+  pendingServerRemoved.length = 0;
+  if (serverRemovedRetryTimer) {
+    clearTimeout(serverRemovedRetryTimer);
+    serverRemovedRetryTimer = null;
   }
 }
 

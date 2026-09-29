@@ -37,7 +37,23 @@ if (DATABASE_URL) {
 
 const stubs = vi.hoisted(() => ({
   actor: null as { id: string; clerk_id: string } | null,
+  failAudit: false,
 }));
+
+// The real audit log, with a switch that makes it fail: the removal commits
+// before the audit row is written, and the notice must not depend on it.
+vi.mock("../services/audit.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../services/audit.js")>();
+  return {
+    ...real,
+    logAudit: async (...args: Parameters<typeof real.logAudit>) => {
+      if (stubs.failAudit) {
+        throw new Error("audit log unavailable");
+      }
+      return real.logAudit(...args);
+    },
+  };
+});
 
 vi.mock("../auth/clerk.js", () => ({
   DEV_AUTH_TOKEN: "dev-local-token",
@@ -170,6 +186,7 @@ describeDb("telling people a server left their list", () => {
   });
 
   afterEach(() => {
+    stubs.failAudit = false;
     for (const socket of open) {
       deleteAuthenticatedSocket(socket);
     }
@@ -263,5 +280,66 @@ describeDb("telling people a server left their list", () => {
     expect([...data.userIds].sort()).toEqual(
       [owner.id, admin.id, member.id].sort(),
     );
+  });
+
+  it("tells a kicked member even when the audit write after the kick fails", async () => {
+    const socket = connect(member);
+    stubs.failAudit = true;
+
+    const status = await call(
+      owner,
+      "DELETE",
+      `/api/servers/${serverId}/members/${member.id}`,
+      { ban: false },
+    );
+
+    expect(status).toBe(500);
+    expect(removals(socket)).toEqual([
+      { type: "server-removed", serverId, reason: "kicked" },
+    ]);
+  });
+
+  it("tells a banned member even when the audit write after the ban fails", async () => {
+    const socket = connect(member);
+    stubs.failAudit = true;
+
+    const status = await call(owner, "POST", `/api/servers/${serverId}/bans`, {
+      userId: member.id,
+    });
+
+    expect(status).toBe(500);
+    expect(removals(socket)).toEqual([
+      { type: "server-removed", serverId, reason: "banned" },
+    ]);
+  });
+
+  it("tells somebody whose join was still committing when the delete ran", async () => {
+    const latecomer = connect(stranger);
+    // A join in flight: the membership row is written and not yet committed,
+    // which holds a key-share lock on the server row through the foreign key.
+    const joining = await getPool().connect();
+    try {
+      await joining.query("BEGIN");
+      await joining.query(
+        `INSERT INTO server_members (server_id, user_id, role)
+         VALUES ($1, $2, 'member')`,
+        [serverId, stranger.id],
+      );
+
+      const deleting = call(owner, "DELETE", `/api/servers/${serverId}`);
+      // Long enough for the delete to be waiting on the lock. Reading the
+      // members in a separate statement first, as the route once did, would
+      // by now have taken its list without the latecomer in it.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await joining.query("COMMIT");
+
+      expect(await deleting).toBe(200);
+    } finally {
+      joining.release();
+    }
+
+    expect(removals(latecomer)).toEqual([
+      { type: "server-removed", serverId, reason: "deleted" },
+    ]);
   });
 });

@@ -702,7 +702,6 @@ import {
   getEveryoneRoleId,
   getMemberHierarchy,
   getPermissionsSnapshot,
-  listServerMemberIds,
   memberHasPermission,
   Permission,
   restorePrivateEveryoneViewOverwrite,
@@ -4976,16 +4975,15 @@ router.patch(
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
   await requireOwner(serverId!, user.id);
   const channelIds = await listServerChannelIds(serverId!);
-  // Read before the delete: the membership rows cascade with the server, and
-  // afterwards there is nobody left to tell.
-  const memberIds = await listServerMemberIds(serverId!);
-  const deleted = await deleteServer(serverId!);
+  // The members as of the delete itself, read under the same lock: the rows
+  // cascade with the server, and afterwards there is nobody left to tell.
+  const memberIds = await deleteServer(serverId!);
+  if (memberIds) {
+    notifyServerRemoved(serverId!, "deleted", memberIds);
+  }
   for (const channelId of channelIds) {
     evictVoiceChannel(channelId);
     evictChannelViewers(channelId);
-  }
-  if (deleted) {
-    notifyServerRemoved(serverId!, "deleted", memberIds);
   }
   return { ok: true };
 });
@@ -8128,6 +8126,10 @@ router.delete(
     } else {
       await kickMember(serverId!, userId!);
     }
+    // Told the moment the removal commits, before the audit row and the
+    // channel lookup: either can fail, and the removal cannot be undone or
+    // repeated, so a notice sent after them could be lost for good.
+    notifyServerRemoved(serverId!, body.ban ? "banned" : "kicked", [userId!]);
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -8139,7 +8141,6 @@ router.delete(
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(userId!, channelIds);
     evictVoiceUser(userId!, channelIds);
-    notifyServerRemoved(serverId!, body.ban ? "banned" : "kicked", [userId!]);
     return { ok: true };
   },
 );
@@ -8582,14 +8583,20 @@ router.post(
     if (!(await getUserById(body.userId))) {
       throw new NotFound("User not found");
     }
-    const targetRole = await requireOutranked(
-      serverId!,
-      user.id,
-      body.userId,
-      "ban",
-    );
+    await requireOutranked(serverId!, user.id, body.userId, "ban");
 
-    await banMember(serverId!, body.userId, user.id, body.reason);
+    const wasMember = await banMember(
+      serverId!,
+      body.userId,
+      user.id,
+      body.reason,
+    );
+    // Told the moment the ban commits, before the audit row and the channel
+    // lookup, for the reason the kick route gives. A pre-emptive ban has no
+    // open session to update.
+    if (wasMember) {
+      notifyServerRemoved(serverId!, "banned", [body.userId]);
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -8602,10 +8609,6 @@ router.post(
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(body.userId, channelIds);
     evictVoiceUser(body.userId, channelIds);
-    // A pre-emptive ban has no open session to update.
-    if (targetRole) {
-      notifyServerRemoved(serverId!, "banned", [body.userId]);
-    }
     return { ok: true };
   },
 );

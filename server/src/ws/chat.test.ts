@@ -23,6 +23,8 @@ vi.mock("../services/users.js", () => ({
     user: { display_name: string },
   ) => user.display_name,
   canAccessChannel: vi.fn(async () => true),
+  // Who is back in a server before a delayed removal notice is republished.
+  listCurrentMembersAmong: vi.fn(async () => [] as string[]),
 }));
 
 // The timeout chokepoint queries Postgres, and this suite deliberately runs
@@ -139,6 +141,9 @@ const {
   handleChatMessage,
   notifyFriendActivity,
   notifyServerRemoved,
+  flushServerRemovedRetries,
+  resetServerRemovedRetries,
+  SERVER_REMOVED_RETRY_WINDOW_MS,
   postChannelMessage,
   resetChatRateLimits,
 } = await import("./chat.js");
@@ -146,7 +151,9 @@ const bus = await import("../lib/bus.js");
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
-const { canAccessChannel } = await import("../services/users.js");
+const { canAccessChannel, listCurrentMembersAmong } = await import(
+  "../services/users.js"
+);
 const { isDmSendBlocked, restoreDmParticipants } = await import(
   "../services/dms.js"
 );
@@ -520,12 +527,114 @@ describe("notifyServerRemoved", () => {
       dispatch?.({ origin: "another-instance", topic: "chat.membership", data });
   }
 
+  /** A transport that records what is published and can be taken down. */
+  function installFlakyBus(): {
+    published: unknown[];
+    setUp: (up: boolean) => void;
+  } {
+    const published: unknown[] = [];
+    let up = false;
+    bus.setBusTransport({
+      name: "flaky",
+      publish: (frame) => {
+        // A real transport drops while it reconnects; this one only records
+        // the frames it would actually have delivered.
+        if (up && frame.topic === "chat.membership") {
+          published.push(frame.data);
+        }
+      },
+      onFrame: () => {},
+      connected: () => up,
+      close: async () => {},
+    });
+    return { published, setUp: (next) => (up = next) };
+  }
+
   afterEach(() => {
     bus.setBusTransport(null);
+    resetServerRemovedRetries();
+    vi.mocked(listCurrentMembersAmong).mockReset();
+    vi.mocked(listCurrentMembersAmong).mockResolvedValue([]);
     for (const recorder of open) {
       deleteAuthenticatedSocket(recorder.socket);
     }
     open.length = 0;
+  });
+
+  it("republishes a notice the bus dropped once the bus is back", async () => {
+    const flaky = installFlakyBus();
+
+    notifyServerRemoved(serverId, "deleted", [removed, bystander]);
+    expect(flaky.published).toEqual([]);
+
+    // Still down on the first retry: held, not lost.
+    await flushServerRemovedRetries();
+    expect(flaky.published).toEqual([]);
+
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([
+      {
+        type: "server-removed",
+        serverId,
+        reason: "deleted",
+        userIds: [removed, bystander],
+      },
+    ]);
+    // A delete needs no membership check: nobody rejoins a deleted server.
+    expect(listCurrentMembersAmong).not.toHaveBeenCalled();
+
+    // Delivered once; nothing is left to send again.
+    await flushServerRemovedRetries();
+    expect(flaky.published).toHaveLength(1);
+  });
+
+  it("does not republish a kick to somebody who has rejoined since", async () => {
+    const flaky = installFlakyBus();
+    vi.mocked(listCurrentMembersAmong).mockResolvedValue([removed]);
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(listCurrentMembersAmong).toHaveBeenCalledWith(serverId, [removed]);
+    expect(flaky.published).toEqual([]);
+  });
+
+  it("still republishes a kick when the membership check fails", async () => {
+    const flaky = installFlakyBus();
+    vi.mocked(listCurrentMembersAmong).mockRejectedValue(new Error("db down"));
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([
+      { type: "server-removed", serverId, reason: "kicked", userIds: [removed] },
+    ]);
+  });
+
+  it("gives up on a notice older than the retry window", async () => {
+    const flaky = installFlakyBus();
+
+    notifyServerRemoved(serverId, "deleted", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries(
+      Date.now() + SERVER_REMOVED_RETRY_WINDOW_MS + 1,
+    );
+
+    expect(flaky.published).toEqual([]);
+  });
+
+  it("queues nothing when the bus took the frame", async () => {
+    const flaky = installFlakyBus();
+    flaky.setUp(true);
+
+    notifyServerRemoved(serverId, "banned", [removed]);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toHaveLength(1);
   });
 
   it("reaches every socket the removed person holds, and nobody else", () => {
