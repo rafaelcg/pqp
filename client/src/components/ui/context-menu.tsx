@@ -2,11 +2,13 @@ import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import { type LucideIcon } from "lucide-react";
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type ComponentType,
   type ReactNode,
 } from "react";
+import { horizontalShiftIntoView } from "@/lib/context-menu-placement";
 import { cn } from "@/lib/utils";
 import {
   MenuItemRows,
@@ -106,6 +108,21 @@ export function ContextMenu({
   const pointerYRef = useRef(0);
   const [alignOffset, setAlignOffset] = useState(0);
 
+  // The same problem on the other axis, with no prop to fix it: Radix pins
+  // `side="right"` and `sideOffset={2}` after our props, so the menu opens 2px
+  // right of the pointer. It flips to the left when the right side has no room,
+  // but a phone is narrower than twice the menu, so at a long-press near the
+  // middle of a 390px screen NEITHER side fits. Radix keeps the less bad one
+  // and lets it hang off the edge, which cut the reaction strip and its `+`.
+  // Once Radix has placed the menu, measure it and slide it back in with the
+  // `translate` property, which does not touch the `transform` Radix positions
+  // with. The wrapper's `style` changes on every placement, including a
+  // resize, so watching it keeps the correction current.
+  const [shiftX, setShiftX] = useState(0);
+  const shiftXRef = useRef(0);
+  const placementObserverRef = useRef<MutationObserver | null>(null);
+  useEffect(() => () => placementObserverRef.current?.disconnect(), []);
+
   const recordPointer = useCallback((event: { clientY: number }) => {
     pointerYRef.current = event.clientY;
   }, []);
@@ -114,7 +131,31 @@ export function ContextMenu({
     if (!node) {
       // Next open starts from the unflipped placement and measures again.
       setAlignOffset(0);
+      shiftXRef.current = 0;
+      setShiftX(0);
+      placementObserverRef.current?.disconnect();
+      placementObserverRef.current = null;
       return;
+    }
+    const clampSideways = () => {
+      const next = horizontalShiftIntoView(
+        node.getBoundingClientRect(),
+        shiftXRef.current,
+        window.innerWidth,
+        COLLISION_PADDING,
+      );
+      if (Math.abs(next - shiftXRef.current) < 0.5) return;
+      shiftXRef.current = next;
+      setShiftX(next);
+    };
+    const wrapper = node.parentElement;
+    if (wrapper && typeof MutationObserver !== "undefined") {
+      placementObserverRef.current?.disconnect();
+      placementObserverRef.current = new MutationObserver(clampSideways);
+      placementObserverRef.current.observe(wrapper, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
     }
     const height = node.offsetHeight;
     const pointerY = pointerYRef.current;
@@ -152,6 +193,7 @@ export function ContextMenu({
           ref={placeContent}
           alignOffset={alignOffset}
           collisionPadding={COLLISION_PADDING}
+          style={shiftX === 0 ? undefined : { translate: `${shiftX}px 0` }}
           // Named so a test can address the open menu and its rows without
           // matching on translated labels.
           data-context-menu=""
