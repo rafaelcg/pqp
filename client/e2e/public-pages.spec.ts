@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { DISPLAY_NAME_MAX_LENGTH } from "@pqp/shared";
 import { ensureServer } from "./fixtures";
 
 /**
@@ -480,7 +481,13 @@ test.describe("long unbroken words on the public pages", () => {
   }) => {
     await ensureAccount(LONG_NAME);
     await ensureHandle(LONG_NAME, LONG_NAME_HANDLE);
-    const name = `Zé ${"Longonome".repeat(6)}`;
+    // As long as a display name may be (32), and still one word far wider
+    // than the card on a phone: without the h1's wrap it sticks out about
+    // 57px on each side.
+    const name = `Zé ${"Longonome".repeat(4)}`.slice(
+      0,
+      DISPLAY_NAME_MAX_LENGTH,
+    );
     const renamed = await api(LONG_NAME, "PATCH", "/api/me", {
       displayName: name,
     });
