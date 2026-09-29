@@ -1650,6 +1650,7 @@
   "settings.profile.banner.failed": "Não deu pra enviar essa capa.",
   "settings.profile.banner.removeFailed": "Não deu pra remover a capa.",
   "settings.profile.displayName": "Nome de exibição",
+  "settings.profile.displayNameRequired": "Escreve um nome de exibição.",
   "settings.profile.username": "Nome de usuário",
   "settings.profile.usernamePlaceholder": "nome_maneiro",
   "settings.profile.usernameHint": "Vira nome_de_usuario#1234, o número sai automático se já estiver em uso.",

@@ -1660,6 +1660,7 @@
   "settings.profile.banner.failed": "No se pudo subir esa portada.",
   "settings.profile.banner.removeFailed": "No se pudo quitar la portada.",
   "settings.profile.displayName": "Nombre visible",
+  "settings.profile.displayNameRequired": "Escribe un nombre visible.",
   "settings.profile.username": "Nombre de usuario",
   "settings.profile.usernamePlaceholder": "nombre_genial",
   "settings.profile.usernameHint": "Queda como nombre#1234, el número se asigna solo si ya está en uso.",

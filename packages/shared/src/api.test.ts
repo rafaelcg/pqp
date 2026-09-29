@@ -14,6 +14,7 @@ import {
   reactionEmojiSchema,
   REPLY_EXCERPT_MAX_LENGTH,
   serverSchema,
+  DISPLAY_NAME_MAX_LENGTH,
   updateProfileSchema,
   usernameSchema,
   userPreferencesSchema,
@@ -157,6 +158,20 @@ describe("createChannelSchema", () => {
 });
 
 describe("updateProfileSchema", () => {
+  it("bounds the display name to the one limit every screen uses", () => {
+    const at = "N".repeat(DISPLAY_NAME_MAX_LENGTH);
+    expect(DISPLAY_NAME_MAX_LENGTH).toBe(32);
+    expect(updateProfileSchema.safeParse({ displayName: at }).success).toBe(true);
+    expect(updateProfileSchema.safeParse({ displayName: `${at}N` }).success).toBe(
+      false,
+    );
+    expect(updateProfileSchema.safeParse({ displayName: "" }).success).toBe(false);
+    expect(updateProfileSchema.safeParse({ displayName: "   " }).success).toBe(false);
+    expect(updateProfileSchema.parse({ displayName: "  Rafa  " }).displayName).toBe(
+      "Rafa",
+    );
+  });
+
   it("requires an http(s) or root-relative avatar", () => {
     expect(
       updateProfileSchema.safeParse({ avatarUrl: "https://x.example/a.png" }).success,

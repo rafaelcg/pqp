@@ -11,6 +11,7 @@ import {
 import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
+  DISPLAY_NAME_MAX_LENGTH,
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
   HANDLE_MAX_LENGTH,
@@ -3569,6 +3570,7 @@ function ProfileSection({
         </span>
         <Input
           value={displayName}
+          maxLength={DISPLAY_NAME_MAX_LENGTH}
           onChange={(e) => onDisplayName(e.target.value)}
         />
       </label>
@@ -4129,6 +4131,15 @@ export function SettingsModal({
   }
 
   async function handleSave() {
+    // Checked before anything is saved. A blank name used to be dropped from
+    // the request, so the dialog closed as if it had worked and kept the old
+    // name. Device settings are not written either: a Save that fails should
+    // leave nothing half applied.
+    if (user && displayName.trim() === "") {
+      setSection("profile");
+      setError(t("settings.profile.displayNameRequired"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -4136,7 +4147,12 @@ export function SettingsModal({
       saveLocalSettings(draftLocal);
       if (user) {
         const updated = await updateMe({
-          displayName: displayName.trim() || undefined,
+          // Only when it changed. An account whose name predates the limit
+          // would otherwise fail every save of an unrelated field.
+          displayName:
+            displayName.trim() !== user.displayName
+              ? displayName.trim()
+              : undefined,
           username: username.trim() || undefined,
           avatarUrl: avatarUrl.trim() || null,
           // Omitted rather than sent empty when the field is blank. An absent
