@@ -938,14 +938,20 @@ export function createChatController(
     // from a jump into history. Sending takes them back to the present
     // (`message-list.tsx`), and when the broadcast confirms the row before the
     // tail page lands, it is no longer optimistic and would be dropped. A row
-    // carrying a nonce was sent from this window (a fetched page never has
-    // one), so it is live and belongs after a tail page.
+    // carrying a nonce was sent from this client (a fetched page never has
+    // one). The nonce stays on the row after it is confirmed, so it alone
+    // does not say "racing this page": only a row newer than the page's last
+    // one is. A send older than that and missing from the page sits outside
+    // it, and carrying it would hang it above the page with a gap between.
+    const pageEnd = next.length > 0 ? toStoredMessage(next[next.length - 1]) : null;
+    const racedThePage = (message: ChatMessage) =>
+      !newerAvailable &&
+      message.nonce !== undefined &&
+      (pageEnd === null || byPosition(message, pageEnd) > 0);
     const inFlight = messages.filter(
       (message) =>
         !stored.has(message.id) &&
-        (carryLive ||
-          isOptimistic(message) ||
-          (!newerAvailable && message.nonce !== undefined)),
+        (carryLive || isOptimistic(message) || racedThePage(message)),
     );
 
     // A reconnect resync (`transport.onReady` in App.tsx) refetches only the

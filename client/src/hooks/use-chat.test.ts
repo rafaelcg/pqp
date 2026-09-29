@@ -1292,6 +1292,29 @@ describe("jumping into history", () => {
     ]);
   });
 
+  it("drops a confirmed send from history that is older than the tail page", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // The present has moved on: the tail page starts after the send, so the
+    // send is outside it and must not ride along above it.
+    mockPage({ messages: history(2, 30), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m30", "m31"]);
+  });
+
   it("shows a send from history once when the tail page already holds it", async () => {
     const { chat, sent } = setup();
     chat.setMessages(history(2), true, true);
