@@ -984,6 +984,11 @@ export const MessageList = memo(function MessageList({
       // would move it.
       if (container) {
         const pinned = distanceFromBottom(container) <= STICKY_THRESHOLD_PX;
+        // The ref too, not only the state, for the same reason `focusRow`
+        // clears both: the ResizeObserver reads the ref and can fire before
+        // React re-renders, and a live message landing in that gap would
+        // otherwise grow a list the observer still thinks is unpinned.
+        isPinnedRef.current = pinned;
         setIsPinned(pinned);
         if (pinned) {
           setMissedCount(0);
@@ -1402,6 +1407,7 @@ export const MessageList = memo(function MessageList({
     }
     const distance = distanceFromBottom(container);
     const pinned = distance <= STICKY_THRESHOLD_PX;
+    isPinnedRef.current = pinned;
     setIsPinned(pinned);
     if (pinned) {
       setMissedCount(0);
