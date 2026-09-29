@@ -9,6 +9,8 @@ import type { ShareAudioProbeConsole } from "./lib/share-audio-probe";
 interface ImportMetaEnv {
   readonly VITE_CLERK_PUBLISHABLE_KEY: string;
   readonly VITE_API_URL?: string;
+  /** `true` turns on the sign-up resume (`lib/signup-assist.ts`). Public, not a secret. */
+  readonly VITE_SIGNUP_ASSIST?: string;
   readonly VITE_WS_URL?: string;
   readonly VITE_TURN_URL?: string;
   readonly VITE_TURN_USERNAME?: string;

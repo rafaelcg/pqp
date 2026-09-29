@@ -152,7 +152,7 @@ and is a no-op anywhere the tag was not injected (every self-host):
 `onboarding_start`, `onboarding_step_view`, `age_gate_pass` / `age_gate_block`,
 `onboarding_you_next`, `onboarding_room_door`, `onboarding_server_created`,
 `onboarding_invite_copied`, `onboarding_done`, `arrival_view`,
-`arrival_first_message`, `arrival_first_voice`, `invite_gate_view`. Links copied
+`arrival_first_message`, `arrival_first_voice`, `invite_gate_view`. The Clerk trip on a community poster is timed by `signup_cta_click` (the tap, with `webview` when it is an in-app browser) and `signup_return` (the account exists, with `seconds` and `bucket` since the tap), both from `lib/signup-assist.ts`. With `VITE_SIGNUP_ASSIST=true` (or `localStorage["pqp:signup-assist"]="on"`), a poster that reloads while Clerk holds a sign-up waiting on its emailed code reopens the modal and fires `signup_resume_open`. Links copied
 from first-run surfaces carry `?ref=onboarding`, so joins through them are
 counted apart from `convite` and `discord`.
 
