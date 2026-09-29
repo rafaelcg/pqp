@@ -19,8 +19,10 @@ const READER_INPUT = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
  * native jump at all, because the router changes the URL without a navigation.
  *
  * So the page does it itself once it has rendered, and again whenever the hash
- * changes. Both go through `scrollIntoView`, so the section's `scroll-mt-*`
- * still clears the sticky header.
+ * or the path changes. The path counts because a hook that outlives a route
+ * (one in a layout) sees `/one#faq` to `/two#faq` as the same hash, and the
+ * reader still arrived somewhere new. Both go through `scrollIntoView`, so the
+ * section's `scroll-mt-*` still clears the sticky header.
  *
  * Arriving on a page, the jump is instant and then follows the section for a
  * few seconds. The web fonts and the live parts of a page (the landing's
@@ -30,13 +32,18 @@ const READER_INPUT = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
  * settled on screen keeps the smooth glide from `index.css`.
  */
 export function useScrollToHash() {
-  const { hash } = useLocation();
-  // The hash this page last handled. Undefined, or the same hash again (Strict
-  // Mode runs every effect twice in development), means the page just arrived.
-  const handled = useRef<string | undefined>(undefined);
+  const { pathname, hash } = useLocation();
+  // The place this page last handled. Undefined, another path, or the same
+  // path and hash again (Strict Mode runs every effect twice in development)
+  // means the reader just arrived; only a new hash on the same path glides.
+  const handled = useRef<{ pathname: string; hash: string } | undefined>(
+    undefined,
+  );
   useEffect(() => {
-    const first = handled.current === undefined || handled.current === hash;
-    handled.current = hash;
+    const prev = handled.current;
+    const first =
+      prev === undefined || prev.pathname !== pathname || prev.hash === hash;
+    handled.current = { pathname, hash };
     if (!hash) return;
     let id: string;
     try {
@@ -80,5 +87,5 @@ export function useScrollToHash() {
     }
     frame = requestAnimationFrame(follow);
     return release;
-  }, [hash]);
+  }, [pathname, hash]);
 }
