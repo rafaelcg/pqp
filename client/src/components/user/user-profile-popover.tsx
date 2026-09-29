@@ -381,6 +381,11 @@ function UserProfileCard({
   const [pendingConfirm, setPendingConfirm] = useState<"remove" | "block" | null>(
     null,
   );
+  /** The same fact, readable from the tap-away listener. */
+  const pendingConfirmRef = useRef(false);
+  useEffect(() => {
+    pendingConfirmRef.current = pendingConfirm !== null;
+  }, [pendingConfirm]);
   const [confirming, setConfirming] = useState<ProfilePrimaryAction | null>(
     null,
   );
@@ -545,12 +550,28 @@ function UserProfileCard({
       if (writingRef.current) {
         return;
       }
+      // The remove and block confirms are portalled to the body, so every
+      // press on them lands "outside" the card. Closing here unmounted the
+      // confirm between mousedown and click, and a mouse or a tap on
+      // "Bloquear" did nothing. While a confirm is up it owns the pointer:
+      // its own buttons, X and Escape decide.
+      if (pendingConfirmRef.current) {
+        return;
+      }
       onClose();
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape") {
+        return;
       }
+      // Escape with a confirm up backs out of the confirm only; the next one
+      // closes the card. Dialog already stops Escape in its capture listener,
+      // but the card must not rely on that: a confirm that is not dismissible
+      // (mid-request) swallows Escape, and the card under it stays too.
+      if (pendingConfirmRef.current) {
+        return;
+      }
+      onClose();
     }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
