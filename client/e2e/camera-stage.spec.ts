@@ -184,12 +184,42 @@ test("a phone-width stage keeps every call control on screen", async ({
   // of ~20rem on a 390 phone: mute and raise hand sat under the server rail,
   // hang-up past the right edge. 320 is the narrowest phone still sold.
   const bar = page.getByTestId("call-controls-bar");
+  // What the stage hands the strip and the self-preview for the pill's extra
+  // lines, beside what those lines actually measure: the pill's height past
+  // its one-line height on this same stage. The stage measures the row the
+  // pill sits in, so this is what catches a row that counts one line as
+  // anything but the pill's own padded line.
+  const rowExtra = () =>
+    page.evaluate(() => {
+      const stage = document.querySelector<HTMLElement>(
+        '[style*="--call-row-extra"]',
+      )!;
+      const pill = document
+        .querySelector(
+          '[data-testid="call-controls-bar"] button[aria-label="Leave"]',
+        )!
+        .closest<HTMLElement>('[class*="rounded-[1.625rem]"]')!;
+      return {
+        handed: Number.parseFloat(
+          stage.style.getPropertyValue("--call-row-extra"),
+        ),
+        pill: pill.offsetHeight,
+      };
+    });
+  await expect.poll(async () => (await rowExtra()).handed).toBe(0);
+  const oneLine = (await rowExtra()).pill;
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await expect(bar.getByRole("button", { name: "Leave" })).toBeAttached();
     await expect
       .poll(() => unreachableStageControls(page), { timeout: 5_000 })
       .toEqual([]);
+    await expect
+      .poll(async () => {
+        const { handed, pill } = await rowExtra();
+        return pill > oneLine && handed === pill - oneLine;
+      })
+      .toBe(true);
   }
   // And the wide stage still draws them on one line.
   await page.setViewportSize({ width: 1440, height: 900 });
