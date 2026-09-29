@@ -80,7 +80,6 @@ import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.watchPartyListBlock
 import gg.pqp.app.watch.watchPartyListEntry
 import gg.pqp.app.watch.ui.WatchPartyListBlockView
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -95,6 +94,53 @@ import kotlinx.serialization.json.jsonPrimitive
  * span about a minute.
  */
 private const val CHANNELS_REFETCH_TRIES = 8
+
+/**
+ * Tickets for every fetch of the channel list on this screen: the first load
+ * and each `channels-update` refetch. A later fetch reads a later state of the
+ * list, so a fetch may write it unless a newer one already has, and an older
+ * list never lands on top of a newer one.
+ *
+ * Not "only the newest may write": a refetch that overtook the first load and
+ * then failed through every retry left the screen with no list at all, though
+ * the load had fetched one. Written tickets are what order the lists; taken
+ * tickets only tell a refetch that a newer one is running.
+ *
+ * [takeFirst] is the first load of a server. Nothing taken before it may write
+ * again, so a fetch still finishing for the server this screen just left is
+ * stale as well.
+ */
+internal class ChannelListTickets {
+    private var latest = 0
+    private var written = 0
+
+    /** A refetch starts. */
+    @Synchronized
+    fun take(): Int = ++latest
+
+    /** The first load of a server starts; every fetch before it is stale. */
+    @Synchronized
+    fun takeFirst(): Int {
+        latest += 1
+        written = latest - 1
+        return latest
+    }
+
+    /** No newer fetch has started since this one. */
+    @Synchronized
+    fun isLatest(ticket: Int): Boolean = ticket == latest
+
+    /**
+     * The fetch holding [ticket] has a list. True when it may write it, which
+     * also makes it the newest list written; the caller then writes.
+     */
+    @Synchronized
+    fun tryWrite(ticket: Int): Boolean {
+        if (ticket <= written) return false
+        written = ticket
+        return true
+    }
+}
 
 /**
  * A server's channels.
@@ -218,13 +264,15 @@ fun ChannelsScreen(
         }
     }
 
-    // Every fetch of the list takes a ticket, and only the newest may write
-    // it: a slow first load, or a refetch overtaken by a newer one, can never
-    // land on top of a newer list. One counter for every server, so a fetch
-    // still finishing for the server this screen just left is stale too.
-    val channelsTicket = remember { AtomicInteger(0) }
+    // Every fetch of the list takes a ticket, and a fetch may write the list
+    // unless a newer one already has (see [ChannelListTickets]): a slow first
+    // load can never land on top of a refetch's newer list, and a refetch that
+    // fails cannot throw away the list the first load did get. One set of
+    // tickets for every server, so a fetch still finishing for the server
+    // this screen just left is stale too.
+    val channelsTickets = remember { ChannelListTickets() }
     LaunchedEffect(serverId) {
-        val ticket = channelsTicket.incrementAndGet()
+        val ticket = channelsTickets.takeFirst()
         val list = try {
             session.api.channels(serverId)
         } catch (e: CancellationException) {
@@ -232,7 +280,7 @@ fun ChannelsScreen(
         } catch (e: Exception) {
             emptyList()
         }
-        if (ticket == channelsTicket.get()) channels = list
+        if (channelsTickets.tryWrite(ticket)) channels = list
     }
     // A channel this viewer can see was created, renamed, moved or deleted.
     // The frame names no channel, so the list is refetched; the server filters
@@ -249,7 +297,7 @@ fun ChannelsScreen(
                 }
             }
             .collectLatest {
-                val ticket = channelsTicket.incrementAndGet()
+                val ticket = channelsTickets.take()
                 for (attempt in 1..CHANNELS_REFETCH_TRIES) {
                     val list = try {
                         session.api.channels(serverId)
@@ -258,11 +306,11 @@ fun ChannelsScreen(
                     } catch (e: Exception) {
                         null
                     }
-                    if (ticket != channelsTicket.get()) return@collectLatest
                     if (list != null) {
-                        channels = list
+                        if (channelsTickets.tryWrite(ticket)) channels = list
                         return@collectLatest
                     }
+                    if (!channelsTickets.isLatest(ticket)) return@collectLatest
                     if (attempt < CHANNELS_REFETCH_TRIES) {
                         delay(RealtimeClient.backoffMillis(attempt))
                     }
