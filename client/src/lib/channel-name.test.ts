@@ -19,6 +19,16 @@ describe("sanitizeChannelName", () => {
     expect(sanitizeChannelName("ARQ_2026")).toBe("arq_2026");
   });
 
+  it("never starts a name with a hyphen", () => {
+    // The bug this pins (srv-4): three spaces became "-" or "---", Criar
+    // stayed enabled, and a channel literally named "-" was created.
+    expect(sanitizeChannelName("   ")).toBe("");
+    expect(sanitizeChannelName("---")).toBe("");
+    expect(sanitizeChannelName(" geral")).toBe("geral");
+    expect(sanitizeChannelName("🎉 geral")).toBe("geral");
+    expect(sanitizeChannelName("! mesa de rpg")).toBe("mesa-de-rpg");
+  });
+
   it("cuts a pasted name at the limit", () => {
     expect(sanitizeChannelName("a".repeat(300))).toHaveLength(
       CHANNEL_NAME_MAX_LENGTH,

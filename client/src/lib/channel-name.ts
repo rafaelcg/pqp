@@ -16,6 +16,12 @@ export const CHANNEL_NAME_MAX_LENGTH = 100;
  * misspelling nobody typed. Same argument `normalizeHandle` makes for
  * handles. Spaces become hyphens for the same reason: "mesa de rpg" means
  * "mesa-de-rpg", not "mesaderpg".
+ *
+ * A name never starts with a hyphen. Leading spaces and symbols would
+ * otherwise leave one behind, and a name of only spaces would become "-",
+ * which passes the empty check and creates a channel called "-". Stripped,
+ * it comes out empty, and the confirm button stays disabled as it does for
+ * "!!!". A trailing hyphen stays: it is the space before the next word.
  */
 export function sanitizeChannelName(raw: string): string {
   return raw
@@ -24,5 +30,6 @@ export function sanitizeChannelName(raw: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "")
+    .replace(/^-+/, "")
     .slice(0, CHANNEL_NAME_MAX_LENGTH);
 }

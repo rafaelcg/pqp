@@ -82,6 +82,33 @@ describe("PromptDialog", () => {
     expect(input.value).toHaveLength(CHANNEL_NAME_MAX_LENGTH);
   });
 
+  it("keeps Criar disabled for a name of only spaces", async () => {
+    // srv-4: spaces became hyphens before the empty check ran, so three
+    // spaces enabled Criar and created a channel named "-".
+    await mount(
+      <PromptDialog
+        open
+        title="Create text channel"
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    const input = nameInput();
+    const submit = document.body.querySelector<HTMLButtonElement>(
+      'button[type="submit"]',
+    )!;
+    // Key by key, each keystroke sanitising what is already there.
+    for (let i = 0; i < 3; i += 1) {
+      type(input, `${input.value} `);
+    }
+    expect(input.value).toBe("");
+    expect(submit.disabled).toBe(true);
+    // A paste arrives in one go.
+    type(input, "   ");
+    expect(input.value).toBe("");
+    expect(submit.disabled).toBe(true);
+  });
+
   it("shows a refusal inside the dialog and keeps it open", async () => {
     let closed = false;
     await mount(

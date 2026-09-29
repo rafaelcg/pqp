@@ -5046,8 +5046,7 @@ function MainAppContent({
 
     if (channelPrompt.mode === "create") {
       if (!selectedServerId || !channelPrompt.type) {
-        setAppError("Select a server before creating a channel");
-        return;
+        throw new Error("Select a server before creating a channel");
       }
       const { channel } = await createChannel(
         selectedServerId,
