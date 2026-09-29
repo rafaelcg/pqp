@@ -98,6 +98,7 @@ import {
 import { formatReactionWho } from "@/lib/reaction-who";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
+import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
 import {
   cn,
@@ -530,8 +531,12 @@ export const MessageList = memo(function MessageList({
   /** For the arrival announcement below — read without adding `messages`
    * itself to that effect's deps, which would rerun it on every in-place
    * edit/reaction update and not just on an actual new arrival. */
-  const latestMessageRef = useRef(messages[messages.length - 1]);
-  latestMessageRef.current = messages[messages.length - 1];
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  /** Set below, once `jumpToPresent` exists; read by the arrival effect. */
+  const followOwnSendRef = useRef<() => void>(() => {});
   /** Row elements by message id, so a jump can find its target. */
   const rowNodes = useRef(new Map<string, HTMLElement>());
   /**
@@ -1016,6 +1021,17 @@ export const MessageList = memo(function MessageList({
     if (arrived <= 0) {
       return;
     }
+    const { sentHere, fromOthers } = splitArrivals(
+      messagesRef.current.slice(-arrived),
+      currentUserIdRef.current,
+    );
+    // Sending is asking to see the bottom, wherever the reader was: Discord
+    // puts you on your own message every time. Scrolled up, the send used to
+    // sit below the fold and the pill counted it as somebody else's news.
+    if (sentHere) {
+      followOwnSendRef.current();
+      return;
+    }
     // A jump parks the reader mid-history: the last row on screen is not the
     // newest in the channel, so following the bottom would scroll to a place
     // nobody asked for and undo the jump itself.
@@ -1024,19 +1040,24 @@ export const MessageList = memo(function MessageList({
     }
     if (isPinnedRef.current) {
       scrollToBottom(messages.length > 60 ? "auto" : "smooth");
-    } else {
-      setMissedCount((count) => count + arrived);
+    } else if (fromOthers.length > 0) {
+      // The reader's own rows are never "new": one from their other device
+      // leaves the scroll alone and the count too.
+      setMissedCount((count) => count + fromOthers.length);
+    }
+    if (fromOthers.length === 0) {
+      return;
     }
 
     // A screen reader gets a one-line heads-up either way — not the message
     // itself, which on a busy channel would mean a wall of speech nobody
     // could interrupt. Reading the actual row is one arrow-key press away
     // once this points them at it.
-    const newest = latestMessageRef.current;
+    const newest = fromOthers[fromOthers.length - 1];
     setLiveAnnouncement(
-      arrived === 1 && newest
+      fromOthers.length === 1
         ? translateMessage("chat.live.from", { name: newest.authorName })
-        : translateMessage("chat.live.many", { count: arrived }),
+        : translateMessage("chat.live.many", { count: fromOthers.length }),
     );
   }, [messages.length, scrollToBottom]);
 
@@ -1277,6 +1298,34 @@ export const MessageList = memo(function MessageList({
       }
     });
   }, [hasNewer, onJumpToPresent, scrollToBottom]);
+
+  /**
+   * The reader just sent something: put them on it. From a jump into history
+   * that means the live end of the channel, which is where the send went.
+   * Close to the bottom it glides; from further up it cuts straight there,
+   * because a long animation reads as lag, and a row that grows mid-flight (a
+   * GIF, an image still loading) would outrun it.
+   */
+  const followOwnSend = useCallback(() => {
+    if (hasNewerRef.current) {
+      jumpToPresent();
+      return;
+    }
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    // The ref as well as the state: the resize observer that follows a late
+    // image reads the ref, and it can fire before the next render copies it.
+    isPinnedRef.current = true;
+    setIsPinned(true);
+    scrollToBottom(
+      distanceFromBottom <= container.clientHeight ? "smooth" : "auto",
+    );
+  }, [jumpToPresent, scrollToBottom]);
+  followOwnSendRef.current = followOwnSend;
 
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
