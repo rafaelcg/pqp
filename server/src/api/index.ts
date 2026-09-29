@@ -214,6 +214,7 @@ import {
   notifyPermissionsUpdate,
   notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
+  notifyServerRemoved,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -4990,7 +4991,12 @@ router.patch(
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
   await requireOwner(serverId!, user.id);
   const channelIds = await listServerChannelIds(serverId!);
-  await deleteServer(serverId!);
+  // The members as of the delete itself, read under the same lock: the rows
+  // cascade with the server, and afterwards there is nobody left to tell.
+  const memberIds = await deleteServer(serverId!);
+  if (memberIds) {
+    notifyServerRemoved(serverId!, "deleted", memberIds);
+  }
   for (const channelId of channelIds) {
     evictVoiceChannel(channelId);
     evictChannelViewers(channelId);
@@ -8136,6 +8142,10 @@ router.delete(
     } else {
       await kickMember(serverId!, userId!);
     }
+    // Told the moment the removal commits, before the audit row and the
+    // channel lookup: either can fail, and the removal cannot be undone or
+    // repeated, so a notice sent after them could be lost for good.
+    notifyServerRemoved(serverId!, body.ban ? "banned" : "kicked", [userId!]);
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -8591,7 +8601,18 @@ router.post(
     }
     await requireOutranked(serverId!, user.id, body.userId, "ban");
 
-    await banMember(serverId!, body.userId, user.id, body.reason);
+    const wasMember = await banMember(
+      serverId!,
+      body.userId,
+      user.id,
+      body.reason,
+    );
+    // Told the moment the ban commits, before the audit row and the channel
+    // lookup, for the reason the kick route gives. A pre-emptive ban has no
+    // open session to update.
+    if (wasMember) {
+      notifyServerRemoved(serverId!, "banned", [body.userId]);
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,

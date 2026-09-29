@@ -759,7 +759,23 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
   }
 }
 
-export async function deleteServer(serverId: string): Promise<boolean> {
+/**
+ * Delete a server and answer with the ids of everybody who was a member at
+ * the moment it went, or null when there was no such server.
+ *
+ * The member list is read in the same transaction as the delete, after
+ * `FOR UPDATE` on the server row, because the rows cascade away with it and
+ * the caller has to tell those people. The lock is what makes the list
+ * complete: a join inserts into `server_members`, whose foreign key check
+ * takes `FOR KEY SHARE` on this same row, and the two locks conflict. So a
+ * join still in flight is waited for and then read here, and a join that
+ * starts after the lock waits for the delete and then fails on the missing
+ * server. Read in a separate statement before the delete, a join landing in
+ * between was cascaded away and never told.
+ */
+export async function deleteServer(
+  serverId: string,
+): Promise<string[] | null> {
   const keys = await serverAttachmentKeys(serverId);
   // The icon and banner ride along on the same list, and for the same reason
   // the attachments do: their only mention anywhere is a column on the row this
@@ -769,10 +785,30 @@ export async function deleteServer(serverId: string): Promise<boolean> {
 
   // channels / members / invites / bans all cascade from servers — and so do
   // the attachment rows, which is why their keys are already in hand.
-  const result = await getPool().query(`DELETE FROM servers WHERE id = $1`, [
-    serverId,
-  ]);
-  const deleted = (result.rowCount ?? 0) > 0;
+  let memberIds: string[] | null = null;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query(
+      `SELECT 1 FROM servers WHERE id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    if ((locked.rowCount ?? 0) > 0) {
+      const members = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM server_members WHERE server_id = $1`,
+        [serverId],
+      );
+      await client.query(`DELETE FROM servers WHERE id = $1`, [serverId]);
+      memberIds = members.rows.map((row) => row.user_id);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  const deleted = memberIds !== null;
 
   if (deleted) {
     // The channels cascaded away, so every one of their cached audiences is
@@ -781,7 +817,7 @@ export async function deleteServer(serverId: string): Promise<boolean> {
     invalidateServerChannelList(serverId);
     deleteObjectsInBackground(keys);
   }
-  return deleted;
+  return memberIds;
 }
 
 export async function renameServer(

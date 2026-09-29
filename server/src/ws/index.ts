@@ -48,6 +48,7 @@ export {
   notifyPermissionsUpdate,
   notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
+  notifyServerRemoved,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
