@@ -2416,6 +2416,7 @@
   "communityHome.compose.needsTitleAndContent": "Un post necesita un título y algo de texto o contenido.",
   "communityHome.compose.videoOverLimit": "Ese video pasa del límite. Súbelo a YouTube y pega el link.",
   "communityHome.compose.fileOverLimit": "Ese archivo pasa de {limit}.",
+  "communityHome.compose.notAnImage": "Ese archivo no es una imagen de verdad. Elige un PNG, JPEG, WebP o GIF.",
   "communityHome.compose.uploadFailed": "No se pudo subir. Intenta de nuevo.",
   "communityHome.compose.badYoutube": "Ese no es un link de video de YouTube, Twitch, TikTok o Instagram.",
   "communityHome.compose.scheduleInPast": "Elige una hora en el futuro.",

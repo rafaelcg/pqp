@@ -1,5 +1,6 @@
 import {
   attachmentFilenameSchema,
+  COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeEmbedUrl,
@@ -9,6 +10,7 @@ import {
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  sniffCommunityHomeImageType,
   tiktokCanonicalUrl,
   tiktokEmbedSrc,
   twitchEmbedSrc,
@@ -81,6 +83,35 @@ export function isHomeVideoFile(file: File): boolean {
 
 export function isHomeImageFile(file: File): boolean {
   return file.type.startsWith("image/");
+}
+
+/**
+ * False when a file the browser calls an image is not one, judged by its first
+ * bytes. The browser types a file from its name, so a text file called `x.png`
+ * says `image/png`; the server checks the stored bytes again on claim, but
+ * catching it here saves the upload and lets the composer say why. Anything
+ * that is not an allowlisted image type passes: other checks own those.
+ */
+export async function isRealHomeImage(file: File): Promise<boolean> {
+  const declared = file.type.trim().toLowerCase();
+  if (!declared.startsWith("image/") || !ALLOWED_CONTENT_TYPES.has(declared)) {
+    return true;
+  }
+  const head = await file.slice(0, COMMUNITY_HOME_IMAGE_SNIFF_BYTES).arrayBuffer();
+  return sniffCommunityHomeImageType(new Uint8Array(head)) === declared;
+}
+
+/**
+ * Hands out one ticket per file pick. A ticket stays current only until the
+ * next pick, so the composer can drop the result of a slow byte check that a
+ * newer pick has already replaced, instead of letting it start an upload.
+ */
+export function createPickSequence(): () => () => boolean {
+  let latest = 0;
+  return () => {
+    const ticket = ++latest;
+    return () => ticket === latest;
+  };
 }
 
 const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
