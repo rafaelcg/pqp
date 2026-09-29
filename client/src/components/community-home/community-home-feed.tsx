@@ -201,14 +201,14 @@ function relativeDayLabel(
 
 // In the app's language, not the browser's, and with the zone named: staff in
 // London and in São Paulo read the same post, so a bare "00:00" is ambiguous.
-function scheduledLabel(iso: string, timezone: string | null, locale: Locale): string {
+export function scheduledLabel(iso: string, timezone: string | null, locale: Locale): string {
   const date = new Date(iso);
   try {
     return new Intl.DateTimeFormat(intlLocale(locale), {
       day: "numeric",
       month: "short",
       year: "numeric",
-      hour: "2-digit",
+      hour: "numeric",
       minute: "2-digit",
       timeZoneName: "short",
       ...(timezone ? { timeZone: timezone } : {}),
@@ -2534,10 +2534,10 @@ export function CommunityHomeFeed({
 
               {canManageServer && scheduled.length > 0 && (
                 <div
-                  className="flex flex-wrap items-center gap-3 rounded-xl border border-ink-4 bg-ink-2 px-4 py-3 text-sm text-paper"
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface-1 px-4 py-3 text-sm text-text"
                   data-home-scheduled-strip
                 >
-                  <CalendarClock className="h-4 w-4 shrink-0 text-signal" aria-hidden />
+                  <CalendarClock className="h-4 w-4 shrink-0 text-accent" aria-hidden />
                   <span className="min-w-0 flex-1">
                     {t("communityHome.scheduledStrip", {
                       count: scheduled.length,
