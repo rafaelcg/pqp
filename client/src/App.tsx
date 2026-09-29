@@ -2132,6 +2132,13 @@ function MainAppContent({
   });
 
   /**
+   * The status hook, through a ref: the socket handler is installed once per
+   * connection and must not be rebuilt each time the account changes it.
+   */
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  /**
    * O recado, the line under the name. A separate hook from `useUserStatus`
    * even though the two controls share a popover, because they share nothing
    * else: the manual status is a preference resolved out of an in-memory
@@ -4241,6 +4248,13 @@ function MainAppContent({
           // whole answer to "B is looking at a channel; what do they see?".
           if (message.type === "friend-activity") {
             friendsRef.current.applyNudge(message.kind);
+            return;
+          }
+
+          // Another tab or device of this account changed its status. Without
+          // this the user panel here read the old choice until a reload.
+          if (message.type === "own-status") {
+            statusRef.current.adoptRemote(message.status);
             return;
           }
 

@@ -75,6 +75,24 @@ export interface AuthenticatedSocket {
 }
 
 const sockets = new Map<WebSocket, AuthenticatedSocket>();
+/**
+ * The same sockets keyed by account, so a frame addressed to one person costs
+ * that person's few sockets rather than a walk of every connection on the
+ * process. Kept in step with `sockets` by the two writers below, and nowhere
+ * else.
+ */
+const socketsByUser = new Map<string, Set<WebSocket>>();
+
+function unindexSocket(socket: WebSocket, userId: string): void {
+  const owned = socketsByUser.get(userId);
+  if (!owned) {
+    return;
+  }
+  owned.delete(socket);
+  if (owned.size === 0) {
+    socketsByUser.delete(userId);
+  }
+}
 
 const NO_CAPS: ReadonlySet<string> = new Set();
 
@@ -83,6 +101,16 @@ export function setAuthenticatedSocket(
   user: DbUser,
   caps: readonly string[] = [],
 ): void {
+  const previous = sockets.get(socket);
+  if (previous && previous.user.id !== user.id) {
+    unindexSocket(socket, previous.user.id);
+  }
+  let owned = socketsByUser.get(user.id);
+  if (!owned) {
+    owned = new Set();
+    socketsByUser.set(user.id, owned);
+  }
+  owned.add(socket);
   sockets.set(socket, {
     socket,
     user,
@@ -106,6 +134,10 @@ export function socketHasCap(socket: WebSocket, cap: string): boolean {
 }
 
 export function deleteAuthenticatedSocket(socket: WebSocket): void {
+  const entry = sockets.get(socket);
+  if (entry) {
+    unindexSocket(socket, entry.user.id);
+  }
   sockets.delete(socket);
 }
 
@@ -118,12 +150,7 @@ export function deleteAuthenticatedSocket(socket: WebSocket): void {
  * the socket that just closed is already out of the map.
  */
 export function userHasAuthenticatedSocket(userId: string): boolean {
-  for (const entry of sockets.values()) {
-    if (entry.user.id === userId) {
-      return true;
-    }
-  }
-  return false;
+  return socketsByUser.has(userId);
 }
 
 /**
@@ -152,5 +179,26 @@ export function forEachAuthenticatedSocket(
 ): void {
   for (const entry of sockets.values()) {
     callback(entry.socket, entry.user, entry.caps);
+  }
+}
+
+/**
+ * Every authenticated socket this process holds for one account, and only
+ * those. Cost is that account's socket count, not the process's.
+ */
+export function forEachSocketOfUser(
+  userId: string,
+  callback: (socket: WebSocket, caps: ReadonlySet<string>) => void,
+): void {
+  const owned = socketsByUser.get(userId);
+  if (!owned) {
+    return;
+  }
+  // A copy: a callback that closes a socket must not mutate what is walked.
+  for (const socket of [...owned]) {
+    const entry = sockets.get(socket);
+    if (entry) {
+      callback(socket, entry.caps);
+    }
   }
 }
