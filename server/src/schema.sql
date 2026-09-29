@@ -3877,6 +3877,11 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+-- Bumped by every write of community_home_enabled, in the same UPDATE, so the
+-- row lock orders it: the member's open app keeps the value with the highest
+-- version and a late or duplicated community-home-update frame cannot undo a
+-- newer flip. Same idea as permissions_version.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_version INTEGER NOT NULL DEFAULT 0;
 
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and

@@ -8,7 +8,13 @@
  * than inside a component: it is the part worth pinning with tests.
  */
 
-import type { Channel, DmSummary, PublicUser, UnreadCounts } from "@pqp/shared";
+import {
+  buildMessagePreview,
+  type Channel,
+  type DmSummary,
+  type PublicUser,
+  type UnreadCounts,
+} from "@pqp/shared";
 import { translateMessage } from "@/lib/i18n";
 
 /** Past this the names stop identifying the room and start being a wall. */
@@ -140,6 +146,72 @@ export function touchConversation(
     lastMessageAt: at,
     ...(lastMessage !== undefined ? { lastMessage } : {}),
   });
+}
+
+/** The fields of a broadcast message the list row is built from. */
+export interface ConversationMessage {
+  channelId: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  attachments: readonly { contentType: string }[];
+}
+
+/**
+ * A full message as the list row's `lastMessage`, redacted by the same shared
+ * function the server's list and `channel-activity` frame use, so the row
+ * reads the same live as it does after a reload.
+ */
+export function previewFromMessage(
+  message: ConversationMessage,
+): NonNullable<DmSummary["lastMessage"]> {
+  return {
+    authorId: message.authorId,
+    authorName: message.authorName,
+    ...buildMessagePreview({
+      body: message.body,
+      hasAttachments: message.attachments.length > 0,
+      isGifAttachment: message.attachments[0]?.contentType === "image/gif",
+    }),
+  };
+}
+
+/**
+ * Bring a conversation's row up to a message the reader received in full.
+ *
+ * `channel-activity` is what moves a row for a message somebody else sent in a
+ * conversation the reader is not looking at. The server sends it to nobody
+ * else: not to the author, and not to a reader who has the conversation open,
+ * because both get the `message-broadcast` instead. Without this, those two
+ * rows kept the previous preview and time until the list was fetched again.
+ *
+ * `previewsOn` mirrors the list's own gate: with previews off the server sends
+ * no `lastMessage`, so the row only moves and its line is left alone. A
+ * message older than the row's newest one changes nothing, so a late frame
+ * cannot put an earlier preview back.
+ */
+export function applyConversationMessage(
+  list: readonly DmSummary[],
+  message: ConversationMessage,
+  options: { previewsOn: boolean },
+): DmSummary[] {
+  const current = list.find(
+    (conversation) => conversation.channelId === message.channelId,
+  );
+  if (
+    !current ||
+    (current.lastMessageAt !== null &&
+      Date.parse(current.lastMessageAt) > Date.parse(message.createdAt))
+  ) {
+    return list as DmSummary[];
+  }
+  return touchConversation(
+    list,
+    message.channelId,
+    message.createdAt,
+    options.previewsOn ? previewFromMessage(message) : undefined,
+  );
 }
 
 /**

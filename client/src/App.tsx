@@ -115,6 +115,7 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { createHistoryLoadTracker } from "@/lib/history-load-tracker";
 import {
   uniformJitterMs,
   bootstrapJitterMs,
@@ -306,6 +307,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -417,7 +419,9 @@ import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import { translateMessage, useTranslation } from "@/lib/i18n";
+import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
 import {
+  applyConversationMessage,
   conversationChannel,
   conversationSubtitle,
   conversationTitle,
@@ -452,6 +456,8 @@ import {
   onSettingsRequest,
 } from "@/lib/settings-request";
 import {
+  applyCommunityHomeRead,
+  applyCommunityHomeSwitch,
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
@@ -459,6 +465,7 @@ import {
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
   markCommunityHomeRowSeen,
+  mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
@@ -479,6 +486,7 @@ import {
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
+  getNotificationState,
   notifyChannelActivity,
   rememberActivityChannel,
   rememberServers,
@@ -1914,9 +1922,19 @@ function MainAppContent({
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  /** The channel whose history request last failed; see `historyFailed`. */
+  const [historyFailedChannelId, setHistoryFailedChannelId] = useState<
+    string | null
+  >(null);
+  /** Orders overlapping history requests; see `createHistoryLoadTracker`. */
+  const [historyLoads] = useState(createHistoryLoadTracker);
+  const clearHistoryFailed = useCallback((channelId: string) => {
+    setHistoryFailedChannelId((failed) =>
+      failed === channelId ? null : failed,
+    );
+  }, []);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
-  const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
   const [mentionableRoles, setMentionableRoles] = useState<
     Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
@@ -1965,7 +1983,7 @@ function MainAppContent({
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
-   * as `mentionMembers`, so no surface pays a second request for it.
+   * as `serverMembers`, so no surface pays a second request for it.
    */
   const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
     () => new Map(),
@@ -2162,6 +2180,13 @@ function MainAppContent({
   });
 
   /**
+   * The status hook, through a ref: the socket handler is installed once per
+   * connection and must not be rebuilt each time the account changes it.
+   */
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  /**
    * O recado, the line under the name. A separate hook from `useUserStatus`
    * even though the two controls share a popover, because they share nothing
    * else: the manual status is a preference resolved out of an in-memory
@@ -2190,6 +2215,9 @@ function MainAppContent({
    */
   const conversationsRef = useRef<DmSummary[]>(conversations);
   conversationsRef.current = conversations;
+  /** Same reason: the handler files a message into its conversation's row. */
+  const blockedUsersRef = useRef<BlockedUser[]>(blockedUsers);
+  blockedUsersRef.current = blockedUsers;
   /**
    * The friends store, through a ref, for the same reason every other live
    * value the socket handler touches goes through one: the handler is installed
@@ -2205,6 +2233,52 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
+
+  /**
+   * Servers whose Baú switch may have moved while this app was not listening:
+   * every server after a reconnect, and one whose re-read failed. Frames sent
+   * while the socket was down are gone, so the switch is re-read from the
+   * server the next time that server is opened (the selected one right after
+   * the reconnect). One request per server per reconnect at most, never a
+   * refetch of the whole server list.
+   */
+  const communityHomeUnverifiedRef = useRef(new Set<string>());
+  /** The newest re-read issued per server; an older answer that lands last is dropped. */
+  const communityHomeReadSeqRef = useRef(new Map<string, number>());
+  const reconcileCommunityHomeSwitch = useCallback(
+    (serverId: string) => {
+      communityHomeUnverifiedRef.current.delete(serverId);
+      if (!communityHomeOn()) {
+        return;
+      }
+      const seqs = communityHomeReadSeqRef.current;
+      const seq = (seqs.get(serverId) ?? 0) + 1;
+      seqs.set(serverId, seq);
+      const issuedAtVersion =
+        serversRef.current.find((row) => row.id === serverId)
+          ?.communityHomeVersion ?? 0;
+      fetchServerCommunityHomeConfig(serverId).then(
+        (config) => {
+          if (seqs.get(serverId) !== seq) {
+            return;
+          }
+          setServers((rows) =>
+            applyCommunityHomeRead(rows, serverId, config, issuedAtVersion),
+          );
+        },
+        () => {
+          if (seqs.get(serverId) === seq) {
+            communityHomeUnverifiedRef.current.add(serverId);
+          }
+        },
+      );
+    },
+    [communityHomeOn],
+  );
+  const reconcileCommunityHomeSwitchRef = useRef(reconcileCommunityHomeSwitch);
+  reconcileCommunityHomeSwitchRef.current = reconcileCommunityHomeSwitch;
 
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
@@ -2978,21 +3052,18 @@ function MainAppContent({
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
     if (conversationParticipants) {
-      setMentionMembers([...conversationParticipants]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     if (!selectedServerId) {
-      setMentionMembers([]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     setServerMembers([]);
-    setMentionMembers([]);
     let cancelled = false;
     void Promise.all([
       fetchMembers(selectedServerId),
@@ -3000,7 +3071,6 @@ function MainAppContent({
     ])
       .then(([{ members }, { roles }]) => {
         if (!cancelled) {
-          setMentionMembers(members);
           setServerMembers(members);
           setServerRoles(roles);
           setMemberRoles(
@@ -3033,9 +3103,15 @@ function MainAppContent({
     applyRosterPayload,
   );
 
-  const mentionCandidates = useMemo(() => {
+  /**
+   * Read straight off the live roster rather than a copy of the first fetch.
+   * A copy is what the member panel outgrew: somebody who joined after the page
+   * loaded showed up there within seconds and could still not be completed
+   * after `@` until a reload.
+   */
+  const mentionCandidates = useMemo((): MentionCandidate[] => {
     if (conversationParticipants) {
-      return mentionMembers;
+      return conversationParticipants;
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
@@ -3070,7 +3146,7 @@ function MainAppContent({
       }
     }
     return [
-      ...mentionMembers.map((member) => ({
+      ...serverMembers.map((member) => ({
         ...member,
         mentionKind: "member" as const,
       })),
@@ -3078,7 +3154,7 @@ function MainAppContent({
     ];
   }, [
     conversationParticipants,
-    mentionMembers,
+    serverMembers,
     mentionableRoles,
     perms,
     t,
@@ -3351,6 +3427,7 @@ function MainAppContent({
       closeThreadPanelRef.current();
       setUnreadSince(null);
       setEditMessageId(null);
+      setHistoryFailedChannelId(null);
 
       // Community Home is a client-only surface, not a channel the API knows.
       if (isCommunityHomeChannelId(channelId)) {
@@ -3361,6 +3438,7 @@ function MainAppContent({
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
+      const load = historyLoads.begin();
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
@@ -3374,6 +3452,10 @@ function MainAppContent({
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
+        load.succeeded();
+        // An older request can land after a newer one failed: what it loaded
+        // is on screen, so the error no longer applies.
+        clearHistoryFailed(channelId);
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
@@ -3386,18 +3468,64 @@ function MainAppContent({
             : null,
         );
         refresh();
-      } catch (error) {
-        setAppError(
-          error instanceof Error ? error.message : "Failed to load messages",
-        );
+      } catch {
+        // Not the app banner: the raw server string ("database_unavailable")
+        // is not copy, and the list below would still say the channel is
+        // empty. The list shows the failure in place, with a retry.
+        if (
+          selectedChannelIdRef.current === channelId &&
+          load.failureStands()
+        ) {
+          setHistoryFailedChannelId(channelId);
+        }
       } finally {
         if (selectedChannelIdRef.current === channelId) {
           setMessagesLoading(false);
         }
       }
     },
-    [chat, clearUnread, liveReadAck, refresh],
+    [chat, clearHistoryFailed, clearUnread, historyLoads, liveReadAck, refresh],
   );
+
+  /**
+   * Fetch the open channel's newest page again after a failed load.
+   *
+   * History only, not `openChannel`: that would also close the thread panel,
+   * drop the reply target and re-mark the channel read, none of which failed.
+   */
+  const retryChannelHistory = useCallback(async () => {
+    const channelId = selectedChannelIdRef.current;
+    if (!channelId) {
+      return;
+    }
+    setHistoryFailedChannelId(null);
+    setMessagesLoading(true);
+    const load = historyLoads.begin();
+    try {
+      const page = await fetchMessages(channelId);
+      if (selectedChannelIdRef.current !== channelId) {
+        return;
+      }
+      load.succeeded();
+      clearHistoryFailed(channelId);
+      chat.setMessages(page.messages, page.hasMore);
+      refresh();
+    } catch {
+      if (
+        selectedChannelIdRef.current === channelId &&
+        load.failureStands()
+      ) {
+        setHistoryFailedChannelId(channelId);
+      }
+    } finally {
+      if (selectedChannelIdRef.current === channelId) {
+        setMessagesLoading(false);
+      }
+    }
+  }, [chat, clearHistoryFailed, historyLoads, refresh]);
+  const handleRetryHistory = useCallback(() => {
+    void retryChannelHistory();
+  }, [retryChannelHistory]);
 
   // ---------------------------------------------------------------- threads
   //
@@ -3847,6 +3975,11 @@ function MainAppContent({
       }
     >();
 
+    // The reconnect re-read of the Baú switch (onReady below). One slot: a
+    // second reconnect replaces the pending re-read instead of stacking one.
+    let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
+      null;
+
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
       if (!state) {
@@ -3918,7 +4051,12 @@ function MainAppContent({
       void fetchMessages(channelId)
         .then((page) => {
           if (selectedChannelIdRef.current === channelId) {
+            // Counted, so an open or retry that fails after this landed
+            // cannot put the error back over the page it loaded.
+            historyLoads.loaded();
             chat.setMessages(page.messages, page.hasMore);
+            // A reconnect is also how a failed first load heals itself.
+            clearHistoryFailed(channelId);
             refresh();
           }
         })
@@ -4281,6 +4419,26 @@ function MainAppContent({
             ) {
               liveReadAck.note(message.message.channelId);
             }
+            // A message this account sent, or one in the conversation it has
+            // open, arrives here in full and never as `channel-activity`, so
+            // the row is moved from the broadcast itself. The list leaves out
+            // what a blocked author said; so does this.
+            if (
+              message.type === "message-broadcast" &&
+              conversationsRef.current.some(
+                (one) => one.channelId === message.message.channelId,
+              ) &&
+              !blockedUsersRef.current.some(
+                (blocked) => blocked.id === message.message.authorId,
+              )
+            ) {
+              const broadcast = message.message;
+              setConversations((prev) =>
+                applyConversationMessage(prev, broadcast, {
+                  previewsOn: getNotificationState().previewInApp,
+                }),
+              );
+            }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
             // keeps only its own channel's, so one frame can never render in
@@ -4296,6 +4454,13 @@ function MainAppContent({
           // whole answer to "B is looking at a channel; what do they see?".
           if (message.type === "friend-activity") {
             friendsRef.current.applyNudge(message.kind);
+            return;
+          }
+
+          // Another tab or device of this account changed its status. Without
+          // this the user panel here read the old choice until a reload.
+          if (message.type === "own-status") {
+            statusRef.current.adoptRemote(message.status);
             return;
           }
 
@@ -4334,7 +4499,6 @@ function MainAppContent({
                 }
                 if (membersRes) {
                   setServerMembers(membersRes.members);
-                  setMentionMembers(membersRes.members);
                   setMemberRoles(
                     new Map(
                       membersRes.members.map((member) => [member.id, member.role]),
@@ -4361,7 +4525,27 @@ function MainAppContent({
           // delete. Likes and new comments do not fan out. The frame carries
           // only the serverId, so the client refetches; a member sitting in
           // DMs or another server is not "in" this one and is left alone.
+          //
+          // When the owner flips the server's Baú switch the frame also
+          // carries the new value and its version. It is written onto that
+          // server wherever the member is looking, so the row, the landing
+          // and the feed agree with the owner without a reload. Only a higher
+          // version than the row holds is applied, so a late or duplicated
+          // frame cannot undo a newer flip.
           if (message.type === "community-home-update") {
+            const { enabled, version } = message;
+            if (typeof enabled === "boolean" && typeof version === "number") {
+              setServers((rows) =>
+                applyCommunityHomeSwitch(rows, message.serverId, {
+                  enabled,
+                  version,
+                }),
+              );
+            } else if (typeof enabled === "boolean") {
+              // A flip from an API instance without versions (mid rolling
+              // deploy): its order is unknown, so ask for the persisted value.
+              reconcileCommunityHomeSwitchRef.current(message.serverId);
+            }
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
@@ -4519,28 +4703,23 @@ function MainAppContent({
           // A moderator acted on THIS client's voice session. Handled here,
           // not in the voice controller: what follows is app behaviour
           // (leave, or rejoin somewhere else), and the frame carries the
-          // whole sentence to show. Guarded to the room we are actually in —
+          // whole English sentence, kept as the fallback. Guarded to the room we are actually in —
           // a stale or forged frame about some other channel does nothing.
           if (message.type === "voice-moderation") {
             const current = voice.getState();
             if (current.voiceChannelId !== message.voiceChannelId) {
               return;
             }
-            // The mute notices are the one case with local copy: the frame's
-            // sentence is English, and this is a state the person will sit
-            // in for a while, so it is worth saying in their language. The
-            // other actions keep the server's sentence verbatim (the
-            // sanction-notice principle: it already carries the whole story).
+            // The notice is written here in the person's language; the
+            // frame's English `message` is only the fallback.
             setAppError(
-              message.action === "muted"
-                ? translateMessage("voice.serverMuted.self")
-                : message.action === "unmuted"
-                  ? translateMessage("voice.serverMuted.cleared")
-                  : message.reason === "idle"
-                    ? translateMessage("voice.idle.disconnected", {
-                        count: message.aloneMinutes ?? 10,
-                      })
-                    : message.message,
+              voiceModerationNotice(
+                message,
+                channelsRef.current.find(
+                  (one) => one.id === message.movedToChannelId,
+                )?.name,
+                translateMessage,
+              ),
             );
             if (message.action === "disconnected") {
               setIdleWarning(null);
@@ -4668,6 +4847,29 @@ function MainAppContent({
           if (selectedServerIdRef.current) {
             void reloadServerThreadsRef.current(selectedServerIdRef.current);
           }
+          // A Baú switch flipped while the socket was down never arrives as
+          // a frame. Every server is re-read when next opened; the one on
+          // screen now, after the same jitter as the message refetch.
+          for (const row of serversRef.current) {
+            communityHomeUnverifiedRef.current.add(row.id);
+          }
+          const reconnectServerId = selectedServerIdRef.current;
+          if (communityHomeReconnectTimer !== null) {
+            clearTimeout(communityHomeReconnectTimer);
+            communityHomeReconnectTimer = null;
+          }
+          if (reconnectServerId) {
+            communityHomeReconnectTimer = setTimeout(() => {
+              communityHomeReconnectTimer = null;
+              if (
+                !cancelled &&
+                selectedServerIdRef.current === reconnectServerId &&
+                communityHomeUnverifiedRef.current.has(reconnectServerId)
+              ) {
+                reconcileCommunityHomeSwitchRef.current(reconnectServerId);
+              }
+            }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
+          }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -4742,6 +4944,9 @@ function MainAppContent({
         if (state.timer !== null) {
           clearTimeout(state.timer);
         }
+      }
+      if (communityHomeReconnectTimer !== null) {
+        clearTimeout(communityHomeReconnectTimer);
       }
       voice.leave();
       transport.disconnect();
@@ -5050,6 +5255,9 @@ function MainAppContent({
       liveParties?: readonly WatchParty[],
     ) => {
       setChannelsLoading(true);
+      if (communityHomeUnverifiedRef.current.has(serverId)) {
+        reconcileCommunityHomeSwitchRef.current(serverId);
+      }
       try {
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
@@ -5088,6 +5296,12 @@ function MainAppContent({
     [communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
+  /**
+   * A refusal from the API is thrown back to the dialog, which shows it under
+   * the field and stays open. The page banner would sit behind the modal
+   * overlay, where nobody reads it. Only what fails after the dialog closed
+   * still goes to the banner.
+   */
   async function handleChannelPromptConfirm(
     name: string,
     isPrivate?: boolean,
@@ -5097,55 +5311,55 @@ function MainAppContent({
       return;
     }
 
-    try {
-      if (channelPrompt.mode === "create") {
-        if (!selectedServerId || !channelPrompt.type) {
-          setAppError("Select a server before creating a channel");
+    if (channelPrompt.mode === "create") {
+      if (!selectedServerId || !channelPrompt.type) {
+        throw new Error("Select a server before creating a channel");
+      }
+      const { channel } = await createChannel(
+        selectedServerId,
+        name,
+        channelPrompt.type,
+        isPrivate ?? channelPrompt.isPrivate ?? false,
+        topic || undefined,
+      );
+      const next = [...channels, channel].sort(
+        (a, b) => a.position - b.position,
+      );
+      setChannels(next);
+      setAppError(null);
+      setChannelPrompt(null);
+      // A category is a grouping header, not a place to be — selecting it
+      // would try to open a message pane for something that can never have
+      // one.
+      if (channel.type !== "category") {
+        try {
+          await selectChannel(channel.id);
+        } catch (error) {
+          setAppError(
+            error instanceof Error ? error.message : "Channel action failed",
+          );
           return;
         }
-        const { channel } = await createChannel(
-          selectedServerId,
-          name,
-          channelPrompt.type,
-          isPrivate ?? channelPrompt.isPrivate ?? false,
-          topic || undefined,
-        );
-        const next = [...channels, channel].sort(
-          (a, b) => a.position - b.position,
-        );
-        setChannels(next);
-        setAppError(null);
-        setChannelPrompt(null);
-        // A category is a grouping header, not a place to be — selecting it
-        // would try to open a message pane for something that can never have
-        // one.
-        if (channel.type !== "category") {
-          await selectChannel(channel.id);
-          if (channel.isPrivate) {
-            setChannelSettings({
-              channelId: channel.id,
-              section: "permissions",
-              forceAdvanced: false,
-            });
-          }
+        if (channel.isPrivate) {
+          setChannelSettings({
+            channelId: channel.id,
+            section: "permissions",
+            forceAdvanced: false,
+          });
         }
-        return;
       }
+      return;
+    }
 
-      if (channelPrompt.channel) {
-        const { channel } = await updateChannel(channelPrompt.channel.id, {
-          name,
-        });
-        setChannels((prev) =>
-          prev.map((c) => (c.id === channel.id ? channel : c)),
-        );
-        setChannelPrompt(null);
-        setAppError(null);
-      }
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Channel action failed",
+    if (channelPrompt.channel) {
+      const { channel } = await updateChannel(channelPrompt.channel.id, {
+        name,
+      });
+      setChannels((prev) =>
+        prev.map((c) => (c.id === channel.id ? channel : c)),
       );
+      setChannelPrompt(null);
+      setAppError(null);
     }
   }
 
@@ -9390,6 +9604,8 @@ function MainAppContent({
         variant={isWatchPartySplit ? "stream" : "default"}
         streamBadges={isWatchPartySplit ? streamBadges : null}
         isLoading={messagesLoading}
+        historyFailed={historyFailedChannelId === selectedChannel.id}
+        onRetryHistory={handleRetryHistory}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
         isLoadingOlder={chat.isLoadingOlder()}
@@ -10214,12 +10430,7 @@ function MainAppContent({
               setServers((prev) =>
                 prev.map((current) =>
                   current.id === server.id
-                    ? {
-                        ...current,
-                        ...server,
-                        role: current.role,
-                        showOnProfile: current.showOnProfile,
-                      }
+                    ? mergeServerUpdate(current, server)
                     : current,
                 ),
               );
@@ -10451,14 +10662,10 @@ function MainAppContent({
           setServers((prev) =>
             prev.map((current) =>
               current.id === server.id
-                ? {
-                    ...current,
-                    ...server,
-                    // Settings writes update the server row, not this viewer's
-                    // membership row. Keep its role and profile opt-out.
-                    role: current.role,
-                    showOnProfile: current.showOnProfile,
-                  }
+                ? // Settings writes update the server row, not this viewer's
+                  // membership row. Keep its role and profile opt-out, and
+                  // the newer copy of the Baú switch.
+                  mergeServerUpdate(current, server)
                 : current,
             ),
           );

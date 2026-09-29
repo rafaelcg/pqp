@@ -75,10 +75,12 @@ import {
   communityHomeEmbedMedia,
   communityHomeEmbedUrl,
   composeSubmitEmbedUrl,
+  createPickSequence,
   formatHomeBytes,
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
   isPostLockedForViewer,
+  isRealHomeImage,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
   parseCommunityHomeEmbed,
@@ -703,6 +705,9 @@ export function PostCard({
   const interactive = mode === "feed" && post.status === "published";
   const showLockPlate = locked && post.hasMedia;
   const showMedia = !locked && post.media;
+  // A file post opens with a one-line row, not a picture: the menu sits in
+  // that row beside the download link instead of floating over it.
+  const fileRow = Boolean(showMedia && post.media?.kind === "file");
   const posterUrl =
     post.posterUrl ??
     (post.media?.kind === "youtube"
@@ -760,14 +765,21 @@ export function PostCard({
       data-home-post-locked={locked ? "1" : "0"}
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
-      {showMedia && post.media ? <UnlockedMedia media={post.media} flush /> : null}
+      {showMedia && post.media ? (
+        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+      ) : null}
       {showStaffMenu && (
-        <div className="absolute right-3 top-3 z-10">
+        <div
+          className={cn(
+            "absolute z-10",
+            fileRow ? "right-2 top-1" : "right-3 top-3",
+          )}
+        >
           <button
             type="button"
             className={cn(
               "inline-flex h-8 w-8 items-center justify-center rounded-md",
-              showLockPlate || showMedia
+              showLockPlate || (showMedia && !fileRow)
                 ? "bg-ink/65 text-paper hover:bg-ink/85"
                 : "text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
@@ -895,7 +907,7 @@ export function PostCard({
 
       <div className={cn("p-5", showStaffMenu && "pr-12")}>
         {post.title && (
-          <h2 className="font-display text-2xl font-bold leading-snug tracking-tight text-text">
+          <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
             {post.title}
           </h2>
         )}
@@ -941,7 +953,7 @@ export function PostCard({
         {locked ? (
           <>
             {summary && summary !== post.title?.trim() && (
-              <p className="mt-3 text-sm leading-relaxed text-text">
+              <p className="mt-3 break-words text-sm leading-relaxed text-text">
                 {summary}
               </p>
             )}
@@ -1174,6 +1186,7 @@ function ComposeCard({
   const [busy, setBusy] = useState<ComposeAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadAbort = useRef<AbortController | null>(null);
+  const nextPick = useMemo(createPickSequence, []);
   const timezone = useMemo(browserTimezone, []);
 
   const hasMedia =
@@ -1195,6 +1208,10 @@ function ComposeCard({
     if (!file) {
       return;
     }
+    // The byte check below is async: a newer pick may land while it runs, and
+    // only the newest pick may go on to abort the current upload and start its
+    // own.
+    const isCurrentPick = nextPick();
     setError(null);
     if (file.size > COMMUNITY_HOME_MAX_BYTES) {
       setError(
@@ -1206,6 +1223,24 @@ function ComposeCard({
       );
       return;
     }
+    let realImage: boolean;
+    try {
+      realImage = await isRealHomeImage(file);
+    } catch {
+      // The browser could not read the file (moved, deleted, permission gone),
+      // so the upload could not have read it either.
+      if (isCurrentPick()) {
+        setError(t("communityHome.compose.uploadFailed"));
+      }
+      return;
+    }
+    if (!isCurrentPick()) {
+      return;
+    }
+    if (!realImage) {
+      setError(t("communityHome.compose.notAnImage"));
+      return;
+    }
     uploadAbort.current?.abort();
     const controller = new AbortController();
     uploadAbort.current = controller;
@@ -1215,6 +1250,9 @@ function ComposeCard({
         signal: controller.signal,
         onProgress: (fraction) => setUploading(fraction),
       });
+      if (controller.signal.aborted) {
+        return;
+      }
       const previewUrl =
         uploaded.kind === "file" ? null : URL.createObjectURL(file);
       setState((prev) => ({
@@ -1229,8 +1267,12 @@ function ComposeCard({
         setError(errorMessage(error, t("communityHome.compose.uploadFailed")));
       }
     } finally {
-      setUploading(null);
-      uploadAbort.current = null;
+      // A superseded upload must not clear the progress and the abort handle
+      // of the upload that replaced it.
+      if (uploadAbort.current === controller) {
+        setUploading(null);
+        uploadAbort.current = null;
+      }
     }
   }
 

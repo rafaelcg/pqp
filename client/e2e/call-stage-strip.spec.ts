@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { ensureServer, leaveVoiceIfConnected, openApp } from "./fixtures";
+import {
+  ensureServer,
+  leaveVoiceIfConnected,
+  openApp,
+  unreachableStageControls,
+} from "./fixtures";
 
 /**
  * The stage strip in a room too big to draw one face per person.
@@ -346,6 +351,17 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
     await page.getByRole("button", { name: "Show participants" }).click();
     await expect(strip(page)).toHaveAttribute("data-open", "true");
+
+    // On a phone the control pill folds onto a second line, and the strip is
+    // stacked above the bar: its reserve has to grow with the pill, or the
+    // strip sits on the top line, which is where mute and raise hand are.
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(strip(page)).toBeVisible();
+      await expect
+        .poll(() => unreachableStageControls(page), { timeout: 5_000 })
+        .toEqual([]);
+    }
   } finally {
     for (const socket of sockets) {
       socket.close();

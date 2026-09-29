@@ -87,6 +87,33 @@ export const setIdleMessageSchema = z.object({
 
 export type SetIdleMessage = z.infer<typeof setIdleMessageSchema>;
 
+/**
+ * "Your own status is now this", sent to the account's OWN sockets and nobody
+ * else's.
+ *
+ * The status registry is a pull surface for everyone else (see
+ * `server/src/ws/status.ts`), which is why no frame announces a change to other
+ * people. But a person's other tabs and devices are not a member list: each of
+ * them shows the account's own status in the user panel, read once from
+ * `/api/me` at bootstrap, and nothing told them it had changed. Picking "away"
+ * in one tab left every other tab reading "online" until a reload, with the
+ * picker in that tab still offering to "change" to the value it was really on.
+ *
+ * Addressed to one account, so it never carries `invisible` anywhere it could
+ * be read by a third party. It carries the raw choice rather than nudging a
+ * refetch because the recipient is entitled to it by construction and a
+ * refetch would be a round trip per tab for one enum value.
+ *
+ * Absent from `CHAT_SERVER_MESSAGE_TYPES` on the same grounds as
+ * `friend-activity`: the channel relay must never see it.
+ */
+export const ownStatusSchema = z.object({
+  type: z.literal("own-status"),
+  status: manualStatusSchema,
+});
+
+export type OwnStatus = z.infer<typeof ownStatusSchema>;
+
 // ------------------------------------------------------ the custom status
 
 /**

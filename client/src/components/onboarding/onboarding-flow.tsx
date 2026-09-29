@@ -15,7 +15,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { Invite, User } from "@pqp/shared";
+import { DISPLAY_NAME_MAX_LENGTH, type Invite, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -589,7 +589,7 @@ function useYouStep({
             ref={nameRef}
             value={displayName}
             disabled={saving}
-            maxLength={32}
+            maxLength={DISPLAY_NAME_MAX_LENGTH}
             autoComplete="nickname"
             placeholder={t("onboarding.you.namePlaceholder")}
             onChange={(event) => {

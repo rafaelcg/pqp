@@ -150,6 +150,36 @@ test("menu hangs off the click on a narrow viewport", async ({ page }) => {
   expectInsideWindow(menuBox, page.viewportSize()!);
 });
 
+test("menu and its reaction strip stay on screen when the click is mid-window on a phone", async ({
+  page,
+}) => {
+  // A phone is narrower than twice the menu, so a click near the middle has no
+  // room on either side. Radix used to keep the right side and let it hang past
+  // the edge, cutting off the last emoji and the `+`.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openApp(page);
+  const row = await fillChannel(page, `mid-${Date.now()}`);
+  const rowBox = (await row.boundingBox())!;
+  const viewport = page.viewportSize()!;
+
+  for (const x of [150, 252]) {
+    const menu = await openMenuAt(page, x, rowBox.y + rowBox.height / 2);
+    await expect
+      .poll(async () => {
+        const box = (await menu.boundingBox())!;
+        return box.x >= 0 && box.x + box.width <= viewport.width;
+      })
+      .toBeTruthy();
+    expectInsideWindow((await menu.boundingBox())!, viewport);
+    expectInsideWindow(
+      (await menu.locator("[data-quick-reaction-more]").boundingBox())!,
+      viewport,
+    );
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+  }
+});
+
 test("menu stays inside a window too short to hold it either way", async ({
   page,
 }) => {

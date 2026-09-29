@@ -1,5 +1,6 @@
 import {
   DM_MAX_RECIPIENTS,
+  buildMessagePreview,
   type ConversationKind,
   type DmPrivacy,
   type DmSummary,
@@ -7,7 +8,6 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { noBlockBetweenSql, notBlockedSql } from "./blocks.js";
-import { buildMessagePreview } from "./dm-preview.js";
 import { areFriendsSql } from "./friends.js";
 import { getPreferences } from "./preferences.js";
 import { invalidateChannelAccessForChannel, toPublicUserSummary } from "./users.js";

@@ -12,6 +12,7 @@ export * from "./connections.js";
 export * from "./depoimentos.js";
 export * from "./discord-import.js";
 export * from "./dm.js";
+export * from "./dm-preview.js";
 export * from "./embeds.js";
 export * from "./call-rating.js";
 export * from "./chance.js";

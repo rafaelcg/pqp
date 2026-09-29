@@ -2,11 +2,17 @@
  * Turning a stored message into the 140-char preview line a conversation's
  * list row and arrival toast are allowed to carry.
  *
- * ONE FUNCTION, TWO CALLERS. `dms.ts`'s `listConversations` (the DM list's
+ * ONE FUNCTION, THREE CALLERS. `dms.ts`'s `listConversations` (the DM list's
  * `lastMessage`) and `ws/chat.ts`'s `notifyChannelActivity` (the
  * `channel-activity` frame behind the arrival toast) both redact through
  * here, so "what counts as an attachment-only message" and "how markdown is
  * stripped" cannot drift between the two surfaces that show the same fact.
+ *
+ * The third is the client's `previewFromMessage`: a message that reaches the
+ * reader as a full `message-broadcast` (their own send, or one in the
+ * conversation they have open) gets no `channel-activity` frame, so the list
+ * row redacts it locally. That is why this lives in shared rather than on the
+ * server: a row updated live has to read exactly like the row after a reload.
  *
  * Mentions need no resolution here: `docs/plans/DM_NOTIFICATIONS_POLISH.md`
  * assumed the Discord `<@id>` shape, but this codebase stores a mention as the
