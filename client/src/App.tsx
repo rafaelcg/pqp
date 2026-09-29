@@ -530,6 +530,7 @@ import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
+import { preloadHlsEngine, setPartyFastStart } from "@/lib/party-fast-start";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -2430,6 +2431,23 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  // `party_fast_start` (runtime flag, per server): the selected server's
+  // answer is what the watch player reads, and the player chunk is fetched
+  // as soon as it is on, not when the first playlist URL arrives.
+  const partyFastStartOn = liveHlsConfig?.fastStart === true;
+  useEffect(() => {
+    setPartyFastStart(partyFastStartOn);
+    if (!partyFastStartOn) {
+      return;
+    }
+    const idle = window.requestIdleCallback;
+    if (typeof idle === "function") {
+      const handle = idle(() => preloadHlsEngine(), { timeout: 1_500 });
+      return () => window.cancelIdleCallback?.(handle);
+    }
+    const timer = window.setTimeout(preloadHlsEngine, 300);
+    return () => window.clearTimeout(timer);
+  }, [partyFastStartOn]);
   /**
    * Asked ONLY where the server has already said no. A server whose config
    * answered `enabled: true` (it runs watch parties) or has not answered yet

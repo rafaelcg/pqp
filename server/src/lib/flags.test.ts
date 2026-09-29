@@ -64,6 +64,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   read_cache: offWords,
   community_home: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
+  party_fast_start: (raw) => raw === "true",
 };
 
 const SAMPLES = [

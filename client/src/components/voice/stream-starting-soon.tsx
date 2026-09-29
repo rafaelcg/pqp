@@ -1,4 +1,11 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { browserConnection } from "@/lib/hls-slow-start";
+import {
+  BUBBLES_FILM_DEFER_MS,
+  bubblesFilmAllowed,
+  partyFastStartActive,
+  startingSoonLineKeys,
+} from "@/lib/party-fast-start";
 import {
   STARTING_SOON_CROSSFADE_MS,
   STARTING_SOON_LINE_KEYS,
@@ -47,11 +54,27 @@ export function StreamStartingSoon({
 }) {
   const { t } = useTranslation();
   const reducedMotion = usePrefersReducedMotion();
-  const activeIndex = useRotatingLineIndex(STARTING_SOON_LINE_KEYS.length);
+  // `party_fast_start`: the 1.1 MB film competes with the stream's init and
+  // first segment for the same link, so it stays a 36 KB poster for the first
+  // seconds (and for good on a link the browser calls slow). Read once per
+  // mount: the flag is server config and does not flip mid-wait.
+  const [fastStart] = useState(partyFastStartActive);
+  const [filmDue, setFilmDue] = useState(!fastStart);
+  useEffect(() => {
+    if (filmDue) {
+      return;
+    }
+    const timer = window.setTimeout(() => setFilmDue(true), BUBBLES_FILM_DEFER_MS);
+    return () => window.clearTimeout(timer);
+  }, [filmDue]);
+  const showFilm =
+    !reducedMotion && filmDue && (!fastStart || bubblesFilmAllowed(browserConnection()));
+  const lineKeys = startingSoonLineKeys(STARTING_SOON_LINE_KEYS, fastStart);
+  const activeIndex = useRotatingLineIndex(lineKeys.length);
 
   return (
     <div className={cn("absolute inset-0 overflow-hidden", className)}>
-      {reducedMotion ? (
+      {!showFilm ? (
         <img
           src={POSTER}
           alt=""
@@ -88,7 +111,7 @@ export function StreamStartingSoon({
         {/* Tall enough for the longest line at two lines, on a phone, so a
             wrap never overlaps the caption drawn under it. */}
         <div className="relative min-h-[2.75em] w-full max-w-sm sm:min-h-[2.25em]">
-          {STARTING_SOON_LINE_KEYS.map((key, index) => (
+          {lineKeys.map((key, index) => (
             <p
               key={key}
               aria-hidden={index !== activeIndex}
