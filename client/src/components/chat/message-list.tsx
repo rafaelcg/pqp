@@ -303,6 +303,13 @@ interface MessageListProps {
   onMarkUnread?: (message: ChatMessage) => void;
   onMarkRead?: () => void;
   /**
+   * Whether the reader is at the live end: pinned to the bottom of the newest
+   * page. Called on mount, on every change, and with false on unmount. The
+   * live read ack uses it so a message below a reader scrolled up in history
+   * is not marked read.
+   */
+  onLiveEndChange?: (atLiveEnd: boolean) => void;
+  /**
    * Last-read cursor from *before* this visit marked the channel read. The NEW
    * rule sits on the first message after it and stays until the channel changes.
    */
@@ -511,6 +518,7 @@ export const MessageList = memo(function MessageList({
   onForward,
   onMarkUnread,
   onMarkRead,
+  onLiveEndChange,
   unreadSince = null,
   editMessageId = null,
   onEditMessageHandled,
@@ -555,6 +563,19 @@ export const MessageList = memo(function MessageList({
   isPinnedRef.current = isPinned;
   const hasNewerRef = useRef(hasNewer);
   hasNewerRef.current = hasNewer;
+  // At the live end: the newest page, and following it or sitting at its
+  // bottom anyway. The geometry half is for a list that cannot scroll: landing
+  // on the NEW rule unpins it and no scroll event ever pins it again, while
+  // everything in it is on screen. Measured again as rows arrive, so a list
+  // that grows past the reader who stopped following reads as not at the end.
+  useEffect(() => {
+    const container = scrollRef.current;
+    const atBottom = container
+      ? distanceFromBottom(container) <= STICKY_THRESHOLD_PX
+      : false;
+    onLiveEndChange?.(!hasNewer && (isPinned || atBottom));
+  }, [isPinned, hasNewer, messages.length, isLoading, onLiveEndChange]);
+  useEffect(() => () => onLiveEndChange?.(false), [onLiveEndChange]);
   /** For the arrival announcement below — read without adding `messages`
    * itself to that effect's deps, which would rerun it on every in-place
    * edit/reaction update and not just on an actual new arrival. */

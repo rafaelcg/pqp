@@ -1998,11 +1998,18 @@ function MainAppContent({
   // the server keeps whichever write commits last, so an ack still in flight
   // must not land after a Mark unread or after the next open's read.
   const [readCursorQueue] = useState(createChannelWriteQueue);
+  /**
+   * The message list is at its live end (pinned to the bottom of the newest
+   * page), as `MessageList` reports it. False while no list is mounted: a
+   * message nobody has on screen has not been read.
+   */
+  const messageListAtLiveEndRef = useRef(false);
   const [liveReadAck] = useState(() =>
     createLiveReadAck({
       queue: readCursorQueue,
-      send: (channelId) => markChannelRead(channelId),
+      send: (channelId, lastReadAt) => markChannelRead(channelId, lastReadAt),
       isVisible: () => document.visibilityState === "visible",
+      isAtLiveEnd: () => messageListAtLiveEndRef.current,
       isSelected: (channelId) => selectedChannelIdRef.current === channelId,
       isHeld: (channelId) => unreadHoldRef.current.has(channelId),
     }),
@@ -2015,6 +2022,16 @@ function MainAppContent({
       liveReadAck.dispose();
     };
   }, [liveReadAck]);
+  const handleMessageListLiveEnd = useCallback(
+    (atLiveEnd: boolean) => {
+      messageListAtLiveEndRef.current = atLiveEnd;
+      if (atLiveEnd) {
+        // Scrolled back down: what arrived while they were up is read now.
+        liveReadAck.resume();
+      }
+    },
+    [liveReadAck],
+  );
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
   // arrow here defeated `MessageList`'s own `memo()` on every render of this
@@ -3479,7 +3496,7 @@ function MainAppContent({
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
-      const load = historyLoads.begin();
+      const load = historyLoads.begin(channelId);
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
@@ -3493,10 +3510,15 @@ function MainAppContent({
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
-        load.succeeded();
         // An older request can land after a newer one failed: what it loaded
         // is on screen, so the error no longer applies.
         clearHistoryFailed(channelId);
+        if (!load.succeeded()) {
+          // Leaving and coming back, or a retry beside a reconnect: a newer
+          // page is already on screen, with whatever arrived since, and this
+          // one would take those messages away again.
+          return;
+        }
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
@@ -3541,14 +3563,16 @@ function MainAppContent({
     }
     setHistoryFailedChannelId(null);
     setMessagesLoading(true);
-    const load = historyLoads.begin();
+    const load = historyLoads.begin(channelId);
     try {
       const page = await fetchMessages(channelId);
       if (selectedChannelIdRef.current !== channelId) {
         return;
       }
-      load.succeeded();
       clearHistoryFailed(channelId);
+      if (!load.succeeded()) {
+        return;
+      }
       chat.setMessages(page.messages, page.hasMore);
       refresh();
     } catch {
@@ -4089,16 +4113,19 @@ function MainAppContent({
         return;
       }
       state.inFlight = true;
+      const load = historyLoads.quiet(channelId);
       void fetchMessages(channelId)
         .then((page) => {
           if (selectedChannelIdRef.current === channelId) {
             // Counted, so an open or retry that fails after this landed
             // cannot put the error back over the page it loaded.
-            historyLoads.loaded();
-            chat.setMessages(page.messages, page.hasMore);
+            const current = load.succeeded();
             // A reconnect is also how a failed first load heals itself.
             clearHistoryFailed(channelId);
-            refresh();
+            if (current) {
+              chat.setMessages(page.messages, page.hasMore);
+              refresh();
+            }
           }
         })
         .catch(() => {
@@ -4449,16 +4476,21 @@ function MainAppContent({
             message.type === "poll-update" ||
             message.type === "message-rejected"
           ) {
-            // Somebody else's message landed in the channel on screen: it is
-            // read, so the next visit's NEW rule does not sit above it. The
-            // server sends no `channel-activity` for the open channel, which
-            // is why this keys on the broadcast.
+            // Somebody else's message landed in the channel on screen. It is
+            // read once the reader can see it (tab visible, list at its live
+            // end), so the next visit's NEW rule does not sit above it; the
+            // ack decides that, not this. The server sends no
+            // `channel-activity` for the open channel, which is why this keys
+            // on the broadcast.
             if (
               message.type === "message-broadcast" &&
               message.message.channelId === selectedChannelIdRef.current &&
               message.message.authorId !== userIdRef.current
             ) {
-              liveReadAck.note(message.message.channelId);
+              liveReadAck.note(
+                message.message.channelId,
+                message.message.createdAt,
+              );
             }
             // A message this account sent, or one in the conversation it has
             // open, arrives here in full and never as `channel-activity`, so
@@ -9871,6 +9903,7 @@ function MainAppContent({
         onForward={setForwardMessage}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
+        onLiveEndChange={handleMessageListLiveEnd}
       />
       )}
       {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
