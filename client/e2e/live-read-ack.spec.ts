@@ -109,6 +109,8 @@ async function unreadCount(
 interface Seeded {
   serverId: string;
   channelId: string;
+  /** A second text channel, short: it never scrolls. */
+  otherChannelId: string;
   owner: string;
   guest: string;
 }
@@ -146,6 +148,16 @@ async function seed(): Promise<Seeded> {
   });
   expect(joined.ok).toBe(true);
 
+  const other = await fetch(`${API}/api/servers/${server.id}/channels`, {
+    method: "POST",
+    headers: headersFor(owner),
+    body: JSON.stringify({ name: "short", type: "text" }),
+  });
+  expect(other.ok).toBe(true);
+  const { channel: otherChannel } = (await other.json()) as {
+    channel: { id: string };
+  };
+
   await sendMessages(
     guest,
     channel.id,
@@ -155,7 +167,13 @@ async function seed(): Promise<Seeded> {
     ),
     40,
   );
-  return { serverId: server.id, channelId: channel.id, owner, guest };
+  return {
+    serverId: server.id,
+    channelId: channel.id,
+    otherChannelId: otherChannel.id,
+    owner,
+    guest,
+  };
 }
 
 async function openChannel(
@@ -222,5 +240,51 @@ test("a message below a reader scrolled up stays unread until they scroll down",
     .poll(() => unreadCount(seeded.owner, seeded.serverId, seeded.channelId), {
       timeout: 10_000,
     })
+    .toBe(0);
+});
+
+test("scrolling up in one channel does not stop acks in the next", async ({
+  page,
+}) => {
+  const seeded = await seed();
+  // Unread waiting in the short channel: opening it lands on the NEW rule.
+  await sendMessages(seeded.guest, seeded.otherChannelId, ["already read"], 1);
+  await fetch(`${API}/api/channels/${seeded.otherChannelId}/read`, {
+    method: "POST",
+    headers: headersFor(seeded.owner),
+  });
+  await sendMessages(seeded.guest, seeded.otherChannelId, ["waiting"], 2);
+  await openChannel(page, seeded);
+
+  await page.getByRole("log").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(
+    page.getByRole("button", { name: /jump to present|new message/i }),
+  ).toBeVisible();
+
+  // In the app, not a reload: the list is the same component across the
+  // switch, and its scroll state must not follow the reader to the next one.
+  await page
+    .locator(`[data-channel-id="${seeded.otherChannelId}"]`)
+    .first()
+    .click();
+  await expect(page.getByRole("log").getByText("waiting")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("separator", { name: "New" })).toBeVisible();
+  await expect
+    .poll(() =>
+      unreadCount(seeded.owner, seeded.serverId, seeded.otherChannelId),
+    )
+    .toBe(0);
+
+  await sendMessages(seeded.guest, seeded.otherChannelId, ["seen here"], 3);
+  await expect(page.getByRole("log").getByText("seen here")).toBeInViewport();
+  await expect
+    .poll(
+      () => unreadCount(seeded.owner, seeded.serverId, seeded.otherChannelId),
+      { timeout: 10_000 },
+    )
     .toBe(0);
 });

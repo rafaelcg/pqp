@@ -563,12 +563,18 @@ export const MessageList = memo(function MessageList({
   isPinnedRef.current = isPinned;
   const hasNewerRef = useRef(hasNewer);
   hasNewerRef.current = hasNewer;
-  // The same test as the "jump to present" bar below: anything else means a
-  // new message lands out of sight.
-  const atLiveEnd = isPinned && !hasNewer;
+  // At the live end: the newest page, and following it or sitting at its
+  // bottom anyway. The geometry half is for a list that cannot scroll: landing
+  // on the NEW rule unpins it and no scroll event ever pins it again, while
+  // everything in it is on screen. Measured again as rows arrive, so a list
+  // that grows past the reader who stopped following reads as not at the end.
   useEffect(() => {
-    onLiveEndChange?.(atLiveEnd);
-  }, [atLiveEnd, onLiveEndChange]);
+    const container = scrollRef.current;
+    const atBottom = container
+      ? distanceFromBottom(container) <= STICKY_THRESHOLD_PX
+      : false;
+    onLiveEndChange?.(!hasNewer && (isPinned || atBottom));
+  }, [isPinned, hasNewer, messages.length, isLoading, onLiveEndChange]);
   useEffect(() => () => onLiveEndChange?.(false), [onLiveEndChange]);
   /** For the arrival announcement below — read without adding `messages`
    * itself to that effect's deps, which would rerun it on every in-place
