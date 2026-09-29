@@ -3,6 +3,7 @@ import type { Channel } from "@pqp/shared";
 import { COMMUNITY_HOME_CHANNEL_ID } from "@/lib/community-home/id";
 import {
   channelListRetryDelayMs,
+  createChannelListTickets,
   vanishedChannelFallback,
 } from "./channel-list-refresh";
 
@@ -60,5 +61,41 @@ describe("channelListRetryDelayMs", () => {
     expect(channelListRetryDelayMs(3)).toBe(10_000);
     expect(channelListRetryDelayMs(4)).toBe(30_000);
     expect(channelListRetryDelayMs(5)).toBeNull();
+  });
+});
+
+describe("createChannelListTickets", () => {
+  it("lets only the newest of two quick nudge refetches write the list", () => {
+    const tickets = createChannelListTickets();
+    const create = tickets.take();
+    const rename = tickets.take();
+    // The rename's refetch answers first, then the create's: only the
+    // rename's may land.
+    expect(tickets.isLatest(rename)).toBe(true);
+    expect(tickets.isLatest(create)).toBe(false);
+  });
+
+  it("drops a refetch from an earlier visit once the person has left and come back", () => {
+    const tickets = createChannelListTickets();
+    // On server A, a nudge refetch starts and hangs.
+    const nudgeOnA = tickets.take();
+    // The person opens B, then A again: each open is a load with its own
+    // ticket.
+    tickets.take();
+    const reopenA = tickets.take();
+    // The reopen's list is current; the hung refetch from the first visit,
+    // answering last, is not.
+    expect(tickets.isLatest(reopenA)).toBe(true);
+    expect(tickets.isLatest(nudgeOnA)).toBe(false);
+  });
+
+  it("tells a navigation load that a nudge started while it was in flight", () => {
+    const tickets = createChannelListTickets();
+    const load = tickets.take();
+    const nudge = tickets.take();
+    // The load writes its list anyway (it is the open server's only one yet)
+    // and, seeing it is not the latest, asks for one more refetch.
+    expect(tickets.isLatest(load)).toBe(false);
+    expect(tickets.isLatest(nudge)).toBe(true);
   });
 });

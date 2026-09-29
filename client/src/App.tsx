@@ -445,6 +445,7 @@ import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
   channelListRetryDelayMs,
+  createChannelListTickets,
   vanishedChannelFallback,
 } from "@/lib/channel-list-refresh";
 import {
@@ -1643,7 +1644,7 @@ function MainAppContent({
   // second apart) cannot land out of order, and a refetch from an earlier
   // visit to this server cannot land on top of the list the visit loaded
   // (`loadChannels` and `applyChannelRoute` take a ticket too).
-  const channelListTicketRef = useRef(0);
+  const [channelListTickets] = useState(createChannelListTickets);
   // The pending retry of a failed `channels-update` refetch, and the server
   // whose list stayed stale after every retry failed. That one is refetched
   // on the next socket reconnect rather than waiting for a navigation.
@@ -4881,9 +4882,9 @@ function MainAppContent({
       clearTimeout(channelListRetryTimerRef.current);
       channelListRetryTimerRef.current = null;
     }
-    const ticket = ++channelListTicketRef.current;
+    const ticket = channelListTickets.take();
     const current = () =>
-      channelListTicketRef.current === ticket &&
+      channelListTickets.isLatest(ticket) &&
       selectedServerIdRef.current === serverId;
     void fetchChannels(serverId).then(
       ({ channels: list }) => {
@@ -5112,7 +5113,7 @@ function MainAppContent({
     ) => {
       setChannelsLoading(true);
       try {
-        const ticket = ++channelListTicketRef.current;
+        const ticket = channelListTickets.take();
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
         setChannels(list);
@@ -5121,7 +5122,7 @@ function MainAppContent({
         // Refetched only while this server is still the open one (see
         // `refreshChannelList`).
         if (
-          channelListTicketRef.current !== ticket &&
+          !channelListTickets.isLatest(ticket) &&
           selectedServerIdRef.current === serverId
         ) {
           refreshChannelListRef.current(serverId);
@@ -5157,7 +5158,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [communityHomeOn, loadUnread, selectChannel, syncRoute],
+    [channelListTickets, communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
   async function handleChannelPromptConfirm(
@@ -6698,13 +6699,13 @@ function MainAppContent({
 
       setChannelsLoading(true);
       try {
-        const ticket = ++channelListTicketRef.current;
+        const ticket = channelListTickets.take();
         const { channels: list } = await fetchChannels(targetServerId);
         setSelection({ kind: "server", serverId: targetServerId });
         setAppError(null);
         setChannels(list);
         // Same as in `loadChannels`: a nudge landed mid-flight.
-        if (channelListTicketRef.current !== ticket) {
+        if (!channelListTickets.isLatest(ticket)) {
           refreshChannelListRef.current(targetServerId);
         }
         void loadUnread(targetServerId);
@@ -6747,7 +6748,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [communityHomeOn, loadUnread, selectChannel],
+    [channelListTickets, communityHomeOn, loadUnread, selectChannel],
   );
 
   /**

@@ -40,3 +40,30 @@ const CHANNEL_LIST_RETRY_MS = [1_000, 4_000, 10_000, 30_000] as const;
 export function channelListRetryDelayMs(failedTries: number): number | null {
   return CHANNEL_LIST_RETRY_MS[failedTries - 1] ?? null;
 }
+
+export interface ChannelListTickets {
+  /** Called when a fetch of the open server's list starts. */
+  take(): number;
+  /** May the fetch holding this ticket still write the list? */
+  isLatest(ticket: number): boolean;
+}
+
+/**
+ * Tickets for every fetch of the open server's channel list: the
+ * `channels-update` refetch and the loads a navigation starts. Only the
+ * newest ticket may write the list. A later fetch reads a later state of the
+ * list, so this is what keeps an older response from landing on top of a
+ * newer one: two quick nudges, or a nudge refetch from an earlier visit to a
+ * server returning after the person left and came back, which started a
+ * newer load.
+ */
+export function createChannelListTickets(): ChannelListTickets {
+  let latest = 0;
+  return {
+    take: () => {
+      latest += 1;
+      return latest;
+    },
+    isLatest: (ticket) => ticket === latest,
+  };
+}
