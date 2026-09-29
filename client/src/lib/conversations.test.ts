@@ -279,6 +279,31 @@ describe("applyConversationMessage", () => {
     ).toBe(list);
   });
 
+  it("takes a message over a row stamped by this device's clock", () => {
+    // `channel-activity` moved the row with the reader's clock, which runs
+    // ahead of the server's. The next real message must still land.
+    const ahead = "2026-08-03T00:00:00.000Z";
+    const list = [summary("b", { lastMessageAt: ahead })];
+    const next = applyConversationMessage(list, sent(), {
+      previewsOn: true,
+      localStampedAt: ahead,
+    });
+    expect(next[0]).toMatchObject({
+      lastMessageAt: NEWER,
+      lastMessage: { preview: "bora hoje?" },
+    });
+  });
+
+  it("still orders against a server time that replaced a local stamp", () => {
+    const list = [summary("b", { lastMessageAt: NEWER })];
+    expect(
+      applyConversationMessage(list, sent({ createdAt: OLDER }), {
+        previewsOn: true,
+        localStampedAt: "2026-08-03T00:00:00.000Z",
+      }),
+    ).toBe(list);
+  });
+
   it("leaves the list alone for a server channel", () => {
     const list = [summary("a", { lastMessageAt: OLDER })];
     expect(

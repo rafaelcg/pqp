@@ -2294,6 +2294,13 @@ function MainAppContent({
    */
   const conversationsRef = useRef<DmSummary[]>(conversations);
   conversationsRef.current = conversations;
+  /**
+   * The `lastMessageAt` a `channel-activity` frame gave a conversation row,
+   * by channel. That value is this device's clock, not the server's, and a
+   * row still holding it must not be ordered against a real message's time
+   * (see `applyConversationMessage`).
+   */
+  const localConversationStampsRef = useRef(new Map<string, string>());
   /** Same reason: the handler files a message into its conversation's row. */
   const blockedUsersRef = useRef<BlockedUser[]>(blockedUsers);
   blockedUsersRef.current = blockedUsers;
@@ -4386,12 +4393,15 @@ function MainAppContent({
               activity.kind ?? "server",
             );
             if (activity.kind && activity.kind !== "server") {
+              // This device's clock: the frame carries no message time. Kept
+              // so the next broadcast is not ordered against it.
               const now = new Date().toISOString();
               if (
                 conversationsRef.current.some(
                   (one) => one.channelId === activity.channelId,
                 )
               ) {
+                localConversationStampsRef.current.set(activity.channelId, now);
                 setConversations((prev) =>
                   touchConversation(
                     prev,
@@ -4532,9 +4542,13 @@ function MainAppContent({
               )
             ) {
               const broadcast = message.message;
+              const localStampedAt =
+                localConversationStampsRef.current.get(broadcast.channelId) ??
+                null;
               setConversations((prev) =>
                 applyConversationMessage(prev, broadcast, {
                   previewsOn: getNotificationState().previewInApp,
+                  localStampedAt,
                 }),
               );
             }

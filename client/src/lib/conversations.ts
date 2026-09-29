@@ -190,19 +190,30 @@ export function previewFromMessage(
  * no `lastMessage`, so the row only moves and its line is left alone. A
  * message older than the row's newest one changes nothing, so a late frame
  * cannot put an earlier preview back.
+ *
+ * That comparison only means something between two server timestamps.
+ * `channel-activity` carries no message time, so the row it moved holds the
+ * reader's own clock (`localStampedAt`, the value the caller stamped). A
+ * clock ahead of the server's would put every real message "before" it and
+ * freeze the row, so a row still holding that stamp takes the message.
  */
 export function applyConversationMessage(
   list: readonly DmSummary[],
   message: ConversationMessage,
-  options: { previewsOn: boolean },
+  options: { previewsOn: boolean; localStampedAt?: string | null },
 ): DmSummary[] {
   const current = list.find(
     (conversation) => conversation.channelId === message.channelId,
   );
+  if (!current) {
+    return list as DmSummary[];
+  }
+  const serverStamped =
+    current.lastMessageAt !== null &&
+    current.lastMessageAt !== (options.localStampedAt ?? null);
   if (
-    !current ||
-    (current.lastMessageAt !== null &&
-      Date.parse(current.lastMessageAt) > Date.parse(message.createdAt))
+    serverStamped &&
+    Date.parse(current.lastMessageAt!) > Date.parse(message.createdAt)
   ) {
     return list as DmSummary[];
   }
