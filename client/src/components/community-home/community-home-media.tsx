@@ -1,5 +1,5 @@
-import { Download, Play } from "lucide-react";
-import { useRef, useState } from "react";
+import { Download, Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { CommunityHomeMedia } from "@pqp/shared";
 import {
   formatHomeBytes,
@@ -208,17 +208,41 @@ export function formatVideoDuration(seconds: number): string {
  * blurred copy of its first frame, because at full width it would be taller
  * than the screen.
  *
- * Until somebody presses play it shows a poster: the first frame, a play
- * button and the length. The browser's own controls take over after that.
+ * It draws its own bar instead of the browser's: play, the time, a progress
+ * line you can drag, sound and fullscreen. Before the first play the bar says
+ * "Assistir" and the length. While it plays the bar fades out after a moment
+ * without the pointer, and comes back on any movement, focus or pause.
  */
 function VideoPlayer({ url }: { url: string }) {
   const { t } = useTranslation();
+  const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLCanvasElement>(null);
+  const hideTimer = useRef<number | null>(null);
   const [shape, setShape] = useState<{ w: number; h: number } | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
+  const [time, setTime] = useState(0);
   const [started, setStarted] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [chrome, setChrome] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
   const fills = !shape || shape.w / shape.h >= FILL_MIN_RATIO;
+
+  useEffect(() => {
+    const onChange = () => setFullscreen(document.fullscreenElement === wrapRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    };
+  }, []);
+
+  const wake = (isPlaying = playing) => {
+    setChrome(true);
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    if (isPlaying) hideTimer.current = window.setTimeout(() => setChrome(false), 2200);
+  };
 
   const onMetadata = () => {
     const v = videoRef.current;
@@ -248,16 +272,62 @@ function VideoPlayer({ url }: { url: string }) {
       // No frame to draw: the sides stay the card's own colour.
     }
   };
-  const start = () => {
+  const toggle = () => {
+    const v = videoRef.current;
+    if (!v) {
+      return;
+    }
     setStarted(true);
-    void videoRef.current?.play().catch(() => {});
+    if (v.paused || v.ended) {
+      void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
   };
+  const seek = (value: number) => {
+    const v = videoRef.current;
+    if (v && Number.isFinite(value)) {
+      v.currentTime = value;
+      setTime(value);
+    }
+  };
+  const toggleMute = () => {
+    const v = videoRef.current;
+    if (v) {
+      v.muted = !v.muted;
+    }
+  };
+  const toggleFullscreen = () => {
+    const wrap = wrapRef.current;
+    const v = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+    } else if (wrap?.requestFullscreen) {
+      void wrap.requestFullscreen().catch(() => {});
+    } else {
+      // iPhone Safari has no element fullscreen, only the video's own.
+      v?.webkitEnterFullscreen?.();
+    }
+  };
+
+  const progress = duration ? Math.min(1, time / duration) : 0;
+  const showChrome = chrome || !playing;
+  const iconButton =
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-paper transition-colors duration-[var(--duration-fast)] hover:bg-paper/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
   return (
     <div
-      className={cn("relative w-full overflow-hidden bg-ink", !fills && "h-96")}
-      style={fills ? { aspectRatio: shape ? `${shape.w} / ${shape.h}` : "16 / 9" } : undefined}
+      ref={wrapRef}
+      className={cn(
+        "group/player relative w-full overflow-hidden bg-ink",
+        !fills && !fullscreen && "h-96",
+        fullscreen && "h-full",
+        !showChrome && "cursor-none",
+      )}
+      style={fills && !fullscreen ? { aspectRatio: shape ? `${shape.w} / ${shape.h}` : "16 / 9" } : undefined}
       data-home-video={fills ? "fill" : "fit"}
+      onPointerMove={() => wake()}
+      onFocus={() => wake()}
     >
       {!fills && (
         <canvas
@@ -269,35 +339,111 @@ function VideoPlayer({ url }: { url: string }) {
       <video
         ref={videoRef}
         className="relative h-full w-full object-contain"
-        controls={started}
         playsInline
         preload="metadata"
         // `#t=0.001` makes iOS Safari paint the first frame before play.
         src={`${url}#t=0.001`}
+        onClick={toggle}
         onLoadedMetadata={onMetadata}
         onLoadedData={onFirstFrame}
-        onPlay={() => setStarted(true)}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onPlay={() => {
+          setStarted(true);
+          setPlaying(true);
+          wake(true);
+        }}
+        onPause={() => {
+          setPlaying(false);
+          wake(false);
+        }}
+        onEnded={() => {
+          setPlaying(false);
+          wake(false);
+        }}
+        onVolumeChange={(e) => setMuted(e.currentTarget.muted)}
       >
         <track kind="captions" />
       </video>
-      {!started && (
+
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-ink/90 to-transparent transition-opacity duration-300",
+          showChrome ? "opacity-100" : "opacity-0",
+        )}
+        aria-hidden
+      />
+      <div
+        className={cn(
+          "absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 pb-3 transition-opacity duration-300 sm:gap-3 sm:px-5 sm:pb-4",
+          showChrome ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        data-home-video-bar
+      >
         <button
           type="button"
-          onClick={start}
-          aria-label={t("communityHome.media.play")}
-          className="group absolute inset-0 flex items-center justify-center focus-visible:outline-none"
+          onClick={toggle}
+          aria-label={playing ? t("communityHome.media.pause") : t("communityHome.media.play")}
+          className={cn(
+            "flex shrink-0 items-center justify-center rounded-full bg-signal text-ink shadow-[0_8px_30px_var(--glow-accent)] transition-transform duration-[var(--duration-fast)] hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            started ? "h-11 w-11" : "h-14 w-14",
+          )}
           data-home-video-play
         >
-          <span className="flex h-16 w-16 items-center justify-center rounded-full bg-signal text-ink shadow-[0_10px_40px_var(--glow-accent)] ring-8 ring-signal/15 transition-transform duration-[var(--duration-fast)] group-hover:scale-105 group-focus-visible:ring-focus-ring sm:h-20 sm:w-20">
-            <Play className="ml-1 h-7 w-7 fill-current sm:h-8 sm:w-8" aria-hidden />
-          </span>
-          {duration != null && (
-            <span className="absolute bottom-3 right-3 rounded-full border border-paper/15 bg-ink/80 px-2.5 py-1 text-xs font-semibold tabular-nums text-paper">
-              {formatVideoDuration(duration)}
-            </span>
+          {playing ? (
+            <Pause className="h-5 w-5 fill-current" aria-hidden />
+          ) : (
+            <Play className={cn("ml-0.5 fill-current", started ? "h-5 w-5" : "h-6 w-6")} aria-hidden />
           )}
         </button>
-      )}
+        {started ? (
+          <span className="shrink-0 text-xs font-semibold tabular-nums text-paper sm:text-sm">
+            {formatVideoDuration(time)}
+            {duration != null && <span className="text-paper-muted"> / {formatVideoDuration(duration)}</span>}
+          </span>
+        ) : (
+          <span className="flex shrink-0 flex-col leading-tight">
+            <span className="font-display text-base font-extrabold text-paper sm:text-lg">
+              {t("communityHome.media.watch")}
+            </span>
+            {duration != null && (
+              <span className="text-xs tabular-nums text-paper-muted sm:text-sm">{formatVideoDuration(duration)}</span>
+            )}
+          </span>
+        )}
+        <div className="relative mx-1 flex h-11 min-w-0 flex-1 items-center">
+          <div className="h-1 w-full rounded-full bg-paper/25">
+            <div className="h-1 rounded-full bg-signal" style={{ width: `${progress * 100}%` }} />
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={duration ?? 0}
+            step={0.1}
+            value={time}
+            onChange={(e) => seek(Number(e.currentTarget.value))}
+            disabled={!duration}
+            aria-label={t("communityHome.media.seek")}
+            aria-valuetext={`${formatVideoDuration(time)} / ${formatVideoDuration(duration ?? 0)}`}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={toggleMute}
+          aria-label={muted ? t("communityHome.media.unmute") : t("communityHome.media.mute")}
+          className={iconButton}
+        >
+          {muted ? <VolumeX className="h-5 w-5" aria-hidden /> : <Volume2 className="h-5 w-5" aria-hidden />}
+        </button>
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          aria-label={fullscreen ? t("communityHome.media.exitFullscreen") : t("communityHome.media.fullscreen")}
+          className={iconButton}
+        >
+          {fullscreen ? <Minimize className="h-5 w-5" aria-hidden /> : <Maximize className="h-5 w-5" aria-hidden />}
+        </button>
+      </div>
     </div>
   );
 }

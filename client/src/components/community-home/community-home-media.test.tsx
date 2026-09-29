@@ -82,14 +82,34 @@ describe("the Baú video", () => {
     expect(box.querySelector("canvas")).not.toBeNull();
   });
 
-  it("pressing play hands over to the browser's controls", async () => {
+  it("draws its own bar: play turns into pause, never the browser's controls", async () => {
     const el = await mount(video);
     const v = el.querySelector("video")!;
-    v.play = () => Promise.resolve();
+    v.play = () => {
+      v.dispatchEvent(new Event("play"));
+      return Promise.resolve();
+    };
+    const play = el.querySelector<HTMLButtonElement>("[data-home-video-play]")!;
+    expect(play.getAttribute("aria-label")).toBe("Play the video");
+    expect(el.textContent).toContain("Watch");
     await act(async () => {
-      el.querySelector<HTMLButtonElement>("[data-home-video-play]")!.click();
+      play.click();
     });
-    expect(el.querySelector("[data-home-video-play]")).toBeNull();
-    expect(v.hasAttribute("controls")).toBe(true);
+    expect(el.querySelector("[data-home-video-play]")!.getAttribute("aria-label")).toBe("Pause");
+    expect(v.hasAttribute("controls")).toBe(false);
+    expect(el.querySelector("[data-home-video-bar] input[type=range]")).not.toBeNull();
+  });
+
+  it("the sound button follows the video's own muted state", async () => {
+    const el = await mount(video);
+    const v = el.querySelector("video")!;
+    const bar = el.querySelector("[data-home-video-bar]")!;
+    expect(bar.querySelector("[aria-label='Mute']")).not.toBeNull();
+    await act(async () => {
+      bar.querySelector<HTMLButtonElement>("[aria-label='Mute']")!.click();
+      v.dispatchEvent(new Event("volumechange"));
+    });
+    expect(v.muted).toBe(true);
+    expect(bar.querySelector("[aria-label='Unmute']")).not.toBeNull();
   });
 });

@@ -1912,7 +1912,7 @@ export function CommunityHomeFeed({
   channels = [],
   onOpenChannel,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -2282,6 +2282,11 @@ export function CommunityHomeFeed({
   }
 
   const feedEmpty = posts !== null && posts.length === 0;
+  // A scheduled post lives in the drafts list, not the feed, so after a reload
+  // it looked deleted. Staff get a strip on the feed that says it is still coming.
+  const scheduled = drafts
+    .filter((p) => p.status === "scheduled" && p.scheduledAt)
+    .sort((a, b) => new Date(a.scheduledAt!).getTime() - new Date(b.scheduledAt!).getTime());
   const showIntro = !introDismissed && !canManageServer;
 
   function openCompose() {
@@ -2523,6 +2528,24 @@ export function CommunityHomeFeed({
                   <Button size="sm" variant="secondary" onClick={() => void load(false)}>
                     <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
                     {t("communityHome.error.retry")}
+                  </Button>
+                </div>
+              )}
+
+              {canManageServer && scheduled.length > 0 && (
+                <div
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-ink-4 bg-ink-2 px-4 py-3 text-sm text-paper"
+                  data-home-scheduled-strip
+                >
+                  <CalendarClock className="h-4 w-4 shrink-0 text-signal" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    {t("communityHome.scheduledStrip", {
+                      count: scheduled.length,
+                      when: scheduledLabel(scheduled[0]!.scheduledAt!, scheduled[0]!.scheduleTimezone, locale),
+                    })}
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={openDrafts}>
+                    {t("communityHome.scheduledStrip.open")}
                   </Button>
                 </div>
               )}
