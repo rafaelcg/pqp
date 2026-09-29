@@ -430,6 +430,14 @@ export function createChatController(
    * while a page forward is often still in flight.
    */
   let windowGeneration = 0;
+  /**
+   * Bumped by every jump, every return to the tail and every send. A page
+   * fetched around a message is dropped when this moved while it was out:
+   * the reader has since asked for something newer (another message, the
+   * present, their own send), and the late page would replace the window
+   * they are now in with the one they left.
+   */
+  let jumpSeq = 0;
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
   /**
@@ -1247,6 +1255,8 @@ export function createChatController(
      * channel this window is not showing.
      */
     async jumpTo(messageId: string): Promise<boolean> {
+      jumpSeq += 1;
+      const seq = jumpSeq;
       const target = channelId;
       if (!target) {
         return false;
@@ -1259,7 +1269,7 @@ export function createChatController(
           around: messageId,
           limit: MESSAGE_PAGE_SIZE,
         });
-        if (channelId !== target) {
+        if (channelId !== target || jumpSeq !== seq) {
           return false;
         }
         applyPage(page.messages, page.hasMore, page.hasNewer);
@@ -1271,6 +1281,7 @@ export function createChatController(
 
     /** Leave a history window behind and reload the newest page. */
     async resetToTail(): Promise<boolean> {
+      jumpSeq += 1;
       const target = channelId;
       if (!target) {
         return false;
@@ -1352,6 +1363,8 @@ export function createChatController(
       if (!clamped && attachments.length === 0) {
         return;
       }
+      // The send is where the reader is going now, not a page still out.
+      jumpSeq += 1;
       const nonce = createNonce();
       /**
        * The local files, so an image is on screen the instant Enter is pressed

@@ -1184,6 +1184,69 @@ describe("jumping into history", () => {
     expect(api.apiFetch).not.toHaveBeenCalled();
   });
 
+  /** A page held until the test releases it. */
+  function holdPage() {
+    let release: (page: HistoryPage) => void = () => {};
+    vi.mocked(api.apiFetch).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve as (page: HistoryPage) => void;
+      }),
+    );
+    return (page: HistoryPage) => release(page);
+  }
+
+  it("drops a page fetched for a jump that a jump to a loaded message overtook", async () => {
+    const { chat } = setup();
+    const tail = history(3, 50);
+    chat.setMessages(tail, true);
+
+    const release = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    // The reader then jumps to a message already on screen.
+    expect(await chat.jumpTo(tail[1]!.id)).toBe(true);
+    release({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m50", "m51", "m52"]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  it("drops a page fetched for a jump when the reader sends meanwhile", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(3, 50), true);
+
+    const release = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    chat.sendMessage("sent while fetching");
+    release({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m50",
+      "m51",
+      "m52",
+      "sent while fetching",
+    ]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  it("drops a page fetched for a jump when the reader returns to the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(3, 50), true);
+
+    const releaseJump = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    mockPage({ messages: history(3, 60), hasMore: true, hasNewer: false });
+    expect(await chat.resetToTail()).toBe(true);
+    releaseJump({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    const bodies = chat.getMessages().map((m) => m.body);
+    expect(bodies.slice(-3)).toEqual(["m60", "m61", "m62"]);
+    expect(bodies).not.toContain("m2");
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
   it("reports a message it cannot reach instead of emptying the channel", async () => {
     const { chat } = setup();
     chat.setMessages(history(2), true);

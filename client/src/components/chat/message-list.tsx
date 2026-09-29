@@ -1136,15 +1136,22 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToMessage = useCallback(
     (messageId: string) => {
+      // Every jump supersedes the one before it, a loaded one included: a page
+      // still being fetched for an earlier target must not land afterwards
+      // and take the reader back there.
+      jumpRequestRef.current += 1;
+      sentWhileJumpingRef.current = false;
+      setPendingJumpId(null);
       if (focusRow(messageId)) {
+        // The window keeps the row it just scrolled to: `jumpTo` drops a page
+        // that a newer jump overtook, and this is that newer jump.
+        void onJumpToMessage?.(messageId).catch(() => {});
         return;
       }
       if (!onJumpToMessage) {
         showJumpNotice();
         return;
       }
-      jumpRequestRef.current += 1;
-      sentWhileJumpingRef.current = false;
       const request = jumpRequestRef.current;
       void onJumpToMessage(messageId)
         .then((reachable) => {
@@ -1583,6 +1590,11 @@ export const MessageList = memo(function MessageList({
    */
   const followOwnSend = useCallback(() => {
     cancelJump();
+    // A permalink whose jump has not started yet (it waits a frame) is older
+    // than this send, and the send wins.
+    if (highlightRef.current) {
+      onHighlightHandled?.();
+    }
     sentWhileJumpingRef.current = true;
     if (hasNewerRef.current) {
       jumpToPresent();
@@ -1601,7 +1613,7 @@ export const MessageList = memo(function MessageList({
     scrollToBottom(
       distanceFromBottom <= container.clientHeight ? "smooth" : "auto",
     );
-  }, [cancelJump, jumpToPresent, scrollToBottom]);
+  }, [cancelJump, jumpToPresent, onHighlightHandled, scrollToBottom]);
   followOwnSendRef.current = followOwnSend;
 
   /**

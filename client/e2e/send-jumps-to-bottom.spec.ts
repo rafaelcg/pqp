@@ -287,6 +287,14 @@ test("sending from a jump into history goes back to the present", async ({
  * the test runner can reliably land in it. Waiting past the timer is the
  * point: the follow has to still be there after it.
  */
+/** Open a message from the search dialog, which is a link to it. */
+async function openSearchResult(page: Page, text: string): Promise<void> {
+  await page.getByRole("button", { name: /Search messages/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox", { name: "Search messages" }).fill(text);
+  await dialog.getByRole("option").filter({ hasText: text }).first().click();
+}
+
 test("a send during a jump in the loaded page stays on the send", async ({
   page,
 }) => {
@@ -434,16 +442,12 @@ test("a send while a jump is still fetching stays on the send", async ({
     },
   );
 
-  await page.getByRole("button", { name: /Search messages/ }).click();
-  const dialog = page.getByRole("dialog");
-  await dialog
-    .getByRole("combobox", { name: "Search messages" })
-    .fill("history 10 ");
-  await dialog
-    .getByRole("option")
-    .filter({ hasText: "history 10 " })
-    .first()
-    .click();
+  // The jump has to be out before the send, or this is the next test.
+  const aroundAsked = page.waitForRequest((request) =>
+    new URL(request.url()).searchParams.has("around"),
+  );
+  await openSearchResult(page, "history 10 ");
+  await aroundAsked;
 
   const composer = page.getByPlaceholder(/^Message /);
   await composer.fill("sent while fetching");
@@ -459,6 +463,108 @@ test("a send while a jump is still fetching stays on the send", async ({
   await expect(
     page.getByRole("button", { name: "Load newer messages" }),
   ).toHaveCount(0);
+});
+
+/**
+ * A send made before the link's jump has even started wins too.
+ *
+ * A search result is a link: the app loads the channel list and reopens the
+ * channel before it asks the list to jump. On a slow machine (CI) the reader's
+ * Enter landed in that gap, so nothing was in flight for the send to cancel.
+ * The jump then started after the send, its page replaced the window without
+ * the send in it, and the list scrolled into history. A slow channel list
+ * makes that order certain.
+ */
+test("a send before a link's jump starts stays on the send", async ({
+  page,
+}) => {
+  const seeded = await seed(120);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 119 ")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+
+  await page.route(
+    (url) => url.pathname.endsWith(`/servers/${seeded.serverId}/channels`),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    },
+  );
+  let aroundAsked = false;
+  page.on("request", (request) => {
+    if (new URL(request.url()).searchParams.has("around")) {
+      aroundAsked = true;
+    }
+  });
+
+  await openSearchResult(page, "history 10 ");
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.fill("sent before the jump");
+  await composer.press("Enter");
+  expect(aroundAsked).toBe(false);
+
+  await page.waitForTimeout(4_000);
+  await expect(page.getByText("sent before the jump")).toBeInViewport();
+  await expect(page.getByText(/^history 10 lorem/)).toHaveCount(0);
+  await expect
+    .poll(() => distanceFromBottom(page))
+    .toBeLessThanOrEqual(2);
+});
+
+/**
+ * A jump to a loaded message wins over an older jump still fetching.
+ *
+ * The loaded jump scrolled and returned before it told anything the earlier
+ * request was stale, so the page fetched for the first target landed later,
+ * replaced the window and took the reader back there.
+ */
+test("a jump to a loaded message wins over a jump still fetching", async ({
+  page,
+}) => {
+  const seeded = await seed(120);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 119 ")).toBeVisible({ timeout: 20_000 });
+
+  let releaseAround: () => void = () => {};
+  const aroundHeld = new Promise<void>((resolve) => {
+    releaseAround = resolve;
+  });
+  await page.route(
+    (url) =>
+      url.pathname.endsWith(`/channels/${seeded.channelId}/messages`) &&
+      url.searchParams.has("around"),
+    async (route) => {
+      await aroundHeld;
+      await route.continue();
+    },
+  );
+
+  const aroundAsked = page.waitForRequest((request) =>
+    new URL(request.url()).searchParams.has("around"),
+  );
+  await openSearchResult(page, "history 10 ");
+  await aroundAsked;
+
+  // In the newest page, so already loaded.
+  await openSearchResult(page, "history 100 ");
+  await expect(page.getByText(/^history 100 lorem/)).toBeInViewport({
+    timeout: 10_000,
+  });
+
+  releaseAround();
+  await page.waitForTimeout(2_500);
+  await expect(page.getByText(/^history 100 lorem/)).toBeInViewport();
+  await expect(page.getByText(/^history 10 lorem/)).toHaveCount(0);
 });
 
 /**

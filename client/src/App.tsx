@@ -2108,6 +2108,20 @@ function MainAppContent({
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     null,
   );
+  /**
+   * How many messages this reader has sent per channel in this tab. A link to
+   * a message (a search result, a permalink) opens its channel first and only
+   * then asks the list to jump, and that can take a while: the channel list
+   * and the history are fetched in between. A send made meanwhile is the
+   * newer request, so the jump is dropped rather than scrolling the reader
+   * away from what they just sent into a page that does not hold it.
+   */
+  const ownSendsRef = useRef(new Map<string, number>());
+  const ownSendCount = useCallback(
+    (channelId: string | null) =>
+      channelId ? (ownSendsRef.current.get(channelId) ?? 0) : 0,
+    [],
+  );
   const [, setTick] = useState(0);
 
   const transport = useMemo(() => createRealtimeTransport(), []);
@@ -7176,6 +7190,7 @@ function MainAppContent({
       channelId: string | null,
       messageId: string | null = null,
     ) => {
+      const sendsBefore = ownSendCount(channelId);
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
       const targetServerId = openable?.serverId ?? serverId;
@@ -7205,7 +7220,10 @@ function MainAppContent({
         }
         if (requested) {
           await selectChannel(requested.id, targetServerId);
-          if (targetMessageId) {
+          if (
+            targetMessageId &&
+            ownSendCount(requested.id) === sendsBefore
+          ) {
             setHighlightMessageId(targetMessageId);
           }
         } else {
@@ -7243,7 +7261,13 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [channelListTickets, communityHomeOn, loadUnread, selectChannel],
+    [
+      channelListTickets,
+      communityHomeOn,
+      loadUnread,
+      ownSendCount,
+      selectChannel,
+    ],
   );
 
   /**
@@ -7256,6 +7280,7 @@ function MainAppContent({
    */
   const applyConversationRoute = useCallback(
     async (channelId: string | null, messageId: string | null = null) => {
+      const sendsBefore = ownSendCount(channelId);
       setSelection(HOME_SELECTION);
       const list = await loadConversations();
       if (!channelId) {
@@ -7270,11 +7295,11 @@ function MainAppContent({
         return;
       }
       await selectConversation(channelId);
-      if (messageId) {
+      if (messageId && ownSendCount(channelId) === sendsBefore) {
         setHighlightMessageId(messageId);
       }
     },
-    [loadConversations, selectConversation],
+    [loadConversations, ownSendCount, selectConversation],
   );
 
   /**
@@ -10066,6 +10091,10 @@ function MainAppContent({
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
           }
+          ownSendsRef.current.set(
+            selectedChannel.id,
+            ownSendCount(selectedChannel.id) + 1,
+          );
           chat.sendMessage(body, replyTarget, attachments);
           trackFirstAction("arrival_first_message");
           setReplyTarget(null);
