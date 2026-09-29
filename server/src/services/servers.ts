@@ -1503,20 +1503,50 @@ export async function listServerChannelIds(
 }
 
 /**
- * The channels filed under a category (never threads, whose `parent_id` is a
- * text channel). Empty for anything that is not a category. Used to decide
- * who hears that a category moved or was deleted: its children move with it,
- * or land back at the top level, and a member who can see a child but not
- * the category still sees that child's place change.
+ * A server's members, and which of them can see at least one of these
+ * channels: the audience of a change to the channel list. With
+ * `carriesChildren`, the channels filed under any of them count too (never
+ * threads, whose `parent_id` is a text channel). A move or a delete takes a
+ * category's children with it, or files them back at the top level, and
+ * visibility does not inherit from a category, so a member who sees a child
+ * and not the category still sees that child's place change.
+ *
+ * One query and one round trip however many channels are named. Visibility
+ * is the same `channelVisibleSql` predicate `listChannels` filters by, asked
+ * once per member under EXISTS, so it stops at the first channel the member
+ * can see. For a channel everyone can see, that is one check per member.
+ * Aggregated into arrays for the reason `readChannelAudience` gives.
  */
-export async function listCategoryChildIds(
-  categoryId: string,
-): Promise<string[]> {
-  const result = await getPool().query<{ id: string }>(
-    `SELECT id FROM channels WHERE parent_id = $1 AND type <> 'thread'`,
-    [categoryId],
+export async function readChannelsUpdateAudience(
+  serverId: string,
+  channelIds: readonly string[],
+  carriesChildren: boolean,
+): Promise<{ memberIds: string[]; viewerIds: string[] }> {
+  const result = await getPool().query<{
+    member_ids: string[] | null;
+    viewer_ids: string[] | null;
+  }>(
+    `SELECT array_agg(sm.user_id) AS member_ids,
+            array_agg(sm.user_id) FILTER (
+              WHERE EXISTS (
+                SELECT 1 FROM channels c
+                WHERE c.server_id = $1
+                  AND (
+                    c.id = ANY($2::uuid[])
+                    OR ($3 AND c.parent_id = ANY($2::uuid[]) AND c.type <> 'thread')
+                  )
+                  AND ${channelVisibleSql("sm.user_id")}
+              )
+            ) AS viewer_ids
+     FROM server_members sm
+     WHERE sm.server_id = $1`,
+    [serverId, [...channelIds], carriesChildren],
   );
-  return result.rows.map((row) => row.id);
+  const row = result.rows[0];
+  return {
+    memberIds: row?.member_ids ?? [],
+    viewerIds: row?.viewer_ids ?? [],
+  };
 }
 
 export async function getChannel(channelId: string): Promise<ChannelRow | null> {

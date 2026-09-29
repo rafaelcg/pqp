@@ -75,7 +75,6 @@ const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
   "../ws/sockets.js"
 );
 const { resetReadCacheForTests } = await import("../lib/read-cache.js");
-const { invalidateChannelAudience } = await import("../services/servers.js");
 
 type User = Awaited<ReturnType<typeof upsertUser>>;
 
@@ -298,9 +297,6 @@ describeDb("channels-update: channel list changes reach members live", () => {
       serverId,
       true,
     );
-    // The overwrite routes drop the cached audience themselves; this write
-    // goes around them.
-    invalidateChannelAudience(category.body.channel.id);
     const moved = await call(owner, "PATCH", `/api/channels/${textChannelId}/move`, {
       parentId: category.body.channel.id,
       index: 0,

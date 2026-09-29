@@ -70,9 +70,12 @@ vi.mock("../services/blocks.js", () => ({
  * sibling dropped its cache before it told anybody to refetch".
  */
 const timeline: string[] = [];
-/** Who `listServerMemberIds` answers with, on either instance. */
+/**
+ * The server's members on either instance, for `listServerMemberIds` and
+ * `readChannelsUpdateAudience` alike.
+ */
 let serverMembers: string[] = [];
-/** How many of the next `listServerMemberIds` calls throw first. */
+/** How many of the next member or audience lookups throw first. */
 let memberLookupFailures = 0;
 /**
  * Who can see a channel, for the channel list nudge. A channel not in the map
@@ -81,19 +84,24 @@ let memberLookupFailures = 0;
 const channelAudiences = new Map<string, string[]>();
 
 vi.mock("../services/servers.js", () => ({
-  getChannelAudience: async (channelId: string) => {
-    const userIds = channelAudiences.get(channelId);
-    return userIds
-      ? {
-          serverId: null,
-          kind: "server",
-          has: (id: string) => userIds.includes(id),
-          userIds,
-        }
-      : null;
-  },
-  listCategoryChildIds: async () => [],
+  getChannelAudience: async () => null,
   getChannel: async () => ({ kind: "dm", server_id: null }),
+  readChannelsUpdateAudience: async (
+    _serverId: string,
+    channelIds: readonly string[],
+  ) => {
+    if (memberLookupFailures > 0) {
+      memberLookupFailures -= 1;
+      throw new Error("database_unavailable");
+    }
+    const viewers = new Set(
+      channelIds.flatMap((id) => channelAudiences.get(id) ?? []),
+    );
+    return {
+      memberIds: serverMembers,
+      viewerIds: serverMembers.filter((id) => viewers.has(id)),
+    };
+  },
   invalidateServerChannelList: (serverId: string) => {
     timeline.push(`invalidate:${serverId}`);
   },
@@ -759,7 +767,7 @@ describe("channels-update across two instances", () => {
     bSockets.deleteAuthenticatedSocket(hidden.socket);
   });
 
-  it("retries a failed member lookup instead of dropping the nudge", async () => {
+  it("retries a failed audience lookup instead of dropping the nudge", async () => {
     const serverId = randomUUID();
     const channelId = randomUUID();
     serverMembers = ["member", "owner"];

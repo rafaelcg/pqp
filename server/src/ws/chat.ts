@@ -59,7 +59,7 @@ import {
   getChannel,
   getChannelAudience,
   invalidateServerChannelList,
-  listCategoryChildIds,
+  readChannelsUpdateAudience,
 } from "../services/servers.js";
 import {
   bumpPermissionsVersion,
@@ -1046,9 +1046,9 @@ async function withChannelsUpdateRetry<T>(read: () => Promise<T>): Promise<T> {
 
 /**
  * Everyone who can see at least one of these channels, or `server` when that
- * is every member. The audience is the same `channelVisibleSql` predicate the
- * list itself is filtered by (`getChannelAudience`), so the people nudged are
- * exactly the people whose refetch can come back different: a member who
+ * is every member. Visibility is the same `channelVisibleSql` predicate the
+ * list itself is filtered by (`readChannelsUpdateAudience`), so the people
+ * nudged are exactly the people whose refetch can come back different: a member who
  * cannot see a private channel is not told that it was created, renamed,
  * moved or deleted.
  *
@@ -1065,33 +1065,15 @@ export async function resolveChannelsUpdateAudience(
   channelIds: readonly string[],
   options: { carriesChildren?: boolean } = {},
 ): Promise<ChannelsUpdateAudience> {
-  const ids = new Set(channelIds);
-  if (options.carriesChildren) {
-    for (const children of await Promise.all(
-      channelIds.map((id) => listCategoryChildIds(id)),
-    )) {
-      for (const id of children) {
-        ids.add(id);
-      }
-    }
-  }
-  const [memberIds, ...audiences] = await Promise.all([
-    listServerMemberIds(serverId),
-    ...[...ids].map((id) => getChannelAudience(id)),
-  ]);
-  const viewers = new Set<string>();
-  for (const audience of audiences) {
-    for (const userId of audience?.userIds ?? []) {
-      viewers.add(userId);
-    }
-  }
-  if (memberIds.every((userId) => viewers.has(userId))) {
+  const { memberIds, viewerIds } = await readChannelsUpdateAudience(
+    serverId,
+    channelIds,
+    options.carriesChildren === true,
+  );
+  if (viewerIds.length >= memberIds.length) {
     return { kind: "server", memberIds };
   }
-  return {
-    kind: "users",
-    userIds: memberIds.filter((userId) => viewers.has(userId)),
-  };
+  return { kind: "users", userIds: viewerIds };
 }
 
 /** Anyone in either. Every member in either one is every member. */

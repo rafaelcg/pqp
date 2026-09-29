@@ -4325,11 +4325,11 @@ function MainAppContent({
             return;
           }
 
-          // A channel on the open server was created, renamed, edited, moved
-          // or deleted. The frame names no channel, so the list is refetched;
-          // the server filters it per viewer, which is what keeps a private
-          // channel off the sidebars of people who cannot see it. A member in
-          // DMs or on another server loads the list fresh when they get here.
+          // A channel this person can see on the open server was created,
+          // renamed, edited, moved or deleted. `refreshChannelList` refetches
+          // and orders the refetch against every other list fetch. A member
+          // in DMs or on another server loads the list fresh when they get
+          // here.
           if (message.type === "channels-update") {
             if (message.serverId !== selectedServerIdRef.current) {
               return;
@@ -4867,8 +4867,16 @@ function MainAppContent({
    * A failure retries on a backoff (`channelListRetryDelayMs`) while this is
    * still the newest ticket and the server is still open. When the schedule
    * is spent the server is marked stale and refetched on the next reconnect.
+   *
+   * Only ever for the open server. A late caller asking for a server the
+   * person has already left must not take a ticket or cancel a pending
+   * retry: either would stop the open server's own refresh, and nothing
+   * would start it again.
    */
   function refreshChannelList(serverId: string, failedTries = 0) {
+    if (selectedServerIdRef.current !== serverId) {
+      return;
+    }
     if (channelListRetryTimerRef.current !== null) {
       clearTimeout(channelListRetryTimerRef.current);
       channelListRetryTimerRef.current = null;
@@ -5110,7 +5118,12 @@ function MainAppContent({
         setChannels(list);
         // A `channels-update` arrived while this was in flight, and its
         // refetch may have landed first: this list could be the older one.
-        if (channelListTicketRef.current !== ticket) {
+        // Refetched only while this server is still the open one (see
+        // `refreshChannelList`).
+        if (
+          channelListTicketRef.current !== ticket &&
+          selectedServerIdRef.current === serverId
+        ) {
           refreshChannelListRef.current(serverId);
         }
         void loadUnread(serverId);
