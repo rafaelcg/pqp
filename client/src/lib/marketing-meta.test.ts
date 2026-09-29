@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest";
 import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import es from "../locales/es/translation.json";
+import { PLAY_STORE_LISTING_URL } from "./play-store";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
   renderMarketingHead,
   LANDING_FAQ,
+  SOFTWARE_OPERATING_SYSTEMS,
   TELA_FAQ,
   VEM_FAQ,
   VS_DISCORD_FAQ,
@@ -536,5 +538,44 @@ describe("injectMarketingHead", () => {
     expect(ptBR["tela.seo.title"]).not.toBe(ptBR["tela.seo.ogTitle"]);
     expect(html.match(/<title>/g)).toHaveLength(1);
     expect(html.match(/property="og:title"/g)).toHaveLength(1);
+  });
+});
+
+describe("structured data", () => {
+  function jsonLdGraph(html: string): Record<string, unknown>[] {
+    const block = html.match(
+      /<script type="application\/ld\+json">([\s\S]*?)<\/script>/,
+    );
+    expect(block).not.toBeNull();
+    return (JSON.parse(block![1]) as { "@graph": Record<string, unknown>[] })["@graph"];
+  }
+
+  it("index.html and the edge head claim the same operating systems", () => {
+    const shell = jsonLdGraph(INDEX_HTML).find(
+      (node) => node["@type"] === "SoftwareApplication",
+    );
+    expect(shell?.operatingSystem).toBe(SOFTWARE_OPERATING_SYSTEMS);
+
+    const landing = jsonLdGraph(renderMarketingHead("/", "pt-BR")).find(
+      (node) => node["@type"] === "SoftwareApplication",
+    );
+    expect(landing?.operatingSystem).toBe(SOFTWARE_OPERATING_SYSTEMS);
+  });
+
+  it("points sameAs only at pages the public can open", () => {
+    for (const node of jsonLdGraph(renderMarketingHead("/", "en"))) {
+      for (const url of (node.sameAs as string[] | undefined) ?? []) {
+        // TestFlight is a beta enrollment, not a public listing.
+        expect(url).not.toContain("apps.apple.com");
+        expect(url).not.toContain("testflight");
+      }
+    }
+  });
+
+  it("names the public Play listing, the same one /android links to", () => {
+    const org = jsonLdGraph(renderMarketingHead("/", "en")).find(
+      (node) => node["@type"] === "Organization",
+    );
+    expect(org?.sameAs).toContain(PLAY_STORE_LISTING_URL);
   });
 });

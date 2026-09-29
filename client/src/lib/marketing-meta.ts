@@ -385,7 +385,7 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
+        "Ficam em servidores em São Paulo, com backups noturnos na América do Norte. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie, relatório de erros e a tag do Google Ads; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
@@ -417,7 +417,7 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
+        "It lives on servers in São Paulo, with nightly backups in North America. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics, error reporting and the Google Ads tag; all of it is at pqp.gg/privacy.",
     },
   ],
   es: [
@@ -449,7 +449,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Viven en servidores en São Paulo. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina.",
+        "Viven en servidores en São Paulo, con respaldos nocturnos en Norteamérica. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies, reporte de errores y la etiqueta de Google Ads; todo está en pqp.gg/privacy.",
     },
   ],
 };
@@ -574,7 +574,7 @@ export const TELA_FAQ: Record<
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
     {
       question:
@@ -612,7 +612,7 @@ export const TELA_FAQ: Record<
     {
       question: "What do you keep about me?",
       answer:
-        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
     },
     {
       question: "Why is Discord screen share suspended in Brazil?",
@@ -649,7 +649,7 @@ export const TELA_FAQ: Record<
     {
       question: "¿Qué guardan sobre mí?",
       answer:
-        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami) y una etiqueta de conversión de Google Ads que solo cuenta registros. Sin remarketing, sin listas de audiencia.",
+        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
     },
     {
       question: "¿Por qué compartir pantalla desde el navegador?",
@@ -810,18 +810,16 @@ export function escapeHtml(value: string): string {
  *
  * Every page carries the WebSite node, and now an Organization node beside
  * it: one stable identity for the publisher, independent of which page a
- * crawler landed on first, with `sameAs` pointing at the two other places the
- * same product answers for itself — the source repository and the Play Store
- * listing. Both are checked-in facts, not guesses: the repo is the one this
- * codebase lives in, and the Play listing is the one `docs/ANDROID_RELEASE.md`
- * records production access as open for. The App Store is deliberately absent
- * — TestFlight is a beta enrollment, not a public listing, and `sameAs` is for
- * pages anyone can already land on.
+ * crawler landed on first, with `sameAs` pointing at the other place the same
+ * product answers for itself: the source repository this codebase lives in,
+ * and the Play listing (the same URL as `PLAY_STORE_LISTING_URL` in
+ * `lib/play-store.ts`), public since 2026-09-28.
+ * `sameAs` is for pages anyone can already land on, so the App Store is
+ * absent: TestFlight is a beta enrollment, not a public listing.
  *
  * The landing adds SoftwareApplication — the page is the product — mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer) and, since the redesign, its own FAQPage, plus the same Play Store
- * link on `sameAs` for the one app-store URL that is public today. `/vs-discord`
+ * Offer) and, since the redesign, its own FAQPage, with the same `sameAs`. `/vs-discord`
  * adds FAQPage too, whose questions are the FAQ section actually rendered on
  * the page — schema for copy a visitor can read, never schema alone. `/tela`
  * does the same with its own seven.
@@ -830,6 +828,15 @@ const ORGANIZATION_SAME_AS = [
   "https://github.com/rafaelcg/pqp",
   "https://play.google.com/store/apps/details?id=gg.pqp.app",
 ];
+
+/**
+ * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
+ * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
+ * the Electron builds for all three systems, iPhone the TestFlight beta, and
+ * Android the Google Play app. `client/index.html` carries the same string for every page
+ * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
+ */
+export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";
 
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -852,7 +859,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       "@type": "SoftwareApplication",
       name: "pqp",
       applicationCategory: "CommunicationApplication",
-      operatingSystem: "Web, Windows, macOS, Linux, Android",
+      operatingSystem: SOFTWARE_OPERATING_SYSTEMS,
       url: `${CANONICAL_ORIGIN}/`,
       description: pick(PAGE_COPY["/"].description, locale),
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
