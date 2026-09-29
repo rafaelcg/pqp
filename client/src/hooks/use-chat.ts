@@ -1724,7 +1724,7 @@ export function createChatController(
               // hold the stored row. Swapping the bubble in as well would show
               // it twice, so the bubble just goes.
               const alreadyStored = messages.some(
-                (entry) => entry.id === incoming.id,
+                (entry, at) => at !== index && entry.id === incoming.id,
               );
               messages = alreadyStored
                 ? [...messages.slice(0, index), ...messages.slice(index + 1)]

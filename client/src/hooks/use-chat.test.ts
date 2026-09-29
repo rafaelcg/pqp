@@ -1322,6 +1322,31 @@ describe("jumping into history", () => {
     ]);
   });
 
+  it("keeps a confirmed send when its broadcast arrives twice", () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2));
+    chat.sendMessage("said once");
+    const { nonce } = sent.at(-1) as { nonce: string };
+    const broadcast = {
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "said once",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never;
+
+    chat.handleServerMessage(broadcast);
+    chat.handleServerMessage(broadcast);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "said once",
+    ]);
+  });
+
   it("drops a page forward that lands after the window went back to the present", async () => {
     const { chat } = setup();
     chat.setMessages(history(2), true, true);
