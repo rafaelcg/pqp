@@ -80,10 +80,21 @@ import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.watchPartyListBlock
 import gg.pqp.app.watch.watchPartyListEntry
 import gg.pqp.app.watch.ui.WatchPartyListBlockView
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * How many times a `channels-update` refetch is tried before the list on
+ * screen is left as it is. On `RealtimeClient.backoffMillis`, eight tries
+ * span about a minute.
+ */
+private const val CHANNELS_REFETCH_TRIES = 8
 
 /**
  * A server's channels.
@@ -207,8 +218,56 @@ fun ChannelsScreen(
         }
     }
 
+    // Every fetch of the list takes a ticket, and only the newest may write
+    // it: a slow first load, or a refetch overtaken by a newer one, can never
+    // land on top of a newer list. One counter for every server, so a fetch
+    // still finishing for the server this screen just left is stale too.
+    val channelsTicket = remember { AtomicInteger(0) }
     LaunchedEffect(serverId) {
-        channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
+        val ticket = channelsTicket.incrementAndGet()
+        val list = try {
+            session.api.channels(serverId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+        if (ticket == channelsTicket.get()) channels = list
+    }
+    // A channel this viewer can see was created, renamed, moved or deleted.
+    // The frame names no channel, so the list is refetched; the server filters
+    // it per viewer. Filtered to this server BEFORE collectLatest, so only a
+    // newer nudge, never an unrelated frame, cancels a refetch that is still
+    // in flight or waiting to retry. A failure retries on the socket's
+    // backoff, about a minute in all, and the list on screen stays meanwhile.
+    LaunchedEffect(serverId) {
+        session.realtime.frames
+            .filter { frame ->
+                when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                    "channels-update" -> frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
+                    else -> false
+                }
+            }
+            .collectLatest {
+                val ticket = channelsTicket.incrementAndGet()
+                for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+                    val list = try {
+                        session.api.channels(serverId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (ticket != channelsTicket.get()) return@collectLatest
+                    if (list != null) {
+                        channels = list
+                        return@collectLatest
+                    }
+                    if (attempt < CHANNELS_REFETCH_TRIES) {
+                        delay(RealtimeClient.backoffMillis(attempt))
+                    }
+                }
+            }
     }
 
     // The Baú's unread count, for the badge on its row.

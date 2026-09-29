@@ -1,5 +1,7 @@
 import type { WebSocket } from "ws";
+import { z } from "zod";
 import {
+  channelsUpdateSchema,
   buildMessagePreview,
   chatClientMessageSchema,
   extractMentions,
@@ -61,6 +63,7 @@ import {
   getChannel,
   getChannelAudience,
   invalidateServerChannelList,
+  readChannelsUpdateAudience,
 } from "../services/servers.js";
 import {
   bumpPermissionsVersion,
@@ -178,6 +181,7 @@ const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
 const PERMISSIONS_TOPIC = "chat.permissions";
 const COMMUNITY_HOME_TOPIC = "chat.community-home";
+const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
 
 interface PresenceUser {
@@ -1319,6 +1323,186 @@ export function deliverCommunityHomeUpdate(
       ? {}
       : { enabled: change.enabled, version: change.version }),
   } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && allowed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Who hears that a server's channel list changed. `server` is every member,
+ * resolved on each instance from `server_members`; `users` is an explicit
+ * list, for a change nobody else can see.
+ */
+export type ChannelsUpdateAudience =
+  | { kind: "server"; memberIds: readonly string[] }
+  | { kind: "users"; userIds: readonly string[] };
+
+/**
+ * The frame on the bus. Internal to the API instances, never sent to a
+ * client, which always gets the content-free `channelsUpdateSchema` shape.
+ * `userIds` present means "only these", absent means "every member". The bus
+ * spills a payload past NOTIFY's cap into a table (`bus-postgres.ts`), so a
+ * long list is fine. No build on `main` subscribes to this topic, so no
+ * older instance can read the frame and drop the list, widening delivery.
+ */
+const channelsUpdateBusSchema = channelsUpdateSchema.extend({
+  userIds: z.array(z.string()).optional(),
+});
+
+/**
+ * How long a failing lookup is retried before the nudge is given up: about
+ * four seconds in all. A mutation has already committed when this runs, and
+ * the frame is ephemeral, so one transient database error must not cost every
+ * member their refresh. Short on purpose: with the breaker open each attempt
+ * fails fast, and a member who misses the nudge still gets the change on
+ * their next refetch.
+ */
+const CHANNELS_UPDATE_RETRY_MS = [250, 1_000, 3_000] as const;
+
+async function withChannelsUpdateRetry<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      const wait = CHANNELS_UPDATE_RETRY_MS[attempt];
+      if (wait === undefined) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+}
+
+/**
+ * Everyone who can see at least one of these channels, or `server` when that
+ * is every member. Visibility is the same `channelVisibleSql` predicate the
+ * list itself is filtered by (`readChannelsUpdateAudience`), so the people
+ * nudged are exactly the people whose refetch can come back different: a member who
+ * cannot see a private channel is not told that it was created, renamed,
+ * moved or deleted.
+ *
+ * `carriesChildren` is for a move or a delete, which takes a category's
+ * children with it (or files them back at the top level). Visibility does not
+ * inherit from a category, so a member who can see a child and not the
+ * category still sees that child move, and is in the audience.
+ *
+ * A channel that no longer exists contributes nobody, which is why a delete
+ * resolves its audience before the row goes.
+ */
+export async function resolveChannelsUpdateAudience(
+  serverId: string,
+  channelIds: readonly string[],
+  options: { carriesChildren?: boolean } = {},
+): Promise<ChannelsUpdateAudience> {
+  const { memberIds, viewerIds } = await readChannelsUpdateAudience(
+    serverId,
+    channelIds,
+    options.carriesChildren === true,
+  );
+  if (viewerIds.length >= memberIds.length) {
+    return { kind: "server", memberIds };
+  }
+  return { kind: "users", userIds: viewerIds };
+}
+
+/** Anyone in either. Every member in either one is every member. */
+export function mergeChannelsUpdateAudiences(
+  a: ChannelsUpdateAudience,
+  b: ChannelsUpdateAudience,
+): ChannelsUpdateAudience {
+  if (a.kind === "server") {
+    return a;
+  }
+  if (b.kind === "server") {
+    return b;
+  }
+  return { kind: "users", userIds: [...new Set([...a.userIds, ...b.userIds])] };
+}
+
+/**
+ * Tell the members who can see a change to a server's channel list that it
+ * changed: a channel was created, renamed, edited, moved or deleted. The frame
+ * itself is content-free, like `permissions-update`: it names no channel, and
+ * each client refetches `GET /api/servers/:id/channels`, which applies privacy
+ * and VIEW_CHANNEL overwrites per viewer.
+ *
+ * Addressed to the channel's audience, not the whole server: a nudge that
+ * changes nothing on a member's sidebar would still tell them that something
+ * they cannot see just changed. `channelIds` is read after the write; `before`
+ * is an audience resolved before it, for a delete (the row is gone after) and
+ * a privacy flip (the people who just lost the channel must see it go).
+ *
+ * Fails closed. If the audience cannot be read after the retries, nobody is
+ * nudged and the error is thrown for the caller to log. Falling back to the
+ * whole server would be the leak this addressing exists to prevent.
+ * Fire-and-forget from the routes.
+ */
+export async function notifyChannelsUpdate(
+  serverId: string,
+  change: {
+    channelIds: readonly string[];
+    carriesChildren?: boolean;
+    before?: ChannelsUpdateAudience | null;
+  },
+): Promise<void> {
+  const after =
+    change.channelIds.length > 0
+      ? await withChannelsUpdateRetry(() =>
+          resolveChannelsUpdateAudience(serverId, change.channelIds, {
+            carriesChildren: change.carriesChildren,
+          }),
+        )
+      : null;
+  const audience =
+    after && change.before
+      ? mergeChannelsUpdateAudiences(after, change.before)
+      : (after ?? change.before);
+  if (!audience) {
+    return;
+  }
+  if (audience.kind === "server") {
+    deliverChannelsUpdate(serverId, audience.memberIds);
+    if (isBusEnabled()) {
+      // No member ids: the receiving instance resolves membership itself, as
+      // `permissions-update` does, so a big server's list never rides the bus.
+      publishToCluster(CHANNELS_TOPIC, { type: "channels-update", serverId });
+    }
+    return;
+  }
+  deliverChannelsUpdate(serverId, audience.userIds);
+  if (isBusEnabled()) {
+    // Always published, even with nobody on the list: every instance still
+    // has to drop its cached copy of the list.
+    publishToCluster(CHANNELS_TOPIC, {
+      type: "channels-update",
+      serverId,
+      userIds: [...audience.userIds],
+    });
+  }
+}
+
+/**
+ * The half that runs on EVERY instance: the origin calls it directly and
+ * `subscribeToCluster(CHANNELS_TOPIC, ...)` calls it on the others. The
+ * channel list read cache (`servers.ts`) is per process, so each instance
+ * drops its own copy here, before the frame goes out, or a member whose
+ * socket and refetch both land on a sibling would read the list from before
+ * the write. Guarded for the same reason as in `deliverPermissionsUpdate`:
+ * this file's tests mock `servers.js` without the export.
+ */
+export function deliverChannelsUpdate(
+  serverId: string,
+  recipientIds: readonly string[],
+): void {
+  try {
+    invalidateServerChannelList(serverId);
+  } catch {
+    // Mocked without the export; see above.
+  }
+  const allowed = new Set(recipientIds);
+  const payload = encode({ type: "channels-update", serverId } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
       socket.send(payload);
@@ -2725,6 +2909,25 @@ subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
     })
     .catch((error) => {
       console.error("[ws] community-home-update relay failed:", error);
+    });
+});
+
+subscribeToCluster(CHANNELS_TOPIC, (data) => {
+  const parsed = channelsUpdateBusSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { serverId, userIds } = parsed.data;
+  if (userIds) {
+    deliverChannelsUpdate(serverId, userIds);
+    return;
+  }
+  void withChannelsUpdateRetry(() => listServerMemberIds(serverId))
+    .then((memberIds) => {
+      deliverChannelsUpdate(serverId, memberIds);
+    })
+    .catch((error) => {
+      console.error("[ws] channels-update relay failed:", error);
     });
 });
 

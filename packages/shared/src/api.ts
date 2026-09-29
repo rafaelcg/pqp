@@ -1074,6 +1074,22 @@ export const moveChannelSchema = z.object({
   index: z.number().int().min(0),
 });
 
+/**
+ * WS nudge: a server's channel list changed (a channel was created, renamed,
+ * edited, moved or deleted). Content-free on purpose: it names no channel.
+ * Each client refetches `GET /api/servers/:id/channels`, which applies
+ * privacy and VIEW_CHANNEL overwrites per viewer. Addressed per user, never
+ * fanned out on a channel: to every member for a channel everyone can see,
+ * and only to the people who can see it otherwise, so a member is never told
+ * that a channel hidden from them changed (`notifyChannelsUpdate`).
+ */
+export const channelsUpdateSchema = z.object({
+  type: z.literal("channels-update"),
+  serverId: z.string().uuid(),
+});
+
+export type ChannelsUpdate = z.infer<typeof channelsUpdateSchema>;
+
 export const createInviteSchema = z.object({
   maxUses: z.number().int().positive().nullable().optional(),
   expiresInHours: z.number().int().positive().nullable().optional(),

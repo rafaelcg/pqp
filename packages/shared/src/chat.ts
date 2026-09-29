@@ -2,6 +2,7 @@ import { z } from "zod";
 import { watchPartySchema } from "./watch-party-session.js";
 import {
   channelKindSchema,
+  channelsUpdateSchema,
   MESSAGE_BULK_DELETE_MAX,
   messageBodyTextSchema,
   messagePinnedBySchema,
@@ -620,6 +621,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // channel the frame named.
   permissionsUpdateSchema,
   communityHomeUpdateSchema,
+  // Per socket like `permissions-update`: the members who can see the change.
+  channelsUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
   watchPartyUpdateSchema,
@@ -726,6 +729,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  *
  * `community-home-update` is absent for the same reason: server-scoped, no
  * channel, clients refetch Baú. It travels on `chat.community-home`.
+ *
+ * `channels-update` is absent for the same reason again: server-scoped, no
+ * channel, clients refetch their own channel list. It travels on
+ * `chat.channels`.
  *
  * `server-removed` is absent because its addressees are the people who just
  * lost the server, so no channel could reach them anyway. It names who was
