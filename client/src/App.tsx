@@ -115,6 +115,7 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { createHistoryLoadTracker } from "@/lib/history-load-tracker";
 import {
   uniformJitterMs,
   bootstrapJitterMs,
@@ -1911,6 +1912,13 @@ function MainAppContent({
   const [historyFailedChannelId, setHistoryFailedChannelId] = useState<
     string | null
   >(null);
+  /** Orders overlapping history requests; see `createHistoryLoadTracker`. */
+  const [historyLoads] = useState(createHistoryLoadTracker);
+  const clearHistoryFailed = useCallback((channelId: string) => {
+    setHistoryFailedChannelId((failed) =>
+      failed === channelId ? null : failed,
+    );
+  }, []);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
@@ -3328,6 +3336,7 @@ function MainAppContent({
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
+      const load = historyLoads.begin();
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
@@ -3341,6 +3350,10 @@ function MainAppContent({
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
+        load.succeeded();
+        // An older request can land after a newer one failed: what it loaded
+        // is on screen, so the error no longer applies.
+        clearHistoryFailed(channelId);
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
@@ -3353,7 +3366,10 @@ function MainAppContent({
         // Not the app banner: the raw server string ("database_unavailable")
         // is not copy, and the list below would still say the channel is
         // empty. The list shows the failure in place, with a retry.
-        if (selectedChannelIdRef.current === channelId) {
+        if (
+          selectedChannelIdRef.current === channelId &&
+          load.failureStands()
+        ) {
           setHistoryFailedChannelId(channelId);
         }
       } finally {
@@ -3362,7 +3378,7 @@ function MainAppContent({
         }
       }
     },
-    [chat, clearUnread, refresh],
+    [chat, clearHistoryFailed, clearUnread, historyLoads, refresh],
   );
 
   /**
@@ -3378,15 +3394,21 @@ function MainAppContent({
     }
     setHistoryFailedChannelId(null);
     setMessagesLoading(true);
+    const load = historyLoads.begin();
     try {
       const page = await fetchMessages(channelId);
       if (selectedChannelIdRef.current !== channelId) {
         return;
       }
+      load.succeeded();
+      clearHistoryFailed(channelId);
       chat.setMessages(page.messages, page.hasMore);
       refresh();
     } catch {
-      if (selectedChannelIdRef.current === channelId) {
+      if (
+        selectedChannelIdRef.current === channelId &&
+        load.failureStands()
+      ) {
         setHistoryFailedChannelId(channelId);
       }
     } finally {
@@ -3394,7 +3416,7 @@ function MainAppContent({
         setMessagesLoading(false);
       }
     }
-  }, [chat, refresh]);
+  }, [chat, clearHistoryFailed, historyLoads, refresh]);
   const handleRetryHistory = useCallback(() => {
     void retryChannelHistory();
   }, [retryChannelHistory]);
@@ -3912,11 +3934,12 @@ function MainAppContent({
       void fetchMessages(channelId)
         .then((page) => {
           if (selectedChannelIdRef.current === channelId) {
+            // Counted, so an open or retry that fails after this landed
+            // cannot put the error back over the page it loaded.
+            historyLoads.loaded();
             chat.setMessages(page.messages, page.hasMore);
             // A reconnect is also how a failed first load heals itself.
-            setHistoryFailedChannelId((failed) =>
-              failed === channelId ? null : failed,
-            );
+            clearHistoryFailed(channelId);
             refresh();
           }
         })
