@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { ensureServer, leaveVoiceIfConnected, openApp } from "./fixtures";
+import {
+  ensureServer,
+  leaveVoiceIfConnected,
+  openApp,
+  unreachableStageControls,
+} from "./fixtures";
 
 /**
  * Turning a camera on in a server voice channel must grow the shared stage,
@@ -157,4 +162,48 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     timeout: 10_000,
   });
   await expect(page.getByTestId("call-stage")).toHaveCount(0);
+});
+
+test("a phone-width stage keeps every call control on screen", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+  await page.getByRole("button", { name: /lobby/i }).first().dblclick();
+  await expect(page.getByText("Voice connected")).toBeVisible({
+    timeout: 20_000,
+  });
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera on", exact: true })
+    .click();
+  await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
+
+  // The stage's pill was one unbreakable row of ~33rem, centred in a stage
+  // of ~20rem on a 390 phone: mute and raise hand sat under the server rail,
+  // hang-up past the right edge. 320 is the narrowest phone still sold.
+  const bar = page.getByTestId("call-controls-bar");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(bar.getByRole("button", { name: "Leave" })).toBeAttached();
+    await expect
+      .poll(() => unreachableStageControls(page), { timeout: 5_000 })
+      .toEqual([]);
+  }
+  // And the wide stage still draws them on one line.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect
+    .poll(async () => {
+      const tops = await bar
+        .getByRole("button")
+        .evaluateAll((buttons) =>
+          buttons
+            .map((b) => b.getBoundingClientRect())
+            .filter((r) => r.width > 0)
+            .map((r) => Math.round(r.top)),
+        );
+      return new Set(tops).size;
+    })
+    .toBe(1);
 });

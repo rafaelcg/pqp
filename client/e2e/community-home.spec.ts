@@ -235,6 +235,28 @@ test.describe("Baú", () => {
     );
   });
 
+  test("a long unbroken title wraps inside its card", async ({ page }) => {
+    const serverId = await seedCommunity(`Titulo Longo ${Date.now()}`);
+    await seedPost(serverId, {
+      title: `https://exemplo.com/${"a".repeat(160)}`,
+      body: "titulo de link sem espacos",
+    });
+    for (const size of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(size);
+      await openAs(page, OWNER, serverId, { communityHome: "1" });
+      const title = page.locator("[data-home-post] h2").first();
+      await expect(title).toBeVisible({ timeout: 20_000 });
+      const box = await title.evaluate((el) => ({
+        client: el.clientWidth,
+        scroll: el.scrollWidth,
+      }));
+      expect(box.scroll).toBeLessThanOrEqual(box.client);
+    }
+  });
+
   test("member: intro card once, teaser comments, VIP lock, no compose", async ({
     page,
   }) => {

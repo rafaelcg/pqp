@@ -21,7 +21,17 @@ starts with Baú off. An owner turns it on in Server settings (the Baú section,
 `PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
 The row, the landing and the feed need both on a private hall. A community
 always lands on Overview (identity), even with Baú still off; the feed stays
-empty until staff turn it on, and only if the instance flag is on. Until the row is
+empty until staff turn it on, and only if the instance flag is on. Flipping the
+switch bumps `servers.community_home_version` in the same UPDATE and sends a
+`community-home-update` frame to every member with `enabled` and `version`. The
+web client writes the value onto its copy of the server only when the version
+is higher than the one it holds, so an open app follows the owner with no
+reload, and a late or duplicated frame cannot undo a newer flip. A failed
+member lookup or a cluster bus that was down is retried in the background
+(`notifyCommunityHomeSwitch`, `server/src/ws/chat.ts`). A frame missed while the
+socket was down is caught on reconnect: the client re-reads
+`GET /api/servers/:id/home/config` (`{ enabled, version }`) for the server on
+screen, and for any other server when it is next opened. Until the row is
 opened once on a server it carries a small "New" chip (`localStorage`, per
 server, `client/src/lib/community-home/new-badges.ts`).
 

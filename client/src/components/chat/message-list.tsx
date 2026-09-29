@@ -29,6 +29,7 @@ import {
   PinOff,
   Play,
   Reply,
+  RotateCw,
   ShieldCheck,
   SmilePlus,
   Star,
@@ -98,6 +99,7 @@ import {
 import { formatReactionWho } from "@/lib/reaction-who";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
+import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
 import {
   cn,
@@ -117,8 +119,21 @@ const STICKY_THRESHOLD_PX = 120;
 const LOAD_MORE_THRESHOLD_PX = 240;
 /** How long a jumped-to message stays lit. */
 const HIGHLIGHT_MS = 2_000;
+/**
+ * How long a jump's smooth scroll may take before it is treated as stopped,
+ * for a browser without `scrollend` or a scroll that had nowhere to go (which
+ * fires nothing at all).
+ */
+const JUMP_SETTLE_MS = 1_000;
+/** At most this many re-centring frames once a jump's scroll has stopped. */
+const JUMP_SETTLE_PASSES = 6;
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
+
+/** How far the transcript is scrolled up from its live end, in pixels. */
+function distanceFromBottom(container: HTMLElement): number {
+  return container.scrollHeight - container.scrollTop - container.clientHeight;
+}
 
 /**
  * Skip layout and paint for a row while it is off screen, the cheap half of
@@ -130,6 +145,10 @@ const JUMP_NOTICE_MS = 3_000;
  * the size lets the browser remember each row's real height after its first
  * render, so a row that scrolls back into view does not jump; the `64px`
  * fallback is only a guess for the very first paint.
+ *
+ * It implies paint containment, which clips everything at the box edge. A row
+ * with the hover toolbar puts it on an inner wrapper, not the `<article>`,
+ * because the toolbar hangs 12px above the article on purpose.
  */
 const ROW_CONTENT_VISIBILITY: CSSProperties = {
   contentVisibility: "auto",
@@ -202,6 +221,13 @@ interface MessageListProps {
   serverId?: string | null;
   channelId?: string | null;
   isLoading?: boolean;
+  /**
+   * The history request for this channel failed. What is on screen is then not
+   * the channel, so the empty state ("say hi") would be a lie: a blip would make
+   * every channel look wiped. Shown instead of it, with `onRetryHistory`.
+   */
+  historyFailed?: boolean;
+  onRetryHistory?: () => void;
   hasMore?: boolean;
   /** True while the loaded window stops short of the newest message. */
   hasNewer?: boolean;
@@ -447,6 +473,8 @@ export const MessageList = memo(function MessageList({
   serverId = null,
   channelId = null,
   isLoading = false,
+  historyFailed = false,
+  onRetryHistory,
   hasMore = false,
   hasNewer = false,
   isLoadingOlder = false,
@@ -530,8 +558,12 @@ export const MessageList = memo(function MessageList({
   /** For the arrival announcement below — read without adding `messages`
    * itself to that effect's deps, which would rerun it on every in-place
    * edit/reaction update and not just on an actual new arrival. */
-  const latestMessageRef = useRef(messages[messages.length - 1]);
-  latestMessageRef.current = messages[messages.length - 1];
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  /** Set below, once `jumpToPresent` exists; read by the arrival effect. */
+  const followOwnSendRef = useRef<() => void>(() => {});
   /** Row elements by message id, so a jump can find its target. */
   const rowNodes = useRef(new Map<string, HTMLElement>());
   /**
@@ -570,6 +602,24 @@ export const MessageList = memo(function MessageList({
   const appendedRef = useRef(0);
   /** Set while a jump back to the live end is in flight. */
   const pendingTailRef = useRef(false);
+  /**
+   * Set while a jump to a message is still travelling there.
+   *
+   * `focusRow` starts a smooth scroll away from the tail, and the first scroll
+   * events of that animation are still within `STICKY_THRESHOLD_PX` of the
+   * bottom, so `handleScroll` used to re-pin the list on its way out. Rows off
+   * screen are `content-visibility: auto` and get laid out as the animation
+   * passes them, the ResizeObserver saw a pinned list growing, and snapped it
+   * back to the bottom: a permalink or a search result to anything already in
+   * the loaded page flashed a row nobody could see. While this is set the
+   * scroll handler neither pins nor pages; it reads the geometry once when
+   * the jump lands.
+   */
+  const jumpingRef = useRef(false);
+  /** The message the jump in flight is going to. */
+  const jumpTargetRef = useRef<string | null>(null);
+  /** Cancels what the jump in flight waits on: `scrollend`, a timer, a frame. */
+  const jumpSettleCleanupRef = useRef<(() => void) | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
 
   /**
@@ -678,8 +728,8 @@ export const MessageList = memo(function MessageList({
   }
 
   const firstUnreadId = useMemo(
-    () => findFirstUnreadMessageId(messages, unreadSince),
-    [messages, unreadSince],
+    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
+    [messages, unreadSince, currentUserId],
   );
   /**
    * The ids a selection may contain, in the order they are on screen.
@@ -911,6 +961,63 @@ export const MessageList = memo(function MessageList({
   }, []);
 
   /**
+   * The jump's smooth scroll has stopped: put the row where it was meant to
+   * be, then hand the scroll back to `handleScroll`.
+   *
+   * The smooth scroll aimed at a place measured before the rows between here
+   * and there had ever been laid out, and a `content-visibility` row that has
+   * never rendered is its 64px guess until it does. Those rows take their
+   * real height as the animation passes them, so the target drifts, by
+   * several rows on a long jump, sometimes off screen. Each pass re-centres
+   * the row instantly and waits a frame for whatever that brought on screen
+   * to lay out, until a pass has nothing left to move.
+   */
+  const settleJump = useCallback(() => {
+    jumpSettleCleanupRef.current?.();
+    jumpSettleCleanupRef.current = null;
+    if (!jumpingRef.current) {
+      return;
+    }
+    let passes = 0;
+    const pass = () => {
+      const container = scrollRef.current;
+      const node = jumpTargetRef.current
+        ? rowNodes.current.get(jumpTargetRef.current)
+        : undefined;
+      if (container && node && passes < JUMP_SETTLE_PASSES) {
+        passes += 1;
+        const from = container.scrollTop;
+        scrollWithin(container, node, { block: "center" });
+        if (container.scrollTop !== from) {
+          const frame = requestAnimationFrame(pass);
+          jumpSettleCleanupRef.current = () => cancelAnimationFrame(frame);
+          return;
+        }
+      }
+      jumpSettleCleanupRef.current = null;
+      jumpingRef.current = false;
+      jumpTargetRef.current = null;
+      // Once, from where the jump stopped, so a target near the tail follows
+      // it again. Pinning only: paging waits for the reader's own scroll,
+      // because prepending a page right under the message they were sent to
+      // would move it.
+      if (container) {
+        const pinned = distanceFromBottom(container) <= STICKY_THRESHOLD_PX;
+        // The ref too, not only the state, for the same reason `focusRow`
+        // clears both: the ResizeObserver reads the ref and can fire before
+        // React re-renders, and a live message landing in that gap would
+        // otherwise grow a list the observer still thinks is unpinned.
+        isPinnedRef.current = pinned;
+        setIsPinned(pinned);
+        if (pinned) {
+          setMissedCount(0);
+        }
+      }
+    };
+    pass();
+  }, []);
+
+  /**
    * Scroll a rendered message into view and light it up. False when the message
    * is not in the loaded window.
    */
@@ -920,14 +1027,31 @@ export const MessageList = memo(function MessageList({
     if (!node || !container) {
       return false;
     }
+    // A jump parks the reader in history, so the list stops following the
+    // tail now, in the ref as well as the state: the ResizeObserver reads the
+    // ref and can fire before React has re-rendered. See `jumpingRef`.
+    jumpSettleCleanupRef.current?.();
+    jumpingRef.current = true;
+    jumpTargetRef.current = messageId;
+    isPinnedRef.current = false;
+    setIsPinned(false);
     scrollWithin(container, node, { behavior: "smooth", block: "center" });
+    // `scrollend` says the animation has stopped, wherever it stopped: a
+    // scroll it cut short ends too, and `settleJump` corrects the position
+    // either way.
+    const timer = window.setTimeout(settleJump, JUMP_SETTLE_MS);
+    container.addEventListener("scrollend", settleJump);
+    jumpSettleCleanupRef.current = () => {
+      window.clearTimeout(timer);
+      container.removeEventListener("scrollend", settleJump);
+    };
     setFlashId(messageId);
     if (flashTimer.current) {
       window.clearTimeout(flashTimer.current);
     }
     flashTimer.current = window.setTimeout(() => setFlashId(null), HIGHLIGHT_MS);
     return true;
-  }, []);
+  }, [settleJump]);
 
   /**
    * Go to a message wherever it lives: a rendered row is scrolled to directly,
@@ -978,6 +1102,7 @@ export const MessageList = memo(function MessageList({
       if (noticeTimer.current) {
         window.clearTimeout(noticeTimer.current);
       }
+      jumpSettleCleanupRef.current?.();
     },
     [],
   );
@@ -1007,13 +1132,26 @@ export const MessageList = memo(function MessageList({
     const appended = appendedRef.current;
     appendedRef.current = 0;
     // The first page of a visit is not an "arrival". The landing effect below
-    // puts the viewport on the NEW rule (or the tail) without treating the
-    // whole history as missed messages.
-    if (previousCount === 0 && added > 0 && !highlightRef.current) {
+    // puts the viewport on the NEW rule (or the tail), or the permalink jump
+    // puts it on its message, without treating the whole history as missed
+    // messages. Following the tail here for a permalink started a smooth
+    // scroll to the bottom that the jump then had to interrupt.
+    if (previousCount === 0 && added > 0) {
       return;
     }
     const arrived = added - prepended - appended;
     if (arrived <= 0) {
+      return;
+    }
+    const { sentHere, fromOthers } = splitArrivals(
+      messagesRef.current.slice(-arrived),
+      currentUserIdRef.current,
+    );
+    // Sending is asking to see the bottom, wherever the reader was: Discord
+    // puts you on your own message every time. Scrolled up, the send used to
+    // sit below the fold and the pill counted it as somebody else's news.
+    if (sentHere) {
+      followOwnSendRef.current();
       return;
     }
     // A jump parks the reader mid-history: the last row on screen is not the
@@ -1024,19 +1162,24 @@ export const MessageList = memo(function MessageList({
     }
     if (isPinnedRef.current) {
       scrollToBottom(messages.length > 60 ? "auto" : "smooth");
-    } else {
-      setMissedCount((count) => count + arrived);
+    } else if (fromOthers.length > 0) {
+      // The reader's own rows are never "new": one from their other device
+      // leaves the scroll alone and the count too.
+      setMissedCount((count) => count + fromOthers.length);
+    }
+    if (fromOthers.length === 0) {
+      return;
     }
 
     // A screen reader gets a one-line heads-up either way — not the message
     // itself, which on a busy channel would mean a wall of speech nobody
     // could interrupt. Reading the actual row is one arrow-key press away
     // once this points them at it.
-    const newest = latestMessageRef.current;
+    const newest = fromOthers[fromOthers.length - 1];
     setLiveAnnouncement(
-      arrived === 1 && newest
+      fromOthers.length === 1
         ? translateMessage("chat.live.from", { name: newest.authorName })
-        : translateMessage("chat.live.many", { count: arrived }),
+        : translateMessage("chat.live.many", { count: fromOthers.length }),
     );
   }, [messages.length, scrollToBottom]);
 
@@ -1106,6 +1249,9 @@ export const MessageList = memo(function MessageList({
     setFlashId(null);
     setJumpNotice(false);
     setPendingJumpId(null);
+    jumpSettleCleanupRef.current?.();
+    jumpSettleCleanupRef.current = null;
+    jumpingRef.current = false;
     // A reveal belongs to the conversation it was made in. Carrying it across
     // would re-open a blocked message in the next channel by message id alone.
     setRevealedIds(new Set());
@@ -1130,9 +1276,6 @@ export const MessageList = memo(function MessageList({
   // a later commit with the same message count would skip the real list and
   // leave it at scrollTop 0. That is the refresh-not-at-the-bottom bug.
   useLayoutEffect(() => {
-    if (highlightRef.current) {
-      return;
-    }
     if (pendingTailRef.current) {
       return;
     }
@@ -1144,6 +1287,15 @@ export const MessageList = memo(function MessageList({
     }
     const key = `${channelId ?? ""}::${unreadSince ?? "none"}`;
     if (unreadLandedRef.current === key) {
+      return;
+    }
+    if (highlightRef.current) {
+      // The permalink is this visit's landing. Recorded, not just skipped:
+      // this effect runs again on every change in message count, and by the
+      // time older history pages in or a new message arrives the highlight
+      // has been handled and cleared, so an unrecorded visit would land again
+      // at the tail, away from the message the reader was sent to.
+      unreadLandedRef.current = key;
       return;
     }
     const unreadId = firstUnreadId;
@@ -1278,14 +1430,46 @@ export const MessageList = memo(function MessageList({
     });
   }, [hasNewer, onJumpToPresent, scrollToBottom]);
 
-  const handleScroll = useCallback(() => {
+  /**
+   * The reader just sent something: put them on it. From a jump into history
+   * that means the live end of the channel, which is where the send went.
+   * Close to the bottom it glides; from further up it cuts straight there,
+   * because a long animation reads as lag, and a row that grows mid-flight (a
+   * GIF, an image still loading) would outrun it.
+   */
+  const followOwnSend = useCallback(() => {
+    if (hasNewerRef.current) {
+      jumpToPresent();
+      return;
+    }
     const container = scrollRef.current;
     if (!container) {
       return;
     }
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
-    const pinned = distanceFromBottom <= STICKY_THRESHOLD_PX;
+    // The ref as well as the state: the resize observer that follows a late
+    // image reads the ref, and it can fire before the next render copies it.
+    isPinnedRef.current = true;
+    setIsPinned(true);
+    scrollToBottom(
+      distanceFromBottom <= container.clientHeight ? "smooth" : "auto",
+    );
+  }, [jumpToPresent, scrollToBottom]);
+  followOwnSendRef.current = followOwnSend;
+
+  const handleScroll = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    // A jump's own animation: `settleJump` reads the geometry when it lands.
+    // Its first frames are still near the bottom and would re-pin the list.
+    if (jumpingRef.current) {
+      return;
+    }
+    const distance = distanceFromBottom(container);
+    const pinned = distance <= STICKY_THRESHOLD_PX;
     setIsPinned(pinned);
     if (pinned) {
       setMissedCount(0);
@@ -1294,7 +1478,7 @@ export const MessageList = memo(function MessageList({
     if (container.scrollTop <= LOAD_MORE_THRESHOLD_PX) {
       loadOlder();
     }
-    if (distanceFromBottom <= LOAD_MORE_THRESHOLD_PX) {
+    if (distance <= LOAD_MORE_THRESHOLD_PX) {
       loadNewer();
     }
   }, [loadNewer, loadOlder]);
@@ -1337,8 +1521,18 @@ export const MessageList = memo(function MessageList({
           </div>
         )}
 
+        {historyFailed && messages.length > 0 && (
+          // Live arrivals since the failed load: keep them, and say the
+          // history above them is missing rather than absent.
+          <HistoryFailed compact onRetry={onRetryHistory} />
+        )}
+
         {messages.length === 0 ? (
-          <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
+          historyFailed ? (
+            <HistoryFailed onRetry={onRetryHistory} />
+          ) : (
+            <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
+          )
         ) : (
           rows.map((row, index) => {
             const { joinTop, joinBottom } = mentionJoins(
@@ -1837,6 +2031,65 @@ function FailedSendFooter({
  * syntax: the composer's format hint teaches that at the composer, once
  * (`feature-hint.tsx`, "composer format").
  */
+function HistoryFailed({
+  compact = false,
+  onRetry,
+}: {
+  compact?: boolean;
+  onRetry?: () => void;
+}) {
+  const { t } = useTranslation();
+  const retry = onRetry ? (
+    <Button
+      type="button"
+      variant="secondary"
+      size={compact ? "sm" : undefined}
+      className={compact ? undefined : "mt-3"}
+      data-history-retry=""
+      onClick={onRetry}
+    >
+      <RotateCw
+        aria-hidden="true"
+        className={compact ? "h-3.5 w-3.5" : "h-4 w-4"}
+      />
+      {t("chat.historyFailed.retry")}
+    </Button>
+  ) : null;
+
+  if (compact) {
+    return (
+      <div
+        data-history-failed=""
+        className="flex flex-wrap items-center justify-center gap-3 px-4 pb-3"
+      >
+        <p role="alert" className="text-sm text-danger">
+          {t("chat.historyFailed.inline")}
+        </p>
+        {retry}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-history-failed=""
+      className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
+    >
+      <AlertCircle aria-hidden="true" className="h-6 w-6 text-danger" />
+      <p
+        role="alert"
+        className="text-balance font-display text-xl font-bold text-paper"
+      >
+        {t("chat.historyFailed.title")}
+      </p>
+      <p className="max-w-xs text-pretty text-sm text-paper-muted">
+        {t("chat.historyFailed.body")}
+      </p>
+      {retry}
+    </div>
+  );
+}
+
 function EmptyState({
   onCopyOwnerInvite,
 }: {
@@ -2641,7 +2894,6 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
           )}
-          style={ROW_CONTENT_VISIBILITY}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
@@ -2670,247 +2922,256 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {stream ? null : startsGroup && !compact ? (
-            <div className="flex w-14 shrink-0 items-start justify-end pr-2">
-              <div className="relative h-9 w-9 shrink-0">
-                <AuthorButton
-                  message={message}
-                  author={authorInfo}
-                  tabIndex={controlTabIndex}
-                  onOpenProfile={openProfile}
-                  className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
-                >
-                  {message.isAutomod ? (
-                    <span
-                      className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
-                      title={t("chat.automodPosted")}
-                    >
-                      <ShieldCheck className="h-5 w-5" aria-hidden />
-                    </span>
-                  ) : (
-                    <UserAvatar
-                      name={message.authorName}
-                      avatarUrl={message.authorAvatarUrl}
-                      rounded="lg"
-                      className="h-9 w-9"
-                      fallbackClassName="bg-ink-3 text-sm"
-                    />
-                  )}
-                </AuthorButton>
-                {!message.isWebhook && authorInfo?.status && (
-                  <StatusDot
-                    status={authorInfo.status}
-                    className="absolute -bottom-0.5 -right-0.5"
-                    ringClassName="rounded-full bg-channel ring-2 ring-channel"
-                  />
-                )}
-              </div>
-            </div>
-          ) : (
-            <time
-              className={cn(
-                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-              )}
-              dateTime={message.createdAt}
-              title={formatFullTimestamp(message.createdAt)}
-            >
-              {formatTime(message.createdAt)}
-            </time>
-          )}
-
-          <div className="min-w-0 flex-1">
-            {stream && !message.body && !isEditing && (
-              <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
-                {streamAuthor}
-              </div>
-            )}
-            {message.replyTo && (
-              <ReplyQuote
-                replyTo={message.replyTo}
-                onJump={onJumpToMessage}
-                tabIndex={controlTabIndex}
-              />
-            )}
-            {startsGroup && !stream && (
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="inline-flex items-baseline gap-1">
+          {/* Containment lives on this wrapper and not on the <article>: paint
+              containment clips at the box edge, and the hover toolbar below
+              overhangs the row's top edge on purpose. The toolbar and the
+              select overlay stay outside it, everything expensive is inside. */}
+          <div
+            className="flex min-w-0 flex-1 items-start"
+            style={ROW_CONTENT_VISIBILITY}
+          >
+            {stream ? null : startsGroup && !compact ? (
+              <div className="flex w-14 shrink-0 items-start justify-end pr-2">
+                <div className="relative h-9 w-9 shrink-0">
                   <AuthorButton
                     message={message}
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className={cn(
-                      "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
-                      !roleColor && (isMine ? "text-signal" : "text-paper"),
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                  >
+                    {message.isAutomod ? (
+                      <span
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        title={t("chat.automodPosted")}
+                      >
+                        <ShieldCheck className="h-5 w-5" aria-hidden />
+                      </span>
+                    ) : (
+                      <UserAvatar
+                        name={message.authorName}
+                        avatarUrl={message.authorAvatarUrl}
+                        rounded="lg"
+                        className="h-9 w-9"
+                        fallbackClassName="bg-ink-3 text-sm"
+                      />
                     )}
-                    style={roleColor ? { color: roleColor } : undefined}
-                  >
-                    {message.authorName}
                   </AuthorButton>
-                  {/* The name#1234 tag is a lookup key, not reading material:
-                      it lives on the profile card. Rank is a quiet glyph;
-                      the role-coloured name is the primary signal. */}
-                  <RankMarks
-                    marks={identityMarks({
-                      rank: authorInfo?.rank,
-                      isWebhook: message.isWebhook,
-                      isCharacter: authorInfo?.isCharacter,
-                      ...rankBadges(authorInfo?.roleIds, roles),
-                    })}
-                  />
-                </span>
-                {message.isAutomod ? (
-                  <span
-                    className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
-                    title={t("chat.automodPosted")}
-                  >
-                    AutoMod
-                  </span>
-                ) : (
-                  message.isWebhook && (
-                    <span
-                      className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
-                      title={t("chat.webhookPosted")}
-                    >
-                      Webhook
-                    </span>
-                  )
-                )}
-                {!compact && (
-                  <time
-                    className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
-                    dateTime={message.createdAt}
-                    title={formatFullTimestamp(message.createdAt)}
-                  >
-                    {formatTime(message.createdAt)}
-                  </time>
-                )}
-                {isMessagePinned && (
-                  <span
-                    className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
-                    title={
-                      message.pinnedBy
-                        ? t("chat.pinnedBy", {
-                            name: message.pinnedBy.displayName,
-                          })
-                        : t("chat.pinned")
-                    }
-                  >
-                    <Pin className="h-3 w-3" aria-hidden />
-                    <span className="sr-only">{t("chat.pinned")}</span>
-                  </span>
-                )}
-              </div>
-            )}
-
-            {isEditing ? (
-              <EditComposer
-                initialValue={message.body}
-                allowEmpty={attachments.length > 0}
-                onCancel={onCancelEdit}
-                onSubmit={onSubmitEdit}
-              />
-            ) : gifMedia ? (
-              <div>
-                <GifAttachment media={gifMedia} />
-                <EditedMarker editedAt={message.editedAt} />
+                  {!message.isWebhook && authorInfo?.status && (
+                    <StatusDot
+                      status={authorInfo.status}
+                      className="absolute -bottom-0.5 -right-0.5"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                    />
+                  )}
+                </div>
               </div>
             ) : (
-              <>
-                {/* A message carrying attachments is allowed to say nothing, so
-                    an empty body renders as nothing rather than an empty line. */}
-                {message.chance ? (
-                  <ChanceCard result={message.chance} />
-                ) : message.poll ? (
-                  <PollCard
-                    poll={message.poll}
-                    canManage={canModerate}
-                    onVote={(optionId) => onVotePoll?.(message.id, optionId)}
-                    onClose={() => onClosePoll?.(message.id)}
-                  />
-                ) : message.body ? (
-                  <div
-                    className={cn(
-                      "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
-                      stream && "[&>p]:inline",
-                    )}
-                  >
-                    {streamAuthor}
-                    <MessageBody
-                      body={message.body}
-                      currentUsername={currentUsername}
+              <time
+                className={cn(
+                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                )}
+                dateTime={message.createdAt}
+                title={formatFullTimestamp(message.createdAt)}
+              >
+                {formatTime(message.createdAt)}
+              </time>
+            )}
+
+            <div className="min-w-0 flex-1">
+              {stream && !message.body && !isEditing && (
+                <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
+                  {streamAuthor}
+                </div>
+              )}
+              {message.replyTo && (
+                <ReplyQuote
+                  replyTo={message.replyTo}
+                  onJump={onJumpToMessage}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+              {startsGroup && !stream && (
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="inline-flex items-baseline gap-1">
+                    <AuthorButton
+                      message={message}
+                      author={authorInfo}
+                      tabIndex={controlTabIndex}
+                      onOpenProfile={openProfile}
+                      className={cn(
+                        "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
+                        !roleColor && (isMine ? "text-signal" : "text-paper"),
+                      )}
+                      style={roleColor ? { color: roleColor } : undefined}
+                    >
+                      {message.authorName}
+                    </AuthorButton>
+                    {/* The name#1234 tag is a lookup key, not reading material:
+                        it lives on the profile card. Rank is a quiet glyph;
+                        the role-coloured name is the primary signal. */}
+                    <RankMarks
+                      marks={identityMarks({
+                        rank: authorInfo?.rank,
+                        isWebhook: message.isWebhook,
+                        isCharacter: authorInfo?.isCharacter,
+                        ...rankBadges(authorInfo?.roleIds, roles),
+                      })}
                     />
-                    {attachments.length === 0 && (
-                      <EditedMarker editedAt={message.editedAt} />
-                    )}
-                  </div>
-                ) : null}
-                {attachments.length > 0 && (
-                  <div>
-                    <AttachmentGrid attachments={attachments} />
-                    <EditedMarker editedAt={message.editedAt} />
-                  </div>
-                )}
-                {/* Says nothing and carries nothing. The server refuses to
-                    create that for an ordinary send, so reaching it means the
-                    attachments were withheld on read — which is what a
-                    deployment whose storage config went missing serves for an
-                    attachment-only message. A webhook message is the one other
-                    way to get here honestly: Discord's own webhooks allow an
-                    embed with no `content` at all, which is why this also
-                    checks for one before naming it a problem. */}
-                {!message.body &&
-                  attachments.length === 0 &&
-                  message.webhookEmbeds.length === 0 && (
-                    <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
-                      {t("chat.attachmentUnavailable")}
-                    </p>
+                  </span>
+                  {message.isAutomod ? (
+                    <span
+                      className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
+                      title={t("chat.automodPosted")}
+                    >
+                      AutoMod
+                    </span>
+                  ) : (
+                    message.isWebhook && (
+                      <span
+                        className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                        title={t("chat.webhookPosted")}
+                      >
+                        Webhook
+                      </span>
+                    )
                   )}
-                {showLinkEmbeds && message.embeds?.[0] && (
-                  <EmbedCard embed={message.embeds[0]} />
-                )}
-                {message.webhookEmbeds.map((embed, index) => (
-                  <WebhookEmbedCard key={index} embed={embed} />
-                ))}
-              </>
-            )}
+                  {!compact && (
+                    <time
+                      className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                      dateTime={message.createdAt}
+                      title={formatFullTimestamp(message.createdAt)}
+                    >
+                      {formatTime(message.createdAt)}
+                    </time>
+                  )}
+                  {isMessagePinned && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
+                      title={
+                        message.pinnedBy
+                          ? t("chat.pinnedBy", {
+                              name: message.pinnedBy.displayName,
+                            })
+                          : t("chat.pinned")
+                      }
+                    >
+                      <Pin className="h-3 w-3" aria-hidden />
+                      <span className="sr-only">{t("chat.pinned")}</span>
+                    </span>
+                  )}
+                </div>
+              )}
 
-            {message.failed && (
-              <FailedSendFooter
-                message={message}
-                tabIndex={controlTabIndex}
-                onRetry={onRetry}
-                onDiscard={onDiscard}
-              />
-            )}
-            {message.pending && message.queued && (
-              <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
-            )}
+              {isEditing ? (
+                <EditComposer
+                  initialValue={message.body}
+                  allowEmpty={attachments.length > 0}
+                  onCancel={onCancelEdit}
+                  onSubmit={onSubmitEdit}
+                />
+              ) : gifMedia ? (
+                <div>
+                  <GifAttachment media={gifMedia} />
+                  <EditedMarker editedAt={message.editedAt} />
+                </div>
+              ) : (
+                <>
+                  {/* A message carrying attachments is allowed to say nothing, so
+                      an empty body renders as nothing rather than an empty line. */}
+                  {message.chance ? (
+                    <ChanceCard result={message.chance} />
+                  ) : message.poll ? (
+                    <PollCard
+                      poll={message.poll}
+                      canManage={canModerate}
+                      onVote={(optionId) => onVotePoll?.(message.id, optionId)}
+                      onClose={() => onClosePoll?.(message.id)}
+                    />
+                  ) : message.body ? (
+                    <div
+                      className={cn(
+                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                        stream && "[&>p]:inline",
+                      )}
+                    >
+                      {streamAuthor}
+                      <MessageBody
+                        body={message.body}
+                        currentUsername={currentUsername}
+                      />
+                      {attachments.length === 0 && (
+                        <EditedMarker editedAt={message.editedAt} />
+                      )}
+                    </div>
+                  ) : null}
+                  {attachments.length > 0 && (
+                    <div>
+                      <AttachmentGrid attachments={attachments} />
+                      <EditedMarker editedAt={message.editedAt} />
+                    </div>
+                  )}
+                  {/* Says nothing and carries nothing. The server refuses to
+                      create that for an ordinary send, so reaching it means the
+                      attachments were withheld on read — which is what a
+                      deployment whose storage config went missing serves for an
+                      attachment-only message. A webhook message is the one other
+                      way to get here honestly: Discord's own webhooks allow an
+                      embed with no `content` at all, which is why this also
+                      checks for one before naming it a problem. */}
+                  {!message.body &&
+                    attachments.length === 0 &&
+                    message.webhookEmbeds.length === 0 && (
+                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
+                        {t("chat.attachmentUnavailable")}
+                      </p>
+                    )}
+                  {showLinkEmbeds && message.embeds?.[0] && (
+                    <EmbedCard embed={message.embeds[0]} />
+                  )}
+                  {message.webhookEmbeds.map((embed, index) => (
+                    <WebhookEmbedCard key={index} embed={embed} />
+                  ))}
+                </>
+              )}
 
-            {isReal && !stream && (
-              <ReactionBar
-                reactions={reactions}
-                currentUserId={currentUserId}
-                isPickerOpen={isPickerOpen}
-                onToggle={(emoji) => onToggleReaction(message.id, emoji)}
-                onOpenPicker={onOpenPicker}
-                onClosePicker={onClosePicker}
-                tabIndex={controlTabIndex}
-              />
-            )}
+              {message.failed && (
+                <FailedSendFooter
+                  message={message}
+                  tabIndex={controlTabIndex}
+                  onRetry={onRetry}
+                  onDiscard={onDiscard}
+                />
+              )}
+              {message.pending && message.queued && (
+                <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
+              )}
 
-            {/* --- threads --- the chip under the origin message. */}
-            {isReal && message.thread && onOpenThread && (
-              <ThreadChip
-                thread={message.thread}
-                originBody={message.body}
-                unread={threadUnread}
-                isOpen={isThreadOpen}
-                onOpen={onOpenThread}
-                tabIndex={controlTabIndex}
-              />
-            )}
+              {isReal && !stream && (
+                <ReactionBar
+                  reactions={reactions}
+                  currentUserId={currentUserId}
+                  isPickerOpen={isPickerOpen}
+                  onToggle={(emoji) => onToggleReaction(message.id, emoji)}
+                  onOpenPicker={onOpenPicker}
+                  onClosePicker={onClosePicker}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+
+              {/* --- threads --- the chip under the origin message. */}
+              {isReal && message.thread && onOpenThread && (
+                <ThreadChip
+                  thread={message.thread}
+                  originBody={message.body}
+                  unread={threadUnread}
+                  isOpen={isThreadOpen}
+                  onOpen={onOpenThread}
+                  tabIndex={controlTabIndex}
+                />
+              )}
+            </div>
           </div>
 
           {/* Right-click and long-press aren't available on every input, so
@@ -3643,10 +3904,23 @@ function EditComposer({
 
   useEffect(() => {
     const node = ref.current;
-    if (node) {
+    if (!node) {
+      return;
+    }
+    const focusAtEnd = () => {
       node.focus();
       node.setSelectionRange(node.value.length, node.value.length);
-    }
+    };
+    focusAtEnd();
+    // Opened from the context menu, the menu is still mounted at this point
+    // and its focus trap pulls focus straight back; it unmounts before the
+    // next frame and would leave focus on <body>. Asking again then lands it.
+    const frame = requestAnimationFrame(() => {
+      if (node.isConnected && document.activeElement !== node) {
+        focusAtEnd();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   async function submit() {

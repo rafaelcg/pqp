@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import {
+  buildMessagePreview,
   chatClientMessageSchema,
   extractMentions,
   extractMentionUsernames,
@@ -13,6 +14,7 @@ import {
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
+  type MessagePreview,
   type MessageRejectReason,
   type PollRequest,
   type ProfileUpdate,
@@ -47,7 +49,6 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
-import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
@@ -1166,14 +1167,157 @@ export async function notifyCommunityHomeUpdate(
   }
 }
 
+/**
+ * The owner flipped the server's Baú switch: the new value and its
+ * `servers.community_home_version`, bumped in the same UPDATE.
+ */
+export interface CommunityHomeSwitch {
+  enabled: boolean;
+  version: number;
+}
+
+/**
+ * Waits between attempts to reach members after a failed member lookup or a
+ * bus that was down. Bounded: past the last one the member's app still
+ * catches up on its next reconnect (it re-reads the config then).
+ */
+export const COMMUNITY_HOME_SWITCH_RETRY_MS: readonly number[] = [
+  2_000, 10_000, 30_000,
+];
+
+/**
+ * The newest switch version this process was asked to deliver, per server. A
+ * retry for an older version stands down once a newer one exists: the client
+ * would ignore it anyway, so it is only saved work. One small integer per
+ * server whose switch moved since boot, so it is never pruned.
+ */
+const newestCommunityHomeSwitch = new Map<string, number>();
+
+function noteCommunityHomeSwitch(serverId: string, version: number): void {
+  const newest = newestCommunityHomeSwitch.get(serverId);
+  if (newest === undefined || version > newest) {
+    newestCommunityHomeSwitch.set(serverId, version);
+  }
+}
+
+function isSupersededSwitch(serverId: string, version: number): boolean {
+  return (newestCommunityHomeSwitch.get(serverId) ?? version) > version;
+}
+
+function retryLater(delayMs: number, run: () => void): void {
+  const timer = setTimeout(run, delayMs);
+  // A pending retry must never be why a process refuses to exit.
+  timer.unref?.();
+}
+
+/**
+ * Tell every connected member the switch's new value, on this instance and
+ * (with `CLUSTER_BUS`) on every other one.
+ *
+ * Never rejects, and retries what failed in the background: the owner's write
+ * has already committed, and a member who misses this frame would otherwise
+ * keep the old value until a reload. Retrying is safe because the client
+ * applies a value only when its version is higher than the one it holds, so a
+ * frame delivered twice, late or out of order changes nothing.
+ *
+ * Resolves after the first local attempt, so the owner's response waits for
+ * one member lookup at most, never for the retries.
+ */
+export async function notifyCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+): Promise<void> {
+  noteCommunityHomeSwitch(serverId, change.version);
+  if (isBusEnabled()) {
+    publishCommunityHomeSwitch(serverId, change, 0);
+  }
+  await deliverCommunityHomeSwitch(serverId, change, 0);
+}
+
+/**
+ * `publishToCluster` swallows a failed publish, so the bus's own connection
+ * state is what says whether the other instances heard this. Same one-shot
+ * reasoning as the watch party reminders in `services/channel-sessions.ts`.
+ */
+function publishCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+  attempt: number,
+): void {
+  if (isSupersededSwitch(serverId, change.version)) {
+    return;
+  }
+  publishToCluster(COMMUNITY_HOME_TOPIC, {
+    type: "community-home-update",
+    serverId,
+    enabled: change.enabled,
+    version: change.version,
+  });
+  if (isBusConnected()) {
+    return;
+  }
+  const delayMs = COMMUNITY_HOME_SWITCH_RETRY_MS[attempt];
+  if (delayMs === undefined) {
+    console.error(
+      `[ws] community-home switch publish gave up for server ${serverId}`,
+    );
+    return;
+  }
+  retryLater(delayMs, () => {
+    publishCommunityHomeSwitch(serverId, change, attempt + 1);
+  });
+}
+
+/**
+ * This instance's members. Used for the local half and for a frame relayed
+ * from another instance, so a failed lookup on either side is retried.
+ */
+async function deliverCommunityHomeSwitch(
+  serverId: string,
+  change: CommunityHomeSwitch,
+  attempt: number,
+): Promise<void> {
+  if (isSupersededSwitch(serverId, change.version)) {
+    return;
+  }
+  try {
+    const memberIds = await listServerMemberIds(serverId);
+    deliverCommunityHomeUpdate(serverId, memberIds, change);
+  } catch (error) {
+    const delayMs = COMMUNITY_HOME_SWITCH_RETRY_MS[attempt];
+    if (delayMs === undefined) {
+      console.error(
+        `[ws] community-home switch delivery gave up for server ${serverId}:`,
+        error,
+      );
+      return;
+    }
+    console.error(
+      `[ws] community-home switch delivery failed for server ${serverId}, retrying in ${delayMs}ms:`,
+      error,
+    );
+    retryLater(delayMs, () => {
+      void deliverCommunityHomeSwitch(serverId, change, attempt + 1);
+    });
+  }
+}
+
+/**
+ * `change` rides along only when the owner flipped the server's Baú switch,
+ * so members with the app open learn the new value without reloading.
+ */
 export function deliverCommunityHomeUpdate(
   serverId: string,
   memberIds: readonly string[],
+  change?: CommunityHomeSwitch,
 ): void {
   const allowed = new Set(memberIds);
   const payload = encode({
     type: "community-home-update",
     serverId,
+    ...(change === undefined
+      ? {}
+      : { enabled: change.enabled, version: change.version }),
   } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
@@ -2564,6 +2708,17 @@ subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
     return;
   }
   const serverId = (data as { serverId: string }).serverId;
+  const { enabled, version } = data as { enabled?: unknown; version?: unknown };
+  if (
+    typeof enabled === "boolean" &&
+    typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 0
+  ) {
+    noteCommunityHomeSwitch(serverId, version);
+    void deliverCommunityHomeSwitch(serverId, { enabled, version }, 0);
+    return;
+  }
   void listServerMemberIds(serverId)
     .then((memberIds) => {
       deliverCommunityHomeUpdate(serverId, memberIds);

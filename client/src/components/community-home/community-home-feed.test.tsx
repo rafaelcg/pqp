@@ -503,6 +503,39 @@ describe("PostCard", () => {
     expect(member).not.toContain("data-home-lock");
   });
 
+  it("a file post keeps its download link clear of the staff menu", () => {
+    const pdf = post({
+      media: {
+        kind: "file",
+        name: "regulamento.pdf",
+        contentType: "application/pdf",
+        byteSize: 1_150_000,
+        url: "https://bucket.example/regulamento.pdf?sig=1",
+        youtubeUrl: null,
+        twitchUrl: null,
+      },
+      hasMedia: true,
+    });
+    const staff = render(
+      <PostCard
+        post={pdf}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        onEdit={() => {}}
+      />,
+    );
+    expect(staff).toContain("data-home-card-menu");
+    expect(staff).toContain("data-home-media-reserve-corner");
+
+    const member = render(
+      <PostCard post={pdf} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
+    );
+    expect(member).not.toContain("data-home-card-menu");
+    expect(member).not.toContain("data-home-media-reserve-corner");
+  });
+
   it("a Twitch post embeds the player with the page host as parent", () => {
     const html = render(
       <PostCard

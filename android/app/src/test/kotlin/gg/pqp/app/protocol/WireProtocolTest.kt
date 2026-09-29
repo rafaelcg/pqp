@@ -228,6 +228,10 @@ class WireProtocolTest {
         // Permissions are enforced server-side and this client draws no
         // manager controls, so a version bump has nothing to invalidate.
         "permissions-update" to "no permission-gated controls on the phone to refresh",
+        // Tells the account's OTHER tabs and devices which status it just
+        // chose. The phone draws no status picker or own-status pip yet, so
+        // there is nothing on it that could go stale.
+        "own-status" to "no status picker on the phone to keep in sync",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
         // The party's own CHAT frame, which the phone has no panel to put

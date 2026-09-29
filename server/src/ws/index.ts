@@ -9,6 +9,10 @@ import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
 import { recordUserCountry } from "../voice/region-audience.js";
 import { userActivity } from "../services/user-activity.js";
+import {
+  listServerChannelIds,
+  onAudienceInvalidated,
+} from "../services/servers.js";
 import { socketCountry } from "../voice/regions.js";
 import { createFrameBudget } from "./frame-budget.js";
 import {
@@ -16,6 +20,7 @@ import {
   getAuthenticatedSocket,
   getSocketUser,
   setAuthenticatedSocket,
+  socketsOfUser,
 } from "./sockets.js";
 import {
   registerStatusSocket,
@@ -41,6 +46,7 @@ export {
   evictChannelViewers,
   evictUserFromChannels,
   notifyPermissionsUpdate,
+  notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
   notifyServerRemoved,
   applyAutomodEffects,
@@ -185,6 +191,69 @@ export function trackSocketLiveness(socket: WebSocket): void {
     alive.set(socket, true);
     missedPongs.set(socket, 0);
   });
+}
+
+/**
+ * An account that is already connected just became a member of a server.
+ *
+ * `auth` sends every socket the voice rooms, live streams, music rows and
+ * watch parties of the servers it belongs to, once. A server joined after
+ * that, by invite or from the directory, was never described: its sidebar
+ * showed empty voice channels until something in each room changed or the
+ * page was reloaded, and a delta for a room the socket held nothing for was
+ * refused as a gap. This sends the same catch-up, narrowed to the one server,
+ * to every socket this account has on THIS instance. The event reaches the
+ * other instances through the audience topic, so each one does the same for
+ * its own sockets.
+ *
+ * Cheap where it does nothing: the bus cannot say which instance holds the
+ * account's sockets, so every instance hears every join, and the per-account
+ * index answers "none here" without walking the instance's connections or
+ * touching the database. Where it does something, the rooms and parties are
+ * read once and sent to all of the account's sockets together; the voice and
+ * watch-party halves run independently, and a socket that fails to take a
+ * frame is skipped without costing the others theirs.
+ *
+ * Fire and forget: the join has already committed and answered. The worst
+ * case of a failure here is the old behaviour.
+ */
+async function catchUpNewMembership(
+  userId: string,
+  serverId: string,
+): Promise<void> {
+  const targets = socketsOfUser(userId);
+  if (targets.length === 0) {
+    return;
+  }
+  const user = getSocketUser(targets[0]!);
+  if (!user) {
+    return;
+  }
+  const channelIds = await listServerChannelIds(serverId);
+  const results = await Promise.allSettled([
+    sendAllVoiceRosters(targets, user, { channelIds }),
+    catchUpWatchParties(targets, userId, { serverId }),
+  ]);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error("[ws] new-membership catch-up failed:", result.reason);
+    }
+  }
+}
+
+// Guarded for the same reason as the listener in `ws/voice.ts`: suites that
+// mock `../services/servers.js` without this export would throw on the read.
+try {
+  onAudienceInvalidated(({ serverId, joinedUserId }) => {
+    if (!serverId || !joinedUserId) {
+      return;
+    }
+    void catchUpNewMembership(joinedUserId, serverId).catch((error) => {
+      console.error("[ws] new-membership catch-up failed:", error);
+    });
+  });
+} catch {
+  // Mocked without this export.
 }
 
 export function handleWsConnection(socket: WebSocket, remoteKey: string) {

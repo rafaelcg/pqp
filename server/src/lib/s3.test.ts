@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteObject,
+  getObjectPrefix,
   headObject,
   isStorageConfigured,
   presignGet,
@@ -320,6 +321,64 @@ describe("addressing style", () => {
     process.env.S3_PUBLIC_BASE_URL = "https://cdn.example.com/files/";
     const signed = signRequest({ method: "GET", key: "chan/k.png", ttlSeconds: 900, forRead: true, now: NOW });
     expect(lines(signed.canonicalRequest)[1]).toBe("/files/chan/k.png");
+  });
+});
+
+describe("getObjectPrefix", () => {
+  /** A body that records whether the reader cancelled it. */
+  function trackedBody(bytes: Uint8Array) {
+    const state = { cancelled: false };
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(bytes);
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    return { stream, state };
+  }
+
+  function answer(status: number, bytes: Uint8Array) {
+    const body = trackedBody(bytes);
+    const fetchMock = vi.fn(async () => new Response(body.stream, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, state: body.state };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks for a range and returns only the prefix", async () => {
+    const { fetchMock, state } = answer(206, new Uint8Array([1, 2, 3, 4]));
+    const bytes = await getObjectPrefix("chan/k.png", 4);
+    expect(Array.from(bytes!)).toEqual([1, 2, 3, 4]);
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect((init.headers as Record<string, string>).Range).toBe("bytes=0-3");
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("stops reading a store that ignores Range and sends the whole body", async () => {
+    // The stream never ends on its own; only the cancel stops it.
+    const { state } = answer(200, new Uint8Array(1024).fill(7));
+    const bytes = await getObjectPrefix("chan/k.png", 12);
+    expect(bytes).toHaveLength(12);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("returns null for a missing object and cancels the error body", async () => {
+    const { state } = answer(404, new TextEncoder().encode("<Error/>"));
+    expect(await getObjectPrefix("chan/k.png", 12)).toBeNull();
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("throws on any other failure and cancels the error body", async () => {
+    const { state } = answer(503, new TextEncoder().encode("<Error/>"));
+    await expect(getObjectPrefix("chan/k.png", 12)).rejects.toBeInstanceOf(
+      StorageError,
+    );
+    expect(state.cancelled).toBe(true);
   });
 });
 
