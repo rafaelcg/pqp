@@ -239,6 +239,15 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/community-home/config (vipEnabled)",
   },
+  party_fast_start: {
+    description:
+      "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
+    env: "PARTY_FAST_START",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/live-hls/config (fastStart)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

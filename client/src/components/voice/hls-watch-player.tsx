@@ -170,6 +170,11 @@ import {
 import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
+import {
+  usePartyFastStart,
+  startupCaption,
+  type StartupStage,
+} from "@/lib/party-fast-start";
 import { cn } from "@/lib/utils";
 import { STAGE_LAYER } from "@/lib/stage-layers";
 
@@ -511,6 +516,26 @@ export function HlsWatchPlayer({
   // rebuild could never show that.
   const rebuildCountRef = useRef(0);
   const [hasFrame, setHasFrame] = useState(false);
+  // `party_fast_start` (server config, subscribed: a mount that beats the answer adopts it). Gates every change this flag makes in this component.
+  const fastStart = usePartyFastStart();
+  // Where the FIRST attach is, and how long it has taken, so the holding
+  // screen can say so instead of "the stream stalled, reconnecting" about a
+  // stream that has not started yet.
+  const [startupStage, setStartupStage] = useState<StartupStage>("connecting");
+  const [waitedSeconds, setWaitedSeconds] = useState(0);
+  useEffect(() => {
+    if (!fastStart || hasFrame || isVod) {
+      return;
+    }
+    const startedAt = Date.now();
+    setWaitedSeconds(0);
+    setStartupStage("connecting");
+    const timer = window.setInterval(
+      () => setWaitedSeconds((Date.now() - startedAt) / 1000),
+      1_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [fastStart, hasFrame, isVod, src]);
   // Autoplay with sound was refused (a tab that resumed the call without a
   // click, Safari's default). The picture runs muted and one tap fixes it.
   const [needsUnmute, setNeedsUnmute] = useState(false);
@@ -2783,6 +2808,7 @@ export function HlsWatchPlayer({
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
         if (!cancelled) {
+          setStartupStage("media");
           setLevels(data.levels as HlsLevelLike[]);
           // Re-apply the pin against THIS master playlist. A height that is
           // not in it comes back as -1, which is hls.js's own Auto, so a
@@ -2998,12 +3024,27 @@ export function HlsWatchPlayer({
     // as conventional does.
     mode: isVod ? "vod" : "live",
   });
+  // The very first load is not a stall. Before the first frame, with no stall
+  // reason and no fatal error, "reconnecting" is only the default answer of
+  // `resolveHoldingScreenReason`; saying "the stream stalled" to somebody who
+  // just arrived reads as broken. With `party_fast_start` it says what the
+  // player is actually waiting for.
+  const firstLoad =
+    fastStart &&
+    !isVod &&
+    !hasFrame &&
+    holdingReason === "reconnecting" &&
+    phase === "playing" &&
+    stallReason === null;
+  const startup = firstLoad ? startupCaption(startupStage, waitedSeconds) : null;
   const holdingCaption =
     holdingReason === "restarting"
       ? t("voice.hls.restarting", { seconds: restartCountdown })
-      : holdingReason === "reconnecting"
-        ? t("voice.hls.stalled")
-        : undefined;
+      : startup
+        ? t(startup.key, { seconds: startup.seconds })
+        : holdingReason === "reconnecting"
+          ? t("voice.hls.stalled")
+          : undefined;
 
   /**
    * THE PRESENTER'S CAMERA, BESIDE OR OVER THEIR FILM.

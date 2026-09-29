@@ -752,6 +752,12 @@ export interface LiveHlsConfig {
    * answer, which reads as off. See `lib/party-newcomer.ts`.
    */
   newcomerExperience?: boolean;
+  /**
+   * `party_fast_start` for this server (runtime flag, per server, off by
+   * default): whether the viewer's browser uses its faster first-frame path.
+   * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.
+   */
+  fastStart?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
