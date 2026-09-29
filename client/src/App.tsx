@@ -4619,6 +4619,9 @@ function MainAppContent({
             }
             permsRef.current.refresh(message.version);
             bumpMemberRosterNudge();
+            // Takes no ticket of its own; the newest one says which of this
+            // reader's own creates it may predate.
+            const listTicket = channelListTickets.latest();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(
@@ -4630,10 +4633,15 @@ function MainAppContent({
                 () => null,
               ),
             ])
-              .then(([{ channels: list }, rolesRes, membersRes]) => {
+              .then(([{ channels: fetched }, rolesRes, membersRes]) => {
                 if (selectedServerIdRef.current !== message.serverId) {
                   return;
                 }
+                const list = channelListTickets.withCreated(
+                  message.serverId,
+                  fetched,
+                  listTicket,
+                );
                 setChannels(list);
                 if (rolesRes) {
                   setServerRoles(rolesRes.roles);
@@ -5273,11 +5281,14 @@ function MainAppContent({
       channelListTickets.isLatest(ticket) &&
       selectedServerIdRef.current === serverId;
     void fetchChannels(serverId).then(
-      ({ channels: list }) => {
+      ({ channels: fetched }) => {
         if (!current()) {
           return;
         }
         channelListTickets.wrote(ticket);
+        // Started before a channel this reader just created: keep it, or
+        // the fallback below would take them off the channel they made.
+        const list = channelListTickets.withCreated(serverId, fetched, ticket);
         if (channelListStaleRef.current === serverId) {
           channelListStaleRef.current = null;
         }
@@ -5588,6 +5599,7 @@ function MainAppContent({
       const next = [...channels, channel].sort(
         (a, b) => a.position - b.position,
       );
+      channelListTickets.created(channel);
       setChannels(next);
       setAppError(null);
       setChannelPrompt(null);
@@ -5671,6 +5683,7 @@ function MainAppContent({
     setPendingDeleteChannelId(null);
     try {
       await deleteChannel(channelId);
+      channelListTickets.forget(channelId);
       // The server SETs NULL any channel's parent_id that pointed at what was
       // just deleted (a category going away uncategorizes its children rather
       // than taking them with it) — mirrored here, or those children keep a

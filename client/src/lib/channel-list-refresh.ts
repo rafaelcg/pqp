@@ -60,6 +60,26 @@ export interface ChannelListTickets {
    * else is going to bring the change in, so the caller refetches.
    */
   owesUpdate(serverId: string, ticket: number): boolean;
+  /** The newest ticket taken so far, for a fetch that takes none of its own. */
+  latest(): number;
+  /**
+   * This reader just created `channel`. Until a fetch that started after
+   * now writes the list, a list that lacks it is older than the create, not
+   * proof it was deleted.
+   */
+  created(channel: Channel): void;
+  /** The reader deleted the channel: stop keeping it in older lists. */
+  forget(channelId: string): void;
+  /**
+   * The list a fetch for `serverId` holding `ticket` should write: its own,
+   * plus every channel this reader created after that fetch started. A fetch
+   * that started after a create answers for it, and the create is forgotten.
+   */
+  withCreated(
+    serverId: string,
+    list: readonly Channel[],
+    ticket: number,
+  ): Channel[];
 }
 
 /**
@@ -79,7 +99,34 @@ export interface ChannelListTickets {
 export function createChannelListTickets(): ChannelListTickets {
   let latest = 0;
   let pending: { serverId: string; ticket: number } | null = null;
+  /** Channels this reader created, with the newest ticket at that moment. */
+  const createdChannels = new Map<string, { channel: Channel; ticket: number }>();
   return {
+    latest: () => latest,
+    created: (channel) => {
+      createdChannels.set(channel.id, { channel, ticket: latest });
+    },
+    forget: (channelId) => {
+      createdChannels.delete(channelId);
+    },
+    withCreated: (serverId, list, ticket) => {
+      const missing: Channel[] = [];
+      for (const [id, entry] of createdChannels) {
+        if (entry.channel.serverId !== serverId) {
+          continue;
+        }
+        if (ticket > entry.ticket) {
+          createdChannels.delete(id);
+          continue;
+        }
+        if (!list.some((channel) => channel.id === id)) {
+          missing.push(entry.channel);
+        }
+      }
+      return missing.length === 0
+        ? (list as Channel[])
+        : [...list, ...missing].sort((a, b) => a.position - b.position);
+    },
     take: () => {
       latest += 1;
       return latest;

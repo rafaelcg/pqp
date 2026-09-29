@@ -156,3 +156,62 @@ describe("createChannelListTickets", () => {
     expect(tickets.owesUpdate("a", next)).toBe(true);
   });
 });
+
+describe("channels this reader created", () => {
+  const created = (id: string, position: number, serverId = "s1") =>
+    ({ id, type: "text", name: id, position, serverId }) as Channel;
+  const geral = created("geral", 0);
+
+  it("keeps a new channel in a list fetched before it was created", () => {
+    const tickets = createChannelListTickets();
+    // A `channels-update` refetch starts, then the reader creates a channel.
+    const refetch = tickets.take();
+    const fresh = created("fresh", 1);
+    tickets.created(fresh);
+    const written = tickets.withCreated("s1", [geral], refetch);
+    expect(written.map((c) => c.id)).toEqual(["geral", "fresh"]);
+    // So the open channel has not vanished.
+    expect(vanishedChannelFallback(written, "fresh")).toEqual({
+      vanished: false,
+    });
+  });
+
+  it("lets a fetch that started after the create answer for it", () => {
+    const tickets = createChannelListTickets();
+    const fresh = created("fresh", 1);
+    tickets.created(fresh);
+    // Deleted by somebody else afterwards: the newer list is the truth.
+    const later = tickets.take();
+    expect(tickets.withCreated("s1", [geral], later).map((c) => c.id)).toEqual(
+      ["geral"],
+    );
+    // And the memory is gone, so an even older list cannot bring it back.
+    expect(tickets.withCreated("s1", [geral], 0).map((c) => c.id)).toEqual([
+      "geral",
+    ]);
+  });
+
+  it("does not add a channel to another server's list", () => {
+    const tickets = createChannelListTickets();
+    const refetch = tickets.take();
+    tickets.created(created("fresh", 1, "s2"));
+    expect(tickets.withCreated("s1", [geral], refetch)).toEqual([geral]);
+  });
+
+  it("does not bring back a channel the reader deleted", () => {
+    const tickets = createChannelListTickets();
+    const refetch = tickets.take();
+    tickets.created(created("fresh", 1));
+    tickets.forget("fresh");
+    expect(tickets.withCreated("s1", [geral], refetch)).toEqual([geral]);
+  });
+
+  it("returns the fetched list itself when nothing is missing", () => {
+    const tickets = createChannelListTickets();
+    const refetch = tickets.take();
+    const fresh = created("fresh", 1);
+    tickets.created(fresh);
+    const list = [geral, fresh];
+    expect(tickets.withCreated("s1", list, refetch)).toBe(list);
+  });
+});
