@@ -306,6 +306,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -449,6 +450,8 @@ import {
   onSettingsRequest,
 } from "@/lib/settings-request";
 import {
+  applyCommunityHomeRead,
+  applyCommunityHomeSwitch,
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
@@ -456,6 +459,7 @@ import {
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
   markCommunityHomeRowSeen,
+  mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
@@ -2185,6 +2189,50 @@ function MainAppContent({
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
 
+  /**
+   * Servers whose Baú switch may have moved while this app was not listening:
+   * every server after a reconnect, and one whose re-read failed. Frames sent
+   * while the socket was down are gone, so the switch is re-read from the
+   * server the next time that server is opened (the selected one right after
+   * the reconnect). One request per server per reconnect at most, never a
+   * refetch of the whole server list.
+   */
+  const communityHomeUnverifiedRef = useRef(new Set<string>());
+  /** The newest re-read issued per server; an older answer that lands last is dropped. */
+  const communityHomeReadSeqRef = useRef(new Map<string, number>());
+  const reconcileCommunityHomeSwitch = useCallback(
+    (serverId: string) => {
+      communityHomeUnverifiedRef.current.delete(serverId);
+      if (!communityHomeOn()) {
+        return;
+      }
+      const seqs = communityHomeReadSeqRef.current;
+      const seq = (seqs.get(serverId) ?? 0) + 1;
+      seqs.set(serverId, seq);
+      const issuedAtVersion =
+        serversRef.current.find((row) => row.id === serverId)
+          ?.communityHomeVersion ?? 0;
+      fetchServerCommunityHomeConfig(serverId).then(
+        (config) => {
+          if (seqs.get(serverId) !== seq) {
+            return;
+          }
+          setServers((rows) =>
+            applyCommunityHomeRead(rows, serverId, config, issuedAtVersion),
+          );
+        },
+        () => {
+          if (seqs.get(serverId) === seq) {
+            communityHomeUnverifiedRef.current.add(serverId);
+          }
+        },
+      );
+    },
+    [communityHomeOn],
+  );
+  const reconcileCommunityHomeSwitchRef = useRef(reconcileCommunityHomeSwitch);
+  reconcileCommunityHomeSwitchRef.current = reconcileCommunityHomeSwitch;
+
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
   const hlsHostAck = useHlsHostAck();
@@ -3810,6 +3858,11 @@ function MainAppContent({
       }
     >();
 
+    // The reconnect re-read of the Baú switch (onReady below). One slot: a
+    // second reconnect replaces the pending re-read instead of stacking one.
+    let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
+      null;
+
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
       if (!state) {
@@ -4319,7 +4372,27 @@ function MainAppContent({
           // delete. Likes and new comments do not fan out. The frame carries
           // only the serverId, so the client refetches; a member sitting in
           // DMs or another server is not "in" this one and is left alone.
+          //
+          // When the owner flips the server's Baú switch the frame also
+          // carries the new value and its version. It is written onto that
+          // server wherever the member is looking, so the row, the landing
+          // and the feed agree with the owner without a reload. Only a higher
+          // version than the row holds is applied, so a late or duplicated
+          // frame cannot undo a newer flip.
           if (message.type === "community-home-update") {
+            const { enabled, version } = message;
+            if (typeof enabled === "boolean" && typeof version === "number") {
+              setServers((rows) =>
+                applyCommunityHomeSwitch(rows, message.serverId, {
+                  enabled,
+                  version,
+                }),
+              );
+            } else if (typeof enabled === "boolean") {
+              // A flip from an API instance without versions (mid rolling
+              // deploy): its order is unknown, so ask for the persisted value.
+              reconcileCommunityHomeSwitchRef.current(message.serverId);
+            }
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
@@ -4621,6 +4694,29 @@ function MainAppContent({
           if (selectedServerIdRef.current) {
             void reloadServerThreadsRef.current(selectedServerIdRef.current);
           }
+          // A Baú switch flipped while the socket was down never arrives as
+          // a frame. Every server is re-read when next opened; the one on
+          // screen now, after the same jitter as the message refetch.
+          for (const row of serversRef.current) {
+            communityHomeUnverifiedRef.current.add(row.id);
+          }
+          const reconnectServerId = selectedServerIdRef.current;
+          if (communityHomeReconnectTimer !== null) {
+            clearTimeout(communityHomeReconnectTimer);
+            communityHomeReconnectTimer = null;
+          }
+          if (reconnectServerId) {
+            communityHomeReconnectTimer = setTimeout(() => {
+              communityHomeReconnectTimer = null;
+              if (
+                !cancelled &&
+                selectedServerIdRef.current === reconnectServerId &&
+                communityHomeUnverifiedRef.current.has(reconnectServerId)
+              ) {
+                reconcileCommunityHomeSwitchRef.current(reconnectServerId);
+              }
+            }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
+          }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -4695,6 +4791,9 @@ function MainAppContent({
         if (state.timer !== null) {
           clearTimeout(state.timer);
         }
+      }
+      if (communityHomeReconnectTimer !== null) {
+        clearTimeout(communityHomeReconnectTimer);
       }
       voice.leave();
       transport.disconnect();
@@ -5003,6 +5102,9 @@ function MainAppContent({
       liveParties?: readonly WatchParty[],
     ) => {
       setChannelsLoading(true);
+      if (communityHomeUnverifiedRef.current.has(serverId)) {
+        reconcileCommunityHomeSwitchRef.current(serverId);
+      }
       try {
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
@@ -10167,12 +10269,7 @@ function MainAppContent({
               setServers((prev) =>
                 prev.map((current) =>
                   current.id === server.id
-                    ? {
-                        ...current,
-                        ...server,
-                        role: current.role,
-                        showOnProfile: current.showOnProfile,
-                      }
+                    ? mergeServerUpdate(current, server)
                     : current,
                 ),
               );
@@ -10404,14 +10501,10 @@ function MainAppContent({
           setServers((prev) =>
             prev.map((current) =>
               current.id === server.id
-                ? {
-                    ...current,
-                    ...server,
-                    // Settings writes update the server row, not this viewer's
-                    // membership row. Keep its role and profile opt-out.
-                    role: current.role,
-                    showOnProfile: current.showOnProfile,
-                  }
+                ? // Settings writes update the server row, not this viewer's
+                  // membership row. Keep its role and profile opt-out, and
+                  // the newer copy of the Baú switch.
+                  mergeServerUpdate(current, server)
                 : current,
             ),
           );

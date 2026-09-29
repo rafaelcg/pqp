@@ -212,6 +212,7 @@ import {
   evictVoiceUser,
   evictVoiceUsersExcept,
   notifyPermissionsUpdate,
+  notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
   applyAutomodEffects,
   postChannelMessage,
@@ -4026,7 +4027,12 @@ router.get(
     if (!server) {
       throw new NotFound("Server not found");
     }
-    return { enabled: server.community_home_enabled ?? false };
+    // The version lets a client reconciling after a reconnect tell whether
+    // this answer is newer than the copy it already holds.
+    return {
+      enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
+    };
   },
 );
 
@@ -4039,8 +4045,18 @@ router.patch(
       await readJsonBody(req),
     );
     const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    // Members with the app open keep their own copy of this flag, so they are
+    // told the new value and its version instead of waiting for a reload. Not
+    // awaited past the first attempt: a failed member lookup or a bus that is
+    // down is retried in the background (see `notifyCommunityHomeSwitch`), and
+    // the owner's write has already succeeded either way.
+    await notifyCommunityHomeSwitch(serverId!, {
+      enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
+    });
     return {
       enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
       server: mapServer(server),
     };
   },

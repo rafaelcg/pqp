@@ -67,7 +67,7 @@ export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private,
  * NOT here — it lives on `server_members`, so only reads that join a
  * membership can select it.
  */
-export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_tagline, community_about, community_links, community_slug`;
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_home_version, community_tagline, community_about, community_links, community_slug`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -809,7 +809,10 @@ export async function setCommunityHomeEnabled(
   enabled: boolean,
 ): Promise<DbServer> {
   const result = await getPool().query<DbServer>(
-    `UPDATE servers SET community_home_enabled = $2 WHERE id = $1
+    `UPDATE servers
+        SET community_home_enabled = $2,
+            community_home_version = community_home_version + 1
+      WHERE id = $1
      RETURNING ${SERVER_COLUMNS}`,
     [serverId, enabled],
   );
@@ -1626,6 +1629,7 @@ export function mapServer(s: DbServer) {
     bannerUrl: s.banner_url ?? null,
     isCommunity: s.is_community ?? false,
     communityHomeEnabled: s.community_home_enabled ?? false,
+    communityHomeVersion: s.community_home_version ?? 0,
     communityTagline: s.community_tagline ?? null,
     communityAbout: s.community_about ?? null,
     communityLinks: parseStoredCommunityLinks(s.community_links ?? []),
