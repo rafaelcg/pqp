@@ -3233,6 +3233,7 @@ function MainAppContent({
     conversationParticipants ? null : selectedServerId,
     memberRosterNudge,
     applyRosterPayload,
+    serverMembers.length,
   );
 
   /**
