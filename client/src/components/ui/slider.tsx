@@ -87,6 +87,8 @@ export function Slider({
   indeterminate = false,
   onValueChange,
   onValueCommit,
+  "aria-label": ariaLabel,
+  "aria-valuetext": ariaValueText,
   ...props
 }: SliderProps) {
   const span = max - min;
@@ -102,6 +104,8 @@ export function Slider({
         aria-valuemin={min}
         aria-valuemax={indeterminate ? undefined : max}
         aria-valuenow={indeterminate ? undefined : Math.round(clamped)}
+        aria-valuetext={indeterminate ? undefined : ariaValueText}
+        aria-label={ariaLabel}
         data-slider={variant}
         data-readonly=""
         data-indeterminate={indeterminate ? "" : undefined}
@@ -140,7 +144,13 @@ export function Slider({
       <SliderPrimitive.Track className={track({ variant })}>
         <SliderPrimitive.Range className="absolute h-full bg-accent" />
       </SliderPrimitive.Track>
-      <SliderPrimitive.Thumb className={thumb({ variant })} />
+      {/* The name goes on the thumb: it is the element with `role="slider"`,
+          and Radix leaves a single thumb unnamed otherwise. */}
+      <SliderPrimitive.Thumb
+        className={thumb({ variant })}
+        aria-label={ariaLabel}
+        aria-valuetext={ariaValueText}
+      />
     </SliderPrimitive.Root>
   );
 }
