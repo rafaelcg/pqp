@@ -1909,7 +1909,6 @@ function MainAppContent({
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
-  const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
   const [mentionableRoles, setMentionableRoles] = useState<
     Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
@@ -1935,7 +1934,7 @@ function MainAppContent({
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
-   * as `mentionMembers`, so no surface pays a second request for it.
+   * as `serverMembers`, so no surface pays a second request for it.
    */
   const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
     () => new Map(),
@@ -2944,21 +2943,18 @@ function MainAppContent({
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
     if (conversationParticipants) {
-      setMentionMembers([...conversationParticipants]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     if (!selectedServerId) {
-      setMentionMembers([]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     setServerMembers([]);
-    setMentionMembers([]);
     let cancelled = false;
     void Promise.all([
       fetchMembers(selectedServerId),
@@ -2966,7 +2962,6 @@ function MainAppContent({
     ])
       .then(([{ members }, { roles }]) => {
         if (!cancelled) {
-          setMentionMembers(members);
           setServerMembers(members);
           setServerRoles(roles);
           setMemberRoles(
@@ -2999,9 +2994,15 @@ function MainAppContent({
     applyRosterPayload,
   );
 
-  const mentionCandidates = useMemo(() => {
+  /**
+   * Read straight off the live roster rather than a copy of the first fetch.
+   * A copy is what the member panel outgrew: somebody who joined after the page
+   * loaded showed up there within seconds and could still not be completed
+   * after `@` until a reload.
+   */
+  const mentionCandidates = useMemo((): MentionCandidate[] => {
     if (conversationParticipants) {
-      return mentionMembers;
+      return conversationParticipants;
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
@@ -3036,7 +3037,7 @@ function MainAppContent({
       }
     }
     return [
-      ...mentionMembers.map((member) => ({
+      ...serverMembers.map((member) => ({
         ...member,
         mentionKind: "member" as const,
       })),
@@ -3044,7 +3045,7 @@ function MainAppContent({
     ];
   }, [
     conversationParticipants,
-    mentionMembers,
+    serverMembers,
     mentionableRoles,
     perms,
     t,
@@ -4275,7 +4276,6 @@ function MainAppContent({
                 }
                 if (membersRes) {
                   setServerMembers(membersRes.members);
-                  setMentionMembers(membersRes.members);
                   setMemberRoles(
                     new Map(
                       membersRes.members.map((member) => [member.id, member.role]),
