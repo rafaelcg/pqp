@@ -1407,7 +1407,6 @@ export const MessageList = memo(function MessageList({
     }
     const distance = distanceFromBottom(container);
     const pinned = distance <= STICKY_THRESHOLD_PX;
-    isPinnedRef.current = pinned;
     setIsPinned(pinned);
     if (pinned) {
       setMissedCount(0);
