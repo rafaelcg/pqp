@@ -75,6 +75,7 @@ import {
   communityHomeEmbedMedia,
   communityHomeEmbedUrl,
   composeSubmitEmbedUrl,
+  createPickSequence,
   formatHomeBytes,
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
@@ -1175,6 +1176,7 @@ function ComposeCard({
   const [busy, setBusy] = useState<ComposeAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadAbort = useRef<AbortController | null>(null);
+  const nextPick = useMemo(createPickSequence, []);
   const timezone = useMemo(browserTimezone, []);
 
   const hasMedia =
@@ -1196,6 +1198,10 @@ function ComposeCard({
     if (!file) {
       return;
     }
+    // The byte check below is async: a newer pick may land while it runs, and
+    // only the newest pick may go on to abort the current upload and start its
+    // own.
+    const isCurrentPick = nextPick();
     setError(null);
     if (file.size > COMMUNITY_HOME_MAX_BYTES) {
       setError(
@@ -1207,7 +1213,21 @@ function ComposeCard({
       );
       return;
     }
-    if (!(await isRealHomeImage(file))) {
+    let realImage: boolean;
+    try {
+      realImage = await isRealHomeImage(file);
+    } catch {
+      // The browser could not read the file (moved, deleted, permission gone),
+      // so the upload could not have read it either.
+      if (isCurrentPick()) {
+        setError(t("communityHome.compose.uploadFailed"));
+      }
+      return;
+    }
+    if (!isCurrentPick()) {
+      return;
+    }
+    if (!realImage) {
       setError(t("communityHome.compose.notAnImage"));
       return;
     }
@@ -1220,6 +1240,9 @@ function ComposeCard({
         signal: controller.signal,
         onProgress: (fraction) => setUploading(fraction),
       });
+      if (controller.signal.aborted) {
+        return;
+      }
       const previewUrl =
         uploaded.kind === "file" ? null : URL.createObjectURL(file);
       setState((prev) => ({
@@ -1234,8 +1257,12 @@ function ComposeCard({
         setError(errorMessage(error, t("communityHome.compose.uploadFailed")));
       }
     } finally {
-      setUploading(null);
-      uploadAbort.current = null;
+      // A superseded upload must not clear the progress and the abort handle
+      // of the upload that replaced it.
+      if (uploadAbort.current === controller) {
+        setUploading(null);
+        uploadAbort.current = null;
+      }
     }
   }
 

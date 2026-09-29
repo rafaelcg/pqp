@@ -46,6 +46,7 @@ export {
 export {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeEmbedUrl,
+  createPickSequence,
   formatHomeBytes,
   homeMediaKindFromFile,
   instagramCanonicalUrl,

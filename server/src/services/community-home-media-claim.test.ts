@@ -42,18 +42,25 @@ vi.mock("../auth/clerk.js", () => ({
 /** What "storage" holds, by key: the bytes and the Content-Type it kept. */
 const stored = new Map<string, { bytes: Buffer; contentType: string }>();
 let storageDown = false;
+/** Storage calls in the order they started and finished. */
+const storageCalls: string[] = [];
 
 vi.mock("../lib/s3.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/s3.js")>()),
   isStorageConfigured: () => true,
   presignPut: (key: string) => `http://storage.test/${key}`,
   headObject: async (key: string) => {
+    storageCalls.push("head:start");
+    // Yield so a read started beside the HEAD gets to start before it ends.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    storageCalls.push("head:end");
     const object = stored.get(key);
     return object
       ? { contentLength: object.bytes.length, contentType: object.contentType }
       : null;
   },
   getObjectPrefix: async (key: string, length: number) => {
+    storageCalls.push("prefix:start");
     if (storageDown) {
       throw new Error("storage unreachable");
     }
@@ -126,6 +133,7 @@ describeDb("community home media claim", () => {
     resetApiRateLimits();
     stored.clear();
     storageDown = false;
+    storageCalls.length = 0;
     process.env.COMMUNITY_HOME_ENABLED = "true";
     owner = await upsertUser({
       clerkId: "clerk_owner",
@@ -172,6 +180,15 @@ describeDb("community home media claim", () => {
     expect(res.body.kind).toBe("image");
   });
 
+  it("reads an image's first bytes alongside the HEAD, not after it", async () => {
+    const res = await mintAndClaim("image/png", PNG);
+    expect(res.status).toBe(200);
+    expect(storageCalls.indexOf("prefix:start")).toBeGreaterThanOrEqual(0);
+    expect(storageCalls.indexOf("prefix:start")).toBeLessThan(
+      storageCalls.indexOf("head:end"),
+    );
+  });
+
   it("refuses a text file named .png", async () => {
     const res = await mintAndClaim(
       "image/png",
@@ -202,5 +219,24 @@ describeDb("community home media claim", () => {
     );
     expect(res.status).toBe(200);
     expect(res.body.kind).toBe("file");
+    expect(storageCalls).not.toContain("prefix:start");
+  });
+
+  it("refuses a missing object even while the byte read is in flight", async () => {
+    const minted = await call<{ uploadId: string }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/home/media`,
+      { contentType: "image/png", byteSize: PNG.length, filename: "foto.png" },
+    );
+    storageDown = true;
+    const res = await call<{ error?: string }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/home/media/claim`,
+      { uploadId: minted.body.uploadId },
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/missing/i);
   });
 });

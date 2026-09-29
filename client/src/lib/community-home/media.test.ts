@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COMMUNITY_HOME_MAX_BYTES,
+  createPickSequence,
   formatHomeBytes,
   instagramEmbedSrc,
   isRealHomeImage,
@@ -90,5 +91,22 @@ describe("isRealHomeImage", () => {
   it("leaves non-image files to their own checks", async () => {
     const file = new File(["%PDF-1.7"], "a.pdf", { type: "application/pdf" });
     expect(await isRealHomeImage(file)).toBe(true);
+  });
+});
+
+describe("createPickSequence", () => {
+  it("keeps only the newest pick current, whatever order checks finish in", async () => {
+    const nextPick = createPickSequence();
+    const started: string[] = [];
+    // Pick A's byte check is slow and pick B's is fast, so A finishes last.
+    async function pick(name: string, checkMs: number) {
+      const isCurrent = nextPick();
+      await new Promise((resolve) => setTimeout(resolve, checkMs));
+      if (isCurrent()) {
+        started.push(name);
+      }
+    }
+    await Promise.all([pick("A", 20), pick("B", 1)]);
+    expect(started).toEqual(["B"]);
   });
 });

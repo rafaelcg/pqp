@@ -595,10 +595,13 @@ export async function getObjectPrefix(
     );
   }
 
-  if (response.status === 404) {
-    return null;
-  }
-  if (!response.ok || !response.body) {
+  if (response.status === 404 || !response.ok || !response.body) {
+    // Cancel an error body instead of leaving it for the collector: undici
+    // keeps the connection checked out until the body is consumed or cancelled.
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 404) {
+      return null;
+    }
     throw new StorageError(`Storage returned HTTP ${response.status} for GET`);
   }
 

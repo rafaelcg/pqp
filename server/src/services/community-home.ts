@@ -1529,6 +1529,20 @@ export async function claimCommunityHomeMediaUpload(input: {
   if (!isCommunityHomeKey(input.serverId, upload.storage_key)) {
     throw new CommunityHomeError("invalid", "Invalid storage key");
   }
+  // An image's first bytes are read alongside the HEAD rather than after it,
+  // so the byte check costs no extra round trip on the claim. The read settles
+  // into a value here, so a HEAD that throws first never leaves it as an
+  // unhandled rejection.
+  const prefixRead =
+    upload.kind === "image"
+      ? getObjectPrefix(
+          upload.storage_key,
+          COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
+        ).then(
+          (bytes) => ({ ok: true as const, bytes }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+      : null;
   let head;
   try {
     head = await headObject(upload.storage_key);
@@ -1548,20 +1562,15 @@ export async function claimCommunityHomeMediaUpload(input: {
   if (head.contentType !== upload.content_type) {
     throw new CommunityHomeError("not_verified", "Content type mismatch");
   }
-  if (upload.kind === "image") {
+  if (prefixRead) {
     // The stored Content-Type is only what the uploader signed for, and the
     // browser derives that from the file name. Look at the bytes too, so a
     // text file called `x.png` never becomes a broken image on the feed.
-    let prefix;
-    try {
-      prefix = await getObjectPrefix(
-        upload.storage_key,
-        COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
-      );
-    } catch (error) {
+    const read = await prefixRead;
+    if (!read.ok) {
       console.error(
         `[community-home] GET prefix failed for ${upload.storage_key}:`,
-        error instanceof Error ? error.message : error,
+        read.error instanceof Error ? read.error.message : read.error,
       );
       throw new CommunityHomeError(
         "not_verified",
@@ -1569,8 +1578,8 @@ export async function claimCommunityHomeMediaUpload(input: {
       );
     }
     if (
-      !prefix ||
-      sniffCommunityHomeImageType(prefix) !== upload.content_type
+      !read.bytes ||
+      sniffCommunityHomeImageType(read.bytes) !== upload.content_type
     ) {
       throw new CommunityHomeError(
         "not_verified",

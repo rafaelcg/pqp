@@ -101,6 +101,19 @@ export async function isRealHomeImage(file: File): Promise<boolean> {
   return sniffCommunityHomeImageType(new Uint8Array(head)) === declared;
 }
 
+/**
+ * Hands out one ticket per file pick. A ticket stays current only until the
+ * next pick, so the composer can drop the result of a slow byte check that a
+ * newer pick has already replaced, instead of letting it start an upload.
+ */
+export function createPickSequence(): () => () => boolean {
+  let latest = 0;
+  return () => {
+    const ticket = ++latest;
+    return () => ticket === latest;
+  };
+}
+
 const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
