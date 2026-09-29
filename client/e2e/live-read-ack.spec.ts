@@ -316,3 +316,20 @@ test("a message that arrives while What's New covers the chat stays unread", asy
     })
     .toBe(0);
 });
+
+test("a message that arrives while the Communities directory covers the chat stays unread", async ({
+  page,
+}) => {
+  const seeded = await seed();
+  await openChannel(page, seeded);
+
+  // The directory is an opaque overlay; the chat stays mounted under it.
+  await page.locator("[data-communities-rail]").click();
+  await page.waitForTimeout(500);
+
+  await sendMessages(seeded.guest, seeded.channelId, ["arrived under the directory"], 41);
+  await page.waitForTimeout(3_000);
+  expect(
+    await unreadCount(seeded.owner, seeded.serverId, seeded.channelId),
+  ).toBe(1);
+});

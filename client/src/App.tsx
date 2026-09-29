@@ -3776,8 +3776,13 @@ function MainAppContent({
   openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
   const openThreadRef = useRef<typeof openThread>(null);
   openThreadRef.current = openThread;
+  // Anything that covers the chat pane while it stays mounted: What's New,
+  // the Communities directory (an opaque full-screen overlay), and the thread
+  // panel where it sits on top of the transcript instead of beside it.
   const transcriptObscured =
-    whatsNewOpen || (openThread !== null && !columnLayout);
+    whatsNewOpen ||
+    (directoryOpen && communitiesEnabled) ||
+    (openThread !== null && !columnLayout);
   transcriptObscuredRef.current = transcriptObscured;
   useEffect(() => {
     if (!transcriptObscured) {

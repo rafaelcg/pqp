@@ -1604,6 +1604,20 @@ export const MessageList = memo(function MessageList({
   }, [cancelJump, jumpToPresent, scrollToBottom]);
   followOwnSendRef.current = followOwnSend;
 
+  /**
+   * The pill: back to the live end, and that wins over a jump to a message
+   * still in flight, the same way a send does. Without the cancel, the jump's
+   * settle (or its fetched page) lands after the reader asked for the present
+   * and puts them back in history.
+   */
+  const jumpToPresentFromPill = useCallback(() => {
+    cancelJump();
+    // Same flag a send sets: a fetched jump page that lands after this click
+    // replaces the window, and the late handler then returns to the present.
+    sentWhileJumpingRef.current = true;
+    jumpToPresent();
+  }, [cancelJump, jumpToPresent]);
+
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
     if (!container) {
@@ -2047,7 +2061,7 @@ export const MessageList = memo(function MessageList({
       {(!isPinned || hasNewer) && (
         <button
           type="button"
-          onClick={jumpToPresent}
+          onClick={jumpToPresentFromPill}
           className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
         >
           <ArrowDown className="h-3.5 w-3.5" />

@@ -462,6 +462,43 @@ test("a send while a jump is still fetching stays on the send", async ({
 });
 
 /**
+ * The pill wins over a jump to a loaded message that is still settling, the
+ * same way a send does: clicking it right after the jump starts must not be
+ * undone by the settle that follows.
+ */
+test("jump to present during a jump stays at the present", async ({ page }) => {
+  const seeded = await seed(120);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 119 ")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+
+  await page.getByRole("button", { name: /Search messages/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
+    .getByRole("combobox", { name: "Search messages" })
+    .fill("history 80 ");
+  await dialog
+    .getByRole("option")
+    .filter({ hasText: "history 80 " })
+    .first()
+    .click();
+
+  // Click as soon as the jump has unpinned the list, inside its settle window.
+  const pill = page.getByRole("button", { name: /Jump to present/ });
+  await pill.click();
+
+  // Past the one-second settle that used to re-centre the target.
+  await page.waitForTimeout(2_000);
+  await expect(page.getByText("history 119 ")).toBeInViewport();
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+});
+
+/**
  * The reader's own scroll ends a jump; it does not get undone by it.
  *
  * Jumping to a row that is already centred moves nothing, so no `scrollend`
