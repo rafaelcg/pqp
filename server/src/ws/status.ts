@@ -11,7 +11,7 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { getPreferences } from "../services/preferences.js";
-import { forEachAuthenticatedSocket } from "./sockets.js";
+import { forEachSocketOfUser } from "./sockets.js";
 
 /**
  * Per-user status: online / idle / do-not-disturb / offline, plus the invisible
@@ -460,8 +460,10 @@ function adoptManualStatus(userId: string, manual: ManualStatus): void {
  */
 function deliverOwnStatus(userId: string, manual: ManualStatus): void {
   const payload = JSON.stringify({ type: "own-status", status: manual });
-  forEachAuthenticatedSocket((socket, user) => {
-    if (socket.readyState === 1 && user.id === userId) {
+  // Indexed by account: a change costs this person's sockets, never a walk of
+  // every connection on the process, and it runs once per instance per change.
+  forEachSocketOfUser(userId, (socket) => {
+    if (socket.readyState === 1) {
       socket.send(payload);
     }
   });
