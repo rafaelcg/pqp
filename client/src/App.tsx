@@ -3847,6 +3847,11 @@ function MainAppContent({
       }
     >();
 
+    // The reconnect re-read of the Baú switch (onReady below). One slot: a
+    // second reconnect replaces the pending re-read instead of stacking one.
+    let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
+      null;
+
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
       if (!state) {
@@ -4684,8 +4689,13 @@ function MainAppContent({
             communityHomeUnverifiedRef.current.add(row.id);
           }
           const reconnectServerId = selectedServerIdRef.current;
+          if (communityHomeReconnectTimer !== null) {
+            clearTimeout(communityHomeReconnectTimer);
+            communityHomeReconnectTimer = null;
+          }
           if (reconnectServerId) {
-            setTimeout(() => {
+            communityHomeReconnectTimer = setTimeout(() => {
+              communityHomeReconnectTimer = null;
               if (
                 !cancelled &&
                 selectedServerIdRef.current === reconnectServerId &&
@@ -4769,6 +4779,9 @@ function MainAppContent({
         if (state.timer !== null) {
           clearTimeout(state.timer);
         }
+      }
+      if (communityHomeReconnectTimer !== null) {
+        clearTimeout(communityHomeReconnectTimer);
       }
       voice.leave();
       transport.disconnect();
