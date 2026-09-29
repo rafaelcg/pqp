@@ -76,6 +76,35 @@ export interface AuthenticatedSocket {
 
 const sockets = new Map<WebSocket, AuthenticatedSocket>();
 
+/**
+ * The same sockets, by account. Kept beside `sockets` so a question about one
+ * account ("does this person still have a tab open", "send this person's
+ * sockets a catch-up") costs that account's sockets rather than a walk of
+ * every connection on the instance. A membership change reaches every
+ * instance over the bus, and most instances hold no socket for that person.
+ */
+const socketsByUser = new Map<string, Set<WebSocket>>();
+
+function indexSocket(userId: string, socket: WebSocket): void {
+  let set = socketsByUser.get(userId);
+  if (!set) {
+    set = new Set();
+    socketsByUser.set(userId, set);
+  }
+  set.add(socket);
+}
+
+function unindexSocket(userId: string, socket: WebSocket): void {
+  const set = socketsByUser.get(userId);
+  if (!set) {
+    return;
+  }
+  set.delete(socket);
+  if (set.size === 0) {
+    socketsByUser.delete(userId);
+  }
+}
+
 const NO_CAPS: ReadonlySet<string> = new Set();
 
 export function setAuthenticatedSocket(
@@ -83,6 +112,11 @@ export function setAuthenticatedSocket(
   user: DbUser,
   caps: readonly string[] = [],
 ): void {
+  const previous = sockets.get(socket);
+  if (previous && previous.user.id !== user.id) {
+    unindexSocket(previous.user.id, socket);
+  }
+  indexSocket(user.id, socket);
   sockets.set(socket, {
     socket,
     user,
@@ -106,7 +140,21 @@ export function socketHasCap(socket: WebSocket, cap: string): boolean {
 }
 
 export function deleteAuthenticatedSocket(socket: WebSocket): void {
+  const entry = sockets.get(socket);
+  if (entry) {
+    unindexSocket(entry.user.id, socket);
+  }
   sockets.delete(socket);
+}
+
+/**
+ * This account's authenticated sockets on this instance, as a copy: a caller
+ * may await between sends, and a socket closing meanwhile must not change the
+ * list under it. Empty when the account has none here.
+ */
+export function socketsOfUser(userId: string): WebSocket[] {
+  const set = socketsByUser.get(userId);
+  return set ? [...set] : [];
 }
 
 /**
@@ -118,12 +166,7 @@ export function deleteAuthenticatedSocket(socket: WebSocket): void {
  * the socket that just closed is already out of the map.
  */
 export function userHasAuthenticatedSocket(userId: string): boolean {
-  for (const entry of sockets.values()) {
-    if (entry.user.id === userId) {
-      return true;
-    }
-  }
-  return false;
+  return socketsByUser.has(userId);
 }
 
 /**

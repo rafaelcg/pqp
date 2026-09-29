@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 import type { VoiceParticipant } from "@pqp/shared";
@@ -41,6 +42,11 @@ const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
   await import("./sockets.js");
 const { handleVoiceMessage, resetVoicePeers, sendAllVoiceRosters } =
   await import("./voice.js");
+const { pinVoiceRoom, settleVoiceRegistryWrites, upsertVoicePeer } =
+  await import("../voice/registry.js");
+const { dbTxByPath, resetDbTxMetrics } = await import(
+  "../lib/db-tx-metrics.js"
+);
 // Registers the new-membership catch-up, the code under test.
 await import("./index.js");
 
@@ -58,11 +64,15 @@ interface FakeClient {
 
 const open: FakeClient[] = [];
 
-function connect(user: DbUser): FakeClient {
+function connect(user: DbUser, options: { broken?: boolean } = {}): FakeClient {
   const frames: Frame[] = [];
   const socket = {
     readyState: 1,
     send: (payload: string | Buffer) => {
+      if (options.broken) {
+        // Closed between the ready-state check and the send.
+        throw new Error("socket closed");
+      }
       frames.push(JSON.parse(payload.toString()) as Frame);
     },
     on: () => {},
@@ -79,6 +89,8 @@ function rostersFor(client: FakeClient, voiceChannelId: string): Frame[] {
       frame.type === "voice-roster" && frame.voiceChannelId === voiceChannelId,
   );
 }
+
+const previousRegistry = process.env.VOICE_REGISTRY;
 
 describeDb("voice rosters for a server joined after connect", () => {
   beforeAll(async () => {
@@ -98,11 +110,17 @@ describeDb("voice rosters for a server joined after connect", () => {
     clearChannelAudienceCache();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await settleVoiceRegistryWrites();
     for (const client of open.splice(0)) {
       deleteAuthenticatedSocket(client.socket);
     }
     resetVoicePeers();
+    if (previousRegistry === undefined) {
+      delete process.env.VOICE_REGISTRY;
+    } else {
+      process.env.VOICE_REGISTRY = previousRegistry;
+    }
   });
 
   it("sends the room's roster to the new member's open socket on invite", async () => {
@@ -148,5 +166,102 @@ describeDb("voice rosters for a server joined after connect", () => {
     expect(roster!.participants?.map((p) => p.userId)).toEqual([owner.id]);
     // Only the account that joined is caught up, and only for this server.
     expect(rostersFor(strangerClient, voiceChannelId)).toHaveLength(0);
+  });
+
+  it("still catches up the account's other sockets when one of them fails", async () => {
+    const owner = await upsertUser({
+      clerkId: "clerk_owner",
+      displayName: "Owner",
+      avatarUrl: null,
+    });
+    const newcomer = await upsertUser({
+      clerkId: "clerk_newcomer",
+      displayName: "Newcomer",
+      avatarUrl: null,
+    });
+    const { server, channels } = await createServer("Sala", owner.id);
+    const voiceChannelId = channels.find((channel) => channel.type === "voice")!.id;
+
+    const ownerClient = connect(owner);
+    await handleVoiceMessage(
+      { socket: ownerClient.socket, user: owner },
+      { type: "join-voice-room", voiceChannelId, transports: ["mesh"] },
+    );
+
+    // The account's first socket throws on every send; its second is fine.
+    const broken = connect(newcomer, { broken: true });
+    const healthy = connect(newcomer);
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const invite = await createInvite(server.id, owner.id);
+      await redeemInvite(invite.code, newcomer.id);
+
+      await vi.waitFor(() => {
+        expect(rostersFor(healthy, voiceChannelId)).toHaveLength(1);
+      });
+      expect(rostersFor(broken, voiceChannelId)).toHaveLength(0);
+      const [roster] = rostersFor(healthy, voiceChannelId);
+      expect(roster!.participants?.map((p) => p.userId)).toEqual([owner.id]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("reads only the joined server's rooms from the registry, seats on other machines included", async () => {
+    process.env.VOICE_REGISTRY = "postgres";
+    await getPool().query(
+      `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands,
+                voice_retired_peers, voice_instances`,
+    );
+    const owner = await upsertUser({
+      clerkId: "clerk_owner",
+      displayName: "Owner",
+      avatarUrl: null,
+    });
+    const newcomer = await upsertUser({
+      clerkId: "clerk_newcomer",
+      displayName: "Newcomer",
+      avatarUrl: null,
+    });
+    const { server, channels } = await createServer("Sala", owner.id);
+    const voiceChannelId = channels.find((channel) => channel.type === "voice")!.id;
+
+    // The owner's seat is only a row: this process holds no peer for it, as
+    // when the owner is connected to the other machine. The roster can come
+    // from nowhere but the registry read.
+    await pinVoiceRoom(voiceChannelId, "mesh");
+    await upsertVoicePeer({
+      peerId: randomUUID(),
+      channelId: voiceChannelId,
+      userId: owner.id,
+      displayName: "Owner",
+      avatarUrl: null,
+      muted: false,
+      deafened: false,
+      sharingScreen: false,
+      listeningMusic: false,
+      cameraStreamId: null,
+      screenAudioStreamId: null,
+      canSpeak: true,
+      canStream: true,
+      canResume: true,
+      orphanedAt: null,
+      transport: "mesh",
+    });
+
+    const newcomerClient = connect(newcomer);
+    resetDbTxMetrics();
+    const invite = await createInvite(server.id, owner.id);
+    await redeemInvite(invite.code, newcomer.id);
+
+    await vi.waitFor(() => {
+      expect(rostersFor(newcomerClient, voiceChannelId)).toHaveLength(1);
+    });
+    const [roster] = rostersFor(newcomerClient, voiceChannelId);
+    expect(roster!.participants?.map((p) => p.userId)).toEqual([owner.id]);
+    // Scoped to the server's channels, never the whole cluster's rooms.
+    expect(dbTxByPath()["registry.listRostersIn"]).toBe(1);
+    expect(dbTxByPath()["registry.listRosters"]).toBeUndefined();
   });
 });

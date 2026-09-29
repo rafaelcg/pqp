@@ -1,5 +1,4 @@
 import type { WebSocket } from "ws";
-import type { DbUser } from "../db.js";
 import {
   CHAT_CLIENT_MESSAGE_TYPES,
   VOICE_CLIENT_MESSAGE_TYPES,
@@ -18,10 +17,10 @@ import { socketCountry } from "../voice/regions.js";
 import { createFrameBudget } from "./frame-budget.js";
 import {
   deleteAuthenticatedSocket,
-  forEachAuthenticatedSocket,
   getAuthenticatedSocket,
   getSocketUser,
   setAuthenticatedSocket,
+  socketsOfUser,
 } from "./sockets.js";
 import {
   registerStatusSocket,
@@ -205,6 +204,14 @@ export function trackSocketLiveness(socket: WebSocket): void {
  * other instances through the audience topic, so each one does the same for
  * its own sockets.
  *
+ * Cheap where it does nothing: the bus cannot say which instance holds the
+ * account's sockets, so every instance hears every join, and the per-account
+ * index answers "none here" without walking the instance's connections or
+ * touching the database. Where it does something, the rooms and parties are
+ * read once and sent to all of the account's sockets together; the voice and
+ * watch-party halves run independently, and a socket that fails to take a
+ * frame is skipped without costing the others theirs.
+ *
  * Fire and forget: the join has already committed and answered. The worst
  * case of a failure here is the old behaviour.
  */
@@ -212,19 +219,23 @@ async function catchUpNewMembership(
   userId: string,
   serverId: string,
 ): Promise<void> {
-  const targets: Array<{ socket: WebSocket; user: DbUser }> = [];
-  forEachAuthenticatedSocket((socket, user) => {
-    if (user.id === userId) {
-      targets.push({ socket, user });
-    }
-  });
+  const targets = socketsOfUser(userId);
   if (targets.length === 0) {
     return;
   }
+  const user = getSocketUser(targets[0]!);
+  if (!user) {
+    return;
+  }
   const channelIds = await listServerChannelIds(serverId);
-  for (const { socket, user } of targets) {
-    await sendAllVoiceRosters(socket, user, { channelIds });
-    await catchUpWatchParties(socket, userId, { serverId });
+  const results = await Promise.allSettled([
+    sendAllVoiceRosters(targets, user, { channelIds }),
+    catchUpWatchParties(targets, userId, { serverId }),
+  ]);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error("[ws] new-membership catch-up failed:", result.reason);
+    }
   }
 }
 

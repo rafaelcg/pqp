@@ -6696,15 +6696,45 @@ function rostersFromMemory(now = Date.now()): Map<string, VoiceParticipant[]> {
  * account just became a member there (`catchUpNewMembership` in
  * `ws/index.ts`). Without it the socket would hold nothing for that server's
  * rooms until each one next changed, and a delta for a room it holds nothing
- * for reads as a gap until the next keyframe.
+ * for reads as a gap until the next keyframe. Narrowed at the source, not on
+ * the way out: the registry read, this process's peers, the live streams and
+ * the music rows are each enumerated for those channels only.
+ *
+ * `target` may be several sockets of the SAME account (what the frames say
+ * depends on `user.id` alone), so the rooms are read and the access checks
+ * run once for all of them. A socket whose send throws is skipped and the
+ * rest still get the frame.
  */
 export async function sendAllVoiceRosters(
-  socket: WebSocket,
+  target: WebSocket | readonly WebSocket[],
   user: DbUser,
   options: { channelIds?: ReadonlySet<string> } = {},
 ) {
-  const wanted = (channelId: string) =>
-    !options.channelIds || options.channelIds.has(channelId);
+  const sockets: readonly WebSocket[] = Array.isArray(target)
+    ? (target as readonly WebSocket[])
+    : [target as WebSocket];
+  /** Sends to every open target; answers how many it reached. */
+  const sendToTargets = (message: VoiceSignalingMessage): number => {
+    let payload: string | null = null;
+    let reached = 0;
+    for (const socket of sockets) {
+      if (socket.readyState !== 1) {
+        continue;
+      }
+      try {
+        payload ??= JSON.stringify(message);
+        socket.send(payload);
+        reached += 1;
+      } catch (error) {
+        // A socket that died between the check and the send is the close
+        // handler's problem; the account's other sockets still get theirs.
+        console.error("[voice] catch-up send failed:", error);
+      }
+    }
+    return reached;
+  };
+  const channelIds = options.channelIds;
+  const wanted = (channelId: string) => !channelIds || channelIds.has(channelId);
   const rooms = new Map<
     string,
     {
@@ -6728,7 +6758,10 @@ export async function sendAllVoiceRosters(
   if (registryOn()) {
     try {
       await Promise.all([...pendingRowWrites.values()]);
-      for (const row of await listVoiceRosters()) {
+      const rows = channelIds
+        ? await listVoiceRosters({ channelIds: [...channelIds] })
+        : await listVoiceRosters();
+      for (const row of rows) {
         const room = roomOf(row.channelId);
         room.transport = row.transport;
         noteRemoteTransport(row.channelId, row.transport);
@@ -6747,6 +6780,9 @@ export async function sendAllVoiceRosters(
       // during a database outage must not be told the other machine's
       // seats are empty.
       for (const [voiceChannelId, participants] of rostersFromMemory()) {
+        if (!wanted(voiceChannelId)) {
+          continue;
+        }
         const room = roomOf(voiceChannelId);
         for (const participant of participants) {
           room.participants.set(participant.peerId, participant);
@@ -6756,6 +6792,9 @@ export async function sendAllVoiceRosters(
     }
   }
   for (const peer of peers.values()) {
+    if (!wanted(peer.voiceChannelId)) {
+      continue;
+    }
     const room = roomOf(peer.voiceChannelId);
     room.participants.set(peer.id, toParticipant(peer));
     room.orphaned.set(peer.id, peer.orphanedAt !== undefined);
@@ -6763,9 +6802,6 @@ export async function sendAllVoiceRosters(
 
   await Promise.all(
     [...rooms].map(async ([voiceChannelId, room]) => {
-      if (!wanted(voiceChannelId)) {
-        return;
-      }
       try {
         // CACHED, NOT `canAccessChannel` DIRECTLY: this runs once per room this
         // instance or the registry knows about, on EVERY socket that
@@ -6783,7 +6819,7 @@ export async function sendAllVoiceRosters(
         console.error("[voice] roster membership check failed:", error);
         return;
       }
-      send(socket, {
+      sendToTargets({
         type: "voice-roster",
         voiceChannelId,
         participants: collapseOrphanedDuplicates(
@@ -6826,7 +6862,13 @@ export async function sendAllVoiceRosters(
   // having learned something newer than the snapshot: re-read it, and say
   // `ended` rather than shipping a session that is over or an unknown null
   // the client is now written to ignore.
-  const live = hlsAudience.liveChannels().filter(wanted).map((channelId) => ({
+  //
+  // Scoped to one server, the server's own channels are asked instead of
+  // walking every live stream on the process.
+  const liveIds = channelIds
+    ? [...channelIds].filter((channelId) => hlsAudience.stream(channelId) !== null)
+    : hlsAudience.liveChannels();
+  const live = liveIds.map((channelId) => ({
     channelId,
     stream: hlsAudience.stream(channelId),
     generation: streamGeneration.get(channelId) ?? 0,
@@ -6846,8 +6888,7 @@ export async function sendAllVoiceRosters(
       const stream = moved
         ? hlsAudience.stream(entry.channelId)
         : entry.stream;
-      send(
-        socket,
+      hlsAudienceFramesSent.frames += sendToTargets(
         // A null this process installed itself is an answer, not silence.
         channelLiveFrameWith(
           entry.channelId,
@@ -6856,19 +6897,18 @@ export async function sendAllVoiceRosters(
           stream !== null || moved,
         ),
       );
-      hlsAudienceFramesSent.frames += 1;
     }),
   );
   // And every room with music this user may view, for the sidebar row.
   // Off the audience cache (`getChannelAudience`, one query per channel per
   // TTL, shared by every socket), not one access query per socket per room.
-  for (const channelId of musicChannels()) {
-    if (!wanted(channelId)) {
-      continue;
-    }
+  const musicIds = channelIds
+    ? [...channelIds].filter((channelId) => getMusicState(channelId) !== null)
+    : musicChannels();
+  for (const channelId of musicIds) {
     const audience = await getChannelAudience(channelId).catch(() => null);
     if (audience?.has(user.id)) {
-      send(socket, await channelMusicFrame(channelId));
+      sendToTargets(await channelMusicFrame(channelId));
     }
   }
 }

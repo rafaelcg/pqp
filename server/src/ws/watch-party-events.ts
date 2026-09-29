@@ -505,43 +505,63 @@ export async function broadcastWatchParty(
  * Scoped to the servers this person is in, and re-checked per channel: a
  * membership row is not VIEW on every channel in it. `serverId` narrows it to
  * one of them, for an account that just joined that server.
+ *
+ * `target` may be several sockets of the SAME account: the parties are read
+ * and the access checks run once, then each open socket gets the frames. A
+ * socket whose send throws is skipped and the rest still get theirs.
  */
 export async function catchUpWatchParties(
-  socket: import("ws").WebSocket,
+  target: import("ws").WebSocket | readonly import("ws").WebSocket[],
   userId: string,
   options: { serverId?: string } = {},
 ): Promise<void> {
+  const sockets: readonly import("ws").WebSocket[] = Array.isArray(target)
+    ? (target as readonly import("ws").WebSocket[])
+    : [target as import("ws").WebSocket];
+  const anyOpen = () => sockets.some((socket) => socket.readyState === 1);
   const { listServersForUser } = await import("../services/servers.js");
   const { listActiveWatchPartiesForServer } = await import(
     "../services/watch-parties.js"
   );
-  const servers = (await listServersForUser(userId)).filter(
-    (server) => !options.serverId || server.id === options.serverId,
-  );
-  for (const server of servers) {
-    if (socket.readyState !== 1) {
+  // One server named: its parties are read directly, without loading every
+  // server this account is in. Membership is still enforced, per party, by
+  // the access check below (no VIEW without a membership row).
+  const serverIds = options.serverId
+    ? [options.serverId]
+    : (await listServersForUser(userId)).map((server) => server.id);
+  for (const serverId of serverIds) {
+    if (!anyOpen()) {
       return;
     }
     const cache: PermissionCache = new Map();
-    const parties = await listActiveWatchPartiesForServer(server.id, {
+    const parties = await listActiveWatchPartiesForServer(serverId, {
       userId,
       permissionsFor: (channelId) =>
-        permissionsFor(cache, server.id, userId, channelId),
+        permissionsFor(cache, serverId, userId, channelId),
     }).catch(() => [] as WatchParty[]);
     for (const party of parties) {
       if (!(await canAccessChannel(party.channelId, userId))) {
         continue;
       }
-      if (socket.readyState !== 1) {
+      if (!anyOpen()) {
         return;
       }
-      socket.send(
-        JSON.stringify({
-          type: "watch-party-update",
-          channelId: party.channelId,
-          party,
-        }),
-      );
+      const payload = JSON.stringify({
+        type: "watch-party-update",
+        channelId: party.channelId,
+        party,
+      });
+      for (const socket of sockets) {
+        if (socket.readyState !== 1) {
+          continue;
+        }
+        try {
+          socket.send(payload);
+        } catch {
+          // Closed between the check and the send: the close handler's
+          // problem, and the account's other sockets still get theirs.
+        }
+      }
     }
   }
 }
