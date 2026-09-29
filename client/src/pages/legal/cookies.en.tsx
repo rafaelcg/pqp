@@ -59,16 +59,24 @@ export const cookiesEn: LegalDocument = {
             page, the tag reports the page view: the page address and title,
             your screen size, your browser and operating system, and the{" "}
             <code>_gcl_au</code> identifier. Some of these reports go to the
-            addresses Google Ads uses to build remarketing audiences, so Google
-            Ads can add your visit to an audience list for our ad account. When
-            an account is created, the tag sends one more event: that a sign-up
-            happened. That event carries no name, no email, no user id and
-            nothing you typed. Our code gives the tag no account data at all.
+            addresses Google Ads uses to build remarketing audiences. Our code
+            sets the tag up in the ordinary way and does not turn off ad
+            personalisation, so Google can add your visit to an audience list
+            for our ad account, and our ads can be shown to you again. When an
+            account is created, our code sends the tag one more event: that a
+            sign-up happened. It is addressed to our ad account and carries
+            nothing else, so it has no name, email or user id. Those are the
+            only two things our code sends. Our code does not use enhanced
+            conversions, the Google Ads feature that sends a hashed email
+            address with a conversion. The tag is Google&apos;s own script, so
+            what Google does with what it receives, under the settings of our
+            ad account, is for Google to describe.
           </p>
           <p>
             Those are all the cookies on pqp.gg. Our analytics and error
-            reporting set none (see &quot;Third parties your browser
-            contacts&quot;). When the tag contacts Google&apos;s servers, Google
+            reporting set none, and the players embedded in some pages can set
+            their own on their own domains (see &quot;Third parties your
+            browser contacts&quot;). When the tag contacts Google&apos;s servers, Google
             can also read and set its own cookies on Google&apos;s domains, if
             your browser allows third-party cookies. Those are Google&apos;s,
             under Google&apos;s terms.
@@ -476,9 +484,34 @@ export const cookiesEn: LegalDocument = {
               and timings of requests the app makes, and your browser and
               operating system. It carries the
               random session id in session storage listed above. Our code
-              never tells it who you are, but some request addresses contain
-              ids, and the link for watching a watch-party stream contains your
-              account id. It does not record clicks, keystrokes or the screen.
+              never tells it who you are, but it reports the addresses of the
+              requests the app makes in full, query string included, and some
+              contain ids. The link the app uses to fetch a watch-party stream
+              carries a token that contains your account id, so a report can
+              identify your account. Grafana also receives the IP address of
+              each report, as any server does, and may derive an approximate
+              location from it. It does not record clicks, keystrokes or the
+              screen.
+            </li>
+            <li>
+              <strong>YouTube</strong>: when a music queue is playing in a voice
+              call you are in, your browser loads YouTube&apos;s player script
+              and the player from <code>www.youtube.com</code>, and track
+              thumbnails from <code>i.ytimg.com</code>. This is YouTube&apos;s
+              standard player, not its privacy-enhanced one, and Google can set
+              its own cookies on its own domains when it loads.
+            </li>
+            <li>
+              <strong>YouTube, Twitch, TikTok and Instagram embeds in Baú</strong>:
+              when a Baú post carries one of these videos, your browser loads
+              the player as the post scrolls into view, from{" "}
+              <code>www.youtube-nocookie.com</code> (YouTube&apos;s
+              privacy-enhanced address), <code>player.twitch.tv</code> or{" "}
+              <code>clips.twitch.tv</code>, <code>www.tiktok.com</code> or{" "}
+              <code>www.instagram.com</code>. Each of them can set its own
+              cookies on its own domain, under its own terms. A locked post
+              shows only a YouTube thumbnail, loaded from{" "}
+              <code>i.ytimg.com</code>.
             </li>
             <li>
               <strong>Steam, Battle.net and Twitch</strong> — only if you click
@@ -540,7 +573,9 @@ export const cookiesEn: LegalDocument = {
             your browser settings, and block third-party requests with a
             browser extension if you prefer. Blocking Clerk&apos;s cookies will
             prevent sign-in. Blocking Google&apos;s costs you nothing and costs
-            us one uncounted sign-up. Clearing local storage resets your theme,
+            us one uncounted sign-up. You can also switch off ad
+            personalisation in your Google account&apos;s ad settings, at{" "}
+            <code>adssettings.google.com</code>. Clearing local storage resets your theme,
             language and notification preferences on that device but does not
             touch your account.
           </p>

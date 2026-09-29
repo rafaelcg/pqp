@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "196fe97f",
+      sourceRev: "33056601",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -243,9 +243,9 @@ export const privacyPtBr: LegalDocument = {
             na sala que não estão no ar. A gente também pode ligar uma opção que
             salva o microfone de quem apresenta como um arquivo de áudio
             separado, ao lado da transmissão. Junto com cada gravação a gente
-            guarda o canal, quando ela começou e terminou, e qual conta estava
-            apresentando, e esse registro continua depois que os arquivos são
-            apagados. Enquanto a transmissão está no ar, a gente também anota
+            guarda o canal e quando ela começou e terminou. Em algumas
+            transmissões a gente também guarda qual conta estava apresentando.
+            Esse registro continua depois que os arquivos são apagados. Enquanto a transmissão está no ar, a gente também anota
             quais contas estão assistindo, para contar o público, e apaga cada
             anotação mais ou menos um dia depois da última vez que aquela pessoa
             foi vista assistindo. Os arquivos ficam no Cloudflare R2, na região leste da
@@ -298,7 +298,24 @@ export const privacyPtBr: LegalDocument = {
             — quem expulsou, baniu, mudou um cargo, apagou a mensagem de outra
             pessoa, renomeou um canal ou exportou o servidor. Ele registra quem
             agiu, a ação, o id do alvo, um motivo opcional e o valor anterior do
-            que mudou. Ele não registra o texto das mensagens.
+            que mudou. Ele não registra o texto das mensagens, com uma exceção:
+            quando o AutoMod bloqueia uma mensagem, a entrada registra o canal,
+            a regra e a palavra, o link ou o trecho que bateu. Ela não guarda o
+            resto da mensagem.
+          </p>
+          <p>
+            <strong>Alertas do AutoMod.</strong> Se a equipe de um servidor
+            ligou o AutoMod e escolheu um canal de alertas, toda vez que o
+            AutoMod bloqueia uma mensagem ele posta um card nesse canal. O card
+            mostra a regra, o nome e a tag do membro, o canal, o trecho que
+            bateu e o texto da mensagem bloqueada (até os primeiros 1.024
+            caracteres). A mensagem bloqueada em si não é postada onde foi
+            enviada. O card fica guardado como uma mensagem comum no canal de
+            alertas. Quem consegue ler esse canal consegue ler o card, e a
+            janela de retenção de mensagens daquele servidor vale para ele. O
+            AutoMod é o autor do card, então excluir a sua conta não o remove.
+            O AutoMod posta no máximo um card para o mesmo membro a cada 10
+            segundos. A entrada no log de auditoria é escrita toda vez.
           </p>
           <p>
             <strong>Prévias de link.</strong> Quando você publica um link, o
@@ -318,6 +335,24 @@ export const privacyPtBr: LegalDocument = {
             guarda a nota, um comentário opcional, o canal, quanto tempo a
             chamada durou, quantas pessoas estavam nela, qual caminho ela usou e
             se alguém compartilhou a tela.
+          </p>
+          <p>
+            <strong>Atividade e primeiros passos.</strong> A gente guarda dois
+            registros pequenos por conta, para as nossas próprias contagens. O
+            primeiro são os dias em que a sua conta esteve ativa: uma linha por
+            dia, no horário de São Paulo, em que o app se conectou ao nosso
+            servidor ou você fez alguma coisa nele, como mandar mensagem,
+            reagir ou entrar numa chamada ou numa watch party. Ele guarda só o
+            dia, não o que você fez nem por quanto tempo. O segundo é o
+            momento dos seus primeiros passos: quando a conta foi criada, e a
+            primeira vez que você passou pela verificação de idade, reivindicou
+            um handle, entrou num servidor, mandou uma mensagem, entrou numa
+            sala de voz ou apresentou uma watch party. O operador usa isso para
+            contar as contas ativas por dia, semana e mês, se quem se cadastra
+            volta, e até onde as contas novas chegam. Os relatórios que o
+            operador lê têm contagens, não nomes. Os dois registros são
+            apagados junto com a sua conta. A exportação de dados ainda não
+            inclui nenhum deles.
           </p>
           <p>
             <strong>Técnicos.</strong> Logs de aplicação com erros e eventos de
@@ -357,7 +392,7 @@ export const privacyPtBr: LegalDocument = {
           </p>
           <p>
             As mesmas páginas também carregam o <strong>Umami</strong>,
-            hospedado pelos criadores dele na União Europeia, com a mesma
+            rodado pelos criadores dele como Umami Cloud, com a mesma
             finalidade: contar visitas e ver em quais páginas as pessoas chegam.
             Ele também é sem cookie, não guarda nada no seu dispositivo e não
             usa identificador persistente. Registra o endereço da página, a
@@ -367,7 +402,9 @@ export const privacyPtBr: LegalDocument = {
             página de divulgação ou, dentro do app, passar pela verificação de
             idade ou criar um servidor, como um nome e alguns
             rótulos (como quanto tempo um passo levou), nunca um id. Ele nunca
-            vê a sua conta, e bloquear ele também não quebra nada.
+            vê a sua conta, e bloquear ele também não quebra nada. Em qual
+            região o Umami Cloud guarda os dados depende de como a conta dele
+            está configurada, e esta política não promete nenhuma.
           </p>
           <p>
             São dois porque respondem perguntas um pouco diferentes, e nenhum
@@ -393,9 +430,15 @@ export const privacyPtBr: LegalDocument = {
             quatro horas. O nosso código nunca diz a ele quem você é: nem nome,
             nem e-mail, nem id de conta. Se você manda um feedback pelo app, o
             feedback leva esse id de sessão, para a gente achar os relatórios
-            daquele momento. Mas alguns endereços de requisição têm
-            ids, e o link para assistir a transmissão de uma watch party tem o
-            id da sua conta, então um relatório também pode ter. Ele não define
+            daquele momento. Mas os endereços das requisições que o app faz vão no
+            relatório por inteiro, com a query string, e alguns têm ids. O link
+            que o app usa para buscar a transmissão de uma watch party leva um
+            token que contém o id da sua conta. Então um relatório sobre essas
+            requisições pode identificar a sua conta para a Grafana, mesmo que
+            o nosso código nunca diga ao Faro quem você é. A Grafana também
+            recebe o endereço IP de cada relatório, como qualquer servidor, e
+            pode deduzir uma localização aproximada a partir dele. Se ela faz
+            isso é uma configuração do lado da Grafana. O Faro não define
             cookie, e não registra cliques, teclas nem a tela. Ele só liga quando a
             compilação recebe o endereço do nosso coletor, e só a compilação
             hospedada do pqp.gg recebe, então uma cópia self-hosted não manda
@@ -421,25 +464,35 @@ export const privacyPtBr: LegalDocument = {
             seu navegador e sistema operacional, e o identificador do cookie{" "}
             <code>_gcl_au</code>. O Google também vê o seu endereço IP, que é o
             que qualquer script de terceiro vê. Parte desses envios vai para os
-            endereços que o Google Ads usa para montar públicos de remarketing,
-            então o Google Ads pode incluir a sua visita numa lista de público
-            da nossa conta de anúncios.
+            endereços que o Google Ads usa para montar públicos de remarketing.
+            O nosso código configura a tag do jeito comum e não desliga a
+            personalização de anúncios, então o Google pode incluir a sua
+            visita numa lista de público da nossa conta de anúncios, e os
+            nossos anúncios podem voltar a aparecer para você.
           </p>
           <p>
-            Quando uma conta é criada, a tag envia mais um evento: que houve um
-            cadastro. Esse evento não leva nome, nem e-mail, nem id de usuário,
-            nem nada que você digitou. Se você chegou por um anúncio, a gente
-            também guarda o <code>gclid</code> na conta uma vez, junto com os
-            outros parâmetros de campanha. O nosso código não entrega dado
-            nenhum da conta para a tag: nem e-mail, nem nome, nem id de
-            usuário.
+            Quando uma conta é criada, o nosso código envia à tag mais um
+            evento: que houve um cadastro. Ele é endereçado à nossa conta de
+            anúncios e não leva mais nada, então não tem nome, e-mail nem id de
+            usuário. Essas são as duas únicas coisas que o nosso código envia:
+            uma visualização de página a cada carregamento e esse evento de
+            cadastro. Se você chegou por um anúncio, a gente também guarda o{" "}
+            <code>gclid</code> na conta uma vez, junto com os outros parâmetros
+            de campanha. O nosso código não usa conversões otimizadas (enhanced
+            conversions), o recurso do Google Ads que envia um e-mail com hash
+            junto com a conversão, e não envia e-mail nenhum. A tag é um script
+            do próprio Google, então o que o Google faz com o que recebe, dentro
+            das configurações da nossa conta de anúncios, é o Google que tem de
+            descrever.
           </p>
           <p>
             O Google é um terceiro aqui e trata o que recebe, inclusive o seu
             endereço IP, sob os termos dele. Bloquear a tag com uma extensão de
             navegador, ou bloquear os cookies <code>_gcl_</code> dela, não
             quebra nada: o produto funciona exatamente igual e o cadastro
-            simplesmente não é contado.
+            simplesmente não é contado. Você também pode desligar a
+            personalização de anúncios nas configurações de anúncios da sua
+            conta Google, em <code>adssettings.google.com</code>.
           </p>
           <p>
             Isso vale para o pqp.gg hospedado e para mais nada. A tag é
@@ -453,7 +506,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "1a9a7bf1",
+      sourceRev: "12e5ef01",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -463,8 +516,10 @@ export const privacyPtBr: LegalDocument = {
             digita. (Uma tela que você compartilha numa watch party é gravada,
             porque é uma transmissão. Veja &quot;Chamadas de voz&quot;.) Os
             relatórios de erro descritos em &quot;O que a gente coleta&quot;
-            são ligados a um id de sessão aleatório, não à sua conta, a não ser
-            que você mande um feedback, que leva esse id. As duas
+            levam um id de sessão aleatório, e o nosso código nunca liga a sua
+            conta a eles. Um endereço de requisição dentro de um relatório
+            ainda pode ter o id da sua conta, como está descrito ali, e o
+            feedback que você manda leva o id de sessão. As duas
             ferramentas de analytics descritas ali contam visitas e não
             conseguem identificar visitantes. A exceção é a tag do Google Ads,
             descrita no mesmo lugar: ela dá um identificador a todo visitante e
@@ -474,18 +529,21 @@ export const privacyPtBr: LegalDocument = {
           <li>
             <strong>Sem venda de dados.</strong> A gente anuncia, sim, e conta
             quantos cadastros a publicidade produziu, pela tag do Google Ads
-            acima. A gente não entrega dado de conta nenhum para o Google, e não
-            vende nem aluga dados pessoais.
+            acima. O nosso código não entrega dado de conta nenhum para o Google, e a
+            gente não vende nem aluga dados pessoais.
           </li>
           <li>
-            <strong>Sem fingerprinting de dispositivo e sem rastrear a sua localização.</strong>{" "}
+            <strong>Sem fingerprinting de dispositivo, e a gente nunca pede a sua localização.</strong>{" "}
             O nosso código não sonda o seu dispositivo atrás de uma impressão
             digital, e nunca pede a sua localização ao navegador ou ao celular.
             As ferramentas de analytics descritas em &quot;O que a gente
             coleta&quot; deduzem o seu país pelo endereço IP, para contagens
             agregadas. O nosso servidor também guarda na sua conta o país da sua
             conexão, em duas letras, para escolher onde rodam as chamadas de
-            voz. Um país é a localização mais precisa que a gente registra.
+            voz. A sua conta não guarda nada mais preciso que um país. Fora dos
+            nossos sistemas, os terceiros listados abaixo veem o seu endereço
+            IP, e o que eles deduzem dele é assunto deles, como está descrito
+            para a Grafana em &quot;Relatório de erros&quot;.
           </li>
           <li>
             <strong>Sem gravação de chamadas comuns.</strong> Uma chamada em DM
@@ -515,35 +573,36 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "c9a6d258",
+      sourceRev: "5b58193f",
       heading: "Chamadas de voz",
       body: (
         <>
           <p>
-            A voz e o vídeo no pqp.gg pegam um de dois caminhos, e qual deles a
-            sua chamada pega é decidido quando a chamada começa. Em sala
-            pequena, o áudio e o vídeo de tela vão{" "}
+            A voz e o vídeo no pqp.gg pegam um de dois caminhos. No caminho
+            direto, o áudio e o vídeo de tela vão{" "}
             <strong>direto do seu dispositivo para as outras pessoas</strong> do
             canal, por WebRTC, criptografados pelo navegador (DTLS-SRTP), e não
-            passam por servidor nenhum nosso. Em sala grande, eles são
+            passam por servidor nenhum nosso. No caminho repassado, eles são
             repassados por um{" "}
             <strong>servidor de mídia que a gente mesmo roda</strong>. São três:
             em São Paulo, no Brasil, em Miami, nos Estados Unidos, e em Londres,
-            no Reino Unido.
+            no Reino Unido. A chamada começa no caminho que as nossas regras
+            escolhem, e uma chamada num servidor pode passar do caminho direto
+            para o repassado enquanto está acontecendo.
           </p>
-          <p>Quais salas são quais:</p>
+          <p>Onde a chamada começa:</p>
           <ul>
             <li>
               Chamada em DM ou em grupo de DM é sempre direta entre as pessoas
-              que estão nela.
+              que estão nela, e nunca muda de caminho.
             </li>
             <li>
-              Canal de voz em servidor com menos de 10 membros é direto entre as
-              pessoas que estão nele.
+              Canal de voz em servidor com menos de 10 membros começa direto entre
+              as pessoas que estão nele.
             </li>
             <li>
-              Canal de voz em servidor com 10 membros ou mais passa pelo
-              servidor de mídia.
+              Canal de voz em servidor com 10 membros ou mais começa no servidor
+              de mídia.
             </li>
             <li>
               Canal de voz em comunidade também passa, seja qual for o tamanho.
@@ -553,15 +612,33 @@ export const privacyPtBr: LegalDocument = {
               a gente trata como sinal de sala que pode encher.
             </li>
             <li>
+              Canal de watch party, onde as watch parties estão ligadas, usa o
+              servidor de mídia seja qual for o tamanho do servidor, porque é
+              lá que a transmissão é feita.
+            </li>
+            <li>
               Quem pode gerenciar os canais do servidor, normalmente o dono e os
               admins, pode fixar o caminho por canal, em{" "}
               <strong>Tamanho da sala de voz</strong> nas configurações do
-              canal, e essa escolha vale no lugar da regra acima.
+              canal, e essa escolha vale no lugar das regras acima. Quem entra
+              não muda de caminho um canal fixado em direto.
             </li>
           </ul>
           <p>
-            A escolha é feita quando a primeira pessoa entra e vale até a sala
-            esvaziar. Uma chamada em andamento nunca troca de caminho.
+            <strong>Uma chamada pode mudar de caminho enquanto acontece.</strong>{" "}
+            Um canal de voz de servidor que começou direto passa para o servidor
+            de mídia quando entra a quarta pessoa, ou quando alguém liga uma
+            câmera ou começa uma transmissão de tela que uma chamada direta não
+            aguenta. Todo mundo na chamada é avisado e os apps reconectam ao
+            servidor de mídia. A gente só muda a chamada de caminho se o
+            servidor de mídia tem espaço para ela. Se não tem, a chamada
+            continua direta e a câmera ou a transmissão de tela é recusada.
+            Quem está num app que não consegue acompanhar a mudança sai da
+            chamada e pode entrar de novo. Uma chamada que mudou fica no
+            servidor de mídia até a sala esvaziar. Ela nunca volta. Chamada em
+            DM ou em grupo de DM nunca muda de caminho. Desde o momento em que
+            a chamada muda, tudo o que está dito abaixo sobre o caminho
+            repassado vale para ela.
           </p>
           <p>
             <strong>Qual servidor de mídia.</strong> Uma chamada repassada roda
@@ -583,7 +660,7 @@ export const privacyPtBr: LegalDocument = {
             Para passar o seu áudio e o seu vídeo adiante, o servidor de mídia
             descriptografa o que você manda e criptografa de novo para cada
             pessoa que recebe. É isso que um servidor de mídia faz; não tem como
-            repassar mídia sem mexer nela. Então, em sala grande, a criptografia
+            repassar mídia sem mexer nela. Então, no caminho repassado, a criptografia
             é entre você e o nosso servidor, e não de ponta a ponta entre os
             participantes, e a frase que ficava aqui antes, de que o seu áudio
             não chegaria à gente nem se a gente quisesse, deixou de valer para
@@ -634,7 +711,7 @@ export const privacyPtBr: LegalDocument = {
               <strong>Cloudflare Realtime TURN</strong>, depois Metered / Open
               Relay se a Cloudflare não estiver configurada ou não responder, depois um relay
               estático (ExpressTURN no pqp.gg) como fallback, mais os servidores
-              STUN públicos do Google e da Cloudflare. Numa sala grande os mesmos relays
+              STUN públicos do Google e da Cloudflare. No caminho repassado os mesmos relays
               podem carregar a conexão entre você e o nosso servidor de mídia.
               Nesse caso a criptografia termina no nosso servidor de mídia, como
               está descrito acima, e o relay continua sem conseguir escutar.
@@ -667,7 +744,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "e5db4d2a",
+      sourceRev: "8483b11b",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -736,8 +813,7 @@ export const privacyPtBr: LegalDocument = {
               <strong>Medir a nossa publicidade.</strong> Contar quantos
               cadastros uma campanha de anúncio produziu, pela tag do Google Ads
               descrita acima. A tag informa cada visualização de página ao
-              Google, e um evento de cadastro que não leva nome, e-mail nem id de
-              usuário. O Google vê o seu IP e a página, como está em
+              Google, e um evento de cadastro. O Google vê o seu IP e a página, como está em
               &quot;Medição de publicidade&quot;.{" "}
               <em>
                 (Base: legítimo interesse, art. 7, IX. Para se opor, bloqueie a
@@ -771,7 +847,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "ee340fc4",
+      sourceRev: "dc530314",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -791,14 +867,14 @@ export const privacyPtBr: LegalDocument = {
               <strong>São Paulo, Brasil</strong>. A Vultr também entrega as
               máquinas virtuais onde rodam os nossos servidores de mídia de voz,
               em <strong>São Paulo, Miami e Londres</strong>. O software em cima
-              delas é nosso. A Vultr entrega as máquinas e a rede. Em sala
-              grande, o áudio e o vídeo de tela passam por um dos servidores de
-              mídia para serem repassados, e as watch parties são gravadas no de
+              delas é nosso. A Vultr entrega as máquinas e a rede. No caminho
+              repassado, o áudio e o vídeo de tela passam por um dos servidores
+              de mídia para serem repassados, e as watch parties são gravadas no de
               São Paulo, como está em &quot;Chamadas de voz&quot; acima.
             </li>
             <li>
-              <strong>Umami</strong> — contagem de visitas sem cookie, hospedado
-              pelos próprios autores na UE. Está em &quot;Analytics do
+              <strong>Umami</strong> — contagem de visitas sem cookie, rodado
+              pelos próprios autores como Umami Cloud. Está em &quot;Analytics do
               site&quot; acima.
             </li>
             <li>
@@ -870,8 +946,35 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>Google Ads</strong> carrega a tag dele em toda página do
               pqp.gg, então o Google vê o seu endereço IP e toda página que você
-              abre, e é avisado uma vez quando uma conta é criada.
+              abre, pode usar essas visitas para montar públicos de remarketing
+              e é avisado uma vez quando uma conta é criada.
               Está detalhado em &quot;Medição de publicidade&quot; acima.
+            </li>
+            <li>
+              <strong>YouTube</strong>: a fila de música numa chamada de voz
+              toca cada faixa no player do próprio YouTube, no seu dispositivo.
+              Enquanto uma fila está tocando numa chamada em que você está, o
+              seu navegador carrega o script do player do YouTube e o próprio
+              player de <code>www.youtube.com</code>, e as miniaturas das
+              faixas de <code>i.ytimg.com</code>, então o Google vê o seu
+              endereço IP e pode definir cookies próprios. É o player padrão do
+              YouTube, não o de privacidade aprimorada. Quando você adiciona um
+              link ou faz uma busca na fila, o nosso servidor envia esse link
+              ou termo de busca ao YouTube, e ao Spotify se for um link do
+              Spotify, então eles veem isso vindo da gente, não de você.
+            </li>
+            <li>
+              <strong>Embeds de YouTube, Twitch, TikTok e Instagram no Baú</strong>:
+              o Baú é o feed de posts de uma comunidade, e um post pode trazer
+              um vídeo de um desses. O seu navegador carrega o player direto do
+              provedor à medida que o post entra na tela: o YouTube por{" "}
+              <code>www.youtube-nocookie.com</code>, o endereço de privacidade
+              aprimorada do YouTube, a Twitch de{" "}
+              <code>player.twitch.tv</code> ou <code>clips.twitch.tv</code>, o
+              TikTok de <code>www.tiktok.com</code> e o Instagram de{" "}
+              <code>www.instagram.com</code>. O provedor vê o seu endereço IP e
+              trata isso sob os termos dele. Um post trancado mostra só uma
+              miniatura do YouTube, carregada de <code>i.ytimg.com</code>.
             </li>
             <li>
               <strong>Steam, Battle.net e Twitch</strong> — só se você clicar
@@ -905,7 +1008,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "a0e54736",
+      sourceRev: "cb94e682",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -915,8 +1018,9 @@ export const privacyPtBr: LegalDocument = {
               no seu.
             </strong>{" "}
             Clerk, Cloudflare, o nosso armazenamento de objetos, os provedores
-            de STUN/TURN e o Google Fonts operam globalmente e normalmente
-            tratam dados nos Estados Unidos e na Europa. O servidor de aplicação
+            de STUN/TURN, o Google (Fonts, a tag do Google Ads e o YouTube), o
+            Umami e os outros provedores de embed operam globalmente e
+            normalmente tratam dados nos Estados Unidos e na Europa. O servidor de aplicação
             e o banco de dados rodam na <strong>Vultr</strong> em{" "}
             <strong>São Paulo, Brasil</strong>. Os relatórios de erro do app web
             vão para um coletor da Grafana em São Paulo. A pessoa que administra
@@ -950,7 +1054,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "retention",
-      sourceRev: "a18e19ec",
+      sourceRev: "ef48b070",
       heading: "Por quanto tempo a gente guarda cada coisa",
       body: (
         <>
@@ -1008,6 +1112,16 @@ export const privacyPtBr: LegalDocument = {
               <strong>Gravações de watch party</strong>: 30 dias depois do fim
               da transmissão, e depois apagadas. Se a equipe do servidor
               desligar &quot;Manter gravação&quot;, uns 10 minutos depois do fim.
+            </li>
+            <li>
+              <strong>Dias de atividade e primeiros passos</strong>: até a sua
+              conta ser excluída.
+            </li>
+            <li>
+              <strong>Cards de alerta do AutoMod</strong>: o mesmo tempo que
+              qualquer outra mensagem daquele canal. A janela de retenção de
+              mensagens do servidor, se ele tiver uma, apaga esses cards como
+              qualquer outra mensagem.
             </li>
             <li>
               <strong>O seu país</strong>: atualizado enquanto você usa o app, e
@@ -1082,10 +1196,22 @@ export const privacyPtBr: LegalDocument = {
             </li>
             <li>
               <strong>O registro das watch parties que você apresentou</strong>:
-              o canal, quando começou e terminou, e o id da sua conta. Ele
-              continua depois que os arquivos são apagados, e excluir a conta
-              ainda não apaga esse registro. Você pode escrever para a gente
-              pedindo para apagar.
+              o canal, quando começou e terminou e, em algumas transmissões, o
+              id da sua conta. Ele continua depois que os arquivos são
+              apagados, e excluir a conta ainda não apaga esse registro. Ele
+              não tem vínculo com a sua conta no banco de dados, então nada o
+              remove sozinho. Você pode escrever para a gente pedindo para
+              apagar.
+            </li>
+            <li>
+              <strong>Cards de alerta do AutoMod sobre você.</strong> O autor do
+              card que o AutoMod posta quando bloqueia a sua mensagem é o
+              AutoMod, não você, então ele não está entre as mensagens que
+              excluir a conta remove. Ele guarda o seu nome, a sua tag e o texto
+              que o AutoMod bloqueou, até a janela de retenção do servidor
+              apagá-lo, se o servidor tiver uma. A equipe do servidor pode
+              apagá-lo antes, e você pode escrever para a gente pedindo para
+              remover.
             </li>
             <li>
               <strong>Feedback que você mandou e chamadas que você
@@ -1110,7 +1236,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "rights",
-      sourceRev: "92d8feec",
+      sourceRev: "ddafcc49",
       heading: "Os seus direitos, e como usar",
       body: (
         <>
@@ -1166,7 +1292,8 @@ export const privacyPtBr: LegalDocument = {
               participou, quem você bloqueou, as denúncias que você fez e as
               ações de moderação que você tomou. Ainda não inclui o seu{" "}
               <code>@handle</code> público, o banner, os depoimentos, os
-              parâmetros de campanha do seu cadastro, o país guardado, os seus
+              parâmetros de campanha do seu cadastro, o país guardado, os seus dias de
+              atividade e os momentos dos primeiros passos, os seus
               registros de push, as suas respostas à lista de espera da watch
               party, as gravações de watch party, as suas reações, a sua lista de
               amigos, o feedback que você mandou nem as avaliações de chamada. Para esses, escreva para a
@@ -1324,14 +1451,14 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "security",
-      sourceRev: "09946099",
+      sourceRev: "f0285dd6",
       heading: "Segurança",
       body: (
         <p>
           O tráfego é criptografado em trânsito. A voz é criptografada em
-          trânsito nos dois caminhos: de ponta a ponta entre os participantes na
-          sala pequena, e entre você e o nosso servidor de mídia na sala grande,
-          onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
+          trânsito nos dois caminhos: de ponta a ponta entre os participantes no
+          caminho direto, e entre você e o nosso servidor de mídia no
+          repassado, onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
           de vida curta e assinados, em vez de públicos. O nosso servidor se
           recusa a buscar prévia de link em endereços de rede interna. Nenhum
           sistema é perfeitamente seguro, e este é mantido por uma pessoa sem

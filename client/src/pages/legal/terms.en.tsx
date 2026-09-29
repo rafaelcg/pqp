@@ -362,12 +362,13 @@ export const termsEn: LegalDocument = {
       heading: "Voice and media",
       body: (
         <p>
-          Voice uses WebRTC. In a small room, audio and screen-share video
+          Voice uses WebRTC. On the direct path, audio and screen-share video
           travel directly between participants and pass through no server of
-          ours. In a large room they are relayed by a media server we run
+          ours. On the relayed path they go through a media server we run
           ourselves, in São Paulo, Miami or London, which passes them on and
           keeps nothing: no ordinary call is recorded by us or stored by us on
-          either path. A watch party is different. It is a broadcast that we
+          either path. A call in a server can move from the direct path to the
+          relayed path while it is running. A watch party is different. It is a broadcast that we
           stream to its audience and record, and the recording is kept for 30
           days. Which rooms are which, and what relaying and recording mean for
           your data, is set out in the{" "}

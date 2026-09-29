@@ -213,9 +213,9 @@ export const privacyEn: LegalDocument = {
             they are on air. It does not hold the audience, or the voices of other people
             in the room who are not on air. We can also turn on a setting that
             saves the host&apos;s microphone as a separate audio file beside the
-            broadcast. With each recording we store the channel, when it started and ended,
-            and which account was presenting, and that record stays after the
-            files are deleted. While a broadcast is live we also note which
+            broadcast. With each recording we store the channel and when it started and
+            ended. For some broadcasts we also store which account was
+            presenting. That record stays after the files are deleted. While a broadcast is live we also note which
             accounts are watching, so the audience can be counted, and delete
             each entry about a day after that person was last seen watching.
             The files are stored
@@ -265,7 +265,24 @@ export const privacyEn: LegalDocument = {
             banned, changed a role, deleted someone else&apos;s message, renamed
             a channel, or exported the server. It records the actor, the action,
             the target id, an optional reason, and the previous value of
-            whatever changed. It does not record message text.
+            whatever changed. It does not record message text, with one
+            exception: when AutoMod blocks a message, the entry records the
+            channel, the rule, and the word, link or fragment that matched. It
+            does not hold the rest of the message.
+          </p>
+          <p>
+            <strong>AutoMod alerts.</strong> If a server&apos;s staff turned on
+            AutoMod and chose an alert channel, then each time AutoMod blocks a
+            message it posts a card in that channel. The card shows the rule,
+            the member&apos;s name and tag, the channel, the matched fragment,
+            and the text of the blocked message (up to its first 1,024
+            characters). The blocked message itself is not posted where it was
+            sent. The card is stored as an ordinary message in the alert
+            channel. Everyone who can read that channel can read it, and that
+            server&apos;s message retention window applies to it. AutoMod is
+            its author, so deleting your account does not remove it. AutoMod
+            posts at most one card for the same member every 10 seconds. The
+            audit log entry is written every time.
           </p>
           <p>
             <strong>Link previews.</strong> When you post a link, our server
@@ -284,6 +301,22 @@ export const privacyEn: LegalDocument = {
             reporting&quot;. If you rate a call, we store the score, an optional
             note, the channel, how long the call lasted, how many people were
             in it, which path it took, and whether someone shared a screen.
+          </p>
+          <p>
+            <strong>Activity and first steps.</strong> We keep two small
+            records for each account, for our own counts. The first is the days
+            your account was active: one row for each day, in São Paulo time,
+            on which the app connected to our server or you did something in
+            it, such as sending a message, reacting, or joining a call or a
+            watch party. It holds the day only, not what you did or for how
+            long. The second is the time of your first steps: when the account
+            was created, and the first time you passed the age check, claimed a
+            handle, joined a server, sent a message, joined a voice room or
+            hosted a watch party. The operator uses them to count daily,
+            weekly and monthly active accounts, whether people who sign up come
+            back, and how far new accounts get. The reports the operator reads
+            hold counts, not names. Both records are deleted with your
+            account. The data export does not include them yet.
           </p>
           <p>
             <strong>Technical.</strong> Application logs of errors and
@@ -320,8 +353,8 @@ export const privacyEn: LegalDocument = {
             it with a browser extension breaks nothing.
           </p>
           <p>
-            The same pages also load <strong>Umami</strong>, hosted by its
-            makers in the EU, for the same purpose: counting visits and seeing
+            The same pages also load <strong>Umami</strong>, run by its makers
+            as Umami Cloud, for the same purpose: counting visits and seeing
             which pages people arrive on. It is cookieless too, stores nothing
             on your device, and uses no persistent identifier. It records the
             page address, the referring page, and your country, browser and
@@ -329,7 +362,9 @@ export const privacyEn: LegalDocument = {
             button on a marketing page or, inside the app, passing the age
             check or creating a server, as a name and a few labels (such as how long a
             step took), never an id. It never
-            sees your account, and blocking it also breaks nothing.
+            sees your account, and blocking it also breaks nothing. Which
+            region Umami Cloud stores the data in depends on how its account is
+            set up, and this policy does not promise one.
           </p>
           <p>
             Two of them, because they answer slightly different questions and
@@ -355,9 +390,15 @@ export const privacyEn: LegalDocument = {
             storage and replaced after 15 minutes idle or four hours. Our code never tells it who you are: no name, no email, no account id.
             If you send feedback from the app, the feedback carries that
             session id, so we can find the reports from around that moment. But
-            some request addresses contain ids, and the link for watching a
-            watch-party stream contains your account id, so a report can too.
-            It sets no cookie, and it does not record clicks, keystrokes or the
+            the addresses of the requests the app makes are reported in full,
+            query string included, and some contain ids. The link the app uses
+            to fetch a watch-party stream carries a token that contains your
+            account id. So a report about those requests can identify your
+            account to Grafana, even though our code never tells Faro who you
+            are. Grafana also receives the IP address of each report, as any
+            server does, and may derive an approximate location from it.
+            Whether it does is a setting on Grafana&apos;s side. Faro
+            sets no cookie, and it does not record clicks, keystrokes or the
             screen. It starts only when the build is given our
             collector address, and only the hosted pqp.gg build is, so a
             self-hosted copy reports nothing to us.
@@ -382,23 +423,33 @@ export const privacyEn: LegalDocument = {
             operating system, and the identifier in its <code>_gcl_au</code>{" "}
             cookie. Google also sees your IP address, which is what any
             third-party script sees. Some of these reports go to the addresses
-            Google Ads uses to build remarketing audiences, so Google Ads can
-            add your visit to an audience list for our ad account.
+            Google Ads uses to build remarketing audiences. Our code sets the
+            tag up in the ordinary way and does not turn off ad
+            personalisation, so Google can add your visit to an audience list
+            for our ad account, and our ads can be shown to you again.
           </p>
           <p>
-            When an account is created, the tag sends one more event: that a
-            sign-up happened. That event carries no name, no email, no user id
-            and nothing you typed. If you arrived from an ad, we also store the{" "}
-            <code>gclid</code> on the account once, with the other campaign
-            parameters. Our code gives the tag no account data at all: no
-            email, no name, no user id.
+            When an account is created, our code sends the tag one more
+            event: that a sign-up happened. It is addressed to our ad account
+            and carries nothing else, so it has no name, email or user id.
+            Those are the only two things our code sends: one page view for
+            each page load, and this one sign-up event. If you arrived from an
+            ad, we also store the <code>gclid</code> on the account once, with
+            the other campaign parameters. Our code does not use enhanced
+            conversions, the Google Ads feature that sends a hashed email
+            address with a conversion, and sends no email address. The tag is
+            Google&apos;s own script, so what Google does with what it
+            receives, under the settings of our ad account, is for Google to
+            describe.
           </p>
           <p>
             Google is a third party here and handles what it receives, including
             your IP address, under its own terms. Blocking the tag with a
             browser extension, or blocking its <code>_gcl_</code> cookies,
             breaks nothing: the product works exactly the same and the sign-up
-            simply goes uncounted.
+            simply goes uncounted. You can also switch off ad personalisation
+            in your Google account&apos;s ad settings, at{" "}
+            <code>adssettings.google.com</code>.
           </p>
           <p>
             This is true of the hosted pqp.gg and of nothing else. The tag is
@@ -419,8 +470,11 @@ export const privacyEn: LegalDocument = {
             recorder: nothing records how you use the site or what you type. (A
             screen you share in a watch party is recorded, as the broadcast it
             is. See &quot;Voice calls&quot;.) The error
-            reports described under &quot;What we collect&quot; are keyed to a random session id, not to your account, unless you send
-            feedback, which carries that id. The two analytics tools
+            reports described under &quot;What we collect&quot; carry a random
+            session id, and our code never attaches your account to them. A
+            request address inside a report can still hold your account id, as
+            described there, and feedback you send carries the session id. The
+            two analytics tools
             described
             there count visits and cannot identify visitors. The exception is
             the Google Ads tag, described in the same place: it gives every
@@ -430,18 +484,21 @@ export const privacyEn: LegalDocument = {
           <li>
             <strong>No selling data.</strong> We do advertise, and we count how
             many sign-ups the advertising produced, through the Google Ads tag
-            above. We give Google no account data, and we do not sell or rent
-            personal data.
+            above. Our code gives Google no account data, and we do not sell or
+            rent personal data.
           </li>
           <li>
-            <strong>No device fingerprinting and no location tracking.</strong>{" "}
+            <strong>No device fingerprinting, and we never ask for your location.</strong>{" "}
             Our code does not probe your device for a fingerprint, and never
             asks your browser or phone for your location. The analytics tools
             described under &quot;What we collect&quot; work out your country
             from your IP address, for aggregate counts. Our server also stores
             the two-letter country of your connection on your account, to
-            choose where voice calls run. A country is the most precise
-            location we record.
+            choose where voice calls run. Your account holds nothing more
+            precise than a country. Outside our own systems, the third parties
+            listed below see your IP address, and what they work out from it is
+            theirs, as described for Grafana under &quot;Error
+            reporting&quot;.
           </li>
           <li>
             <strong>No recording of ordinary calls.</strong> A call in a DM or
@@ -474,29 +531,30 @@ export const privacyEn: LegalDocument = {
       body: (
         <>
           <p>
-            Voice and video take one of two paths on pqp.gg, and which one your
-            call gets is decided when the call starts. In a small room, audio
-            and screen-share video go{" "}
+            Voice and video take one of two paths on pqp.gg. On the direct
+            path, audio and screen-share video go{" "}
             <strong>straight from your device to the other people</strong> in
             the channel over WebRTC, encrypted by the browser (DTLS-SRTP), and
-            pass through no server of ours at all. In a large room they are
+            pass through no server of ours at all. On the relayed path they are
             relayed by a <strong>media server we run ourselves</strong>. We run
             three: in São Paulo, Brazil, in Miami, United States, and in London,
-            United Kingdom.
+            United Kingdom. A call starts on the path our rules pick, and a
+            call in a server can move from the direct path to the relayed path
+            while it is running.
           </p>
-          <p>Which rooms are which:</p>
+          <p>Where a call starts:</p>
           <ul>
             <li>
               A call in a DM or a group DM is always direct between the people
-              on it.
+              on it, and never moves.
             </li>
             <li>
-              A voice channel in a server with fewer than 10 members is direct
-              between the people on it.
+              A voice channel in a server with fewer than 10 members starts
+              direct between the people on it.
             </li>
             <li>
-              A voice channel in a server with 10 members or more goes through
-              the media server.
+              A voice channel in a server with 10 members or more starts on the
+              media server.
             </li>
             <li>
               So does any voice channel in a community, whatever its size. A
@@ -506,15 +564,31 @@ export const privacyEn: LegalDocument = {
               is what we treat as the sign of a room that can fill up.
             </li>
             <li>
+              A watch party channel, where watch parties are switched on, uses
+              the media server whatever the size of the server, because the
+              broadcast is made there.
+            </li>
+            <li>
               Anyone who can manage a server&apos;s channels, normally its owner
               and its admins, can pin either path per channel, under{" "}
               <strong>Voice room size</strong> in the channel settings, and that
-              choice replaces the rule above.
+              choice replaces the rules above. People joining do not move a
+              channel that is pinned to direct.
             </li>
           </ul>
           <p>
-            The choice is made when the first person joins and holds until the
-            room empties. A call already in progress never switches paths.
+            <strong>A call can move while it is running.</strong> A voice
+            channel in a server that started direct moves to the media server
+            when a fourth person joins, or when somebody turns on a camera or
+            starts a screen share that a direct call cannot carry. Everyone in
+            the call is told and their apps reconnect to the media server. We
+            move a call only if the media server has room for it. If it does
+            not, the call stays direct and the camera or share is refused.
+            People whose app cannot follow the move are dropped from the call
+            and can rejoin. A call that has moved stays on the media server
+            until the room empties. It never moves back. A call in a DM or a
+            group DM never moves. From the moment a call moves, everything said
+            below about the relayed path applies to it.
           </p>
           <p>
             <strong>Which media server.</strong> A relayed call runs on one of
@@ -536,9 +610,9 @@ export const privacyEn: LegalDocument = {
             To pass your audio and video on to everyone else, the media server
             decrypts what you send and encrypts it again for each person
             receiving it. That is what a media server does; there is no way to
-            relay media without handling it. So in a large room the encryption
-            is between you and our server rather than end to end between the
-            participants, and the sentence that used to sit here, that your
+            relay media without handling it. So on the relayed path the
+            encryption is between you and our server rather than end to end
+            between the participants, and the sentence that used to sit here, that your
             audio could not reach us even if we wanted it to, has stopped being
             true of every call.
           </p>
@@ -586,7 +660,7 @@ export const privacyEn: LegalDocument = {
               then Metered / Open Relay if Cloudflare is not configured or does
               not answer, then a
               static relay (ExpressTURN on pqp.gg) as the fallback, plus public
-              STUN servers run by Google and Cloudflare. In a large room
+              STUN servers run by Google and Cloudflare. On the relayed path
               the same relays can carry the connection between you and our
               media server. There the encryption ends at our media server, as
               described above, and the relay still cannot listen.
@@ -687,7 +761,7 @@ export const privacyEn: LegalDocument = {
               <strong>Measuring our advertising.</strong> Counting how many
               sign-ups an ad campaign produced, through the Google Ads tag
               described above. The tag reports each page view to Google, and
-              one sign-up event that carries no name, email or user id. Google
+              one sign-up event. Google
               sees your IP and the page, as set out under &quot;Advertising
               measurement&quot;.{" "}
               <em>
@@ -740,15 +814,15 @@ export const privacyEn: LegalDocument = {
               <strong>São Paulo, Brazil</strong>. Vultr also provides the
               virtual machines our voice media servers run on, in{" "}
               <strong>São Paulo, Miami and London</strong>. The software on
-              them is ours. Vultr provides the machines and the network. In a
-              large room your audio and screen-share video pass through one of
+              them is ours. Vultr provides the machines and the network. On the
+              relayed path your audio and screen-share video pass through one of
               the media servers to be relayed, and watch parties are recorded
               on the São Paulo one, as described under &quot;Voice calls&quot;
               above.
             </li>
             <li>
-              <strong>Umami</strong> — cookieless visit counts, hosted by its
-              makers in the EU. Set out under &quot;Site analytics&quot; above.
+              <strong>Umami</strong> — cookieless visit counts, run by its
+              makers as Umami Cloud. Set out under &quot;Site analytics&quot; above.
             </li>
             <li>
               <strong>Cloudflare</strong> — serves the web app and the marketing
@@ -811,9 +885,36 @@ export const privacyEn: LegalDocument = {
             </li>
             <li>
               <strong>Google Ads</strong> loads its tag on every page of pqp.gg,
-              so Google sees your IP address and every page you load, and it is
-              told once when an account is created. Set out in full under
+              so Google sees your IP address and every page you load, can use
+              those visits to build remarketing audiences, and is told once
+              when an account is created. Set out in full under
               &quot;Advertising measurement&quot; above.
+            </li>
+            <li>
+              <strong>YouTube</strong>: the music queue in a voice call plays
+              each track in YouTube&apos;s own player on your device. While a
+              queue is playing in a call you are in, your browser loads
+              YouTube&apos;s player script and the player itself from{" "}
+              <code>www.youtube.com</code>, and track thumbnails from{" "}
+              <code>i.ytimg.com</code>, so Google sees your IP address and can
+              set its own cookies. This is YouTube&apos;s standard player, not
+              its privacy-enhanced one. When you add a link or search in the
+              queue, our server sends that link or search term to YouTube, and
+              to Spotify for a Spotify link, so they see it from us and not
+              from you.
+            </li>
+            <li>
+              <strong>YouTube, Twitch, TikTok and Instagram embeds in Baú</strong>:
+              Baú is a community&apos;s feed of posts, and a post can carry a
+              video from one of these. Your browser loads that player directly
+              from the provider as the post scrolls into view: YouTube through{" "}
+              <code>www.youtube-nocookie.com</code>, YouTube&apos;s
+              privacy-enhanced address, Twitch from{" "}
+              <code>player.twitch.tv</code> or <code>clips.twitch.tv</code>,
+              TikTok from <code>www.tiktok.com</code> and Instagram from{" "}
+              <code>www.instagram.com</code>. That provider sees your IP address
+              and handles it under its own terms. A locked post shows only a
+              YouTube thumbnail, loaded from <code>i.ytimg.com</code>.
             </li>
             <li>
               <strong>Steam, Battle.net, and Twitch</strong> — only if you
@@ -855,8 +956,9 @@ export const privacyEn: LegalDocument = {
               Your data is processed in several countries, and probably not
               yours.
             </strong>{" "}
-            Clerk, Cloudflare, our object-storage and STUN/TURN providers, and
-            Google Fonts operate globally and typically process data in the
+            Clerk, Cloudflare, our object-storage and STUN/TURN providers,
+            Google (Fonts, the Google Ads tag and YouTube), Umami and the other
+            embed providers operate globally and typically process data in the
             United States and Europe. The application server and the database
             run on <strong>Vultr</strong> in{" "}
             <strong>São Paulo, Brazil</strong>. Error reports from the web app go
@@ -949,6 +1051,15 @@ export const privacyEn: LegalDocument = {
               &quot;Keep recording&quot; off, about 10 minutes after it ends.
             </li>
             <li>
+              <strong>Activity days and first steps</strong>: until your
+              account is deleted.
+            </li>
+            <li>
+              <strong>AutoMod alert cards</strong>: as long as any other
+              message in that channel. A server&apos;s message retention window,
+              if it has one, deletes them like any other message.
+            </li>
+            <li>
               <strong>Your country</strong>: kept up to date while you use the
               app, and deleted with your account. Only members seen in the last 30 days
               count when a call picks its region.
@@ -1015,9 +1126,20 @@ export const privacyEn: LegalDocument = {
             </li>
             <li>
               <strong>The record of watch parties you presented</strong>: the
-              channel, when it started and ended, and your account id. It stays
-              after the files are deleted, and deleting your account does not
-              remove it yet. You can write to us to have it removed.
+              channel, when it started and ended, and, for some broadcasts, your
+              account id. It stays after the files are deleted, and deleting
+              your account does not remove it yet. It has no link to your
+              account in the database, so nothing removes it automatically. You
+              can write to us to have it removed.
+            </li>
+            <li>
+              <strong>AutoMod alert cards about you.</strong> AutoMod, not you,
+              is the author of the card it posts when it blocks your message,
+              so it is not one of the messages deleting your account removes. It
+              keeps your name, your tag and the text AutoMod blocked, until
+              the server&apos;s retention window deletes it, if the server has
+              one. The server&apos;s staff can delete it sooner, and you can
+              write to us to have it removed.
             </li>
             <li>
               <strong>Feedback you sent and calls you rated</strong>, with your
@@ -1095,7 +1217,8 @@ export const privacyEn: LegalDocument = {
               in, who you have blocked, reports you filed, and moderation
               actions you took. It does not yet include your public{" "}
               <code>@handle</code>, your banner, depoimentos, the campaign
-              parameters from your sign-up, your stored country, your push
+              parameters from your sign-up, your stored country, your activity days
+              and first-step times, your push
               registrations, your watch party waitlist answers, watch party recordings, your
               reactions, your friends list, feedback you sent, or call ratings. For those, email us. Very large accounts are capped, and the file
               says so when it has been cut short. (Server <em>owners</em> can
@@ -1242,8 +1365,8 @@ export const privacyEn: LegalDocument = {
       body: (
         <p>
           Traffic is encrypted in transit. Voice is encrypted in transit on both
-          paths: end to end between the participants in a small room, and
-          between you and our media server in a large one, where it has to
+          paths: end to end between the participants on the direct path, and
+          between you and our media server on the relayed one, where it has to
           handle the media in order to relay it. Attachment links are
           short-lived and signed rather than public. Our server refuses to fetch
           link previews from internal network addresses. No system is perfectly

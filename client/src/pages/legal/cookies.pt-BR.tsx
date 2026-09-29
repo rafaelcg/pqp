@@ -34,7 +34,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "cookies",
-      sourceRev: "d75f1e41",
+      sourceRev: "503d8060",
       heading: "Cookies",
       body: (
         <>
@@ -71,17 +71,25 @@ export const cookiesPtBr: LegalDocument = {
             título da página, o tamanho da sua tela, o seu navegador e sistema
             operacional, e o identificador <code>_gcl_au</code>. Parte desses
             envios vai para os endereços que o Google Ads usa para montar
-            públicos de remarketing, então o Google Ads pode incluir a sua
-            visita numa lista de público da nossa conta de anúncios. Quando uma
-            conta é criada, a tag envia mais um evento: que houve um cadastro.
-            Esse evento não leva nome, nem e-mail, nem id de usuário, nem nada
-            que você digitou. O nosso código não entrega dado nenhum da conta
-            para a tag.
+            públicos de remarketing. O nosso código configura a tag do jeito
+            comum e não desliga a personalização de anúncios, então o Google
+            pode incluir a sua visita numa lista de público da nossa conta de
+            anúncios, e os nossos anúncios podem voltar a aparecer para você.
+            Quando uma conta é criada, o nosso código envia à tag mais um
+            evento: que houve um cadastro. Ele é endereçado à nossa conta de
+            anúncios e não leva mais nada, então não tem nome, e-mail nem id de
+            usuário. Essas são as duas únicas coisas que o nosso código envia.
+            O nosso código não usa conversões otimizadas (enhanced
+            conversions), o recurso do Google Ads que envia um e-mail com hash
+            junto com a conversão. A tag é um script do próprio Google, então o
+            que o Google faz com o que recebe, dentro das configurações da
+            nossa conta de anúncios, é o Google que tem de descrever.
           </p>
           <p>
             São esses os cookies do pqp.gg. O nosso analytics e o nosso
-            relatório de erros não definem nenhum (veja &quot;Terceiros que o
-            seu navegador contata&quot;). Quando a tag fala com os servidores do
+            relatório de erros não definem nenhum, e os players embutidos em
+            algumas páginas podem definir os deles nos domínios deles (veja
+            &quot;Terceiros que o seu navegador contata&quot;). Quando a tag fala com os servidores do
             Google, o Google também pode ler e definir cookies próprios nos
             domínios dele, se o seu navegador permitir cookies de terceiros.
             Esses são do Google, sob os termos do Google.
@@ -434,7 +442,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "6847772e",
+      sourceRev: "1dae8f42",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -507,9 +515,35 @@ export const cookiesPtBr: LegalDocument = {
               velocidade da página, os endereços e tempos das requisições que o
               app faz, e o seu navegador e sistema operacional. Ele leva o id de sessão aleatório do armazenamento de
               sessão listado acima. O nosso código nunca diz a ele quem você é,
-              mas alguns endereços de requisição têm ids, e o link para assistir
-              a transmissão de uma watch party tem o id da sua conta. Ele não
-              registra cliques, teclas nem a tela.
+              mas ele informa os endereços das requisições que o app faz por
+              inteiro, com a query string, e alguns têm ids. O link que o app
+              usa para buscar a transmissão de uma watch party leva um token
+              que contém o id da sua conta, então um relatório pode identificar
+              a sua conta. A Grafana também recebe o endereço IP de cada
+              relatório, como qualquer servidor, e pode deduzir uma localização
+              aproximada a partir dele. Ele não registra cliques, teclas nem a
+              tela.
+            </li>
+            <li>
+              <strong>YouTube</strong>: quando uma fila de música está tocando
+              numa chamada de voz em que você está, o seu navegador carrega o
+              script do player do YouTube e o player de{" "}
+              <code>www.youtube.com</code>, e as miniaturas das faixas de{" "}
+              <code>i.ytimg.com</code>. É o player padrão do YouTube, não o de
+              privacidade aprimorada, e o Google pode definir cookies próprios
+              nos domínios dele quando isso carrega.
+            </li>
+            <li>
+              <strong>Embeds de YouTube, Twitch, TikTok e Instagram no Baú</strong>:
+              quando um post do Baú traz um desses vídeos, o seu navegador
+              carrega o player à medida que o post entra na tela, de{" "}
+              <code>www.youtube-nocookie.com</code> (o endereço de privacidade
+              aprimorada do YouTube), <code>player.twitch.tv</code> ou{" "}
+              <code>clips.twitch.tv</code>, <code>www.tiktok.com</code> ou{" "}
+              <code>www.instagram.com</code>. Cada um deles pode definir
+              cookies próprios no domínio dele, sob os termos dele. Um post
+              trancado mostra só uma miniatura do YouTube, carregada de{" "}
+              <code>i.ytimg.com</code>.
             </li>
             <li>
               <strong>Steam, Battle.net e Twitch</strong> — só se você clicar
@@ -566,7 +600,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "managing",
-      sourceRev: "7586bca2",
+      sourceRev: "0ba47282",
       heading: "Como controlar isso",
       body: (
         <>
@@ -575,7 +609,9 @@ export const cookiesPtBr: LegalDocument = {
             pqp.gg nas configurações do seu navegador, e bloquear requisições a
             terceiros com uma extensão, se preferir. Bloquear os cookies do
             Clerk impede o login. Bloquear os do Google não custa nada a você e
-            custa a nós um cadastro não contado. Limpar o armazenamento local
+            custa a nós um cadastro não contado. Você também pode desligar a
+            personalização de anúncios nas configurações de anúncios da sua
+            conta Google, em <code>adssettings.google.com</code>. Limpar o armazenamento local
             reseta o tema, o idioma e as preferências de notificação naquele
             dispositivo, mas não mexe na sua conta.
           </p>
