@@ -1,7 +1,7 @@
-import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { SignUpButton, SignedIn, SignedOut, useClerk } from "@clerk/clerk-react";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
   monthStampToDate,
@@ -22,10 +22,48 @@ import { fetchPublicCommunity } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { intentStorage, stashJoinIntent } from "@/lib/handle-intent";
+import {
+  noteSignupCta,
+  shouldResumeSignUp,
+  signupAssistEnabled,
+} from "@/lib/signup-assist";
+import { track } from "@/lib/track";
 import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+const COMMUNITY_SURFACE = "community";
+
+/**
+ * Reopens the sign-up modal on its code step when a phone reloaded this page
+ * while the person was in their mail app. Renders nothing. See
+ * `lib/signup-assist.ts` for every condition, the flag among them.
+ */
+export function ResumeSignUp({ appHref }: { appHref: string }) {
+  const clerk = useClerk();
+  const tried = useRef(false);
+  useEffect(() => {
+    if (tried.current || !clerk.loaded) return;
+    tried.current = true;
+    const signUp = clerk.client?.signUp;
+    if (
+      !shouldResumeSignUp({
+        enabled: signupAssistEnabled(),
+        surface: COMMUNITY_SURFACE,
+        signUp,
+        storage: intentStorage(),
+      })
+    ) {
+      return;
+    }
+    track("signup_resume_open", { surface: COMMUNITY_SURFACE });
+    void Promise.resolve(clerk.openSignUp({ forceRedirectUrl: appHref })).catch(() => {
+      // A modal that will not open leaves the poster and its button, as before.
+    });
+  }, [clerk, clerk.loaded, appHref]);
+  return null;
+}
 
 /**
  * `pqp.gg/c/valorant-brasil` — the front door of a community, for people who do
@@ -218,7 +256,10 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
    * `forceRedirectUrl` carries the same value in the URL as the belt to that
    * brace. See `lib/handle-intent.ts` for why both.
    */
-  const rememberIntent = () => stashJoinIntent(intentStorage(), community.slug);
+  const rememberIntent = () => {
+    stashJoinIntent(intentStorage(), community.slug);
+    noteSignupCta(COMMUNITY_SURFACE);
+  };
   const appHref = `/app?join=${encodeURIComponent(community.slug)}`;
 
   // Seeded from the slug rather than the name, for the reason the profile's is
@@ -380,6 +421,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
             ) : (
               <>
                 <SignedOut>
+                  <ResumeSignUp appHref={appHref} />
                   <SignUpButton mode="modal" forceRedirectUrl={appHref}>
                     <Button
                       className="cta-lift h-12 w-full flex-1 rounded-full text-base sm:w-auto"

@@ -416,6 +416,7 @@ import {
   type ArrivalSurface,
 } from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
+import { noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { ServerIcon } from "@/components/layout/server-identity";
@@ -7819,6 +7820,8 @@ function MainAppContent({
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
     const acquisition = takeAcquisition(storage);
+    // How long the round trip through Clerk took, when this browser started it.
+    noteSignupReturn(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
