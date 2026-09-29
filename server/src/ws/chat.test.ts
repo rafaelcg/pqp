@@ -53,7 +53,7 @@ vi.mock("../services/servers.js", () => ({
 vi.mock("../services/permissions.js", () => ({
   bumpPermissionsVersion: async () => 1,
   computeMemberPermissions: vi.fn(async () => 0n),
-  listServerMemberIds: async () => [],
+  listServerMemberIds: vi.fn(async (): Promise<string[]> => []),
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -138,6 +138,7 @@ const {
   deliverCommunityHomeUpdate,
   deliverPermissionsUpdate,
   handleChatMessage,
+  notifyCommunityHomeSwitch,
   notifyFriendActivity,
   postChannelMessage,
   resetChatRateLimits,
@@ -150,7 +151,10 @@ const { isDmSendBlocked, restoreDmParticipants } = await import(
   "../services/dms.js"
 );
 const { getChannel } = await import("../services/servers.js");
-const { computeMemberPermissions } = await import("../services/permissions.js");
+const { computeMemberPermissions, listServerMemberIds } = await import(
+  "../services/permissions.js"
+);
+const { setBusTransport } = await import("../lib/bus.js");
 const { createMessage, findMessageByNonce, getReplyParent } = await import(
   "../services/messages.js"
 );
@@ -484,7 +488,8 @@ describe("deliverPermissionsUpdate", () => {
 
 /**
  * The Baú nudge doubles as the "owner flipped the switch" message: with
- * `enabled` set, a member's open app rewrites its copy of the server.
+ * `enabled` and `version` set, a member's open app rewrites its copy of the
+ * server when the version is newer than the one it holds.
  */
 describe("deliverCommunityHomeUpdate", () => {
   const member = "11111111-1111-1111-1111-111111111111";
@@ -506,15 +511,15 @@ describe("deliverCommunityHomeUpdate", () => {
     open.length = 0;
   });
 
-  it("carries the new value when the owner flips the switch", () => {
+  it("carries the new value and its version when the owner flips the switch", () => {
     const target = connect(member);
 
-    deliverCommunityHomeUpdate(serverId, [member], true);
-    deliverCommunityHomeUpdate(serverId, [member], false);
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: true, version: 1 });
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: false, version: 2 });
 
     expect(framesOfType(target.received, "community-home-update")).toEqual([
-      { type: "community-home-update", serverId, enabled: true },
-      { type: "community-home-update", serverId, enabled: false },
+      { type: "community-home-update", serverId, enabled: true, version: 1 },
+      { type: "community-home-update", serverId, enabled: false, version: 2 },
     ]);
   });
 
@@ -531,9 +536,143 @@ describe("deliverCommunityHomeUpdate", () => {
   it("reaches members only", () => {
     const other = connect(bystander);
 
-    deliverCommunityHomeUpdate(serverId, [member], true);
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: true, version: 1 });
 
     expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * The switch's frame is the only way an open app learns the owner's flip
+ * without a reload, so a failed member lookup or a bus that was down is
+ * retried rather than only logged. Retries are safe because the client keeps
+ * the highest version it has seen.
+ */
+describe("notifyCommunityHomeSwitch", () => {
+  const member = "44444444-4444-4444-4444-444444444444";
+  const open: Recorder[] = [];
+  let published: { topic: string; data: unknown }[];
+  let busUp: boolean;
+  let relay: ((frame: { origin: string; topic: string; data: unknown }) => void) | null;
+
+  function connect(userId: string): Recorder {
+    const recorder = recordingSocket(1);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  function installBus(): void {
+    published = [];
+    busUp = true;
+    relay = null;
+    setBusTransport({
+      name: "test",
+      publish: (frame) => {
+        published.push({ topic: frame.topic, data: frame.data });
+      },
+      onFrame: (handler) => {
+        relay = handler;
+      },
+      connected: () => busUp,
+      close: async () => {},
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(listServerMemberIds).mockImplementation(async () => [member]);
+  });
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+    setBusTransport(null);
+    vi.mocked(listServerMemberIds).mockImplementation(async () => []);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("delivers locally and publishes the same value and version", async () => {
+    const serverId = randomUUID();
+    installBus();
+    const target = connect(member);
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 7 });
+
+    const frame = { type: "community-home-update", serverId, enabled: true, version: 7 };
+    expect(framesOfType(target.received, "community-home-update")).toEqual([frame]);
+    expect(published).toEqual([{ topic: "chat.community-home", data: frame }]);
+  });
+
+  it("retries the member lookup when it fails, instead of leaving members stale", async () => {
+    const serverId = randomUUID();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    await expect(
+      notifyCommunityHomeSwitch(serverId, { enabled: true, version: 2 }),
+    ).resolves.toBeUndefined();
+    expect(target.received).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: true, version: 2 },
+    ]);
+  });
+
+  it("stops retrying an older flip once a newer one went out", async () => {
+    const serverId = randomUUID();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 2 });
+    await notifyCommunityHomeSwitch(serverId, { enabled: false, version: 3 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: false, version: 3 },
+    ]);
+  });
+
+  it("publishes again while the bus is down, and stops once it is up", async () => {
+    const serverId = randomUUID();
+    installBus();
+    busUp = false;
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 4 });
+    expect(published).toHaveLength(1);
+
+    busUp = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(published).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(published).toHaveLength(2);
+  });
+
+  it("delivers a frame relayed from another instance with its version, retrying a failed lookup", async () => {
+    const serverId = randomUUID();
+    installBus();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    relay?.({
+      origin: "another-instance",
+      topic: "chat.community-home",
+      data: { type: "community-home-update", serverId, enabled: false, version: 9 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.received).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: false, version: 9 },
+    ]);
   });
 });
 

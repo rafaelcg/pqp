@@ -306,6 +306,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -448,6 +449,7 @@ import {
   onSettingsRequest,
 } from "@/lib/settings-request";
 import {
+  applyCommunityHomeSwitch,
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
@@ -455,6 +457,7 @@ import {
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
   markCommunityHomeRowSeen,
+  mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
@@ -2175,6 +2178,44 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+
+  /**
+   * Servers whose Baú switch may have moved while this app was not listening:
+   * every server after a reconnect, and one whose re-read failed. Frames sent
+   * while the socket was down are gone, so the switch is re-read from the
+   * server the next time that server is opened (the selected one right after
+   * the reconnect). One request per server per reconnect at most, never a
+   * refetch of the whole server list.
+   */
+  const communityHomeUnverifiedRef = useRef(new Set<string>());
+  const reconcileCommunityHomeSwitch = useCallback(
+    (serverId: string) => {
+      communityHomeUnverifiedRef.current.delete(serverId);
+      if (!communityHomeOn()) {
+        return;
+      }
+      fetchServerCommunityHomeConfig(serverId).then(
+        (config) => {
+          const version = config.version;
+          if (version === undefined) {
+            return;
+          }
+          setServers((rows) =>
+            applyCommunityHomeSwitch(rows, serverId, {
+              enabled: config.enabled,
+              version,
+            }),
+          );
+        },
+        () => {
+          communityHomeUnverifiedRef.current.add(serverId);
+        },
+      );
+    },
+    [communityHomeOn],
+  );
+  const reconcileCommunityHomeSwitchRef = useRef(reconcileCommunityHomeSwitch);
+  reconcileCommunityHomeSwitchRef.current = reconcileCommunityHomeSwitch;
 
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
@@ -4304,24 +4345,19 @@ function MainAppContent({
           // DMs or another server is not "in" this one and is left alone.
           //
           // When the owner flips the server's Baú switch the frame also
-          // carries the new value. It is written onto that server wherever
-          // the member is looking, so the row, the landing and the feed agree
-          // with the owner without a reload.
+          // carries the new value and its version. It is written onto that
+          // server wherever the member is looking, so the row, the landing
+          // and the feed agree with the owner without a reload. Only a higher
+          // version than the row holds is applied, so a late or duplicated
+          // frame cannot undo a newer flip.
           if (message.type === "community-home-update") {
-            const enabled = message.enabled;
-            if (typeof enabled === "boolean") {
+            const { enabled, version } = message;
+            if (typeof enabled === "boolean" && typeof version === "number") {
               setServers((rows) =>
-                rows.some(
-                  (row) =>
-                    row.id === message.serverId &&
-                    row.communityHomeEnabled !== enabled,
-                )
-                  ? rows.map((row) =>
-                      row.id === message.serverId
-                        ? { ...row, communityHomeEnabled: enabled }
-                        : row,
-                    )
-                  : rows,
+                applyCommunityHomeSwitch(rows, message.serverId, {
+                  enabled,
+                  version,
+                }),
               );
             }
             if (message.serverId === selectedServerIdRef.current) {
@@ -4629,6 +4665,24 @@ function MainAppContent({
           // socket was down are simply gone. Re-ask.
           if (selectedServerIdRef.current) {
             void reloadServerThreadsRef.current(selectedServerIdRef.current);
+          }
+          // A Baú switch flipped while the socket was down never arrives as
+          // a frame. Every server is re-read when next opened; the one on
+          // screen now, after the same jitter as the message refetch.
+          for (const row of serversRef.current) {
+            communityHomeUnverifiedRef.current.add(row.id);
+          }
+          const reconnectServerId = selectedServerIdRef.current;
+          if (reconnectServerId) {
+            setTimeout(() => {
+              if (
+                !cancelled &&
+                selectedServerIdRef.current === reconnectServerId &&
+                communityHomeUnverifiedRef.current.has(reconnectServerId)
+              ) {
+                reconcileCommunityHomeSwitchRef.current(reconnectServerId);
+              }
+            }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
@@ -5012,6 +5066,9 @@ function MainAppContent({
       liveParties?: readonly WatchParty[],
     ) => {
       setChannelsLoading(true);
+      if (communityHomeUnverifiedRef.current.has(serverId)) {
+        reconcileCommunityHomeSwitchRef.current(serverId);
+      }
       try {
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
@@ -10176,12 +10233,7 @@ function MainAppContent({
               setServers((prev) =>
                 prev.map((current) =>
                   current.id === server.id
-                    ? {
-                        ...current,
-                        ...server,
-                        role: current.role,
-                        showOnProfile: current.showOnProfile,
-                      }
+                    ? mergeServerUpdate(current, server)
                     : current,
                 ),
               );
@@ -10413,14 +10465,10 @@ function MainAppContent({
           setServers((prev) =>
             prev.map((current) =>
               current.id === server.id
-                ? {
-                    ...current,
-                    ...server,
-                    // Settings writes update the server row, not this viewer's
-                    // membership row. Keep its role and profile opt-out.
-                    role: current.role,
-                    showOnProfile: current.showOnProfile,
-                  }
+                ? // Settings writes update the server row, not this viewer's
+                  // membership row. Keep its role and profile opt-out, and
+                  // the newer copy of the Baú switch.
+                  mergeServerUpdate(current, server)
                 : current,
             ),
           );

@@ -357,13 +357,25 @@ describe("communityHomeUpdateSchema", () => {
     ).toEqual({ type: "community-home-update", serverId });
   });
 
-  it("carries the switch's new value when the owner flips it", () => {
+  it("carries the switch's new value and its version when the owner flips it", () => {
+    const frame = communityHomeUpdateSchema.parse({
+      type: "community-home-update",
+      serverId,
+      enabled: true,
+      version: 3,
+    });
+    expect(frame.enabled).toBe(true);
+    expect(frame.version).toBe(3);
+  });
+
+  it("refuses a version that is not a whole number", () => {
     expect(
-      communityHomeUpdateSchema.parse({
+      communityHomeUpdateSchema.safeParse({
         type: "community-home-update",
         serverId,
         enabled: true,
-      }).enabled,
-    ).toBe(true);
+        version: 1.5,
+      }).success,
+    ).toBe(false);
   });
 });

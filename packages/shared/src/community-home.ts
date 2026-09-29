@@ -863,14 +863,18 @@ export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
 /**
  * WS nudge: clients refetch Home for this server. Not a channel broadcast.
  *
- * `enabled` is present only when the owner flipped this server's Baú switch:
- * it is the new value, so a member's open app can update its copy of the
- * server without a reload. Publish, pin and delete frames leave it out.
+ * `enabled` and `version` are present only when the owner flipped this
+ * server's Baú switch: the new value and its `servers.community_home_version`.
+ * A member's open app applies the value only when the version is higher than
+ * the one its copy of the server holds, so frames that arrive late, twice or
+ * out of order cannot leave it on an older setting. Publish, pin and delete
+ * frames leave both out.
  */
 export const communityHomeUpdateSchema = z.object({
   type: z.literal("community-home-update"),
   serverId: z.string().uuid(),
   enabled: z.boolean().optional(),
+  version: z.number().int().nonnegative().optional(),
 });
 
 export type CommunityHomeUpdate = z.infer<typeof communityHomeUpdateSchema>;

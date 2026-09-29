@@ -31,6 +31,11 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  applyCommunityHomeSwitch,
+  mergeServerUpdate,
+  type CommunityHomeSwitchState,
+} from "./switch-version";
+export {
   COMMUNITY_HOME_POST_TOAST_MS,
   shouldOfferCommunityHomePostToast,
 } from "./post-toast";

@@ -1296,6 +1296,8 @@ export interface DbServer {
   banner_key?: string | null;
   is_community?: boolean;
   community_home_enabled?: boolean;
+  /** Bumped with every write of `community_home_enabled`; see schema.sql. */
+  community_home_version?: number;
   community_tagline?: string | null;
   community_about?: string | null;
   community_links?: unknown;
