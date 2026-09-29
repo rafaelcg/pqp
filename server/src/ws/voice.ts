@@ -5366,6 +5366,21 @@ function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
   }
 }
 
+/**
+ * Somebody hung up on purpose: `leave-voice-room`, or the tab-close beacon.
+ * Everything `removePeer` does, plus the one thing a reconnect must not do:
+ * an unanswered ring in a call that is now empty ends within
+ * `CALL_HANGUP_CONFIRM_MS`, not after the empty-room grace (see
+ * `endRingOnHangup`).
+ */
+function hangUpPeer(peerId: string): void {
+  const voiceChannelId = peers.get(peerId)?.voiceChannelId;
+  removePeer(peerId);
+  if (voiceChannelId) {
+    endRingOnHangup(voiceChannelId);
+  }
+}
+
 function removePeer(peerId: string) {
   const peer = peers.get(peerId);
   if (!peer) {
@@ -5666,7 +5681,7 @@ export async function leaveVoiceByResumeToken(
     ) {
       return false;
     }
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
   if (!registryOn()) {
@@ -5697,10 +5712,10 @@ export async function leaveVoiceByResumeToken(
   // The row may have come home while the read was out (a resume landed
   // here); the map is exact for what this process holds.
   if (peers.has(resumePeerId)) {
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
-  releaseForeignPeer(row, "beacon");
+  releaseForeignPeer(row, "beacon", { hangup: true });
   return true;
 }
 
@@ -5715,7 +5730,11 @@ export async function leaveVoiceByResumeToken(
  * orphan timer would fire later and announce a departure the room already
  * saw.
  */
-function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
+function releaseForeignPeer(
+  row: VoicePeerRow,
+  reason: string,
+  { hangup = false }: { hangup?: boolean } = {},
+): void {
   const { peerId, channelId } = row;
   trackRowWrite(channelId, peerId, () =>
     deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
@@ -5734,6 +5753,9 @@ function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
       channelId,
       kind: "adopted",
       peerId,
+      // The owner holds the ring, if there is one; this tells it the seat
+      // went because its person hung up, not because a resume moved it.
+      ...(hangup ? { hangup: true } : {}),
     } satisfies VoiceRoomFrame);
   }
   broadcastToRoom(channelId, { type: "peer-left", peerId });
@@ -8220,12 +8242,12 @@ export async function handleVoiceMessage(
 
   if (payload.type === "leave-voice-room") {
     if (existingPeerId) {
-      removePeer(existingPeerId);
+      hangUpPeer(existingPeerId);
       return;
     }
     for (const peer of peers.values()) {
       if (peer.socket === socket) {
-        removePeer(peer.id);
+        hangUpPeer(peer.id);
         return;
       }
     }
@@ -9012,8 +9034,31 @@ export const CALL_RING_TIMEOUT_MS = 45_000;
  * moment, and a flappy caller network can empty it for a few seconds; killing
  * the ring on the first empty read would turn every caller hiccup into a
  * "missed call" that nobody missed.
+ *
+ * Only for rooms that emptied by accident. A deliberate hangup
+ * (`leave-voice-room`, the tab-close beacon) is never a reconnect, and every
+ * client sends it only when the person meant to leave, so it gets the much
+ * shorter `CALL_HANGUP_CONFIRM_MS` instead: otherwise the callee keeps
+ * ringing for five seconds after the caller gave up, and answering in that
+ * window puts them alone in an empty call.
  */
 export const CALL_EMPTY_ROOM_GRACE_MS = 5_000;
+
+/**
+ * How long a ring outlives a deliberate hangup that left the call empty.
+ *
+ * Not a reconnect grace: a hangup is never followed by a rejoin of the same
+ * seat. It is the window for a join that is ALREADY IN FLIGHT when the
+ * hangup lands. A join does a run of awaited checks before it seats anybody,
+ * and on the other machine its row, or its `answered` frame, reaches the
+ * ring's owner later still. An empty read taken the instant the caller left
+ * would miss that join, cancel the ring under the callee who is picking up,
+ * and post a missed call for a call they answered. The seat lands in tens of
+ * milliseconds in practice; one second is that with a wide margin, and still
+ * a fifth of the reconnect grace. A join slower than this lands alone in the
+ * room, which is exactly what one landing after the grace did before.
+ */
+export const CALL_HANGUP_CONFIRM_MS = 1_000;
 
 /** What the missed-call record says. Stored as a normal message body. */
 export const MISSED_CALL_BODY = "📞 Missed call";
@@ -9412,13 +9457,65 @@ function declineRing(conversationId: string, userId: string): boolean {
  * The room emptied here. After the grace period, an unanswered ring dies
  * with it. With the registry on the expiry check reads the rows as well,
  * because the caller may have come back on the other machine: an empty
- * local room is not an empty call.
+ * local room is not an empty call. A deliberate hangup does not wait this
+ * long; `endRingOnHangup` swaps this timer for `CALL_HANGUP_CONFIRM_MS`.
  */
 function noteVoiceRoomEmptied(voiceChannelId: string) {
   const ring = conversationRings.get(voiceChannelId);
   if (!ring || ring.emptyRoomTimer) {
     return;
   }
+  armEmptyRoomTimer(ring, voiceChannelId, CALL_EMPTY_ROOM_GRACE_MS, "grace");
+}
+
+/**
+ * The room emptied because somebody hung up, so the ring ends after
+ * `CALL_HANGUP_CONFIRM_MS` rather than after the reconnect grace. The one
+ * timer does both jobs, which is what keeps the edges right: any join, a
+ * callee answering from either machine or the caller dialling again, clears
+ * it in `answerRing` exactly as it clears the grace.
+ *
+ * Nobody in the room means nobody at all, orphans included: a seat held for
+ * its resume window is still in the call, so the grace timer
+ * `noteVoiceRoomEmptied` already armed keeps deciding that case as before.
+ */
+function endRingOnHangup(voiceChannelId: string): void {
+  const ring = conversationRings.get(voiceChannelId);
+  if (!ring || getRoomPeers(voiceChannelId).length > 0) {
+    return;
+  }
+  if (ring.emptyRoomTimer) {
+    clearTimeout(ring.emptyRoomTimer);
+  }
+  armEmptyRoomTimer(ring, voiceChannelId, CALL_HANGUP_CONFIRM_MS, "hangup");
+}
+
+/**
+ * When the timer fires, the ring ends if the call is still empty: nobody in
+ * this process's map and, with the registry on, no row on any machine.
+ *
+ * The two kinds differ when the rows do not say "empty":
+ *
+ * | read      | `grace` (the full five seconds) | `hangup` (the short window) |
+ * |-----------|---------------------------------|-----------------------------|
+ * | no rows   | ends the ring                   | ends the ring               |
+ * | rows      | keeps it (somebody is there)    | falls back to the grace     |
+ * | failed    | ends the ring                   | falls back to the grace     |
+ *
+ * The grace column is what it has always been. A hangup's short window is
+ * only allowed to END a ring early, never to decide it lives on: a failed
+ * read, or a row that may be stale (a tab-close beacon on the other machine
+ * retires the seat there, and that machine's delete can still be in flight
+ * when this read runs), gets a second read at the grace. So the worst case
+ * after a hangup is the old five seconds of ringing, never a ring left up
+ * until it times out.
+ */
+function armEmptyRoomTimer(
+  ring: ConversationRing,
+  voiceChannelId: string,
+  delayMs: number,
+  kind: "grace" | "hangup",
+): void {
   ring.emptyRoomTimer = setTimeout(() => {
     ring.emptyRoomTimer = null;
     if (getRoomPeers(voiceChannelId).length > 0) {
@@ -9428,19 +9525,41 @@ function noteVoiceRoomEmptied(voiceChannelId: string) {
       void endConversationRing(voiceChannelId, "cancelled");
       return;
     }
-    void listVoicePeersInRoom(voiceChannelId)
-      .catch(() => [])
-      .then((rows) => {
-        if (
-          rows.length === 0 &&
-          getRoomPeers(voiceChannelId).length === 0 &&
-          conversationRings.get(voiceChannelId) === ring &&
-          ring.emptyRoomTimer === null
-        ) {
-          void endConversationRing(voiceChannelId, "cancelled");
-        }
-      });
-  }, CALL_EMPTY_ROOM_GRACE_MS);
+    const stillEmptyAndOurs = () =>
+      getRoomPeers(voiceChannelId).length === 0 &&
+      conversationRings.get(voiceChannelId) === ring &&
+      ring.emptyRoomTimer === null;
+    const end = () => {
+      if (stillEmptyAndOurs()) {
+        void endConversationRing(voiceChannelId, "cancelled");
+      }
+    };
+    const restOfGrace = () => {
+      if (stillEmptyAndOurs()) {
+        armEmptyRoomTimer(
+          ring,
+          voiceChannelId,
+          CALL_EMPTY_ROOM_GRACE_MS - CALL_HANGUP_CONFIRM_MS,
+          "grace",
+        );
+      }
+    };
+    // Every outcome, spelled out per kind (the table above). The only one
+    // that leaves the ring alone is a grace read that found somebody.
+    const onRows = kind === "hangup" ? restOfGrace : () => undefined;
+    const onFailure = kind === "hangup" ? restOfGrace : end;
+    // A hangup's own row delete may still be queued; read after it lands.
+    const read =
+      kind === "hangup"
+        ? settledRowWrites(voiceChannelId).then(() =>
+            listVoicePeersInRoom(voiceChannelId),
+          )
+        : listVoicePeersInRoom(voiceChannelId);
+    void read.then(
+      (found) => (found.length > 0 ? onRows() : end()),
+      onFailure,
+    );
+  }, delayMs);
 }
 
 /** Remove the ring without any missed-call record (it was answered). */
@@ -10522,11 +10641,18 @@ const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
     peer: voiceParticipantSchema,
   }),
   z.object({ channelId: z.string().uuid(), kind: z.literal("roster") }),
-  /** Another instance answers for this peer id now: forget it, say nothing. */
+  /**
+   * Another instance answers for this peer id now: forget it, say nothing.
+   * `hangup` when it went because its person hung up (the tab-close beacon
+   * landed on the other machine), so a ring this instance owns ends as it
+   * would for a hangup here. Optional: a machine on an older build sends
+   * none, and the ring then gets the grace, as it did before.
+   */
   z.object({
     channelId: z.string().uuid(),
     kind: z.literal("adopted"),
     peerId: z.string().min(1),
+    hangup: z.boolean().optional(),
   }),
 ]);
 type VoiceRoomFrame = z.infer<typeof voiceRoomFrameSchema>;
@@ -10988,6 +11114,9 @@ subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
       noteClusterFrameReceived();
     }
     dropVoicePeerSilently(frame.peerId);
+    if (frame.hangup) {
+      endRingOnHangup(frame.channelId);
+    }
     return;
   }
   if (getRoomPeers(frame.channelId).length > 0) {
