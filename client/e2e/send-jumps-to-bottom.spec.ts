@@ -468,12 +468,15 @@ test("a send while a jump is still fetching stays on the send", async ({
 /**
  * A send made before the link's jump has even started wins too.
  *
- * A search result is a link: the app loads the channel list and reopens the
- * channel before it asks the list to jump. On a slow machine (CI) the reader's
+ * A search result is a link: the router applies the new address in a
+ * transition, then the app loads the channel list and reopens the channel,
+ * and only then asks the list to jump. On a slow machine (CI) the reader's
  * Enter landed in that gap, so nothing was in flight for the send to cancel.
  * The jump then started after the send, its page replaced the window without
- * the send in it, and the list scrolled into history. A slow channel list
- * makes that order certain.
+ * the send in it, and the list scrolled into history. On a slow CPU the send
+ * can even come before the app sees the new address, so the link carries the
+ * time it was followed. A slow channel list and a throttled CPU make both
+ * orders likely.
  */
 test("a send before a link's jump starts stays on the send", async ({
   page,
@@ -502,6 +505,8 @@ test("a send before a link's jump starts stays on the send", async ({
     }
   });
 
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
   await openSearchResult(page, "history 10 ");
   const composer = page.getByPlaceholder(/^Message /);
   await composer.fill("sent before the jump");

@@ -344,6 +344,7 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import {
+  linkFollowedAt,
   parseAppRoute,
   pickOpenableServer,
   signedOutRedirectPath,
@@ -2109,17 +2110,19 @@ function MainAppContent({
     null,
   );
   /**
-   * How many messages this reader has sent per channel in this tab. A link to
-   * a message (a search result, a permalink) opens its channel first and only
-   * then asks the list to jump, and that can take a while: the channel list
-   * and the history are fetched in between. A send made meanwhile is the
-   * newer request, so the jump is dropped rather than scrolling the reader
-   * away from what they just sent into a page that does not hold it.
+   * When this reader last sent a message, per channel, in this tab. A link to
+   * a message (a search result) opens its channel first and only then asks
+   * the list to jump, and that can take a while: the router applies the new
+   * address in a transition, then the channel list and the history are
+   * fetched. A send made after the link was followed is the newer request, so
+   * the jump is dropped rather than scrolling the reader away from what they
+   * just sent into a page that does not hold it.
    */
-  const ownSendsRef = useRef(new Map<string, number>());
-  const ownSendCount = useCallback(
-    (channelId: string | null) =>
-      channelId ? (ownSendsRef.current.get(channelId) ?? 0) : 0,
+  const lastOwnSendAtRef = useRef(new Map<string, number>());
+  const sentSince = useCallback(
+    (channelId: string | null, since: number) =>
+      channelId !== null &&
+      (lastOwnSendAtRef.current.get(channelId) ?? 0) > since,
     [],
   );
   const [, setTick] = useState(0);
@@ -7189,8 +7192,8 @@ function MainAppContent({
       serverId: string,
       channelId: string | null,
       messageId: string | null = null,
+      linkedAt: number = Date.now(),
     ) => {
-      const sendsBefore = ownSendCount(channelId);
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
       const targetServerId = openable?.serverId ?? serverId;
@@ -7220,10 +7223,7 @@ function MainAppContent({
         }
         if (requested) {
           await selectChannel(requested.id, targetServerId);
-          if (
-            targetMessageId &&
-            ownSendCount(requested.id) === sendsBefore
-          ) {
+          if (targetMessageId && !sentSince(requested.id, linkedAt)) {
             setHighlightMessageId(targetMessageId);
           }
         } else {
@@ -7265,8 +7265,8 @@ function MainAppContent({
       channelListTickets,
       communityHomeOn,
       loadUnread,
-      ownSendCount,
       selectChannel,
+      sentSince,
     ],
   );
 
@@ -7279,8 +7279,11 @@ function MainAppContent({
    * account is not part of — which is a dead link, not a channel to try opening.
    */
   const applyConversationRoute = useCallback(
-    async (channelId: string | null, messageId: string | null = null) => {
-      const sendsBefore = ownSendCount(channelId);
+    async (
+      channelId: string | null,
+      messageId: string | null = null,
+      linkedAt: number = Date.now(),
+    ) => {
       setSelection(HOME_SELECTION);
       const list = await loadConversations();
       if (!channelId) {
@@ -7295,11 +7298,11 @@ function MainAppContent({
         return;
       }
       await selectConversation(channelId);
-      if (messageId && ownSendCount(channelId) === sendsBefore) {
+      if (messageId && !sentSince(channelId, linkedAt)) {
         setHighlightMessageId(messageId);
       }
     },
-    [loadConversations, ownSendCount, selectConversation],
+    [loadConversations, selectConversation, sentSince],
   );
 
   /**
@@ -7634,14 +7637,20 @@ function MainAppContent({
     if (target.kind === "connection-callback") {
       return;
     }
+    const linkedAt = linkFollowedAt(location.state);
     if (target.kind === "conversation") {
-      void applyConversationRoute(target.channelId, target.messageId);
+      void applyConversationRoute(
+        target.channelId,
+        target.messageId,
+        linkedAt,
+      );
       return;
     }
     void applyChannelRoute(
       target.serverId,
       target.channelId,
       target.messageId,
+      linkedAt,
     );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
@@ -10091,10 +10100,7 @@ function MainAppContent({
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
           }
-          ownSendsRef.current.set(
-            selectedChannel.id,
-            ownSendCount(selectedChannel.id) + 1,
-          );
+          lastOwnSendAtRef.current.set(selectedChannel.id, Date.now());
           chat.sendMessage(body, replyTarget, attachments);
           trackFirstAction("arrival_first_message");
           setReplyTarget(null);
