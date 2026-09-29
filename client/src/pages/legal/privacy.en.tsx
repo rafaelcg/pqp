@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "27 September 2026",
+  updated: "29 September 2026",
   sections: [
     {
       id: "intro",
@@ -197,10 +197,9 @@ export const privacyEn: LegalDocument = {
             <strong>Files and images.</strong> When file attachments are
             enabled, we store the filename, type, size, and dimensions in our
             database, and the file itself in S3-compatible object storage.
-            Attachments are <strong>            enabled</strong> on pqp.gg today. A profile banner uses the same
-            storage. GIFs
-            picked from the GIF search are stored as a link to the GIF provider,
-            not as a copy. When image scanning is configured, a freshly uploaded
+            Attachments are <strong>enabled</strong> on pqp.gg today. A profile
+            banner uses the same storage. GIFs picked from the GIF search are
+            stored as a link to the GIF provider, not as a copy. When image scanning is configured, a freshly uploaded
             image is checked before it is visible in a channel. A match can
             drop the file without a person reading it. That is a check of the
             file, not a decision about you as a person. Avatars and banners are
@@ -209,13 +208,17 @@ export const privacyEn: LegalDocument = {
           <p>
             <strong>Watch parties.</strong> A watch party is a broadcast, and we
             record it. The recording holds what the audience receives: the
-            shared screen and its sound, the host&apos;s camera if it is on,
-            the host&apos;s voice, and the voices of any guests the host puts
-            on air. It does not hold the audience, or the voices of other people
+            shared screen and its sound, the host&apos;s camera if it is on, and
+            the voices of the host and of any guests the host puts on air, while
+            they are on air. It does not hold the audience, or the voices of other people
             in the room who are not on air. We can also turn on a setting that
             saves the host&apos;s microphone as a separate audio file beside the
-            broadcast. With each recording we store the channel, when it started
-            and ended, and which account was presenting. The files are stored
+            broadcast. With each recording we store the channel, when it started and ended,
+            and which account was presenting, and that record stays after the
+            files are deleted. While a broadcast is live we also note which
+            accounts are watching, so the audience can be counted, and delete
+            each entry about a day after that person was last seen watching.
+            The files are stored
             in Cloudflare R2, in its Eastern North America location. Who can see
             them, and for how long, is under &quot;Voice calls&quot; and
             &quot;How long we keep things&quot;.
@@ -243,8 +246,8 @@ export const privacyEn: LegalDocument = {
             it: a web push address and its public keys, or an Apple or Google
             device token. We delete it when the push service tells us it no
             longer works, and when you delete your account. A push can name the
-            server, the channel and the person who wrote. It never contains the
-            text of a message.
+            server, the channel, the person who wrote or who is calling, or the
+            title of an event. It never contains the text of a message.
           </p>
           <p>
             <strong>Settings.</strong> Notification preferences, theme,
@@ -272,13 +275,26 @@ export const privacyEn: LegalDocument = {
             it.
           </p>
           <p>
+            <strong>Feedback and call ratings.</strong> If you send feedback
+            from Settings, we store the text, your account, your browser&apos;s
+            user agent, and where you were when you wrote it: the platform, the
+            app version, the page in the app, your language, the window size,
+            whether you were in a call and how it was connected, and the
+            error-report session id described under &quot;Error
+            reporting&quot;. If you rate a call, we store the score, an optional
+            note, the channel, how long the call lasted, how many people were
+            in it, which path it took, and whether someone shared a screen.
+          </p>
+          <p>
             <strong>Technical.</strong> Application logs of errors and
             connection events. Most log lines record a connection number and a
             user id, not your IP address. A few record more: when you sign in to
             the desktop app through your browser, that log line holds your IP
             address and your browser&apos;s user agent. The logs of our API
             server are sent to Grafana Cloud, run by Grafana Labs, and kept
-            there for 14 days. Your IP address is also read in memory to enforce
+            there for 14 days. The API server also keeps its own copy of its
+            recent logs, up to 100 MB per service, which at our volume covers
+            several months. Your IP address is also read in memory to enforce
             rate limits. It is never written to our database.
           </p>
 
@@ -309,9 +325,9 @@ export const privacyEn: LegalDocument = {
             which pages people arrive on. It is cookieless too, stores nothing
             on your device, and uses no persistent identifier. It records the
             page address, the referring page, and your country, browser and
-            device type, all of it aggregate. Inside the app it also counts a
-            few named first-run steps, such as passing the age check or
-            creating a server, as a name and a few labels (such as how long a
+            device type, all of it aggregate. It also counts a few named steps, such as tapping a sign-up
+            button on a marketing page or, inside the app, passing the age
+            check or creating a server, as a name and a few labels (such as how long a
             step took), never an id. It never
             sees your account, and blocking it also breaks nothing.
           </p>
@@ -329,28 +345,30 @@ export const privacyEn: LegalDocument = {
             holds the page address, the error message and where in our code it
             happened, messages the app writes to the browser console at the
             info, warning and error levels, reports of anything the browser
-            blocked under the site&apos;s security policy, the pages you move
-            between inside the app, page speed measurements, the addresses and
+            blocked under the site&apos;s security policy, page speed
+            measurements, the addresses and
             timings of requests the app makes, and your browser and operating
             system.
           </p>
           <p>
             It carries a random session id, kept in your browser&apos;s session
-            storage and replaced after 15 minutes idle or four hours. Our code
-            never tells it who you are: no name, no email, no account id. But
+            storage and replaced after 15 minutes idle or four hours. Our code never tells it who you are: no name, no email, no account id.
+            If you send feedback from the app, the feedback carries that
+            session id, so we can find the reports from around that moment. But
             some request addresses contain ids, and the link for watching a
             watch-party stream contains your account id, so a report can too.
             It sets no cookie, and it does not record clicks, keystrokes or the
-            screen. Like the Google
-            tag, it is added only to the hosted pqp.gg build, so a self-hosted
-            copy reports nothing to us.
+            screen. It starts only when the build is given our
+            collector address, and only the hosted pqp.gg build is, so a
+            self-hosted copy reports nothing to us.
           </p>
 
           <h3>Advertising measurement</h3>
           <p>
             pqp.gg buys a small amount of advertising, and it carries{" "}
             <strong>the Google Ads tag</strong> so we can tell whether an ad
-            produced an account and not just a click. This is the one thing on
+            produced an account and not just a click. Apart from the sign-in
+            cookies Clerk needs to keep you logged in, this is the one thing on
             the site that is not cookieless, and we would rather say so plainly
             than bury it. Google&apos;s tag loads on every page of pqp.gg. It
             gives every visitor a first-party cookie on the pqp.gg domain,{" "}
@@ -378,9 +396,9 @@ export const privacyEn: LegalDocument = {
           <p>
             Google is a third party here and handles what it receives, including
             your IP address, under its own terms. Blocking the tag with a
-            browser extension, or blocking cookies for pqp.gg, breaks nothing:
-            the product works exactly the same and the sign-up simply goes
-            uncounted.
+            browser extension, or blocking its <code>_gcl_</code> cookies,
+            breaks nothing: the product works exactly the same and the sign-up
+            simply goes uncounted.
           </p>
           <p>
             This is true of the hosted pqp.gg and of nothing else. The tag is
@@ -401,8 +419,8 @@ export const privacyEn: LegalDocument = {
             recorder: nothing records how you use the site or what you type. (A
             screen you share in a watch party is recorded, as the broadcast it
             is. See &quot;Voice calls&quot;.) The error
-            reports described under &quot;What we collect&quot; are keyed to a
-            random session id, not to your account. The two analytics tools
+            reports described under &quot;What we collect&quot; are keyed to a random session id, not to your account, unless you send
+            feedback, which carries that id. The two analytics tools
             described
             there count visits and cannot identify visitors. The exception is
             the Google Ads tag, described in the same place: it gives every
@@ -542,9 +560,11 @@ export const privacyEn: LegalDocument = {
             our server starts a recorder on the São Paulo media server. The
             recorder makes the video stream the audience watches, and the same
             files are kept afterwards as the recording. It holds what the
-            audience receives: the shared screen and its sound, the host&apos;s
-            camera if it is on, the host&apos;s voice, and the voices of guests
-            the host puts on air. People who watch are not recorded. The recording is
+            audience receives: the shared screen and its sound, the host&apos;s camera if it is on, and
+            the voices of the host and of guests the host puts on air, while
+            they are on air. People who watch are not recorded, though we note
+            who is watching to count the audience, as described under
+            &quot;What we collect&quot;. The recording is
             stored in Cloudflare R2, in its Eastern North America location, and
             kept for 30 days after the broadcast ends. Anyone who can start watch
             parties or manage that channel, normally the server&apos;s owner and
@@ -563,11 +583,13 @@ export const privacyEn: LegalDocument = {
               TURN relay carries the media, but it is still encrypted between
               the participants, so the relay cannot listen to it. Our STUN/TURN
               providers today are <strong>Cloudflare Realtime TURN</strong>,
-              then Metered / Open Relay if Cloudflare is not configured, then a
+              then Metered / Open Relay if Cloudflare is not configured or does
+              not answer, then a
               static relay (ExpressTURN on pqp.gg) as the fallback, plus public
-              STUN servers run by Google and Cloudflare. In a large room that
-              same job is done by the media server itself, on the same machine,
-              with no third party in the middle.
+              STUN servers run by Google and Cloudflare. In a large room
+              the same relays can carry the connection between you and our
+              media server. There the encryption ends at our media server, as
+              described above, and the relay still cannot listen.
             </li>
             <li>
               <strong>Who looks after the machines.</strong> Each media server
@@ -709,7 +731,8 @@ export const privacyEn: LegalDocument = {
           <ul>
             <li>
               <strong>Clerk</strong> — authentication. Holds your email and
-              credentials.
+              credentials. Your browser loads the sign-in screens, and profile
+              pictures Clerk hosts, from Clerk directly.
             </li>
             <li>
               <strong>Vultr</strong>: the server that runs our application,
@@ -757,8 +780,7 @@ export const privacyEn: LegalDocument = {
               Messaging, and a notice to a browser goes through the push service
               that browser uses. Notices to a browser are encrypted so the push
               service cannot read them. Notices to phones are not encrypted that
-              way, so Apple or Google can read the server, channel and sender
-              names a notice carries. No notice carries the text of a message.
+              way, so Apple or Google can read the names a notice carries. No notice carries the text of a message.
             </li>
             <li>
               <strong>Cloudflare Realtime TURN</strong>, Metered / Open Relay,
@@ -782,8 +804,10 @@ export const privacyEn: LegalDocument = {
               before the switch to KLIPY still load from GIPHY or Tenor.
             </li>
             <li>
-              <strong>DiceBear</strong> — the preset avatar images in Settings
-              load from their service.
+              <strong>DiceBear</strong> — the preset avatars in Settings are
+              images on their service. If you pick one, your avatar stays a
+              link to DiceBear, so everyone who sees it loads it from
+              DiceBear.
             </li>
             <li>
               <strong>Google Ads</strong> loads its tag on every page of pqp.gg,
@@ -925,19 +949,21 @@ export const privacyEn: LegalDocument = {
               &quot;Keep recording&quot; off, about 10 minutes after it ends.
             </li>
             <li>
-              <strong>Your country</strong>: replaced each time it changes, and
-              deleted with your account. Only members seen in the last 30 days
+              <strong>Your country</strong>: kept up to date while you use the
+              app, and deleted with your account. Only members seen in the last 30 days
               count when a call picks its region.
             </li>
             <li>
-              <strong>Server logs</strong>: 14 days in Grafana Cloud.
+              <strong>Server logs</strong>: 14 days in Grafana Cloud. The API
+              server&apos;s own copy is limited by size, up to 100 MB per
+              service, which at our volume covers several months.
             </li>
             <li>
               <strong>Database backups</strong>: every night we copy the whole
               database to Cloudflare R2, in its Eastern North America location,
               and keep each copy for 30 days. The server that makes the copy
               also keeps the last 7 days of copies. Vultr, which runs the
-              database, keeps its own backups too.
+              database, keeps its own backups too, for at most 14 days.
             </li>
           </ul>
           <p>
@@ -958,8 +984,8 @@ export const privacyEn: LegalDocument = {
               abusing a server would be one click away from being erased too.
             </li>
             <li>
-              <strong>Bans you issued against other people</strong>, with your
-              id removed. That record is a fact about the person who was banned
+              <strong>Bans and timeouts you issued against other people</strong>,
+              with your id removed. That record is a fact about the person who was banned
               and about the server, not about you — removing it would silently
               readmit everyone you had ever banned.
             </li>
@@ -979,14 +1005,24 @@ export const privacyEn: LegalDocument = {
             </li>
           </ul>
           <p>
-            Two more things outlast a deletion for a while, not for a legal
-            reason, but because they are not tied to your account:
+            A few more things outlast a deletion, not for a legal reason:
           </p>
           <ul>
             <li>
               <strong>Watch party recordings you appear in</strong>, as host or
               as a guest on air. They belong to the server&apos;s channel, and
               are deleted when their 30 days run out.
+            </li>
+            <li>
+              <strong>The record of watch parties you presented</strong>: the
+              channel, when it started and ended, and your account id. It stays
+              after the files are deleted, and deleting your account does not
+              remove it yet. You can write to us to have it removed.
+            </li>
+            <li>
+              <strong>Feedback you sent and calls you rated</strong>, with your
+              id removed. The text, notes and device details stay, so a bug
+              report can still be worked on.
             </li>
             <li>
               <strong>Database backups.</strong> A backup made before you
@@ -1060,8 +1096,8 @@ export const privacyEn: LegalDocument = {
               actions you took. It does not yet include your public{" "}
               <code>@handle</code>, your banner, depoimentos, the campaign
               parameters from your sign-up, your stored country, your push
-              registrations, your watch party waitlist answers, or watch party
-              recordings. For those, email us. Very large accounts are capped, and the file
+              registrations, your watch party waitlist answers, watch party recordings, your
+              reactions, your friends list, feedback you sent, or call ratings. For those, email us. Very large accounts are capped, and the file
               says so when it has been cut short. (Server <em>owners</em> can
               also export a whole server from Server Settings, but that is an
               owner tool covering everyone&apos;s messages in that server — it
@@ -1227,10 +1263,10 @@ export const privacyEn: LegalDocument = {
           If you run pqp yourself, you choose the database, the Clerk
           application, and the hosting, and you are the controller for your
           users. pqp.gg does not receive your users&apos; data. Our advertising,
-          analytics and error reporting do not reach your copy either: the
-          Google Ads tag, Umami and Grafana Faro described above are added to
-          the pqp.gg build alone, so a self-hosted instance ships without
-          them. Tell your members how you handle their
+          analytics and error reporting do not reach your copy either: the Google Ads tag and Umami described above are added to the
+          pqp.gg build alone, and Grafana Faro starts only when a build is
+          given our collector address, so a self-hosted instance sends them
+          nothing. Tell your members how you handle their
           information.
         </p>
       ),

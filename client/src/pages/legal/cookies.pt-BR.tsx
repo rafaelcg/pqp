@@ -17,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "27 de setembro de 2026",
+  updated: "29 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -34,7 +34,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "cookies",
-      sourceRev: "a6784eed",
+      sourceRev: "d75f1e41",
       heading: "Cookies",
       body: (
         <>
@@ -44,7 +44,8 @@ export const cookiesPtBr: LegalDocument = {
             <a href="https://clerk.com" target="_blank" rel="noreferrer">
               Clerk
             </a>
-            , o serviço que faz o seu login. O Clerk usa cookies de sessão (e o
+            , o serviço que faz o seu login. O Clerk usa cookies como <code>__session</code> e{" "}
+            <code>__client_uat</code> (e o
             armazenamento próprio dele no navegador) para manter você logado e
             para proteger contra sequestro de sessão. Eles são{" "}
             <strong>estritamente necessários</strong>: bloqueie e você não
@@ -97,7 +98,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "02f13f1a",
+      sourceRev: "349bb814",
       heading: "Armazenamento local",
       body: (
         <>
@@ -144,8 +145,8 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp-local-settings</code>: entrar com o microfone mudo,
               lista de participantes compacta, ativação por voz ou
               push-to-talk e a tecla, volume de entrada e de saída, se as
-              prévias de link aparecem, e as suas outras preferências de voz e
-              vídeo. Também guarda qual microfone, câmera e saída de áudio você
+              prévias de link aparecem, os seus atalhos de teclado e as suas outras preferências
+              de voz e vídeo. Também guarda qual microfone, câmera e saída de áudio você
               escolheu, como os ids que o navegador dá a esses dispositivos.
             </li>
             <li>
@@ -237,8 +238,8 @@ export const cookiesPtBr: LegalDocument = {
               para os cartões &quot;Começar por aqui&quot; daquele servidor.
             </li>
             <li>
-              <code>pqp:community-home-viewer</code>: para a equipe do servidor,
-              qual visão de membro do Baú você está pré-visualizando.
+              <code>pqp:community-home-viewer</code>: qual visão de membro do
+              Baú você está pré-visualizando, depois de abrir um link de prévia.
             </li>
           </ul>
           <p>
@@ -256,8 +257,9 @@ export const cookiesPtBr: LegalDocument = {
               insistir em todo desligar.
             </li>
             <li>
-              <code>pqp:whats-new</code>, <code>pqp:whats-new-feed</code>: a
-              novidade mais recente que você já viu.
+              <code>pqp:whats-new</code>: qual card de Novidades você já viu.{" "}
+              <code>pqp:whats-new-feed</code>: a novidade mais recente que você
+              já viu.
             </li>
             <li>
               <code>pqp:community-home-settings-seen</code>, e{" "}
@@ -288,15 +290,15 @@ export const cookiesPtBr: LegalDocument = {
               veio com parâmetros de campanha (<code>utm_source</code>,{" "}
               <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
               <code>gclid</code> ou <code>ref</code>), esses valores e a página
-              em que você chegou, para a gente saber de qual link veio um
+              em que você chegou, e quando foram salvos, para a gente saber de qual link veio um
               cadastro. Se você chegou por um anúncio do Google, o{" "}
               <code>gclid</code> é o identificador que o Google deu a esse
               clique no anúncio. Nada mais ali identifica você. O nosso código
-              nunca entrega isso a terceiro. Expira em 30 dias e é gravado uma
-              vez só (um link de campanha posterior não substitui). Na primeira
+              nunca entrega isso a terceiro. Expira em 30 dias e, enquanto vale, um
+              link de campanha posterior não substitui. Na primeira
               vez que o app carrega depois do seu login, ele é enviado uma única
-              vez para a sua conta e apagado do seu dispositivo, e o nosso
-              servidor guarda esses valores na sua conta. Se você nunca se
+              vez para a sua conta e apagado do seu dispositivo, e, se a conta foi criada no último dia, o nosso servidor guarda
+              esses valores nela. Se não, eles são descartados. Se você nunca se
               cadastrar, ele simplesmente expira.
             </li>
             <li>
@@ -316,14 +318,14 @@ export const cookiesPtBr: LegalDocument = {
               reivindicar, uma pessoa que você quis adicionar, ou uma
               comunidade, servidor ou convite em que você quis entrar ou que quis
               criar antes de entrar na conta, para a gente terminar isso depois
-              do cadastro. Cada um expira em uma hora e é apagado depois de
-              usado.
+              do cadastro. Cada um expira em uma hora e é
+              apagado quando esse passo termina.
             </li>
             <li>
               <code>pqp:pending-watch-party-waitlist</code>: que você abriu o
               link da lista de espera da watch party antes de entrar na conta,
               para o formulário abrir depois do cadastro. Expira em uma hora e é
-              apagado depois de usado.
+              apagado quando o formulário abre.
             </li>
           </ul>
           <p>
@@ -419,13 +421,13 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "offline-cache",
-      sourceRev: "1815d920",
+      sourceRev: "76e8888a",
       heading: "Cache offline",
       body: (
         <p>
           O pqp.gg instala um service worker para o app abrir quando você está
           offline ou com uma conexão ruim. Ele guarda os arquivos estáticos do
-          próprio app — JavaScript, CSS, HTML e fontes — no Cache Storage do seu
+          próprio app — JavaScript, CSS e HTML — no Cache Storage do seu
           navegador. <strong>Ele não guarda as suas mensagens.</strong>
         </p>
       ),

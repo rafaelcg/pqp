@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "27 September 2026",
+  updated: "29 September 2026",
   sections: [
     {
       id: "intro",
@@ -35,8 +35,8 @@ export const cookiesEn: LegalDocument = {
             <a href="https://clerk.com" target="_blank" rel="noreferrer">
               Clerk
             </a>
-            , the service that signs you in. Clerk uses session cookies (and its
-            own browser storage) to keep you logged in and to protect against
+            , the service that signs you in. Clerk uses cookies such as <code>__session</code> and{" "}
+            <code>__client_uat</code> (and its own browser storage) to keep you logged in and to protect against
             session hijacking. These are <strong>strictly necessary</strong>:
             block them and you cannot sign in at all. Clerk documents the
             individual cookie names and lifetimes on its own site.
@@ -127,8 +127,8 @@ export const cookiesEn: LegalDocument = {
             <li>
               <code>pqp-local-settings</code>: mute-on-join, compact participant
               list, voice activation or push-to-talk and its key, input and
-              output volume, whether link previews are shown, and your other
-              voice and video preferences. It also holds which microphone,
+              output volume, whether link previews are shown, your keyboard shortcuts, and your other voice and video
+              preferences. It also holds which microphone,
               camera and speaker you picked, as the ids your browser gives
               those devices.
             </li>
@@ -218,8 +218,8 @@ export const cookiesEn: LegalDocument = {
               &quot;Start here&quot; cards.
             </li>
             <li>
-              <code>pqp:community-home-viewer</code>: for server staff, which
-              member view of Baú you are previewing.
+              <code>pqp:community-home-viewer</code>: which member view of Baú
+              you are previewing, after you open a preview link.
             </li>
           </ul>
           <p>
@@ -235,8 +235,9 @@ export const cookiesEn: LegalDocument = {
               a call, so the prompt does not nag every hang-up.
             </li>
             <li>
-              <code>pqp:whats-new</code>, <code>pqp:whats-new-feed</code>: the
-              newest release note you have seen.
+              <code>pqp:whats-new</code>: which What&apos;s New card you have
+              already seen. <code>pqp:whats-new-feed</code>: the newest release
+              note you have seen.
             </li>
             <li>
               <code>pqp:community-home-settings-seen</code>, and{" "}
@@ -266,16 +267,15 @@ export const cookiesEn: LegalDocument = {
               <code>pqp:acquisition</code>: if the link that brought you here
               carried campaign parameters (<code>utm_source</code>,{" "}
               <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
-              <code>gclid</code> or <code>ref</code>), those values and the
-              page you landed on, so we can tell which link a sign-up came
+              <code>gclid</code> or <code>ref</code>), those values and the page you landed on, and when they were saved, so we can tell which link a sign-up came
               from. If you arrived from a Google ad, <code>gclid</code> is the
               identifier Google gave that ad click. Nothing else in it
-              identifies you. Our code never gives it to a third party. It
-              expires after 30 days, and it is written only once (a later
-              campaign link does not replace it). The first time the app loads
+              identifies you. Our code never gives it to a third party. It expires after 30 days, and while
+              it is live a later campaign link does not replace it. The first time the app loads
               after you sign in, it is sent to your account once and deleted
-              from your device, and our server keeps those values on your
-              account. If you never sign up it simply expires.
+              from your device, and if the account was created in the last day, our server keeps
+              those values on it. Otherwise they are discarded. If you never
+              sign up it simply expires.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the
@@ -294,13 +294,13 @@ export const cookiesEn: LegalDocument = {
               a person you meant to add, or a community, server or invite you
               meant to join or create before signing in, so we can finish that
               after you create an account. Each expires after an hour and is
-              cleared once used.
+              cleared once that step is done.
             </li>
             <li>
               <code>pqp:pending-watch-party-waitlist</code>: that you opened the
               watch party waitlist link before signing in, so the waitlist form
               opens after you create an account. It expires after an hour and
-              is cleared once used.
+              is cleared once the form has opened.
             </li>
           </ul>
           <p>
@@ -398,7 +398,7 @@ export const cookiesEn: LegalDocument = {
         <p>
           pqp.gg installs a service worker so the app can start when you are
           offline or on a bad connection. It caches the app&apos;s own static
-          files — JavaScript, CSS, HTML and fonts — in your browser&apos;s Cache
+          files — JavaScript, CSS and HTML — in your browser&apos;s Cache
           Storage. <strong>It does not cache your messages.</strong>
         </p>
       ),

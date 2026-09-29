@@ -385,7 +385,7 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie, relatório de erros e a tag do Google Ads; está tudo em pqp.gg/privacy.",
+        "Ficam em servidores em São Paulo, com backups noturnos na América do Norte. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie, relatório de erros e a tag do Google Ads; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
@@ -417,7 +417,7 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics, error reporting and the Google Ads tag; all of it is at pqp.gg/privacy.",
+        "It lives on servers in São Paulo, with nightly backups in North America. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics, error reporting and the Google Ads tag; all of it is at pqp.gg/privacy.",
     },
   ],
   es: [
@@ -449,7 +449,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Viven en servidores en São Paulo. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies, reporte de errores y la etiqueta de Google Ads; todo está en pqp.gg/privacy.",
+        "Viven en servidores en São Paulo, con respaldos nocturnos en Norteamérica. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies, reporte de errores y la etiqueta de Google Ads; todo está en pqp.gg/privacy.",
     },
   ],
 };

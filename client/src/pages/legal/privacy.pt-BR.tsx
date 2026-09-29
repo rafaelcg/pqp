@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "27 de setembro de 2026",
+  updated: "29 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "d4ce27d5",
+      sourceRev: "196fe97f",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -238,13 +238,17 @@ export const privacyPtBr: LegalDocument = {
             <strong>Watch parties.</strong> Uma watch party é uma transmissão,
             e a gente grava. A gravação tem o que o público recebe: a tela
             compartilhada e o som dela, a câmera de quem apresenta se estiver
-            ligada, a voz de quem apresenta e a voz dos convidados que essa
-            pessoa coloca no ar. Não tem o público, nem a voz de outras pessoas
+            ligada, e a voz de quem apresenta e dos convidados que essa pessoa
+            coloca no ar, enquanto estão no ar. Não tem o público, nem a voz de outras pessoas
             na sala que não estão no ar. A gente também pode ligar uma opção que
             salva o microfone de quem apresenta como um arquivo de áudio
             separado, ao lado da transmissão. Junto com cada gravação a gente
             guarda o canal, quando ela começou e terminou, e qual conta estava
-            apresentando. Os arquivos ficam no Cloudflare R2, na região leste da
+            apresentando, e esse registro continua depois que os arquivos são
+            apagados. Enquanto a transmissão está no ar, a gente também anota
+            quais contas estão assistindo, para contar o público, e apaga cada
+            anotação mais ou menos um dia depois da última vez que aquela pessoa
+            foi vista assistindo. Os arquivos ficam no Cloudflare R2, na região leste da
             América do Norte. Quem pode ver, e por quanto tempo, está em
             &quot;Chamadas de voz&quot; e em &quot;Por quanto tempo a gente
             guarda cada coisa&quot;.
@@ -273,8 +277,9 @@ export const privacyPtBr: LegalDocument = {
             ser alcançado: um endereço de push web e as chaves públicas dele, ou
             um token de dispositivo da Apple ou do Google. A gente apaga isso
             quando o serviço de push avisa que não funciona mais, e quando você
-            exclui a sua conta. Um push pode trazer o nome do servidor, do canal
-            e de quem escreveu. Nunca traz o texto de uma mensagem.
+            exclui a sua conta. Um push pode trazer o
+            nome do servidor, do canal, de quem escreveu ou de quem está ligando,
+            ou o título de um evento. Nunca traz o texto de uma mensagem.
           </p>
           <p>
             <strong>Configurações.</strong> Preferências de notificação, tema,
@@ -303,13 +308,27 @@ export const privacyPtBr: LegalDocument = {
             — ele não registra quem publicou.
           </p>
           <p>
+            <strong>Feedback e avaliações de chamada.</strong> Se você manda um
+            feedback pelas configurações, a gente guarda o texto, a sua conta, o
+            user agent do seu navegador e onde você estava quando escreveu: a
+            plataforma, a versão do app, a página do app, o seu idioma, o
+            tamanho da janela, se você estava numa chamada e como ela estava
+            conectada, e o id de sessão do relatório de erros descrito em
+            &quot;Relatório de erros&quot;. Se você avalia uma chamada, a gente
+            guarda a nota, um comentário opcional, o canal, quanto tempo a
+            chamada durou, quantas pessoas estavam nela, qual caminho ela usou e
+            se alguém compartilhou a tela.
+          </p>
+          <p>
             <strong>Técnicos.</strong> Logs de aplicação com erros e eventos de
             conexão. A maioria das linhas de log registra um número de conexão e
             um id de usuário, não o seu endereço IP. Algumas registram mais:
             quando você entra no app de desktop pelo navegador, essa linha de log
             guarda o seu endereço IP e o user agent do seu navegador. Os logs do
             nosso servidor de API são enviados ao Grafana Cloud, da Grafana
-            Labs, e ficam lá por 14 dias. O seu endereço IP também é lido em
+            Labs, e ficam lá por 14 dias. O servidor de API também guarda a
+            própria cópia dos logs recentes, até 100 MB por serviço, o que no
+            nosso volume cobre vários meses. O seu endereço IP também é lido em
             memória para aplicar limites de uso. Ele nunca é gravado no nosso
             banco de dados.
           </p>
@@ -343,9 +362,10 @@ export const privacyPtBr: LegalDocument = {
             Ele também é sem cookie, não guarda nada no seu dispositivo e não
             usa identificador persistente. Registra o endereço da página, a
             página que trouxe você, e o seu país, navegador e tipo de
-            dispositivo, tudo de forma agregada. Dentro do app ele também conta
-            alguns passos nomeados do primeiro acesso, como passar pela
-            verificação de idade ou criar um servidor, como um nome e alguns
+            dispositivo, tudo de forma agregada. Ele também conta
+            alguns passos nomeados, como tocar num botão de cadastro de uma
+            página de divulgação ou, dentro do app, passar pela verificação de
+            idade ou criar um servidor, como um nome e alguns
             rótulos (como quanto tempo um passo levou), nunca um id. Ele nunca
             vê a sua conta, e bloquear ele também não quebra nada.
           </p>
@@ -364,28 +384,32 @@ export const privacyPtBr: LegalDocument = {
             onde no nosso código ela aconteceu, mensagens que o app escreve no
             console do navegador nos níveis info, aviso e erro, avisos de
             qualquer coisa que o navegador bloqueou pela política de segurança
-            do site, as páginas por onde você passa dentro do app, medições de
-            velocidade da página, os endereços e tempos das requisições que o
+            do site, medições de velocidade da página, os endereços e tempos das requisições que o
             app faz, e o seu navegador e sistema operacional.
           </p>
           <p>
             Ele leva um id de sessão aleatório, guardado no armazenamento de
             sessão do seu navegador e trocado depois de 15 minutos parado ou de
             quatro horas. O nosso código nunca diz a ele quem você é: nem nome,
-            nem e-mail, nem id de conta. Mas alguns endereços de requisição têm
+            nem e-mail, nem id de conta. Se você manda um feedback pelo app, o
+            feedback leva esse id de sessão, para a gente achar os relatórios
+            daquele momento. Mas alguns endereços de requisição têm
             ids, e o link para assistir a transmissão de uma watch party tem o
             id da sua conta, então um relatório também pode ter. Ele não define
-            cookie, e não registra cliques, teclas nem a tela. Como a tag do Google, ele só entra na compilação hospedada do
-            pqp.gg, então uma cópia self-hosted não manda nada para a gente.
+            cookie, e não registra cliques, teclas nem a tela. Ele só liga quando a
+            compilação recebe o endereço do nosso coletor, e só a compilação
+            hospedada do pqp.gg recebe, então uma cópia self-hosted não manda
+            nada para a gente.
           </p>
 
           <h3>Medição de publicidade</h3>
           <p>
             O pqp.gg compra um pouco de publicidade, e carrega a{" "}
             <strong>tag do Google Ads</strong> para a gente saber se um anúncio
-            produziu uma conta e não só um clique. Essa é a única coisa no site
-            que não é sem cookie, e a gente prefere dizer isso na cara do que
-            esconder. A tag do Google carrega em toda página do pqp.gg. Ela dá
+            produziu uma conta e não só um clique. Tirando os cookies de login
+            que o Clerk precisa para manter você conectado, essa é a única coisa
+            no site que não é sem cookie, e a gente prefere dizer isso na cara
+            do que esconder. A tag do Google carrega em toda página do pqp.gg. Ela dá
             a todo visitante um cookie de origem própria no domínio pqp.gg,{" "}
             <code>_gcl_au</code>, com um identificador aleatório, e quando a sua
             visita veio de um anúncio ela registra isso em outros cookies com
@@ -413,9 +437,9 @@ export const privacyPtBr: LegalDocument = {
           <p>
             O Google é um terceiro aqui e trata o que recebe, inclusive o seu
             endereço IP, sob os termos dele. Bloquear a tag com uma extensão de
-            navegador, ou bloquear cookies para o pqp.gg, não quebra nada: o
-            produto funciona exatamente igual e o cadastro simplesmente não é
-            contado.
+            navegador, ou bloquear os cookies <code>_gcl_</code> dela, não
+            quebra nada: o produto funciona exatamente igual e o cadastro
+            simplesmente não é contado.
           </p>
           <p>
             Isso vale para o pqp.gg hospedado e para mais nada. A tag é
@@ -429,7 +453,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "44edb69f",
+      sourceRev: "1a9a7bf1",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -439,7 +463,8 @@ export const privacyPtBr: LegalDocument = {
             digita. (Uma tela que você compartilha numa watch party é gravada,
             porque é uma transmissão. Veja &quot;Chamadas de voz&quot;.) Os
             relatórios de erro descritos em &quot;O que a gente coleta&quot;
-            são ligados a um id de sessão aleatório, não à sua conta. As duas
+            são ligados a um id de sessão aleatório, não à sua conta, a não ser
+            que você mande um feedback, que leva esse id. As duas
             ferramentas de analytics descritas ali contam visitas e não
             conseguem identificar visitantes. A exceção é a tag do Google Ads,
             descrita no mesmo lugar: ela dá um identificador a todo visitante e
@@ -490,7 +515,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "55c4180c",
+      sourceRev: "c9a6d258",
       heading: "Chamadas de voz",
       body: (
         <>
@@ -583,9 +608,11 @@ export const privacyPtBr: LegalDocument = {
             no servidor de mídia de São Paulo. Esse gravador produz o vídeo que
             o público assiste, e os mesmos arquivos ficam guardados depois como
             a gravação. Ela tem o que o público recebe: a tela compartilhada e o
-            som dela, a câmera de quem apresenta se estiver ligada, a voz de
-            quem apresenta e a voz dos convidados que essa pessoa coloca no ar.
-            Quem assiste não é gravado. A gravação fica no Cloudflare R2, na
+            som dela, a câmera de quem apresenta se estiver ligada, e a voz de
+            quem apresenta e dos convidados que essa pessoa coloca no ar,
+            enquanto estão no ar. Quem assiste não é gravado, mas a gente anota
+            quem está assistindo para contar o público, como está em &quot;O que
+            a gente coleta&quot;. A gravação fica no Cloudflare R2, na
             região leste da América do Norte, por 30 dias depois do fim da
             transmissão. Quem pode começar watch parties ou gerenciar aquele
             canal, normalmente o dono e os admins do servidor, pode assistir de
@@ -605,11 +632,12 @@ export const privacyPtBr: LegalDocument = {
               continua criptografada entre os participantes, então o relay não
               consegue escutar. Os nossos provedores de STUN/TURN hoje são a{" "}
               <strong>Cloudflare Realtime TURN</strong>, depois Metered / Open
-              Relay se a Cloudflare não estiver configurada, depois um relay
+              Relay se a Cloudflare não estiver configurada ou não responder, depois um relay
               estático (ExpressTURN no pqp.gg) como fallback, mais os servidores
-              STUN públicos do Google e da Cloudflare. Numa sala grande esse
-              mesmo trabalho é feito pelo próprio servidor de mídia, na mesma
-              máquina, sem terceiro nenhum no meio.
+              STUN públicos do Google e da Cloudflare. Numa sala grande os mesmos relays
+              podem carregar a conexão entre você e o nosso servidor de mídia.
+              Nesse caso a criptografia termina no nosso servidor de mídia, como
+              está descrito acima, e o relay continua sem conseguir escutar.
             </li>
             <li>
               <strong>Quem cuida das máquinas.</strong> Cada servidor de mídia é
@@ -743,7 +771,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "bf6a07f4",
+      sourceRev: "ee340fc4",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -754,7 +782,8 @@ export const privacyPtBr: LegalDocument = {
           <ul>
             <li>
               <strong>Clerk</strong> — autenticação. Guarda o seu e-mail e as
-              suas credenciais.
+              suas credenciais. O seu navegador carrega as telas de login, e as
+              fotos de perfil que o Clerk hospeda, direto do Clerk.
             </li>
             <li>
               <strong>Vultr</strong>: o servidor que roda a nossa aplicação e o
@@ -804,9 +833,7 @@ export const privacyPtBr: LegalDocument = {
               Google, e um aviso para o navegador passa pelo serviço de push que
               aquele navegador usa. Os avisos para o navegador são
               criptografados, então o serviço de push não consegue ler. Os
-              avisos para celular não são criptografados desse jeito, então a
-              Apple ou o Google conseguem ler os nomes de servidor, canal e
-              remetente que o aviso traz. Nenhum aviso traz o texto de uma
+              avisos para celular não são criptografados desse jeito, então a Apple ou o Google conseguem ler os nomes que o aviso traz. Nenhum aviso traz o texto de uma
               mensagem.
             </li>
             <li>
@@ -834,8 +861,11 @@ export const privacyPtBr: LegalDocument = {
               troca para o KLIPY ainda carregam do GIPHY ou do Tenor.
             </li>
             <li>
-              <strong>DiceBear</strong> — as imagens de avatar prontas em{" "}
-              <span lang="en">Settings</span> carregam do serviço deles.
+              <strong>DiceBear</strong> — os avatares prontos em{" "}
+              <span lang="en">Settings</span> são imagens do serviço deles. Se
+              você escolhe um, o seu avatar continua sendo um link para o
+              DiceBear, então todo mundo que vê o seu avatar carrega ele do
+              DiceBear.
             </li>
             <li>
               <strong>Google Ads</strong> carrega a tag dele em toda página do
@@ -920,7 +950,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "retention",
-      sourceRev: "f98d0c86",
+      sourceRev: "a18e19ec",
       heading: "Por quanto tempo a gente guarda cada coisa",
       body: (
         <>
@@ -980,12 +1010,14 @@ export const privacyPtBr: LegalDocument = {
               desligar &quot;Manter gravação&quot;, uns 10 minutos depois do fim.
             </li>
             <li>
-              <strong>O seu país</strong>: substituído cada vez que muda, e
+              <strong>O seu país</strong>: atualizado enquanto você usa o app, e
               apagado junto com a sua conta. Só contam os membros vistos nos
               últimos 30 dias quando uma chamada escolhe a região.
             </li>
             <li>
-              <strong>Logs do servidor</strong>: 14 dias no Grafana Cloud.
+              <strong>Logs do servidor</strong>: 14 dias no Grafana Cloud. A
+              cópia do próprio servidor de API é limitada por tamanho, até 100 MB
+              por serviço, o que no nosso volume cobre vários meses.
             </li>
             <li>
               <strong>Backups do banco de dados</strong>: toda noite a gente
@@ -993,7 +1025,7 @@ export const privacyPtBr: LegalDocument = {
               leste da América do Norte, e guarda cada cópia por 30 dias. O
               servidor que faz a cópia também guarda as cópias dos últimos 7
               dias. A Vultr, que roda o banco de dados, também guarda os backups
-              dela.
+              dela, por no máximo 14 dias.
             </li>
           </ul>
           <p>
@@ -1018,7 +1050,8 @@ export const privacyPtBr: LegalDocument = {
               ser apagado também.
             </li>
             <li>
-              <strong>Banimentos que você aplicou em outras pessoas</strong>,
+              <strong>Banimentos e silenciamentos que você aplicou em outras
+              pessoas</strong>,
               com o seu id removido. Esse registro é um fato sobre quem foi
               banido e sobre o servidor, não sobre você — removê-lo readmitiria
               em silêncio todo mundo que você já baniu.
@@ -1038,14 +1071,27 @@ export const privacyPtBr: LegalDocument = {
             </li>
           </ul>
           <p>
-            Mais duas coisas duram um tempo depois da exclusão, não por motivo
-            legal, mas porque não estão presas à sua conta:
+            Mais algumas coisas continuam depois da exclusão, não por motivo
+            legal:
           </p>
           <ul>
             <li>
               <strong>Gravações de watch party em que você aparece</strong>,
               como quem apresenta ou como convidado no ar. Elas pertencem ao
               canal do servidor e são apagadas quando os 30 dias acabam.
+            </li>
+            <li>
+              <strong>O registro das watch parties que você apresentou</strong>:
+              o canal, quando começou e terminou, e o id da sua conta. Ele
+              continua depois que os arquivos são apagados, e excluir a conta
+              ainda não apaga esse registro. Você pode escrever para a gente
+              pedindo para apagar.
+            </li>
+            <li>
+              <strong>Feedback que você mandou e chamadas que você
+              avaliou</strong>, com o seu id removido. O texto, os comentários e
+              os dados do dispositivo continuam, para um relato de bug ainda
+              poder ser resolvido.
             </li>
             <li>
               <strong>Backups do banco de dados.</strong> Um backup feito antes
@@ -1064,7 +1110,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "rights",
-      sourceRev: "adec687f",
+      sourceRev: "92d8feec",
       heading: "Os seus direitos, e como usar",
       body: (
         <>
@@ -1122,7 +1168,8 @@ export const privacyPtBr: LegalDocument = {
               <code>@handle</code> público, o banner, os depoimentos, os
               parâmetros de campanha do seu cadastro, o país guardado, os seus
               registros de push, as suas respostas à lista de espera da watch
-              party nem as gravações de watch party. Para esses, escreva para a
+              party, as gravações de watch party, as suas reações, a sua lista de
+              amigos, o feedback que você mandou nem as avaliações de chamada. Para esses, escreva para a
               gente. Contas muito grandes têm um limite, e
               o arquivo avisa quando foi cortado. (<em>Donos</em> de servidor também podem
               exportar um servidor inteiro em{" "}
@@ -1298,7 +1345,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "self-hosted",
-      sourceRev: "dea03fdf",
+      sourceRev: "c521ca41",
       heading: "Instâncias self-hosted",
       body: (
         <p>
@@ -1306,9 +1353,10 @@ export const privacyPtBr: LegalDocument = {
           aplicação do Clerk e a hospedagem, e você é o controlador dos seus
           usuários. O pqp.gg não recebe os dados dos seus usuários. A nossa
           publicidade, o nosso analytics e o nosso relatório de erros também
-          não chegam na sua cópia: a tag do Google Ads, o Umami e o Grafana
-          Faro descritos acima são adicionados só na compilação do pqp.gg,
-          então uma instância self-hosted sai sem eles. Conte para os seus membros como
+          não chegam na sua cópia: a tag do Google Ads e o Umami
+          descritos acima são adicionados só na compilação do pqp.gg, e o
+          Grafana Faro só liga quando a compilação recebe o endereço do nosso
+          coletor, então uma instância self-hosted não manda nada para eles. Conte para os seus membros como
           você lida com as informações deles.
         </p>
       ),
