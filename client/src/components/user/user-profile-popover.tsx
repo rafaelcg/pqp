@@ -561,9 +561,17 @@ function UserProfileCard({
       onClose();
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape") {
+        return;
       }
+      // Escape with a confirm up backs out of the confirm only; the next one
+      // closes the card. Dialog already stops Escape in its capture listener,
+      // but the card must not rely on that: a confirm that is not dismissible
+      // (mid-request) swallows Escape, and the card under it stays too.
+      if (pendingConfirmRef.current) {
+        return;
+      }
+      onClose();
     }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);

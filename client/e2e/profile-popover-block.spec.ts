@@ -220,4 +220,10 @@ test("Remove friend from the card, confirmed with a mouse click, removes", async
   await confirm.getByRole("button", { name: "Remove friend" }).click();
 
   await expect.poll(() => listFriends(aSuffix)).not.toContain(pair.b.id);
+
+  // With no confirm up, Escape closes the card itself again.
+  await expect(confirm).toBeHidden();
+  await expect(card).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(card).toBeHidden();
 });
