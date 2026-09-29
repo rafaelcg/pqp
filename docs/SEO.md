@@ -49,12 +49,10 @@ component.
 
 **Added in this PR:**
 
-- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`),
-  with `sameAs` pointing at the GitHub repository. The Google Play listing
-  was here too until 2026-09-23, when it was removed because the listing
-  still answers 404 to the public. Add it back in the same change that sets
-  `VITE_PLAY_STORE_URL`. The App Store is absent: TestFlight is a beta
-  enrollment, not a public listing.
+- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`).
+  Its `sameAs` (`ORGANIZATION_SAME_AS`) names the GitHub repository and the
+  Google Play listing. The Play listing has been public since 2026-09-28. The
+  App Store is absent: TestFlight is a beta enrollment, not a public listing.
 - The landing's `SoftwareApplication` node now carries that same `sameAs` and
   an `operatingSystem` list that names every platform the product actually
   ships on (`SOFTWARE_OPERATING_SYSTEMS`: Web, Windows, macOS, Linux, Android,
@@ -123,12 +121,11 @@ explanation for each, to revisit once the exact URLs are in hand:
 - **The Search Console buckets without exact URLs** (see above) are read from
   Rafael's count snapshot, not verified against the live Search Console UI.
   Confirm the exact URLs before spending more effort on any one bucket.
-- **Play Store and TestFlight are not full public store listings yet.** The
-  Play listing has production access open (per `docs/ANDROID_RELEASE.md`) and
-  is linked from the new guides and from `Organization.sameAs`; TestFlight is
-  a beta enrollment and is deliberately kept out of structured data for that
-  reason. Update `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once an App
-  Store listing exists.
+- **iOS has no public store listing yet.** The Google Play listing has been public
+  since 2026-09-28. It is linked from the guides and from `Organization.sameAs`.
+  TestFlight is a beta enrollment, so structured data leaves it out. Add the
+  App Store listing to `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once it
+  exists.
 
 ## Keyword plan
 
