@@ -21,9 +21,10 @@ import type { WebSocket } from "ws";
  * Driven through the real router against a real Postgres, the same posture as
  * `read-cache.test.ts`. The sockets are recorders registered straight into
  * the authenticated socket table, which is all the member-addressed fan-out
- * reads. The frame names no channel, so the privacy half of the contract is
- * the refetch: a member who cannot see a private channel is nudged like
- * everyone else and still does not get it back from the list.
+ * reads. The privacy half of the contract: the frame names no channel, and it
+ * goes only to the people who can see the channel that changed, so a member
+ * is never told that a channel hidden from them was created, renamed or
+ * deleted.
  */
 
 // TEST_DATABASE_URL wins — see the note in api.test.ts.
@@ -48,13 +49,33 @@ vi.mock("../auth/clerk.js", () => ({
   verifyAuthHeader: async () => null,
 }));
 
+/** Flipped by the test that proves a failed audit write still nudges. */
+let failAudit = false;
+
+vi.mock("../services/audit.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../services/audit.js")>();
+  return {
+    ...real,
+    logAudit: async (...args: Parameters<typeof real.logAudit>) => {
+      if (failAudit) {
+        throw new Error("audit write failed");
+      }
+      return real.logAudit(...args);
+    },
+  };
+});
+
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { applyPrivateChannelOverwrites } = await import(
+  "../services/permissions.js"
+);
 const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
   "../ws/sockets.js"
 );
 const { resetReadCacheForTests } = await import("../lib/read-cache.js");
+const { invalidateChannelAudience } = await import("../services/servers.js");
 
 type User = Awaited<ReturnType<typeof upsertUser>>;
 
@@ -127,6 +148,7 @@ async function channelNames(as: User, serverId: string): Promise<string[]> {
 describeDb("channels-update: channel list changes reach members live", () => {
   let owner: User;
   let member: User;
+  let granted: User;
   let outsider: User;
   let serverId: string;
   let textChannelId: string;
@@ -165,6 +187,11 @@ describeDb("channels-update: channel list changes reach members live", () => {
       displayName: "Member",
       avatarUrl: null,
     });
+    granted = await upsertUser({
+      clerkId: "clerk_granted",
+      displayName: "Granted",
+      avatarUrl: null,
+    });
     outsider = await upsertUser({
       clerkId: "clerk_outsider",
       displayName: "Outsider",
@@ -178,12 +205,14 @@ describeDb("channels-update: channel list changes reach members live", () => {
     serverId = created.body.server.id;
     textChannelId = created.body.channels.find((c) => c.type === "text")!.id;
     await getPool().query(
-      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
-      [serverId, member.id],
+      `INSERT INTO server_members (server_id, user_id, role)
+       VALUES ($1, $2, 'member'), ($1, $3, 'member')`,
+      [serverId, member.id, granted.id],
     );
   });
 
   afterEach(() => {
+    failAudit = false;
     for (const recorder of open) {
       deleteAuthenticatedSocket(recorder.socket);
     }
@@ -205,7 +234,8 @@ describeDb("channels-update: channel list changes reach members live", () => {
     expect(await channelNames(member, serverId)).toContain("avisos");
   });
 
-  it("nudges on a private channel too, and the refetch still hides it", async () => {
+  it("tells only the people who can see a private channel that it was created", async () => {
+    const ownerSocket = connect(owner);
     const memberSocket = connect(member);
 
     const res = await call(owner, "POST", `/api/servers/${serverId}/channels`, {
@@ -215,11 +245,81 @@ describeDb("channels-update: channel list changes reach members live", () => {
     });
     expect(res.status).toBe(201);
 
-    await expectNudged(memberSocket, serverId);
-    // Content-free on the wire, filtered on the refetch.
-    expect(memberSocket.received.join("")).not.toContain("staff");
+    // The owner's other tabs hear it; the member, who cannot see it, does not.
+    await expectNudged(ownerSocket, serverId);
+    expect(framesOfType(memberSocket, "channels-update")).toEqual([]);
     expect(await channelNames(member, serverId)).not.toContain("staff");
     expect(await channelNames(owner, serverId)).toContain("staff");
+  });
+
+  it("tells only the people who could see a private channel that it was deleted", async () => {
+    const staff = await privateChannelFor(granted, "staff");
+    const memberSocket = connect(member);
+    const grantedSocket = connect(granted);
+
+    const res = await call(owner, "DELETE", `/api/channels/${staff}`);
+    expect(res.status).toBe(200);
+
+    await expectNudged(grantedSocket, serverId);
+    expect(framesOfType(memberSocket, "channels-update")).toEqual([]);
+    expect(await channelNames(granted, serverId)).not.toContain("staff");
+  });
+
+  it("tells only the people who can see a private channel that it was renamed", async () => {
+    const staff = await privateChannelFor(granted, "staff");
+    const memberSocket = connect(member);
+    const grantedSocket = connect(granted);
+
+    const res = await call(owner, "PATCH", `/api/channels/${staff}`, {
+      name: "equipe",
+    });
+    expect(res.status).toBe(200);
+
+    await expectNudged(grantedSocket, serverId);
+    expect(framesOfType(memberSocket, "channels-update")).toEqual([]);
+  });
+
+  it("tells a member who sees a child of a hidden category when that category is deleted", async () => {
+    // The member cannot see the category, but can see the channel filed in
+    // it, which lands back at the top level when the category goes.
+    const probe = connect(owner);
+    const category = await call<{ channel: { id: string } }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/channels`,
+      { name: "Staff", type: "category" },
+    );
+    expect(category.status).toBe(201);
+    // A category cannot be made private through the API, but an overwrite
+    // denying @everyone VIEW_CHANNEL hides it all the same.
+    await applyPrivateChannelOverwrites(
+      getPool(),
+      category.body.channel.id,
+      serverId,
+      true,
+    );
+    // The overwrite routes drop the cached audience themselves; this write
+    // goes around them.
+    invalidateChannelAudience(category.body.channel.id);
+    const moved = await call(owner, "PATCH", `/api/channels/${textChannelId}/move`, {
+      parentId: category.body.channel.id,
+      index: 0,
+    });
+    expect(moved.status).toBe(200);
+    // Both setup nudges have landed before the member starts listening.
+    await vi.waitFor(() => {
+      expect(framesOfType(probe, "channels-update")).toHaveLength(2);
+    });
+    const memberSocket = connect(member);
+
+    const res = await call(
+      owner,
+      "DELETE",
+      `/api/channels/${category.body.channel.id}`,
+    );
+    expect(res.status).toBe(200);
+
+    await expectNudged(memberSocket, serverId);
   });
 
   it("nudges when a channel is renamed", async () => {
@@ -234,7 +334,7 @@ describeDb("channels-update: channel list changes reach members live", () => {
     expect(await channelNames(member, serverId)).toContain("geral");
   });
 
-  it("leaves a privacy flip to permissions-update, which already refetches", async () => {
+  it("sends both frames on a privacy flip, to the people losing the channel too", async () => {
     const memberSocket = connect(member);
 
     const res = await call(owner, "PATCH", `/api/channels/${textChannelId}`, {
@@ -242,10 +342,12 @@ describeDb("channels-update: channel list changes reach members live", () => {
     });
     expect(res.status).toBe(200);
 
+    // The member just lost the channel, so they hear about it: the phones
+    // refetch their list on `channels-update` only.
     await vi.waitFor(() => {
       expect(framesOfType(memberSocket, "permissions-update")).toHaveLength(1);
     });
-    expect(framesOfType(memberSocket, "channels-update")).toEqual([]);
+    await expectNudged(memberSocket, serverId);
   });
 
   it("nudges when a channel is deleted", async () => {
@@ -279,4 +381,56 @@ describeDb("channels-update: channel list changes reach members live", () => {
 
     await expectNudged(memberSocket, serverId);
   });
+
+  it("still nudges when the audit write after a create fails", async () => {
+    const memberSocket = connect(member);
+    failAudit = true;
+
+    const res = await call(owner, "POST", `/api/servers/${serverId}/channels`, {
+      name: "avisos",
+      type: "text",
+    });
+    // The channel committed; only the audit row did not.
+    expect(res.status).toBe(500);
+
+    await expectNudged(memberSocket, serverId);
+    failAudit = false;
+    expect(await channelNames(member, serverId)).toContain("avisos");
+  });
+
+  it("still nudges when the audit write after a move fails", async () => {
+    const memberSocket = connect(member);
+    failAudit = true;
+
+    const res = await call(owner, "PATCH", `/api/channels/${textChannelId}/move`, {
+      parentId: null,
+      index: 1,
+    });
+    expect(res.status).toBe(500);
+
+    await expectNudged(memberSocket, serverId);
+  });
+
+  /** A private text channel that `who` has been given access to. */
+  async function privateChannelFor(who: User, name: string): Promise<string> {
+    const probe = connect(owner);
+    const created = await call<{ channel: { id: string } }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/channels`,
+      { name, type: "text", isPrivate: true },
+    );
+    expect(created.status).toBe(201);
+    // The create's own nudge has landed before the grant, so it can never
+    // reach a socket the test opens afterwards.
+    await expectNudged(probe, serverId);
+    const grant = await call(
+      owner,
+      "POST",
+      `/api/channels/${created.body.channel.id}/members`,
+      { userId: who.id },
+    );
+    expect(grant.status).toBeLessThan(300);
+    return created.body.channel.id;
+  }
 });

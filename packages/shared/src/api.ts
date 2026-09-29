@@ -1064,11 +1064,12 @@ export const moveChannelSchema = z.object({
 
 /**
  * WS nudge: a server's channel list changed (a channel was created, renamed,
- * edited, moved or deleted). Content-free on purpose: it names no channel, so
- * it can go to every member without saying anything about a private channel
- * they cannot see. Each client refetches `GET /api/servers/:id/channels`,
- * which applies privacy and VIEW_CHANNEL overwrites per viewer. Addressed to
- * the server's members, never fanned out on a channel.
+ * edited, moved or deleted). Content-free on purpose: it names no channel.
+ * Each client refetches `GET /api/servers/:id/channels`, which applies
+ * privacy and VIEW_CHANNEL overwrites per viewer. Addressed per user, never
+ * fanned out on a channel: to every member for a channel everyone can see,
+ * and only to the people who can see it otherwise, so a member is never told
+ * that a channel hidden from them changed (`notifyChannelsUpdate`).
  */
 export const channelsUpdateSchema = z.object({
   type: z.literal("channels-update"),

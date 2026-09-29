@@ -1502,6 +1502,23 @@ export async function listServerChannelIds(
   return new Set(result.rows.map((row) => row.id));
 }
 
+/**
+ * The channels filed under a category (never threads, whose `parent_id` is a
+ * text channel). Empty for anything that is not a category. Used to decide
+ * who hears that a category moved or was deleted: its children move with it,
+ * or land back at the top level, and a member who can see a child but not
+ * the category still sees that child's place change.
+ */
+export async function listCategoryChildIds(
+  categoryId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM channels WHERE parent_id = $1 AND type <> 'thread'`,
+    [categoryId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 export async function getChannel(channelId: string): Promise<ChannelRow | null> {
   const result = await getPool().query<ChannelRow>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`,

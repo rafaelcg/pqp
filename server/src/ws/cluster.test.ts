@@ -72,9 +72,27 @@ vi.mock("../services/blocks.js", () => ({
 const timeline: string[] = [];
 /** Who `listServerMemberIds` answers with, on either instance. */
 let serverMembers: string[] = [];
+/** How many of the next `listServerMemberIds` calls throw first. */
+let memberLookupFailures = 0;
+/**
+ * Who can see a channel, for the channel list nudge. A channel not in the map
+ * has no audience, which is what every other test here wants.
+ */
+const channelAudiences = new Map<string, string[]>();
 
 vi.mock("../services/servers.js", () => ({
-  getChannelAudience: async () => null,
+  getChannelAudience: async (channelId: string) => {
+    const userIds = channelAudiences.get(channelId);
+    return userIds
+      ? {
+          serverId: null,
+          kind: "server",
+          has: (id: string) => userIds.includes(id),
+          userIds,
+        }
+      : null;
+  },
+  listCategoryChildIds: async () => [],
   getChannel: async () => ({ kind: "dm", server_id: null }),
   invalidateServerChannelList: (serverId: string) => {
     timeline.push(`invalidate:${serverId}`);
@@ -85,7 +103,13 @@ vi.mock("../services/servers.js", () => ({
 // as it was before this mock existed.
 vi.mock("../services/permissions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/permissions.js")>()),
-  listServerMemberIds: async () => serverMembers,
+  listServerMemberIds: async () => {
+    if (memberLookupFailures > 0) {
+      memberLookupFailures -= 1;
+      throw new Error("database_unavailable");
+    }
+    return serverMembers;
+  },
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -642,15 +666,8 @@ describeDb("chat over the postgres bus", () => {
  * member's refetch can land on B.
  */
 describe("channels-update across two instances", () => {
-  it("reaches a member on the other instance after that instance drops its cached list", async () => {
-    const serverId = randomUUID();
-    serverMembers = ["member", "owner"];
-    timeline.length = 0;
-    const a = await bootInstance();
-    // B is only ever reached through its own socket table, imported from the
-    // graph `bootInstance` just built.
-    await bootInstance();
-    const bSockets = await import("./sockets.js");
+  /** A member socket on B that also writes its sends onto `timeline`. */
+  function timelineSocket(): Recorder {
     const received: string[] = [];
     const socket = {
       readyState: 1,
@@ -660,14 +677,29 @@ describe("channels-update across two instances", () => {
       },
       on: () => {},
     } as unknown as WebSocket;
-    bSockets.setAuthenticatedSocket(socket, asUser("member"));
+    return { socket, received };
+  }
+
+  it("reaches a member on the other instance after that instance drops its cached list", async () => {
+    const serverId = randomUUID();
+    const channelId = randomUUID();
+    serverMembers = ["member", "owner"];
+    channelAudiences.set(channelId, ["member", "owner"]);
+    timeline.length = 0;
+    const a = await bootInstance();
+    // B is only ever reached through its own socket table, imported from the
+    // graph `bootInstance` just built.
+    await bootInstance();
+    const bSockets = await import("./sockets.js");
+    const member = timelineSocket();
+    bSockets.setAuthenticatedSocket(member.socket, asUser("member"));
     const stranger = recordingSocket();
     bSockets.setAuthenticatedSocket(stranger.socket, asUser("stranger"));
 
-    await a.chat.notifyChannelsUpdate(serverId);
+    await a.chat.notifyChannelsUpdate(serverId, { channelIds: [channelId] });
 
     await vi.waitFor(() => {
-      expect(framesOfType(received, "channels-update")).toEqual([
+      expect(framesOfType(member.received, "channels-update")).toEqual([
         { type: "channels-update", serverId },
       ]);
     });
@@ -678,12 +710,73 @@ describe("channels-update across two instances", () => {
       `invalidate:${serverId}`,
       "send:channels-update",
     ]);
-    // Membership only; the frame on the bus carries no user ids.
+    // Everyone can see it, so the frame on the bus carries no user ids: B
+    // resolves membership itself.
     expect(
-      onTheWire.filter((frame) => frame.topic === "chat.channels"),
-    ).toHaveLength(1);
-    bSockets.deleteAuthenticatedSocket(socket);
+      onTheWire
+        .filter((frame) => frame.topic === "chat.channels")
+        .map((frame) => frame.data),
+    ).toEqual([{ type: "channels-update", serverId }]);
+    bSockets.deleteAuthenticatedSocket(member.socket);
     bSockets.deleteAuthenticatedSocket(stranger.socket);
+  });
+
+  it("carries the audience across for a channel only some members can see", async () => {
+    const serverId = randomUUID();
+    const channelId = randomUUID();
+    serverMembers = ["member", "owner", "hidden"];
+    channelAudiences.set(channelId, ["member", "owner"]);
+    timeline.length = 0;
+    const a = await bootInstance();
+    await bootInstance();
+    const bSockets = await import("./sockets.js");
+    const member = timelineSocket();
+    bSockets.setAuthenticatedSocket(member.socket, asUser("member"));
+    const hidden = recordingSocket();
+    bSockets.setAuthenticatedSocket(hidden.socket, asUser("hidden"));
+
+    await a.chat.notifyChannelsUpdate(serverId, { channelIds: [channelId] });
+
+    await vi.waitFor(() => {
+      expect(framesOfType(member.received, "channels-update")).toHaveLength(1);
+    });
+    // The member who cannot see the channel hears nothing, on either side.
+    expect(hidden.received).toEqual([]);
+    expect(
+      onTheWire
+        .filter((frame) => frame.topic === "chat.channels")
+        .map((frame) => frame.data),
+    ).toEqual([
+      { type: "channels-update", serverId, userIds: ["member", "owner"] },
+    ]);
+    // B still dropped its cached list before it sent.
+    expect(timeline).toEqual([
+      `invalidate:${serverId}`,
+      `invalidate:${serverId}`,
+      "send:channels-update",
+    ]);
+    bSockets.deleteAuthenticatedSocket(member.socket);
+    bSockets.deleteAuthenticatedSocket(hidden.socket);
+  });
+
+  it("retries a failed member lookup instead of dropping the nudge", async () => {
+    const serverId = randomUUID();
+    const channelId = randomUUID();
+    serverMembers = ["member", "owner"];
+    channelAudiences.set(channelId, ["member", "owner"]);
+    const a = await bootInstance();
+    const aSockets = await import("./sockets.js");
+    const member = recordingSocket();
+    aSockets.setAuthenticatedSocket(member.socket, asUser("member"));
+    memberLookupFailures = 1;
+
+    await a.chat.notifyChannelsUpdate(serverId, { channelIds: [channelId] });
+
+    expect(memberLookupFailures).toBe(0);
+    expect(framesOfType(member.received, "channels-update")).toEqual([
+      { type: "channels-update", serverId },
+    ]);
+    aSockets.deleteAuthenticatedSocket(member.socket);
   });
 });
 

@@ -214,6 +214,7 @@ import {
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
   notifyChannelsUpdate,
+  resolveChannelsUpdateAudience,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -5030,6 +5031,10 @@ router.post(
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
     }
+    // After the creator's own access row, so a private channel's audience
+    // already holds them, and before the audit write, so a failed audit
+    // cannot cost the members a change that has already committed.
+    pingChannels(serverId!, { channelIds: [channel.id] });
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -5038,9 +5043,6 @@ router.post(
       targetId: channel.id,
       changes: [{ key: "name", old: null, new: channel.name }],
     });
-    // After the creator's own access row, so their other tabs' refetch
-    // already includes a private channel.
-    pingChannels(serverId!);
     return created({ channel: mapChannel(channel) });
   },
 );
@@ -5076,6 +5078,13 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     Permission.MANAGE_CHANNELS,
   );
   const body = updateChannelSchema.parse(await readJsonBody(req));
+  const privacyChanged =
+    body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
+  // A privacy flip changes who can see the channel, so the people who are
+  // about to lose it are read now: they must see it go.
+  const audienceBefore = privacyChanged
+    ? await resolveChannelsUpdateAudience(channel.server_id, [channelId!])
+    : null;
   const updated = await updateChannel(channelId!, {
     name: body.name,
     isPrivate: body.isPrivate,
@@ -5086,6 +5095,31 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   });
   if (!updated) {
     throw new NotFound("Channel not found");
+  }
+
+  // `channel` (read for the authorization check above) already carries the
+  // pre-update row, so the diff costs nothing extra to compute here.
+  const changes = (
+    [
+      ["name", channel.name, updated.name],
+      ["topic", channel.topic, updated.topic],
+      ["isPrivate", channel.is_private, updated.is_private],
+      ["imageUrl", channel.image_url, updated.image_url],
+      ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
+      ["voiceTransport", channel.voice_transport, updated.voice_transport],
+    ] as const
+  )
+    .filter(([, oldValue, newValue]) => oldValue !== newValue)
+    .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+  // Right after the write, before the eviction work below and the audit
+  // write, so neither can cost the members a change that has committed. A
+  // privacy flip sends this too, beside `permissions-update`: the web client
+  // refetches its list on either frame, but the phones only on this one.
+  if (changes.length > 0) {
+    pingChannels(channel.server_id, {
+      channelIds: [channelId!],
+      before: audienceBefore,
+    });
   }
 
   // Turning a channel private must immediately cut off anyone watching or
@@ -5113,32 +5147,10 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   if (!updated.is_private && channel.is_private) {
     void cancelPrivateVoiceResweep(channelId!);
   }
-  const privacyChanged =
-    body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
   if (privacyChanged) {
     pingPermissions(channel.server_id);
   }
 
-  // `channel` (read for the authorization check above) already carries the
-  // pre-update row, so the diff costs nothing extra to compute here.
-  const changes = (
-    [
-      ["name", channel.name, updated.name],
-      ["topic", channel.topic, updated.topic],
-      ["isPrivate", channel.is_private, updated.is_private],
-      ["imageUrl", channel.image_url, updated.image_url],
-      ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
-      ["voiceTransport", channel.voice_transport, updated.voice_transport],
-    ] as const
-  )
-    .filter(([, oldValue, newValue]) => oldValue !== newValue)
-    .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
-  // A privacy flip already sent `permissions-update`, and every client
-  // refetches its channel list on that frame; a second nudge would only be a
-  // second refetch.
-  if (changes.length > 0 && !privacyChanged) {
-    pingChannels(channel.server_id);
-  }
   if (changes.length > 0) {
     await logAudit({
       serverId: channel.server_id,
@@ -5160,10 +5172,18 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  // Read before the delete: afterwards there is no row to ask who could see
+  // it. A failure here fails the request with nothing deleted, so no nudge
+  // is owed.
+  const audienceBefore = await resolveChannelsUpdateAudience(
+    channel.server_id,
+    [channelId!],
+    { carriesChildren: true },
+  );
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);
-  pingChannels(channel.server_id);
+  pingChannels(channel.server_id, { channelIds: [], before: audienceBefore });
   await logAudit({
     serverId: channel.server_id,
     actorId: user.id,
@@ -5201,6 +5221,11 @@ router.patch(
       throw error;
     }
 
+    // Before the audit write, for the same reason as on create.
+    pingChannels(channel.server_id, {
+      channelIds: [channelId!],
+      carriesChildren: true,
+    });
     await logAudit({
       serverId: channel.server_id,
       actorId: user.id,
@@ -5212,7 +5237,6 @@ router.patch(
         { key: "index", old: channel.position, new: body.index },
       ],
     });
-    pingChannels(channel.server_id);
 
     return {
       channels: (await listChannels(channel.server_id, user.id)).map(mapChannel),
@@ -7802,9 +7826,16 @@ function pingPermissions(serverId: string): void {
   });
 }
 
-/** Members' sidebars refetch the channel list. See `notifyChannelsUpdate`. */
-function pingChannels(serverId: string): void {
-  void notifyChannelsUpdate(serverId).catch((error) => {
+/**
+ * The sidebars of the members who can see the change refetch the channel
+ * list. See `notifyChannelsUpdate`, which also says why a failure is logged
+ * and not widened.
+ */
+function pingChannels(
+  serverId: string,
+  change: Parameters<typeof notifyChannelsUpdate>[1],
+): void {
+  void notifyChannelsUpdate(serverId, change).catch((error) => {
     console.error("[api] channels-update failed:", error);
   });
 }

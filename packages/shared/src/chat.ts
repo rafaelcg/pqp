@@ -617,7 +617,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // channel the frame named.
   permissionsUpdateSchema,
   communityHomeUpdateSchema,
-  // Same addressing as `permissions-update`: a server's members, per socket.
+  // Per socket like `permissions-update`: the members who can see the change.
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,

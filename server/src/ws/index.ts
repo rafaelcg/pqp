@@ -43,6 +43,7 @@ export {
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
   notifyChannelsUpdate,
+  resolveChannelsUpdateAudience,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
