@@ -3734,10 +3734,23 @@ function EditComposer({
 
   useEffect(() => {
     const node = ref.current;
-    if (node) {
+    if (!node) {
+      return;
+    }
+    const focusAtEnd = () => {
       node.focus();
       node.setSelectionRange(node.value.length, node.value.length);
-    }
+    };
+    focusAtEnd();
+    // Opened from the context menu, the menu is still mounted at this point
+    // and its focus trap pulls focus straight back; it unmounts before the
+    // next frame and would leave focus on <body>. Asking again then lands it.
+    const frame = requestAnimationFrame(() => {
+      if (node.isConnected && document.activeElement !== node) {
+        focusAtEnd();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   async function submit() {
