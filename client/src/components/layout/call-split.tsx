@@ -38,7 +38,7 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   PHONE_PANE_MAX_WIDTH_PX,
-  PHONE_SHORT_STAGE_MIN_PX,
+  phoneShortStageHeight,
   phoneStageTarget,
 } from "@/lib/party-newcomer";
 import { cn } from "@/lib/utils";
@@ -285,7 +285,7 @@ export function CallSplit({
   const stagePx = !sized
     ? null
     : phoneShort
-      ? Math.max(PHONE_SHORT_STAGE_MIN_PX, Math.round(container * 0.45))
+      ? phoneShortStageHeight(container)
       : phoneFloor
         ? clampSplit({
             fraction: splitFraction(

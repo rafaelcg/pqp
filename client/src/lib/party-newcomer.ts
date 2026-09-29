@@ -144,8 +144,23 @@ export function suppressAppInviteForNewcomer(
  */
 export const PHONE_CHAT_FLOOR_SHARE = 0.38;
 export const PHONE_STAGE_EXTRA_PX = 48;
-/** The smallest stage the short-pane fallback will draw. */
-export const PHONE_SHORT_STAGE_MIN_PX = 120;
+/** What the short-pane fallback reserves for the chat before the stage may grow. */
+export const PHONE_SHORT_CHAT_RESERVE_PX = 160;
+
+/**
+ * The stage on a pane too short for a divider: under half, and never more than
+ * what is left after reserving the chat's share. On a very short pane the stage
+ * shrinks toward nothing before the chat does.
+ */
+export function phoneShortStageHeight(container: number): number {
+  return Math.max(
+    0,
+    Math.min(
+      Math.round(container * 0.45),
+      container - PHONE_SHORT_CHAT_RESERVE_PX,
+    ),
+  );
+}
 
 export function phoneStageTarget(
   container: number,

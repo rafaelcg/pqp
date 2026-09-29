@@ -9,6 +9,7 @@ import {
   isPartyNewcomerStripDismissed,
   partyNewcomerStripVisible,
   partyPhoneLayoutOn,
+  phoneShortStageHeight,
   phoneStageTarget,
   suppressAppInviteForNewcomer,
   type PartyNewcomerFacts,
@@ -152,5 +153,18 @@ describe("phoneStageTarget", () => {
     expect(container - divider - stage).toBeGreaterThanOrEqual(
       MIN_CHAT_HEIGHT_PX,
     );
+  });
+});
+
+describe("phoneShortStageHeight", () => {
+  it("is under half on a pane that only just misses the divider", () => {
+    expect(phoneShortStageHeight(364)).toBe(164);
+  });
+
+  it("never takes the chat's reserve, however short the pane", () => {
+    expect(phoneShortStageHeight(250)).toBe(90);
+    expect(250 - phoneShortStageHeight(250)).toBeGreaterThanOrEqual(160);
+    expect(phoneShortStageHeight(120)).toBe(0);
+    expect(phoneShortStageHeight(0)).toBe(0);
   });
 });
