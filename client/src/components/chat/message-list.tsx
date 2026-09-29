@@ -29,6 +29,7 @@ import {
   PinOff,
   Play,
   Reply,
+  RotateCw,
   ShieldCheck,
   SmilePlus,
   Star,
@@ -202,6 +203,13 @@ interface MessageListProps {
   serverId?: string | null;
   channelId?: string | null;
   isLoading?: boolean;
+  /**
+   * The history request for this channel failed. What is on screen is then not
+   * the channel, so the empty state ("say hi") would be a lie: a blip would make
+   * every channel look wiped. Shown instead of it, with `onRetryHistory`.
+   */
+  historyFailed?: boolean;
+  onRetryHistory?: () => void;
   hasMore?: boolean;
   /** True while the loaded window stops short of the newest message. */
   hasNewer?: boolean;
@@ -447,6 +455,8 @@ export const MessageList = memo(function MessageList({
   serverId = null,
   channelId = null,
   isLoading = false,
+  historyFailed = false,
+  onRetryHistory,
   hasMore = false,
   hasNewer = false,
   isLoadingOlder = false,
@@ -1337,8 +1347,18 @@ export const MessageList = memo(function MessageList({
           </div>
         )}
 
+        {historyFailed && messages.length > 0 && (
+          // Live arrivals since the failed load: keep them, and say the
+          // history above them is missing rather than absent.
+          <HistoryFailed compact onRetry={onRetryHistory} />
+        )}
+
         {messages.length === 0 ? (
-          <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
+          historyFailed ? (
+            <HistoryFailed onRetry={onRetryHistory} />
+          ) : (
+            <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
+          )
         ) : (
           rows.map((row, index) => {
             const { joinTop, joinBottom } = mentionJoins(
@@ -1837,6 +1857,65 @@ function FailedSendFooter({
  * syntax: the composer's format hint teaches that at the composer, once
  * (`feature-hint.tsx`, "composer format").
  */
+function HistoryFailed({
+  compact = false,
+  onRetry,
+}: {
+  compact?: boolean;
+  onRetry?: () => void;
+}) {
+  const { t } = useTranslation();
+  const retry = onRetry ? (
+    <Button
+      type="button"
+      variant="secondary"
+      size={compact ? "sm" : undefined}
+      className={compact ? undefined : "mt-3"}
+      data-history-retry=""
+      onClick={onRetry}
+    >
+      <RotateCw
+        aria-hidden="true"
+        className={compact ? "h-3.5 w-3.5" : "h-4 w-4"}
+      />
+      {t("chat.historyFailed.retry")}
+    </Button>
+  ) : null;
+
+  if (compact) {
+    return (
+      <div
+        data-history-failed=""
+        className="flex flex-wrap items-center justify-center gap-3 px-4 pb-3"
+      >
+        <p role="alert" className="text-sm text-danger">
+          {t("chat.historyFailed.inline")}
+        </p>
+        {retry}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-history-failed=""
+      className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
+    >
+      <AlertCircle aria-hidden="true" className="h-6 w-6 text-danger" />
+      <p
+        role="alert"
+        className="text-balance font-display text-xl font-bold text-paper"
+      >
+        {t("chat.historyFailed.title")}
+      </p>
+      <p className="max-w-xs text-pretty text-sm text-paper-muted">
+        {t("chat.historyFailed.body")}
+      </p>
+      {retry}
+    </div>
+  );
+}
+
 function EmptyState({
   onCopyOwnerInvite,
 }: {
