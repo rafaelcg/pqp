@@ -14,10 +14,12 @@ export function CallControlGroup({
 
 /**
  * Hairline between clusters. Dropped on a narrow row, where every pixel is a
- * tile's. `container` measures the row's own container (under 22rem, the
- * width the full set of tiles needs) rather than the window, for the slim bar
- * that lives in the composer and is narrower than the screen whenever a
- * sidebar is open.
+ * tile's. Both rules measure the row's own container rather than the window.
+ * `container` is the slim bar that lives in the composer and is narrower than
+ * the screen whenever a sidebar is open: under 22rem, the width the full set
+ * of tiles needs. Without it this is the stage's call bar, where under 40rem
+ * the clusters dissolve into one wrapping row (see `CallControls`) and a
+ * hairline would stand in the middle of a line.
  */
 export function CallControlDivider({
   className,
@@ -31,7 +33,7 @@ export function CallControlDivider({
       aria-hidden="true"
       className={cn(
         "hidden w-px self-stretch bg-border",
-        container ? "@min-[22rem]:block" : "sm:block",
+        container ? "@min-[22rem]:block" : "@min-[40rem]:block",
         className,
       )}
     />
