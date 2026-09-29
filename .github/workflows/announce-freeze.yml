@@ -1,0 +1,40 @@
+name: Announce merge freeze
+
+# docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6: the other half of the
+# merge freeze in deploy-api-vultr.yml and deploy-api-fly.yml. Those
+# workflows enforce the freeze through the DEPLOY_FREEZE repo variable. This
+# one only announces it on the PR itself, the moment someone adds the
+# `freeze` label, so nobody has to read a workflow file to learn why a merge
+# did not deploy.
+#
+# WHY A WORKFLOW OF ITS OWN
+# This job used to live in ci.yml, which then had to listen to `labeled`.
+# CI cancels the run in progress for the same ref (`cancel-in-progress`), so
+# adding any label, `restarts-api` included, cancelled the real CI run and
+# replaced it with one whose jobs were all skipped. On 2026-09-29 eight PRs
+# ended with every check cancelled. Here the label event has its own
+# workflow and no concurrency group, so it cannot touch a CI run.
+#
+# No paths-ignore: a freeze applies to a docs-only PR too.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+
+jobs:
+  announce:
+    name: Announce merge freeze
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.event.label.name == 'freeze'
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment that server deploys are frozen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "server deploys are frozen for an event"
