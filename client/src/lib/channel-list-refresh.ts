@@ -60,8 +60,11 @@ export interface ChannelListTickets {
    * else is going to bring the change in, so the caller refetches.
    */
   owesUpdate(serverId: string, ticket: number): boolean;
-  /** The newest ticket taken so far, for a fetch that takes none of its own. */
-  latest(): number;
+  /**
+   * Where a fetch that takes no ticket of its own starts, for `withCreated`.
+   * Not a ticket: it never makes another fetch's ticket stale.
+   */
+  mark(): number;
   /**
    * This reader just created `channel`. Until a fetch that started after
    * now writes the list, a list that lacks it is older than the create, not
@@ -71,9 +74,10 @@ export interface ChannelListTickets {
   /** The reader deleted the channel: stop keeping it in older lists. */
   forget(channelId: string): void;
   /**
-   * The list a fetch for `serverId` holding `ticket` should write: its own,
-   * plus every channel this reader created after that fetch started. A fetch
-   * that started after a create answers for it, and the create is forgotten.
+   * The list a fetch for `serverId` holding `ticket` (or a `mark`) should
+   * write: its own, plus every channel this reader created after that fetch
+   * started. A fetch that started after a create answers for it, and the
+   * create is forgotten.
    */
   withCreated(
     serverId: string,
@@ -97,14 +101,21 @@ export interface ChannelListTickets {
  * until a fetch at least as new as it writes the list (`owesUpdate`).
  */
 export function createChannelListTickets(): ChannelListTickets {
+  /**
+   * One count for tickets, marks and creates, so "started before the create"
+   * is `ticket < create` for all of them. A create moves it without moving
+   * `latest`, so it never makes a fetch in flight stale.
+   */
+  let clock = 0;
   let latest = 0;
   let pending: { serverId: string; ticket: number } | null = null;
-  /** Channels this reader created, with the newest ticket at that moment. */
+  /** Channels this reader created, with the clock at that moment. */
   const createdChannels = new Map<string, { channel: Channel; ticket: number }>();
   return {
-    latest: () => latest,
+    mark: () => clock,
     created: (channel) => {
-      createdChannels.set(channel.id, { channel, ticket: latest });
+      clock += 1;
+      createdChannels.set(channel.id, { channel, ticket: clock });
     },
     forget: (channelId) => {
       createdChannels.delete(channelId);
@@ -115,7 +126,7 @@ export function createChannelListTickets(): ChannelListTickets {
         if (entry.channel.serverId !== serverId) {
           continue;
         }
-        if (ticket > entry.ticket) {
+        if (ticket >= entry.ticket) {
           createdChannels.delete(id);
           continue;
         }
@@ -128,7 +139,8 @@ export function createChannelListTickets(): ChannelListTickets {
         : [...list, ...missing].sort((a, b) => a.position - b.position);
     },
     take: () => {
-      latest += 1;
+      clock += 1;
+      latest = clock;
       return latest;
     },
     isLatest: (ticket) => ticket === latest,

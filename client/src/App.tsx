@@ -4619,9 +4619,9 @@ function MainAppContent({
             }
             permsRef.current.refresh(message.version);
             bumpMemberRosterNudge();
-            // Takes no ticket of its own; the newest one says which of this
+            // Takes no ticket of its own; the mark says which of this
             // reader's own creates it may predate.
-            const listTicket = channelListTickets.latest();
+            const listTicket = channelListTickets.mark();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(

@@ -191,6 +191,26 @@ describe("channels this reader created", () => {
     ]);
   });
 
+  it("lets a fetch without a ticket that started after the create answer for it", () => {
+    // The permissions refetch takes no ticket. Started after the create, a
+    // list without the channel means it went private or was deleted.
+    const tickets = createChannelListTickets();
+    const before = tickets.mark();
+    tickets.created(created("fresh", 1));
+    expect(
+      tickets.withCreated("s1", [geral], before).map((c) => c.id),
+    ).toEqual(["geral", "fresh"]);
+    const after = tickets.mark();
+    expect(tickets.withCreated("s1", [geral], after)).toEqual([geral]);
+  });
+
+  it("does not make a fetch in flight stale by creating a channel", () => {
+    const tickets = createChannelListTickets();
+    const refetch = tickets.take();
+    tickets.created(created("fresh", 1));
+    expect(tickets.isLatest(refetch)).toBe(true);
+  });
+
   it("does not add a channel to another server's list", () => {
     const tickets = createChannelListTickets();
     const refetch = tickets.take();
