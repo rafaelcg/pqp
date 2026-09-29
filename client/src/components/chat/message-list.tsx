@@ -1605,18 +1605,15 @@ export const MessageList = memo(function MessageList({
   followOwnSendRef.current = followOwnSend;
 
   /**
-   * The pill: back to the live end, and that wins over a jump to a message
-   * still in flight, the same way a send does. Without the cancel, the jump's
-   * settle (or its fetched page) lands after the reader asked for the present
-   * and puts them back in history.
+   * The pill: back to the live end, by the same path a send takes. It wins
+   * over a jump still in flight (its settle, its fetched page), and it pins
+   * the list before it scrolls. A plain smooth scroll to the bottom aimed at
+   * the `scrollHeight` measured on the click, and the `content-visibility`
+   * rows it passed grew as they were laid out, so it stopped short of the
+   * end, unpinned, with the pill still showing. That happened after any jump
+   * that crossed rows never laid out, a search result or a permalink.
    */
-  const jumpToPresentFromPill = useCallback(() => {
-    cancelJump();
-    // Same flag a send sets: a fetched jump page that lands after this click
-    // replaces the window, and the late handler then returns to the present.
-    sentWhileJumpingRef.current = true;
-    jumpToPresent();
-  }, [cancelJump, jumpToPresent]);
+  const jumpToPresentFromPill = followOwnSend;
 
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;

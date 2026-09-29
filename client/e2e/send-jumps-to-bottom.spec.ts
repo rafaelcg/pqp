@@ -465,6 +465,11 @@ test("a send while a jump is still fetching stays on the send", async ({
  * The pill wins over a jump to a loaded message that is still settling, the
  * same way a send does: clicking it right after the jump starts must not be
  * undone by the settle that follows.
+ *
+ * It also has to reach the end. The search result reopens the list at the top
+ * (a permalink owns the landing), so the rows between the target and the tail
+ * have never been laid out. A smooth scroll aimed at the height measured on
+ * the click stopped short once those rows took their real height.
  */
 test("jump to present during a jump stays at the present", async ({ page }) => {
   const seeded = await seed(120);
@@ -496,6 +501,7 @@ test("jump to present during a jump stays at the present", async ({ page }) => {
   await page.waitForTimeout(2_000);
   await expect(page.getByText("history 119 ")).toBeInViewport();
   await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+  await expect(pill).toHaveCount(0);
 });
 
 /**
