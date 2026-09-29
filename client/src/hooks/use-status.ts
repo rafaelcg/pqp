@@ -189,15 +189,18 @@ export function useUserStatus({
    * once the write settles, in `reconcileAfterSave`.
    */
   const heldRemoteRef = useRef<ManualStatus[]>([]);
-  /** Bumped on every remote adoption, so an older refetch can tell it lost. */
-  const remoteGenerationRef = useRef(0);
+  /**
+   * Bumped on every remote adoption and every local save, so an older refetch
+   * can tell it lost to either.
+   */
+  const choiceGenerationRef = useRef(0);
 
   const adoptRemote = useCallback((next: ManualStatus) => {
     if (savingRef.current) {
       heldRemoteRef.current.push(next);
       return;
     }
-    remoteGenerationRef.current += 1;
+    choiceGenerationRef.current += 1;
     setManualState(next);
   }, []);
 
@@ -219,11 +222,12 @@ export function useUserStatus({
       return;
     }
     const latestHeld = held[held.length - 1]!;
-    const generation = remoteGenerationRef.current;
+    const generation = choiceGenerationRef.current;
     // A newer frame or a newer save of this tab's own has a fresher answer
-    // than this read, which was issued before either of them.
-    const stillCurrent = () =>
-      !savingRef.current && remoteGenerationRef.current === generation;
+    // than this read, which was issued before either of them. Checking that no
+    // save is in flight is not enough: a save can start and settle while this
+    // read is still on the wire, and then nothing would be in flight.
+    const stillCurrent = () => choiceGenerationRef.current === generation;
     void fetchMe()
       .then((me) => {
         if (stillCurrent()) {
@@ -252,6 +256,7 @@ export function useUserStatus({
       setManualState(next);
       setSaving(true);
       savingRef.current = true;
+      choiceGenerationRef.current += 1;
       heldRemoteRef.current = [];
       let settled: ManualStatus = previous;
       void updatePreferences({ status: next })

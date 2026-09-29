@@ -165,4 +165,55 @@ describe("useUserStatus own-status from other devices", () => {
 
     expect(controls!.manual).toBe("invisible");
   });
+
+  it("lets a newer save of its own that settles during the read-back win over it", async () => {
+    const firstWrite = deferred<ReturnType<typeof saved>>();
+    const readBack = deferred<ReturnType<typeof me>>();
+    updatePreferencesMock
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValueOnce(saved("online"));
+    fetchMeMock.mockReturnValueOnce(readBack.promise);
+    await mount("online");
+
+    await act(async () => controls!.setManual("dnd"));
+    await act(async () => controls!.adoptRemote("away"));
+    await act(async () => firstWrite.resolve(saved("dnd")));
+    await flush();
+    expect(fetchMeMock).toHaveBeenCalledTimes(1);
+
+    // Picked, saved and settled while the read-back is still on the wire. No
+    // frame arrives in between, so only the save itself can mark it stale.
+    await act(async () => controls!.setManual("online"));
+    await flush();
+    expect(controls!.saving).toBe(false);
+
+    await act(async () => readBack.resolve(me("away")));
+    await flush();
+
+    expect(controls!.manual).toBe("online");
+    expect(fetchMeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a failed read-back's fallback overwrite a newer save", async () => {
+    const firstWrite = deferred<ReturnType<typeof saved>>();
+    const readBack = deferred<ReturnType<typeof me>>();
+    updatePreferencesMock
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValueOnce(saved("online"));
+    fetchMeMock.mockReturnValueOnce(readBack.promise);
+    await mount("online");
+
+    await act(async () => controls!.setManual("dnd"));
+    await act(async () => controls!.adoptRemote("away"));
+    await act(async () => firstWrite.resolve(saved("dnd")));
+    await flush();
+
+    await act(async () => controls!.setManual("online"));
+    await flush();
+
+    await act(async () => readBack.reject(new Error("offline")));
+    await flush();
+
+    expect(controls!.manual).toBe("online");
+  });
 });
