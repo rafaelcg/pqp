@@ -429,7 +429,10 @@ import {
 } from "@/lib/conversations";
 import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
-import { createLiveReadAck } from "@/lib/live-read-ack";
+import {
+  createChannelWriteQueue,
+  createLiveReadAck,
+} from "@/lib/live-read-ack";
 import {
   HOME_SELECTION,
   selectionRoutePath,
@@ -1932,10 +1935,16 @@ function MainAppContent({
   const unreadCursorByChannelRef = useRef<Record<string, string>>({});
   // Messages that arrive in the open channel are read once they are on
   // screen; see `live-read-ack.ts` for why this is not done on leave alone.
+  // Every write to a channel's read cursor goes through this queue, in order:
+  // the server keeps whichever write commits last, so an ack still in flight
+  // must not land after a Mark unread or after the next open's read.
+  const [readCursorQueue] = useState(createChannelWriteQueue);
   const [liveReadAck] = useState(() =>
     createLiveReadAck({
+      queue: readCursorQueue,
       send: (channelId) => markChannelRead(channelId),
       isVisible: () => document.visibilityState === "visible",
+      isSelected: (channelId) => selectedChannelIdRef.current === channelId,
       isHeld: (channelId) => unreadHoldRef.current.has(channelId),
     }),
   );
@@ -2850,16 +2859,17 @@ function MainAppContent({
       return next;
     });
     try {
-      // An ack from the last visit still in flight would otherwise land after
-      // this and make its cursor the "previous" one we get back.
-      await liveReadAck.settled(channelId);
-      const result = await markChannelRead(channelId);
+      // Queued behind any ack from the last visit, so that ack cannot land
+      // after this and make its cursor the "previous" one we get back.
+      const result = await readCursorQueue.run(channelId, () =>
+        markChannelRead(channelId),
+      );
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, [liveReadAck]);
+  }, [readCursorQueue]);
 
   const loadUnread = useCallback(async (serverId: string) => {
     try {
@@ -3771,7 +3781,9 @@ function MainAppContent({
       if (openThreadChannelIdRef.current === channelId) {
         setThreadUnreadSince(lastReadAt);
       }
-      void markChannelRead(channelId, lastReadAt)
+      // Queued, so a live ack already on the wire lands before the rewind.
+      void readCursorQueue
+        .run(channelId, () => markChannelRead(channelId, lastReadAt))
         .then(() => {
           if (selectedServerId) {
             void loadUnread(selectedServerId);
@@ -3781,7 +3793,7 @@ function MainAppContent({
           // Badge is best-effort.
         });
     },
-    [loadUnread, selectedServerId],
+    [loadUnread, readCursorQueue, selectedServerId],
   );
 
   const handleMarkRead = useCallback(() => {
