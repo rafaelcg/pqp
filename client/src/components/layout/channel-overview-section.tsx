@@ -8,6 +8,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
+  CHANNEL_NAME_MAX_LENGTH,
+  sanitizeChannelName,
+} from "@/lib/channel-name";
+import {
   fetchChannelVoiceTransport,
   type ChannelVoiceTransport,
 } from "@/lib/api";
@@ -220,7 +224,10 @@ export function ChannelOverviewSection({
 
   return (
     <div className="space-y-3.5">
-      <SettingsGroup title={t("channelSettings.name")}>
+      <SettingsGroup
+        title={t("channelSettings.name")}
+        hint={t("channelSettings.nameHint")}
+      >
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -234,9 +241,12 @@ export function ChannelOverviewSection({
           <Input
             value={draft.name}
             onChange={(event) =>
-              onDraftChange({ ...draft, name: event.target.value })
+              onDraftChange({
+                ...draft,
+                name: sanitizeChannelName(event.target.value),
+              })
             }
-            maxLength={32}
+            maxLength={CHANNEL_NAME_MAX_LENGTH}
             aria-label={t("channelSettings.name")}
             className={fieldClass}
           />

@@ -46,6 +46,7 @@ export {
   evictChannelViewers,
   evictUserFromChannels,
   notifyPermissionsUpdate,
+  notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
   applyAutomodEffects,
   postChannelMessage,

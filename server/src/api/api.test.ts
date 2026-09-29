@@ -438,8 +438,29 @@ describeDb("API authorization", () => {
     expect(enabled.body.enabled).toBe(true);
     expect(enabled.body.server.communityHomeEnabled).toBe(true);
 
-    const persisted = await call<{ enabled: boolean }>(member, "GET", path);
+    const persisted = await call<{ enabled: boolean; version: number }>(
+      member,
+      "GET",
+      path,
+    );
     expect(persisted.body.enabled).toBe(true);
+
+    // Every flip bumps the version, so an app holding two frames keeps the
+    // newer one whatever order they arrive in.
+    const disabled = await call<{
+      enabled: boolean;
+      version: number;
+      server: { communityHomeEnabled: boolean; communityHomeVersion: number };
+    }>(admin, "PATCH", path, { enabled: false });
+    expect(disabled.body.enabled).toBe(false);
+    expect(disabled.body.version).toBe(persisted.body.version + 1);
+    expect(disabled.body.server.communityHomeVersion).toBe(disabled.body.version);
+    const reread = await call<{ enabled: boolean; version: number }>(
+      member,
+      "GET",
+      path,
+    );
+    expect(reread.body).toEqual({ enabled: false, version: disabled.body.version });
     delete process.env.COMMUNITY_HOME_ENABLED;
   });
 

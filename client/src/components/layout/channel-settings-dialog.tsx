@@ -315,7 +315,10 @@ export function ChannelSettingsDialog({
     setSaveError(null);
     try {
       const { channel: updated } = await updateChannel(current.id, {
-        name,
+        // Only a changed name is sent. A channel copied from a Discord
+        // template can carry a name the rename rules never allowed, and
+        // resending it would refuse a save that only touched the topic.
+        ...(name !== current.name ? { name } : {}),
         topic: draft.topic.trim() || null,
         imageUrl: draft.imageUrl.trim() || null,
         ...(current.kind === "server" &&

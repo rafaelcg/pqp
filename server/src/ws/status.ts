@@ -11,6 +11,7 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { getPreferences } from "../services/preferences.js";
+import { forEachSocketOfUser } from "./sockets.js";
 
 /**
  * Per-user status: online / idle / do-not-disturb / offline, plus the invisible
@@ -423,6 +424,7 @@ export function setSocketIdle(socket: WebSocket, idle: boolean): void {
  */
 export function applyManualStatus(userId: string, manual: ManualStatus): void {
   adoptManualStatus(userId, manual);
+  deliverOwnStatus(userId, manual);
   if (isBusEnabled()) {
     publishToCluster(STATUS_TOPIC, { kind: "manual", userId, manual });
   }
@@ -444,6 +446,27 @@ function adoptManualStatus(userId: string, manual: ManualStatus): void {
   }
   entry.manual = manual;
   publishUser(userId);
+}
+
+/**
+ * Tell every socket THIS process holds for the account what it now is, so the
+ * account's other tabs and devices stop showing the old choice.
+ *
+ * Runs on every instance for one change (here from `applyManualStatus`, and
+ * from the `manual` bus frame below), because an account's sockets are spread
+ * across replicas. It goes to that account alone: the value can be `invisible`,
+ * which nobody else is ever told. Sent even when the local registry already
+ * agrees, since the sockets are what may be stale, not the registry.
+ */
+function deliverOwnStatus(userId: string, manual: ManualStatus): void {
+  const payload = JSON.stringify({ type: "own-status", status: manual });
+  // Indexed by account: a change costs this person's sockets, never a walk of
+  // every connection on the process, and it runs once per instance per change.
+  forEachSocketOfUser(userId, (socket) => {
+    if (socket.readyState === 1) {
+      socket.send(payload);
+    }
+  });
 }
 
 /** Test seam: forget every socket and every remote contribution. */
@@ -547,6 +570,7 @@ subscribeToCluster(STATUS_TOPIC, (data, origin) => {
       return;
     }
     adoptManualStatus(userId, manual.data);
+    deliverOwnStatus(userId, manual.data);
     return;
   }
 

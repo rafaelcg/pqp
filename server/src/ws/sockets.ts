@@ -75,32 +75,21 @@ export interface AuthenticatedSocket {
 }
 
 const sockets = new Map<WebSocket, AuthenticatedSocket>();
-
 /**
- * The same sockets, by account. Kept beside `sockets` so a question about one
- * account ("does this person still have a tab open", "send this person's
- * sockets a catch-up") costs that account's sockets rather than a walk of
- * every connection on the instance. A membership change reaches every
- * instance over the bus, and most instances hold no socket for that person.
+ * The same sockets keyed by account, so a frame addressed to one person costs
+ * that person's few sockets rather than a walk of every connection on the
+ * process. Kept in step with `sockets` by the two writers below, and nowhere
+ * else.
  */
 const socketsByUser = new Map<string, Set<WebSocket>>();
 
-function indexSocket(userId: string, socket: WebSocket): void {
-  let set = socketsByUser.get(userId);
-  if (!set) {
-    set = new Set();
-    socketsByUser.set(userId, set);
-  }
-  set.add(socket);
-}
-
-function unindexSocket(userId: string, socket: WebSocket): void {
-  const set = socketsByUser.get(userId);
-  if (!set) {
+function unindexSocket(socket: WebSocket, userId: string): void {
+  const owned = socketsByUser.get(userId);
+  if (!owned) {
     return;
   }
-  set.delete(socket);
-  if (set.size === 0) {
+  owned.delete(socket);
+  if (owned.size === 0) {
     socketsByUser.delete(userId);
   }
 }
@@ -114,9 +103,14 @@ export function setAuthenticatedSocket(
 ): void {
   const previous = sockets.get(socket);
   if (previous && previous.user.id !== user.id) {
-    unindexSocket(previous.user.id, socket);
+    unindexSocket(socket, previous.user.id);
   }
-  indexSocket(user.id, socket);
+  let owned = socketsByUser.get(user.id);
+  if (!owned) {
+    owned = new Set();
+    socketsByUser.set(user.id, owned);
+  }
+  owned.add(socket);
   sockets.set(socket, {
     socket,
     user,
@@ -142,19 +136,9 @@ export function socketHasCap(socket: WebSocket, cap: string): boolean {
 export function deleteAuthenticatedSocket(socket: WebSocket): void {
   const entry = sockets.get(socket);
   if (entry) {
-    unindexSocket(entry.user.id, socket);
+    unindexSocket(socket, entry.user.id);
   }
   sockets.delete(socket);
-}
-
-/**
- * This account's authenticated sockets on this instance, as a copy: a caller
- * may await between sends, and a socket closing meanwhile must not change the
- * list under it. Empty when the account has none here.
- */
-export function socketsOfUser(userId: string): WebSocket[] {
-  const set = socketsByUser.get(userId);
-  return set ? [...set] : [];
 }
 
 /**
@@ -177,6 +161,16 @@ export function userHasAuthenticatedSocket(userId: string): boolean {
  * deployed and never once used), and a fraction is the only thing that tells
  * the two apart from outside.
  */
+/**
+ * This account's sockets on this instance, as a copy the caller may hold
+ * across a close. Empty when the account has none here, which is the usual
+ * answer for a membership change arriving over the bus.
+ */
+export function socketsOfUser(userId: string): WebSocket[] {
+  const owned = socketsByUser.get(userId);
+  return owned ? [...owned] : [];
+}
+
 export function countAuthenticatedSockets(cap: string): {
   sockets: number;
   withCap: number;
@@ -195,5 +189,26 @@ export function forEachAuthenticatedSocket(
 ): void {
   for (const entry of sockets.values()) {
     callback(entry.socket, entry.user, entry.caps);
+  }
+}
+
+/**
+ * Every authenticated socket this process holds for one account, and only
+ * those. Cost is that account's socket count, not the process's.
+ */
+export function forEachSocketOfUser(
+  userId: string,
+  callback: (socket: WebSocket, caps: ReadonlySet<string>) => void,
+): void {
+  const owned = socketsByUser.get(userId);
+  if (!owned) {
+    return;
+  }
+  // A copy: a callback that closes a socket must not mutate what is walked.
+  for (const socket of [...owned]) {
+    const entry = sockets.get(socket);
+    if (entry) {
+      callback(socket, entry.caps);
+    }
   }
 }

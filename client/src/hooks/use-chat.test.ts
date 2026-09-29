@@ -1264,6 +1264,163 @@ describe("jumping into history", () => {
     expect(chat.hasNewerHistory()).toBe(false);
   });
 
+  // Sending from a jump takes the reader back to the present, so the send and
+  // the tail page race. Either order has to end with the message on screen once.
+  it("keeps a send from history that was confirmed before the tail page landed", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // A page read just before the insert committed: it stops short of the send.
+    mockPage({ messages: history(2, 8), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "m9",
+      "from history",
+    ]);
+  });
+
+  it("drops a confirmed send from history that is older than the tail page", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // The present has moved on: the tail page starts after the send, so the
+    // send is outside it and must not ride along above it.
+    mockPage({ messages: history(2, 30), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m30", "m31"]);
+  });
+
+  it("keeps a confirmed send from history that the tail page's span covers but missed", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // Somebody else's message stamped after the send but committed before it:
+    // the page holds theirs and not the send, which still belongs between.
+    mockPage({
+      messages: [...history(1, 8), ...history(1, 30)],
+      hasMore: true,
+      hasNewer: false,
+    });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "from history",
+      "m30",
+    ]);
+  });
+
+  it("shows a send from history once when the tail page already holds it", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    const stored = serverMessage({
+      id: "00000000-0000-4000-8000-0000000000ff",
+      body: "from history",
+      createdAt: new Date(20_000).toISOString(),
+    });
+    mockPage({
+      messages: [...history(2, 8), stored],
+      hasMore: true,
+      hasNewer: false,
+    });
+    await chat.resetToTail();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: stored,
+    } as never);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "m9",
+      "from history",
+    ]);
+  });
+
+  it("keeps a confirmed send when its broadcast arrives twice", () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2));
+    chat.sendMessage("said once");
+    const { nonce } = sent.at(-1) as { nonce: string };
+    const broadcast = {
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "said once",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never;
+
+    chat.handleServerMessage(broadcast);
+    chat.handleServerMessage(broadcast);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "said once",
+    ]);
+  });
+
+  it("drops a page forward that lands after the window went back to the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true, true);
+
+    let answerForward!: (page: HistoryPage) => void;
+    vi.mocked(api.apiFetch).mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerForward = resolve;
+      }),
+    );
+    const forward = chat.loadNewer();
+    mockPage({ messages: history(2, 8), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+    answerForward({ messages: history(2, 2), hasMore: true, hasNewer: true });
+
+    expect(await forward).toBe(0);
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m8", "m9"]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
   it("moves the forward cursor off a message that was deleted", async () => {
     const { chat } = setup();
     const loaded = history(2);
