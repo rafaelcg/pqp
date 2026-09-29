@@ -46,6 +46,20 @@ export interface ChannelListTickets {
   take(): number;
   /** May the fetch holding this ticket still write the list? */
   isLatest(ticket: number): boolean;
+  /**
+   * Called when a `channels-update` refetch starts, with its ticket: that
+   * server's list is behind a change until a fetch that started no earlier
+   * writes it.
+   */
+  updateStarted(serverId: string, ticket: number): void;
+  /** Called when the fetch holding this ticket wrote the list. */
+  wrote(ticket: number): void;
+  /**
+   * A fetch of this server's list failed. True when it held the newest
+   * ticket and a `channels-update` refetch it overtook never wrote: nothing
+   * else is going to bring the change in, so the caller refetches.
+   */
+  owesUpdate(serverId: string, ticket: number): boolean;
 }
 
 /**
@@ -56,14 +70,30 @@ export interface ChannelListTickets {
  * newer one: two quick nudges, or a nudge refetch from an earlier visit to a
  * server returning after the person left and came back, which started a
  * newer load.
+ *
+ * The flip side is that a newer load silences a nudge refetch it overtook.
+ * When that load then fails, the change the nudge was bringing in would be
+ * lost until the next navigation, so the tickets also remember the nudge
+ * until a fetch at least as new as it writes the list (`owesUpdate`).
  */
 export function createChannelListTickets(): ChannelListTickets {
   let latest = 0;
+  let pending: { serverId: string; ticket: number } | null = null;
   return {
     take: () => {
       latest += 1;
       return latest;
     },
     isLatest: (ticket) => ticket === latest,
+    updateStarted: (serverId, ticket) => {
+      pending = { serverId, ticket };
+    },
+    wrote: (ticket) => {
+      if (pending && ticket >= pending.ticket) {
+        pending = null;
+      }
+    },
+    owesUpdate: (serverId, ticket) =>
+      ticket === latest && pending !== null && pending.serverId === serverId,
   };
 }

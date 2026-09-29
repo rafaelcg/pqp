@@ -98,4 +98,61 @@ describe("createChannelListTickets", () => {
     expect(tickets.isLatest(load)).toBe(false);
     expect(tickets.isLatest(nudge)).toBe(true);
   });
+
+  it("owes the nudge's refetch when a load that overtook it fails", () => {
+    const tickets = createChannelListTickets();
+    // A nudge refetch starts (or failed and waits on its backoff); a load of
+    // the same server takes a newer ticket, so the nudge's answer, or its
+    // retry, will find itself stale.
+    const nudge = tickets.take();
+    tickets.updateStarted("a", nudge);
+    const load = tickets.take();
+    expect(tickets.isLatest(nudge)).toBe(false);
+    // The load fails. Nothing has written the change: refetch.
+    expect(tickets.owesUpdate("a", load)).toBe(true);
+  });
+
+  it("owes nothing once a load that overtook the nudge wrote the list", () => {
+    const tickets = createChannelListTickets();
+    const nudge = tickets.take();
+    tickets.updateStarted("a", nudge);
+    const load = tickets.take();
+    tickets.wrote(load);
+    // A later load failing has nothing to bring back: the list it would have
+    // replaced already holds the change.
+    const next = tickets.take();
+    expect(tickets.owesUpdate("a", next)).toBe(false);
+  });
+
+  it("leaves a failed load alone when something newer is in charge", () => {
+    const tickets = createChannelListTickets();
+    const nudge = tickets.take();
+    tickets.updateStarted("a", nudge);
+    const load = tickets.take();
+    // A second nudge started after the load: its own retries own the change.
+    const again = tickets.take();
+    tickets.updateStarted("a", again);
+    expect(tickets.owesUpdate("a", load)).toBe(false);
+  });
+
+  it("does not refetch another server for a nudge it never got", () => {
+    const tickets = createChannelListTickets();
+    const nudge = tickets.take();
+    tickets.updateStarted("a", nudge);
+    // The person opened B and its load failed: A's change is fetched fresh
+    // when they go back to A.
+    const loadB = tickets.take();
+    expect(tickets.owesUpdate("b", loadB)).toBe(false);
+  });
+
+  it("does not let an older write clear a newer nudge", () => {
+    const tickets = createChannelListTickets();
+    const load = tickets.take();
+    const nudge = tickets.take();
+    tickets.updateStarted("a", nudge);
+    // The load answers first and writes its (older) list.
+    tickets.wrote(load);
+    const next = tickets.take();
+    expect(tickets.owesUpdate("a", next)).toBe(true);
+  });
 });

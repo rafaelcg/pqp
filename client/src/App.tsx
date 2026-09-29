@@ -5196,6 +5196,7 @@ function MainAppContent({
       channelListRetryTimerRef.current = null;
     }
     const ticket = channelListTickets.take();
+    channelListTickets.updateStarted(serverId, ticket);
     const current = () =>
       channelListTickets.isLatest(ticket) &&
       selectedServerIdRef.current === serverId;
@@ -5204,6 +5205,7 @@ function MainAppContent({
         if (!current()) {
           return;
         }
+        channelListTickets.wrote(ticket);
         if (channelListStaleRef.current === serverId) {
           channelListStaleRef.current = null;
         }
@@ -5428,11 +5430,12 @@ function MainAppContent({
       if (communityHomeUnverifiedRef.current.has(serverId)) {
         reconcileCommunityHomeSwitchRef.current(serverId);
       }
+      const ticket = channelListTickets.take();
       try {
-        const ticket = channelListTickets.take();
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
         setChannels(list);
+        channelListTickets.wrote(ticket);
         // A `channels-update` arrived while this was in flight, and its
         // refetch may have landed first: this list could be the older one.
         // Refetched only while this server is still the open one (see
@@ -5463,8 +5466,15 @@ function MainAppContent({
           syncRoute({ kind: "server", serverId }, null);
         }
       } catch (error) {
+        const gone = error instanceof ApiError && error.status === 404;
+        // This load's ticket silenced a `channels-update` refetch that was in
+        // flight or waiting to retry, and now it failed too: start that
+        // refetch again, or the change stays missing until a navigation.
+        if (!gone && channelListTickets.owesUpdate(serverId, ticket)) {
+          refreshChannelListRef.current(serverId);
+        }
         setAppError(
-          error instanceof ApiError && error.status === 404
+          gone
             ? translateMessage("chrome.serverUnavailable")
             : error instanceof Error
               ? error.message
@@ -7023,12 +7033,13 @@ function MainAppContent({
       const targetMessageId = usedFallback ? null : messageId;
 
       setChannelsLoading(true);
+      const ticket = channelListTickets.take();
       try {
-        const ticket = channelListTickets.take();
         const { channels: list } = await fetchChannels(targetServerId);
         setSelection({ kind: "server", serverId: targetServerId });
         setAppError(null);
         setChannels(list);
+        channelListTickets.wrote(ticket);
         // Same as in `loadChannels`: a nudge landed mid-flight.
         if (!channelListTickets.isLatest(ticket)) {
           refreshChannelListRef.current(targetServerId);
@@ -7062,8 +7073,14 @@ function MainAppContent({
           }
         }
       } catch (error) {
+        const gone = error instanceof ApiError && error.status === 404;
+        // Same as in `loadChannels`: a failed load must not strand a nudge
+        // refetch its ticket silenced.
+        if (!gone && channelListTickets.owesUpdate(targetServerId, ticket)) {
+          refreshChannelListRef.current(targetServerId);
+        }
         setAppError(
-          error instanceof ApiError && error.status === 404
+          gone
             ? translateMessage("chrome.serverUnavailable")
             : error instanceof Error
               ? error.message
