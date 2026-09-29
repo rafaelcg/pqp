@@ -4019,5 +4019,10 @@
   "signedOut.invite.eyebrow": "Invite",
   "signedOut.invite.title": "You're invited to {server}",
   "signedOut.invite.body": "Create an account and you're in. Takes a minute.",
-  "signedOut.invite.haveAccount": "I have an account"
+  "signedOut.invite.haveAccount": "I have an account",
+  "partyNewcomer.body.beside": "Live watch party: {name} is sharing their screen. The chat is on the right.",
+  "partyNewcomer.body.below": "Live watch party: {name} is sharing their screen. The chat is right below.",
+  "partyNewcomer.bodyNoName.beside": "Live watch party: someone is sharing their screen. The chat is on the right.",
+  "partyNewcomer.bodyNoName.below": "Live watch party: someone is sharing their screen. The chat is right below.",
+  "partyNewcomer.dismiss": "Got it"
 }
