@@ -1443,12 +1443,19 @@ export const banMemberSchema = z.object({
  * Optional body on `POST /api/channels/:id/read`. Empty means "read up to now"
  * (opening the channel). `lastReadAt` is how Mark unread rewinds the cursor
  * to just before a chosen message.
+ *
+ * `forwardOnly` makes an explicit `lastReadAt` move the cursor forward only:
+ * the live read ack sends it, because the cursor may already sit past the
+ * message it acks (an open's read to NOW() landed first). Mark unread leaves
+ * it off, since a rewind is the point. An API that predates the field strips
+ * it and applies the cursor as before.
  */
 export const markChannelReadSchema = z.object({
   lastReadAt: z
     .string()
     .refine((value) => Number.isFinite(Date.parse(value)), "Invalid timestamp")
     .optional(),
+  forwardOnly: z.boolean().optional(),
 });
 
 /**

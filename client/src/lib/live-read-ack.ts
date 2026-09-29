@@ -37,6 +37,15 @@
  *   - A failed ack is retried with backoff while the reader stays on the
  *     channel, through the same checks. The leave ack is not retried: a retry
  *     would be queued after the next open's read and take its cursor back.
+ *   - What was seen belongs to one visit. Once the channel is found no longer
+ *     on screen, whatever it still held is dropped: the next open reads the
+ *     channel up to its own NOW(), and an older cursor carried into that
+ *     visit's leave ack would take the cursor back. The caller flushes on
+ *     every way of leaving; this is what holds if one is ever missed. The
+ *     ack also asks the server to move the cursor forward only.
+ *   - `dispose` cancels everything already started: timers, acks waiting in
+ *     the queue, and the retry of an ack still on the wire. The object keeps
+ *     working afterwards, because React's StrictMode disposes and remounts.
  */
 
 export type ChannelWriteQueue = {
@@ -76,7 +85,10 @@ export function createChannelWriteQueue(): ChannelWriteQueue {
 export type LiveReadAckOptions = {
   /** The same queue every other cursor write for these channels uses. */
   queue: ChannelWriteQueue;
-  /** Sets the channel's cursor to exactly `lastReadAt`. */
+  /**
+   * Moves the channel's cursor forward to `lastReadAt`, and never back: the
+   * open's read may already have moved it past this message.
+   */
   send: (channelId: string, lastReadAt: string) => Promise<unknown>;
   isVisible: () => boolean;
   /**
@@ -137,8 +149,14 @@ export function createLiveReadAck({
   const unseenUpTo = new Map<string, number>();
   /** Failed attempts of the current ack, per channel. */
   const failures = new Map<string, number>();
-  /** Bumped on every leave, so an ack from an earlier visit is not retried. */
-  let departures = 0;
+  /**
+   * Bumped on every leave of a channel, so an ack from an earlier visit to it
+   * is not retried. Per channel: leaving one says nothing about another.
+   */
+  const departures = new Map<string, number>();
+  const visitOf = (channelId: string) => departures.get(channelId) ?? 0;
+  /** Bumped by `dispose`: work started before it must not run after it. */
+  let generation = 0;
 
   const seeing = () => isVisible() && isAtLiveEnd();
 
@@ -165,8 +183,16 @@ export function createLiveReadAck({
     failures.delete(channelId);
   };
 
-  const retry = (channelId: string, covered: number, visit: number) => {
-    if (visit !== departures || !isSelected(channelId)) {
+  const retry = (
+    channelId: string,
+    covered: number,
+    visit: number,
+    started: number,
+  ) => {
+    if (started !== generation) {
+      return;
+    }
+    if (visit !== visitOf(channelId) || !isSelected(channelId)) {
       // Left while it was on the wire, even if back since: the next open's
       // read is queued behind it, and a retry would land after that read.
       failures.delete(channelId);
@@ -192,8 +218,13 @@ export function createLiveReadAck({
       return;
     }
     queued.add(channelId);
+    const started = generation;
     void queue
       .run(channelId, () => {
+        if (started !== generation) {
+          // Disposed while it waited; `dispose` already emptied `queued`.
+          return Promise.resolve();
+        }
         queued.delete(channelId);
         // Read when the ack leaves the queue: a Mark unread made while it
         // waited still wins, and owns the cursor until it is released.
@@ -202,10 +233,15 @@ export function createLiveReadAck({
           unseenUpTo.delete(channelId);
           return Promise.resolve();
         }
-        if (!isSelected(channelId) || !seeing()) {
-          // The reader left, hid the tab or scrolled up while this waited.
-          // Wait for them if they are still here.
-          if (isSelected(channelId) && !pending.has(channelId)) {
+        if (!isSelected(channelId)) {
+          // The reader left while this waited. What they saw is dropped with
+          // the visit (see the file comment).
+          forget(channelId);
+          return Promise.resolve();
+        }
+        if (!seeing()) {
+          // The tab hid or the reader scrolled up while this waited.
+          if (!pending.has(channelId)) {
             pending.set(channelId, null);
           }
           return Promise.resolve();
@@ -216,12 +252,14 @@ export function createLiveReadAck({
           return Promise.resolve();
         }
         seenUpTo.delete(channelId);
-        const visit = departures;
+        const visit = visitOf(channelId);
         return send(channelId, cursorAfter(covered)).then(
           () => {
-            failures.delete(channelId);
+            if (started === generation) {
+              failures.delete(channelId);
+            }
           },
-          () => retry(channelId, covered, visit),
+          () => retry(channelId, covered, visit, started),
         );
       })
       .catch(() => undefined);
@@ -237,11 +275,14 @@ export function createLiveReadAck({
 
   const onTimer = (channelId: string) => {
     clear(channelId);
+    if (!isSelected(channelId)) {
+      // Left during the quiet second without a leave ack.
+      forget(channelId);
+      return;
+    }
     if (!seeing()) {
       // The tab hid, or the reader scrolled up, during the quiet second.
-      if (isSelected(channelId)) {
-        pending.set(channelId, null);
-      }
+      pending.set(channelId, null);
       return;
     }
     dispatch(channelId);
@@ -274,7 +315,7 @@ export function createLiveReadAck({
       schedule(channelId);
     },
     flush(channelId) {
-      departures += 1;
+      departures.set(channelId, visitOf(channelId) + 1);
       if (seeing()) {
         promote(channelId);
       }
@@ -286,9 +327,10 @@ export function createLiveReadAck({
       // Queued behind whatever is in flight, and ahead of the next open's
       // read. Its cursor is fixed now, so running late cannot cover a
       // message that arrives after the reader has gone.
+      const started = generation;
       void queue
         .run(channelId, () =>
-          isHeld(channelId)
+          started !== generation || isHeld(channelId)
             ? Promise.resolve()
             : send(channelId, cursorAfter(covered)),
         )
@@ -310,6 +352,8 @@ export function createLiveReadAck({
       }
     },
     dispose() {
+      generation += 1;
+      queued.clear();
       for (const timer of pending.values()) {
         if (timer) {
           clearTimeout(timer);

@@ -2294,6 +2294,61 @@ describeDb("API authorization", () => {
         unread.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(1);
     });
+
+    it("never moves the cursor back for a forward-only cursor", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         VALUES ($1, $2, 'older', NOW() - INTERVAL '2 minutes'),
+                ($1, $2, 'newer', NOW() - INTERVAL '1 minute')`,
+        [textChannelId, owner.id],
+      );
+      const older = await getPool().query<{ created_at: Date }>(
+        `SELECT created_at FROM messages
+          WHERE channel_id = $1 AND body = 'older'`,
+        [textChannelId],
+      );
+      const pastOlder = new Date(
+        older.rows[0]!.created_at.getTime() + 1,
+      ).toISOString();
+
+      // The open's read, to NOW(), lands first.
+      const opened = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+      );
+      expect(opened.status).toBe(200);
+
+      // Then the live ack of the older message, from an earlier visit.
+      const acked = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+        { lastReadAt: pastOlder, forwardOnly: true },
+      );
+      expect(acked.status).toBe(200);
+      expect(acked.body.lastReadAt).toBe(opened.body.lastReadAt);
+
+      const unread = await call<{
+        unread: Array<{ channelId: string; count: number }>;
+      }>(member, "GET", `/api/servers/${serverId}/unread`);
+      expect(
+        unread.body.unread.find((u) => u.channelId === textChannelId)?.count ??
+          0,
+      ).toBe(0);
+
+      // Forward still moves it: a first ack on a channel never opened.
+      const { textChannelId: fresh } = await makeServer();
+      const first = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${fresh}/read`,
+        { lastReadAt: pastOlder, forwardOnly: true },
+      );
+      expect(first.status).toBe(200);
+      expect(first.body.lastReadAt).toBe(pastOlder);
+    });
   });
 
   describe("ownership", () => {

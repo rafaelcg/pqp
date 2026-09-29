@@ -1486,6 +1486,7 @@ export async function markChannelRead(
   channelId: string,
   userId: string,
   lastReadAt?: Date,
+  options: { forwardOnly?: boolean } = {},
 ): Promise<{ previousLastReadAt: Date | null; lastReadAt: Date }> {
   const previous = await getPool().query<{ last_read_at: Date }>(
     `SELECT last_read_at
@@ -1498,18 +1499,31 @@ export async function markChannelRead(
   // "Read up to now" must use Postgres's clock: messages.created_at is NOW()
   // too, and a JS Date that is a few dozen milliseconds behind leaves the
   // message still unread. An explicit rewind (Mark unread) keeps the caller's
-  // timestamp, clamped so it cannot sit in the future.
+  // timestamp, clamped so it cannot sit in the future. `forwardOnly` (the live
+  // read ack) never moves the cursor back: an ack of an older message landing
+  // after the open's read would otherwise mark read messages unread again.
   if (lastReadAt && Number.isFinite(lastReadAt.getTime())) {
     const at =
       lastReadAt.getTime() > Date.now() ? new Date() : lastReadAt;
-    await getPool().query(
-      `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (channel_id, user_id)
-       DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
+    const written = await getPool().query<{ last_read_at: Date }>(
+      options.forwardOnly
+        ? `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id, user_id)
+           DO UPDATE SET last_read_at =
+             GREATEST(channel_reads.last_read_at, EXCLUDED.last_read_at)
+           RETURNING last_read_at`
+        : `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id, user_id)
+           DO UPDATE SET last_read_at = EXCLUDED.last_read_at
+           RETURNING last_read_at`,
       [channelId, userId, at],
     );
-    return { previousLastReadAt, lastReadAt: at };
+    return {
+      previousLastReadAt,
+      lastReadAt: written.rows[0]?.last_read_at ?? at,
+    };
   }
 
   const inserted = await getPool().query<{ last_read_at: Date }>(

@@ -508,6 +508,106 @@ describe("createLiveReadAck", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("does not send a cursor from a visit that ended without a leave ack", async () => {
+    const ack = make();
+    ack.note("c1", at());
+    // Left through Home, a deleted channel or a lost server: no flush. The
+    // timer fires with the channel no longer on screen.
+    selected = null;
+    vi.advanceTimersByTime(1000);
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+    // Back later: that open's read set the cursor to its own NOW(). The leave
+    // ack of THIS visit has seen nothing, and must not rewind that read to
+    // the older message from the earlier visit.
+    selected = "c1";
+    ack.flush("c1");
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not send a cursor parked while the reader was away", async () => {
+    const ack = make();
+    ack.note("c1", at());
+    // The tab hid during the quiet second, and the reader then left without
+    // a flush while it was hidden.
+    visible = false;
+    vi.advanceTimersByTime(1000);
+    selected = null;
+    visible = true;
+    ack.resume();
+    selected = "c1";
+    ack.flush("c1");
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("keeps one channel's leave from cancelling another channel's retry", async () => {
+    const failing = deferred();
+    send.mockImplementationOnce(() => failing.promise);
+    const ack = make();
+    ack.note("c1", at());
+    vi.advanceTimersByTime(1000);
+    await drain();
+    // A leave ack for some other channel while c1's ack is on the wire.
+    ack.flush("c2");
+    failing.reject(new Error("offline"));
+    await drain();
+    vi.advanceTimersByTime(2000);
+    await drain();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an ack that was on the wire at dispose", async () => {
+    const failing = deferred();
+    send.mockImplementationOnce(() => failing.promise);
+    const ack = make();
+    ack.note("c1", at());
+    vi.advanceTimersByTime(1000);
+    await drain();
+    expect(send).toHaveBeenCalledTimes(1);
+    ack.dispose();
+    failing.reject(new Error("offline"));
+    await drain();
+    vi.advanceTimersByTime(60_000);
+    await drain();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send an ack still waiting in the queue at dispose", async () => {
+    const slow = deferred();
+    void queue.run("c1", () => slow.promise);
+    const ack = make();
+    ack.note("c1", at());
+    vi.advanceTimersByTime(1000);
+    await drain();
+    ack.dispose();
+    slow.resolve();
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not send a leave ack still waiting in the queue at dispose", async () => {
+    const slow = deferred();
+    void queue.run("c1", () => slow.promise);
+    const ack = make();
+    ack.note("c1", at());
+    ack.flush("c1");
+    ack.dispose();
+    slow.resolve();
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("works again after dispose, as a StrictMode remount needs", async () => {
+    const ack = make();
+    ack.dispose();
+    ack.note("c1", at());
+    vi.advanceTimersByTime(1000);
+    await drain();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("clears retry timers on dispose", async () => {
     send.mockImplementationOnce(() => Promise.reject(new Error("offline")));
     const ack = make();

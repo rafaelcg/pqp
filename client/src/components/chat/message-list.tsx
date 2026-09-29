@@ -303,12 +303,14 @@ interface MessageListProps {
   onMarkUnread?: (message: ChatMessage) => void;
   onMarkRead?: () => void;
   /**
-   * Whether the reader is at the live end: pinned to the bottom of the newest
-   * page. Called on mount, on every change, and with false on unmount. The
-   * live read ack uses it so a message below a reader scrolled up in history
-   * is not marked read.
+   * Whether the reader is at the live end: the channel's history has loaded,
+   * and the list is pinned to the bottom of its newest page. Called on mount,
+   * on every change, and with false on unmount or when the channel changes,
+   * always with the channel it is about. The live read ack uses it so a
+   * message below a reader scrolled up in history, or one that lands while
+   * the channel's history is still loading, is not marked read.
    */
-  onLiveEndChange?: (atLiveEnd: boolean) => void;
+  onLiveEndChange?: (atLiveEnd: boolean, channelId: string | null) => void;
   /**
    * Last-read cursor from *before* this visit marked the channel read. The NEW
    * rule sits on the first message after it and stays until the channel changes.
@@ -568,14 +570,30 @@ export const MessageList = memo(function MessageList({
   // on the NEW rule unpins it and no scroll event ever pins it again, while
   // everything in it is on screen. Measured again as rows arrive, so a list
   // that grows past the reader who stopped following reads as not at the end.
+  // Never while the history is loading or failed to load: the rows on screen
+  // are then not the channel's newest page, whatever the scroll says.
   useEffect(() => {
     const container = scrollRef.current;
     const atBottom = container
       ? distanceFromBottom(container) <= STICKY_THRESHOLD_PX
       : false;
-    onLiveEndChange?.(!hasNewer && (isPinned || atBottom));
-  }, [isPinned, hasNewer, messages.length, isLoading, onLiveEndChange]);
-  useEffect(() => () => onLiveEndChange?.(false), [onLiveEndChange]);
+    onLiveEndChange?.(
+      !isLoading && !historyFailed && !hasNewer && (isPinned || atBottom),
+      channelId,
+    );
+  }, [
+    isPinned,
+    hasNewer,
+    messages.length,
+    isLoading,
+    historyFailed,
+    channelId,
+    onLiveEndChange,
+  ]);
+  useEffect(
+    () => () => onLiveEndChange?.(false, channelId),
+    [onLiveEndChange, channelId],
+  );
   /** For the arrival announcement below — read without adding `messages`
    * itself to that effect's deps, which would rerun it on every in-place
    * edit/reaction update and not just on an actual new arrival. */

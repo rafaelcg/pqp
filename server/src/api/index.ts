@@ -5353,6 +5353,7 @@ router.post("/api/channels/:channelId/read", async ({ req, user }, { channelId }
     channelId!,
     user.id,
     body.lastReadAt ? new Date(body.lastReadAt) : undefined,
+    { forwardOnly: body.forwardOnly === true },
   );
   return {
     ok: true as const,

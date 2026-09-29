@@ -1999,17 +1999,22 @@ function MainAppContent({
   // must not land after a Mark unread or after the next open's read.
   const [readCursorQueue] = useState(createChannelWriteQueue);
   /**
-   * The message list is at its live end (pinned to the bottom of the newest
-   * page), as `MessageList` reports it. False while no list is mounted: a
-   * message nobody has on screen has not been read.
+   * The channel whose message list is at its live end (history loaded, pinned
+   * to the bottom of the newest page), as `MessageList` reports it. Null while
+   * no list is mounted, and reset the moment a channel starts loading: a
+   * report from the list that was on screen before is about another channel,
+   * and a message nobody has on screen has not been read.
    */
-  const messageListAtLiveEndRef = useRef(false);
+  const messageListLiveEndRef = useRef<string | null>(null);
   const [liveReadAck] = useState(() =>
     createLiveReadAck({
       queue: readCursorQueue,
-      send: (channelId, lastReadAt) => markChannelRead(channelId, lastReadAt),
+      send: (channelId, lastReadAt) =>
+        markChannelRead(channelId, lastReadAt, { forwardOnly: true }),
       isVisible: () => document.visibilityState === "visible",
-      isAtLiveEnd: () => messageListAtLiveEndRef.current,
+      isAtLiveEnd: () =>
+        messageListLiveEndRef.current !== null &&
+        messageListLiveEndRef.current === selectedChannelIdRef.current,
       isSelected: (channelId) => selectedChannelIdRef.current === channelId,
       isHeld: (channelId) => unreadHoldRef.current.has(channelId),
     }),
@@ -2023,15 +2028,31 @@ function MainAppContent({
     };
   }, [liveReadAck]);
   const handleMessageListLiveEnd = useCallback(
-    (atLiveEnd: boolean) => {
-      messageListAtLiveEndRef.current = atLiveEnd;
-      if (atLiveEnd) {
+    (atLiveEnd: boolean, channelId: string | null) => {
+      if (atLiveEnd && channelId) {
+        messageListLiveEndRef.current = channelId;
         // Scrolled back down: what arrived while they were up is read now.
         liveReadAck.resume();
+      } else if (messageListLiveEndRef.current === channelId) {
+        // Only the list's own channel: a late unmount of the previous list
+        // must not clear the report of the one on screen now.
+        messageListLiveEndRef.current = null;
       }
     },
     [liveReadAck],
   );
+  // Every way of leaving a channel acks what was seen there and ends the
+  // visit. `openChannel` does it before it switches; this catches the rest
+  // (Home, a closed conversation route, a deleted channel, a lost server).
+  // A second flush of the same channel finds nothing left and sends nothing.
+  const liveReadAckChannelRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = liveReadAckChannelRef.current;
+    liveReadAckChannelRef.current = selectedChannelId;
+    if (previous && previous !== selectedChannelId) {
+      liveReadAck.flush(previous);
+    }
+  }, [selectedChannelId, liveReadAck]);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
   // arrow here defeated `MessageList`'s own `memo()` on every render of this
@@ -3479,6 +3500,9 @@ function MainAppContent({
       }
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
+      // Not at the live end until this channel's list says so, after its
+      // history has loaded.
+      messageListLiveEndRef.current = null;
       // The reply belongs to the conversation you were in, not the next one.
       setReplyTarget(null);
       // --- threads --- the panel belongs to the channel it was opened from.
@@ -3563,6 +3587,8 @@ function MainAppContent({
     }
     setHistoryFailedChannelId(null);
     setMessagesLoading(true);
+    // Loading again: the list reports the live end once the page is in.
+    messageListLiveEndRef.current = null;
     const load = historyLoads.begin(channelId);
     try {
       const page = await fetchMessages(channelId);

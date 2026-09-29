@@ -1197,14 +1197,27 @@ export const moveChannel = (
     index,
   });
 
-export const markChannelRead = (channelId: string, lastReadAt?: string) =>
+/**
+ * With no cursor, reads the channel up to the server's NOW(). With one, sets
+ * it there (Mark unread), or with `forwardOnly` only moves it forward (the
+ * live read ack, which must never undo a newer read).
+ */
+export const markChannelRead = (
+  channelId: string,
+  lastReadAt?: string,
+  options: { forwardOnly?: boolean } = {},
+) =>
   post<{
     ok: boolean;
     previousLastReadAt?: string | null;
     lastReadAt?: string;
   }>(
     `/api/channels/${channelId}/read`,
-    lastReadAt ? { lastReadAt } : undefined,
+    lastReadAt
+      ? options.forwardOnly
+        ? { lastReadAt, forwardOnly: true }
+        : { lastReadAt }
+      : undefined,
   );
 
 // ----------------------------------------------------------------- messages
