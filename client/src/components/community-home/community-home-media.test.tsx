@@ -1,12 +1,22 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CommunityHomeMedia } from "@pqp/shared";
 import { UnlockedMedia, formatVideoDuration } from "./community-home-media";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+
+// The seek bar is the Radix slider, which measures its thumb; jsdom has no
+// ResizeObserver to measure with.
+beforeAll(() => {
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+});
 
 const video: CommunityHomeMedia = {
   kind: "video",
@@ -42,6 +52,8 @@ async function loadMetadata(el: HTMLVideoElement, w: number, h: number, duration
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await act(async () => root?.unmount());
   host?.remove();
   root = null;
@@ -53,6 +65,12 @@ describe("formatVideoDuration", () => {
     expect(formatVideoDuration(39.2)).toBe("0:39");
     expect(formatVideoDuration(61)).toBe("1:01");
     expect(formatVideoDuration(0)).toBe("0:00");
+  });
+
+  it("never reads a second ahead, and grows an hour column past 60 minutes", () => {
+    expect(formatVideoDuration(39.8)).toBe("0:39");
+    expect(formatVideoDuration(3725)).toBe("1:02:05");
+    expect(formatVideoDuration(Number.NaN)).toBe("0:00");
   });
 });
 
@@ -74,12 +92,22 @@ describe("the Baú video", () => {
     expect(el.textContent).toContain("0:39");
   });
 
-  it("a tall video keeps the fixed box and gets the blurred sides", async () => {
+  it("a tall video keeps the fixed box and paints its first frame on the sides", async () => {
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage,
+    } as unknown as CanvasRenderingContext2D);
     const el = await mount(video);
-    await loadMetadata(el.querySelector("video")!, 1080, 1920, 12);
+    const v = el.querySelector("video")!;
+    await loadMetadata(v, 1080, 1920, 12);
     const box = el.querySelector<HTMLElement>("[data-home-video]")!;
     expect(box.dataset.homeVideo).toBe("fit");
-    expect(box.querySelector("canvas")).not.toBeNull();
+    const canvas = box.querySelector("canvas")!;
+    expect(canvas).not.toBeNull();
+    await act(async () => {
+      v.dispatchEvent(new Event("loadeddata"));
+    });
+    expect(drawImage).toHaveBeenCalledWith(v, 0, 0, 48, 85);
   });
 
   it("draws its own bar: play turns into pause, never the browser's controls", async () => {
@@ -97,7 +125,38 @@ describe("the Baú video", () => {
     });
     expect(el.querySelector("[data-home-video-play]")!.getAttribute("aria-label")).toBe("Pause");
     expect(v.hasAttribute("controls")).toBe(false);
-    expect(el.querySelector("[data-home-video-bar] input[type=range]")).not.toBeNull();
+    expect(el.querySelector("[data-home-video-bar] input[type=range]")).toBeNull();
+  });
+
+  it("the position bar is a named slider that says the time in words a player uses", async () => {
+    const el = await mount(video);
+    await loadMetadata(el.querySelector("video")!, 1920, 1080, 39.2);
+    const slider = el.querySelector("[data-home-video-bar] [role=slider]")!;
+    expect(slider.getAttribute("aria-label")).toBe("Video position");
+    expect(slider.getAttribute("aria-valuetext")).toBe("0:00 / 0:39");
+  });
+
+  it("while it plays the bar fades after a moment, and any key brings it back", async () => {
+    vi.useFakeTimers();
+    const el = await mount(video);
+    const v = el.querySelector("video")!;
+    const bar = el.querySelector<HTMLElement>("[data-home-video-bar]")!;
+    await act(async () => {
+      v.dispatchEvent(new Event("play"));
+    });
+    expect(bar.dataset.homeVideoChrome).toBe("shown");
+    await act(async () => {
+      vi.advanceTimersByTime(2300);
+    });
+    expect(bar.dataset.homeVideoChrome).toBe("hidden");
+    // Hidden by opacity only, and never while keyboard focus is in it.
+    expect(bar.className).toContain("has-[:focus-visible]:opacity-100");
+    await act(async () => {
+      el.querySelector("[data-home-video]")!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+      );
+    });
+    expect(bar.dataset.homeVideoChrome).toBe("shown");
   });
 
   it("the sound button follows the video's own muted state", async () => {

@@ -8,6 +8,13 @@ import {
   twitchEmbedSrc,
   youtubeEmbedSrc,
 } from "@/lib/community-home/media";
+import { Slider } from "@/components/ui/slider";
+import {
+  currentFullscreenElement,
+  exitDocumentFullscreen,
+  requestElementFullscreen,
+  type WebkitFullscreenElement,
+} from "@/components/voice/document-fullscreen";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -194,12 +201,16 @@ export function UnlockedMedia({
 /** A landscape video wider than this fills the card at its own shape. */
 const FILL_MIN_RATIO = 4 / 3;
 
+/** m:ss, or h:mm:ss past an hour. Floored, like every player's clock. */
 export function formatVideoDuration(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds));
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
+
+type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
 
 /**
  * The Baú's video. A landscape video takes the card's full width at its own
@@ -211,7 +222,8 @@ export function formatVideoDuration(seconds: number): string {
  * It draws its own bar instead of the browser's: play, the time, a progress
  * line you can drag, sound and fullscreen. Before the first play the bar says
  * "Assistir" and the length. While it plays the bar fades out after a moment
- * without the pointer, and comes back on any movement, focus or pause.
+ * without the pointer, and comes back on any movement, key press, focus or
+ * pause. It never fades while keyboard focus is inside it.
  */
 function VideoPlayer({ url }: { url: string }) {
   const { t } = useTranslation();
@@ -227,16 +239,38 @@ function VideoPlayer({ url }: { url: string }) {
   const [muted, setMuted] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
   const fills = !shape || shape.w / shape.h >= FILL_MIN_RATIO;
 
   useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === wrapRef.current);
+    const onChange = () => setFullscreen(currentFullscreenElement() === wrapRef.current);
     document.addEventListener("fullscreenchange", onChange);
+    document.addEventListener("webkitfullscreenchange", onChange);
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
     };
   }, []);
+
+  // The blurred sides are the first frame, drawn once into a small canvas.
+  // Drawn from an effect because the canvas only mounts once the shape says
+  // "fit", which can land after the frame does. A cross-origin frame only
+  // taints the canvas, which is fine: it is never read back.
+  useEffect(() => {
+    const v = videoRef.current;
+    const c = backdropRef.current;
+    if (fills || !frameReady || !v || !c || v.videoWidth === 0) {
+      return;
+    }
+    c.width = 48;
+    c.height = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
+    try {
+      c.getContext("2d")?.drawImage(v, 0, 0, c.width, c.height);
+    } catch {
+      // No frame to draw: the sides stay the card's own colour.
+    }
+  }, [fills, frameReady]);
 
   const wake = (isPlaying = playing) => {
     setChrome(true);
@@ -254,22 +288,6 @@ function VideoPlayer({ url }: { url: string }) {
     }
     if (Number.isFinite(v.duration) && v.duration > 0) {
       setDuration(v.duration);
-    }
-  };
-  // The blurred sides are the first frame, drawn once into a small canvas.
-  // A cross-origin frame only taints the canvas, which is fine: it is never read back.
-  const onFirstFrame = () => {
-    const v = videoRef.current;
-    const c = backdropRef.current;
-    if (!v || !c || v.videoWidth === 0) {
-      return;
-    }
-    c.width = 48;
-    c.height = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
-    try {
-      c.getContext("2d")?.drawImage(v, 0, 0, c.width, c.height);
-    } catch {
-      // No frame to draw: the sides stay the card's own colour.
     }
   };
   const toggle = () => {
@@ -298,28 +316,33 @@ function VideoPlayer({ url }: { url: string }) {
     }
   };
   const toggleFullscreen = () => {
-    const wrap = wrapRef.current;
-    const v = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => {});
-    } else if (wrap?.requestFullscreen) {
-      void wrap.requestFullscreen().catch(() => {});
+    const wrap = wrapRef.current as WebkitFullscreenElement | null;
+    if (!wrap) {
+      return;
+    }
+    if (currentFullscreenElement()) {
+      void exitDocumentFullscreen().catch(() => {});
+    } else if (
+      typeof wrap.requestFullscreen === "function" ||
+      typeof wrap.webkitRequestFullscreen === "function"
+    ) {
+      void requestElementFullscreen(wrap).catch(() => {});
     } else {
-      // iPhone Safari has no element fullscreen, only the video's own.
-      v?.webkitEnterFullscreen?.();
+      // iPhone Safari has no element fullscreen, only the video's own. Called
+      // synchronously so the tap still counts as the gesture it needs.
+      (videoRef.current as IosVideo | null)?.webkitEnterFullscreen?.();
     }
   };
 
-  const progress = duration ? Math.min(1, time / duration) : 0;
   const showChrome = chrome || !playing;
   const iconButton =
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-paper transition-colors duration-[var(--duration-fast)] hover:bg-paper/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-text transition-colors duration-[var(--duration-fast)] hover:bg-text/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 focus-visible:ring-focus-ring";
 
   return (
     <div
       ref={wrapRef}
       className={cn(
-        "group/player relative w-full overflow-hidden bg-ink",
+        "group/player relative w-full overflow-hidden bg-surface-0",
         !fills && !fullscreen && "h-96",
         fullscreen && "h-full",
         !showChrome && "cursor-none",
@@ -327,6 +350,7 @@ function VideoPlayer({ url }: { url: string }) {
       style={fills && !fullscreen ? { aspectRatio: shape ? `${shape.w} / ${shape.h}` : "16 / 9" } : undefined}
       data-home-video={fills ? "fill" : "fit"}
       onPointerMove={() => wake()}
+      onKeyDown={() => wake()}
       onFocus={() => wake()}
     >
       {!fills && (
@@ -345,7 +369,7 @@ function VideoPlayer({ url }: { url: string }) {
         src={`${url}#t=0.001`}
         onClick={toggle}
         onLoadedMetadata={onMetadata}
-        onLoadedData={onFirstFrame}
+        onLoadedData={() => setFrameReady(true)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onPlay={() => {
           setStarted(true);
@@ -367,24 +391,27 @@ function VideoPlayer({ url }: { url: string }) {
 
       <div
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-ink/90 to-transparent transition-opacity duration-300",
-          showChrome ? "opacity-100" : "opacity-0",
+          "pointer-events-none absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-surface-0/90 to-transparent transition-opacity duration-[var(--duration-slow)]",
+          showChrome ? "opacity-100" : "opacity-0 group-has-[:focus-visible]/player:opacity-100",
         )}
         aria-hidden
       />
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 pb-3 transition-opacity duration-300 sm:gap-3 sm:px-5 sm:pb-4",
-          showChrome ? "opacity-100" : "pointer-events-none opacity-0",
+          "absolute inset-x-0 bottom-0 flex items-center gap-2 px-3 pb-3 transition-opacity duration-[var(--duration-slow)] sm:gap-3 sm:px-5 sm:pb-4",
+          showChrome
+            ? "opacity-100"
+            : "pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
         )}
         data-home-video-bar
+        data-home-video-chrome={showChrome ? "shown" : "hidden"}
       >
         <button
           type="button"
           onClick={toggle}
           aria-label={playing ? t("communityHome.media.pause") : t("communityHome.media.play")}
           className={cn(
-            "flex shrink-0 items-center justify-center rounded-full bg-signal text-ink shadow-[0_8px_30px_var(--glow-accent)] transition-transform duration-[var(--duration-fast)] hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            "flex shrink-0 items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_8px_30px_var(--glow-accent)] transition-transform duration-[var(--duration-fast)] hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 focus-visible:ring-focus-ring",
             started ? "h-11 w-11" : "h-14 w-14",
           )}
           data-home-video-play
@@ -396,37 +423,32 @@ function VideoPlayer({ url }: { url: string }) {
           )}
         </button>
         {started ? (
-          <span className="shrink-0 text-xs font-semibold tabular-nums text-paper sm:text-sm">
+          <span className="shrink-0 text-xs font-semibold tabular-nums text-text sm:text-sm">
             {formatVideoDuration(time)}
-            {duration != null && <span className="text-paper-muted"> / {formatVideoDuration(duration)}</span>}
+            {duration != null && <span className="text-text-tertiary"> / {formatVideoDuration(duration)}</span>}
           </span>
         ) : (
           <span className="flex shrink-0 flex-col leading-tight">
-            <span className="font-display text-base font-extrabold text-paper sm:text-lg">
+            <span className="font-display text-base font-extrabold text-text sm:text-lg">
               {t("communityHome.media.watch")}
             </span>
             {duration != null && (
-              <span className="text-xs tabular-nums text-paper-muted sm:text-sm">{formatVideoDuration(duration)}</span>
+              <span className="text-xs tabular-nums text-text-tertiary sm:text-sm">{formatVideoDuration(duration)}</span>
             )}
           </span>
         )}
-        <div className="relative mx-1 flex h-11 min-w-0 flex-1 items-center">
-          <div className="h-1 w-full rounded-full bg-paper/25">
-            <div className="h-1 rounded-full bg-signal" style={{ width: `${progress * 100}%` }} />
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={duration ?? 0}
-            step={0.1}
-            value={time}
-            onChange={(e) => seek(Number(e.currentTarget.value))}
-            disabled={!duration}
-            aria-label={t("communityHome.media.seek")}
-            aria-valuetext={`${formatVideoDuration(time)} / ${formatVideoDuration(duration ?? 0)}`}
-            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
-          />
-        </div>
+        <Slider
+          variant="scrub"
+          value={time}
+          min={0}
+          max={duration ?? 1}
+          step={0.1}
+          disabled={!duration}
+          onValueChange={seek}
+          aria-label={t("communityHome.media.seek")}
+          aria-valuetext={`${formatVideoDuration(time)} / ${formatVideoDuration(duration ?? 0)}`}
+          className="mx-1 h-11 min-w-0 flex-1 cursor-pointer"
+        />
         <button
           type="button"
           onClick={toggleMute}
