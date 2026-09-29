@@ -850,6 +850,29 @@ export async function isServerMember(
   return (await getMemberRole(serverId, userId)) !== null;
 }
 
+/**
+ * Which of these (server, person) pairs are memberships right now, read
+ * straight from the table in one query, answered as `serverId:userId` keys.
+ * Deliberately not through `getMemberRole`'s cache: the caller is deciding
+ * whether removal notices are still true, and a role cached on this instance
+ * before the removal is exactly the stale answer that question cannot take.
+ */
+export async function listCurrentMemberships(
+  pairs: readonly { serverId: string; userId: string }[],
+): Promise<Set<string>> {
+  if (pairs.length === 0) {
+    return new Set();
+  }
+  const result = await getPool().query<{ server_id: string; user_id: string }>(
+    `SELECT m.server_id, m.user_id
+     FROM server_members m
+     JOIN unnest($1::uuid[], $2::uuid[]) AS p(server_id, user_id)
+       ON m.server_id = p.server_id AND m.user_id = p.user_id`,
+    [pairs.map((pair) => pair.serverId), pairs.map((pair) => pair.userId)],
+  );
+  return new Set(result.rows.map((row) => `${row.server_id}:${row.user_id}`));
+}
+
 export async function listServerMemberIds(serverId: string): Promise<string[]> {
   const result = await getPool().query<{ user_id: string }>(
     `SELECT user_id FROM server_members WHERE server_id = $1`,
@@ -1463,6 +1486,7 @@ export async function markChannelRead(
   channelId: string,
   userId: string,
   lastReadAt?: Date,
+  options: { forwardOnly?: boolean } = {},
 ): Promise<{ previousLastReadAt: Date | null; lastReadAt: Date }> {
   const previous = await getPool().query<{ last_read_at: Date }>(
     `SELECT last_read_at
@@ -1475,18 +1499,31 @@ export async function markChannelRead(
   // "Read up to now" must use Postgres's clock: messages.created_at is NOW()
   // too, and a JS Date that is a few dozen milliseconds behind leaves the
   // message still unread. An explicit rewind (Mark unread) keeps the caller's
-  // timestamp, clamped so it cannot sit in the future.
+  // timestamp, clamped so it cannot sit in the future. `forwardOnly` (the live
+  // read ack) never moves the cursor back: an ack of an older message landing
+  // after the open's read would otherwise mark read messages unread again.
   if (lastReadAt && Number.isFinite(lastReadAt.getTime())) {
     const at =
       lastReadAt.getTime() > Date.now() ? new Date() : lastReadAt;
-    await getPool().query(
-      `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (channel_id, user_id)
-       DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
+    const written = await getPool().query<{ last_read_at: Date }>(
+      options.forwardOnly
+        ? `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id, user_id)
+           DO UPDATE SET last_read_at =
+             GREATEST(channel_reads.last_read_at, EXCLUDED.last_read_at)
+           RETURNING last_read_at`
+        : `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id, user_id)
+           DO UPDATE SET last_read_at = EXCLUDED.last_read_at
+           RETURNING last_read_at`,
       [channelId, userId, at],
     );
-    return { previousLastReadAt, lastReadAt: at };
+    return {
+      previousLastReadAt,
+      lastReadAt: written.rows[0]?.last_read_at ?? at,
+    };
   }
 
   const inserted = await getPool().query<{ last_read_at: Date }>(

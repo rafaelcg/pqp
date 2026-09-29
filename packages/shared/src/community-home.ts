@@ -98,6 +98,47 @@ export const communityHomeContentTypeSchema = z.enum(
   COMMUNITY_HOME_MIME_ALLOWLIST,
 );
 
+/** Bytes of a file's start that `sniffCommunityHomeImageType` needs. */
+export const COMMUNITY_HOME_IMAGE_SNIFF_BYTES = 12;
+
+/**
+ * Which allowlisted image type these leading bytes really are, or null.
+ *
+ * Storage keeps whatever `Content-Type` the upload was signed with, and the
+ * browser takes that from the file's name, so a text file called `x.png` looks
+ * like a PNG to every check except the bytes. Shared so the composer can refuse
+ * it before uploading and the claim can refuse it again on the stored object.
+ */
+export function sniffCommunityHomeImageType(
+  bytes: Uint8Array,
+): CommunityHomeContentType | null {
+  const startsWith = (signature: number[], offset = 0) =>
+    bytes.length >= offset + signature.length &&
+    signature.every((byte, index) => bytes[offset + index] === byte);
+  if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return "image/png";
+  }
+  if (startsWith([0xff, 0xd8, 0xff])) {
+    return "image/jpeg";
+  }
+  // "GIF87a" and "GIF89a".
+  if (
+    startsWith([0x47, 0x49, 0x46, 0x38]) &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return "image/gif";
+  }
+  // "RIFF", four size bytes, "WEBP".
+  if (
+    startsWith([0x52, 0x49, 0x46, 0x46]) &&
+    startsWith([0x57, 0x45, 0x42, 0x50], 8)
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
 export function communityHomeMediaKindFromContentType(
   contentType: CommunityHomeContentType,
 ): "image" | "video" | "file" {
@@ -860,10 +901,21 @@ export const communityHomeConfigSchema = z.object({
 
 export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
 
-/** WS nudge: clients refetch Home for this server. Not a channel broadcast. */
+/**
+ * WS nudge: clients refetch Home for this server. Not a channel broadcast.
+ *
+ * `enabled` and `version` are present only when the owner flipped this
+ * server's Baú switch: the new value and its `servers.community_home_version`.
+ * A member's open app applies the value only when the version is higher than
+ * the one its copy of the server holds, so frames that arrive late, twice or
+ * out of order cannot leave it on an older setting. Publish, pin and delete
+ * frames leave both out.
+ */
 export const communityHomeUpdateSchema = z.object({
   type: z.literal("community-home-update"),
   serverId: z.string().uuid(),
+  enabled: z.boolean().optional(),
+  version: z.number().int().nonnegative().optional(),
 });
 
 export type CommunityHomeUpdate = z.infer<typeof communityHomeUpdateSchema>;

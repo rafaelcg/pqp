@@ -268,8 +268,8 @@ gh variable set DEPLOY_FREEZE --body false   # unfreeze
 gh variable list                              # confirm what is set right now
 ```
 
-Labeling a pull request `freeze` makes the `announce-freeze` job in
-`.github/workflows/ci.yml` comment "server deploys are frozen for an event"
+Labeling a pull request `freeze` makes `.github/workflows/announce-freeze.yml`
+comment "server deploys are frozen for an event"
 on that PR, so a contributor who was not in the room when the freeze went on
 still finds out before wondering why their merge did not deploy. The label
 only announces; it does not itself do anything to either deploy workflow —

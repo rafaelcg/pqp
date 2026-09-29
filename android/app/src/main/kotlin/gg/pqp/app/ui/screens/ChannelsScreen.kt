@@ -80,10 +80,67 @@ import gg.pqp.app.watch.liveHlsConfig
 import gg.pqp.app.watch.watchPartyListBlock
 import gg.pqp.app.watch.watchPartyListEntry
 import gg.pqp.app.watch.ui.WatchPartyListBlockView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * How many times a `channels-update` refetch is tried before the list on
+ * screen is left as it is. On `RealtimeClient.backoffMillis`, eight tries
+ * span about a minute.
+ */
+private const val CHANNELS_REFETCH_TRIES = 8
+
+/**
+ * Tickets for every fetch of the channel list on this screen: the first load
+ * and each `channels-update` refetch. A later fetch reads a later state of the
+ * list, so a fetch may write it unless a newer one already has, and an older
+ * list never lands on top of a newer one.
+ *
+ * Not "only the newest may write": a refetch that overtook the first load and
+ * then failed through every retry left the screen with no list at all, though
+ * the load had fetched one. Written tickets are what order the lists; taken
+ * tickets only tell a refetch that a newer one is running.
+ *
+ * [takeFirst] is the first load of a server. Nothing taken before it may write
+ * again, so a fetch still finishing for the server this screen just left is
+ * stale as well.
+ */
+internal class ChannelListTickets {
+    private var latest = 0
+    private var written = 0
+
+    /** A refetch starts. */
+    @Synchronized
+    fun take(): Int = ++latest
+
+    /** The first load of a server starts; every fetch before it is stale. */
+    @Synchronized
+    fun takeFirst(): Int {
+        latest += 1
+        written = latest - 1
+        return latest
+    }
+
+    /** No newer fetch has started since this one. */
+    @Synchronized
+    fun isLatest(ticket: Int): Boolean = ticket == latest
+
+    /**
+     * The fetch holding [ticket] has a list. True when it may write it, which
+     * also makes it the newest list written; the caller then writes.
+     */
+    @Synchronized
+    fun tryWrite(ticket: Int): Boolean {
+        if (ticket <= written) return false
+        written = ticket
+        return true
+    }
+}
 
 /**
  * A server's channels.
@@ -207,8 +264,58 @@ fun ChannelsScreen(
         }
     }
 
+    // Every fetch of the list takes a ticket, and a fetch may write the list
+    // unless a newer one already has (see [ChannelListTickets]): a slow first
+    // load can never land on top of a refetch's newer list, and a refetch that
+    // fails cannot throw away the list the first load did get. One set of
+    // tickets for every server, so a fetch still finishing for the server
+    // this screen just left is stale too.
+    val channelsTickets = remember { ChannelListTickets() }
     LaunchedEffect(serverId) {
-        channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
+        val ticket = channelsTickets.takeFirst()
+        val list = try {
+            session.api.channels(serverId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+        if (channelsTickets.tryWrite(ticket)) channels = list
+    }
+    // A channel this viewer can see was created, renamed, moved or deleted.
+    // The frame names no channel, so the list is refetched; the server filters
+    // it per viewer. Filtered to this server BEFORE collectLatest, so only a
+    // newer nudge, never an unrelated frame, cancels a refetch that is still
+    // in flight or waiting to retry. A failure retries on the socket's
+    // backoff, about a minute in all, and the list on screen stays meanwhile.
+    LaunchedEffect(serverId) {
+        session.realtime.frames
+            .filter { frame ->
+                when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                    "channels-update" -> frame["serverId"]?.jsonPrimitive?.contentOrNull == serverId
+                    else -> false
+                }
+            }
+            .collectLatest {
+                val ticket = channelsTickets.take()
+                for (attempt in 1..CHANNELS_REFETCH_TRIES) {
+                    val list = try {
+                        session.api.channels(serverId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (list != null) {
+                        if (channelsTickets.tryWrite(ticket)) channels = list
+                        return@collectLatest
+                    }
+                    if (!channelsTickets.isLatest(ticket)) return@collectLatest
+                    if (attempt < CHANNELS_REFETCH_TRIES) {
+                        delay(RealtimeClient.backoffMillis(attempt))
+                    }
+                }
+            }
     }
 
     // The Baú's unread count, for the badge on its row.

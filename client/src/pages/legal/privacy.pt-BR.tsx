@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "7 de setembro de 2026",
+  updated: "29 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "fbe4bff7",
+      sourceRev: "2635023a",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -235,11 +235,62 @@ export const privacyPtBr: LegalDocument = {
             varridos hoje.
           </p>
           <p>
+            <strong>Watch parties.</strong> Uma watch party é uma transmissão,
+            e a gente grava. A gravação tem o que o público recebe: a tela
+            compartilhada e o som dela, a câmera de quem apresenta se estiver
+            ligada, e a voz de quem apresenta e dos convidados que essa pessoa
+            coloca no ar, enquanto estão no ar. Não tem o público, nem a voz de outras pessoas
+            na sala que não estão no ar. A gente também pode ligar uma opção que
+            salva o microfone de quem apresenta como um arquivo de áudio
+            separado, ao lado da transmissão. Junto com cada gravação a gente
+            guarda o canal e quando ela começou e terminou. Em algumas
+            transmissões a gente também guarda qual conta estava apresentando.
+            Esse registro continua depois que os arquivos são apagados. Enquanto a transmissão está no ar, a gente também anota
+            quais contas estão assistindo, para contar o público, e apaga cada
+            anotação mais ou menos um dia depois da última vez que aquela pessoa
+            foi vista assistindo. Os arquivos ficam no Cloudflare R2, na região leste da
+            América do Norte. Quem pode ver, e por quanto tempo, está em
+            &quot;Chamadas de voz&quot; e em &quot;Por quanto tempo a gente
+            guarda cada coisa&quot;.
+          </p>
+          <p>
+            <strong>Lista de espera da watch party.</strong> Se você entra na
+            lista de espera da watch party, a gente guarda a sua resposta: o
+            servidor a que ela se refere (se tiver), se você pediu como alguém
+            que administra aquele servidor ou como espectador, o tamanho de
+            público que você escolheu, um recado curto opcional, um nome
+            opcional na Twitch ou na Kick, e se o pedido foi aprovado.
+          </p>
+          <p>
+            <strong>O seu país.</strong> O pqp.gg roda servidores de voz em mais
+            de uma região. Então, quando o app se conecta ao nosso servidor, a
+            gente guarda na sua conta o código de duas letras do país de onde
+            vem a conexão (por exemplo <code>BR</code>) e quando viu isso. O
+            código vem da Cloudflare, por onde a conexão passa no caminho até a
+            gente. A gente nunca guarda o seu endereço IP nem a sua cidade para
+            isso. Ele só serve para escolher onde rodam as chamadas de voz de um
+            servidor: veja &quot;Chamadas de voz&quot;.
+          </p>
+          <p>
+            <strong>Notificações push.</strong> Se você liga as notificações
+            push, a gente guarda o que o seu navegador ou celular entrega para
+            ser alcançado: um endereço de push web e as chaves públicas dele, ou
+            um token de dispositivo da Apple ou do Google. A gente apaga isso
+            quando o serviço de push avisa que não funciona mais, e quando você
+            exclui a sua conta. Um push pode trazer o
+            nome do servidor, do canal, de quem escreveu ou de quem está ligando,
+            ou o título de um evento. Nunca traz o texto de uma mensagem.
+          </p>
+          <p>
             <strong>Configurações.</strong> Preferências de notificação, tema,
             entrar mudo e volumes de áudio são salvos na sua conta para
             acompanhar você entre dispositivos, e espelhados no armazenamento
             local do seu navegador. Veja o{" "}
-            <Link to="/cookies">Aviso de cookies</Link>.
+            <Link to="/cookies">Aviso de cookies</Link>. O idioma que você
+            escolhe também é salvo na conta, mas só para definir o idioma das
+            notificações push. Elas existem em inglês e em português, então quem
+            escolhe espanhol fica salvo como inglês. Isso não muda o idioma nos
+            seus outros dispositivos.
           </p>
           <p>
             <strong>Registros de moderação.</strong> Donos e admins de servidor
@@ -247,7 +298,26 @@ export const privacyPtBr: LegalDocument = {
             — quem expulsou, baniu, mudou um cargo, apagou a mensagem de outra
             pessoa, renomeou um canal ou exportou o servidor. Ele registra quem
             agiu, a ação, o id do alvo, um motivo opcional e o valor anterior do
-            que mudou. Ele não registra o texto das mensagens.
+            que mudou. Ele não registra o texto das mensagens, com uma exceção:
+            quando o AutoMod bloqueia uma mensagem, a entrada registra o canal,
+            a regra e a palavra, o link ou o trecho que bateu. Ela não guarda o
+            resto da mensagem.
+          </p>
+          <p>
+            <strong>Alertas do AutoMod.</strong> Se a equipe de um servidor
+            ligou o AutoMod e escolheu um canal de alertas, quando o AutoMod
+            bloqueia uma mensagem ele posta um card nesse canal, no máximo um
+            card para o mesmo membro naquele servidor a cada 10 segundos. Uma
+            mensagem bloqueada dentro desse intervalo não ganha card próprio. O card
+            mostra a regra, o nome e a tag do membro, o canal, o trecho que
+            bateu e o texto da mensagem bloqueada (até os primeiros 1.024
+            caracteres). A mensagem bloqueada em si não é postada onde foi
+            enviada. O card fica guardado como uma mensagem comum no canal de
+            alertas. Quem consegue ler esse canal consegue ler o card, e a
+            janela de retenção de mensagens daquele servidor vale para ele. O
+            AutoMod é o autor do card, então excluir a sua conta não o remove.
+            A entrada no log de auditoria é escrita para toda mensagem
+            bloqueada, inclusive as que não ganham card.
           </p>
           <p>
             <strong>Prévias de link.</strong> Quando você publica um link, o
@@ -257,11 +327,47 @@ export const privacyPtBr: LegalDocument = {
             — ele não registra quem publicou.
           </p>
           <p>
+            <strong>Feedback e avaliações de chamada.</strong> Se você manda um
+            feedback pelas configurações, a gente guarda o texto, a sua conta, o
+            user agent do seu navegador e onde você estava quando escreveu: a
+            plataforma, a versão do app, a página do app, o seu idioma, o
+            tamanho da janela, se você estava numa chamada e como ela estava
+            conectada, e o id de sessão do relatório de erros descrito em
+            &quot;Relatório de erros&quot;. Se você avalia uma chamada, a gente
+            guarda a nota, um comentário opcional, o canal, quanto tempo a
+            chamada durou, quantas pessoas estavam nela, qual caminho ela usou e
+            se alguém compartilhou a tela.
+          </p>
+          <p>
+            <strong>Atividade e primeiros passos.</strong> A gente guarda dois
+            registros pequenos por conta, para as nossas próprias contagens. O
+            primeiro são os dias em que a sua conta esteve ativa: uma linha por
+            dia, no horário de São Paulo, em que o app se conectou ao nosso
+            servidor ou você fez alguma coisa nele, como mandar mensagem,
+            reagir ou entrar numa chamada ou numa watch party. Ele guarda só o
+            dia, não o que você fez nem por quanto tempo. O segundo é o
+            momento dos seus primeiros passos: quando a conta foi criada, e a
+            primeira vez que você passou pela verificação de idade, reivindicou
+            um handle, entrou num servidor, mandou uma mensagem, entrou numa
+            sala de voz ou apresentou uma watch party. O operador usa isso para
+            contar as contas ativas por dia, semana e mês, se quem se cadastra
+            volta, e até onde as contas novas chegam. Os relatórios que o
+            operador lê têm contagens, não nomes. Os dois registros são
+            apagados junto com a sua conta. A exportação de dados ainda não
+            inclui nenhum deles.
+          </p>
+          <p>
             <strong>Técnicos.</strong> Logs de aplicação com erros e eventos de
-            conexão. Eles registram um número de conexão e um id de usuário; não
-            registram o seu endereço IP. O seu endereço IP é lido em memória,
-            por um instante, para aplicar limites de uso, e não é gravado no
-            nosso banco de dados nem nos nossos logs.
+            conexão. A maioria das linhas de log registra um número de conexão e
+            um id de usuário, não o seu endereço IP. Algumas registram mais:
+            quando você entra no app de desktop pelo navegador, essa linha de log
+            guarda o seu endereço IP e o user agent do seu navegador. Os logs do
+            nosso servidor de API são enviados ao Grafana Cloud, da Grafana
+            Labs, e ficam lá por 14 dias. O servidor de API também guarda a
+            própria cópia dos logs recentes, até 100 MB por serviço, o que no
+            nosso volume cobre vários meses. O seu endereço IP também é lido em
+            memória para aplicar limites de uso. Ele nunca é gravado no nosso
+            banco de dados.
           </p>
 
           <h3>Analytics do site</h3>
@@ -288,13 +394,19 @@ export const privacyPtBr: LegalDocument = {
           </p>
           <p>
             As mesmas páginas também carregam o <strong>Umami</strong>,
-            hospedado pelos criadores dele na União Europeia, com a mesma
+            rodado pelos criadores dele como Umami Cloud, com a mesma
             finalidade: contar visitas e ver em quais páginas as pessoas chegam.
             Ele também é sem cookie, não guarda nada no seu dispositivo e não
             usa identificador persistente. Registra o endereço da página, a
             página que trouxe você, e o seu país, navegador e tipo de
-            dispositivo, tudo de forma agregada. Ele nunca vê a sua conta, e
-            bloquear ele também não quebra nada.
+            dispositivo, tudo de forma agregada. Ele também conta
+            alguns passos nomeados, como tocar num botão de cadastro de uma
+            página de divulgação ou, dentro do app, passar pela verificação de
+            idade ou criar um servidor, como um nome e alguns
+            rótulos (como quanto tempo um passo levou), nunca um id. Ele nunca
+            vê a sua conta, e bloquear ele também não quebra nada. Em qual
+            região o Umami Cloud guarda os dados depende de como a conta dele
+            está configurada, e esta política não promete nenhuma.
           </p>
           <p>
             São dois porque respondem perguntas um pouco diferentes, e nenhum
@@ -302,36 +414,87 @@ export const privacyPtBr: LegalDocument = {
             junto.
           </p>
 
-          <h3>Medição de publicidade</h3>
+          <h3>Relatório de erros</h3>
           <p>
-            O pqp.gg compra um pouco de publicidade, e carrega o{" "}
-            <strong>rastreamento de conversão do Google Ads</strong> para a
-            gente saber se um anúncio produziu uma conta e não só um clique.
-            Essa é a única coisa no site que não é sem cookie, e a gente prefere
-            dizer isso na cara do que esconder. A tag do Google carrega em toda
-            página do pqp.gg, e ela define cookies de origem própria no domínio
-            pqp.gg (os nomes começam em <code>_gcl_</code>) para lembrar que a
-            sua visita chegou por um anúncio.
+            O app web no pqp.gg usa o <strong>Grafana Faro</strong>, da Grafana
+            Labs, para avisar a gente quando algo quebra, para a gente
+            consertar. Ele envia relatórios para o coletor da Grafana em São
+            Paulo. Um relatório tem o endereço da página, a mensagem de erro e
+            onde no nosso código ela aconteceu, mensagens que o app escreve no
+            console do navegador nos níveis info, aviso e erro, avisos de
+            qualquer coisa que o navegador bloqueou pela política de segurança
+            do site, medições de velocidade da página, os endereços e tempos das requisições que o
+            app faz, e o seu navegador e sistema operacional.
           </p>
           <p>
-            Um evento é enviado ao Google, uma vez: quando uma conta é criada, a
-            tag informa que houve um cadastro. Ele não leva nome, nem e-mail,
-            nem id de usuário, nem nada que você digitou. O Google ainda vê o
-            seu endereço IP e qual página você abriu, que é o que qualquer
-            script de terceiro vê. Se você chegou por um anúncio, a gente
-            também guarda o <code>gclid</code> na conta uma vez, junto com os
-            outros parâmetros de campanha. A gente não envia dados da sua
-            conta para o Google, não ativou conversões aprimoradas nem nenhum
-            cruzamento com dados de clientes, e não roda remarketing nem listas
-            de público. Entrar de novo não envia nada, e nada do que você faz
-            dentro do app envia também.
+            Ele leva um id de sessão aleatório, guardado no armazenamento de
+            sessão do seu navegador e trocado depois de 15 minutos parado ou de
+            quatro horas. O nosso código nunca diz a ele quem você é: nem nome,
+            nem e-mail, nem id de conta. Se você manda um feedback pelo app, o
+            feedback leva esse id de sessão, para a gente achar os relatórios
+            daquele momento. Mas os endereços das requisições que o app faz vão no
+            relatório por inteiro, com a query string, e alguns têm ids. O link
+            que o app usa para buscar a transmissão de uma watch party leva um
+            token que contém o id da sua conta. Então um relatório sobre essas
+            requisições pode identificar a sua conta para a Grafana, mesmo que
+            o nosso código nunca diga ao Faro quem você é. A Grafana também
+            recebe o endereço IP de cada relatório, como qualquer servidor, e
+            pode deduzir uma localização aproximada a partir dele. Se ela faz
+            isso é uma configuração do lado da Grafana. O Faro não define
+            cookie, e não registra cliques, teclas nem a tela. Ele só liga quando a
+            compilação recebe o endereço do nosso coletor, e só a compilação
+            hospedada do pqp.gg recebe, então uma cópia self-hosted não manda
+            nada para a gente.
+          </p>
+
+          <h3>Medição de publicidade</h3>
+          <p>
+            O pqp.gg compra um pouco de publicidade, e carrega a{" "}
+            <strong>tag do Google Ads</strong> para a gente saber se um anúncio
+            produziu uma conta e não só um clique. Tirando os cookies de login
+            que o Clerk precisa para manter você conectado, essa é a única coisa
+            no site que não é sem cookie, e a gente prefere dizer isso na cara
+            do que esconder. A tag do Google carrega em toda página do pqp.gg. Ela dá
+            a todo visitante um cookie de origem própria no domínio pqp.gg,{" "}
+            <code>_gcl_au</code>, com um identificador aleatório, e quando a sua
+            visita veio de um anúncio ela registra isso em outros cookies com
+            nomes começando em <code>_gcl_</code>.
+          </p>
+          <p>
+            Cada vez que você carrega uma página, a tag informa a visualização
+            ao Google: o endereço e o título da página, o tamanho da sua tela, o
+            seu navegador e sistema operacional, e o identificador do cookie{" "}
+            <code>_gcl_au</code>. O Google também vê o seu endereço IP, que é o
+            que qualquer script de terceiro vê. Parte desses envios vai para os
+            endereços que o Google Ads usa para montar públicos de remarketing.
+            O nosso código configura a tag do jeito comum e não desliga a
+            personalização de anúncios, então o Google pode incluir a sua
+            visita numa lista de público da nossa conta de anúncios, e os
+            nossos anúncios podem voltar a aparecer para você.
+          </p>
+          <p>
+            Quando uma conta é criada, o nosso código envia à tag mais um
+            evento: que houve um cadastro. Ele é endereçado à nossa conta de
+            anúncios e não leva mais nada, então não tem nome, e-mail nem id de
+            usuário. Essas são as duas únicas coisas que o nosso código envia:
+            uma visualização de página a cada carregamento e esse evento de
+            cadastro. Se você chegou por um anúncio, a gente também guarda o{" "}
+            <code>gclid</code> na conta uma vez, junto com os outros parâmetros
+            de campanha. O nosso código não usa conversões otimizadas (enhanced
+            conversions), o recurso do Google Ads que envia um e-mail com hash
+            junto com a conversão, e não envia e-mail nenhum. A tag é um script
+            do próprio Google, então o que o Google faz com o que recebe, dentro
+            das configurações da nossa conta de anúncios, é o Google que tem de
+            descrever.
           </p>
           <p>
             O Google é um terceiro aqui e trata o que recebe, inclusive o seu
             endereço IP, sob os termos dele. Bloquear a tag com uma extensão de
-            navegador, ou bloquear cookies para o pqp.gg, não quebra nada: o
-            produto funciona exatamente igual e o cadastro simplesmente não é
-            contado.
+            navegador, ou bloquear os cookies <code>_gcl_</code> dela, não
+            quebra nada: o produto funciona exatamente igual e o cadastro
+            simplesmente não é contado. Você também pode desligar a
+            personalização de anúncios nas configurações de anúncios da sua
+            conta Google, em <code>adssettings.google.com</code>.
           </p>
           <p>
             Isso vale para o pqp.gg hospedado e para mais nada. A tag é
@@ -345,41 +508,57 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "ac93c305",
+      sourceRev: "12e5ef01",
       heading: "O que a gente não faz",
       body: (
         <ul>
           <li>
-            <strong>Sem perfil sobre você.</strong> Não tem gravador de sessão e
-            não tem serviço de relatório de erro, e nada do que a gente guarda
-            monta um retrato de você como pessoa. As duas ferramentas de
-            analytics descritas em &quot;O que a gente coleta&quot; acima contam
-            visitas e não conseguem identificar visitantes. A única exceção ao
-            &quot;nada segue você entre sites&quot; é a tag de conversão do
-            Google Ads, descrita no mesmo lugar: o trabalho dela é ligar um
-            clique em anúncio a um cadastro, e ela é a única coisa no pqp.gg que
-            um terceiro consegue ler.
+            <strong>Sem perfil sobre você da nossa parte.</strong> Não tem
+            gravador de sessão: nada grava como você usa o site nem o que você
+            digita. (Uma tela que você compartilha numa watch party é gravada,
+            porque é uma transmissão. Veja &quot;Chamadas de voz&quot;.) Os
+            relatórios de erro descritos em &quot;O que a gente coleta&quot;
+            levam um id de sessão aleatório, e o nosso código nunca liga a sua
+            conta a eles. Um endereço de requisição dentro de um relatório
+            ainda pode ter o id da sua conta, como está descrito ali, e o
+            feedback que você manda leva o id de sessão. As duas
+            ferramentas de analytics descritas ali contam visitas e não
+            conseguem identificar visitantes. A exceção é a tag do Google Ads,
+            descrita no mesmo lugar: ela dá um identificador a todo visitante e
+            informa as visualizações de página ao Google, que pode usar isso
+            para públicos de publicidade.
           </li>
           <li>
-            <strong>Sem perfil publicitário e sem venda de dados.</strong> A
-            gente anuncia, sim, e conta quantos cadastros a publicidade
-            produziu, que é a tag de conversão acima. A gente não monta perfil
-            publicitário, não roda remarketing nem listas de público, e não vende
-            nem aluga dados pessoais.
+            <strong>Sem venda de dados.</strong> A gente anuncia, sim, e conta
+            quantos cadastros a publicidade produziu, pela tag do Google Ads
+            acima. O nosso código não entrega dado de conta nenhum para o Google, e a
+            gente não vende nem aluga dados pessoais.
           </li>
           <li>
-            <strong>Sem fingerprinting de dispositivo e sem geolocalização.</strong>{" "}
-            A gente não sonda o seu dispositivo atrás de uma impressão digital e
-            não procura a sua localização.
+            <strong>Sem fingerprinting de dispositivo, e a gente nunca pede a sua localização.</strong>{" "}
+            O nosso código não sonda o seu dispositivo atrás de uma impressão
+            digital, e nunca pede a sua localização ao navegador ou ao celular.
+            As ferramentas de analytics descritas em &quot;O que a gente
+            coleta&quot; deduzem o seu país pelo endereço IP, para contagens
+            agregadas. O nosso servidor também guarda na sua conta o país da sua
+            conexão, em duas letras, para escolher onde rodam as chamadas de
+            voz. A sua conta não guarda nada mais preciso que um país. Fora dos
+            nossos sistemas, os terceiros listados abaixo veem o seu endereço
+            IP, e o que eles deduzem dele é assunto deles, como está descrito
+            para a Grafana em &quot;Relatório de erros&quot;.
           </li>
           <li>
-            <strong>Sem gravação de voz.</strong> Nenhuma chamada é gravada nem
-            armazenada pela gente, por caminho nenhum — veja abaixo.
+            <strong>Sem gravação de chamadas comuns.</strong> Uma chamada em DM
+            ou em canal de voz não é gravada nem armazenada pela gente, em
+            nenhum dos dois caminhos. As watch parties são a exceção: são
+            transmissões, e a gente grava. Veja abaixo.
           </li>
           <li>
             <strong>Sem endereço IP na nossa base.</strong> Não existe coluna de
-            endereço IP na API do pqp.gg. Os terceiros listados abaixo ainda vêem
-            o seu IP quando o seu navegador fala com eles. O botão de download
+            endereço IP na API do pqp.gg. Algumas linhas de log guardam um
+            endereço IP, como está em &quot;O que a gente coleta&quot;. Os
+            terceiros listados abaixo ainda veem o seu IP quando o seu navegador
+            fala com eles. O botão de download
             do Android no pqp.gg também manda uma contagem para o painel de
             operação, que limita essa contagem por IP por um minuto.
           </li>
@@ -396,34 +575,36 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "4ffed91f",
+      sourceRev: "5b58193f",
       heading: "Chamadas de voz",
       body: (
         <>
           <p>
-            A voz e o vídeo no pqp.gg pegam um de dois caminhos, e qual deles a
-            sua chamada pega é decidido quando a chamada começa. Em sala
-            pequena, o áudio e o vídeo de tela vão{" "}
+            A voz e o vídeo no pqp.gg pegam um de dois caminhos. No caminho
+            direto, o áudio e o vídeo de tela vão{" "}
             <strong>direto do seu dispositivo para as outras pessoas</strong> do
             canal, por WebRTC, criptografados pelo navegador (DTLS-SRTP), e não
-            passam por servidor nenhum nosso. Em sala grande, eles são
+            passam por servidor nenhum nosso. No caminho repassado, eles são
             repassados por um{" "}
-            <strong>servidor de mídia que a gente mesmo roda</strong>, em São
-            Paulo, no Brasil.
+            <strong>servidor de mídia que a gente mesmo roda</strong>. São três:
+            em São Paulo, no Brasil, em Miami, nos Estados Unidos, e em Londres,
+            no Reino Unido. A chamada começa no caminho que as nossas regras
+            escolhem, e uma chamada num servidor pode passar do caminho direto
+            para o repassado enquanto está acontecendo.
           </p>
-          <p>Quais salas são quais:</p>
+          <p>Onde a chamada começa:</p>
           <ul>
             <li>
               Chamada em DM ou em grupo de DM é sempre direta entre as pessoas
-              que estão nela.
+              que estão nela, e nunca muda de caminho.
             </li>
             <li>
-              Canal de voz em servidor com menos de 10 membros é direto entre as
-              pessoas que estão nele.
+              Canal de voz em servidor com menos de 10 membros começa direto entre
+              as pessoas que estão nele.
             </li>
             <li>
-              Canal de voz em servidor com 10 membros ou mais passa pelo
-              servidor de mídia.
+              Canal de voz em servidor com 10 membros ou mais começa no servidor
+              de mídia.
             </li>
             <li>
               Canal de voz em comunidade também passa, seja qual for o tamanho.
@@ -433,15 +614,46 @@ export const privacyPtBr: LegalDocument = {
               a gente trata como sinal de sala que pode encher.
             </li>
             <li>
+              Canal de watch party, onde as watch parties estão ligadas, usa o
+              servidor de mídia seja qual for o tamanho do servidor, porque é
+              lá que a transmissão é feita.
+            </li>
+            <li>
               Quem pode gerenciar os canais do servidor, normalmente o dono e os
               admins, pode fixar o caminho por canal, em{" "}
               <strong>Tamanho da sala de voz</strong> nas configurações do
-              canal, e essa escolha vale no lugar da regra acima.
+              canal, e essa escolha vale no lugar das regras acima. Quem entra
+              não muda de caminho um canal fixado em direto.
             </li>
           </ul>
           <p>
-            A escolha é feita quando a primeira pessoa entra e vale até a sala
-            esvaziar. Uma chamada em andamento nunca troca de caminho.
+            <strong>Uma chamada pode mudar de caminho enquanto acontece.</strong>{" "}
+            Um canal de voz de servidor que começou direto passa para o servidor
+            de mídia quando entra a quarta pessoa, ou quando alguém liga uma
+            câmera ou começa uma transmissão de tela que uma chamada direta não
+            aguenta. Todo mundo na chamada é avisado e os apps reconectam ao
+            servidor de mídia. A gente só muda a chamada de caminho se o
+            servidor de mídia tem espaço para ela. Se não tem, a chamada
+            continua direta e a câmera ou a transmissão de tela é recusada.
+            Quem está num app que não consegue acompanhar a mudança sai da
+            chamada e pode entrar de novo. Uma chamada que mudou fica no
+            servidor de mídia até a sala esvaziar. Ela nunca volta. Chamada em
+            DM ou em grupo de DM nunca muda de caminho. Desde o momento em que
+            a chamada muda, tudo o que está dito abaixo sobre o caminho
+            repassado vale para ela.
+          </p>
+          <p>
+            <strong>Qual servidor de mídia.</strong> Uma chamada repassada roda
+            em um dos três, e todo mundo nela passa por esse mesmo. A gente olha
+            os membros do servidor que estiveram ativos nos últimos 30 dias, e o
+            país guardado na conta de cada um (veja &quot;O que a gente
+            coleta&quot;). Se pelo menos cinco têm país conhecido e pelo menos
+            60% deles pertencem a uma região, a chamada abre lá. Se não houver
+            essa maioria, ela abre na nossa região padrão. Se menos de cinco
+            têm país conhecido, ela abre na região do país da primeira pessoa
+            que entra. Quem administra o pqp.gg também pode fixar um canal numa
+            região na mão. A região fica fixa até a sala esvaziar. As watch
+            parties rodam sempre em São Paulo.
           </p>
           <p>
             <strong>
@@ -450,21 +662,42 @@ export const privacyPtBr: LegalDocument = {
             Para passar o seu áudio e o seu vídeo adiante, o servidor de mídia
             descriptografa o que você manda e criptografa de novo para cada
             pessoa que recebe. É isso que um servidor de mídia faz; não tem como
-            repassar mídia sem mexer nela. Então, em sala grande, a criptografia
+            repassar mídia sem mexer nela. Então, no caminho repassado, a criptografia
             é entre você e o nosso servidor, e não de ponta a ponta entre os
             participantes, e a frase que ficava aqui antes, de que o seu áudio
             não chegaria à gente nem se a gente quisesse, deixou de valer para
             toda chamada.
           </p>
           <p>
-            <strong>O que a gente faz com isso: repassa e joga fora.</strong>{" "}
-            Nada é gravado, nada é armazenado, e pessoa nenhuma escuta. A
-            máquina roda o servidor de mídia e mais nada: sem serviço de
-            gravação, sem fila e sem disco onde a mídia seja escrita. E nenhum
-            dos tokens que a gente emite para entrar numa sala carrega permissão
-            de gravar. A mídia existe na memória daquele servidor pelo tempo de
-            repassar o pacote. A gente também não consegue voltar depois e
-            recuperar uma chamada, porque cópia nenhuma foi feita.
+            <strong>
+              O que a gente faz com uma chamada comum: repassa e joga fora.
+            </strong>{" "}
+            Uma chamada em DM ou em canal de voz não é gravada, não é
+            armazenada, e pessoa nenhuma escuta. Nada grava essa chamada e
+            nenhuma mídia dela é escrita em disco. Nenhum dos tokens que a gente
+            emite para entrar numa sala carrega permissão de gravar. A mídia
+            existe na memória do servidor de mídia pelo tempo de repassar o
+            pacote. A gente também não consegue voltar depois e recuperar uma
+            chamada dessas, porque cópia nenhuma foi feita.
+          </p>
+          <p>
+            <strong>As watch parties são gravadas.</strong> Uma watch party é
+            uma transmissão para um público, não uma chamada. Quando quem
+            apresenta começa a compartilhar, o nosso servidor liga um gravador
+            no servidor de mídia de São Paulo. Esse gravador produz o vídeo que
+            o público assiste, e os mesmos arquivos ficam guardados depois como
+            a gravação. Ela tem o que o público recebe: a tela compartilhada e o
+            som dela, a câmera de quem apresenta se estiver ligada, e a voz de
+            quem apresenta e dos convidados que essa pessoa coloca no ar,
+            enquanto estão no ar. Quem assiste não é gravado, mas a gente anota
+            quem está assistindo para contar o público, como está em &quot;O que
+            a gente coleta&quot;. A gravação fica no Cloudflare R2, na
+            região leste da América do Norte, por 30 dias depois do fim da
+            transmissão. Quem pode começar watch parties ou gerenciar aquele
+            canal, normalmente o dono e os admins do servidor, pode assistir de
+            novo e baixar a gravação durante esses 30 dias. Essas pessoas também
+            podem desligar &quot;Manter gravação&quot;, e aí ela é apagada uns
+            10 minutos depois do fim da transmissão.
           </p>
           <p>Três ressalvas honestas:</p>
           <ul>
@@ -478,27 +711,29 @@ export const privacyPtBr: LegalDocument = {
               continua criptografada entre os participantes, então o relay não
               consegue escutar. Os nossos provedores de STUN/TURN hoje são a{" "}
               <strong>Cloudflare Realtime TURN</strong>, depois Metered / Open
-              Relay se a Cloudflare não estiver configurada, depois um relay
+              Relay se a Cloudflare não estiver configurada ou não responder, depois um relay
               estático (ExpressTURN no pqp.gg) como fallback, mais os servidores
-              STUN públicos do Google e da Cloudflare. Numa sala grande esse
-              mesmo trabalho é feito pelo próprio servidor de mídia, na mesma
-              máquina, sem terceiro nenhum no meio.
+              STUN públicos do Google e da Cloudflare. No caminho repassado os mesmos relays
+              podem carregar a conexão entre você e o nosso servidor de mídia.
+              Nesse caso a criptografia termina no nosso servidor de mídia, como
+              está descrito acima, e o relay continua sem conseguir escutar.
             </li>
             <li>
-              <strong>Quem cuida da máquina.</strong> O servidor de mídia é uma
-              máquina virtual que a gente aluga da <strong>Vultr</strong> em São
-              Paulo e administra por conta própria. A Vultr entrega o hardware,
-              a rede e o prédio; o software que roda em cima é nosso.
+              <strong>Quem cuida das máquinas.</strong> Cada servidor de mídia é
+              uma máquina virtual que a gente aluga da <strong>Vultr</strong>,
+              em São Paulo, Miami e Londres, e administra por conta própria. A
+              Vultr entrega o hardware, a rede e o prédio. O software que roda
+              em cima é nosso.
             </li>
             <li>
               <strong>Isso é uma promessa, não uma prova.</strong> No caminho
               direto a gente não conseguiria gravar a sua chamada nem querendo,
               porque ela não chega até a gente. No caminho repassado a gente
-              conseguiria, e não grava. Quem tiver acesso de administrador
-              àquela máquina pode instalar um gravador, e o que separa você
-              disso é a palavra de quem opera o pqp.gg mais a configuração
-              descrita acima. A gente prefere dizer isso na cara do que deixar a
-              frase antiga cobrir os dois casos.
+              conseguiria, e numa chamada comum não grava. Quem tiver acesso de
+              administrador àquelas máquinas pode instalar um gravador, e o que
+              separa você disso é a palavra de quem opera o pqp.gg mais a
+              configuração descrita acima. A gente prefere dizer isso na cara do
+              que deixar a frase antiga cobrir os dois casos.
             </li>
           </ul>
           <p>
@@ -511,7 +746,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "6de9cf53",
+      sourceRev: "8483b11b",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -526,17 +761,19 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>Fazer o pqp funcionar.</strong> Criar a sua conta,
               entregar as suas mensagens, manter o seu histórico para ele estar
-              lá quando você recarrega, conectar as suas chamadas de voz e
-              lembrar das suas configurações — o serviço básico para o qual você
-              se cadastrou.{" "}
+              lá quando você recarrega, conectar as suas chamadas de voz, gravar
+              as watch parties para poderem ser assistidas de novo, e lembrar
+              das suas configurações. É o serviço básico para o qual você se
+              cadastrou.{" "}
               <em>(Isso se apoia no nosso contrato com você: art. 7, V.)</em>
             </li>
             <li>
               <strong>
                 Manter o serviço de pé e impedir que abusem dele.
               </strong>{" "}
-              Limites de uso, bloqueio de ataques, investigação de problemas,
-              proteção de outras pessoas contra dano.{" "}
+              Limites de uso, bloqueio de ataques, investigação de problemas
+              (inclusive os relatórios de erro e o analytics do site descritos
+              acima), proteção de outras pessoas contra dano.{" "}
               <em>
                 (Base: o nosso legítimo interesse, art. 7, IX — ponderado com os
                 seus direitos e limitado ao que isso realmente exige.)
@@ -576,10 +813,10 @@ export const privacyPtBr: LegalDocument = {
             </li>
             <li>
               <strong>Medir a nossa publicidade.</strong> Contar quantos
-              cadastros uma campanha de anúncio produziu, pela tag de conversão
-              do Google Ads descrita acima. Ela conta um evento. O evento não
-              leva nome, e-mail nem id de usuário. O Google ainda vê o seu IP e
-              a página, como está em &quot;Medição de publicidade&quot;.{" "}
+              cadastros uma campanha de anúncio produziu, pela tag do Google Ads
+              descrita acima. A tag informa cada visualização de página ao
+              Google, e um evento de cadastro. O Google vê o seu IP e a página, como está em
+              &quot;Medição de publicidade&quot;.{" "}
               <em>
                 (Base: legítimo interesse, art. 7, IX. Para se opor, bloqueie a
                 tag no navegador ou escreva para a gente.)
@@ -612,7 +849,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "266a6929",
+      sourceRev: "dc530314",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -623,37 +860,59 @@ export const privacyPtBr: LegalDocument = {
           <ul>
             <li>
               <strong>Clerk</strong> — autenticação. Guarda o seu e-mail e as
-              suas credenciais.
+              suas credenciais. O seu navegador carrega as telas de login, e as
+              fotos de perfil que o Clerk hospeda, direto do Clerk.
             </li>
             <li>
-              <strong>Fly.io</strong> — servidores de aplicação e o banco de
-              dados Postgres, em{" "}
-              <strong>São Paulo, Brasil (região gru da Fly)</strong>.
+              <strong>Vultr</strong>: o servidor que roda a nossa aplicação e o
+              banco de dados Postgres gerenciado que ela usa, os dois em{" "}
+              <strong>São Paulo, Brasil</strong>. A Vultr também entrega as
+              máquinas virtuais onde rodam os nossos servidores de mídia de voz,
+              em <strong>São Paulo, Miami e Londres</strong>. O software em cima
+              delas é nosso. A Vultr entrega as máquinas e a rede. No caminho
+              repassado, o áudio e o vídeo de tela passam por um dos servidores
+              de mídia para serem repassados, e as watch parties são gravadas no de
+              São Paulo, como está em &quot;Chamadas de voz&quot; acima.
             </li>
             <li>
-              <strong>Vultr</strong>, a máquina virtual onde roda o nosso
-              servidor de mídia de voz, em <strong>São Paulo, Brasil</strong>. O
-              software em cima dela é nosso; a Vultr entrega a máquina e a rede.
-              Em sala grande, o áudio e o vídeo de tela passam por ali para
-              serem repassados, como está em &quot;Chamadas de voz&quot; acima.
-            </li>
-            <li>
-              <strong>Umami</strong> — contagem de visitas sem cookie, hospedado
-              pelos próprios autores na UE. Está em &quot;Analytics do
+              <strong>Umami</strong> — contagem de visitas sem cookie, rodado
+              pelos próprios autores como Umami Cloud. Está em &quot;Analytics do
               site&quot; acima.
             </li>
             <li>
               <strong>Cloudflare</strong> — serve o app web e o site
-              institucional. O Cloudflare Web Analytics, se estiver ligado na
-              zona, é injetado no edge deles em vez de ir no nosso código.
+              institucional. O Cloudflare Web Analytics é colocado em cada
+              página no edge deles em vez de ir no nosso código. As requisições
+              do app ao nosso servidor, e a conexão em tempo real dele,
+              mensagens incluídas, também passam pela rede da Cloudflare no
+              caminho até o nosso servidor.
             </li>
             <li>
-              <strong>Cloudflare R2</strong> — armazenamento de objetos para os
+              <strong>Grafana Labs</strong>: relatórios de erro do app web, pelo
+              Grafana Faro, enviados a um coletor em São Paulo. Está detalhado
+              em &quot;Relatório de erros&quot; acima. O Grafana Cloud também
+              recebe os logs do nosso servidor de API e guarda por 14 dias, como
+              está em &quot;Técnicos&quot; acima.
+            </li>
+            <li>
+              <strong>Cloudflare R2</strong>: armazenamento de objetos para os
               anexos de arquivo, quando os anexos estão ligados. O seu navegador
               envia e baixa os bytes dos anexos <em>direto</em> para esse
               armazenamento, usando links assinados de vida curta, então o
               provedor de armazenamento vê o seu endereço IP enquanto um arquivo
-              é transferido.
+              é transferido. O R2 também guarda as gravações das watch parties e
+              os backups noturnos do nosso banco de dados, na região leste da
+              América do Norte.
+            </li>
+            <li>
+              <strong>Serviços de push</strong>: só se você ligar as
+              notificações push. Um aviso para iPhone passa pela Apple, um aviso
+              para o app de Android passa pelo Firebase Cloud Messaging do
+              Google, e um aviso para o navegador passa pelo serviço de push que
+              aquele navegador usa. Os avisos para o navegador são
+              criptografados, então o serviço de push não consegue ler. Os
+              avisos para celular não são criptografados desse jeito, então a Apple ou o Google conseguem ler os nomes que o aviso traz. Nenhum aviso traz o texto de uma
+              mensagem.
             </li>
             <li>
               <strong>Cloudflare Realtime TURN</strong>, Metered / Open Relay,
@@ -680,14 +939,44 @@ export const privacyPtBr: LegalDocument = {
               troca para o KLIPY ainda carregam do GIPHY ou do Tenor.
             </li>
             <li>
-              <strong>DiceBear</strong> — as imagens de avatar prontas em{" "}
-              <span lang="en">Settings</span> carregam do serviço deles.
+              <strong>DiceBear</strong> — os avatares prontos em{" "}
+              <span lang="en">Settings</span> são imagens do serviço deles. Se
+              você escolhe um, o seu avatar continua sendo um link para o
+              DiceBear, então todo mundo que vê o seu avatar carrega ele do
+              DiceBear.
             </li>
             <li>
-              <strong>Google Ads</strong> carrega a tag de conversão em toda
-              página do pqp.gg, então o Google vê o seu endereço IP e qual
-              página você abriu, e é avisado uma vez quando uma conta é criada.
+              <strong>Google Ads</strong> carrega a tag dele em toda página do
+              pqp.gg, então o Google vê o seu endereço IP e toda página que você
+              abre, pode usar essas visitas para montar públicos de remarketing
+              e é avisado uma vez quando uma conta é criada.
               Está detalhado em &quot;Medição de publicidade&quot; acima.
+            </li>
+            <li>
+              <strong>YouTube</strong>: a fila de música numa chamada de voz
+              toca cada faixa no player do próprio YouTube, no seu dispositivo.
+              Enquanto uma fila está tocando numa chamada em que você está, o
+              seu navegador carrega o script do player do YouTube e o próprio
+              player de <code>www.youtube.com</code>, e as miniaturas das
+              faixas de <code>i.ytimg.com</code>, então o Google vê o seu
+              endereço IP e pode definir cookies próprios. É o player padrão do
+              YouTube, não o de privacidade aprimorada. Quando você adiciona um
+              link ou faz uma busca na fila, o nosso servidor envia esse link
+              ou termo de busca ao YouTube, e ao Spotify se for um link do
+              Spotify, então eles veem isso vindo da gente, não de você.
+            </li>
+            <li>
+              <strong>Embeds de YouTube, Twitch, TikTok e Instagram no Baú</strong>:
+              o Baú é o feed de posts de uma comunidade, e um post pode trazer
+              um vídeo de um desses. O seu navegador carrega o player direto do
+              provedor à medida que o post entra na tela: o YouTube por{" "}
+              <code>www.youtube-nocookie.com</code>, o endereço de privacidade
+              aprimorada do YouTube, a Twitch de{" "}
+              <code>player.twitch.tv</code> ou <code>clips.twitch.tv</code>, o
+              TikTok de <code>www.tiktok.com</code> e o Instagram de{" "}
+              <code>www.instagram.com</code>. O provedor vê o seu endereço IP e
+              trata isso sob os termos dele. Um post trancado mostra só uma
+              miniatura do YouTube, carregada de <code>i.ytimg.com</code>.
             </li>
             <li>
               <strong>Steam, Battle.net e Twitch</strong> — só se você clicar
@@ -721,7 +1010,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "7843ade0",
+      sourceRev: "cb94e682",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -731,31 +1020,43 @@ export const privacyPtBr: LegalDocument = {
               no seu.
             </strong>{" "}
             Clerk, Cloudflare, o nosso armazenamento de objetos, os provedores
-            de STUN/TURN e o Google Fonts operam globalmente e normalmente
-            tratam dados nos Estados Unidos e na Europa. Os servidores de
-            aplicação e o banco de dados rodam na <strong>Fly.io</strong> em{" "}
-            <strong>São Paulo, Brasil (região gru da Fly)</strong>, e o servidor
-            de mídia de voz roda em uma máquina da Vultr também em{" "}
-            <strong>São Paulo</strong>, então uma chamada repassada não sai do
-            Brasil. A pessoa que administra o pqp.gg está no Reino Unido, então
-            tudo que é tratado por um humano é tratado lá.
+            de STUN/TURN, o Google (Fonts, a tag do Google Ads e o YouTube), o
+            Umami e os outros provedores de embed operam globalmente e
+            normalmente tratam dados nos Estados Unidos e na Europa. O servidor de aplicação
+            e o banco de dados rodam na <strong>Vultr</strong> em{" "}
+            <strong>São Paulo, Brasil</strong>. Os relatórios de erro do app web
+            vão para um coletor da Grafana em São Paulo. A pessoa que administra
+            o pqp.gg está no Reino Unido, então tudo que é tratado por um humano
+            é tratado lá.
           </p>
+          <p>Parte dos seus dados sai do Brasil no dia a dia:</p>
+          <ul>
+            <li>
+              Uma chamada de voz repassada pode rodar no nosso servidor de mídia
+              em Miami ou em Londres em vez de São Paulo, dependendo de onde
+              estão os membros do servidor. Veja &quot;Chamadas de voz&quot;.
+            </li>
+            <li>
+              As gravações das watch parties, e os backups noturnos do nosso
+              banco de dados inteiro (mensagens incluídas), ficam no Cloudflare
+              R2, na região leste da América do Norte.
+            </li>
+          </ul>
           <p>
             A base honesta dessas transferências: são serviços comerciais
             comuns, usados nos termos publicados por cada um deles, e é nesses
             termos que as transferências se apoiam. Não existe acordo de
             transferência sob medida negociado para o pqp, porque não existe
-            empresa para assinar e não existe advogado para redigir. O banco de
-            dados já roda no Brasil, então as suas mensagens não saem do país no
-            dia a dia — mas quem lê uma denúncia ou responde a um pedido de
-            exclusão está no Reino Unido, e isso também é uma transferência.
+            empresa para assinar e não existe advogado para redigir. Quem lê uma
+            denúncia ou responde a um pedido de exclusão está no Reino Unido, e
+            isso também é uma transferência.
           </p>
         </>
       ),
     },
     {
       id: "retention",
-      sourceRev: "333cd4dc",
+      sourceRev: "ef48b070",
       heading: "Por quanto tempo a gente guarda cada coisa",
       body: (
         <>
@@ -809,6 +1110,39 @@ export const privacyPtBr: LegalDocument = {
               <strong>Banimentos</strong> — guardados até o dono do servidor
               desfazer, para o banimento sobreviver à saída da pessoa banida.
             </li>
+            <li>
+              <strong>Gravações de watch party</strong>: 30 dias depois do fim
+              da transmissão, e depois apagadas. Se a equipe do servidor
+              desligar &quot;Manter gravação&quot;, uns 10 minutos depois do fim.
+            </li>
+            <li>
+              <strong>Dias de atividade e primeiros passos</strong>: até a sua
+              conta ser excluída.
+            </li>
+            <li>
+              <strong>Cards de alerta do AutoMod</strong>: o mesmo tempo que
+              qualquer outra mensagem daquele canal. A janela de retenção de
+              mensagens do servidor, se ele tiver uma, apaga esses cards como
+              qualquer outra mensagem.
+            </li>
+            <li>
+              <strong>O seu país</strong>: atualizado enquanto você usa o app, e
+              apagado junto com a sua conta. Só contam os membros vistos nos
+              últimos 30 dias quando uma chamada escolhe a região.
+            </li>
+            <li>
+              <strong>Logs do servidor</strong>: 14 dias no Grafana Cloud. A
+              cópia do próprio servidor de API é limitada por tamanho, até 100 MB
+              por serviço, o que no nosso volume cobre vários meses.
+            </li>
+            <li>
+              <strong>Backups do banco de dados</strong>: toda noite a gente
+              copia o banco de dados inteiro para o Cloudflare R2, na região
+              leste da América do Norte, e guarda cada cópia por 30 dias. O
+              servidor que faz a cópia também guarda as cópias dos últimos 7
+              dias. A Vultr, que roda o banco de dados, também guarda os backups
+              dela, por no máximo 14 dias.
+            </li>
           </ul>
           <p>
             <strong>O que sobrevive à exclusão da sua conta.</strong> Excluir a
@@ -832,7 +1166,8 @@ export const privacyPtBr: LegalDocument = {
               ser apagado também.
             </li>
             <li>
-              <strong>Banimentos que você aplicou em outras pessoas</strong>,
+              <strong>Banimentos e silenciamentos que você aplicou em outras
+              pessoas</strong>,
               com o seu id removido. Esse registro é um fato sobre quem foi
               banido e sobre o servidor, não sobre você — removê-lo readmitiria
               em silêncio todo mundo que você já baniu.
@@ -852,6 +1187,49 @@ export const privacyPtBr: LegalDocument = {
             </li>
           </ul>
           <p>
+            Mais algumas coisas continuam depois da exclusão, não por motivo
+            legal:
+          </p>
+          <ul>
+            <li>
+              <strong>Gravações de watch party em que você aparece</strong>,
+              como quem apresenta ou como convidado no ar. Elas pertencem ao
+              canal do servidor e são apagadas quando os 30 dias acabam.
+            </li>
+            <li>
+              <strong>O registro das watch parties que você apresentou</strong>:
+              o canal, quando começou e terminou e, em algumas transmissões, o
+              id da sua conta. Ele continua depois que os arquivos são
+              apagados, e excluir a conta ainda não apaga esse registro. Ele
+              não tem vínculo com a sua conta no banco de dados, então nada o
+              remove sozinho. Você pode escrever para a gente pedindo para
+              apagar.
+            </li>
+            <li>
+              <strong>Cards de alerta do AutoMod sobre você.</strong> O autor do
+              card que o AutoMod posta quando bloqueia a sua mensagem é o
+              AutoMod, não você, então ele não está entre as mensagens que
+              excluir a conta remove. Ele guarda o seu nome, a sua tag e o texto
+              que o AutoMod bloqueou, até a janela de retenção do servidor
+              apagá-lo, se o servidor tiver uma. A equipe do servidor pode
+              apagá-lo antes, e você pode escrever para a gente pedindo para
+              remover.
+            </li>
+            <li>
+              <strong>Feedback que você mandou e chamadas que você
+              avaliou</strong>, com o seu id removido. O texto, os comentários e
+              os dados do dispositivo continuam, para um relato de bug ainda
+              poder ser resolvido.
+            </li>
+            <li>
+              <strong>Backups do banco de dados.</strong> Um backup feito antes
+              de você excluir a conta ainda tem os seus dados, até esse backup
+              ser apagado 30 dias depois de feito. A gente usa backup só para
+              recuperar o serviço depois de uma falha, nunca para trazer de volta
+              uma conta.
+            </li>
+          </ul>
+          <p>
             Fora esses, a gente pode guardar o mínimo necessário para cumprir
             obrigação legal ou para exercer direitos em processo.
           </p>
@@ -860,7 +1238,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "rights",
-      sourceRev: "44a6f510",
+      sourceRev: "ddafcc49",
       heading: "Os seus direitos, e como usar",
       body: (
         <>
@@ -915,8 +1293,13 @@ export const privacyPtBr: LegalDocument = {
               anexados a elas, contas de jogo ligadas, as conversas de que você
               participou, quem você bloqueou, as denúncias que você fez e as
               ações de moderação que você tomou. Ainda não inclui o seu{" "}
-              <code>@handle</code> público, o banner nem os depoimentos. Para
-              esses, escreva para a gente. Contas muito grandes têm um limite, e
+              <code>@handle</code> público, o banner, os depoimentos, os
+              parâmetros de campanha do seu cadastro, o país guardado, os seus dias de
+              atividade e os momentos dos primeiros passos, os seus
+              registros de push, as suas respostas à lista de espera da watch
+              party, as gravações de watch party, as suas reações, a sua lista de
+              amigos, o feedback que você mandou nem as avaliações de chamada. Para esses, escreva para a
+              gente. Contas muito grandes têm um limite, e
               o arquivo avisa quando foi cortado. (<em>Donos</em> de servidor também podem
               exportar um servidor inteiro em{" "}
               <span lang="en">Server Settings</span>, mas essa é uma ferramenta
@@ -930,9 +1313,10 @@ export const privacyPtBr: LegalDocument = {
               — self-service: <strong lang="en">Delete my account</strong>, em{" "}
               <span lang="en">Settings</span>, na seção{" "}
               <span lang="en">&quot;Your data&quot;</span>. Você confirma
-              digitando a sua própria tag. É permanente, não tem como desfazer e
-              não existe backup para restaurar, e é exclusão de verdade em vez
-              de conta escondida: o seu perfil, as configurações, todas as
+              digitando a sua própria tag. É permanente, não tem como desfazer,
+              e a gente não restaura conta excluída a partir dos nossos backups.
+              É exclusão de verdade em vez de conta escondida: o seu perfil, as
+              configurações, todas as
               mensagens que você escreveu em qualquer lugar, as suas reações,
               menções, marcadores de leitura, participações em servidores e em
               conversas, os convites que você criou e os arquivos que você
@@ -1013,7 +1397,10 @@ export const privacyPtBr: LegalDocument = {
             alguém sem isso. O que a gente não alcança é a cópia que já saiu dos
             nossos sistemas: as suas mensagens ainda vão estar em uma exportação
             que um dono de servidor rodou antes de você sair, e em qualquer
-            print que outro membro tirou.
+            print que outro membro tirou. Uma gravação de watch party que alguém
+            baixou guarda a sua voz e a sua imagem se você esteve no ar. Dentro
+            dos nossos sistemas, um backup do banco de dados feito antes de você
+            sair guarda os seus dados até expirar, depois de 30 dias.
           </p>
           <p>
             Você também tem o direito de reclamar a uma autoridade se achar que
@@ -1066,14 +1453,14 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "security",
-      sourceRev: "09946099",
+      sourceRev: "f0285dd6",
       heading: "Segurança",
       body: (
         <p>
           O tráfego é criptografado em trânsito. A voz é criptografada em
-          trânsito nos dois caminhos: de ponta a ponta entre os participantes na
-          sala pequena, e entre você e o nosso servidor de mídia na sala grande,
-          onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
+          trânsito nos dois caminhos: de ponta a ponta entre os participantes no
+          caminho direto, e entre você e o nosso servidor de mídia no
+          repassado, onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
           de vida curta e assinados, em vez de públicos. O nosso servidor se
           recusa a buscar prévia de link em endereços de rede interna. Nenhum
           sistema é perfeitamente seguro, e este é mantido por uma pessoa sem
@@ -1087,16 +1474,18 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "self-hosted",
-      sourceRev: "1eb5616f",
+      sourceRev: "c521ca41",
       heading: "Instâncias self-hosted",
       body: (
         <p>
           Se você roda o pqp por conta própria, você escolhe o banco de dados, a
           aplicação do Clerk e a hospedagem, e você é o controlador dos seus
           usuários. O pqp.gg não recebe os dados dos seus usuários. A nossa
-          publicidade também não chega na sua cópia: a tag de conversão do
-          Google Ads descrita acima é adicionada só na compilação do pqp.gg, então
-          uma instância self-hosted sai sem ela. Conte para os seus membros como
+          publicidade, o nosso analytics e o nosso relatório de erros também
+          não chegam na sua cópia: a tag do Google Ads e o Umami
+          descritos acima são adicionados só na compilação do pqp.gg, e o
+          Grafana Faro só liga quando a compilação recebe o endereço do nosso
+          coletor, então uma instância self-hosted não manda nada para eles. Conte para os seus membros como
           você lida com as informações deles.
         </p>
       ),

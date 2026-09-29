@@ -127,6 +127,41 @@ export function conversationRoutePath(channelId?: string | null): string {
   return channelId ? `/app/dm/${encodeURIComponent(channelId)}` : "/app/dm";
 }
 
+/** Past this, a link's stamp belongs to a history entry being revisited. */
+const LINK_STAMP_TTL_MS = 10_000;
+
+/** Router state a link to a message carries: when it was followed. */
+export interface MessageLinkState {
+  linkedAt: number;
+}
+
+/** State for `navigate` when the reader follows a link to a message. */
+export function messageLinkState(now: number = Date.now()): MessageLinkState {
+  return { linkedAt: now };
+}
+
+/**
+ * When the link that produced this address was followed. The router applies
+ * a navigation in a transition, so the app can see the new address well after
+ * the click, and a send in between must still count as newer than the link.
+ * A stamp older than `LINK_STAMP_TTL_MS` is a history entry being revisited,
+ * not the click that made it, so the time is now.
+ */
+export function linkFollowedAt(state: unknown, now: number = Date.now()): number {
+  const linkedAt =
+    state && typeof state === "object"
+      ? (state as Partial<MessageLinkState>).linkedAt
+      : undefined;
+  if (
+    typeof linkedAt === "number" &&
+    linkedAt <= now &&
+    now - linkedAt < LINK_STAMP_TTL_MS
+  ) {
+    return linkedAt;
+  }
+  return now;
+}
+
 /**
  * Permalink to one message. Carries the server id as well as the channel id:
  * without it the recipient has no way to load the channel, which is why the

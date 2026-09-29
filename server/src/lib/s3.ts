@@ -563,6 +563,70 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
   };
 }
 
+/**
+ * The first `length` bytes of an object, for a caller that has to look at what
+ * was actually stored (a HEAD only reports what the uploader claimed).
+ *
+ * A ranged GET, so a 10 MiB video is never pulled into this process. A store
+ * that ignores `Range` and answers 200 with the whole body is handled by
+ * reading only the prefix and cancelling the stream. Returns null when the
+ * object is not there; throws for anything else, like `headObject`.
+ */
+export async function getObjectPrefix(
+  key: string,
+  length: number,
+): Promise<Uint8Array | null> {
+  const url = signRequest({
+    method: "GET",
+    key,
+    ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+  }).url;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Range: `bytes=0-${length - 1}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+
+  if (response.status === 404 || !response.ok || !response.body) {
+    // Cancel an error body instead of leaving it for the collector: undici
+    // keeps the connection checked out until the body is consumed or cancelled.
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 404) {
+      return null;
+    }
+    throw new StorageError(`Storage returned HTTP ${response.status} for GET`);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  try {
+    while (total < length) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      chunks.push(value);
+      total += value.length;
+    }
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks).subarray(0, length);
+}
+
 /** Idempotent: an object that is already gone is a success, not an error. */
 export async function deleteObject(
   key: string,

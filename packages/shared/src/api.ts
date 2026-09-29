@@ -612,6 +612,14 @@ export const serverSchema = z.object({
   /** Whether this server has opted into the rollout-gated Baú / Home feed. */
   communityHomeEnabled: z.boolean().default(false),
   /**
+   * Bumped by every flip of `communityHomeEnabled` (the owner's switch). A
+   * copy of the flag only ever moves to a higher version, so a late or
+   * duplicated `community-home-update` frame cannot undo a newer flip.
+   * Optional so a response from an API that predates it still parses; read a
+   * missing value as 0.
+   */
+  communityHomeVersion: z.number().int().nonnegative().optional(),
+  /**
    * In-app Overview identity. Defaulted so a payload from an API that
    * predates them still parses. Featured lives only on the public `/c/`
    * poster, not here — in-app the pinned Baú post is the featured moment.
@@ -634,9 +642,13 @@ export const serverSchema = z.object({
   showOnProfile: z.boolean().default(true),
 });
 
-/** `GET /api/servers/:id/home/config`: this server's own Baú opt-in. */
+/**
+ * `GET /api/servers/:id/home/config`: this server's own Baú opt-in, with the
+ * version of that value (see `communityHomeVersion` on the server).
+ */
 export const serverCommunityHomeConfigSchema = z.object({
   enabled: z.boolean(),
+  version: z.number().int().nonnegative().optional(),
 });
 export type ServerCommunityHomeConfig = z.infer<
   typeof serverCommunityHomeConfigSchema
@@ -1062,6 +1074,22 @@ export const moveChannelSchema = z.object({
   index: z.number().int().min(0),
 });
 
+/**
+ * WS nudge: a server's channel list changed (a channel was created, renamed,
+ * edited, moved or deleted). Content-free on purpose: it names no channel.
+ * Each client refetches `GET /api/servers/:id/channels`, which applies
+ * privacy and VIEW_CHANNEL overwrites per viewer. Addressed per user, never
+ * fanned out on a channel: to every member for a channel everyone can see,
+ * and only to the people who can see it otherwise, so a member is never told
+ * that a channel hidden from them changed (`notifyChannelsUpdate`).
+ */
+export const channelsUpdateSchema = z.object({
+  type: z.literal("channels-update"),
+  serverId: z.string().uuid(),
+});
+
+export type ChannelsUpdate = z.infer<typeof channelsUpdateSchema>;
+
 export const createInviteSchema = z.object({
   maxUses: z.number().int().positive().nullable().optional(),
   expiresInHours: z.number().int().positive().nullable().optional(),
@@ -1140,8 +1168,17 @@ export const acquisitionSchema = z
 
 export type AcquisitionInput = z.infer<typeof acquisitionSchema>;
 
+/**
+ * The longest display name anywhere a person can type one: onboarding,
+ * Settings, the API, and the two native clients. It was 32 in onboarding and
+ * Android, 100 here, and nothing in Settings, so a name that one screen
+ * refused another saved. Names that predate the limit (a Clerk full name can
+ * be longer) still display in full; only writing a new one is bound by it.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 32;
+
 export const updateProfileSchema = z.object({
-  displayName: z.string().min(1).max(100).optional(),
+  displayName: z.string().trim().min(1).max(DISPLAY_NAME_MAX_LENGTH).optional(),
   username: usernameSchema.optional(),
   avatarUrl: z
     .string()
@@ -1406,12 +1443,19 @@ export const banMemberSchema = z.object({
  * Optional body on `POST /api/channels/:id/read`. Empty means "read up to now"
  * (opening the channel). `lastReadAt` is how Mark unread rewinds the cursor
  * to just before a chosen message.
+ *
+ * `forwardOnly` makes an explicit `lastReadAt` move the cursor forward only:
+ * the live read ack sends it, because the cursor may already sit past the
+ * message it acks (an open's read to NOW() landed first). Mark unread leaves
+ * it off, since a rewind is the point. An API that predates the field strips
+ * it and applies the cursor as before.
  */
 export const markChannelReadSchema = z.object({
   lastReadAt: z
     .string()
     .refine((value) => Number.isFinite(Date.parse(value)), "Invalid timestamp")
     .optional(),
+  forwardOnly: z.boolean().optional(),
 });
 
 /**

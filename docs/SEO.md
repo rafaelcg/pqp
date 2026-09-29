@@ -49,15 +49,15 @@ component.
 
 **Added in this PR:**
 
-- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`),
-  with `sameAs` pointing at the two other public places this product answers
-  for itself today: the GitHub repository and the Google Play listing
-  (`docs/ANDROID_RELEASE.md` records production access as open for it). The
-  App Store is deliberately absent: TestFlight is a beta enrollment, not a
-  public listing.
+- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`).
+  Its `sameAs` (`ORGANIZATION_SAME_AS`) names the GitHub repository and the
+  Google Play listing. The Play listing has been public since 2026-09-28. The
+  App Store is absent: TestFlight is a beta enrollment, not a public listing.
 - The landing's `SoftwareApplication` node now carries that same `sameAs` and
   an `operatingSystem` list that names every platform the product actually
-  ships on (Web, Windows, macOS, Linux, Android) instead of just "Web".
+  ships on (`SOFTWARE_OPERATING_SYSTEMS`: Web, Windows, macOS, Linux, Android,
+  iOS) instead of just "Web". `client/index.html` carries the same list, and
+  a test keeps the two equal.
 - `Article` + `FAQPage` + `BreadcrumbList` JSON-LD on the six new guides
   (`blog-meta.ts`'s `jsonLdForArticle`), built from the same FAQ copy the page
   renders, same rule the marketing pages already follow.
@@ -121,12 +121,11 @@ explanation for each, to revisit once the exact URLs are in hand:
 - **The Search Console buckets without exact URLs** (see above) are read from
   Rafael's count snapshot, not verified against the live Search Console UI.
   Confirm the exact URLs before spending more effort on any one bucket.
-- **Play Store and TestFlight are not full public store listings yet.** The
-  Play listing has production access open (per `docs/ANDROID_RELEASE.md`) and
-  is linked from the new guides and from `Organization.sameAs`; TestFlight is
-  a beta enrollment and is deliberately kept out of structured data for that
-  reason. Update `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once an App
-  Store listing exists.
+- **iOS has no public store listing yet.** The Google Play listing has been public
+  since 2026-09-28. It is linked from the guides and from `Organization.sameAs`.
+  TestFlight is a beta enrollment, so structured data leaves it out. Add the
+  App Store listing to `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once it
+  exists.
 
 ## Keyword plan
 

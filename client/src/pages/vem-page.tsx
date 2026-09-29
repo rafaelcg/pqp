@@ -11,14 +11,8 @@ import {
   Lock,
   Mic,
 } from "lucide-react";
-import {
-  Fragment,
-  useEffect,
-  useRef,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Fragment, useRef, type CSSProperties, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import type { DiscordImportPlan } from "@pqp/shared";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
@@ -26,6 +20,7 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { useScrollReveal } from "@/hooks/use-scroll-reveal";
+import { useScrollToHash } from "@/hooks/use-scroll-to-hash";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import {
@@ -1266,23 +1261,6 @@ function Compare() {
       </ul>
     </>
   );
-}
-
-/**
- * `/vem#importar` has to land on the section even though the page is a lazy
- * chunk the browser's own anchor jump runs before. One effect, once, after the
- * first paint of this page.
- */
-function useScrollToHash() {
-  const { hash } = useLocation();
-  useEffect(() => {
-    if (!hash) return;
-    const id = decodeURIComponent(hash.slice(1));
-    const target = document.getElementById(id);
-    if (target) {
-      target.scrollIntoView({ block: "start" });
-    }
-  }, [hash]);
 }
 
 // ---------------------------------------------------------------------------

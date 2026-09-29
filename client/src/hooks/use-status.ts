@@ -5,7 +5,7 @@ import {
   type ManualStatus,
   type UserStatus,
 } from "@pqp/shared";
-import { updatePreferences } from "@/lib/api";
+import { fetchMe, updatePreferences } from "@/lib/api";
 import { translateMessage } from "@/lib/i18n";
 import { setDoNotDisturb } from "@/lib/notifications";
 
@@ -48,6 +48,11 @@ export interface StatusControls {
   /** Set when the write failed and `manual` was rolled back to the truth. */
   error: string | null;
   setManual: (next: ManualStatus) => void;
+  /**
+   * Adopt a choice another tab or device of this account just made, as told by
+   * the server's `own-status` frame. Never writes anything back.
+   */
+  adoptRemote: (next: ManualStatus) => void;
 }
 
 export interface UseUserStatusOptions {
@@ -173,6 +178,69 @@ export function useUserStatus({
   }, [connected, idle]);
 
   // ----------------------------------------------------------- manual
+  /**
+   * `own-status` frames that arrived while this tab's own write was in flight.
+   *
+   * Not applied on arrival: the server sends the frame to every socket of the
+   * account, this one included, so one of them is usually the echo of the very
+   * write in flight, and adopting it mid-save would fight the optimistic value.
+   * Not dropped either: one of them may be another device's choice, and nothing
+   * would ever correct this tab if it were thrown away. They are reconciled
+   * once the write settles, in `reconcileAfterSave`.
+   */
+  const heldRemoteRef = useRef<ManualStatus[]>([]);
+  /**
+   * Bumped on every remote adoption and every local save, so an older refetch
+   * can tell it lost to either.
+   */
+  const choiceGenerationRef = useRef(0);
+
+  const adoptRemote = useCallback((next: ManualStatus) => {
+    if (savingRef.current) {
+      heldRemoteRef.current.push(next);
+      return;
+    }
+    choiceGenerationRef.current += 1;
+    setManualState(next);
+  }, []);
+
+  /**
+   * Settle a finished write against whatever the other devices said meanwhile.
+   *
+   * Frames that all agree with the value this tab settled on are the echo of
+   * its own write (or another device picking the same thing): nothing to do,
+   * and no request. A frame that disagrees means two devices wrote at once, and
+   * which one Postgres kept cannot be read off arrival order here, because the
+   * echo of this tab's write and the other device's frame can reach this socket
+   * in either order. So the stored value is read back and wins. If that read
+   * fails, the newest frame this socket was sent is the best evidence left.
+   */
+  const reconcileAfterSave = useCallback((settled: ManualStatus) => {
+    const held = heldRemoteRef.current;
+    heldRemoteRef.current = [];
+    if (held.every((value) => value === settled)) {
+      return;
+    }
+    const latestHeld = held[held.length - 1]!;
+    const generation = choiceGenerationRef.current;
+    // A newer frame or a newer save of this tab's own has a fresher answer
+    // than this read, which was issued before either of them. Checking that no
+    // save is in flight is not enough: a save can start and settle while this
+    // read is still on the wire, and then nothing would be in flight.
+    const stillCurrent = () => choiceGenerationRef.current === generation;
+    void fetchMe()
+      .then((me) => {
+        if (stillCurrent()) {
+          setManualState(me.preferences?.status ?? DEFAULT_MANUAL_STATUS);
+        }
+      })
+      .catch(() => {
+        if (stillCurrent()) {
+          setManualState(latestHeld);
+        }
+      });
+  }, []);
+
   const setManual = useCallback(
     (next: ManualStatus) => {
       setError(null);
@@ -188,22 +256,28 @@ export function useUserStatus({
       setManualState(next);
       setSaving(true);
       savingRef.current = true;
+      choiceGenerationRef.current += 1;
+      heldRemoteRef.current = [];
+      let settled: ManualStatus = previous;
       void updatePreferences({ status: next })
         .then((response) => {
           // Trust the server's merged copy over what was sent, so a value it
           // rejected or normalised never lingers on screen.
-          setManualState(response.preferences.status ?? DEFAULT_MANUAL_STATUS);
+          settled = response.preferences.status ?? DEFAULT_MANUAL_STATUS;
+          setManualState(settled);
         })
         .catch(() => {
+          settled = previous;
           setManualState(previous);
           setError(translateMessage("status.saveFailed"));
         })
         .finally(() => {
           setSaving(false);
           savingRef.current = false;
+          reconcileAfterSave(settled);
         });
     },
-    [manual],
+    [manual, reconcileAfterSave],
   );
 
   return {
@@ -212,6 +286,7 @@ export function useUserStatus({
     saving,
     error,
     setManual,
+    adoptRemote,
   };
 }
 

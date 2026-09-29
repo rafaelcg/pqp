@@ -17,6 +17,10 @@ import { cn } from "@/lib/utils";
  * Newlines stay (authors write paragraphs). The clamp is CSS, so the first
  * paint is already right, and the button appears only when the text actually
  * overflows the clamp.
+ *
+ * Long words break anywhere. A pasted URL is one unbroken word, and without
+ * this it ran past the column and was cut off at the card's edge, where the
+ * clamp could not see it (it only measures height).
  */
 export function CommunityAboutText({
   about,
@@ -59,7 +63,7 @@ export function CommunityAboutText({
       <p
         ref={textRef}
         className={cn(
-          "whitespace-pre-line text-base leading-7 text-text",
+          "whitespace-pre-line text-base leading-7 text-text [overflow-wrap:anywhere]",
           !open && clampClass,
         )}
         data-community-about-open={open ? "1" : "0"}

@@ -1,6 +1,7 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import {
+  applyConversationMessage,
   conversationChannel,
   conversationSubtitle,
   conversationTitle,
@@ -10,6 +11,7 @@ import {
   touchConversation,
   unreadFromConversations,
   upsertConversation,
+  type ConversationMessage,
 } from "./conversations";
 
 function person(name: string, id = name): PublicUser {
@@ -196,6 +198,119 @@ describe("touchConversation", () => {
     expect(touchConversation(list, "some-server-channel", "2026-08-02T00:00:00.000Z")).toBe(
       list,
     );
+  });
+});
+
+describe("applyConversationMessage", () => {
+  const OLDER = "2026-08-01T00:00:00.000Z";
+  const NEWER = "2026-08-02T00:00:00.000Z";
+
+  function sent(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
+    return {
+      channelId: "b",
+      authorId: "me",
+      authorName: "Eu",
+      body: "**bora** hoje?",
+      createdAt: NEWER,
+      attachments: [],
+      ...overrides,
+    };
+  }
+
+  it("moves the row and replaces its preview with the redacted message", () => {
+    // The author's own send and a message in the open conversation reach the
+    // client only as a broadcast. The row has to read as it will after a
+    // reload: same time, same redaction, the author kept for the prefix.
+    const list = [
+      summary("a", { lastMessageAt: "2026-07-31T00:00:00.000Z" }),
+      summary("b", {
+        lastMessageAt: OLDER,
+        lastMessage: {
+          authorId: "ana",
+          authorName: "Ana",
+          preview: "a mensagem anterior",
+          isAttachment: false,
+          isGif: false,
+        },
+      }),
+    ];
+    const next = applyConversationMessage(list, sent(), { previewsOn: true });
+    expect(next[0]).toMatchObject({
+      channelId: "b",
+      lastMessageAt: NEWER,
+      lastMessage: {
+        authorId: "me",
+        authorName: "Eu",
+        preview: "bora hoje?",
+        isAttachment: false,
+        isGif: false,
+      },
+    });
+  });
+
+  it("labels an attachment-only message the way the server does", () => {
+    const list = [summary("b", { lastMessageAt: OLDER })];
+    const next = applyConversationMessage(
+      list,
+      sent({ body: "", attachments: [{ contentType: "image/gif" }] }),
+      { previewsOn: true },
+    );
+    expect(next[0]!.lastMessage).toMatchObject({
+      preview: "",
+      isAttachment: true,
+      isGif: true,
+    });
+  });
+
+  it("moves the row but keeps its line when previews are off", () => {
+    // The server sends no `lastMessage` to a reader with previews off. The
+    // client must not show text it would not have been sent.
+    const list = [summary("b", { lastMessageAt: OLDER, lastMessage: null })];
+    const next = applyConversationMessage(list, sent(), { previewsOn: false });
+    expect(next[0]).toMatchObject({ lastMessageAt: NEWER, lastMessage: null });
+  });
+
+  it("never puts an older message over a newer one", () => {
+    const list = [summary("b", { lastMessageAt: NEWER })];
+    expect(
+      applyConversationMessage(list, sent({ createdAt: OLDER }), {
+        previewsOn: true,
+      }),
+    ).toBe(list);
+  });
+
+  it("takes a message over a row stamped by this device's clock", () => {
+    // `channel-activity` moved the row with the reader's clock, which runs
+    // ahead of the server's. The next real message must still land.
+    const ahead = "2026-08-03T00:00:00.000Z";
+    const list = [summary("b", { lastMessageAt: ahead })];
+    const next = applyConversationMessage(list, sent(), {
+      previewsOn: true,
+      localStampedAt: ahead,
+    });
+    expect(next[0]).toMatchObject({
+      lastMessageAt: NEWER,
+      lastMessage: { preview: "bora hoje?" },
+    });
+  });
+
+  it("still orders against a server time that replaced a local stamp", () => {
+    const list = [summary("b", { lastMessageAt: NEWER })];
+    expect(
+      applyConversationMessage(list, sent({ createdAt: OLDER }), {
+        previewsOn: true,
+        localStampedAt: "2026-08-03T00:00:00.000Z",
+      }),
+    ).toBe(list);
+  });
+
+  it("leaves the list alone for a server channel", () => {
+    const list = [summary("a", { lastMessageAt: OLDER })];
+    expect(
+      applyConversationMessage(list, sent({ channelId: "server-channel" }), {
+        previewsOn: true,
+      }),
+    ).toBe(list);
   });
 });
 

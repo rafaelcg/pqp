@@ -124,14 +124,23 @@ export async function fetchMappedDiscordTemplate(
     throw new DiscordTemplateUnavailableError();
   }
 
+  // The link was fine by now: a body we cannot read is Discord's problem, so
+  // it must not come back as "that is not a template link".
   let payload: unknown;
   try {
     payload = JSON.parse(response.body.toString("utf8"));
   } catch {
-    throw new DiscordImportParseError();
+    throw new DiscordTemplateUnavailableError();
   }
 
-  return { code, plan: mapGuildTemplate(payload) };
+  try {
+    return { code, plan: mapGuildTemplate(payload) };
+  } catch (error) {
+    if (error instanceof DiscordImportParseError) {
+      throw new DiscordTemplateUnavailableError();
+    }
+    throw error;
+  }
 }
 
 async function insertChannels(

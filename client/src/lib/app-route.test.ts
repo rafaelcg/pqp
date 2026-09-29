@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   channelRoutePath,
   conversationRoutePath,
+  linkFollowedAt,
+  messageLinkState,
   messageRoutePath,
   parseAppRoute,
   pickOpenableServer,
@@ -251,5 +253,24 @@ describe("pickOpenableServer", () => {
 
   it("returns null when they have no server at all", () => {
     expect(pickOpenableServer("gone", [])).toBeNull();
+  });
+});
+
+describe("linkFollowedAt", () => {
+  it("is when the link was followed, for a fresh stamp", () => {
+    expect(linkFollowedAt(messageLinkState(1_000), 3_000)).toBe(1_000);
+  });
+
+  it("is now for an address with no stamp", () => {
+    expect(linkFollowedAt(null, 3_000)).toBe(3_000);
+    expect(linkFollowedAt({ other: true }, 3_000)).toBe(3_000);
+  });
+
+  it("is now for a history entry revisited later", () => {
+    expect(linkFollowedAt(messageLinkState(1_000), 60_000)).toBe(60_000);
+  });
+
+  it("is now for a stamp from the future, such as another clock", () => {
+    expect(linkFollowedAt(messageLinkState(9_000), 3_000)).toBe(3_000);
   });
 });
