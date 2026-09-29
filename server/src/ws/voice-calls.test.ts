@@ -7,6 +7,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
@@ -1119,6 +1120,57 @@ describeDb("rings across two instances", () => {
     expect(a.voice.isConversationRinging(CONVERSATION)).toBe(true);
     expect(frame(calleeOnB, "call-ring-cancelled")).toBeUndefined();
     expect(fakes.createMessageCalls).toHaveLength(0);
+  });
+
+  it("a registry that cannot be read after a hangup ends the ring at the grace, not the ring timeout", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    await a.registry.settleVoiceRegistryWrites();
+    // Every read A makes from here on fails: the hangup window's, and then
+    // the grace's. A's next pool dials a port nothing listens on; B keeps
+    // the pool it already has.
+    const realUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = "postgresql://nobody:nothing@127.0.0.1:1/none";
+    onTestFinished(() => {
+      process.env.DATABASE_URL = realUrl;
+    });
+    await a.db.closePool();
+    const hungUpAt = Date.now();
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "leave-voice-room" },
+    );
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, a.voice.CALL_HANGUP_CONFIRM_MS + 300),
+    );
+    // A failed read in the short window ends nothing on its own.
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(true);
+
+    const deadline = hungUpAt + a.voice.CALL_EMPTY_ROOM_GRACE_MS + 2_000;
+    while (frame(calleeOnB, "call-ring-cancelled") === undefined) {
+      if (Date.now() > deadline) {
+        throw new Error("the ring outlived the grace");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    // The grace's own read failed too, and a failed grace read ends the
+    // ring, as it always has.
+    expect(Date.now() - hungUpAt).toBeGreaterThanOrEqual(
+      a.voice.CALL_EMPTY_ROOM_GRACE_MS - 50,
+    );
+    expect(frame(calleeOnB, "call-ring-cancelled")).toMatchObject({
+      reason: "cancelled",
+    });
   });
 
   it("a row the hangup window still sees gets a second look at the grace, not the ring timeout", async () => {

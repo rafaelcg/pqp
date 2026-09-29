@@ -9494,14 +9494,20 @@ function endRingOnHangup(voiceChannelId: string): void {
  * When the timer fires, the ring ends if the call is still empty: nobody in
  * this process's map and, with the registry on, no row on any machine.
  *
- * The two kinds differ when the rows do not say "empty". The grace has run
- * its full length by then: a failed read ends the ring and a row keeps it,
- * as they always have. A hangup's short window is only allowed to END a
- * ring early, never to decide it lives on. So on a failed read, or on a row
- * that may be stale (a tab-close beacon on the other machine retires the
- * seat there, and that machine's delete can still be in flight when this
- * read runs), it falls back to the rest of the grace, which reads again.
- * The worst case is the old five seconds of ringing, never a ring left up
+ * The two kinds differ when the rows do not say "empty":
+ *
+ * | read      | `grace` (the full five seconds) | `hangup` (the short window) |
+ * |-----------|---------------------------------|-----------------------------|
+ * | no rows   | ends the ring                   | ends the ring               |
+ * | rows      | keeps it (somebody is there)    | falls back to the grace     |
+ * | failed    | ends the ring                   | falls back to the grace     |
+ *
+ * The grace column is what it has always been. A hangup's short window is
+ * only allowed to END a ring early, never to decide it lives on: a failed
+ * read, or a row that may be stale (a tab-close beacon on the other machine
+ * retires the seat there, and that machine's delete can still be in flight
+ * when this read runs), gets a second read at the grace. So the worst case
+ * after a hangup is the old five seconds of ringing, never a ring left up
  * until it times out.
  */
 function armEmptyRoomTimer(
@@ -9519,22 +9525,17 @@ function armEmptyRoomTimer(
       void endConversationRing(voiceChannelId, "cancelled");
       return;
     }
-    const stillOurs = () =>
+    const stillEmptyAndOurs = () =>
+      getRoomPeers(voiceChannelId).length === 0 &&
       conversationRings.get(voiceChannelId) === ring &&
       ring.emptyRoomTimer === null;
-    // A hangup's own row delete may still be queued; read after it lands.
-    const rows =
-      kind === "hangup"
-        ? settledRowWrites(voiceChannelId).then(() =>
-            listVoicePeersInRoom(voiceChannelId),
-          )
-        : listVoicePeersInRoom(voiceChannelId).catch(() => []);
+    const end = () => {
+      if (stillEmptyAndOurs()) {
+        void endConversationRing(voiceChannelId, "cancelled");
+      }
+    };
     const restOfGrace = () => {
-      if (
-        kind === "hangup" &&
-        stillOurs() &&
-        getRoomPeers(voiceChannelId).length === 0
-      ) {
+      if (stillEmptyAndOurs()) {
         armEmptyRoomTimer(
           ring,
           voiceChannelId,
@@ -9543,15 +9544,21 @@ function armEmptyRoomTimer(
         );
       }
     };
-    void rows.then((found) => {
-      if (found.length > 0) {
-        restOfGrace();
-        return;
-      }
-      if (getRoomPeers(voiceChannelId).length === 0 && stillOurs()) {
-        void endConversationRing(voiceChannelId, "cancelled");
-      }
-    }, restOfGrace);
+    // Every outcome, spelled out per kind (the table above). The only one
+    // that leaves the ring alone is a grace read that found somebody.
+    const onRows = kind === "hangup" ? restOfGrace : () => undefined;
+    const onFailure = kind === "hangup" ? restOfGrace : end;
+    // A hangup's own row delete may still be queued; read after it lands.
+    const read =
+      kind === "hangup"
+        ? settledRowWrites(voiceChannelId).then(() =>
+            listVoicePeersInRoom(voiceChannelId),
+          )
+        : listVoicePeersInRoom(voiceChannelId);
+    void read.then(
+      (found) => (found.length > 0 ? onRows() : end()),
+      onFailure,
+    );
   }, delayMs);
 }
 
