@@ -940,14 +940,17 @@ export function createChatController(
     // tail page lands, it is no longer optimistic and would be dropped. A row
     // carrying a nonce was sent from this client (a fetched page never has
     // one). The nonce stays on the row after it is confirmed, so it alone
-    // does not say "racing this page": only a row newer than the page's last
-    // one is. A send older than that and missing from the page sits outside
-    // it, and carrying it would hang it above the page with a gap between.
-    const pageEnd = next.length > 0 ? toStoredMessage(next[next.length - 1]) : null;
+    // does not say "racing this page". A send older than the page's first row
+    // sits outside the page, and carrying it would hang it above the page with
+    // a gap between, so it goes. A send inside the page's span or after it and
+    // missing from the page was not committed when the page was read: the
+    // server stamps `createdAt` when its transaction starts, so a message that
+    // committed sooner can be in the page with a later time than the send.
+    const pageStart = next.length > 0 ? toStoredMessage(next[0]) : null;
     const racedThePage = (message: ChatMessage) =>
       !newerAvailable &&
       message.nonce !== undefined &&
-      (pageEnd === null || byPosition(message, pageEnd) > 0);
+      (pageStart === null || byPosition(message, pageStart) > 0);
     const inFlight = messages.filter(
       (message) =>
         !stored.has(message.id) &&
