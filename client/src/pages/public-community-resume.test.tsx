@@ -43,24 +43,31 @@ describe("ResumeSignUp", () => {
 
   it("reopens the modal on the code step for a browser that tapped the button", () => {
     localStorage.setItem(SIGNUP_ASSIST_OVERRIDE_KEY, "on");
-    noteSignupCta("community");
-    render(<ResumeSignUp appHref="/app?join=moon" />);
+    noteSignupCta("community", "moon");
+    render(<ResumeSignUp slug="moon" appHref="/app?join=moon" />);
     expect(clerk.openSignUp).toHaveBeenCalledWith({ forceRedirectUrl: "/app?join=moon" });
   });
 
+  it("does not finish a sign-up started for one community into another", () => {
+    localStorage.setItem(SIGNUP_ASSIST_OVERRIDE_KEY, "on");
+    noteSignupCta("community", "moon");
+    render(<ResumeSignUp slug="other" appHref="/app?join=other" />);
+    expect(clerk.openSignUp).not.toHaveBeenCalled();
+  });
+
   it("does nothing with the flag off", () => {
-    noteSignupCta("community");
-    render(<ResumeSignUp appHref="/app?join=moon" />);
+    noteSignupCta("community", "moon");
+    render(<ResumeSignUp slug="moon" appHref="/app?join=moon" />);
     expect(clerk.openSignUp).not.toHaveBeenCalled();
   });
 
   it("does nothing for a visitor who never tapped, or with nothing pending", () => {
     localStorage.setItem(SIGNUP_ASSIST_OVERRIDE_KEY, "on");
-    render(<ResumeSignUp appHref="/app?join=moon" />);
+    render(<ResumeSignUp slug="moon" appHref="/app?join=moon" />);
     expect(clerk.openSignUp).not.toHaveBeenCalled();
-    noteSignupCta("community");
+    noteSignupCta("community", "moon");
     clerk.client.signUp = undefined;
-    render(<ResumeSignUp appHref="/app?join=moon" />);
+    render(<ResumeSignUp slug="moon" appHref="/app?join=moon" />);
     expect(clerk.openSignUp).not.toHaveBeenCalled();
   });
 });

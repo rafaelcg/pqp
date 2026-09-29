@@ -105,7 +105,15 @@ export function secondsBucket(seconds: number): string {
 interface StoredCta {
   at: number;
   surface: string;
+  /** The community slug the tap was for. Resume and redirect never leave it. */
+  target: string;
 }
+
+export const SIGNUP_RETURN_LOCK_KEY = "pqp:signup-return-lock";
+/** Long enough for every tab to boot, short enough to be gone by the next sign-up. */
+export const SIGNUP_RETURN_LOCK_MS = 10_000;
+/** Clerk stamps `createdAt` on its clock, the tap on ours. */
+export const SIGNUP_CLOCK_SKEW_MS = 60_000;
 
 /**
  * The tap on a sign-up button, before Clerk takes over. Kept in localStorage,
@@ -114,6 +122,7 @@ interface StoredCta {
  */
 export function noteSignupCta(
   surface: string,
+  target: string,
   storage: ReadWriteStorage | null = safeLocalStorage(),
   now: number = Date.now(),
   ua: string = callerUa(),
@@ -125,7 +134,7 @@ export function noteSignupCta(
   try {
     storage?.setItem(
       SIGNUP_CTA_KEY,
-      JSON.stringify({ at: now, surface } satisfies StoredCta),
+      JSON.stringify({ at: now, surface, target } satisfies StoredCta),
     );
   } catch {
     // Denied: the click is counted, the return will not have a time.
@@ -141,7 +150,8 @@ function readCta(storage: Pick<Storage, "getItem"> | null, now: number): StoredC
       !parsed ||
       typeof parsed !== "object" ||
       typeof (parsed as StoredCta).at !== "number" ||
-      typeof (parsed as StoredCta).surface !== "string"
+      typeof (parsed as StoredCta).surface !== "string" ||
+      typeof (parsed as StoredCta).target !== "string"
     ) {
       return null;
     }
@@ -152,15 +162,42 @@ function readCta(storage: Pick<Storage, "getItem"> | null, now: number): StoredC
   }
 }
 
+/** When Clerk says the signed-in account was created, in ms, or null. */
+export function clerkAccountCreatedAtMs(): number | null {
+  try {
+    const created = (
+      window as unknown as { Clerk?: { user?: { createdAt?: Date | number | null } | null } }
+    ).Clerk?.user?.createdAt;
+    const ms = created instanceof Date ? created.getTime() : created;
+    return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The account exists and the app is up: `signup_return`, with how long the
- * round trip took and where it started. Consumed, so a reload never counts a
- * second return. Call it where the arrival intents are consumed.
+ * round trip took and where it started.
+ *
+ * COUNTED ONLY FOR A SIGN-UP THIS TAP CAUSED. A tap that was abandoned, then
+ * an existing account signed in some other way inside the hour, would
+ * otherwise read as a completed sign-up. So the account must have been created
+ * at or after the tap (`accountCreatedAtMs`, from Clerk, with a minute of
+ * clock skew allowed); an unknown creation time counts nothing. The record is
+ * consumed either way.
+ *
+ * COUNTED ONCE ACROSS TABS. Two tabs that boot together both read the record
+ * before either removes it, so removing is not a claim. A short-lived lock key
+ * is: the first tab to find it absent writes its own id and reads it back, and
+ * only the tab that reads its own id counts. localStorage has no compare and
+ * set, so a sub-millisecond double claim is still possible; that costs one
+ * duplicate event, never a wrong one.
  */
 export function noteSignupReturn(
   storage: ReadWriteStorage | null = safeLocalStorage(),
   now: number = Date.now(),
   ua: string = callerUa(),
+  accountCreatedAtMs: number | null = clerkAccountCreatedAtMs(),
 ): void {
   const cta = readCta(storage, now);
   try {
@@ -169,6 +206,8 @@ export function noteSignupReturn(
     // Nothing to do about it.
   }
   if (!cta) return;
+  if (accountCreatedAtMs === null || accountCreatedAtMs < cta.at - SIGNUP_CLOCK_SKEW_MS) return;
+  if (!claimReturn(storage, now)) return;
   const seconds = Math.round((now - cta.at) / 1000);
   const data: TrackData = {
     surface: cta.surface,
@@ -180,6 +219,19 @@ export function noteSignupReturn(
   track("signup_return", data);
 }
 
+function claimReturn(storage: ReadWriteStorage | null, now: number): boolean {
+  if (!storage) return false;
+  try {
+    const held = Number(storage.getItem(SIGNUP_RETURN_LOCK_KEY)?.split(":")[0]);
+    if (Number.isFinite(held) && now - held < SIGNUP_RETURN_LOCK_MS) return false;
+    const mine = `${now}:${Math.random().toString(36).slice(2)}`;
+    storage.setItem(SIGNUP_RETURN_LOCK_KEY, mine);
+    return storage.getItem(SIGNUP_RETURN_LOCK_KEY) === mine;
+  } catch {
+    return false;
+  }
+}
+
 /** Whether Clerk holds a sign-up that is waiting on a code. */
 export interface PendingSignUp {
   status?: string | null;
@@ -188,7 +240,8 @@ export interface PendingSignUp {
 
 /**
  * Open the modal again? Only when ALL of these hold: the flag is on, this very
- * browser tapped the sign-up button on this page within the hour (so the
+ * browser tapped the sign-up button for THIS community within the hour (a
+ * pending sign-up started for community A must never finish into B) (so the
  * person asked for it and it is not a stranger's leftover), and Clerk has a
  * sign-up that is stuck at a verification step (so there is a code screen to
  * return to, rather than a blank form we would be pushing on somebody).
@@ -196,13 +249,15 @@ export interface PendingSignUp {
 export function shouldResumeSignUp(input: {
   enabled: boolean;
   surface: string;
+  /** The community this page is for. Must be the one the tap was for. */
+  target: string;
   signUp: PendingSignUp | null | undefined;
   storage: Pick<Storage, "getItem"> | null;
   now?: number;
 }): boolean {
   if (!input.enabled) return false;
   const cta = readCta(input.storage, input.now ?? Date.now());
-  if (!cta || cta.surface !== input.surface) return false;
+  if (!cta || cta.surface !== input.surface || cta.target !== input.target) return false;
   const signUp = input.signUp;
   if (!signUp || signUp.status !== "missing_requirements") return false;
   const unverified = signUp.unverifiedFields ?? [];

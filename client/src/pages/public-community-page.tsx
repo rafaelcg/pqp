@@ -40,7 +40,7 @@ const COMMUNITY_SURFACE = "community";
  * while the person was in their mail app. Renders nothing. See
  * `lib/signup-assist.ts` for every condition, the flag among them.
  */
-export function ResumeSignUp({ appHref }: { appHref: string }) {
+export function ResumeSignUp({ slug, appHref }: { slug: string; appHref: string }) {
   const clerk = useClerk();
   const tried = useRef(false);
   useEffect(() => {
@@ -51,6 +51,7 @@ export function ResumeSignUp({ appHref }: { appHref: string }) {
       !shouldResumeSignUp({
         enabled: signupAssistEnabled(),
         surface: COMMUNITY_SURFACE,
+        target: slug,
         signUp,
         storage: intentStorage(),
       })
@@ -61,7 +62,7 @@ export function ResumeSignUp({ appHref }: { appHref: string }) {
     void Promise.resolve(clerk.openSignUp({ forceRedirectUrl: appHref })).catch(() => {
       // A modal that will not open leaves the poster and its button, as before.
     });
-  }, [clerk, clerk.loaded, appHref]);
+  }, [clerk, clerk.loaded, slug, appHref]);
   return null;
 }
 
@@ -258,7 +259,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
    */
   const rememberIntent = () => {
     stashJoinIntent(intentStorage(), community.slug);
-    noteSignupCta(COMMUNITY_SURFACE);
+    noteSignupCta(COMMUNITY_SURFACE, community.slug);
   };
   const appHref = `/app?join=${encodeURIComponent(community.slug)}`;
 
@@ -421,7 +422,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
             ) : (
               <>
                 <SignedOut>
-                  <ResumeSignUp appHref={appHref} />
+                  <ResumeSignUp slug={community.slug} appHref={appHref} />
                   <SignUpButton mode="modal" forceRedirectUrl={appHref}>
                     <Button
                       className="cta-lift h-12 w-full flex-1 rounded-full text-base sm:w-auto"

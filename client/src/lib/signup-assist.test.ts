@@ -79,12 +79,12 @@ describe("the CTA to return timing", () => {
     const umami = { track: vi.fn() };
     (window as { umami?: unknown }).umami = umami;
     const storage = memoryStorage();
-    noteSignupCta("community", storage, 1_000, IOS_INSTAGRAM);
+    noteSignupCta("community", "moon", storage, 1_000, IOS_INSTAGRAM);
     expect(umami.track).toHaveBeenCalledWith("signup_cta_click", {
       surface: "community",
       webview: "instagram",
     });
-    noteSignupReturn(storage, 1_000 + 47_000, IOS_INSTAGRAM);
+    noteSignupReturn(storage, 1_000 + 47_000, IOS_INSTAGRAM, 20_000);
     expect(umami.track).toHaveBeenLastCalledWith("signup_return", {
       surface: "community",
       seconds: 47,
@@ -98,17 +98,52 @@ describe("the CTA to return timing", () => {
     const umami = { track: vi.fn() };
     (window as { umami?: unknown }).umami = umami;
     const storage = memoryStorage();
-    noteSignupCta("community", storage, 0, ANDROID_CHROME);
-    noteSignupReturn(storage, 5_000, ANDROID_CHROME);
-    noteSignupReturn(storage, 6_000, ANDROID_CHROME);
+    noteSignupCta("community", "moon", storage, 0, ANDROID_CHROME);
+    noteSignupReturn(storage, 5_000, ANDROID_CHROME, 1_000);
+    noteSignupReturn(storage, 6_000, ANDROID_CHROME, 1_000);
     expect(umami.track.mock.calls.filter(([n]) => n === "signup_return")).toHaveLength(1);
 
     umami.track.mockClear();
-    noteSignupCta("community", storage, 0, ANDROID_CHROME);
+    noteSignupCta("community", "moon", storage, 0, ANDROID_CHROME);
     umami.track.mockClear();
-    noteSignupReturn(storage, SIGNUP_CTA_TTL_MS + 1, ANDROID_CHROME);
-    noteSignupReturn(memoryStorage({ [SIGNUP_CTA_KEY]: "not json" }), 1, "");
+    noteSignupReturn(storage, SIGNUP_CTA_TTL_MS + 1, ANDROID_CHROME, SIGNUP_CTA_TTL_MS);
+    noteSignupReturn(memoryStorage({ [SIGNUP_CTA_KEY]: "not json" }), 1, "", 1);
     expect(umami.track).not.toHaveBeenCalled();
+  });
+
+  it("does not count an existing account that signed in after an abandoned tap", () => {
+    const umami = { track: vi.fn() };
+    (window as { umami?: unknown }).umami = umami;
+    const storage = memoryStorage();
+    noteSignupCta("community", "moon", storage, 1_000_000, ANDROID_CHROME);
+    umami.track.mockClear();
+    noteSignupReturn(storage, 1_050_000, ANDROID_CHROME, 1_000_000 - 86_400_000);
+    expect(umami.track).not.toHaveBeenCalled();
+    expect(storage.map.has(SIGNUP_CTA_KEY)).toBe(false);
+  });
+
+  it("does not count when Clerk cannot say when the account was created", () => {
+    const umami = { track: vi.fn() };
+    (window as { umami?: unknown }).umami = umami;
+    const storage = memoryStorage();
+    noteSignupCta("community", "moon", storage, 1_000, ANDROID_CHROME);
+    umami.track.mockClear();
+    noteSignupReturn(storage, 9_000, ANDROID_CHROME, null);
+    expect(umami.track).not.toHaveBeenCalled();
+  });
+
+  it("counts once when two tabs boot on the same record", () => {
+    const umami = { track: vi.fn() };
+    (window as { umami?: unknown }).umami = umami;
+    const storage = memoryStorage();
+    noteSignupCta("community", "moon", storage, 1_000, ANDROID_CHROME);
+    umami.track.mockClear();
+    // Both tabs read the record before either removes it.
+    const snapshot = storage.getItem(SIGNUP_CTA_KEY)!;
+    noteSignupReturn(storage, 9_000, ANDROID_CHROME, 2_000);
+    storage.setItem(SIGNUP_CTA_KEY, snapshot);
+    noteSignupReturn(storage, 9_001, ANDROID_CHROME, 2_000);
+    expect(umami.track.mock.calls.filter(([n]) => n === "signup_return")).toHaveLength(1);
   });
 
   it("does not throw when storage is denied", () => {
@@ -123,8 +158,8 @@ describe("the CTA to return timing", () => {
         throw new Error("denied");
       },
     };
-    expect(() => noteSignupCta("community", hostile, 0, "")).not.toThrow();
-    expect(() => noteSignupReturn(hostile, 1, "")).not.toThrow();
+    expect(() => noteSignupCta("community", "moon", hostile, 0, "")).not.toThrow();
+    expect(() => noteSignupReturn(hostile, 1, "", 1)).not.toThrow();
   });
 
   it("buckets", () => {
@@ -143,28 +178,29 @@ describe("shouldResumeSignUp", () => {
   const waiting = { status: "missing_requirements", unverifiedFields: ["email_address"] };
   const tapped = () => {
     const storage = memoryStorage();
-    noteSignupCta("community", storage, 1_000, "");
+    noteSignupCta("community", "moon", storage, 1_000, "");
     return storage;
   };
 
   it("reopens the code step when this browser started it and the flag is on", () => {
     expect(
-      shouldResumeSignUp({ enabled: true, surface: "community", signUp: waiting, storage: tapped(), now: 2_000 }),
+      shouldResumeSignUp({ enabled: true, surface: "community", target: "moon", signUp: waiting, storage: tapped(), now: 2_000 }),
     ).toBe(true);
   });
   it("does nothing with the flag off", () => {
     expect(
-      shouldResumeSignUp({ enabled: false, surface: "community", signUp: waiting, storage: tapped(), now: 2_000 }),
+      shouldResumeSignUp({ enabled: false, surface: "community", target: "moon", signUp: waiting, storage: tapped(), now: 2_000 }),
     ).toBe(false);
   });
   it("does nothing without a tap from this browser, or from another surface, or an hour late", () => {
-    const base = { enabled: true, surface: "community", signUp: waiting, now: 2_000 } as const;
+    const base = { enabled: true, surface: "community", target: "moon", signUp: waiting, now: 2_000 } as const;
     expect(shouldResumeSignUp({ ...base, storage: memoryStorage() })).toBe(false);
     expect(shouldResumeSignUp({ ...base, surface: "profile", storage: tapped() })).toBe(false);
+    expect(shouldResumeSignUp({ ...base, target: "other", storage: tapped() })).toBe(false);
     expect(shouldResumeSignUp({ ...base, storage: tapped(), now: 1_000 + SIGNUP_CTA_TTL_MS + 1 })).toBe(false);
   });
   it("does nothing unless Clerk is waiting on a code", () => {
-    const base = { enabled: true, surface: "community", storage: tapped(), now: 2_000 } as const;
+    const base = { enabled: true, surface: "community", target: "moon", storage: tapped(), now: 2_000 } as const;
     expect(shouldResumeSignUp({ ...base, signUp: null })).toBe(false);
     expect(shouldResumeSignUp({ ...base, signUp: { status: "complete" } })).toBe(false);
     expect(
