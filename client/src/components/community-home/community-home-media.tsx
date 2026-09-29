@@ -32,13 +32,19 @@ function MediaCaption({ media }: { media: CommunityHomeMedia }) {
  *
  * `flush` is for a Patreon-style card: the media is the top of the card,
  * edge to edge, no inner radius or border of its own.
+ *
+ * `reserveCorner` keeps the card's top-right corner free for the staff menu.
+ * Only the file row needs it: players and pictures let the menu float over
+ * them, but the file row has its size and download link in that corner.
  */
 export function UnlockedMedia({
   media,
   flush = false,
+  reserveCorner = false,
 }: {
   media: CommunityHomeMedia;
   flush?: boolean;
+  reserveCorner?: boolean;
 }) {
   const { t } = useTranslation();
   const frame = cn(
@@ -129,8 +135,10 @@ export function UnlockedMedia({
         className={cn(
           "flex items-center gap-3 px-3 py-2.5 text-sm",
           flush ? "border-t border-border" : "rounded-lg border border-border bg-surface-0",
+          reserveCorner && "pr-12",
         )}
         data-home-media="file"
+        data-home-media-reserve-corner={reserveCorner ? "" : undefined}
       >
         <span className="rounded bg-signal/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-signal">
           {media.name.toLowerCase().endsWith(".pdf")
