@@ -2200,12 +2200,17 @@ function MainAppContent({
       const seqs = communityHomeReadSeqRef.current;
       const seq = (seqs.get(serverId) ?? 0) + 1;
       seqs.set(serverId, seq);
+      const issuedAtVersion =
+        serversRef.current.find((row) => row.id === serverId)
+          ?.communityHomeVersion ?? 0;
       fetchServerCommunityHomeConfig(serverId).then(
         (config) => {
           if (seqs.get(serverId) !== seq) {
             return;
           }
-          setServers((rows) => applyCommunityHomeRead(rows, serverId, config));
+          setServers((rows) =>
+            applyCommunityHomeRead(rows, serverId, config, issuedAtVersion),
+          );
         },
         () => {
           if (seqs.get(serverId) === seq) {

@@ -87,16 +87,16 @@ describe("applyCommunityHomeRead", () => {
   it("guards a versioned read like a frame", () => {
     const rows = [server({ communityHomeEnabled: true, communityHomeVersion: 5 })];
     expect(
-      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 4 }),
+      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 4 }, 5),
     ).toBe(rows);
     expect(
-      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 6 })[0],
+      applyCommunityHomeRead(rows, "s1", { enabled: false, version: 6 }, 5)[0],
     ).toMatchObject({ communityHomeEnabled: false, communityHomeVersion: 6 });
   });
 
   it("applies a read from an API without versions and keeps the row's version", () => {
     const rows = [server({ communityHomeEnabled: false, communityHomeVersion: 2 })];
-    const next = applyCommunityHomeRead(rows, "s1", { enabled: true });
+    const next = applyCommunityHomeRead(rows, "s1", { enabled: true }, 2);
     expect(next[0]).toMatchObject({
       communityHomeEnabled: true,
       communityHomeVersion: 2,
@@ -109,7 +109,19 @@ describe("applyCommunityHomeRead", () => {
 
   it("returns the same array when an unversioned read agrees", () => {
     const rows = [server({ communityHomeEnabled: true })];
-    expect(applyCommunityHomeRead(rows, "s1", { enabled: true })).toBe(rows);
+    expect(applyCommunityHomeRead(rows, "s1", { enabled: true }, 2)).toBe(rows);
+  });
+
+  it("drops an unversioned read when a versioned frame landed while it was in flight", () => {
+    // Read sent at version 2; the owner's newer flip arrived as a v3 frame.
+    let rows: Server[] = [server({ communityHomeEnabled: false, communityHomeVersion: 2 })];
+    rows = applyCommunityHomeSwitch(rows, "s1", { enabled: true, version: 3 });
+    const next = applyCommunityHomeRead(rows, "s1", { enabled: false }, 2);
+    expect(next).toBe(rows);
+    expect(next[0]).toMatchObject({
+      communityHomeEnabled: true,
+      communityHomeVersion: 3,
+    });
   });
 });
 
