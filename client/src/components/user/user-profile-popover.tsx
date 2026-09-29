@@ -86,6 +86,7 @@ import {
   moderationNeedsConfirmation,
   needsConfirmation,
   placeCard,
+  placeMenu,
   primaryAction,
   primaryIsInert,
   offersDecline,
@@ -94,6 +95,7 @@ import {
   resolvePresence,
   profileAboutTabs,
   activeProfileAboutTab,
+  type MenuPlacement,
   type Placement,
   type ProfileAboutTab,
   type ProfileModerationAction,
@@ -281,6 +283,9 @@ export function ProfilePopoverProvider({
  * line under the Portuguese labels.
  */
 const CARD_WIDTH = 320;
+
+/** 15rem. A tall owner menu scrolls past this rather than grow further. */
+const MORE_MENU_MAX_HEIGHT = 240;
 
 const ABOUT_LABEL: Record<ProfileAboutTab, MessageKey> = {
   depoimentos: "depoimentos.section",
@@ -495,6 +500,53 @@ function UserProfileCard({
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchor, onClose, state, loading, aboutActive, aboutTabs.length]);
+
+  /**
+   * Where the Mais menu sits. Fixed to the window, measured from the tile, so
+   * the card's own scroller cannot clip it (see `placeMenu`). It stays a DOM
+   * child of the card, which keeps the tap-away and scroll handlers above
+   * treating a press on Bloquear as a press inside the card.
+   */
+  const moreTileRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const [menuAt, setMenuAt] = useState<MenuPlacement | null>(null);
+  useLayoutEffect(() => {
+    const tile = moreTileRef.current;
+    const menu = moreMenuRef.current;
+    const card = cardRef.current;
+    if (!overflowOpen || !tile || !menu || !card) {
+      setMenuAt(null);
+      return;
+    }
+    function place() {
+      const own = menu!.getBoundingClientRect();
+      setMenuAt(
+        placeMenu(
+          tile!.getBoundingClientRect(),
+          // The natural height up to the cap, not what the last placement
+          // squeezed it to.
+          {
+            width: own.width,
+            height: Math.min(menu!.scrollHeight, MORE_MENU_MAX_HEIGHT),
+          },
+          { width: window.innerWidth, height: window.innerHeight },
+        ),
+      );
+    }
+    place();
+    // A fixed menu does not travel with the card's content, so scrolling the
+    // card closes it rather than leaving it over the wrong row. Not capture:
+    // a scroll inside the menu's own list does not bubble here.
+    function onCardScroll() {
+      setOverflowOpen(false);
+    }
+    window.addEventListener("resize", place);
+    card.addEventListener("scroll", onCardScroll);
+    return () => {
+      window.removeEventListener("resize", place);
+      card.removeEventListener("scroll", onCardScroll);
+    };
+  }, [overflowOpen, placement]);
 
   /**
    * The card's own content, read once on open.
@@ -1056,7 +1108,7 @@ function UserProfileCard({
           </div>
         )}
         {tileMore && (
-          <div className="relative min-w-0 flex-1">
+          <div ref={moreTileRef} className="min-w-0 flex-1">
             <ActionTile
               label={t("profile.more")}
               aria-haspopup="menu"
@@ -1068,12 +1120,22 @@ function UserProfileCard({
             </ActionTile>
             {overflowOpen && (
               <div
+                ref={moreMenuRef}
                 role="menu"
                 aria-label={t("profile.more")}
-                // Opens down, not up: the card itself scrolls, and an upward
-                // menu was clipped by that overflow (Block disappeared). A cap
-                // still keeps a tall owner menu inside the card.
-                className="absolute top-full right-0 z-10 mt-1 max-h-[15rem] w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                // Fixed, not absolute: the card scrolls, and an absolute menu
+                // was clipped by it either way it opened (Block went upward,
+                // Report went downward). Hidden until measured, like the card.
+                style={{
+                  left: menuAt?.left ?? 0,
+                  top: menuAt?.top ?? 0,
+                  maxHeight: Math.min(
+                    MORE_MENU_MAX_HEIGHT,
+                    menuAt?.maxHeight ?? MORE_MENU_MAX_HEIGHT,
+                  ),
+                  visibility: menuAt ? "visible" : "hidden",
+                }}
+                className="fixed z-10 w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
               >
                 {overflowItems.map((item) => (
                   <button
@@ -1167,7 +1229,7 @@ function UserProfileCard({
           // enough: at high zoom the identity and NESTA COMUNIDADE already fill
           // the viewport cap, the inner scroller shrinks to nothing, and the
           // bottom of the card is unreachable. overflow-y on this node is what
-          // a daft zoom needs. Mais opens downward so Block is not clipped.
+          // a daft zoom needs. The Mais menu is fixed so this cannot clip it.
           // Drop under the confirm Dialog (z-60) so the in-app confirm is on top.
           className={cn(
             "fixed max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in",
