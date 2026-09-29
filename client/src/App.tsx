@@ -417,6 +417,7 @@ import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import { translateMessage, useTranslation } from "@/lib/i18n";
+import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
 import {
   conversationChannel,
   conversationSubtitle,
@@ -2174,6 +2175,8 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
 
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
@@ -4460,28 +4463,23 @@ function MainAppContent({
           // A moderator acted on THIS client's voice session. Handled here,
           // not in the voice controller: what follows is app behaviour
           // (leave, or rejoin somewhere else), and the frame carries the
-          // whole sentence to show. Guarded to the room we are actually in —
+          // whole English sentence, kept as the fallback. Guarded to the room we are actually in —
           // a stale or forged frame about some other channel does nothing.
           if (message.type === "voice-moderation") {
             const current = voice.getState();
             if (current.voiceChannelId !== message.voiceChannelId) {
               return;
             }
-            // The mute notices are the one case with local copy: the frame's
-            // sentence is English, and this is a state the person will sit
-            // in for a while, so it is worth saying in their language. The
-            // other actions keep the server's sentence verbatim (the
-            // sanction-notice principle: it already carries the whole story).
+            // The notice is written here in the person's language; the
+            // frame's English `message` is only the fallback.
             setAppError(
-              message.action === "muted"
-                ? translateMessage("voice.serverMuted.self")
-                : message.action === "unmuted"
-                  ? translateMessage("voice.serverMuted.cleared")
-                  : message.reason === "idle"
-                    ? translateMessage("voice.idle.disconnected", {
-                        count: message.aloneMinutes ?? 10,
-                      })
-                    : message.message,
+              voiceModerationNotice(
+                message,
+                channelsRef.current.find(
+                  (one) => one.id === message.movedToChannelId,
+                )?.name,
+                translateMessage,
+              ),
             );
             if (message.action === "disconnected") {
               setIdleWarning(null);
