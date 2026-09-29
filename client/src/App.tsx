@@ -415,7 +415,11 @@ import {
   spendConfetti,
   type ArrivalSurface,
 } from "@/lib/arrival";
-import { takeAcquisition } from "@/lib/acquisition";
+import {
+  markSignupStartedNow,
+  takeAcquisition,
+  takeSignupSeconds,
+} from "@/lib/acquisition";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { ServerIcon } from "@/components/layout/server-identity";
@@ -1078,7 +1082,9 @@ function ClerkAppGate() {
                 ) : (
                   <>
                     <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-                      <Button>{t("signedOut.createAccount")}</Button>
+                      <Button onClick={markSignupStartedNow}>
+                        {t("signedOut.createAccount")}
+                      </Button>
                     </SignUpButton>
                     <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
                       <Button variant="secondary">
@@ -7818,7 +7824,16 @@ function MainAppContent({
     const stashedWaitlist = takeWaitlistIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
-    const acquisition = takeAcquisition(storage);
+    const stashedAcquisition = takeAcquisition(storage);
+    // How long the sign-up took (modal open to now). Consumed with the stash.
+    const signupSeconds = takeSignupSeconds(storage);
+    const acquisition =
+      stashedAcquisition || signupSeconds !== null
+        ? {
+            ...(stashedAcquisition ?? {}),
+            ...(signupSeconds !== null ? { signupSeconds } : {}),
+          }
+        : null;
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;

@@ -98,6 +98,40 @@ describeDb("recordAcquisition", () => {
     expect((await columns(user.id)).acquisition_source).toBeNull();
   });
 
+  it("records how long the sign-up took, clamped and rounded, even with no campaign", async () => {
+    const user = await freshUser("clerk-signup-time");
+    expect(await recordAcquisition(user.id, { signupSeconds: 47 })).toBe(true);
+    const row = await getPool().query<{ s: number | null; landing: string | null }>(
+      `SELECT acquisition_signup_s AS s, acquisition_landing AS landing FROM users WHERE id = $1`,
+      [user.id],
+    );
+    expect(row.rows[0]).toEqual({ s: 45, landing: null });
+
+    const other = await freshUser("clerk-signup-time-2");
+    // The schema refuses more than an hour at the API; the service clamps too.
+    expect(
+      await recordAcquisition(other.id, { landing: "/c/moon", signupSeconds: 99_999 }),
+    ).toBe(true);
+    const clamped = await getPool().query<{ s: number }>(
+      `SELECT acquisition_signup_s AS s FROM users WHERE id = $1`,
+      [other.id],
+    );
+    expect(clamped.rows[0]!.s).toBe(3600);
+  });
+
+  it("reports the sign-up time as percentiles over the accounts that carry one", async () => {
+    for (const [i, seconds] of [20, 40, 60, 80, 100].entries()) {
+      const user = await freshUser(`clerk-p-${i}`);
+      await recordAcquisition(user.id, { landing: "/c/moonkisticos", signupSeconds: seconds });
+    }
+    await freshUser("clerk-p-none");
+    const report = await acquisitionReport(30);
+    expect(report.total).toBe(6);
+    expect(report.signup).toEqual({ measured: 5, p50Seconds: 60, p90Seconds: 92 });
+    // The plain landing that used to be lost is now a row.
+    expect(report.landings).toEqual([{ landing: "/c/moonkisticos", signups: 5 }]);
+  });
+
   it("treats an all-blank payload as nothing to record", async () => {
     const user = await freshUser("clerk-blank");
     expect(await recordAcquisition(user.id, { source: "  ", ref: "" })).toBe(

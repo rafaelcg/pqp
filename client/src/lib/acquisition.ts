@@ -27,6 +27,18 @@
  * never signed up does not sit there indefinitely. Nothing acts on an expired
  * entry; it is simply dropped on read.
  *
+ * WHAT A LINK WITH NO CAMPAIGN RECORDS (2026-09-29). Most doors carry no
+ * parameters at all: a streamer's plain `pqp.gg/c/<slug>` in chat, a link in a
+ * bio. Recording nothing for those left 210 of 213 viewers of one watch party
+ * with no acquisition row. So a visit with no parameters still records the
+ * page it landed on and, when the browser volunteers one, the SITE it came
+ * from (the referrer's host only, never its path or query; an Android Custom
+ * Tab reports the app's package, `android-app://com.twitch.android.app`).
+ * That entry is "plain" and is the weakest claim there is: a later link with
+ * real campaign parameters replaces it (first EXPLICIT touch), and two plain
+ * ones never replace each other. Landing paths are cut to their first segment
+ * except `/c/<slug>`, so an invite code in the path is never stored.
+ *
  * Every function tolerates storage being denied by doing nothing, which loses
  * one attribution and nothing else.
  */
@@ -34,6 +46,15 @@
 import type { AcquisitionInput } from "@pqp/shared";
 
 export const ACQUISITION_KEY = "pqp:acquisition";
+
+/**
+ * Set the first time a stash is consumed on this browser. A plain visit is
+ * only remembered while it is absent: without it every reload of a signed-in
+ * person would stash a fresh landing and send it on the next bootstrap, one
+ * pointless request per page load for everybody who already has an account.
+ * With it, a returning account costs one request per browser, ever.
+ */
+export const ACQUISITION_DONE_KEY = "pqp:acquisition-done";
 
 export const ACQUISITION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -46,6 +67,14 @@ export type Acquisition = AcquisitionInput;
 
 interface StoredAcquisition extends Acquisition {
   at: number;
+  /** No campaign parameters: a landing (and maybe a referrer host) only. */
+  plain?: boolean;
+}
+
+/** What `main.tsx` knows about this page load beyond the URL. */
+export interface ArrivalContext {
+  referrer: string;
+  hostname: string;
 }
 
 type WritableStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -82,29 +111,93 @@ export function acquisitionFromLocation(
   if (!carriesSomething) {
     return null;
   }
-  acquisition.landing = clip(pathname, LANDING_MAX) ?? "/";
+  acquisition.landing = landingForStorage(pathname);
   return compact(acquisition);
+}
+
+/**
+ * The landing path, safe to keep: `/c/<slug>` whole (a public address), and
+ * every other path down to its first segment (`/@rafa`, `/tela`, `/blog`,
+ * `/invite`, `/app`), because the rest of a path can be a capability.
+ */
+export function landingForStorage(pathname: string): string {
+  const segments = pathname.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0) {
+    return "/";
+  }
+  const keep = segments[0] === "c" ? 2 : 1;
+  return clip(`/${segments.slice(0, keep).join("/")}`, LANDING_MAX) ?? "/";
+}
+
+/** Last two labels: `www.twitch.tv` and `m.twitch.tv` are both `twitch.tv`. */
+function siteOf(host: string): string {
+  return host.split(".").slice(-2).join(".");
+}
+
+/**
+ * The referring SITE, as a coarse source label, or null when there is none or
+ * it is us or our own sign-in. Host only: a referrer's path and query are the
+ * other site's business and can hold anything.
+ */
+export function referrerSource(
+  referrer: string,
+  ownHostname: string,
+): { source: string; medium: string } | null {
+  let url: URL;
+  try {
+    url = new URL(referrer);
+  } catch {
+    return null;
+  }
+  if (url.protocol === "android-app:") {
+    const pkg = clip(url.hostname || url.pathname.replace(/^\/+/, ""), FIELD_MAX - 12);
+    return pkg ? { source: `android-app:${pkg}`, medium: "referral" } : null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  if (
+    host === "" ||
+    host === "localhost" ||
+    siteOf(host) === siteOf(ownHostname.toLowerCase()) ||
+    host.endsWith("clerk.accounts.dev") ||
+    host.endsWith(".clerk.com")
+  ) {
+    return null;
+  }
+  return { source: clip(host, FIELD_MAX) ?? host, medium: "referral" };
+}
+
+/** A visit that carried no campaign: where it landed, and who sent it. */
+export function plainAcquisition(
+  pathname: string,
+  context: ArrivalContext,
+): Acquisition {
+  const from = referrerSource(context.referrer, context.hostname);
+  return compact({
+    source: from?.source,
+    medium: from?.medium,
+    landing: landingForStorage(pathname),
+  });
 }
 
 /** Drop the undefined keys so the stored JSON says only what was there. */
 function compact(acquisition: Acquisition): Acquisition {
-  const out: Acquisition = {};
-  for (const [key, value] of Object.entries(acquisition) as [
-    keyof Acquisition,
-    string | undefined,
-  ][]) {
+  const out: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(acquisition)) {
     if (value !== undefined) {
       out[key] = value;
     }
   }
-  return out;
+  return out as Acquisition;
 }
 
 /** The live (unexpired, well-formed) entry's fields, or null. */
 function readStored(
   storage: WritableStorage | null,
   now: number,
-): Acquisition | null {
+): (Acquisition & { plain?: boolean }) | null {
   if (!storage) {
     return null;
   }
@@ -145,7 +238,10 @@ function readStored(
         fields[key] = value;
       }
     }
-    return Object.keys(fields).length === 0 ? null : fields;
+    if (Object.keys(fields).length === 0) {
+      return null;
+    }
+    return stored.plain === true ? { ...fields, plain: true } : fields;
   } catch {
     // User-writable storage. Anything unreadable is "no record".
     return null;
@@ -162,17 +258,25 @@ export function stashAcquisition(
   storage: WritableStorage | null,
   acquisition: Acquisition | null,
   now: number = Date.now(),
+  plain = false,
 ): void {
   if (!storage || !acquisition) {
     return;
   }
-  if (readStored(storage, now)) {
+  const existing = readStored(storage, now);
+  // First touch, with one exception: a real campaign replaces a plain visit
+  // (a landing and maybe a referrer), never the other way round.
+  if (existing && !(existing.plain === true && !plain)) {
     return;
   }
   try {
     storage.setItem(
       ACQUISITION_KEY,
-      JSON.stringify({ ...compact(acquisition), at: now } satisfies StoredAcquisition),
+      JSON.stringify({
+        ...compact(acquisition),
+        at: now,
+        ...(plain ? { plain: true } : {}),
+      } satisfies StoredAcquisition),
     );
   } catch {
     // Storage denied. One attribution is the whole cost.
@@ -197,7 +301,93 @@ export function takeAcquisition(
   } catch {
     return null;
   }
-  return stored;
+  if (!stored) {
+    return null;
+  }
+  try {
+    storage.setItem(ACQUISITION_DONE_KEY, "1");
+  } catch {
+    // Storage denied: the plain visit may repeat. Harmless, server-refused.
+  }
+  const { plain: _plain, ...fields } = stored;
+  return fields;
+}
+
+/**
+ * WHEN THE SIGN-UP MODAL OPENED, so the time it took can be told.
+ *
+ * `users.created_at` starts after Clerk finishes, which left the heaviest step
+ * of the funnel (an emailed code, a captcha, an app switch on a phone)
+ * unmeasured. The CTAs that open the modal call `markSignupStarted`; the first
+ * ready bootstrap calls `takeSignupSeconds`, which turns the stamp into a
+ * duration and deletes it. Only the DURATION leaves the browser (rounded to
+ * 5 s), never the timestamp. First press wins, so a second tap on the CTA does
+ * not restart the clock; a stamp older than an hour is an abandoned attempt
+ * and is dropped rather than reported as a very slow sign-up.
+ */
+export const SIGNUP_STARTED_KEY = "pqp:signup-started";
+export const SIGNUP_STARTED_TTL_MS = 60 * 60 * 1000;
+
+export function markSignupStarted(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): void {
+  if (!storage) {
+    return;
+  }
+  try {
+    const raw = storage.getItem(SIGNUP_STARTED_KEY);
+    const previous = raw === null ? Number.NaN : Number(raw);
+    if (Number.isFinite(previous) && now - previous <= SIGNUP_STARTED_TTL_MS && previous <= now) {
+      return;
+    }
+    storage.setItem(SIGNUP_STARTED_KEY, String(now));
+  } catch {
+    // Storage denied: one sign-up goes unmeasured.
+  }
+}
+
+/** For the CTAs: the browser's own storage, or nothing where it is denied. */
+export function markSignupStartedNow(): void {
+  try {
+    markSignupStarted(window.localStorage);
+  } catch {
+    // Storage denied.
+  }
+}
+
+/** Read and CONSUME: a duration in seconds (5 s steps), or null. */
+export function takeSignupSeconds(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): number | null {
+  if (!storage) {
+    return null;
+  }
+  let raw: string | null;
+  try {
+    raw = storage.getItem(SIGNUP_STARTED_KEY);
+    storage.removeItem(SIGNUP_STARTED_KEY);
+  } catch {
+    return null;
+  }
+  const startedAt = raw === null ? Number.NaN : Number(raw);
+  if (!Number.isFinite(startedAt) || startedAt > now) {
+    return null;
+  }
+  const elapsed = now - startedAt;
+  if (elapsed > SIGNUP_STARTED_TTL_MS) {
+    return null;
+  }
+  return Math.round(elapsed / 1000 / 5) * 5;
+}
+
+function hasConsumedBefore(storage: WritableStorage | null): boolean {
+  try {
+    return storage?.getItem(ACQUISITION_DONE_KEY) != null;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -210,10 +400,16 @@ export function rememberAcquisitionFromLocation(
   storage: WritableStorage | null,
   location: Pick<Location, "search" | "pathname">,
   now: number = Date.now(),
+  arrival?: ArrivalContext,
 ): void {
-  stashAcquisition(
-    storage,
-    acquisitionFromLocation(location.search, location.pathname),
-    now,
-  );
+  const campaign = acquisitionFromLocation(location.search, location.pathname);
+  if (campaign) {
+    stashAcquisition(storage, campaign, now);
+    return;
+  }
+  // No campaign parameters. Without the page-load context (a caller that only
+  // has a URL) there is nothing to record, exactly as before.
+  if (arrival && !hasConsumedBefore(storage)) {
+    stashAcquisition(storage, plainAcquisition(location.pathname, arrival), now, true);
+  }
 }

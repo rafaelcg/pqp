@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { markSignupStartedNow } from "@/lib/acquisition";
 import { ArrowUpRight, Check, Loader2, X } from "lucide-react";
 import {
   useCallback,
@@ -149,6 +150,7 @@ export function ClaimPage() {
    */
   const appTarget = ready ? `/app?claim=${encodeURIComponent(handle)}` : "/app";
   const rememberClaim = useCallback(() => {
+    markSignupStartedNow();
     if (ready) {
       stashHandleClaim(intentStorage(), handle);
     }

@@ -432,7 +432,12 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // the first render is captured. Inert unless VITE_FARO_URL is set, which is
 // only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
 initFaro();
-rememberAcquisitionFromLocation(browserStorage(), window.location);
+rememberAcquisitionFromLocation(
+  browserStorage(),
+  window.location,
+  Date.now(),
+  { referrer: document.referrer, hostname: window.location.hostname },
+);
 // Same reasoning for the two intents a sign-in redirect would drop with the
 // query string: `?import=discord` and an invite link's `?ref=` tag
 // (lib/handle-intent.ts).

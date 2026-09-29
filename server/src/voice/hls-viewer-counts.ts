@@ -90,17 +90,39 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
  */
 const MAX_TRACKED_SESSIONS = 512;
 const MAX_VIEWERS_PER_SESSION = 50_000;
+/** Foreground or background time one viewer may accrue between two flushes. */
+const MAX_PENDING_MS = 30 * 60_000;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type HlsViewerSource = "presence" | "playlist" | "telemetry";
 
+/**
+ * What a presence beat may add about the person behind it, and nothing more:
+ * a coarse device class and foreground / background milliseconds. No user
+ * agent, no address, no size in pixels.
+ */
+export interface HlsViewerDetail {
+  device?: "phone" | "tablet" | "desktop";
+  visibleMs?: number;
+  hiddenMs?: number;
+}
+
+interface ViewerSeen {
+  first: number;
+  last: number;
+  device: "phone" | "tablet" | "desktop" | null;
+  /** Reported since the last successful flush; subtracted once stored. */
+  visibleMs: number;
+  hiddenMs: number;
+}
+
 interface TrackedSession {
   channelId: string;
   startedAt: number;
   /** userId -> first and last seen by this process, epoch ms. */
-  viewers: Map<string, { first: number; last: number }>;
+  viewers: Map<string, ViewerSeen>;
   /**
    * The newest sighting a successful flush has stored. A viewer seen after
    * this is not forgotten, however old, until a flush stores it: a database
@@ -141,6 +163,7 @@ export interface HlsViewerCounter {
     startedAt: number,
     userId: string,
     source: HlsViewerSource,
+    detail?: HlsViewerDetail,
   ): void;
   /**
    * Flush every broadcast that has something new and has not been flushed
@@ -180,11 +203,25 @@ export function createHlsViewerCounter(
   let dropped = 0;
   let lastPruneAt = 0;
 
+  function applyDetail(seen: ViewerSeen, detail: HlsViewerDetail | undefined): void {
+    if (!detail) {
+      return;
+    }
+    if (detail.device) {
+      seen.device = detail.device;
+    }
+    // Clamped again here: the route's schema already bounds a beat, this
+    // bounds the sum a buggy caller could build up between two flushes.
+    seen.visibleMs = Math.min(seen.visibleMs + (detail.visibleMs ?? 0), MAX_PENDING_MS);
+    seen.hiddenMs = Math.min(seen.hiddenMs + (detail.hiddenMs ?? 0), MAX_PENDING_MS);
+  }
+
   function note(
     channelId: string,
     startedAt: number,
     userId: string,
     source: HlsViewerSource,
+    detail?: HlsViewerDetail,
   ): void {
     if (
       !UUID_RE.test(channelId) ||
@@ -219,12 +256,21 @@ export function createHlsViewerCounter(
     const seen = session.viewers.get(userId);
     if (seen) {
       seen.last = at;
+      applyDetail(seen, detail);
     } else {
       if (session.viewers.size >= MAX_VIEWERS_PER_SESSION) {
         dropped += 1;
         return;
       }
-      session.viewers.set(userId, { first: at, last: at });
+      const created: ViewerSeen = {
+        first: at,
+        last: at,
+        device: null,
+        visibleMs: 0,
+        hiddenMs: 0,
+      };
+      applyDetail(created, detail);
+      session.viewers.set(userId, created);
     }
     session.dirty = true;
     noted[source] += 1;
@@ -237,11 +283,17 @@ export function createHlsViewerCounter(
     const userIds: string[] = [];
     const firstMs: number[] = [];
     const lastMs: number[] = [];
+    const devices: Array<string | null> = [];
+    const visibleMs: number[] = [];
+    const hiddenMs: number[] = [];
     let newest = 0;
     for (const [userId, seen] of session.viewers) {
       userIds.push(userId);
       firstMs.push(seen.first);
       lastMs.push(seen.last);
+      devices.push(seen.device);
+      visibleMs.push(seen.visibleMs);
+      hiddenMs.push(seen.hiddenMs);
       newest = Math.max(newest, seen.last);
     }
     session.flushing = true;
@@ -260,9 +312,11 @@ export function createHlsViewerCounter(
         `WITH batch AS (
            SELECT u.user_id,
                   to_timestamp(u.first_ms / 1000.0) AS first_seen,
-                  to_timestamp(u.last_ms / 1000.0) AS last_seen
-             FROM unnest($3::uuid[], $4::float8[], $5::float8[])
-                  AS u(user_id, first_ms, last_ms)
+                  to_timestamp(u.last_ms / 1000.0) AS last_seen,
+                  u.device, u.visible_ms, u.hidden_ms
+             FROM unnest($3::uuid[], $4::float8[], $5::float8[],
+                         $8::text[], $9::bigint[], $10::bigint[])
+                  AS u(user_id, first_ms, last_ms, device, visible_ms, hidden_ms)
          ), merged AS (
            SELECT b.user_id,
                   LEAST(b.first_seen, v.first_seen_at) AS first_seen,
@@ -272,11 +326,16 @@ export function createHlsViewerCounter(
                ON v.channel_id = $1 AND v.started_at_ms = $2 AND v.user_id = b.user_id
          ), ins AS (
            INSERT INTO hls_session_viewers
-             (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at)
-           SELECT $1, $2, user_id, first_seen, last_seen FROM batch
+             (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at,
+              device_class, visible_ms, hidden_ms)
+           SELECT $1, $2, user_id, first_seen, last_seen, device, visible_ms, hidden_ms
+             FROM batch
            ON CONFLICT (channel_id, started_at_ms, user_id) DO UPDATE
              SET last_seen_at = GREATEST(hls_session_viewers.last_seen_at, EXCLUDED.last_seen_at),
-                 first_seen_at = LEAST(hls_session_viewers.first_seen_at, EXCLUDED.first_seen_at)
+                 first_seen_at = LEAST(hls_session_viewers.first_seen_at, EXCLUDED.first_seen_at),
+                 device_class = COALESCE(EXCLUDED.device_class, hls_session_viewers.device_class),
+                 visible_ms = hls_session_viewers.visible_ms + EXCLUDED.visible_ms,
+                 hidden_ms = hls_session_viewers.hidden_ms + EXCLUDED.hidden_ms
            RETURNING (xmax = 0) AS inserted
          ), eval AS (
            SELECT to_timestamp($6::float8 / 1000.0) AS at,
@@ -321,8 +380,20 @@ export function createHlsViewerCounter(
           lastMs,
           at - evalLagMs,
           presentToleranceMs,
+          devices,
+          visibleMs,
+          hiddenMs,
         ],
       );
+      // Stored: take exactly what was stored off the pending totals, so a
+      // beat that landed while the statement ran is still owed to the next.
+      userIds.forEach((id, index) => {
+        const seen = session.viewers.get(id);
+        if (seen) {
+          seen.visibleMs = Math.max(0, seen.visibleMs - visibleMs[index]);
+          seen.hiddenMs = Math.max(0, seen.hiddenMs - hiddenMs[index]);
+        }
+      });
       session.lastFlushAt = at;
       session.persistedThrough = Math.max(session.persistedThrough, newest);
       flushes += 1;
@@ -478,8 +549,118 @@ export function noteHlsViewer(
   startedAt: number,
   userId: string,
   source: HlsViewerSource,
+  detail?: HlsViewerDetail,
 ): void {
-  hlsViewerCounter.note(channelId, startedAt, userId, source);
+  hlsViewerCounter.note(channelId, startedAt, userId, source, detail);
+}
+
+export interface HlsAudienceByDevice {
+  phone: number;
+  tablet: number;
+  desktop: number;
+  /** Viewers whose client predates the device report. */
+  unknown: number;
+}
+
+export interface HlsViewerAudience {
+  channelId: string;
+  startedAt: number;
+  /** Everyone still in `hls_session_viewers` (a day after the last sighting). */
+  viewers: number;
+  byDevice: HlsAudienceByDevice;
+  /** Accounts created after the broadcast started, by device. */
+  newAccountsByDevice: HlsAudienceByDevice;
+  visibleSeconds: number;
+  hiddenSeconds: number;
+  /** hidden / (visible + hidden), 0 to 1, or null with nothing reported. */
+  hiddenShare: number | null;
+  /** Viewers that reported foreground or background time at all. */
+  reportingViewers: number;
+}
+
+/**
+ * Who watched, by coarse class, for each broadcast that still has viewer
+ * rows (they are pruned a day after the last sighting, so this is a "since
+ * yesterday" read, not a history). Counts and seconds only: a user id is used
+ * to join `users.created_at` and never leaves this query.
+ */
+export async function hlsViewerAudience(limit = 10): Promise<HlsViewerAudience[]> {
+  const result = await getPool().query<{
+    channel_id: string;
+    started_at_ms: string;
+    viewers: string;
+    phone: string;
+    tablet: string;
+    desktop: string;
+    unknown: string;
+    new_phone: string;
+    new_tablet: string;
+    new_desktop: string;
+    new_unknown: string;
+    visible_ms: string;
+    hidden_ms: string;
+    reporting: string;
+  }>(
+    `WITH recent AS (
+       SELECT channel_id, started_at_ms
+         FROM hls_session_viewers
+        GROUP BY channel_id, started_at_ms
+        ORDER BY MAX(last_seen_at) DESC
+        LIMIT $1
+     )
+     SELECT v.channel_id::text AS channel_id,
+            v.started_at_ms::text AS started_at_ms,
+            COUNT(*)::text AS viewers,
+            COUNT(*) FILTER (WHERE v.device_class = 'phone')::text AS phone,
+            COUNT(*) FILTER (WHERE v.device_class = 'tablet')::text AS tablet,
+            COUNT(*) FILTER (WHERE v.device_class = 'desktop')::text AS desktop,
+            COUNT(*) FILTER (WHERE v.device_class IS NULL)::text AS unknown,
+            COUNT(*) FILTER (WHERE n.isnew AND v.device_class = 'phone')::text AS new_phone,
+            COUNT(*) FILTER (WHERE n.isnew AND v.device_class = 'tablet')::text AS new_tablet,
+            COUNT(*) FILTER (WHERE n.isnew AND v.device_class = 'desktop')::text AS new_desktop,
+            COUNT(*) FILTER (WHERE n.isnew AND v.device_class IS NULL)::text AS new_unknown,
+            COALESCE(SUM(v.visible_ms), 0)::text AS visible_ms,
+            COALESCE(SUM(v.hidden_ms), 0)::text AS hidden_ms,
+            COUNT(*) FILTER (WHERE v.visible_ms + v.hidden_ms > 0)::text AS reporting
+       FROM recent r
+       JOIN hls_session_viewers v
+         ON v.channel_id = r.channel_id AND v.started_at_ms = r.started_at_ms
+       LEFT JOIN users u ON u.id = v.user_id
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(u.created_at >= to_timestamp(v.started_at_ms / 1000.0), FALSE) AS isnew
+      ) n
+      GROUP BY v.channel_id, v.started_at_ms
+      ORDER BY v.started_at_ms DESC`,
+    [limit],
+  );
+  return result.rows.map((row) => {
+    const visible = Number(row.visible_ms);
+    const hidden = Number(row.hidden_ms);
+    return {
+      channelId: row.channel_id,
+      startedAt: Number(row.started_at_ms),
+      viewers: Number(row.viewers),
+      byDevice: {
+        phone: Number(row.phone),
+        tablet: Number(row.tablet),
+        desktop: Number(row.desktop),
+        unknown: Number(row.unknown),
+      },
+      newAccountsByDevice: {
+        phone: Number(row.new_phone),
+        tablet: Number(row.new_tablet),
+        desktop: Number(row.new_desktop),
+        unknown: Number(row.new_unknown),
+      },
+      visibleSeconds: Math.round(visible / 1000),
+      hiddenSeconds: Math.round(hidden / 1000),
+      hiddenShare:
+        visible + hidden > 0
+          ? Math.round((hidden / (visible + hidden)) * 1000) / 1000
+          : null,
+      reportingViewers: Number(row.reporting),
+    };
+  });
 }
 
 export interface LiveHlsViewerSession {

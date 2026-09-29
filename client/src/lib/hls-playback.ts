@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/utils";
 import {
   LIVE_HLS_PRESENCE_INTERVAL_MS,
+  LIVE_HLS_PRESENCE_MAX_SPAN_MS,
+  type LiveHlsDeviceClass,
   LIVE_HLS_TELEMETRY_FLUSH_MS,
   type LiveHlsTelemetryBatch,
   type LiveHlsTelemetrySample,
@@ -895,6 +897,83 @@ export function isHlsStartupSample(
  * `tick` runs more often than the interval so the first beat goes out soon
  * after playback starts; `beat` itself enforces one per interval.
  */
+/**
+ * phone / tablet / desktop, from what the screen IS and never from the user
+ * agent string: a coarse pointer (touch) on a short side under 600 CSS px is a
+ * phone, a coarse pointer on a larger screen is a tablet, everything else is a
+ * desktop. Three values, no finer, so it cannot fingerprint anybody. The
+ * inputs are injectable because a test has no screen.
+ */
+export function hlsDeviceClass(
+  input: { coarsePointer: boolean; shortSidePx: number } = readScreen(),
+): LiveHlsDeviceClass {
+  if (!input.coarsePointer) {
+    return "desktop";
+  }
+  return input.shortSidePx < 600 ? "phone" : "tablet";
+}
+
+function readScreen(): { coarsePointer: boolean; shortSidePx: number } {
+  try {
+    return {
+      coarsePointer: window.matchMedia("(pointer: coarse)").matches,
+      shortSidePx: Math.min(window.screen.width, window.screen.height),
+    };
+  } catch {
+    return { coarsePointer: false, shortSidePx: Number.POSITIVE_INFINITY };
+  }
+}
+
+/**
+ * Foreground and background milliseconds, accumulated across
+ * `visibilitychange` and handed out per beat. `take()` returns what has built
+ * up since the last `take()` (each capped at one span the server accepts) and
+ * starts again. Bucketed by the state at the moment it changed, so a tab
+ * hidden for 25 of a beat's 30 seconds reports 25 hidden and 5 visible.
+ */
+export interface HlsVisibilityMeter {
+  /** Call from a `visibilitychange` listener. */
+  change(): void;
+  take(): { visibleMs: number; hiddenMs: number };
+}
+
+export function createHlsVisibilityMeter(input: {
+  isHidden: () => boolean;
+  now?: () => number;
+}): HlsVisibilityMeter {
+  const now = input.now ?? Date.now;
+  let hidden = input.isHidden();
+  let since = now();
+  let visibleMs = 0;
+  let hiddenMs = 0;
+  function settle(): void {
+    const at = now();
+    const span = Math.max(0, at - since);
+    if (hidden) {
+      hiddenMs += span;
+    } else {
+      visibleMs += span;
+    }
+    since = at;
+  }
+  return {
+    change() {
+      settle();
+      hidden = input.isHidden();
+    },
+    take() {
+      settle();
+      const out = {
+        visibleMs: Math.min(Math.round(visibleMs), LIVE_HLS_PRESENCE_MAX_SPAN_MS),
+        hiddenMs: Math.min(Math.round(hiddenMs), LIVE_HLS_PRESENCE_MAX_SPAN_MS),
+      };
+      visibleMs = 0;
+      hiddenMs = 0;
+      return out;
+    },
+  };
+}
+
 export interface HlsPresenceBeat {
   /** Call on a timer and on `playing`: sends when due and playing. */
   beat(): void;
@@ -934,14 +1013,22 @@ export function createHlsPresenceBeat(input: {
  * Fire-and-forget, like telemetry: a missed beat is one fewer sighting, and
  * the next one is 30 s away. `token` is the Bearer the caller already holds.
  */
-export function sendHlsPresence(sessionToken: string, token: string | null): void {
+export function sendHlsPresence(
+  sessionToken: string,
+  token: string | null,
+  extras: {
+    device?: LiveHlsDeviceClass;
+    visibleMs?: number;
+    hiddenMs?: number;
+  } = {},
+): void {
   fetch(`${getApiBaseUrl()}/api/live-hls/presence`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ sessionToken }),
+    body: JSON.stringify({ sessionToken, ...extras }),
   }).catch(() => {
     // Dropped. See the doc comment above.
   });

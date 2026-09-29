@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { markSignupStartedNow } from "@/lib/acquisition";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
@@ -218,7 +219,10 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
    * `forceRedirectUrl` carries the same value in the URL as the belt to that
    * brace. See `lib/handle-intent.ts` for why both.
    */
-  const rememberIntent = () => stashJoinIntent(intentStorage(), community.slug);
+  const rememberIntent = () => {
+    stashJoinIntent(intentStorage(), community.slug);
+    markSignupStartedNow();
+  };
   const appHref = `/app?join=${encodeURIComponent(community.slug)}`;
 
   // Seeded from the slug rather than the name, for the reason the profile's is

@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { markSignupStartedNow } from "@/lib/acquisition";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -216,7 +217,10 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
    * survive — the same lesson `signedOutRedirectPath` learned about invites, in
    * the one shape a path cannot carry. See `lib/handle-intent.ts`.
    */
-  const rememberIntent = () => stashAddIntent(intentStorage(), profile.handle);
+  const rememberIntent = () => {
+    stashAddIntent(intentStorage(), profile.handle);
+    markSignupStartedNow();
+  };
   const appHref = `/app?add=${encodeURIComponent(profile.handle)}`;
 
   /**

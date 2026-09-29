@@ -1,4 +1,6 @@
 import {
+  hlsViewerAudience,
+  type HlsViewerAudience,
   hlsViewerCounter,
   liveHlsViewerSessions,
   type HlsViewerCounterStats,
@@ -832,6 +834,8 @@ export interface AdminMetrics {
     viewers: {
       live: LiveHlsViewerSession[] | null;
       here: HlsViewerCounterStats;
+      /** Per broadcast with viewer rows: device split, foreground time. */
+      audience: HlsViewerAudience[] | null;
     };
   };
   topServers24h: {
@@ -1241,6 +1245,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
   const hlsViewers = await liveHlsViewerSessions().catch(() => null);
+  const hlsAudience = await hlsViewerAudience().catch(() => null);
   const waitlist = await watchPartyWaitlistMetrics().catch(() => null);
 
   // The tab detail, in a second round of parallel queries. It is separate from
@@ -1657,7 +1662,16 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       restartsScheduled: hlsActivity.restartsScheduledTotal,
       restartsExhausted: hlsActivity.restartsExhaustedTotal,
       playlistRejectedByReason: hlsPlaylistRejectionsByReason(),
-      viewers: { live: hlsViewers, here: hlsViewerCounter.stats() },
+      viewers: {
+        live: hlsViewers,
+        here: hlsViewerCounter.stats(),
+        /**
+         * Who is in the audience, by phone / tablet / desktop and by
+         * foreground vs background seconds, per broadcast that still has
+         * viewer rows (a day). Counts only; null when the query failed.
+         */
+        audience: hlsAudience,
+      },
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

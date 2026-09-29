@@ -2966,6 +2966,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_gclid TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_ref TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_landing TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_at TIMESTAMPTZ;
+-- Seconds between the sign-up modal opening and the account being ready, as
+-- the person's own browser clocked it (rounded to 5 s, capped at an hour;
+-- absent when the two ends were not in the same visit). `created_at` starts
+-- after Clerk finishes, so without this the heaviest step of the funnel is
+-- unmeasured. A duration, never a timestamp: it identifies nobody and is read
+-- only as percentiles by GET /api/admin/acquisition.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_signup_s INTEGER;
 
 -- --------------------------------------------------------------- connections
 --
@@ -4853,3 +4860,16 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
+
+-- Who watched a party, by coarse class only. `device_class` is one of
+-- phone / tablet / desktop as the viewer's own browser judged it from screen
+-- size and pointer type (no user agent is read or stored); NULL for a client
+-- that predates it. `visible_ms` / `hidden_ms` are the foreground and
+-- background milliseconds its presence beats reported, summed. The row is
+-- already pruned a day after the last sighting, and every reader aggregates
+-- (`hlsViewerAudience` in voice/hls-viewer-counts.ts). Additive, constant
+-- defaults, safe on a live table.
+ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS device_class TEXT
+  CHECK (device_class IN ('phone', 'tablet', 'desktop'));
+ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS visible_ms BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS hidden_ms BIGINT NOT NULL DEFAULT 0;
