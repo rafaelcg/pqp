@@ -669,6 +669,29 @@ describe("notifyServerRemoved", () => {
     expect(other.received).toHaveLength(0);
   });
 
+  it("canonicalises ids a route passed in uppercase", () => {
+    const target = connect(removed);
+
+    notifyServerRemoved(serverId.toUpperCase(), "kicked", [removed.toUpperCase()]);
+
+    expect(framesOfType(target.received, "server-removed")).toEqual([
+      { type: "server-removed", serverId, reason: "kicked" },
+    ]);
+  });
+
+  it("checks rejoins with canonical ids when a route passed them in uppercase", async () => {
+    const flaky = installFlakyBus();
+    vi.mocked(listCurrentMemberships).mockResolvedValue(
+      new Set([`${serverId}:${removed}`]),
+    );
+
+    notifyServerRemoved(serverId.toUpperCase(), "kicked", [removed.toUpperCase()]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([]);
+  });
+
   it("skips a socket that is not open rather than throwing at the route", () => {
     const closing = connect(removed, 3 /* CLOSED */);
 

@@ -885,10 +885,19 @@ export function notifyServerRemoved(
   if (userIds.length === 0) {
     return;
   }
-  const frame: ServerRemoved = { type: "server-removed", serverId, reason };
-  deliverServerRemoved(frame, userIds);
+  // Canonical (lowercase) ids from here on. A route parameter is whatever the
+  // caller typed, and Postgres matches an uppercase UUID happily, but every
+  // comparison after this one is a string compare: the socket's user id, the
+  // client's server list, the retry's rejoin check.
+  const frame: ServerRemoved = {
+    type: "server-removed",
+    serverId: serverId.toLowerCase(),
+    reason,
+  };
+  const addressees = userIds.map((id) => id.toLowerCase());
+  deliverServerRemoved(frame, addressees);
   if (isBusEnabled()) {
-    publishServerRemoved({ frame, userIds: [...userIds], firstAt: Date.now() });
+    publishServerRemoved({ frame, userIds: addressees, firstAt: Date.now() });
   }
 }
 
