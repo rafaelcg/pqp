@@ -219,6 +219,7 @@ describe("createLiveReadAck", () => {
     const ack = make();
     ack.note("c1");
     vi.advanceTimersByTime(1000);
+    await drain();
     ack.note("c1");
     vi.advanceTimersByTime(1000);
     await drain();
@@ -234,6 +235,70 @@ describe("createLiveReadAck", () => {
     first.resolve();
     await reopen;
     expect(log).toEqual(["ack 1", "ack 2", "open"]);
+  });
+
+  it("keeps one ack waiting behind a slow request, however many fire", async () => {
+    const slow = deferred();
+    send.mockImplementationOnce(() => slow.promise);
+    const ack = make();
+    ack.note("c1");
+    vi.advanceTimersByTime(1000);
+    await drain();
+    for (let i = 0; i < 5; i += 1) {
+      ack.note("c1");
+      vi.advanceTimersByTime(1000);
+    }
+    await drain();
+    expect(send).toHaveBeenCalledTimes(1);
+    slow.resolve();
+    await drain();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a queued ack once the reader has left the channel", async () => {
+    const slow = deferred();
+    void queue.run("c1", () => slow.promise);
+    const ack = make();
+    ack.note("c1");
+    vi.advanceTimersByTime(1000);
+    await drain();
+    // Left while the ack waited: NOW() would cover what arrives after.
+    selected = "c2";
+    slow.resolve();
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("parks a queued ack if the tab hid while it waited", async () => {
+    const slow = deferred();
+    void queue.run("c1", () => slow.promise);
+    const ack = make();
+    ack.note("c1");
+    vi.advanceTimersByTime(1000);
+    await drain();
+    visible = false;
+    slow.resolve();
+    await drain();
+    expect(send).not.toHaveBeenCalled();
+    visible = true;
+    ack.resume();
+    vi.advanceTimersByTime(1000);
+    await drain();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the leave ack when it would have to wait in the queue", async () => {
+    const slow = deferred();
+    void queue.run("c1", () => slow.promise);
+    const ack = make();
+    ack.note("c1");
+    ack.flush("c1");
+    selected = "c2";
+    slow.resolve();
+    await drain();
+    vi.advanceTimersByTime(5000);
+    await drain();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("acks at once on leave, and only when something is waiting", async () => {

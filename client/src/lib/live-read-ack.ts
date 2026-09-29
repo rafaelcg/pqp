@@ -21,9 +21,17 @@
  *     response before sending the next request. The server's plain mark-read
  *     sets NOW() and a rewind sets an exact value, so the last write to commit
  *     wins; ordering the writes is what makes "last" mean "last clicked".
- *   - The hold (Mark unread) is checked when the ack is DISPATCHED from that
- *     queue, not when it is scheduled. A pending or queued ack must never
- *     overwrite the cursor the reader just rewound on purpose.
+ *   - The hold (Mark unread) is checked when the ack LEAVES that queue, not
+ *     when it is scheduled. A pending or queued ack must never overwrite the
+ *     cursor the reader just rewound on purpose.
+ *   - The ack sets the cursor to the server's NOW() when it runs, so it may
+ *     only run while the reader still has the channel on screen. An ack that
+ *     waited in the queue re-checks that; one that finds the reader gone is
+ *     dropped, which costs at most one extra NEW rule and never hides a
+ *     message nobody saw. The leave ack runs only if the queue is idle, for
+ *     the same reason.
+ *   - At most one ack per channel waits in the queue. A slow request does not
+ *     pile up acks behind it; the one waiting covers every arrival before it.
  */
 
 export type ChannelWriteQueue = {
@@ -32,6 +40,8 @@ export type ChannelWriteQueue = {
    * resolves or rejects with its result. A failed task does not stall the rest.
    */
   run: <T>(channelId: string, task: () => Promise<T>) => Promise<T>;
+  /** A write for this channel is running or waiting. */
+  busy: (channelId: string) => boolean;
 };
 
 export function createChannelWriteQueue(): ChannelWriteQueue {
@@ -51,6 +61,9 @@ export function createChannelWriteQueue(): ChannelWriteQueue {
         }
       });
       return result;
+    },
+    busy(channelId) {
+      return tails.has(channelId);
     },
   };
 }
@@ -88,16 +101,43 @@ export function createLiveReadAck({
 }: LiveReadAckOptions): LiveReadAck {
   /** Channels with an unacked arrival. `null` = waiting for the page to show. */
   const pending = new Map<string, ReturnType<typeof setTimeout> | null>();
+  /** Channels with an ack waiting in the queue that has not started yet. */
+  const queued = new Set<string>();
 
   const dispatch = (channelId: string) => {
+    if (queued.has(channelId)) {
+      // The waiting ack reads NOW() when it runs, so it covers this too.
+      return;
+    }
+    queued.add(channelId);
     void queue
-      .run(channelId, () =>
-        // Read at dispatch: a Mark unread made while this ack was queued
-        // behind another write still wins.
-        isHeld(channelId) ? Promise.resolve() : send(channelId),
-      )
+      .run(channelId, () => {
+        queued.delete(channelId);
+        // Read when the ack leaves the queue: a Mark unread made while it
+        // waited still wins.
+        if (isHeld(channelId)) {
+          return Promise.resolve();
+        }
+        if (!isSelected(channelId) || !isVisible()) {
+          // The reader left or hid the tab while this waited; NOW() would
+          // cover messages they did not see. Wait for the tab if still here.
+          if (isSelected(channelId) && !pending.has(channelId)) {
+            pending.set(channelId, null);
+          }
+          return Promise.resolve();
+        }
+        return send(channelId);
+      })
       // A missed ack only means the rule shows once too often.
       .catch(() => undefined);
+  };
+
+  /** The leave ack: sent at once, before the reader is gone, or not at all. */
+  const dispatchNow = (channelId: string) => {
+    if (queue.busy(channelId) || isHeld(channelId)) {
+      return;
+    }
+    void queue.run(channelId, () => send(channelId)).catch(() => undefined);
   };
 
   const clear = (channelId: string) => {
@@ -146,7 +186,7 @@ export function createLiveReadAck({
       const seen = pending.get(channelId) !== null && isVisible();
       clear(channelId);
       if (seen) {
-        dispatch(channelId);
+        dispatchNow(channelId);
       }
     },
     resume() {
