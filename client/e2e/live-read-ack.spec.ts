@@ -288,3 +288,31 @@ test("scrolling up in one channel does not stop acks in the next", async ({
     )
     .toBe(0);
 });
+
+test("a message that arrives while What's New covers the chat stays unread", async ({
+  page,
+}) => {
+  const seeded = await seed();
+  await openChannel(page, seeded);
+
+  // The chat stays mounted under Novidades, still "at its live end".
+  await page.locator("[data-whats-new-rail]").click();
+  await expect(page.getByRole("log")).toBeHidden();
+
+  await sendMessages(seeded.guest, seeded.channelId, ["arrived unseen"], 41);
+  await page.waitForTimeout(3_000);
+  expect(
+    await unreadCount(seeded.owner, seeded.serverId, seeded.channelId),
+  ).toBe(1);
+
+  // Back on the chat, it is on screen and is read.
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("log").getByText("arrived unseen"),
+  ).toBeInViewport();
+  await expect
+    .poll(() => unreadCount(seeded.owner, seeded.serverId, seeded.channelId), {
+      timeout: 10_000,
+    })
+    .toBe(0);
+});

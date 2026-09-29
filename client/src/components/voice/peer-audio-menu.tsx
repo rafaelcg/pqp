@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -211,6 +212,7 @@ export function PeerAudioMenu({
   align = "start",
   anchorRef,
   panelRef,
+  onClose,
   className,
 }: {
   name: string;
@@ -230,6 +232,12 @@ export function PeerAudioMenu({
    */
   anchorRef?: RefObject<HTMLElement | null>;
   panelRef?: RefObject<HTMLDivElement | null>;
+  /**
+   * Closes the panel. A portalled panel needs it: it is no longer next to its
+   * trigger in the DOM, so Tab out of it closes it and hands the focus back to
+   * the anchor rather than letting the key wander off to the end of the page.
+   */
+  onClose?: () => void;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -286,6 +294,7 @@ export function PeerAudioMenu({
         label={label}
         anchorRef={anchorRef}
         panelRef={panelRef}
+        onClose={onClose}
         side={side}
         className={className}
       >
@@ -355,6 +364,7 @@ function AnchoredPanel({
   label,
   anchorRef,
   panelRef,
+  onClose,
   side,
   className,
   children,
@@ -362,6 +372,7 @@ function AnchoredPanel({
   label: string;
   anchorRef: RefObject<HTMLElement | null>;
   panelRef?: RefObject<HTMLDivElement | null>;
+  onClose?: () => void;
   side: PeerAudioMenuSide;
   className?: string;
   children: ReactNode;
@@ -419,6 +430,38 @@ function AnchoredPanel({
     };
   }, [placed, anchorRef]);
 
+  // The panel sits at the end of the document, so the browser's own Tab order
+  // would drop the keyboard there. Leaving either end of it closes it and puts
+  // the focus back where it opened from: Tab from the last control carries on
+  // from the anchor to whatever follows it, Shift+Tab from the first control
+  // lands on the anchor itself, which is where it was before the panel moved.
+  const onKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      const panel = ownRef.current;
+      if (event.key !== "Tab" || !panel || !onClose) {
+        return;
+      }
+      const stops = panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      );
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      const active = document.activeElement;
+      const leavingBackwards =
+        event.shiftKey && (active === panel || active === first || !first);
+      const leavingForwards = !event.shiftKey && (active === last || !last);
+      if (!leavingBackwards && !leavingForwards) {
+        return;
+      }
+      if (leavingBackwards) {
+        event.preventDefault();
+      }
+      anchorRef.current?.focus({ preventScroll: true });
+      onClose();
+    },
+    [anchorRef, onClose],
+  );
+
   const setRefs = useCallback(
     (node: HTMLDivElement | null) => {
       ownRef.current = node;
@@ -436,6 +479,7 @@ function AnchoredPanel({
       data-testid="peer-audio-menu"
       aria-label={label}
       tabIndex={-1}
+      onKeyDown={onKeyDown}
       style={{
         position: "fixed",
         top: placement?.top ?? 0,

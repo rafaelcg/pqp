@@ -401,3 +401,117 @@ test("a send from history lands on the present even when the tail page is slow",
     0,
   );
 });
+
+/**
+ * A send wins over a jump whose page is still being fetched.
+ *
+ * The reply-quote or search jump to a message outside the loaded window asks
+ * for a page around it. A send made while that request is out went to the
+ * bottom, and then the page landed, replaced the window (without the send,
+ * which the new window has no room for) and scrolled the reader into history.
+ * Holding the `around` page makes the order certain.
+ */
+test("a send while a jump is still fetching stays on the send", async ({
+  page,
+}) => {
+  const seeded = await seed(120);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 119 ")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+
+  await page.route(
+    (url) =>
+      url.pathname.endsWith(`/channels/${seeded.channelId}/messages`) &&
+      url.searchParams.has("around"),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await route.continue();
+    },
+  );
+
+  await page.getByRole("button", { name: /Search messages/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
+    .getByRole("combobox", { name: "Search messages" })
+    .fill("history 10 ");
+  await dialog
+    .getByRole("option")
+    .filter({ hasText: "history 10 " })
+    .first()
+    .click();
+
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.fill("sent while fetching");
+  await composer.press("Enter");
+
+  // Well past the held page and the settle that would follow it.
+  await page.waitForTimeout(4_000);
+  await expect(page.getByText("sent while fetching")).toBeInViewport();
+  await expect(page.getByText(/^history 10 lorem/)).toHaveCount(0);
+  await expect
+    .poll(() => distanceFromBottom(page))
+    .toBeLessThanOrEqual(2);
+  await expect(
+    page.getByRole("button", { name: "Load newer messages" }),
+  ).toHaveCount(0);
+});
+
+/**
+ * The reader's own scroll ends a jump; it does not get undone by it.
+ *
+ * Jumping to a row that is already centred moves nothing, so no `scrollend`
+ * ends the jump and the one-second timer is what settles it. A wheel inside
+ * that second used to be followed by the settle putting the row back.
+ */
+test("wheeling during a jump is not pulled back to the target", async ({
+  page,
+}) => {
+  const seeded = await seed(60);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 59 ")).toBeVisible({ timeout: 20_000 });
+
+  const jumpToSearchResult = async () => {
+    await page.getByRole("button", { name: /Search messages/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog
+      .getByRole("combobox", { name: "Search messages" })
+      .fill("history 30 ");
+    await dialog
+      .getByRole("option")
+      .filter({ hasText: "history 30 " })
+      .first()
+      .click();
+    await expect(dialog).toBeHidden();
+  };
+  const scrollTop = () =>
+    page.getByRole("log").evaluate((log) => log.scrollTop);
+
+  // The row that has just been jumped to wears a ring while the jump runs.
+  const flashing = page.locator('[class*="ring-accent/50"]');
+  await jumpToSearchResult();
+  await expect(flashing).toHaveCount(1);
+  await expect(flashing).toHaveCount(0, { timeout: 10_000 });
+  const centred = await scrollTop();
+
+  // Already centred: nothing scrolls, so nothing ends this jump but the timer.
+  await jumpToSearchResult();
+  await expect(flashing).toHaveCount(1);
+  const box = await page.getByRole("log").evaluate((log) => {
+    const rect = log.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -500);
+  await page.waitForTimeout(2_000);
+  expect(centred - (await scrollTop())).toBeGreaterThan(300);
+});

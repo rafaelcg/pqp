@@ -254,6 +254,7 @@ function ListenerChip({
         side="top"
         anchorRef={menu.rootRef}
         panelRef={menu.panelRef}
+        onClose={menu.close}
       />
     </span>
   );

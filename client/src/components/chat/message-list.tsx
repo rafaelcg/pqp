@@ -127,6 +127,16 @@ const HIGHLIGHT_MS = 2_000;
 const JUMP_SETTLE_MS = 1_000;
 /** At most this many re-centring frames once a jump's scroll has stopped. */
 const JUMP_SETTLE_PASSES = 6;
+/** Keys that scroll the transcript by hand and so end a jump in flight. */
+const JUMP_YIELD_KEYS = new Set([
+  "PageUp",
+  "PageDown",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  " ",
+]);
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
 
@@ -655,6 +665,15 @@ export const MessageList = memo(function MessageList({
    * the jump lands.
    */
   const jumpingRef = useRef(false);
+  /**
+   * Bumped whenever a jump that is still fetching should be abandoned: a send,
+   * a channel switch, another jump. The late `.then` compares it.
+   */
+  const jumpRequestRef = useRef(0);
+  /** A send happened while a jump's page was still out. */
+  const sentWhileJumpingRef = useRef(false);
+  const returnToPresentRef = useRef<() => void>(() => {});
+  const handleScrollRef = useRef<() => void>(() => {});
   /** The message the jump in flight is going to. */
   const jumpTargetRef = useRef<string | null>(null);
   /** Cancels what the jump in flight waits on: `scrollend`, a timer, a frame. */
@@ -1080,9 +1099,28 @@ export const MessageList = memo(function MessageList({
     // either way.
     const timer = window.setTimeout(settleJump, JUMP_SETTLE_MS);
     container.addEventListener("scrollend", settleJump);
+    // The reader taking over ends the jump: settling would snap them back to
+    // the old target when their own scroll stops. Only real input counts, a
+    // scroll event alone cannot tell the animation from the reader.
+    const yieldToReader = (event: Event) => {
+      if (event.type === "keydown" && !JUMP_YIELD_KEYS.has((event as KeyboardEvent).key)) {
+        return;
+      }
+      jumpSettleCleanupRef.current?.();
+      jumpSettleCleanupRef.current = null;
+      jumpingRef.current = false;
+      jumpTargetRef.current = null;
+      handleScrollRef.current();
+    };
+    container.addEventListener("wheel", yieldToReader, { passive: true });
+    container.addEventListener("touchstart", yieldToReader, { passive: true });
+    container.addEventListener("keydown", yieldToReader);
     jumpSettleCleanupRef.current = () => {
       window.clearTimeout(timer);
       container.removeEventListener("scrollend", settleJump);
+      container.removeEventListener("wheel", yieldToReader);
+      container.removeEventListener("touchstart", yieldToReader);
+      container.removeEventListener("keydown", yieldToReader);
     };
     setFlashId(messageId);
     if (flashTimer.current) {
@@ -1105,15 +1143,33 @@ export const MessageList = memo(function MessageList({
         showJumpNotice();
         return;
       }
+      jumpRequestRef.current += 1;
+      sentWhileJumpingRef.current = false;
+      const request = jumpRequestRef.current;
       void onJumpToMessage(messageId)
         .then((reachable) => {
+          if (jumpRequestRef.current !== request) {
+            // A send, a channel switch or a newer jump took over while the
+            // page was out. The fetched window has replaced the one the
+            // reader is in, so a send made meanwhile is not in it: go back to
+            // the live end instead of scrolling into history.
+            if (reachable && sentWhileJumpingRef.current) {
+              sentWhileJumpingRef.current = false;
+              returnToPresentRef.current();
+            }
+            return;
+          }
           if (reachable) {
             setPendingJumpId(messageId);
           } else {
             showJumpNotice();
           }
         })
-        .catch(showJumpNotice);
+        .catch(() => {
+          if (jumpRequestRef.current === request) {
+            showJumpNotice();
+          }
+        });
     },
     [focusRow, onJumpToMessage, showJumpNotice],
   );
@@ -1295,6 +1351,8 @@ export const MessageList = memo(function MessageList({
     setFlashId(null);
     setJumpNotice(false);
     setPendingJumpId(null);
+    jumpRequestRef.current += 1;
+    sentWhileJumpingRef.current = false;
     jumpSettleCleanupRef.current?.();
     jumpSettleCleanupRef.current = null;
     jumpingRef.current = false;
@@ -1465,6 +1523,14 @@ export const MessageList = memo(function MessageList({
       scrollToBottom();
       return;
     }
+    returnToPresentRef.current();
+  }, [hasNewer, onJumpToPresent, scrollToBottom]);
+
+  /** Fetch the newest page, whatever `hasNewer` last rendered as. */
+  const returnToPresent = useCallback(() => {
+    if (!onJumpToPresent) {
+      return;
+    }
     // Flagged before the fetch, not after: the effect below owns the scroll
     // because it is the only thing that runs after React has committed the new
     // window. See the comment there.
@@ -1479,7 +1545,8 @@ export const MessageList = memo(function MessageList({
         // Left armed, the flag would fire on whatever reaches the tail next.
         pendingTailRef.current = false;
       });
-  }, [hasNewer, onJumpToPresent, scrollToBottom]);
+  }, [onJumpToPresent]);
+  returnToPresentRef.current = returnToPresent;
 
   /**
    * Drop a jump to a message that has not finished: its settle, the row it is
@@ -1488,6 +1555,7 @@ export const MessageList = memo(function MessageList({
    * put the reader back on the old target.
    */
   const cancelJump = useCallback(() => {
+    jumpRequestRef.current += 1;
     jumpSettleCleanupRef.current?.();
     jumpSettleCleanupRef.current = null;
     setPendingJumpId(null);
@@ -1515,6 +1583,7 @@ export const MessageList = memo(function MessageList({
    */
   const followOwnSend = useCallback(() => {
     cancelJump();
+    sentWhileJumpingRef.current = true;
     if (hasNewerRef.current) {
       jumpToPresent();
       return;
@@ -1564,6 +1633,7 @@ export const MessageList = memo(function MessageList({
       loadNewer();
     }
   }, [loadNewer, loadOlder]);
+  handleScrollRef.current = handleScroll;
 
   if (isLoading) {
     return <MessageListSkeleton />;

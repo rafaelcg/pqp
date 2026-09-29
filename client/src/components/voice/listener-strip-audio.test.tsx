@@ -78,12 +78,17 @@ function openPanel() {
   expect(panel()).not.toBeNull();
 }
 
-function key(target: Element, name: string) {
-  act(() => {
-    target.dispatchEvent(
-      new KeyboardEvent("keydown", { key: name, bubbles: true }),
-    );
+function key(target: Element, name: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", {
+    key: name,
+    bubbles: true,
+    cancelable: true,
+    ...init,
   });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
 }
 
 describe("ListenerStrip sound panel", () => {
@@ -132,5 +137,39 @@ describe("ListenerStrip sound panel", () => {
     key(document.activeElement!, "Escape");
     expect(panel()).toBeNull();
     expect(document.activeElement).toBe(chip());
+  });
+
+  it("hands Tab from the last control back to the chip and closes", () => {
+    mount();
+    openPanel();
+    const stops = panel()!.querySelectorAll<HTMLElement>("button, input");
+    const last = stops[stops.length - 1]!;
+    act(() => last.focus());
+    const event = key(last, "Tab");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(chip());
+    // Not prevented: the browser carries on from the chip to what follows it.
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("lands Shift+Tab from the first control on the chip itself", () => {
+    mount();
+    openPanel();
+    const first = panel()!.querySelector<HTMLElement>("button, input")!;
+    act(() => first.focus());
+    const event = key(first, "Tab", { shiftKey: true });
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(chip());
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves Tab between its own controls alone", () => {
+    mount();
+    openPanel();
+    const first = panel()!.querySelector<HTMLElement>("button, input")!;
+    act(() => first.focus());
+    const event = key(first, "Tab");
+    expect(panel()).not.toBeNull();
+    expect(event.defaultPrevented).toBe(false);
   });
 });
