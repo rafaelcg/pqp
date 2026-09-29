@@ -97,6 +97,7 @@ import {
 } from "@/lib/community-home";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
+import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
 import { UnlockedMedia } from "./community-home-media";
@@ -170,6 +171,7 @@ type StaffTab = "feed" | "compose" | "drafts";
 function relativeDayLabel(
   iso: string,
   t: (key: MessageKey, vars?: MessageVars) => string,
+  locale: Locale,
 ): string {
   const posted = new Date(iso);
   if (Number.isNaN(posted.getTime())) {
@@ -194,18 +196,25 @@ function relativeDayLabel(
   if (dayDiff <= 7) {
     return t("communityHome.postedDays", { count: dayDiff });
   }
-  return posted.toLocaleDateString();
+  return posted.toLocaleDateString(intlLocale(locale));
 }
 
-function scheduledLabel(iso: string, timezone: string | null): string {
+// In the app's language, not the browser's, and with the zone named: staff in
+// London and in São Paulo read the same post, so a bare "00:00" is ambiguous.
+function scheduledLabel(iso: string, timezone: string | null, locale: Locale): string {
+  const date = new Date(iso);
   try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
+    return new Intl.DateTimeFormat(intlLocale(locale), {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
       ...(timezone ? { timeZone: timezone } : {}),
-    });
+    }).format(date);
   } catch {
-    return new Date(iso).toLocaleString();
+    return date.toLocaleString(intlLocale(locale));
   }
 }
 
@@ -338,7 +347,7 @@ function CommentRow({
   canDelete: boolean;
   onDelete: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   return (
     <li className="flex gap-2.5" data-home-comment>
       <UserAvatar
@@ -354,7 +363,7 @@ function CommentRow({
             {comment.author.displayName}
           </span>
           <span className="shrink-0 text-[11px] text-paper-muted">
-            {relativeDayLabel(comment.createdAt, t)}
+            {relativeDayLabel(comment.createdAt, t, locale)}
           </span>
           {canDelete && (
             <button
@@ -696,7 +705,7 @@ export function PostCard({
   onTogglePin,
   onToggleLock,
 }: PostCardProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [liking, setLiking] = useState(false);
@@ -915,7 +924,7 @@ export function PostCard({
           <span>
             {isPreview
               ? t("communityHome.compose.previewNow")
-              : relativeDayLabel(post.publishedAt ?? post.createdAt, t)}
+              : relativeDayLabel(post.publishedAt ?? post.createdAt, t, locale)}
           </span>
           {locked && !showLockPlate && (
             <span
@@ -944,7 +953,7 @@ export function PostCard({
             <span className="inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
               <CalendarClock className="h-2.5 w-2.5" aria-hidden />
               {t("communityHome.status.scheduledFor", {
-                when: scheduledLabel(post.scheduledAt, post.scheduleTimezone),
+                when: scheduledLabel(post.scheduledAt, post.scheduleTimezone, locale),
               })}
             </span>
           )}

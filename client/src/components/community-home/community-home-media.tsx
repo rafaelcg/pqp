@@ -1,4 +1,5 @@
-import { Download } from "lucide-react";
+import { Download, Play } from "lucide-react";
+import { useRef, useState } from "react";
 import type { CommunityHomeMedia } from "@pqp/shared";
 import {
   formatHomeBytes,
@@ -15,15 +16,6 @@ function twitchPlayerParent(): string {
     return window.location.hostname;
   }
   return "localhost";
-}
-
-function MediaCaption({ media }: { media: CommunityHomeMedia }) {
-  return (
-    <div className="border-t border-ink-4 px-3 py-1.5 text-[11px] text-paper-muted">
-      {media.name}
-      {media.byteSize != null ? ` · ${formatHomeBytes(media.byteSize)}` : null}
-    </div>
-  );
 }
 
 /**
@@ -170,21 +162,12 @@ export function UnlockedMedia({
     return (
       <div className={frame} data-home-media="video">
         {media.url ? (
-          <video
-            className="max-h-96 w-full bg-ink"
-            controls
-            playsInline
-            preload="metadata"
-            src={media.url}
-          >
-            <track kind="captions" />
-          </video>
+          <VideoPlayer url={media.url} />
         ) : (
           <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
             {t("communityHome.media.unavailable")}
           </div>
         )}
-        <MediaCaption media={media} />
       </div>
     );
   }
@@ -204,7 +187,117 @@ export function UnlockedMedia({
           {t("communityHome.media.unavailable")}
         </div>
       )}
-      <MediaCaption media={media} />
+    </div>
+  );
+}
+
+/** A landscape video wider than this fills the card at its own shape. */
+const FILL_MIN_RATIO = 4 / 3;
+
+export function formatVideoDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * The Baú's video. A landscape video takes the card's full width at its own
+ * aspect ratio, so there are no black bars beside it. Anything taller than
+ * 4:3 (a phone clip, a square) keeps a 24rem box and fills the sides with a
+ * blurred copy of its first frame, because at full width it would be taller
+ * than the screen.
+ *
+ * Until somebody presses play it shows a poster: the first frame, a play
+ * button and the length. The browser's own controls take over after that.
+ */
+function VideoPlayer({ url }: { url: string }) {
+  const { t } = useTranslation();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const backdropRef = useRef<HTMLCanvasElement>(null);
+  const [shape, setShape] = useState<{ w: number; h: number } | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [started, setStarted] = useState(false);
+  const fills = !shape || shape.w / shape.h >= FILL_MIN_RATIO;
+
+  const onMetadata = () => {
+    const v = videoRef.current;
+    if (!v) {
+      return;
+    }
+    if (v.videoWidth > 0 && v.videoHeight > 0) {
+      setShape({ w: v.videoWidth, h: v.videoHeight });
+    }
+    if (Number.isFinite(v.duration) && v.duration > 0) {
+      setDuration(v.duration);
+    }
+  };
+  // The blurred sides are the first frame, drawn once into a small canvas.
+  // A cross-origin frame only taints the canvas, which is fine: it is never read back.
+  const onFirstFrame = () => {
+    const v = videoRef.current;
+    const c = backdropRef.current;
+    if (!v || !c || v.videoWidth === 0) {
+      return;
+    }
+    c.width = 48;
+    c.height = Math.max(1, Math.round((48 * v.videoHeight) / v.videoWidth));
+    try {
+      c.getContext("2d")?.drawImage(v, 0, 0, c.width, c.height);
+    } catch {
+      // No frame to draw: the sides stay the card's own colour.
+    }
+  };
+  const start = () => {
+    setStarted(true);
+    void videoRef.current?.play().catch(() => {});
+  };
+
+  return (
+    <div
+      className={cn("relative w-full overflow-hidden bg-ink", !fills && "h-96")}
+      style={fills ? { aspectRatio: shape ? `${shape.w} / ${shape.h}` : "16 / 9" } : undefined}
+      data-home-video={fills ? "fill" : "fit"}
+    >
+      {!fills && (
+        <canvas
+          ref={backdropRef}
+          aria-hidden
+          className="absolute inset-0 h-full w-full scale-110 object-cover opacity-60 blur-2xl"
+        />
+      )}
+      <video
+        ref={videoRef}
+        className="relative h-full w-full object-contain"
+        controls={started}
+        playsInline
+        preload="metadata"
+        // `#t=0.001` makes iOS Safari paint the first frame before play.
+        src={`${url}#t=0.001`}
+        onLoadedMetadata={onMetadata}
+        onLoadedData={onFirstFrame}
+        onPlay={() => setStarted(true)}
+      >
+        <track kind="captions" />
+      </video>
+      {!started && (
+        <button
+          type="button"
+          onClick={start}
+          aria-label={t("communityHome.media.play")}
+          className="group absolute inset-0 flex items-center justify-center focus-visible:outline-none"
+          data-home-video-play
+        >
+          <span className="flex h-16 w-16 items-center justify-center rounded-full bg-signal text-ink shadow-[0_10px_40px_var(--glow-accent)] ring-8 ring-signal/15 transition-transform duration-[var(--duration-fast)] group-hover:scale-105 group-focus-visible:ring-focus-ring sm:h-20 sm:w-20">
+            <Play className="ml-1 h-7 w-7 fill-current sm:h-8 sm:w-8" aria-hidden />
+          </span>
+          {duration != null && (
+            <span className="absolute bottom-3 right-3 rounded-full border border-paper/15 bg-ink/80 px-2.5 py-1 text-xs font-semibold tabular-nums text-paper">
+              {formatVideoDuration(duration)}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 }

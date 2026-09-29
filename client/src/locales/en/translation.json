@@ -2353,6 +2353,7 @@
   "communityHome.media.file": "File",
   "communityHome.media.download": "Download",
   "communityHome.media.unavailable": "Media unavailable right now.",
+  "communityHome.media.play": "Play the video",
   "communityHome.media.openTikTok": "Watch on TikTok",
   "communityHome.media.openInstagram": "Watch on Instagram",
   "communityHome.comments.viewAll_one": "See {count} comment",
