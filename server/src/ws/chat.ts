@@ -78,7 +78,7 @@ import { getThreadInfo } from "../services/threads.js";
 import {
   canAccessChannel,
   invalidateChannelAccessForServer,
-  listCurrentMembersAmong,
+  listCurrentMemberships,
 } from "../services/users.js";
 import {
   revokeHlsAccess,
@@ -955,10 +955,12 @@ function queueServerRemovedRetry(entry: PendingServerRemoved): void {
  * A kick or a ban is checked against the table first: somebody kicked while
  * the bus was down may have come back through a fresh invite before it
  * recovered, and a late "you were removed" would take away a server they are
- * in again. A delete needs no check, because nobody can rejoin a server that
- * no longer exists. If the check itself fails the notice goes out as it was:
- * the removal did happen, and a tab that keeps a server it lost is the bug
- * this frame exists to fix.
+ * in again. One query covers the whole backlog, so a long outage does not turn
+ * into a queue of round trips in front of the notices. A delete needs no
+ * check, because nobody can rejoin a server that no longer exists. If the
+ * check itself fails the notices go out as they were: the removals did
+ * happen, and a tab that keeps a server it lost is the bug this frame exists
+ * to fix.
  */
 export async function flushServerRemovedRetries(
   now = Date.now(),
@@ -967,34 +969,42 @@ export async function flushServerRemovedRetries(
     clearTimeout(serverRemovedRetryTimer);
     serverRemovedRetryTimer = null;
   }
-  const batch = pendingServerRemoved.splice(0);
+  const batch = pendingServerRemoved
+    .splice(0)
+    .filter((entry) => now - entry.firstAt <= SERVER_REMOVED_RETRY_WINDOW_MS);
   if (!isBusEnabled()) {
     return;
   }
   if (!isBusConnected()) {
     // Still down: hold everything that is not yet too old for another round.
     for (const entry of batch) {
-      if (now - entry.firstAt <= SERVER_REMOVED_RETRY_WINDOW_MS) {
-        queueServerRemovedRetry(entry);
-      }
+      queueServerRemovedRetry(entry);
     }
     return;
   }
+  const pairs = batch
+    .filter((entry) => entry.frame.reason !== "deleted")
+    .flatMap((entry) =>
+      entry.userIds.map((userId) => ({
+        serverId: entry.frame.serverId,
+        userId,
+      })),
+    );
+  let back = new Set<string>();
+  if (pairs.length > 0) {
+    try {
+      back = await listCurrentMemberships(pairs);
+    } catch {
+      // See above: send them as they were.
+    }
+  }
   for (const entry of batch) {
-    if (now - entry.firstAt > SERVER_REMOVED_RETRY_WINDOW_MS) {
-      continue;
-    }
-    let userIds = entry.userIds;
-    if (entry.frame.reason !== "deleted") {
-      try {
-        const back = new Set(
-          await listCurrentMembersAmong(entry.frame.serverId, userIds),
-        );
-        userIds = userIds.filter((id) => !back.has(id));
-      } catch {
-        // See above: send it as it was.
-      }
-    }
+    const userIds =
+      entry.frame.reason === "deleted"
+        ? entry.userIds
+        : entry.userIds.filter(
+            (id) => !back.has(`${entry.frame.serverId}:${id}`),
+          );
     if (userIds.length > 0) {
       publishServerRemoved({ ...entry, userIds });
     }

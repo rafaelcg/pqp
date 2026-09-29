@@ -24,7 +24,7 @@ vi.mock("../services/users.js", () => ({
   ) => user.display_name,
   canAccessChannel: vi.fn(async () => true),
   // Who is back in a server before a delayed removal notice is republished.
-  listCurrentMembersAmong: vi.fn(async () => [] as string[]),
+  listCurrentMemberships: vi.fn(async () => new Set<string>()),
 }));
 
 // The timeout chokepoint queries Postgres, and this suite deliberately runs
@@ -151,7 +151,7 @@ const bus = await import("../lib/bus.js");
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
-const { canAccessChannel, listCurrentMembersAmong } = await import(
+const { canAccessChannel, listCurrentMemberships } = await import(
   "../services/users.js"
 );
 const { isDmSendBlocked, restoreDmParticipants } = await import(
@@ -553,8 +553,8 @@ describe("notifyServerRemoved", () => {
   afterEach(() => {
     bus.setBusTransport(null);
     resetServerRemovedRetries();
-    vi.mocked(listCurrentMembersAmong).mockReset();
-    vi.mocked(listCurrentMembersAmong).mockResolvedValue([]);
+    vi.mocked(listCurrentMemberships).mockReset();
+    vi.mocked(listCurrentMemberships).mockResolvedValue(new Set());
     for (const recorder of open) {
       deleteAuthenticatedSocket(recorder.socket);
     }
@@ -583,7 +583,7 @@ describe("notifyServerRemoved", () => {
       },
     ]);
     // A delete needs no membership check: nobody rejoins a deleted server.
-    expect(listCurrentMembersAmong).not.toHaveBeenCalled();
+    expect(listCurrentMemberships).not.toHaveBeenCalled();
 
     // Delivered once; nothing is left to send again.
     await flushServerRemovedRetries();
@@ -592,19 +592,36 @@ describe("notifyServerRemoved", () => {
 
   it("does not republish a kick to somebody who has rejoined since", async () => {
     const flaky = installFlakyBus();
-    vi.mocked(listCurrentMembersAmong).mockResolvedValue([removed]);
+    const otherServer = "44444444-4444-4444-4444-444444444444";
+    // Back in the first server, still out of the second.
+    vi.mocked(listCurrentMemberships).mockResolvedValue(
+      new Set([`${serverId}:${removed}`]),
+    );
 
     notifyServerRemoved(serverId, "kicked", [removed]);
+    notifyServerRemoved(otherServer, "banned", [removed]);
     flaky.setUp(true);
     await flushServerRemovedRetries();
 
-    expect(listCurrentMembersAmong).toHaveBeenCalledWith(serverId, [removed]);
-    expect(flaky.published).toEqual([]);
+    // The whole backlog is checked in one query, not one per notice.
+    expect(listCurrentMemberships).toHaveBeenCalledTimes(1);
+    expect(listCurrentMemberships).toHaveBeenCalledWith([
+      { serverId, userId: removed },
+      { serverId: otherServer, userId: removed },
+    ]);
+    expect(flaky.published).toEqual([
+      {
+        type: "server-removed",
+        serverId: otherServer,
+        reason: "banned",
+        userIds: [removed],
+      },
+    ]);
   });
 
   it("still republishes a kick when the membership check fails", async () => {
     const flaky = installFlakyBus();
-    vi.mocked(listCurrentMembersAmong).mockRejectedValue(new Error("db down"));
+    vi.mocked(listCurrentMemberships).mockRejectedValue(new Error("db down"));
 
     notifyServerRemoved(serverId, "kicked", [removed]);
     flaky.setUp(true);

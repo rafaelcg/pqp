@@ -71,7 +71,9 @@ vi.mock("../auth/clerk.js", () => ({
 
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
-const { upsertUser } = await import("../services/users.js");
+const { upsertUser, listCurrentMemberships } = await import(
+  "../services/users.js"
+);
 const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
   "../ws/sockets.js"
 );
@@ -311,6 +313,23 @@ describeDb("telling people a server left their list", () => {
     expect(removals(socket)).toEqual([
       { type: "server-removed", serverId, reason: "banned" },
     ]);
+  });
+
+  it("answers which pairs are memberships now, for the bus retry's rejoin check", async () => {
+    const other = await getPool().query<{ id: string }>(
+      `INSERT INTO servers (name, owner_id) VALUES ('Outra', $1) RETURNING id`,
+      [owner.id],
+    );
+    const otherId = other.rows[0]!.id;
+
+    const memberships = await listCurrentMemberships([
+      { serverId, userId: member.id },
+      { serverId, userId: stranger.id },
+      { serverId: otherId, userId: member.id },
+    ]);
+
+    expect([...memberships]).toEqual([`${serverId}:${member.id}`]);
+    expect(await listCurrentMemberships([])).toEqual(new Set());
   });
 
   it("tells somebody whose join was still committing when the delete ran", async () => {
