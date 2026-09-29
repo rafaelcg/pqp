@@ -111,6 +111,19 @@ export function postSummary(post: BlogPost, reader: BlogReadLocale): string {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "login-com-twitch-e-android-na-play",
+    date: "2026-09-29",
+    title: {
+      "pt-BR": "Login com a Twitch e Android na Google Play",
+      en: "Sign in with Twitch and Android on Google Play",
+    },
+    summary: {
+      "pt-BR":
+        "Dá pra criar conta e entrar com a Twitch. O app de Android está na Google Play, a call volta em uns 10 segundos depois de uma queda de rede e o site tem seletor de idioma.",
+      en: "You can now sign up and log in with Twitch. The Android app is on Google Play, a call rejoins in about 10 seconds after a network drop, and the site has a language picker.",
+    },
+  },
+  {
     slug: "watch-party-mais-redonda",
     date: "2026-09-27",
     title: {

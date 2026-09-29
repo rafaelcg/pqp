@@ -24,6 +24,16 @@ const BODIES: Record<
   string,
   Record<BlogLocale, BodyLoader> & { es?: BodyLoader }
 > = {
+  "login-com-twitch-e-android-na-play": {
+    "pt-BR": () =>
+      import("@/content/blog/login-com-twitch-e-android-na-play.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/login-com-twitch-e-android-na-play.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "watch-party-mais-redonda": {
     "pt-BR": () =>
       import("@/content/blog/watch-party-mais-redonda.pt-BR.md?raw").then(
