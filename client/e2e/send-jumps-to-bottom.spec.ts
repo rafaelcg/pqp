@@ -211,6 +211,19 @@ test("sending while scrolled up lands on your message and counts nothing", async
     0,
   );
 
+  // The reader's own message from another device is not a send from here:
+  // it leaves the scroll where it is, and it is not news either.
+  await scrollUp(page, 900);
+  const reading = await distanceFromBottom(page);
+  await sendMessages(seeded.owner, seeded.channelId, ["from my other device"]);
+  await expect(page.getByText("from my other device")).toBeAttached();
+  await page.waitForTimeout(500);
+  expect(await distanceFromBottom(page)).toBeGreaterThanOrEqual(reading);
+  await expect(page.getByText("from my other device")).not.toBeInViewport();
+  await expect(page.getByRole("button", { name: /new message/ })).toHaveCount(
+    0,
+  );
+
   // Somebody else's message still waits for a reader who scrolled up.
   await scrollUp(page, 900);
   const before = await distanceFromBottom(page);
@@ -261,4 +274,130 @@ test("sending from a jump into history goes back to the present", async ({
   await expect(
     page.getByRole("button", { name: "Jump to present" }),
   ).toHaveCount(0);
+});
+
+/**
+ * A send wins over a jump to a message that has not settled yet.
+ *
+ * The jump re-centres its row once its smooth scroll stops, on `scrollend` or
+ * a one-second timer. A send in that window scrolled to the bottom, and then
+ * the settle put the reader back on the row they had jumped to. The send is
+ * fired from inside the page on the jump's first scroll away from the bottom,
+ * because a jump inside the loaded page finishes faster than a keypress from
+ * the test runner can reliably land in it. Waiting past the timer is the
+ * point: the follow has to still be there after it.
+ */
+test("a send during a jump in the loaded page stays on the send", async ({
+  page,
+}) => {
+  const seeded = await seed(60);
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}?lang=en`,
+  );
+  await expect(page.getByText("history 59 ")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+
+  await page.getByPlaceholder(/^Message /).fill("sent mid-jump");
+  await page.evaluate(() => {
+    const onScroll = (event: Event) => {
+      const log = event.target;
+      if (!(log instanceof HTMLElement) || log.getAttribute("role") !== "log") {
+        return;
+      }
+      if (log.scrollHeight - log.scrollTop - log.clientHeight <= 200) {
+        return;
+      }
+      document.removeEventListener("scroll", onScroll, true);
+      document
+        .querySelector<HTMLTextAreaElement>('[placeholder^="Message "]')
+        ?.closest("form")
+        ?.requestSubmit();
+    };
+    document.addEventListener("scroll", onScroll, true);
+  });
+
+  // Inside the first page (the newest 50) and far enough up to be a long jump.
+  await page.getByRole("button", { name: /Search messages/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
+    .getByRole("combobox", { name: "Search messages" })
+    .fill("history 14");
+  await dialog
+    .getByRole("option")
+    .filter({ hasText: "history 14 " })
+    .first()
+    .click();
+
+  await expect(page.getByText("sent mid-jump")).toBeAttached();
+  await page.waitForTimeout(1_500);
+  await expect(page.getByText("sent mid-jump")).toBeInViewport();
+  expect(await distanceFromBottom(page)).toBeLessThanOrEqual(2);
+  await expect(
+    page.getByRole("button", { name: "Jump to present" }),
+  ).toHaveCount(0);
+});
+
+/**
+ * From a jump into history, the send goes back to the present, however late
+ * the present arrives.
+ *
+ * The ack of the send comes back before the tail page, and swapping the
+ * bubble in used to count as the jump back landing: the list scrolled the old
+ * window, and the tail then appeared wherever that offset put it, under an
+ * "N new messages" pill. Holding the tail page makes that order certain.
+ */
+test("a send from history lands on the present even when the tail page is slow", async ({
+  page,
+}) => {
+  const seeded = await seed(120);
+  const res = await fetch(
+    `${API}/api/channels/${seeded.channelId}/messages?limit=100`,
+    { headers: headersFor(seeded.owner) },
+  );
+  const { messages } = (await res.json()) as {
+    messages: { id: string; body: string }[];
+  };
+  const old = messages.find((one) => one.body.startsWith("history 20 "))!;
+
+  await page.addInitScript((suffix) => {
+    localStorage.setItem("pqp:dev-user-suffix", suffix);
+  }, seeded.owner);
+  await page.goto(
+    `/app/server/${seeded.serverId}/channel/${seeded.channelId}/message/${old.id}?lang=en`,
+  );
+  await expect(page.getByText("history 20 ")).toBeVisible({ timeout: 20_000 });
+  await expect(
+    page.getByRole("button", { name: "Load newer messages" }),
+  ).toBeVisible();
+
+  // Only the page back to the present: no cursor of any kind.
+  await page.route(
+    (url) =>
+      url.pathname.endsWith(`/channels/${seeded.channelId}/messages`) &&
+      !url.searchParams.has("around") &&
+      !url.searchParams.has("before") &&
+      !url.searchParams.has("after"),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    },
+  );
+
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.fill("sent before the present came back");
+  await composer.press("Enter");
+
+  await expect(
+    page.getByRole("button", { name: "Load newer messages" }),
+  ).toHaveCount(0, { timeout: 10_000 });
+  await expect(
+    page.getByText("sent before the present came back"),
+  ).toBeInViewport();
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(2);
+  await expect(page.getByRole("button", { name: /new message/ })).toHaveCount(
+    0,
+  );
 });

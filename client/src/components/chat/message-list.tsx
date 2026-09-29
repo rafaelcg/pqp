@@ -1240,16 +1240,23 @@ export const MessageList = memo(function MessageList({
   // replacing a scroll container's contents drops it back to the top, which is
   // exactly the place the reader just asked to leave. Waiting for the commit is
   // what makes the button land where it says it will.
+  //
+  // Only the commit that reached the present, not the next change to
+  // `messages`: a send from history gets its ack back before the tail page,
+  // and swapping that bubble in used to spend the flag on the outgoing window.
+  // The tail then landed wherever the old scroll offset put it.
   useLayoutEffect(() => {
-    if (!pendingTailRef.current) {
+    if (!pendingTailRef.current || hasNewer) {
       return;
     }
     pendingTailRef.current = false;
     lastCountRef.current = messages.length;
+    // The ref too: the ResizeObserver reads it before the next render does.
+    isPinnedRef.current = true;
     setIsPinned(true);
     setMissedCount(0);
     scrollToBottom("auto");
-  }, [messages, scrollToBottom]);
+  }, [messages, hasNewer, scrollToBottom]);
 
   // Restore the scroll offset after older messages are prepended.
   useLayoutEffect(() => {
@@ -1444,12 +1451,40 @@ export const MessageList = memo(function MessageList({
     // because it is the only thing that runs after React has committed the new
     // window. See the comment there.
     pendingTailRef.current = true;
-    void onJumpToPresent().then((loaded) => {
-      if (!loaded) {
+    void onJumpToPresent()
+      .then((loaded) => {
+        if (!loaded) {
+          pendingTailRef.current = false;
+        }
+      })
+      .catch(() => {
+        // Left armed, the flag would fire on whatever reaches the tail next.
         pendingTailRef.current = false;
-      }
-    });
+      });
   }, [hasNewer, onJumpToPresent, scrollToBottom]);
+
+  /**
+   * Drop a jump to a message that has not finished: its settle, the row it is
+   * still re-centring, and a fetched target still waiting for its frame.
+   * Whatever runs next owns the scroll, and a late settle would otherwise
+   * put the reader back on the old target.
+   */
+  const cancelJump = useCallback(() => {
+    jumpSettleCleanupRef.current?.();
+    jumpSettleCleanupRef.current = null;
+    setPendingJumpId(null);
+    if (!jumpingRef.current) {
+      return;
+    }
+    jumpingRef.current = false;
+    jumpTargetRef.current = null;
+    // Stop the smooth scroll where it is. An instant scroll cancels it, and
+    // its remaining frames would otherwise keep heading for the old target.
+    const container = scrollRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollTop, behavior: "instant" });
+    }
+  }, []);
 
   /**
    * The reader just sent something: put them on it. From a jump into history
@@ -1457,8 +1492,11 @@ export const MessageList = memo(function MessageList({
    * Close to the bottom it glides; from further up it cuts straight there,
    * because a long animation reads as lag, and a row that grows mid-flight (a
    * GIF, an image still loading) would outrun it.
+   *
+   * A send always wins over a jump to a message that is still settling.
    */
   const followOwnSend = useCallback(() => {
+    cancelJump();
     if (hasNewerRef.current) {
       jumpToPresent();
       return;
@@ -1476,7 +1514,7 @@ export const MessageList = memo(function MessageList({
     scrollToBottom(
       distanceFromBottom <= container.clientHeight ? "smooth" : "auto",
     );
-  }, [jumpToPresent, scrollToBottom]);
+  }, [cancelJump, jumpToPresent, scrollToBottom]);
   followOwnSendRef.current = followOwnSend;
 
   const handleScroll = useCallback(() => {
@@ -1496,6 +1534,11 @@ export const MessageList = memo(function MessageList({
       setMissedCount(0);
     }
 
+    // The window on screen is about to be replaced by the tail: a page added
+    // to it now would only be thrown away, or restored over the new one.
+    if (pendingTailRef.current) {
+      return;
+    }
     if (container.scrollTop <= LOAD_MORE_THRESHOLD_PX) {
       loadOlder();
     }
