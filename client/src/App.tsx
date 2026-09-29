@@ -421,6 +421,7 @@ import type { PublicInvitePreview } from "@pqp/shared";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
 import {
+  applyConversationMessage,
   conversationChannel,
   conversationSubtitle,
   conversationTitle,
@@ -481,6 +482,7 @@ import {
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
+  getNotificationState,
   notifyChannelActivity,
   rememberActivityChannel,
   rememberServers,
@@ -2183,6 +2185,9 @@ function MainAppContent({
    */
   const conversationsRef = useRef<DmSummary[]>(conversations);
   conversationsRef.current = conversations;
+  /** Same reason: the handler files a message into its conversation's row. */
+  const blockedUsersRef = useRef<BlockedUser[]>(blockedUsers);
+  blockedUsersRef.current = blockedUsers;
   /**
    * The friends store, through a ref, for the same reason every other live
    * value the socket handler touches goes through one: the handler is installed
@@ -4355,6 +4360,26 @@ function MainAppContent({
             message.type === "poll-update" ||
             message.type === "message-rejected"
           ) {
+            // A message this account sent, or one in the conversation it has
+            // open, arrives here in full and never as `channel-activity`, so
+            // the row is moved from the broadcast itself. The list leaves out
+            // what a blocked author said; so does this.
+            if (
+              message.type === "message-broadcast" &&
+              conversationsRef.current.some(
+                (one) => one.channelId === message.message.channelId,
+              ) &&
+              !blockedUsersRef.current.some(
+                (blocked) => blocked.id === message.message.authorId,
+              )
+            ) {
+              const broadcast = message.message;
+              setConversations((prev) =>
+                applyConversationMessage(prev, broadcast, {
+                  previewsOn: getNotificationState().previewInApp,
+                }),
+              );
+            }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
             // keeps only its own channel's, so one frame can never render in

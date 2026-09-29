@@ -317,7 +317,7 @@ export const channelActivitySchema = z.object({
    * instance's copy across `CLUSTER_BUS` carries neither key at all.
    *
    * Already redacted and truncated to 140 chars server-side
-   * (`server/src/services/dm-preview.ts`). Never raw markdown, never sent for
+   * (`packages/shared/src/dm-preview.ts`). Never raw markdown, never sent for
    * a server channel.
    */
   preview: z.string().max(140).optional(),

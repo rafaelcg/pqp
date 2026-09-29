@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import {
+  buildMessagePreview,
   chatClientMessageSchema,
   extractMentions,
   extractMentionUsernames,
@@ -12,6 +13,7 @@ import {
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
+  type MessagePreview,
   type MessageRejectReason,
   type PollRequest,
   type ProfileUpdate,
@@ -45,7 +47,6 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
-import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
 import { getPreferencesForUsers } from "../services/preferences.js";
 import {
