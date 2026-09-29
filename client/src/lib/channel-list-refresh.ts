@@ -27,3 +27,16 @@ export function vanishedChannelFallback(
     list.find((channel) => channel.type !== "category");
   return { vanished: true, nextId: next?.id ?? null };
 }
+
+/**
+ * How long to wait before the next try at a `channels-update` refetch that
+ * failed, by how many tries have failed so far. `null` once the schedule is
+ * spent: the list is then marked stale and refetched when the socket next
+ * reconnects, since a failure this long is almost always the connection.
+ * About 45 seconds in all, so a blip heals on its own without a navigation.
+ */
+const CHANNEL_LIST_RETRY_MS = [1_000, 4_000, 10_000, 30_000] as const;
+
+export function channelListRetryDelayMs(failedTries: number): number | null {
+  return CHANNEL_LIST_RETRY_MS[failedTries - 1] ?? null;
+}

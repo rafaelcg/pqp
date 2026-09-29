@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Channel } from "@pqp/shared";
 import { COMMUNITY_HOME_CHANNEL_ID } from "@/lib/community-home/id";
-import { vanishedChannelFallback } from "./channel-list-refresh";
+import {
+  channelListRetryDelayMs,
+  vanishedChannelFallback,
+} from "./channel-list-refresh";
 
 function channel(id: string, type: Channel["type"]): Channel {
   return { id, type, name: id } as Channel;
@@ -47,5 +50,15 @@ describe("vanishedChannelFallback", () => {
     expect(
       vanishedChannelFallback([channel("cat", "category")], "avisos"),
     ).toEqual({ vanished: true, nextId: null });
+  });
+});
+
+describe("channelListRetryDelayMs", () => {
+  it("backs off after each failed try, then gives up", () => {
+    expect(channelListRetryDelayMs(1)).toBe(1_000);
+    expect(channelListRetryDelayMs(2)).toBe(4_000);
+    expect(channelListRetryDelayMs(3)).toBe(10_000);
+    expect(channelListRetryDelayMs(4)).toBe(30_000);
+    expect(channelListRetryDelayMs(5)).toBeNull();
   });
 });

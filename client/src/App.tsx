@@ -443,7 +443,10 @@ import {
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
-import { vanishedChannelFallback } from "@/lib/channel-list-refresh";
+import {
+  channelListRetryDelayMs,
+  vanishedChannelFallback,
+} from "@/lib/channel-list-refresh";
 import {
   onConnectionCheckRequest,
   onSettingsRequest,
@@ -1634,10 +1637,29 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
-  // Tokens the `channels-update` refetch, so two quick frames (a create and
-  // a rename a second apart) cannot land out of order and leave the older
-  // list on screen.
-  const channelsRefetchRef = useRef(0);
+  // A ticket for every fetch of the open server's channel list that the
+  // `channels-update` refetch has to order itself against. Only the newest
+  // ticket may write the list, so two quick frames (a create and a rename a
+  // second apart) cannot land out of order, and a refetch from an earlier
+  // visit to this server cannot land on top of the list the visit loaded
+  // (`loadChannels` and `applyChannelRoute` take a ticket too).
+  const channelListTicketRef = useRef(0);
+  // The pending retry of a failed `channels-update` refetch, and the server
+  // whose list stayed stale after every retry failed. That one is refetched
+  // on the next socket reconnect rather than waiting for a navigation.
+  const channelListRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const channelListStaleRef = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (channelListRetryTimerRef.current !== null) {
+        clearTimeout(channelListRetryTimerRef.current);
+      }
+    },
+    [],
+  );
+  const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
   // The instance's Baú flags, resolved once before the first landing so the
   // bootstrap can choose between Home and the first text channel. Off until
   // the API answers; a ref mirrors it for the callbacks that pick a landing.
@@ -4312,38 +4334,7 @@ function MainAppContent({
             if (message.serverId !== selectedServerIdRef.current) {
               return;
             }
-            const request = ++channelsRefetchRef.current;
-            void fetchChannels(message.serverId)
-              .then(({ channels: list }) => {
-                if (
-                  channelsRefetchRef.current !== request ||
-                  selectedServerIdRef.current !== message.serverId
-                ) {
-                  return;
-                }
-                setChannels(list);
-                // Deleted under the person reading it: open another channel
-                // the same way a click would, so the transcript and the
-                // composer follow, not just the highlighted row.
-                const fallback = vanishedChannelFallback(
-                  list,
-                  selectedChannelIdRef.current,
-                );
-                if (fallback.vanished) {
-                  if (fallback.nextId) {
-                    void selectChannelRef.current(
-                      fallback.nextId,
-                      message.serverId,
-                    );
-                  } else {
-                    setSelectedChannelId(null);
-                    selectedChannelIdRef.current = null;
-                  }
-                }
-              })
-              .catch(() => {
-                // Next navigation will refetch.
-              });
+            refreshChannelListRef.current(message.serverId);
             return;
           }
 
@@ -4658,6 +4649,13 @@ function MainAppContent({
           if (selectedServerIdRef.current) {
             void reloadServerThreadsRef.current(selectedServerIdRef.current);
           }
+          // A `channels-update` refetch that failed through every retry left
+          // this server's list stale. Only then: an unconditional refetch on
+          // every reconnect would add a read per tab to a reconnect storm.
+          const staleServerId = channelListStaleRef.current;
+          if (staleServerId && staleServerId === selectedServerIdRef.current) {
+            refreshChannelListRef.current(staleServerId);
+          }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -4859,6 +4857,71 @@ function MainAppContent({
   );
   selectChannelRef.current = selectChannel;
 
+  /**
+   * Refetch the open server's channel list after a `channels-update` frame.
+   * The frame names no channel, so the whole list is refetched; the server
+   * filters it per viewer, and only the people who can see the change get
+   * the frame at all. A member in DMs or on another server loads the list
+   * fresh when they get here.
+   *
+   * A failure retries on a backoff (`channelListRetryDelayMs`) while this is
+   * still the newest ticket and the server is still open. When the schedule
+   * is spent the server is marked stale and refetched on the next reconnect.
+   */
+  function refreshChannelList(serverId: string, failedTries = 0) {
+    if (channelListRetryTimerRef.current !== null) {
+      clearTimeout(channelListRetryTimerRef.current);
+      channelListRetryTimerRef.current = null;
+    }
+    const ticket = ++channelListTicketRef.current;
+    const current = () =>
+      channelListTicketRef.current === ticket &&
+      selectedServerIdRef.current === serverId;
+    void fetchChannels(serverId).then(
+      ({ channels: list }) => {
+        if (!current()) {
+          return;
+        }
+        if (channelListStaleRef.current === serverId) {
+          channelListStaleRef.current = null;
+        }
+        setChannels(list);
+        // Deleted under the person reading it: open another channel the same
+        // way a click would, so the transcript and the composer follow, not
+        // just the highlighted row.
+        const fallback = vanishedChannelFallback(
+          list,
+          selectedChannelIdRef.current,
+        );
+        if (fallback.vanished) {
+          if (fallback.nextId) {
+            void selectChannelRef.current(fallback.nextId, serverId);
+          } else {
+            setSelectedChannelId(null);
+            selectedChannelIdRef.current = null;
+          }
+        }
+      },
+      () => {
+        if (!current()) {
+          return;
+        }
+        const delay = channelListRetryDelayMs(failedTries + 1);
+        if (delay === null) {
+          channelListStaleRef.current = serverId;
+          return;
+        }
+        channelListRetryTimerRef.current = setTimeout(() => {
+          channelListRetryTimerRef.current = null;
+          if (current()) {
+            refreshChannelList(serverId, failedTries + 1);
+          }
+        }, delay);
+      },
+    );
+  }
+  refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
+
   /** Open one conversation, switching the sidebar to the home view with it. */
   const selectConversation = useCallback(
     async (channelId: string) => {
@@ -5041,9 +5104,15 @@ function MainAppContent({
     ) => {
       setChannelsLoading(true);
       try {
+        const ticket = ++channelListTicketRef.current;
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
         setChannels(list);
+        // A `channels-update` arrived while this was in flight, and its
+        // refetch may have landed first: this list could be the older one.
+        if (channelListTicketRef.current !== ticket) {
+          refreshChannelListRef.current(serverId);
+        }
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
         const liveParty = liveParties
@@ -6616,10 +6685,15 @@ function MainAppContent({
 
       setChannelsLoading(true);
       try {
+        const ticket = ++channelListTicketRef.current;
         const { channels: list } = await fetchChannels(targetServerId);
         setSelection({ kind: "server", serverId: targetServerId });
         setAppError(null);
         setChannels(list);
+        // Same as in `loadChannels`: a nudge landed mid-flight.
+        if (channelListTicketRef.current !== ticket) {
+          refreshChannelListRef.current(targetServerId);
+        }
         void loadUnread(targetServerId);
         const requested = targetChannelId
           ? list.find((c) => c.id === targetChannelId)
