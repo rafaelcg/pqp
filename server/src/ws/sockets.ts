@@ -161,6 +161,16 @@ export function userHasAuthenticatedSocket(userId: string): boolean {
  * deployed and never once used), and a fraction is the only thing that tells
  * the two apart from outside.
  */
+/**
+ * This account's sockets on this instance, as a copy the caller may hold
+ * across a close. Empty when the account has none here, which is the usual
+ * answer for a membership change arriving over the bus.
+ */
+export function socketsOfUser(userId: string): WebSocket[] {
+  const owned = socketsByUser.get(userId);
+  return owned ? [...owned] : [];
+}
+
 export function countAuthenticatedSockets(cap: string): {
   sockets: number;
   withCap: number;

@@ -145,7 +145,7 @@ export async function redeemInvite(
 
     await client.query("COMMIT");
     if (joinedNow) {
-      invalidateServerAudience(invite.server_id);
+      invalidateServerAudience(invite.server_id, { joinedUserId: userId });
       // Funnel step `first_join`, and AFTER the commit on purpose: the stamp is
       // its own statement on the pool, never inside this transaction. Only a
       // real join (a fresh membership row) counts; re-opening an invite you
