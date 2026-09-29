@@ -9494,11 +9494,15 @@ function endRingOnHangup(voiceChannelId: string): void {
  * When the timer fires, the ring ends if the call is still empty: nobody in
  * this process's map and, with the registry on, no row on any machine.
  *
- * The two kinds differ only when the rows cannot be read. The grace has run
- * its full length by then and ends the ring, as it always has. A hangup's
- * short window ends nothing on a failed read: it falls back to the rest of
- * the grace, so a database blip costs the callee the old five seconds of
- * ringing and never cancels a ring that somebody may be answering.
+ * The two kinds differ when the rows do not say "empty". The grace has run
+ * its full length by then: a failed read ends the ring and a row keeps it,
+ * as they always have. A hangup's short window is only allowed to END a
+ * ring early, never to decide it lives on. So on a failed read, or on a row
+ * that may be stale (a tab-close beacon on the other machine retires the
+ * seat there, and that machine's delete can still be in flight when this
+ * read runs), it falls back to the rest of the grace, which reads again.
+ * The worst case is the old five seconds of ringing, never a ring left up
+ * until it times out.
  */
 function armEmptyRoomTimer(
   ring: ConversationRing,
@@ -9525,27 +9529,29 @@ function armEmptyRoomTimer(
             listVoicePeersInRoom(voiceChannelId),
           )
         : listVoicePeersInRoom(voiceChannelId).catch(() => []);
-    void rows.then(
-      (found) => {
-        if (
-          found.length === 0 &&
-          getRoomPeers(voiceChannelId).length === 0 &&
-          stillOurs()
-        ) {
-          void endConversationRing(voiceChannelId, "cancelled");
-        }
-      },
-      () => {
-        if (stillOurs() && getRoomPeers(voiceChannelId).length === 0) {
-          armEmptyRoomTimer(
-            ring,
-            voiceChannelId,
-            CALL_EMPTY_ROOM_GRACE_MS - CALL_HANGUP_CONFIRM_MS,
-            "grace",
-          );
-        }
-      },
-    );
+    const restOfGrace = () => {
+      if (
+        kind === "hangup" &&
+        stillOurs() &&
+        getRoomPeers(voiceChannelId).length === 0
+      ) {
+        armEmptyRoomTimer(
+          ring,
+          voiceChannelId,
+          CALL_EMPTY_ROOM_GRACE_MS - CALL_HANGUP_CONFIRM_MS,
+          "grace",
+        );
+      }
+    };
+    void rows.then((found) => {
+      if (found.length > 0) {
+        restOfGrace();
+        return;
+      }
+      if (getRoomPeers(voiceChannelId).length === 0 && stillOurs()) {
+        void endConversationRing(voiceChannelId, "cancelled");
+      }
+    }, restOfGrace);
   }, delayMs);
 }
 

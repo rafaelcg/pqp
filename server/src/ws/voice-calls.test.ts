@@ -1121,6 +1121,53 @@ describeDb("rings across two instances", () => {
     expect(fakes.createMessageCalls).toHaveLength(0);
   });
 
+  it("a row the hangup window still sees gets a second look at the grace, not the ring timeout", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE, THIRD]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const thirdOnB = authedOn(b, THIRD);
+    const calleeOnB = authedOn(b, CALLEE);
+    await joinOn(b, thirdOnB, THIRD);
+    await b.registry.settleVoiceRegistryWrites();
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    const hungUpAt = Date.now();
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "leave-voice-room" },
+    );
+    await new Promise((resolve) =>
+      setTimeout(resolve, a.voice.CALL_HANGUP_CONFIRM_MS + 300),
+    );
+    // The window's read saw B's row, so the ring is still up.
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(true);
+
+    // The row goes after that read (a beacon's delete on B landing late
+    // looks the same from A). Nothing on A hears about it.
+    b.voice.removeVoicePeerBySocket(thirdOnB.socket);
+    await b.registry.settleVoiceRegistryWrites();
+
+    const deadline = hungUpAt + a.voice.CALL_EMPTY_ROOM_GRACE_MS + 2_000;
+    while (frame(calleeOnB, "call-ring-cancelled") === undefined) {
+      if (Date.now() > deadline) {
+        throw new Error("the ring outlived the grace");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(Date.now() - hungUpAt).toBeGreaterThanOrEqual(
+      a.voice.CALL_EMPTY_ROOM_GRACE_MS - 50,
+    );
+    expect(frame(calleeOnB, "call-ring-cancelled")).toMatchObject({
+      reason: "cancelled",
+    });
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(false);
+  });
+
   /**
    * FIVE RINGS PER FIVE MINUTES IS A NUMBER AIMED AT THE PERSON BEING BUZZED,
    * and until this it was five PER MACHINE. A caller with a tab on each got
