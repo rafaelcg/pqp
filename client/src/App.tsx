@@ -1689,6 +1689,26 @@ function MainAppContent({
     [],
   );
   const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
+  /**
+   * Servers a navigation is loading the channel list for, with how many. While
+   * one is in flight `selectedChannelIdRef` may still name the channel of the
+   * server the reader just left, so a refetch must not read it as deleted.
+   */
+  const channelLoadsRef = useRef(new Map<string, number>());
+  const beginChannelLoad = (serverId: string) => {
+    channelLoadsRef.current.set(
+      serverId,
+      (channelLoadsRef.current.get(serverId) ?? 0) + 1,
+    );
+  };
+  const endChannelLoad = (serverId: string) => {
+    const left = (channelLoadsRef.current.get(serverId) ?? 1) - 1;
+    if (left <= 0) {
+      channelLoadsRef.current.delete(serverId);
+    } else {
+      channelLoadsRef.current.set(serverId, left);
+    }
+  };
   // The instance's Baú flags, resolved once before the first landing so the
   // bootstrap can choose between Home and the first text channel. Off until
   // the API answers; a ref mirrors it for the callbacks that pick a landing.
@@ -2006,6 +2026,14 @@ function MainAppContent({
    * and a message nobody has on screen has not been read.
    */
   const messageListLiveEndRef = useRef<string | null>(null);
+  /**
+   * The main transcript is mounted but not on screen: What's New hides the
+   * whole chat pane, and on a phone the thread panel covers it. The list still
+   * reports "at its live end" then (a hidden box reads as pinned), so this is
+   * what stops a message nobody can see from being acked. Set below, where
+   * `openThread` and the layout are known.
+   */
+  const transcriptObscuredRef = useRef(false);
   const [liveReadAck] = useState(() =>
     createLiveReadAck({
       queue: readCursorQueue,
@@ -2013,6 +2041,7 @@ function MainAppContent({
         markChannelRead(channelId, lastReadAt, { forwardOnly: true }),
       isVisible: () => document.visibilityState === "visible",
       isAtLiveEnd: () =>
+        !transcriptObscuredRef.current &&
         messageListLiveEndRef.current !== null &&
         messageListLiveEndRef.current === selectedChannelIdRef.current,
       isSelected: (channelId) => selectedChannelIdRef.current === channelId,
@@ -3747,6 +3776,15 @@ function MainAppContent({
   openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
   const openThreadRef = useRef<typeof openThread>(null);
   openThreadRef.current = openThread;
+  const transcriptObscured =
+    whatsNewOpen || (openThread !== null && !columnLayout);
+  transcriptObscuredRef.current = transcriptObscured;
+  useEffect(() => {
+    if (!transcriptObscured) {
+      // Uncovered: what arrived meanwhile is on screen now.
+      liveReadAck.resume();
+    }
+  }, [transcriptObscured, liveReadAck]);
   const memberSidebarOpenRef = useRef(false);
   memberSidebarOpenRef.current = memberSidebar.open;
 
@@ -4619,9 +4657,11 @@ function MainAppContent({
             }
             permsRef.current.refresh(message.version);
             bumpMemberRosterNudge();
-            // Takes no ticket of its own; the mark says which of this
-            // reader's own creates it may predate.
-            const listTicket = channelListTickets.mark();
+            // A real ticket: this batch reads the list later than any fetch
+            // already out, so it may write over them, and a `channels-update`
+            // refetch that starts after it (and lands first) is not
+            // overwritten by it when it lands second.
+            const listTicket = channelListTickets.take();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(
@@ -4637,12 +4677,16 @@ function MainAppContent({
                 if (selectedServerIdRef.current !== message.serverId) {
                   return;
                 }
+                const listIsCurrent = channelListTickets.isLatest(listTicket);
                 const list = channelListTickets.withCreated(
                   message.serverId,
                   fetched,
                   listTicket,
                 );
-                setChannels(list);
+                if (listIsCurrent) {
+                  channelListTickets.wrote(listTicket);
+                  setChannels(list);
+                }
                 if (rolesRes) {
                   setServerRoles(rolesRes.roles);
                   setMentionableRoles(
@@ -4663,7 +4707,12 @@ function MainAppContent({
                   );
                 }
                 const current = selectedChannelIdRef.current;
-                if (current && !list.some((channel) => channel.id === current)) {
+                if (
+                  listIsCurrent &&
+                  !channelLoadsRef.current.has(message.serverId) &&
+                  current &&
+                  !list.some((channel) => channel.id === current)
+                ) {
                   const next =
                     list.find((channel) => channel.type === "text") ?? list[0];
                   if (next) {
@@ -4673,7 +4722,15 @@ function MainAppContent({
                 }
               })
               .catch(() => {
-                // Next navigation will refetch.
+                // A `channels-update` refetch this batch overtook was silenced
+                // by its ticket: start it again, or the change stays missing
+                // until the next navigation.
+                if (
+                  channelListTickets.owesUpdate(message.serverId, listTicket) &&
+                  selectedServerIdRef.current === message.serverId
+                ) {
+                  refreshChannelListRef.current(message.serverId);
+                }
               });
             return;
           }
@@ -5296,10 +5353,12 @@ function MainAppContent({
         // Deleted under the person reading it: open another channel the same
         // way a click would, so the transcript and the composer follow, not
         // just the highlighted row.
-        const fallback = vanishedChannelFallback(
-          list,
-          selectedChannelIdRef.current,
-        );
+        // Not while a navigation is loading this server: the selection is
+        // then still the previous server's channel (or a DM), which this
+        // list never had. That load picks the landing itself.
+        const fallback = channelLoadsRef.current.has(serverId)
+          ? { vanished: false as const }
+          : vanishedChannelFallback(list, selectedChannelIdRef.current);
         if (fallback.vanished) {
           if (fallback.nextId) {
             void selectChannelRef.current(fallback.nextId, serverId);
@@ -5510,6 +5569,7 @@ function MainAppContent({
       liveParties?: readonly WatchParty[],
     ) => {
       setChannelsLoading(true);
+      beginChannelLoad(serverId);
       if (communityHomeUnverifiedRef.current.has(serverId)) {
         reconcileCommunityHomeSwitchRef.current(serverId);
       }
@@ -5564,6 +5624,7 @@ function MainAppContent({
               : "Failed to load channels",
         );
       } finally {
+        endChannelLoad(serverId);
         setChannelsLoading(false);
       }
     },
@@ -7118,6 +7179,7 @@ function MainAppContent({
       const targetMessageId = usedFallback ? null : messageId;
 
       setChannelsLoading(true);
+      beginChannelLoad(targetServerId);
       const ticket = channelListTickets.take();
       try {
         const { channels: list } = await fetchChannels(targetServerId);
@@ -7172,6 +7234,7 @@ function MainAppContent({
               : translateMessage("chrome.serverUnavailable"),
         );
       } finally {
+        endChannelLoad(targetServerId);
         setChannelsLoading(false);
       }
     },
