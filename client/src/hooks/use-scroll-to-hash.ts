@@ -33,7 +33,7 @@ export function useScrollToHash() {
   const { hash } = useLocation();
   // The hash this page last handled. Undefined, or the same hash again (Strict
   // Mode runs every effect twice in development), means the page just arrived.
-  const handled = useRef<string>(undefined);
+  const handled = useRef<string | undefined>(undefined);
   useEffect(() => {
     const first = handled.current === undefined || handled.current === hash;
     handled.current = hash;
