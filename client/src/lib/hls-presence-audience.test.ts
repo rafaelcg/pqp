@@ -50,6 +50,41 @@ describe("createHlsVisibilityMeter", () => {
     expect(meter.take()).toEqual({ visibleMs: 10_000, hiddenMs: 30_000 });
   });
 
+  it("does not count time spent paused, and resumes counting when it plays again", () => {
+    let now = 1_000_000;
+    let playing = true;
+    const meter = createHlsVisibilityMeter({
+      isHidden: () => false,
+      isPlaying: () => playing,
+      now: () => now,
+    });
+    now += 10_000;
+    playing = false;
+    meter.change();
+    // Ten minutes paused: never owed to anybody.
+    now += 600_000;
+    playing = true;
+    meter.change();
+    now += 20_000;
+    expect(meter.take()).toEqual({ visibleMs: 30_000, hiddenMs: 0 });
+  });
+
+  it("a tab hidden while paused counts as neither", () => {
+    let now = 0;
+    const playing = false;
+    let hidden = false;
+    const meter = createHlsVisibilityMeter({
+      isHidden: () => hidden,
+      isPlaying: () => playing,
+      now: () => now,
+    });
+    now += 30_000;
+    hidden = true;
+    meter.change();
+    now += 30_000;
+    expect(meter.take()).toEqual({ visibleMs: 0, hiddenMs: 0 });
+  });
+
   it("caps one beat at the most the server accepts", () => {
     const { meter, advance } = setup();
     advance(LIVE_HLS_PRESENCE_MAX_SPAN_MS * 3);

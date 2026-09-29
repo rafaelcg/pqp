@@ -1323,9 +1323,13 @@ export function HlsWatchPlayer({
     const device = hlsDeviceClass();
     const meter = createHlsVisibilityMeter({
       isHidden: () => document.visibilityState === "hidden",
+      isPlaying: () => !video.paused && !video.ended,
     });
     const onVisibility = () => meter.change();
     document.addEventListener("visibilitychange", onVisibility);
+    for (const name of ["playing", "pause", "ended", "play"] as const) {
+      video.addEventListener(name, onVisibility);
+    }
     const presence = createHlsPresenceBeat({
       sessionToken: presenceToken,
       isPlaying: () => !video.paused && !video.ended,
@@ -1347,6 +1351,9 @@ export function HlsWatchPlayer({
       presence.stop();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
+      for (const name of ["playing", "pause", "ended", "play"] as const) {
+        video.removeEventListener(name, onVisibility);
+      }
       video.removeEventListener("playing", onPlaying);
     };
   }, [getVideo, presenceToken]);

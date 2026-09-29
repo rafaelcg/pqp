@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  ACQUISITION_DONE_KEY,
   ACQUISITION_KEY,
   SIGNUP_STARTED_KEY,
   SIGNUP_STARTED_TTL_MS,
   acquisitionFromLocation,
   landingForStorage,
+  acknowledgeAcquisition,
   markSignupStarted,
+  peekAcquisition,
+  peekSignupSeconds,
   referrerSource,
   rememberAcquisitionFromLocation,
   takeAcquisition,
@@ -99,6 +103,16 @@ describe("plain visits (no campaign parameters)", () => {
     ]) {
       expect(referrerSource(referrer, "pqp.gg")).toBeNull();
     }
+  });
+
+  it("does not call another site on the same country suffix ours, but does call a subdomain ours", () => {
+    expect(referrerSource("https://example.co.uk/x", "pqp.co.uk")).toEqual({
+      source: "example.co.uk",
+      medium: "referral",
+    });
+    expect(referrerSource("https://www.pqp.co.uk/x", "pqp.co.uk")).toBeNull();
+    expect(referrerSource("https://app.pqp.co.uk/x", "pqp.co.uk")).toBeNull();
+    expect(referrerSource("https://pqp.gg/x", "staging.pqp.gg")).toBeNull();
   });
 
   it("never stores an invite code or any path below the first segment", () => {
@@ -200,7 +214,46 @@ describe("plain visits (no campaign parameters)", () => {
   });
 });
 
+describe("the stash outlives a failed send", () => {
+  it("peeking never consumes; only an acknowledgement clears it and sets the marker", () => {
+    const storage = memoryStorage();
+    const T = Date.now();
+    rememberAcquisitionFromLocation(
+      storage,
+      { search: "", pathname: "/c/moon" },
+      T,
+      { referrer: "", hostname: "pqp.gg" },
+    );
+    markSignupStarted(storage, T);
+    // A request that fails: nothing is cleared, so the next load sends again.
+    expect(peekAcquisition(storage, T + 10_000)).toEqual({ landing: "/c/moon" });
+    expect(peekAcquisition(storage, T + 20_000)).toEqual({ landing: "/c/moon" });
+    expect(peekSignupSeconds(storage, T + 20_000)).toBe(20);
+    expect(storage.map.has(ACQUISITION_DONE_KEY)).toBe(false);
+    // A later plain visit is still recorded while nothing was accepted.
+    // The server accepted: cleared, and only now is the marker set.
+    acknowledgeAcquisition(storage, true);
+    expect(storage.map.has(ACQUISITION_KEY)).toBe(false);
+    expect(storage.map.has(SIGNUP_STARTED_KEY)).toBe(false);
+    expect(storage.map.has(ACQUISITION_DONE_KEY)).toBe(true);
+  });
+
+  it("acknowledging with nothing sent tidies up without setting the marker", () => {
+    const storage = memoryStorage();
+    storage.setItem(ACQUISITION_KEY, "{garbage");
+    acknowledgeAcquisition(storage, false);
+    expect(storage.map.size).toBe(0);
+  });
+});
+
 describe("time in sign-up", () => {
+  it("a sign-up that took longer than 15 minutes was two visits and is not reported", () => {
+    const storage = memoryStorage();
+    markSignupStarted(storage, 1_000_000);
+    expect(peekSignupSeconds(storage, 1_000_000 + 16 * 60_000)).toBeNull();
+    expect(peekSignupSeconds(storage, 1_000_000 + 14 * 60_000)).toBe(840);
+  });
+
   let storage: ReturnType<typeof memoryStorage>;
   beforeEach(() => {
     storage = memoryStorage();

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
@@ -113,7 +114,10 @@ interface ViewerSeen {
   first: number;
   last: number;
   device: "phone" | "tablet" | "desktop" | null;
-  /** Reported since the last successful flush; subtracted once stored. */
+  /**
+   * CUMULATIVE for this map entry, never reset by a flush: the stored value
+   * is SET, not added to, so a retried flush cannot count twice.
+   */
   visibleMs: number;
   hiddenMs: number;
 }
@@ -193,6 +197,9 @@ export function createHlsViewerCounter(
   const presentToleranceMs =
     options.presentToleranceMs ?? HLS_VIEWER_PRESENT_TOLERANCE_MS;
   const sessions = new Map<string, TrackedSession>();
+  // Names this process's share of a viewer's foreground / background time in
+  // the row, so two machines add up and a retry of one does not.
+  const instanceId = randomUUID().slice(0, 8);
   const noted: Record<HlsViewerSource, number> = {
     presence: 0,
     playlist: 0,
@@ -284,16 +291,20 @@ export function createHlsViewerCounter(
     const firstMs: number[] = [];
     const lastMs: number[] = [];
     const devices: Array<string | null> = [];
-    const visibleMs: number[] = [];
-    const hiddenMs: number[] = [];
+    const details: string[] = [];
     let newest = 0;
     for (const [userId, seen] of session.viewers) {
       userIds.push(userId);
       firstMs.push(seen.first);
       lastMs.push(seen.last);
       devices.push(seen.device);
-      visibleMs.push(seen.visibleMs);
-      hiddenMs.push(seen.hiddenMs);
+      details.push(
+        seen.visibleMs + seen.hiddenMs > 0
+          ? JSON.stringify({
+              [`${instanceId}:${seen.first}`]: { v: seen.visibleMs, h: seen.hiddenMs },
+            })
+          : "{}",
+      );
       newest = Math.max(newest, seen.last);
     }
     session.flushing = true;
@@ -313,10 +324,10 @@ export function createHlsViewerCounter(
            SELECT u.user_id,
                   to_timestamp(u.first_ms / 1000.0) AS first_seen,
                   to_timestamp(u.last_ms / 1000.0) AS last_seen,
-                  u.device, u.visible_ms, u.hidden_ms
+                  u.device, u.detail::jsonb AS detail
              FROM unnest($3::uuid[], $4::float8[], $5::float8[],
-                         $8::text[], $9::bigint[], $10::bigint[])
-                  AS u(user_id, first_ms, last_ms, device, visible_ms, hidden_ms)
+                         $8::text[], $9::text[])
+                  AS u(user_id, first_ms, last_ms, device, detail)
          ), merged AS (
            SELECT b.user_id,
                   LEAST(b.first_seen, v.first_seen_at) AS first_seen,
@@ -327,15 +338,14 @@ export function createHlsViewerCounter(
          ), ins AS (
            INSERT INTO hls_session_viewers
              (channel_id, started_at_ms, user_id, first_seen_at, last_seen_at,
-              device_class, visible_ms, hidden_ms)
-           SELECT $1, $2, user_id, first_seen, last_seen, device, visible_ms, hidden_ms
+              device_class, detail)
+           SELECT $1, $2, user_id, first_seen, last_seen, device, detail
              FROM batch
            ON CONFLICT (channel_id, started_at_ms, user_id) DO UPDATE
              SET last_seen_at = GREATEST(hls_session_viewers.last_seen_at, EXCLUDED.last_seen_at),
                  first_seen_at = LEAST(hls_session_viewers.first_seen_at, EXCLUDED.first_seen_at),
                  device_class = COALESCE(EXCLUDED.device_class, hls_session_viewers.device_class),
-                 visible_ms = hls_session_viewers.visible_ms + EXCLUDED.visible_ms,
-                 hidden_ms = hls_session_viewers.hidden_ms + EXCLUDED.hidden_ms
+                 detail = hls_session_viewers.detail || EXCLUDED.detail
            RETURNING (xmax = 0) AS inserted
          ), eval AS (
            SELECT to_timestamp($6::float8 / 1000.0) AS at,
@@ -381,19 +391,9 @@ export function createHlsViewerCounter(
           at - evalLagMs,
           presentToleranceMs,
           devices,
-          visibleMs,
-          hiddenMs,
+          details,
         ],
       );
-      // Stored: take exactly what was stored off the pending totals, so a
-      // beat that landed while the statement ran is still owed to the next.
-      userIds.forEach((id, index) => {
-        const seen = session.viewers.get(id);
-        if (seen) {
-          seen.visibleMs = Math.max(0, seen.visibleMs - visibleMs[index]);
-          seen.hiddenMs = Math.max(0, seen.hiddenMs - hiddenMs[index]);
-        }
-      });
       session.lastFlushAt = at;
       session.persistedThrough = Math.max(session.persistedThrough, newest);
       flushes += 1;
@@ -584,7 +584,47 @@ export interface HlsViewerAudience {
  * yesterday" read, not a history). Counts and seconds only: a user id is used
  * to join `users.created_at` and never leaves this query.
  */
+let audienceCache: { at: number; limit: number; value: HlsViewerAudience[] } | null = null;
+let audienceInFlight: Promise<HlsViewerAudience[]> | null = null;
+/** Metrics are recomputed every 30 s at most; this bounds any other caller too. */
+const AUDIENCE_CACHE_MS = 60_000;
+
+export function resetHlsViewerAudienceCacheForTests(): void {
+  audienceCache = null;
+  audienceInFlight = null;
+}
+
+/**
+ * Bounded twice: the ten broadcasts come from `hls_session_viewer_stats` (one
+ * row per broadcast, indexed on `updated_at`), and only THOSE broadcasts' viewer
+ * rows are aggregated, by primary-key prefix. The cost follows the ten
+ * returned sessions, not the day's total viewers. Cached for a minute and
+ * coalesced, so a burst of admin reads is one query.
+ */
 export async function hlsViewerAudience(limit = 10): Promise<HlsViewerAudience[]> {
+  const nowMs = Date.now();
+  if (
+    audienceCache &&
+    audienceCache.limit === limit &&
+    nowMs - audienceCache.at < AUDIENCE_CACHE_MS
+  ) {
+    return audienceCache.value;
+  }
+  if (audienceInFlight) {
+    return audienceInFlight;
+  }
+  audienceInFlight = queryHlsViewerAudience(limit)
+    .then((value) => {
+      audienceCache = { at: Date.now(), limit, value };
+      return value;
+    })
+    .finally(() => {
+      audienceInFlight = null;
+    });
+  return audienceInFlight;
+}
+
+async function queryHlsViewerAudience(limit: number): Promise<HlsViewerAudience[]> {
   const result = await getPool().query<{
     channel_id: string;
     started_at_ms: string;
@@ -603,9 +643,9 @@ export async function hlsViewerAudience(limit = 10): Promise<HlsViewerAudience[]
   }>(
     `WITH recent AS (
        SELECT channel_id, started_at_ms
-         FROM hls_session_viewers
-        GROUP BY channel_id, started_at_ms
-        ORDER BY MAX(last_seen_at) DESC
+         FROM hls_session_viewer_stats
+        WHERE updated_at >= NOW() - interval '24 hours'
+        ORDER BY updated_at DESC
         LIMIT $1
      )
      SELECT v.channel_id::text AS channel_id,
@@ -619,13 +659,18 @@ export async function hlsViewerAudience(limit = 10): Promise<HlsViewerAudience[]
             COUNT(*) FILTER (WHERE n.isnew AND v.device_class = 'tablet')::text AS new_tablet,
             COUNT(*) FILTER (WHERE n.isnew AND v.device_class = 'desktop')::text AS new_desktop,
             COUNT(*) FILTER (WHERE n.isnew AND v.device_class IS NULL)::text AS new_unknown,
-            COALESCE(SUM(v.visible_ms), 0)::text AS visible_ms,
-            COALESCE(SUM(v.hidden_ms), 0)::text AS hidden_ms,
-            COUNT(*) FILTER (WHERE v.visible_ms + v.hidden_ms > 0)::text AS reporting
+            COALESCE(SUM(d.v), 0)::text AS visible_ms,
+            COALESCE(SUM(d.h), 0)::text AS hidden_ms,
+            COUNT(*) FILTER (WHERE d.v + d.h > 0)::text AS reporting
        FROM recent r
        JOIN hls_session_viewers v
          ON v.channel_id = r.channel_id AND v.started_at_ms = r.started_at_ms
        LEFT JOIN users u ON u.id = v.user_id
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(SUM((e.value->>'v')::bigint), 0) AS v,
+               COALESCE(SUM((e.value->>'h')::bigint), 0) AS h
+          FROM jsonb_each(v.detail) e
+      ) d
       CROSS JOIN LATERAL (
         SELECT COALESCE(u.created_at >= to_timestamp(v.started_at_ms / 1000.0), FALSE) AS isnew
       ) n

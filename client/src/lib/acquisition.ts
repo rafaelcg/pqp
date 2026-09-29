@@ -129,9 +129,16 @@ export function landingForStorage(pathname: string): string {
   return clip(`/${segments.slice(0, keep).join("/")}`, LANDING_MAX) ?? "/";
 }
 
-/** Last two labels: `www.twitch.tv` and `m.twitch.tv` are both `twitch.tv`. */
-function siteOf(host: string): string {
-  return host.split(".").slice(-2).join(".");
+/**
+ * The same site: the same host, or one a subdomain of the other
+ * (`staging.pqp.gg` and `pqp.gg`). Deliberately NOT "same last two labels",
+ * which would call every `*.co.uk` site ours on a `.co.uk` self-host.
+ */
+function sameSite(host: string, own: string): boolean {
+  return (
+    own !== "" &&
+    (host === own || host.endsWith(`.${own}`) || own.endsWith(`.${host}`))
+  );
 }
 
 /**
@@ -160,7 +167,7 @@ export function referrerSource(
   if (
     host === "" ||
     host === "localhost" ||
-    siteOf(host) === siteOf(ownHostname.toLowerCase()) ||
+    sameSite(host, ownHostname.toLowerCase().replace(/^www\./, "")) ||
     host.endsWith("clerk.accounts.dev") ||
     host.endsWith(".clerk.com")
   ) {
@@ -292,25 +299,53 @@ export function takeAcquisition(
   storage: WritableStorage | null,
   now: number = Date.now(),
 ): Acquisition | null {
+  const stored = peekAcquisition(storage, now);
+  acknowledgeAcquisition(storage, stored !== null);
+  return stored;
+}
+
+/**
+ * Read WITHOUT consuming. What the app uses: the stash is only cleared by
+ * `acknowledgeAcquisition` once the server has accepted it, so a request that
+ * failed (a dropped connection, a 503 from the breaker) is sent again on the
+ * next load instead of losing the attribution for good.
+ */
+export function peekAcquisition(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): Acquisition | null {
   if (!storage) {
     return null;
   }
   const stored = readStored(storage, now);
-  try {
-    storage.removeItem(ACQUISITION_KEY);
-  } catch {
-    return null;
-  }
   if (!stored) {
     return null;
   }
+  const { plain: _plain, ...fields } = stored;
+  return fields;
+}
+
+/**
+ * The server accepted it (or refused it for good): clear the stash and the
+ * sign-up stamp, and, only when something was actually sent, set the marker
+ * that stops later plain visits being stashed again on this browser.
+ */
+export function acknowledgeAcquisition(
+  storage: WritableStorage | null,
+  sent: boolean,
+): void {
+  if (!storage) {
+    return;
+  }
   try {
-    storage.setItem(ACQUISITION_DONE_KEY, "1");
+    storage.removeItem(ACQUISITION_KEY);
+    storage.removeItem(SIGNUP_STARTED_KEY);
+    if (sent) {
+      storage.setItem(ACQUISITION_DONE_KEY, "1");
+    }
   } catch {
     // Storage denied: the plain visit may repeat. Harmless, server-refused.
   }
-  const { plain: _plain, ...fields } = stored;
-  return fields;
 }
 
 /**
@@ -322,11 +357,16 @@ export function takeAcquisition(
  * ready bootstrap calls `takeSignupSeconds`, which turns the stamp into a
  * duration and deletes it. Only the DURATION leaves the browser (rounded to
  * 5 s), never the timestamp. First press wins, so a second tap on the CTA does
- * not restart the clock; a stamp older than an hour is an abandoned attempt
+ * not restart the clock; a stamp older than 15 minutes is an abandoned attempt
  * and is dropped rather than reported as a very slow sign-up.
  */
 export const SIGNUP_STARTED_KEY = "pqp:signup-started";
-export const SIGNUP_STARTED_TTL_MS = 60 * 60 * 1000;
+/**
+ * 15 minutes, not an hour: a sign-up (even with an emailed code) that took
+ * longer than that was two visits, and a duration that spans them measures
+ * the person's day, not the modal.
+ */
+export const SIGNUP_STARTED_TTL_MS = 15 * 60 * 1000;
 
 export function markSignupStarted(
   storage: WritableStorage | null,
@@ -361,13 +401,26 @@ export function takeSignupSeconds(
   storage: WritableStorage | null,
   now: number = Date.now(),
 ): number | null {
+  const seconds = peekSignupSeconds(storage, now);
+  try {
+    storage?.removeItem(SIGNUP_STARTED_KEY);
+  } catch {
+    // Storage denied.
+  }
+  return seconds;
+}
+
+/** Read WITHOUT consuming; `acknowledgeAcquisition` clears it after the send. */
+export function peekSignupSeconds(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): number | null {
   if (!storage) {
     return null;
   }
   let raw: string | null;
   try {
     raw = storage.getItem(SIGNUP_STARTED_KEY);
-    storage.removeItem(SIGNUP_STARTED_KEY);
   } catch {
     return null;
   }

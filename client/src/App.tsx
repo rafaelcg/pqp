@@ -416,9 +416,10 @@ import {
   type ArrivalSurface,
 } from "@/lib/arrival";
 import {
+  acknowledgeAcquisition,
   markSignupStartedNow,
-  takeAcquisition,
-  takeSignupSeconds,
+  peekAcquisition,
+  peekSignupSeconds,
 } from "@/lib/acquisition";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
@@ -7824,9 +7825,11 @@ function MainAppContent({
     const stashedWaitlist = takeWaitlistIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
-    const stashedAcquisition = takeAcquisition(storage);
-    // How long the sign-up took (modal open to now). Consumed with the stash.
-    const signupSeconds = takeSignupSeconds(storage);
+    // Read, not consumed: cleared only once the server has answered (below),
+    // so a failed request is sent again on the next load.
+    const stashedAcquisition = peekAcquisition(storage);
+    // How long the sign-up took (modal open to now).
+    const signupSeconds = peekSignupSeconds(storage);
     const acquisition =
       stashedAcquisition || signupSeconds !== null
         ? {
@@ -7891,9 +7894,19 @@ function MainAppContent({
      * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
      */
     if (acquisition) {
-      void updateMe({ acquisition }).catch(() => {
-        // A lost attribution. Not worth a banner.
-      });
+      void updateMe({ acquisition })
+        .then(() => acknowledgeAcquisition(storage, true))
+        .catch((error: unknown) => {
+          // A refusal for good (a 4xx) is cleared so it cannot loop; a
+          // transient failure keeps the stash for the next load. Not worth a
+          // banner either way.
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429) {
+            acknowledgeAcquisition(storage, false);
+          }
+        });
+    } else {
+      // Nothing to send: only tidy an expired entry away.
+      acknowledgeAcquisition(storage, false);
     }
 
     void (async () => {

@@ -106,7 +106,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "423e8f5e",
+      sourceRev: "3f79a862",
       heading: "Armazenamento local",
       body: (
         <>
@@ -323,7 +323,7 @@ export const cookiesPtBr: LegalDocument = {
               janela de cadastro, para a gente saber quanto tempo o cadastro
               leva. Só a duração, arredondada para cinco segundos, é enviada
               quando a sua conta fica pronta; a hora em si é apagada do seu
-              dispositivo e nunca enviada. Expira em uma hora.
+              dispositivo e nunca enviada. Expira em 15 minutos.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: o identificador da conta

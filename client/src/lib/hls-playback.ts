@@ -925,34 +925,41 @@ function readScreen(): { coarsePointer: boolean; shortSidePx: number } {
 }
 
 /**
- * Foreground and background milliseconds, accumulated across
- * `visibilitychange` and handed out per beat. `take()` returns what has built
+ * Foreground and background milliseconds WHILE THE PICTURE PLAYS, accumulated
+ * across `visibilitychange` and play/pause and handed out per beat. Time spent
+ * paused (or ended) is discarded, never held for the next beat: a viewer who
+ * paused for ten minutes was not audience for ten minutes. `take()` returns what has built
  * up since the last `take()` (each capped at one span the server accepts) and
  * starts again. Bucketed by the state at the moment it changed, so a tab
  * hidden for 25 of a beat's 30 seconds reports 25 hidden and 5 visible.
  */
 export interface HlsVisibilityMeter {
-  /** Call from a `visibilitychange` listener. */
+  /** Call from `visibilitychange` and from every play / pause / ended event. */
   change(): void;
   take(): { visibleMs: number; hiddenMs: number };
 }
 
 export function createHlsVisibilityMeter(input: {
   isHidden: () => boolean;
+  isPlaying?: () => boolean;
   now?: () => number;
 }): HlsVisibilityMeter {
   const now = input.now ?? Date.now;
+  const isPlaying = input.isPlaying ?? (() => true);
   let hidden = input.isHidden();
+  let playing = isPlaying();
   let since = now();
   let visibleMs = 0;
   let hiddenMs = 0;
   function settle(): void {
     const at = now();
     const span = Math.max(0, at - since);
-    if (hidden) {
-      hiddenMs += span;
-    } else {
-      visibleMs += span;
+    if (playing) {
+      if (hidden) {
+        hiddenMs += span;
+      } else {
+        visibleMs += span;
+      }
     }
     since = at;
   }
@@ -960,6 +967,7 @@ export function createHlsVisibilityMeter(input: {
     change() {
       settle();
       hidden = input.isHidden();
+      playing = isPlaying();
     },
     take() {
       settle();

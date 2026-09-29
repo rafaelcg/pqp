@@ -299,7 +299,7 @@ export const cookiesEn: LegalDocument = {
               window, so we can tell how long sign-up takes. Only the length
               of time, rounded to five seconds, is sent when your account is
               ready; the time itself is deleted from your device and never
-              sent. It expires after an hour.
+              sent. It expires after 15 minutes.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the

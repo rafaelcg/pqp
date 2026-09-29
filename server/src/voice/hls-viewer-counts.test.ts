@@ -20,6 +20,7 @@ const {
   hlsViewerMinutes,
   liveHlsViewerSessions,
   hlsViewerAudience,
+  resetHlsViewerAudienceCacheForTests,
   HLS_VIEWER_EVAL_LAG_MS,
   HLS_VIEWER_FLUSH_INTERVAL_MS,
 } = await import("./hls-viewer-counts.js");
@@ -71,6 +72,7 @@ describeDb("watch party viewer counts", () => {
                 hls_session_viewers, hls_session_viewer_minutes,
                 hls_session_viewer_stats RESTART IDENTITY CASCADE`,
     );
+    resetHlsViewerAudienceCacheForTests();
     const owner = await upsertUser({
       clerkId: "clerk_hls_viewer_counts",
       displayName: "Host",
@@ -328,10 +330,12 @@ describeDb("watch party viewer counts", () => {
         visible_ms: string;
         hidden_ms: string;
       }>(
-        `SELECT user_id::text, device_class, visible_ms::text, hidden_ms::text
-           FROM hls_session_viewers
-          WHERE channel_id = $1 AND started_at_ms = $2
-          ORDER BY user_id`,
+        `SELECT v.user_id::text, v.device_class,
+                (SELECT COALESCE(SUM((e.value->>'v')::bigint), 0) FROM jsonb_each(v.detail) e)::text AS visible_ms,
+                (SELECT COALESCE(SUM((e.value->>'h')::bigint), 0) FROM jsonb_each(v.detail) e)::text AS hidden_ms
+           FROM hls_session_viewers v
+          WHERE v.channel_id = $1 AND v.started_at_ms = $2
+          ORDER BY v.user_id`,
         [channelId, STARTED_AT],
       );
       return result.rows;
@@ -369,6 +373,10 @@ describeDb("watch party viewer counts", () => {
         visibleMs: 30_000,
       });
       await a.flushDue();
+      // A flush with nothing new re-sends the same cumulative value.
+      now += HLS_VIEWER_FLUSH_INTERVAL_MS;
+      a.note(channelId, STARTED_AT, userId(1), "presence");
+      await a.flushDue();
 
       expect(await rows()).toEqual([
         { user_id: userId(1), device_class: "phone", visible_ms: "55000", hidden_ms: "35000" },
@@ -377,16 +385,23 @@ describeDb("watch party viewer counts", () => {
       ]);
     });
 
-    it("does not double count a beat that lands while a flush is in flight, and keeps it after a failed flush", async () => {
+    it("keeps a failed flush's beats, and a retry of a statement that had committed counts once", async () => {
       let now = T0;
-      let fail = true;
+      let mode: "down" | "commit-then-fail" | "ok" = "down";
       const counter = createHlsViewerCounter({
         now: () => now,
         pool: () => ({
-          query: ((text: string, values?: unknown[]) =>
-            fail && isFlushWrite(text)
-              ? Promise.reject(new Error("db down"))
-              : getPool().query(text, values)) as ReturnType<typeof getPool>["query"],
+          query: (async (text: string, values?: unknown[]) => {
+            if (!isFlushWrite(text) || mode === "ok") {
+              return getPool().query(text, values);
+            }
+            if (mode === "down") {
+              throw new Error("db down");
+            }
+            // The statement reaches Postgres and commits; the reply is lost.
+            await getPool().query(text, values);
+            throw new Error("timeout after commit");
+          }) as ReturnType<typeof getPool>["query"],
         }),
       });
       counter.note(channelId, STARTED_AT, userId(1), "presence", {
@@ -398,13 +413,22 @@ describeDb("watch party viewer counts", () => {
       expect(counter.stats().flushFailures).toBe(1);
       expect(await rows()).toEqual([]);
 
-      // The database is back. Another beat, then the flush stores both.
-      fail = false;
+      // Committed but reported as failed: the row is there, and stays right
+      // however many times the same state is written again.
+      mode = "commit-then-fail";
       now = T0 + HLS_VIEWER_FLUSH_INTERVAL_MS;
       counter.note(channelId, STARTED_AT, userId(1), "presence", {
         visibleMs: 10_000,
         hiddenMs: 20_000,
       });
+      await counter.flushDue();
+      expect(counter.stats().flushFailures).toBe(2);
+      for (const minute of [2, 3]) {
+        now = T0 + minute * HLS_VIEWER_FLUSH_INTERVAL_MS;
+        await counter.flushDue();
+      }
+      mode = "ok";
+      now = T0 + 4 * HLS_VIEWER_FLUSH_INTERVAL_MS;
       await counter.flushDue();
       expect(await rows()).toEqual([
         { user_id: userId(1), device_class: "tablet", visible_ms: "40000", hidden_ms: "20000" },
@@ -415,6 +439,20 @@ describeDb("watch party viewer counts", () => {
       counter.note(channelId, STARTED_AT, userId(1), "presence");
       await counter.flushDue();
       expect((await rows())[0]).toMatchObject({ visible_ms: "40000", hidden_ms: "20000" });
+    });
+
+    it("a viewer who comes back after leaving the map adds a new share, not a clobber", async () => {
+      let now = T0;
+      const counter = createHlsViewerCounter({ now: () => now });
+      counter.note(channelId, STARTED_AT, userId(1), "presence", { visibleMs: 30_000 });
+      await counter.flushDue();
+      // Long gone: stored and expired out of this process's map.
+      now = T0 + 10 * HLS_VIEWER_FLUSH_INTERVAL_MS;
+      await counter.flushDue();
+      expect(counter.stats().trackedSessions).toBe(0);
+      counter.note(channelId, STARTED_AT, userId(1), "presence", { visibleMs: 5_000 });
+      await counter.flushDue();
+      expect((await rows())[0]).toMatchObject({ visible_ms: "35000" });
     });
 
     it("reports counts and seconds per broadcast, with new accounts split out, and no user id", async () => {
@@ -466,6 +504,32 @@ describeDb("watch party viewer counts", () => {
         },
       ]);
       expect(JSON.stringify(audience)).not.toContain(fresh.id);
+    });
+
+    it("only looks at the most recent broadcasts, and serves a cached answer inside a minute", async () => {
+      const now = Date.now();
+      const counter = createHlsViewerCounter({ now: () => now });
+      // Three broadcasts, the oldest stats row a day and a half stale.
+      for (const [i, started] of [STARTED_AT, STARTED_AT + 1, STARTED_AT + 2].entries()) {
+        counter.note(channelId, started, userId(i + 1), "presence", { device: "phone" });
+      }
+      await counter.flushDue({ force: true });
+      await getPool().query(
+        `UPDATE hls_session_viewer_stats SET updated_at = NOW() - interval '36 hours'
+          WHERE started_at_ms = $1`,
+        [STARTED_AT],
+      );
+      const two = await hlsViewerAudience(2);
+      expect(two.map((row) => row.startedAt).sort()).toEqual([STARTED_AT + 1, STARTED_AT + 2]);
+      // The stale one is outside the day even with room to spare.
+      resetHlsViewerAudienceCacheForTests();
+      expect((await hlsViewerAudience(10)).map((row) => row.startedAt).sort()).toEqual([
+        STARTED_AT + 1,
+        STARTED_AT + 2,
+      ]);
+      // Cached: a change in the table is not seen inside the minute.
+      await getPool().query(`DELETE FROM hls_session_viewers`);
+      expect(await hlsViewerAudience(10)).toHaveLength(2);
     });
 
     it("stores nothing but the three classes", async () => {
