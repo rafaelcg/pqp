@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "33056601",
+      sourceRev: "2635023a",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -305,8 +305,10 @@ export const privacyPtBr: LegalDocument = {
           </p>
           <p>
             <strong>Alertas do AutoMod.</strong> Se a equipe de um servidor
-            ligou o AutoMod e escolheu um canal de alertas, toda vez que o
-            AutoMod bloqueia uma mensagem ele posta um card nesse canal. O card
+            ligou o AutoMod e escolheu um canal de alertas, quando o AutoMod
+            bloqueia uma mensagem ele posta um card nesse canal, no máximo um
+            card para o mesmo membro naquele servidor a cada 10 segundos. Uma
+            mensagem bloqueada dentro desse intervalo não ganha card próprio. O card
             mostra a regra, o nome e a tag do membro, o canal, o trecho que
             bateu e o texto da mensagem bloqueada (até os primeiros 1.024
             caracteres). A mensagem bloqueada em si não é postada onde foi
@@ -314,8 +316,8 @@ export const privacyPtBr: LegalDocument = {
             alertas. Quem consegue ler esse canal consegue ler o card, e a
             janela de retenção de mensagens daquele servidor vale para ele. O
             AutoMod é o autor do card, então excluir a sua conta não o remove.
-            O AutoMod posta no máximo um card para o mesmo membro a cada 10
-            segundos. A entrada no log de auditoria é escrita toda vez.
+            A entrada no log de auditoria é escrita para toda mensagem
+            bloqueada, inclusive as que não ganham card.
           </p>
           <p>
             <strong>Prévias de link.</strong> Quando você publica um link, o

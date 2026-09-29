@@ -272,17 +272,19 @@ export const privacyEn: LegalDocument = {
           </p>
           <p>
             <strong>AutoMod alerts.</strong> If a server&apos;s staff turned on
-            AutoMod and chose an alert channel, then each time AutoMod blocks a
-            message it posts a card in that channel. The card shows the rule,
+            AutoMod and chose an alert channel, then when AutoMod blocks a
+            message it posts a card in that channel, at most one card for the
+            same member in that server every 10 seconds. A message blocked
+            inside that window gets no card of its own. The card shows the rule,
             the member&apos;s name and tag, the channel, the matched fragment,
             and the text of the blocked message (up to its first 1,024
             characters). The blocked message itself is not posted where it was
             sent. The card is stored as an ordinary message in the alert
             channel. Everyone who can read that channel can read it, and that
             server&apos;s message retention window applies to it. AutoMod is
-            its author, so deleting your account does not remove it. AutoMod
-            posts at most one card for the same member every 10 seconds. The
-            audit log entry is written every time.
+            its author, so deleting your account does not remove it. The
+            audit log entry is written for every blocked message, including the
+            ones that get no card.
           </p>
           <p>
             <strong>Link previews.</strong> When you post a link, our server
