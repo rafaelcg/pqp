@@ -111,6 +111,7 @@ import {
   channelOverwriteSchema,
   completeConnectionSchema,
   updateConnectionSchema,
+  DISPLAY_NAME_MAX_LENGTH,
   updateProfileSchema,
   updateServerSchema,
   USER_SEARCH_PAGE_SIZE,
@@ -1402,8 +1403,30 @@ router.post("/api/me/age-check", async ({ req, user }) => {
   return { ageGate: result.status };
 });
 
+/**
+ * `updateProfileSchema` binds a NEW display name to `DISPLAY_NAME_MAX_LENGTH`.
+ * This route parses with a looser ceiling first, because a name that predates
+ * the limit (a Clerk full name is stored untruncated) is still what an already
+ * installed iOS build sends back on every Settings save. The limit is enforced
+ * below, and only when the name actually changes.
+ */
+const patchProfileSchema = updateProfileSchema.extend({
+  displayName: z.string().trim().min(1).max(1000).optional(),
+});
+
 router.patch("/api/me", async ({ req, user, ageGate }) => {
-  const body = updateProfileSchema.parse(await readJsonBody(req));
+  const body = patchProfileSchema.parse(await readJsonBody(req));
+  if (body.displayName !== undefined) {
+    if (body.displayName === user.display_name.trim()) {
+      // The stored name sent back unchanged is not an edit, whatever its length.
+      body.displayName = undefined;
+    } else if (body.displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw new HttpError(
+        400,
+        `Display name must be ${DISPLAY_NAME_MAX_LENGTH} characters or fewer.`,
+      );
+    }
+  }
   // BEFORE the profile write, and in its own statement.
   //
   // A handle is the one field on this form that can fail for a reason nothing

@@ -161,7 +161,7 @@ describeDb("community home media claim", () => {
     );
     expect(minted.status).toBe(201);
     stored.set(minted.body.key, { bytes, contentType });
-    return call<{ error?: string; kind?: string }>(
+    return call<{ error?: string; kind?: string; contentType?: string }>(
       owner,
       "POST",
       `/api/servers/${serverId}/home/media/claim`,
@@ -199,9 +199,28 @@ describeDb("community home media claim", () => {
     expect(res.body.error).toMatch(/not a valid image/i);
   });
 
-  it("refuses real image bytes stored under another declared type", async () => {
-    const res = await mintAndClaim("image/png", JPEG);
-    expect(res.status).toBe(400);
+  it("claims a real JPEG named .png and relabels it as a JPEG", async () => {
+    const res = await mintAndClaim("image/png", JPEG, "meme.png");
+    expect(res.status).toBe(200);
+    expect(res.body.contentType).toBe("image/jpeg");
+    const row = await getPool().query<{ content_type: string }>(
+      `SELECT content_type FROM community_home_media_uploads`,
+    );
+    expect(row.rows[0]?.content_type).toBe("image/jpeg");
+  });
+
+  it("lets a relabelled upload be claimed a second time", async () => {
+    const minted = await call<{ uploadId: string; key: string }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/home/media`,
+      { contentType: "image/png", byteSize: JPEG.length, filename: "meme.png" },
+    );
+    stored.set(minted.body.key, { bytes: JPEG, contentType: "image/png" });
+    const claimPath = `/api/servers/${serverId}/home/media/claim`;
+    const body = { uploadId: minted.body.uploadId };
+    expect((await call(owner, "POST", claimPath, body)).status).toBe(200);
+    expect((await call(owner, "POST", claimPath, body)).status).toBe(200);
   });
 
   it("refuses when the stored bytes cannot be read", async () => {

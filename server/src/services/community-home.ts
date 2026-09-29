@@ -4,6 +4,7 @@ import {
   COMMUNITY_HOME_FEED_LIMIT,
   COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
   COMMUNITY_HOME_MAX_BYTES,
+  COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeMediaKindFromContentType,
   hasPermission,
   isCommunityHomeEmbedKind,
@@ -37,6 +38,11 @@ import {
   memberHasPermission,
 } from "./permissions.js";
 import { toPublicUserSummary } from "./users.js";
+
+/** The allowlisted content types a Baú image may be stored under. */
+const IMAGE_CONTENT_TYPES: ReadonlySet<string> = new Set(
+  COMMUNITY_HOME_MIME_ALLOWLIST.filter((type) => type.startsWith("image/")),
+);
 
 /**
  * Community Home (Baú): durable posts, flat comments, likes, schedule.
@@ -1559,9 +1565,18 @@ export async function claimCommunityHomeMediaUpload(input: {
   if (head.contentLength > COMMUNITY_HOME_MAX_BYTES) {
     throw new CommunityHomeError("over_limit", "File too large");
   }
-  if (head.contentType !== upload.content_type) {
+  // An image's stored type may legitimately differ from the row's: a claim
+  // relabels the row to what the bytes are, and a re-claim then sees the type
+  // the object was signed with. The byte check below is the real test for an
+  // image, so here it only has to be an allowlisted image type.
+  const storedTypeOk =
+    upload.kind === "image"
+      ? IMAGE_CONTENT_TYPES.has(head.contentType ?? "")
+      : head.contentType === upload.content_type;
+  if (!storedTypeOk) {
     throw new CommunityHomeError("not_verified", "Content type mismatch");
   }
+  let contentType = upload.content_type;
   if (prefixRead) {
     // The stored Content-Type is only what the uploader signed for, and the
     // browser derives that from the file name. Look at the bytes too, so a
@@ -1577,27 +1592,30 @@ export async function claimCommunityHomeMediaUpload(input: {
         "Upload could not be verified",
       );
     }
-    if (
-      !read.bytes ||
-      sniffCommunityHomeImageType(read.bytes) !== upload.content_type
-    ) {
+    // Any allowlisted image passes, whatever the file name said: a real JPEG
+    // saved as `meme.png` is a fine image. Only bytes that are not an
+    // allowlisted image at all (a text file called `x.png`) are refused. The
+    // row keeps what the bytes are, so the post shows the right type.
+    const sniffed = read.bytes ? sniffCommunityHomeImageType(read.bytes) : null;
+    if (!sniffed) {
       throw new CommunityHomeError(
         "not_verified",
-        "The file is not a valid image of its declared type",
+        "The file is not a valid image",
       );
     }
+    contentType = sniffed;
   }
   await pool.query(
     `UPDATE community_home_media_uploads
-        SET verified_at = NOW(), byte_size = $2
+        SET verified_at = NOW(), byte_size = $2, content_type = $3
       WHERE id = $1`,
-    [upload.id, head.contentLength],
+    [upload.id, head.contentLength, contentType],
   );
   return {
     uploadId: upload.id,
     kind: upload.kind,
     name: upload.filename,
-    contentType: upload.content_type as CommunityHomeContentType,
+    contentType: contentType as CommunityHomeContentType,
     byteSize: head.contentLength,
   };
 }

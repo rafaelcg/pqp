@@ -86,19 +86,33 @@ export function isHomeImageFile(file: File): boolean {
 }
 
 /**
- * False when a file the browser calls an image is not one, judged by its first
- * bytes. The browser types a file from its name, so a text file called `x.png`
- * says `image/png`; the server checks the stored bytes again on claim, but
- * catching it here saves the upload and lets the composer say why. Anything
- * that is not an allowlisted image type passes: other checks own those.
+ * What an image file really is, judged by its first bytes, or null when the
+ * bytes are not an allowlisted image. The browser types a file from its name,
+ * so a text file called `x.png` says `image/png` and a real WebP called
+ * `foto.jpg` says `image/jpeg`; the bytes are the only honest answer. Returns
+ * undefined for a file that is not a declared allowlisted image, since other
+ * checks own those.
  */
-export async function isRealHomeImage(file: File): Promise<boolean> {
+async function sniffHomeImageFile(
+  file: File,
+): Promise<CommunityHomeContentType | null | undefined> {
   const declared = file.type.trim().toLowerCase();
   if (!declared.startsWith("image/") || !ALLOWED_CONTENT_TYPES.has(declared)) {
-    return true;
+    return undefined;
   }
   const head = await file.slice(0, COMMUNITY_HOME_IMAGE_SNIFF_BYTES).arrayBuffer();
-  return sniffCommunityHomeImageType(new Uint8Array(head)) === declared;
+  return sniffCommunityHomeImageType(new Uint8Array(head));
+}
+
+/**
+ * False when a file the browser calls an image is not one, judged by its first
+ * bytes. A real image under the wrong extension (a JPEG saved as `.png`) is
+ * fine: the upload is labelled with what the bytes are. The server checks the
+ * stored bytes again on claim. Anything that is not an allowlisted image type
+ * passes: other checks own those.
+ */
+export async function isRealHomeImage(file: File): Promise<boolean> {
+  return (await sniffHomeImageFile(file)) !== null;
 }
 
 /**
@@ -223,13 +237,22 @@ export async function uploadHomeMedia(
   file: File,
   options: { signal?: AbortSignal; onProgress?: (fraction: number) => void } = {},
 ): Promise<UploadedHomeMedia> {
-  const contentType = file.type.trim().toLowerCase();
+  let contentType = file.type.trim().toLowerCase();
   if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
     throw new Error(
       contentType
         ? `${contentType} files are not allowed here.`
         : "Unrecognised file type.",
     );
+  }
+  // Sign the upload with what an image's bytes are, not what its name says, so
+  // a JPEG saved as `.png` is stored and served as a JPEG.
+  const sniffed = await sniffHomeImageFile(file);
+  if (sniffed === null) {
+    throw new Error("That file is not a real image.");
+  }
+  if (sniffed) {
+    contentType = sniffed;
   }
   if (file.size <= 0) {
     throw new Error("That file is empty.");

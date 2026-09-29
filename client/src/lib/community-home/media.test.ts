@@ -83,9 +83,9 @@ describe("isRealHomeImage", () => {
     expect(await isRealHomeImage(file)).toBe(false);
   });
 
-  it("refuses real bytes under a different declared image type", async () => {
+  it("accepts a real image whose bytes are another allowed type than its name", async () => {
     const file = new File([png], "a.jpg", { type: "image/jpeg" });
-    expect(await isRealHomeImage(file)).toBe(false);
+    expect(await isRealHomeImage(file)).toBe(true);
   });
 
   it("leaves non-image files to their own checks", async () => {

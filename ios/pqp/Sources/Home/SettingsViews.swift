@@ -170,8 +170,12 @@ struct AccountSettingsView: View {
         do {
             // Two calls because the server keeps them apart: the profile is
             // columns, the preferences are one merged JSON blob.
+            // The name goes only when it changed, as on the web: a stored name
+            // longer than the limit must not fail a save of the other fields.
+            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let nameChanged = trimmedName != (session.currentUser?.displayName ?? "")
             _ = try await session.api.updateProfile(
-                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+                displayName: nameChanged ? trimmedName : nil,
                 dmPrivacy: dmPrivacy
             )
             // Through the session, so what the server stored is what the next
