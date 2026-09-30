@@ -23,6 +23,7 @@ const SECTIONS = [
   "Privacy",
   "Your data",
   "Feedback",
+  "Help and contact",
 ] as const;
 
 async function openSettings(page: Page): Promise<void> {
@@ -63,7 +64,7 @@ test.describe("settings sections", () => {
 
     await page.keyboard.press("End");
     await expect(
-      page.getByRole("tab", { name: "Feedback", exact: true }),
+      page.getByRole("tab", { name: "Help and contact", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
   });
 
