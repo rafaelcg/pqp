@@ -7840,7 +7840,7 @@ function MainAppContent({
     // so a failed request is sent again on the next load.
     const stashedAcquisition = peekAcquisition(storage);
     // How long the round trip through Clerk took, when this browser started it.
-    // ONE record does both jobs: #909's `pqp:signup-cta` tap stamp feeds the
+    // ONE record does both jobs: PR 909's `pqp:signup-cta` tap stamp feeds the
     // `signup_return` event AND the duration sent with the acquisition, so
     // there is a single key, a single account-created-after-the-tap check and a
     // single cross-tab lock. `null` unless this tap caused this sign-up.
