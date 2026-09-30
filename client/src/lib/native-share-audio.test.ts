@@ -742,3 +742,47 @@ describe("what the worklet reports, and what the diagnostics say", () => {
     expect(describeNativeShareAudio()).toContain("flag=true shell=ok");
   });
 });
+
+describe("an error nobody planned for still lets go of everything", () => {
+  it("stops the shell's capture, closes the graph and reports a failed attach when the context throws at share start", async () => {
+    const shell = bridge({ active: true, sessionId: "share-70", target: null });
+    fakeWindow.pqpDesktop = shell;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await armNativeShareAudio()).toBe(true);
+    const context = FakeAudioContext.instances[0]!;
+    // Suspended between the arm and the attach, and resume() throws where the
+    // spec says it rejects.
+    context.state = "suspended";
+    context.resume = () => {
+      throw new TypeError("resume is not available");
+    };
+    const stream = new FakeStream();
+    const result = await attachNativeShareAudio(stream as unknown as MediaStream);
+    expect(result).toEqual({ attached: false, reason: "error", target: null });
+    expect(stream.getAudioTracks()).toHaveLength(0);
+    expect(shell.nativeShareAudioStop).toHaveBeenCalledWith("share-70");
+    expect(context.closed).toBe(true);
+    expect(shell.unsubscribed).toBe(1);
+    expect(describeNativeShareAudio()).toContain("FAILED at attach");
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(false);
+  });
+
+  it("does not leave a live session behind when adding the track to the stream throws", async () => {
+    const shell = bridge({ active: true, sessionId: "share-71", target: null });
+    fakeWindow.pqpDesktop = shell;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stream = new FakeStream();
+    stream.addTrack = () => {
+      throw new Error("stream is closed");
+    };
+    const result = await attachNativeShareAudio(stream as unknown as MediaStream);
+    expect(result.attached).toBe(false);
+    expect(result.reason).toBe("error");
+    expect(shell.nativeShareAudioStop).toHaveBeenCalledWith("share-71");
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+    // The watch on the session is gone: nothing ticks for a share that never was.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(shell.nativeShareAudioStop).toHaveBeenCalledTimes(1);
+  });
+});

@@ -720,6 +720,13 @@ export async function attachNativeShareAudio(
     }
   });
   let succeeded = false;
+  // What this attempt holds, so that an error nobody planned for (a WebAudio
+  // implementation that throws where the spec says it rejects) still lets go
+  // of all of it and stops the shell's capture, instead of leaving a running
+  // capture and an open graph behind a share that then reports nothing.
+  let claimedSessionId: string | null = null;
+  let graphInHand: Graph | null = null;
+  let portInHand: MessagePort | null = null;
   try {
     let claim: NativeShareAudioClaim;
     try {
@@ -748,8 +755,10 @@ export async function attachNativeShareAudio(
       return { attached: false, reason: claim.reason ?? "none", target: null };
     }
     const sessionId = claim.sessionId;
+    claimedSessionId = sessionId;
     noteNativeShareAudio({ claim: "active" });
     const port = await ports.take(sessionId);
+    portInHand = port;
     noteNativeShareAudio({ port: port !== null });
     if (!port) {
       void bridge.nativeShareAudioStop(sessionId).catch(() => {});
@@ -780,6 +789,7 @@ export async function attachNativeShareAudio(
       noteNativeShareAudio({ attached: false });
       return { attached: false, reason: "audio-graph", target: null };
     }
+    graphInHand = graph;
     if (graph.context.state !== "running") {
       // Suspended between the arm and now (the window lost focus, the device
       // changed): resume once, inside the same bound, and judge the state.
@@ -850,6 +860,35 @@ export async function attachNativeShareAudio(
       `[share-audio] native share sound attached (${claim.target?.mode ?? "?"} ${claim.target?.exe ?? ""}, context ${graph.context.state} @ ${graph.context.sampleRate})`,
     );
     return { attached: true, reason: null, target: claim.target ?? null };
+  } catch (err) {
+    // Not planned for: release everything this attempt holds, stop the shell's
+    // capture, and report a failed attach (the caller says so to the person).
+    console.warn("[share-audio] native attach failed unexpectedly", err);
+    if (succeeded && live) {
+      // It threw after the session was live (adding the track to the stream):
+      // the caller is told it failed, so the session must not go on.
+      failedThisSession = true;
+      noteNativeShareAudio({ attached: false });
+      noteNativeShareAudioFailure("attach", err instanceof Error ? err.name : "error");
+      teardown(live, true);
+    } else if (!succeeded) {
+      if (claimedSessionId) {
+        void bridge.nativeShareAudioStop(claimedSessionId).catch(() => {});
+      }
+      if (graphInHand) {
+        disposeGraph(graphInHand);
+      }
+      try {
+        portInHand?.close();
+      } catch {
+        // Already transferred to the worklet, which closes it with the graph.
+      }
+      discardPrimedNativeShareAudio();
+      failedThisSession = true;
+      noteNativeShareAudio({ attached: false });
+      noteNativeShareAudioFailure("attach", err instanceof Error ? err.name : "error");
+    }
+    return { attached: false, reason: "error", target: null };
   } finally {
     ports.dispose();
     if (!succeeded) {
