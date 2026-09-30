@@ -77,6 +77,8 @@ const {
   saveTrayPrefs,
 } = require("./lib/tray-state");
 const { createShareAudioController } = require("./lib/win-share-audio-session");
+const { createSharePriority } = require("./lib/share-priority");
+const { summariseGpuStatus, formatGpuStatusLine } = require("./lib/gpu-status");
 const {
   PROBE_TONE_PAGE,
   wantsShareAudioProbe,
@@ -148,6 +150,46 @@ function shareAudio() {
     });
   }
   return shareAudioController;
+}
+
+/**
+ * `share_high_motion_guard`, the shell's half: while a screen share is live,
+ * the processes that capture, encode and carry it run one notch above normal
+ * (Windows only), and go back afterwards. The page asks through
+ * `pqp:share-live`, and only when the runtime flag is on for the call's
+ * server; nothing here runs on its own. See `lib/share-priority.js`.
+ */
+const sharePriority = createSharePriority({
+  platform: process.platform,
+  listProcesses: () => app.getAppMetrics(),
+  getPriority: (pid) => os.getPriority(pid),
+  setPriority: (pid, priority) => os.setPriority(pid, priority),
+  priorities: {
+    NORMAL: os.constants.priority.PRIORITY_NORMAL,
+    ABOVE_NORMAL: os.constants.priority.PRIORITY_ABOVE_NORMAL,
+  },
+  log: (line) => console.log(line),
+});
+
+/** Chromium's GPU feature status, read on demand (and once at startup, below). */
+function gpuStatusSummary() {
+  try {
+    return summariseGpuStatus(app.getGPUFeatureStatus());
+  } catch {
+    return summariseGpuStatus(null);
+  }
+}
+
+/**
+ * One low-volume line saying whether this machine encodes video on the GPU.
+ * Logged when the app is ready and once more when Chromium's GPU info lands,
+ * because the first read can precede the GPU process. The bundled Chromium
+ * turns the Media Foundation hardware encoder on by default on Windows and
+ * this shell passes no switch that would turn it off; this is how a machine
+ * that ended up on the software encoder anyway shows itself.
+ */
+function logGpuStatus() {
+  console.log(formatGpuStatusLine(gpuStatusSummary(), process.platform));
 }
 
 /** @type {BrowserWindow | null} */
@@ -1312,6 +1354,18 @@ function createWindow(appUrl, allowedOrigin) {
 
   trackWindowState(mainWindow, app.getPath("userData"));
 
+  // The priority boost belongs to a share the page is running. A page that
+  // reloads, navigates away or crashes cannot say "it is over", so the shell
+  // does: nothing stays raised for a share that no longer exists.
+  // Main frame only, and not a same-document route change: an embedded frame
+  // loading, or the app moving between its own pages, is not the share ending.
+  mainWindow.webContents.on("did-start-navigation", (details) => {
+    if (details?.isMainFrame === true && details?.isSameDocument !== true) {
+      sharePriority.stop();
+    }
+  });
+  mainWindow.webContents.on("render-process-gone", () => sharePriority.stop());
+
   // A minimized window otherwise throttles timers past the voice-resume TTL
   // (90s). Held media still needs those timers to rejoin after an API restart.
   mainWindow.webContents.setBackgroundThrottling(false);
@@ -2169,6 +2223,34 @@ if (probingShareAudio) {
     }
   });
 
+  /**
+   * `share_high_motion_guard`: the page says a screen share is live or over.
+   * Answers the app window only, like every channel that changes what this
+   * machine does. Not Windows: nothing to do, and it says so.
+   */
+  ipcMain.handle("pqp:share-live", (event, live) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { live: false, boost: "unsupported", processes: 0 };
+    }
+    return live === true ? sharePriority.start() : sharePriority.stop();
+  });
+
+  /** What this shell knows about the share pipeline, for `pqpShareHealth()`. */
+  ipcMain.handle("pqp:share-health", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return null;
+    }
+    return {
+      platform: process.platform,
+      versions: {
+        electron: process.versions.electron ?? null,
+        chrome: process.versions.chrome ?? null,
+      },
+      gpu: gpuStatusSummary(),
+      priority: sharePriority.status(),
+    };
+  });
+
   ipcMain.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);
     if (
@@ -2196,6 +2278,8 @@ if (probingShareAudio) {
 
   app.whenReady().then(async () => {
     app.setName("pqp");
+    logGpuStatus();
+    app.once("gpu-info-update", logGpuStatus);
     registerProtocolClient();
     const locale = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(locale);
@@ -2254,6 +2338,7 @@ if (probingShareAudio) {
   app.on("before-quit", () => {
     quitting = true;
     desktopAuth.stop();
+    sharePriority.stop();
     if (staticServer) {
       const server = staticServer;
       staticServer = null;

@@ -69,6 +69,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
   client_force_update: (raw) => raw === "true",
+  share_high_motion_guard: (raw) => raw === "true",
 };
 
 const SAMPLES = [

@@ -121,6 +121,19 @@ only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
 (ISO date or epoch ms) forces bundles built before a moment and is environment-only.
 See `docs/PWA.md` §"Nobody stays on an old bundle".
 
+Also born as a flag: `SHARE_HIGH_MOTION_GUARD` (`share_high_motion_guard`,
+default off, **per server**), served to the client by the same
+`GET /api/share/config?serverId=` as `shareHighMotionGuard`. A presenter whose
+screen share is starved by a game at a very high frame rate (a 360 Hz CS2 at
+100 % GPU) is stepped down in place, resolution and bitrate first and frame rate
+last, recovers slowly with hysteresis, and in the desktop app on Windows the
+shell's processes run one notch above normal while the share is live. Client and
+Electron only, no user-facing copy, never applied to a watch party's share. Off,
+the client behaves exactly as before: no constraint is written, the shell is told
+nothing. `pqpShareHealth()` in the console works either way. Design, evidence
+and the test steps: `docs/DESKTOP.md` §"A share next to a game at a very high
+frame rate".
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

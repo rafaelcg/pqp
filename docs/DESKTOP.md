@@ -184,6 +184,103 @@ and the watch party lowers the capture's height with `applyConstraints` while it
 runs. A capture that refuses a constraint keeps running unchanged; nothing in
 that path stops a track.
 
+### A share next to a game at a very high frame rate (`share_high_motion_guard`)
+
+Field report, 2026-09-30, two people in the UK on the London SFU: sharing a CS2
+window (or the whole screen, in the desktop app or in Chrome) from a 360 Hz
+monitor with the game uncapped gave the viewer heavy lag and freezes; alt-tabbing
+out made the share fine, and capping the game at 60 fps fixed it. The machine did
+not look overloaded. We do not answer that by asking anybody to cap their game,
+so the pipeline has to cope. The flag is runtime (`docs/FEATURE_FLAGS.md`),
+default off, per server, read from `GET /api/share/config`.
+
+**What the code says about where the work is.** Read from Chromium's and
+WebRTC's sources, not measured on a 360 Hz PC (that is the test below):
+
+- The capture is **paced by the frame rate we ask for, not by the display's.**
+  `DesktopCaptureDevice` schedules its next capture at
+  `max(2 x the last capture's duration, 1 / requestedFrameRate)` (the 2x is
+  `kDefaultMaximumCpuConsumptionPercentage = 50`). `screenCaptureOptions` asks
+  for `frameRate: { ideal: 60, max: 60 }`, so a 360 Hz source is read at most 60
+  times a second. Where Chromium uses the Windows Graphics Capture capturer, it
+  only signals an event when DWM delivers a frame; the readback (`CopyResource`,
+  `Map`, a copy into a CPU frame) runs inside the capture call. The constraint limits that work. It
+  is a request, so the guard reads `getSettings().frameRate` back and asks
+  again in place when it is over (`enforceCaptureFrameRate`).
+- What does not shrink with the constraint is what each capture call costs.
+  A readback waits for the GPU, a game at 100 % GPU makes that wait long, and the
+  rule above turns a long call into a lower rate by itself (a 25 ms call gives at
+  most 20 fps whatever was asked). Encode and colour conversion need the same GPU
+  (hardware encode) or the same cores (software encode) as the game.
+- **Resolution does not help the capture.** The readback is the native size;
+  `height.max` only scales afterwards. So resolution is the right first step for
+  a starved ENCODER, and useless for a starved CAPTURE, which is why the guard
+  tells them apart (below).
+- `videoCodec: "h264"` uses the Media Foundation hardware encoder when the GPU
+  process has one (`MediaFoundationVideoEncodeAccelerator` is on by default on
+  Windows in the bundled Chromium) and OpenH264 in software when not. The shell
+  passes no switch that disables either, and now logs the GPU feature status
+  once at startup (`[pqp] gpu (win32): video_encode=enabled (hardware) ...`).
+  `MediaFoundationSharedImageEncode` exists but is off by default upstream; it
+  is an A/B for a test PC (`pqp.exe --enable-features=MediaFoundationSharedImageEncode`),
+  not something we ship.
+- `maintain-framerate` plus `contentHint = "motion"` is the right trade for a
+  game, and it means libwebrtc answers CPU overuse by lowering resolution, never
+  frame rate. Nothing reacted to a CAPTURE that could not keep up.
+
+**What the flag turns on.**
+
+1. **Capture rate is verified** at the start of the share (`getSettings()`
+   against the request, re-applied in place if over).
+2. **A silent monitor** reads the share's sender stats every 2 s
+   (`share-guard-runtime.ts`), on the SFU and on the mesh (worst sender decides).
+   Verdicts (`share-high-motion-guard.ts`): *encoder starved* (`qualityLimitationReason
+   = cpu`, or encode time per frame over 90 % of its slot, or frames captured but
+   not sent), *capture starved* (few frames, each one large), *network*
+   (bandwidth limited, not its business), *healthy* (a still picture with few
+   frames is healthy).
+3. **A ladder, frame rate last**: 1080p60, then 720p, then 540p (bitrate scaled
+   with each), then 30 fps. A starved capture skips the resolution rungs
+   (they do not help it) and goes to 30 fps, and does nothing if it was already
+   30. Down needs about 5 s of sustained starvation, then 8 s are not trusted
+   while the encoder reconfigures. Up needs 45 s healthy with projected headroom
+   at the higher level, frame rate comes back first, each step up that is undone
+   within 90 s doubles the wait, and three of those keep the share where it is.
+   Steps are `applyConstraints` on the capture (over the snapshot of the
+   original constraints: `applyConstraints` replaces the set) plus a frame-rate
+   ceiling and a bitrate scale on the senders. In place: no republish, no new
+   sid, no picker.
+4. **Shell priority boost** (`electron/lib/share-priority.js`, Windows only):
+   while a share is live the browser, renderer, GPU, audio and video-capture
+   processes go to `ABOVE_NORMAL` and back to exactly what each had. It never
+   goes higher, never lowers a process that is already above, and is undone when
+   the page reloads, its renderer dies, or the app quits. It does **not** change
+   GPU scheduling priority (Windows has a per-process GPU class, Node cannot set
+   it; that would need a native call and is the next step if this is not enough).
+5. **No user-facing copy.** Nothing tells the presenter anything, and nothing
+   asks them to touch a game setting.
+
+**Never for a watch party.** The guard is off for `intent.watchParty`, for a
+stream the watch party opened, and it gives the share back and stops when a party
+starts transcoding from it (`blocked`). The party's ingest has its own pin
+(`screenPlanPinned`, `screen-resolution-recovery.ts`).
+
+**Reading a machine: `pqpShareHealth()`** in the console (works with the flag
+off, reads two stats samples a second apart): codec, encoder and whether it is
+hardware, fps sent / captured / asked, encode ms per frame, limitation reason,
+size, bitrate, the capture-rate check, the guard's level, and the shell's GPU
+status and priority boost. `pqpShareHealth.force(n)` holds the guard on step `n`
+(0 is full quality) to A/B a step by hand. Capture fps far under asked fps with
+limited by `none` is a capture that is behind; `cpu`, or encode time near its
+slot, is the encoder; a software encoder on a machine with a GPU is a hardware
+encode that is not being used.
+
+**Test on a 360 Hz PC**, in `docs/plans/` terms: turn the flag on for one server
+from the dashboard (controles, interruptores, `share_high_motion_guard`), open the
+desktop app, share the game window with CS2 uncapped, run `pqpShareHealth()`
+during the stutter and read it with the paragraph above; then
+`pqpShareHealth.force(1)`, `force(2)`, `force(3)` and watch the viewer at each.
+
 ---
 
 ## 2. Build locally

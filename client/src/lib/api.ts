@@ -696,6 +696,12 @@ export interface ShareConfig {
    * the call (`lib/native-share-audio.ts`). Absent on an older API: off.
    */
   desktopShareAudioNative?: boolean;
+  /**
+   * The presenter's share guard (`lib/share-high-motion-guard.ts`) and the
+   * desktop app's priority boost are on for this server. Absent on an older
+   * API: off.
+   */
+  shareHighMotionGuard?: boolean;
 }
 
 /** `serverId` is the server the call is in; a DM call asks without one. */

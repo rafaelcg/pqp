@@ -7,6 +7,7 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
+import type { ShareGuardCeiling } from "./share-high-motion-guard";
 import { emitNetworkHint } from "./network-hints";
 import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
@@ -240,6 +241,19 @@ export interface PeerConnectionManager {
    * the share never blinks and the picker never reopens.
    */
   setScreenQuality(quality: VideoQuality): void;
+  /**
+   * `share_high_motion_guard`: hold the screen senders under a frame-rate
+   * ceiling and a bitrate scale the presenter's guard chose, and re-tune them.
+   * Null lifts it. In place on the live senders, like the quality above.
+   * Optional so a test double need not know about it.
+   */
+  setScreenGuardCeiling?(ceiling: ShareGuardCeiling | null): void;
+  /**
+   * One stats report per live screen sender (one per peer: a mesh presenter
+   * encodes the share once for each of them). For the guard and for
+   * `pqpShareHealth`.
+   */
+  getScreenSenderReports?(): Promise<RTCStatsReport[]>;
   /**
    * Record which of a peer's video streams is their camera (from the roster).
    * Null means "camera off" — any remaining video is treated as screen share.
@@ -571,6 +585,8 @@ async function tuneScreenSender(
   budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
   /** What a camera on the same uplink asked for, in bps. 0 when it is off. */
   cameraChosenBps = 0,
+  /** `share_high_motion_guard`'s current step, null when it has none. */
+  guard: ShareGuardCeiling | null = null,
 ): Promise<void> {
   if (!sender) {
     return;
@@ -590,13 +606,21 @@ async function tuneScreenSender(
     const captureHeight = sender.track?.getSettings?.().height ?? null;
     const scale = screenScaleFactor(quality, captureHeight);
     for (const encoding of params.encodings) {
-      encoding.maxBitrate = meshScreenBitrate(
+      const ceiling = meshScreenBitrate(
         peerCount,
         quality,
         budgetBps,
         cameraChosenBps,
       );
-      encoding.maxFramerate = publishMaxFrameRateFromTrack(sender.track ?? {});
+      const delivered = publishMaxFrameRateFromTrack(sender.track ?? {});
+      // The guard only ever lowers: its level is a ceiling on top of what the
+      // capture delivers, never a promise of more.
+      encoding.maxBitrate = guard
+        ? Math.round(ceiling * guard.bitrateScale)
+        : ceiling;
+      encoding.maxFramerate = guard
+        ? Math.min(guard.maxFps, delivered)
+        : delivered;
       // Written on every rung including 1080p, where it is 1: a divisor only
       // ever set on the way down would make the menu a one-way trip, leaving a
       // 3x scale in place after somebody chose 1080p again.
@@ -642,6 +666,7 @@ export function createPeerConnectionManager(
         screenQuality,
         screenBudgetBps,
         cameraChosenBps(),
+        screenGuardCeiling,
       );
     }
   }
@@ -818,6 +843,8 @@ export function createPeerConnectionManager(
    * other input to the screen sender's number, alongside `screenQuality`.
    */
   let screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
+  /** `share_high_motion_guard`'s step for this share. Null: the guard is off or at the top. */
+  let screenGuardCeiling: ShareGuardCeiling | null = null;
   let screenBudgetTimer: ReturnType<typeof setInterval> | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
@@ -1168,6 +1195,7 @@ export function createPeerConnectionManager(
           screenQuality,
           screenBudgetBps,
           cameraChosenBps(),
+          screenGuardCeiling,
         );
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
@@ -1514,6 +1542,8 @@ export function createPeerConnectionManager(
         startScreenBudgetSampling();
       } else {
         stopScreenBudgetSampling();
+        // The guard's step belongs to the share that ended.
+        screenGuardCeiling = null;
       }
       // Both edges of a share move the camera's slice.
       retuneAllCameraSenders();
@@ -1536,6 +1566,7 @@ export function createPeerConnectionManager(
             screenQuality,
             screenBudgetBps,
             cameraChosenBps(),
+            screenGuardCeiling,
           );
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
@@ -1607,6 +1638,27 @@ export function createPeerConnectionManager(
       }
       cameraMaxBitrate = maxBitrate;
       retuneAllVideoSenders();
+    },
+
+    setScreenGuardCeiling(ceiling: ShareGuardCeiling | null) {
+      screenGuardCeiling = ceiling;
+      retuneAllScreenSenders();
+    },
+
+    async getScreenSenderReports() {
+      const reports: RTCStatsReport[] = [];
+      for (const peer of peers.values()) {
+        const sender = peer.screenSender;
+        if (!sender || typeof sender.getStats !== "function") {
+          continue;
+        }
+        try {
+          reports.push(await sender.getStats());
+        } catch {
+          // A sender that went away mid-read is simply not in this sample.
+        }
+      }
+      return reports;
     },
 
     setScreenQuality(quality: VideoQuality) {

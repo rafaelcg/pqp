@@ -175,6 +175,13 @@ export interface ScreenCaptureIntent {
    * other's per-server flag. See `lib/native-share-audio.ts`.
    */
   nativeShareAudio?: boolean;
+  /**
+   * `share_high_motion_guard` for THIS share's server, decided before the
+   * picker the same way (`lib/share-guard-flag.ts`). True puts the running
+   * share under the guard; absent or false is the share exactly as it always
+   * was. Never true for a watch party, whatever the flag says.
+   */
+  shareHighMotionGuard?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */

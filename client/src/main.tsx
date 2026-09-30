@@ -48,6 +48,7 @@ import { recoverFromChunkLoadError } from "./lib/chunk-reload";
 import { isInCall } from "./lib/in-call-state";
 import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
 import { installShareAudioProbe } from "./lib/share-audio-probe";
+import { installShareHealth } from "./lib/share-health";
 import { setStaleChunkBannerVisible } from "./lib/stale-chunk-state";
 import "./index.css";
 
@@ -450,6 +451,7 @@ rememberWaitlistIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
+installShareHealth();
 
 // Cloudflare Pages deletes an old deploy's hashed assets once a new one
 // lands, so a tab left open across a deploy 404s the moment Vite's build

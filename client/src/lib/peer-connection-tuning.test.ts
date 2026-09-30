@@ -945,3 +945,91 @@ describe("the screen budget follows what the connections measure", () => {
     expect(getStats).not.toHaveBeenCalled();
   });
 });
+
+describe("share_high_motion_guard on the mesh", () => {
+  /** A capture that delivers 60 fps, which is what makes a ceiling observable. */
+  function sixtyFpsStream(id: string): MediaStream {
+    const track = {
+      id,
+      kind: "video",
+      getSettings: () => ({ width: 1920, height: 1080, frameRate: 60 }),
+    };
+    return {
+      id,
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+  }
+
+  it("changes nothing until a ceiling is set", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(sixtyFpsStream("screen"));
+    const params = lastParams(screenSenders()[0]!);
+    expect(params?.encodings[0]?.maxFramerate).toBe(60);
+    expect(params?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+    );
+    manager.dispose();
+  });
+
+  it("holds every screen sender under the ceiling, and lifts it again", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(sixtyFpsStream("screen"));
+    const unguarded =
+      lastParams(screenSenders().filter((s) => s.track !== null)[0]!)?.encodings[0]
+        ?.maxBitrate ?? 0;
+
+    manager.setScreenGuardCeiling?.({ maxFps: 30, maxHeight: 540, bitrateScale: 0.5 });
+    await Promise.resolve();
+    for (const sender of screenSenders().filter((s) => s.track !== null)) {
+      const encoding = lastParams(sender)?.encodings[0];
+      expect(encoding?.maxFramerate).toBe(30);
+      expect(encoding?.maxBitrate).toBe(Math.round(unguarded * 0.5));
+    }
+
+    manager.setScreenGuardCeiling?.(null);
+    await Promise.resolve();
+    for (const sender of screenSenders().filter((s) => s.track !== null)) {
+      const encoding = lastParams(sender)?.encodings[0];
+      expect(encoding?.maxFramerate).toBe(60);
+      expect(encoding?.maxBitrate).toBe(unguarded);
+    }
+    manager.dispose();
+  });
+
+  it("never lets the guard raise a rate the capture does not deliver", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    manager.setScreenGuardCeiling?.({ maxFps: 60, maxHeight: null, bitrateScale: 1 });
+    await Promise.resolve();
+    // The fake capture reports no frame rate, which reads as 30.
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxFramerate).toBe(30);
+    manager.dispose();
+  });
+
+  it("a share that ends drops the ceiling with it", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(sixtyFpsStream("screen"));
+    manager.setScreenGuardCeiling?.({ maxFps: 30, maxHeight: 540, bitrateScale: 0.5 });
+    await manager.setLocalScreenStream(null);
+    await manager.setLocalScreenStream(sixtyFpsStream("screen-2"));
+    const live = senders.filter((s) => s.track?.id === "screen-2");
+    expect(lastParams(live[0]!)?.encodings[0]?.maxFramerate).toBe(60);
+    manager.dispose();
+  });
+
+  it("answers an empty list of reports when no sender can be read", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(sixtyFpsStream("screen"));
+    // The fake sender has no getStats; a real one does. Either way: no throw.
+    expect(await manager.getScreenSenderReports?.()).toEqual([]);
+    manager.dispose();
+  });
+});
