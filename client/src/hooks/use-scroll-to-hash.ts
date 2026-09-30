@@ -52,13 +52,37 @@ export function useScrollToHash() {
       // A malformed escape (`#%E0`) names no section; stay where we are.
       return;
     }
-    const target = document.getElementById(id);
-    if (!target) return;
-    if (!first) {
-      target.scrollIntoView({ block: "start" });
-      return;
-    }
+    const found = document.getElementById(id);
+    if (found) return arrive(found, first);
 
+    // A section that is not in the page yet: one that renders once a server
+    // answer lands (the landing's Communities band). Wait for it, for as long
+    // as the settle window, instead of giving up on the first render.
+    let stop: (() => void) | undefined;
+    const timer = window.setTimeout(() => observer.disconnect(), SETTLE_MS);
+    const observer = new MutationObserver(() => {
+      const late = document.getElementById(id);
+      if (!late) return;
+      observer.disconnect();
+      window.clearTimeout(timer);
+      stop = arrive(late, first);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      stop?.();
+    };
+  }, [pathname, hash]);
+}
+
+/** Scroll to a section that exists, and keep following it while the page settles. */
+function arrive(target: HTMLElement, first: boolean): (() => void) | undefined {
+  if (!first) {
+    target.scrollIntoView({ block: "start" });
+    return undefined;
+  }
+  {
     const jump = () =>
       target.scrollIntoView({ block: "start", behavior: "instant" });
     const pageTop = () => target.getBoundingClientRect().top + window.scrollY;
@@ -87,5 +111,5 @@ export function useScrollToHash() {
     }
     frame = requestAnimationFrame(follow);
     return release;
-  }, [pathname, hash]);
+  }
 }

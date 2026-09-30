@@ -20,7 +20,7 @@ pqp (https://pqp.gg) is an open-source voice and text chat for groups of friends
 - Web: https://pqp.gg/app (needs an account)
 - Desktop: Electron shell, https://pqp.gg/download
 - iOS: native SwiftUI client, TestFlight beta, https://pqp.gg/beta
-- Android: native Kotlin and Compose client, APK beta, https://pqp.gg/android
+- Android: native Kotlin and Compose client, on Google Play (the APK is still available), https://pqp.gg/android
 
 ## Accounts and access
 

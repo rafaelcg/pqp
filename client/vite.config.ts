@@ -141,10 +141,14 @@ export default defineConfig({
       // first; `/app` is the thing worth installing.
       includeAssets: ["icons/*.png", "robots.txt"],
       manifest: {
-        name: "pqp — group chat you own",
+        name: "pqp",
         short_name: "pqp",
+        // The site's default language is Portuguese (`landing.seo.*`), and a
+        // manifest is one static file, so it says the same thing the default
+        // head does.
+        lang: "pt-BR",
         description:
-          "Discord-like voice and text chat. Self-host it or use the hosted service.",
+          "Voz, tela compartilhada e chat pra sua galera. De graça e de código aberto.",
         start_url: "/app",
         scope: "/",
         display: "standalone",

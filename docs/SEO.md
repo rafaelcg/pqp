@@ -255,10 +255,25 @@ What ships now:
 - **Canonicals pinned to `https://pqp.gg`** in the edge-injected heads, so the
   `pqp-3yr.pages.dev` twin votes for pqp.gg instead of competing with it.
   `/claim` canonicalises to `/garanta` (one page, two names).
-- **hreflang**: one URL serves both languages by negotiation; `?lang=pt-BR` /
-  `?lang=en` are the crawlable variants, `x-default` is the bare negotiated
-  URL. That is the honest ceiling of this architecture, separate per-language
-  URLs would need per-language routes (see §4).
+- **hreflang**: one URL serves each language by negotiation; `?lang=pt-BR` /
+  `?lang=en` / `?lang=es` are the crawlable variants, `x-default` is the bare
+  negotiated URL. That is the honest ceiling of this architecture, separate
+  per-language URLs would need per-language routes (see §4).
+  **Canonical is self-referencing per language** (2026-09-30, `marketingUrlsFor`
+  in `marketing-meta.ts`, mirrored by `Seo`): Portuguese is the bare path,
+  English and Spanish declare `?lang=en` / `?lang=es` as their own canonical.
+  Before, every variant canonicalised to the bare path while hreflang pointed
+  at the `?lang=` URLs, which Google reads as a contradiction and answers by
+  ignoring the hreflang set (Lighthouse: "canonical points to another hreflang
+  location"). This supersedes the "Alternate page with proper canonical" note
+  in the Search Console section above. A page with no Spanish copy (policies,
+  status) canonicalises its `?lang=es` request to `?lang=en` and lists no `es`
+  alternate.
+- **Unknown paths are a real 404** (2026-09-30, `spa-routes.ts`): the edge keeps
+  the SPA body but answers `404` plus `X-Robots-Tag: noindex` for a path the
+  router has no route for, instead of a 200 copy of the home page.
+  `spa-routes.test.ts` reads `main.tsx`, so a new route that the list does not
+  know fails the suite.
 - **`robots.txt` + `sitemap.xml`** (`client/public/`): sitemap now lists all
   eight public routes including `/vs-discord` and `/status`.
 - **JSON-LD**: `WebSite` everywhere, `SoftwareApplication` on `/` only,

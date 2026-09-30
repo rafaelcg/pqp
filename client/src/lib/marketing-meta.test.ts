@@ -10,6 +10,7 @@ import { PLAY_STORE_LISTING_URL } from "./play-store";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
+  marketingUrlsFor,
   renderMarketingHead,
   LANDING_FAQ,
   SOFTWARE_OPERATING_SYSTEMS,
@@ -227,7 +228,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
   it("every homepage FAQ pair matches its landing.faq.* twin, both locales", () => {
     // Same rule: the page renders LANDING_FAQ_IDS in this order and the
     // JSON-LD must be the same list.
-    const ids = ["safe", "free", "install", "capacity", "import", "data"] as const;
+    const ids = ["safe", "free", "signin", "install", "capacity", "import", "data"] as const;
     expect(LANDING_FAQ.en).toHaveLength(ids.length);
     expect(LANDING_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {
@@ -354,7 +355,7 @@ describe("Spanish", () => {
 
   it("every Spanish FAQ pair matches its catalogue twin", () => {
     const sets = [
-      [LANDING_FAQ.es, "landing", ["safe", "free", "install", "capacity", "import", "data"]],
+      [LANDING_FAQ.es, "landing", ["safe", "free", "signin", "install", "capacity", "import", "data"]],
       [VS_DISCORD_FAQ.es, "vsDiscord", ["why", "when", "how", "catch"]],
       [TELA_FAQ.es, "tela", ["download", "vpn", "people", "free", "mobile", "data", "why"]],
       [
@@ -413,24 +414,61 @@ describe("renderMarketingHead", () => {
   });
 
   it("canonicalises /claim to /garanta, as the client Seo does", () => {
-    const head = renderMarketingHead("/claim", "en");
+    const head = renderMarketingHead("/claim", "pt-BR");
     expect(head).toContain(
       '<link rel="canonical" href="https://pqp.gg/garanta" />',
     );
     expect(head).not.toContain("https://pqp.gg/claim");
   });
 
-  it("emits the hreflang trio around one canonical", () => {
-    const head = renderMarketingHead("/", "pt-BR");
-    expect(head).toContain(
-      '<link rel="alternate" hreflang="x-default" href="https://pqp.gg/" />',
+  it("makes each language's canonical point at itself", () => {
+    // The bug: every language said canonical `/` while hreflang pointed at
+    // `?lang=` URLs, so Google threw the hreflang set away.
+    const pt = renderMarketingHead("/", "pt-BR");
+    const en = renderMarketingHead("/", "en");
+    const es = renderMarketingHead("/", "es");
+    expect(pt).toContain('<link rel="canonical" href="https://pqp.gg/" />');
+    expect(en).toContain('<link rel="canonical" href="https://pqp.gg/?lang=en" />');
+    expect(es).toContain('<link rel="canonical" href="https://pqp.gg/?lang=es" />');
+    expect(en).toContain('<meta property="og:url" content="https://pqp.gg/?lang=en" />');
+  });
+
+  it("lists the same hreflang set on every language, bare path as x-default and Portuguese", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const head = renderMarketingHead("/", locale);
+      expect(head).toContain(
+        '<link rel="alternate" hreflang="x-default" href="https://pqp.gg/" />',
+      );
+      expect(head).toContain(
+        '<link rel="alternate" hreflang="pt-BR" href="https://pqp.gg/" />',
+      );
+      expect(head).toContain(
+        '<link rel="alternate" hreflang="en" href="https://pqp.gg/?lang=en" />',
+      );
+      expect(head).toContain(
+        '<link rel="alternate" hreflang="es" href="https://pqp.gg/?lang=es" />',
+      );
+    }
+  });
+
+  it("does not claim a Spanish URL for a page with no Spanish copy", () => {
+    const es = renderMarketingHead("/privacy", "es");
+    // The text is English, so the document is the English one.
+    expect(es).toContain(
+      '<link rel="canonical" href="https://pqp.gg/privacy?lang=en" />',
     );
-    expect(head).toContain(
-      '<link rel="alternate" hreflang="pt-BR" href="https://pqp.gg/?lang=pt-BR" />',
+    expect(es).not.toContain('hreflang="es"');
+    expect(marketingUrlsFor("/privacy", "es").alternates.map((a) => a.hreflang)).toEqual(
+      ["x-default", "pt-BR", "en"],
     );
-    expect(head).toContain(
-      '<link rel="alternate" hreflang="en" href="https://pqp.gg/?lang=en" />',
-    );
+  });
+
+  it("states the share card's real size on the product card only", () => {
+    const head = renderMarketingHead("/", "en");
+    expect(head).toContain('<meta property="og:image:width" content="1200" />');
+    expect(head).toContain('<meta property="og:image:height" content="630" />');
+    // `/vem` has its own art at its own size: say nothing rather than lie.
+    expect(renderMarketingHead("/vem", "en")).not.toContain("og:image:width");
   });
 
   it("carries FAQPage JSON-LD on /, /vs-discord and /tela only", () => {
@@ -478,6 +516,10 @@ describe("injectMarketingHead", () => {
     expect(html).toContain(`<title>${ptBR["vsDiscord.seo.title"]}</title>`);
     expect(html.match(/property="og:title"/g)).toHaveLength(1);
     expect(html.match(/rel="canonical"/g)).toHaveLength(1);
+    // `og:site_name` has an underscore; it used to slip past the strip and the
+    // shipped copy stayed beside ours, so the tag appeared twice.
+    expect(html.match(/property="og:site_name"/g)).toHaveLength(1);
+    expect(html.match(/property="og:image:width"/g)).toHaveLength(1);
     expect(html).toContain('href="https://pqp.gg/vs-discord"');
     expect(html).not.toContain('<link rel="canonical" href="https://pqp.gg/" />');
     // The stock JSON-LD graph went with the rest; ours took its place.

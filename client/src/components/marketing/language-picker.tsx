@@ -15,10 +15,11 @@ import { cn } from "@/lib/utils";
  * option; this is the same reload `LanguagePicker` in the authenticated
  * settings modal already does, minus the signed-in profile sync.
  *
- * Canonical URLs and hreflang (`components/marketing/seo.tsx`) never read the
- * stored preference or the current locale — they always emit the bare path
- * plus the three `?lang=` alternates — so choosing a language here creates no
- * new indexable URL and does not touch SEO at all.
+ * Canonical URLs and hreflang (`components/marketing/seo.tsx`,
+ * `marketingUrlsFor`) follow the language the document was served in, one
+ * self-referencing canonical per language (`?lang=en`, `?lang=es`, the bare
+ * path for Portuguese). They never read the stored preference, so choosing a
+ * language here creates no new indexable URL beyond those three.
  *
  * FLAGS: one per language, owner's call (2026-09-28): Brazil for Portuguese,
  * the United Kingdom for English, Spain for Spanish. Drawn as inline SVG
@@ -141,7 +142,10 @@ export function LanguagePicker({ variant = "solid", className }: LanguagePickerP
       <DropdownMenuPrimitive.Trigger asChild>
         <button
           type="button"
-          aria-label={t("nav.language")}
+          // WCAG 2.5.3 (label in name): the visible text is the two-letter
+          // code, so the accessible name has to start with it. "PT, Idioma"
+          // is read as the current choice and what the control is for.
+          aria-label={`${LOCALE_CODE[locale]}, ${t("nav.language")}`}
           className={cn(
             "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium tracking-wide transition-colors duration-150",
             isHero
@@ -151,7 +155,7 @@ export function LanguagePicker({ variant = "solid", className }: LanguagePickerP
           )}
         >
           <FlagChip locale={locale} />
-          <span aria-hidden>{LOCALE_CODE[locale]}</span>
+          <span>{LOCALE_CODE[locale]}</span>
           <ChevronDown aria-hidden className="h-3 w-3 opacity-70" />
         </button>
       </DropdownMenuPrimitive.Trigger>

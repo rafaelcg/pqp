@@ -26,8 +26,11 @@ import { testflightUrl } from "@/lib/testflight";
  * self-host that unsets the variable to a single space gets the pre-Play
  * page back: APK-only, sideload steps included.
  *
- * The copy names what the app does not do yet (camera, big-room screen
- * share on Android), so nobody installs it expecting more.
+ * The copy names what the app does not do yet (turning on the camera; the
+ * engine has no camera capture, docs/ANDROID.md), so nobody installs it
+ * expecting more. Sharing your own screen is not on that list any more: both
+ * transports publish it, so it works in a large room and in a watch party you
+ * host.
  *
  * The hero is a two-column split (copy left, a real screenshot right) on
  * the same grid `/download` uses. The photo is a capture of the running app,

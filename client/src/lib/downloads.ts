@@ -21,11 +21,13 @@
  * longer. Nothing on screen depends on the response, so there is no spinner, no
  * layout shift, and no version number to go stale.
  *
- * The lookup is deliberately NOT fired on page load. api.github.com is
- * unauthenticated (60 requests/hour/IP — a visitor behind CGNAT can be over it
- * through no fault of their own) and this landing page otherwise makes no
- * third-party requests at all. The UI calls this on hover/focus of the download
- * control instead, so a visitor who never reaches for it never touches GitHub.
+ * The lookup is not fired by this module. api.github.com is unauthenticated
+ * (60 requests/hour/IP — a visitor behind CGNAT can be over it through no fault
+ * of their own), so a miss is expected and harmless. `/download` calls it on
+ * mount; the landing hero calls it on mount too, on a desktop platform only,
+ * because a hero button that says "Download for Mac" and opens the releases
+ * page on a quick click is a broken promise. Hover and focus still call it, for
+ * the surfaces that wait for intent.
  */
 
 const REPO = "rafaelcg/pqp";
