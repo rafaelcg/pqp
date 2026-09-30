@@ -1500,6 +1500,19 @@ html[data-route="other"] #pre-hero {
   display: none;
 }
 
+/* Room for the hero's download line, which is one line of text on a computer
+   and a store badge or pill (44 to 56 px) on a phone. The phone value is a floor
+   under both, so the live page never ends up higher than the static one (see
+   the note on the screenshot in lib/prerender-hero.ts). `data-plat` is set by
+   the head script in index.html. */
+.pre-download {
+  height: 1.5rem;
+}
+
+html[data-plat] .pre-download {
+  height: 2.5rem;
+}
+
 /* Same start frame as `hero-drift`, held still, so the live page's drift
    begins exactly where the static picture stands. */
 .hero-parallax-still {

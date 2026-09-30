@@ -190,6 +190,17 @@
             for (var i = 0; i < langs.length && !loc; i++) loc = norm(langs[i]);
           }
           d.lang = loc || "en";
+          // Which download line the hero will show under its buttons, so the
+          // static block leaves the right amount of room for it (a store badge
+          // on a phone, one line of text elsewhere). Mirrors isAndroidDevice()
+          // and isIOSDevice() in src/lib/downloads.ts.
+          var ua = navigator.userAgent || "";
+          if (
+            /Android|iPhone|iPad|iPod/i.test(ua) ||
+            (/Macintosh/.test(ua) && "ontouchend" in document)
+          ) {
+            d.setAttribute("data-plat", "phone");
+          }
         }
       } catch (e) {}
       })();
