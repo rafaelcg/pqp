@@ -40,6 +40,7 @@ import {
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
 import type { ShareGuardCeiling } from "./share-high-motion-guard";
+import { guardedLayerFramerates } from "./share-guard-layers";
 import {
   decideScreenResolutionRecovery,
   initialScreenResolutionRecovery,
@@ -2682,9 +2683,13 @@ export async function connectLiveKit({
           const fps = ceiling
             ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
             : publishMaxFrameRateFromTrack(track);
-          for (const encoding of params.encodings ?? []) {
-            encoding.maxFramerate = fps;
-          }
+          // Under a ceiling the smaller copies go to 30 before anything the
+          // full-picture viewer sees does (`share-guard-layers.ts`).
+          const encodings = params.encodings ?? [];
+          const rates = guardedLayerFramerates(encodings, fps, ceiling !== null);
+          encodings.forEach((encoding, index) => {
+            encoding.maxFramerate = rates[index] ?? fps;
+          });
           await sender.setParameters(params);
         } catch (err) {
           console.warn(
