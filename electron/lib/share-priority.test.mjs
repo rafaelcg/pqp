@@ -175,6 +175,34 @@ describe("createSharePriority", () => {
     assert.deepEqual(priority.status(), { live: false, boost: "restored", processes: 0 });
   });
 
+  it("keeps a single retry timer however many times stop is called while restoring fails", () => {
+    const os = machine({ 10: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(10);
+    priority.stop();
+    priority.stop();
+    priority.stop();
+    assert.equal(os.timers.filter(Boolean).length, 1);
+    os.refuse();
+    os.tick();
+    assert.equal(os.timers.filter(Boolean).length, 0);
+    assert.equal(os.priorities.get(10), NORMAL);
+  });
+
+  it("gives up after a few retries instead of retrying forever", () => {
+    const os = machine({ 10: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(10);
+    priority.stop();
+    for (let i = 0; i < 10; i += 1) {
+      os.tick();
+    }
+    assert.equal(os.timers.filter(Boolean).length, 0);
+    assert.equal(priority.status().boost, "failed");
+  });
+
   it("drops a failed restore for a process that has exited", () => {
     const os = machine({ 10: NORMAL, 11: NORMAL });
     const priority = createSharePriority(os.deps);

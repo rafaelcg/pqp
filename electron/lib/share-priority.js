@@ -193,6 +193,12 @@ function createSharePriority(deps) {
 
   /** Retry a restore that did not finish, a few times, then give up loudly. */
   function scheduleRestoreRetry(attempt) {
+    // One retry timer at a time: a second `stop()` while a restore is still
+    // failing must replace it, not leave the first one running forever.
+    if (retryTimer !== null) {
+      clearTimer(retryTimer);
+      retryTimer = null;
+    }
     if (raised.size === 0 || attempt >= RESTORE_RETRIES || live) {
       if (raised.size > 0 && !live) {
         log(`[pqp] share priority: could not restore ${raised.size} processes`);
