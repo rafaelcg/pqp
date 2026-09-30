@@ -9095,6 +9095,10 @@ function MainAppContent({
           setSettingsSection("feedback");
           setSettingsOpen(true);
         }}
+        onOpenHelp={() => {
+          setSettingsSection("help");
+          setSettingsOpen(true);
+        }}
         onOpenProfile={() => {
           setSettingsSection("profile");
           setSettingsOpen(true);
