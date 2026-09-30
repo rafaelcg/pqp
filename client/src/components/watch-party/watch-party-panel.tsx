@@ -82,7 +82,13 @@ import {
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
+  wantsNativeShareAudio,
 } from "@/lib/screen-capture-audio";
+import {
+  armNativeShareAudio,
+  attachNativeShareAudio,
+  ensureNativeShareAudio,
+} from "@/lib/native-share-audio";
 import {
   blocksGoLive,
   desktopSharesTabAudio,
@@ -1106,7 +1112,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // surface never offers the page-owned `shareSystemAudio` prompt that could
   // stand in for one, so "desktop" would point the presenter at a box that is
   // not there. That build gets the same honest answer as macOS.
-  const captureEnv = liveScreenCaptureEnvironment();
+  // Whether the last pick could carry the Windows app's native sound: a
+  // silent pick there means the box was left unticked, the desktop hint.
+  const [nativeShareAudioOffered, setNativeShareAudioOffered] = useState(false);
+  const captureEnv = liveScreenCaptureEnvironment({ nativeShareAudio: nativeShareAudioOffered });
   const silentPickHint = !isDesktopApp()
     ? undefined
     : offersShellSystemAudio(captureEnv) && captureEnv.sharePickerOffersAudio
@@ -1172,13 +1181,30 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // used to build its own and leave out the shell's picker flag, so a
       // Windows desktop host was asked for a capture with no audio at all while
       // the shell's own picker stood ready to offer the box. One reader now.
-      await ensureOsCanExcludeCallAudio();
-      const options = screenCaptureOptions(
-        false,
-        liveScreenCaptureEnvironment(),
-        { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
-      );
+      const [, nativeShareAudio] = await Promise.all([
+        ensureOsCanExcludeCallAudio(),
+        ensureNativeShareAudio(party.serverId ?? null),
+      ]);
+      const intent = {
+        preferBrowserTab: true,
+        maxFrameRate: props.hlsMaxFrameRate,
+        nativeShareAudio,
+      };
+      let pickEnv = liveScreenCaptureEnvironment(intent);
+      // The Windows desktop app's own per-process sound, the film without the
+      // call, attached to the preview so go-live broadcasts what was checked.
+      // A refused arm builds the options the old way instead.
+      let nativeAudio = wantsNativeShareAudio(false, pickEnv, intent);
+      if (nativeAudio && !(await armNativeShareAudio())) {
+        nativeAudio = false;
+        pickEnv = { ...pickEnv, shellNativeShareAudio: false };
+      }
+      setNativeShareAudioOffered(nativeAudio);
+      const options = screenCaptureOptions(false, pickEnv, intent);
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
+      if (nativeAudio) {
+        await attachNativeShareAudio(picked);
+      }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
       // must clear the preview, not leave a frozen last frame that they then

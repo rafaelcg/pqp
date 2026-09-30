@@ -689,6 +689,23 @@ export const fetchIceServers = () =>
 export const fetchVoiceBackend = () =>
   apiFetch<{ backend: VoiceBackendType }>("/api/voice/backend");
 
+/** Screen-share switches the operator flips live (runtime flags). */
+export interface ShareConfig {
+  /**
+   * The Windows desktop app may capture a share's sound per process, without
+   * the call (`lib/native-share-audio.ts`). Absent on an older API: off.
+   */
+  desktopShareAudioNative?: boolean;
+}
+
+/** `serverId` is the server the call is in; a DM call asks without one. */
+export const fetchShareConfig = (serverId?: string | null) =>
+  apiFetch<ShareConfig>(
+    serverId
+      ? `/api/share/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/share/config",
+  );
+
 /** Whether this deployment transcodes screen shares to HLS. */
 /**
  * Whether the egress is on, and for this server in particular when one is

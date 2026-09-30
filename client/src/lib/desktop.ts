@@ -28,6 +28,21 @@ export interface PqpDesktop {
    * did for every shell until now. See `DesktopShareCapabilities`.
    */
   capabilities?: DesktopShareCapabilities;
+  /**
+   * Native share audio on Windows (`capabilities.nativeShareAudio`): can this
+   * machine capture a share's sound per process? See
+   * `lib/native-share-audio.ts` for the whole handshake.
+   */
+  nativeShareAudioStatus?(): Promise<NativeShareAudioStatus>;
+  /** The next share's picker offers the sound box; call before `getDisplayMedia`. */
+  nativeShareAudioArm?(): Promise<boolean>;
+  /**
+   * After `getDisplayMedia`: did the share start a capture? If so its PCM
+   * port has been posted to this window as a `message` event first.
+   */
+  nativeShareAudioClaim?(): Promise<NativeShareAudioClaim>;
+  /** The share is over; with its `sessionId`, only that capture. */
+  nativeShareAudioStop?(sessionId?: string): Promise<void>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -174,8 +189,39 @@ export interface DesktopShareCapabilities {
   restrictOwnAudio: boolean;
   /** The shell's own picker asks about computer audio, so the page need not. */
   pickerOffersAudio: boolean;
+  /**
+   * This shell can capture a share's sound per process through WASAPI
+   * process loopback (Windows): the shared window's app, or everything but
+   * pqp for a screen, Windows 10 included. The sound does NOT arrive on the
+   * display stream; see `lib/native-share-audio.ts`. Absent in every shell
+   * before it; off unless the runtime flag says so.
+   */
+  nativeShareAudio?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
+}
+
+/** `nativeShareAudioStatus()`: whether this machine can, and if not why. */
+export interface NativeShareAudioStatus {
+  available: boolean;
+  /** Why not, for the log: `platform`, `load`, `activate`, `timeout`, ... */
+  reason: string | null;
+  stage: string | null;
+  /** The HRESULT that refused, unsigned. */
+  hr: number | null;
+  /** Windows NT build, 19045 for Windows 10 22H2. */
+  build: number;
+}
+
+/** `nativeShareAudioClaim()`: whether the share that just started carries sound. */
+export interface NativeShareAudioClaim {
+  active: boolean;
+  sessionId?: string;
+  /** What is captured: `exclude` (everything but pqp) or `include` (one app). */
+  target?: { mode: "include" | "exclude"; reason: string; exe: string | null } | null;
+  reason?: string;
+  stage?: string | null;
+  hr?: number | null;
 }
 
 export interface DesktopVoiceState {

@@ -12,6 +12,9 @@ const {
   dialog,
   globalShortcut,
   Tray,
+  utilityProcess,
+  MessageChannelMain,
+  clipboard,
 } = require("electron");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -40,6 +43,7 @@ const {
   screenPermission,
   captureResponse,
   windowsBuildAllowsOwnAudioExclude,
+  windowsNtBuild,
   pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
@@ -68,6 +72,13 @@ const {
   loadTrayPrefs,
   saveTrayPrefs,
 } = require("./lib/tray-state");
+const { createShareAudioController } = require("./lib/win-share-audio-session");
+const {
+  PROBE_TONE_PAGE,
+  wantsShareAudioProbe,
+  runShareAudioProbe,
+  formatShareAudioProbe,
+} = require("./lib/win-share-audio-probe");
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
@@ -100,6 +111,32 @@ function canExcludeOwnAudioOnThisOs() {
     process.platform !== "win32" ||
     windowsBuildAllowsOwnAudioExclude(os.release())
   );
+}
+
+/**
+ * Native share audio on Windows: WASAPI process loopback in a utility
+ * process, PCM straight to the page (`lib/win-share-audio*.js`). Created on
+ * first use, never on macOS or Linux, and inert until the page arms it, which
+ * it only does while the `desktop_share_audio_native` runtime flag is on.
+ */
+let shareAudioController = null;
+
+function forkShareAudioHost() {
+  return utilityProcess.fork(path.join(__dirname, "lib", "win-share-audio-host.js"), [], {
+    serviceName: "pqp share audio",
+  });
+}
+
+function shareAudio() {
+  if (!shareAudioController) {
+    shareAudioController = createShareAudioController({
+      fork: forkShareAudioHost,
+      createChannel: () => new MessageChannelMain(),
+      ownPid: process.pid,
+      log: (message) => console.log(`[pqp] share audio: ${message}`),
+    });
+  }
+  return shareAudioController;
 }
 
 /** @type {BrowserWindow | null} */
@@ -801,9 +838,9 @@ async function explainNoSources() {
  * Resolves with `{ id, shareAudio }`, or null for every way of saying no: the
  * Cancel button, Escape, closing the window, a page that never loads.
  * `shareAudio` is only meaningful on Windows; the handler still ignores it
- * everywhere else.
+ * everywhere else. `offersNativeAudio` is true when the shell's own per-process capture is armed for this share, which draws the sound box on any Windows.
  */
-function showSourcePicker(labeled) {
+function showSourcePicker(labeled, offersNativeAudio) {
   // One at a time. A second voice channel asking mid-decision would stack two
   // identical windows with no way to tell which call each belongs to.
   if (pickerWindow && !pickerWindow.isDestroyed()) {
@@ -854,10 +891,13 @@ function showSourcePicker(labeled) {
         ? {
             sources: labeled,
             dark,
-            // "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice) or
+// "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice, or any
+            // Windows while the shell's own capture is armed for this share) or
             // "explain" (Windows 10, where the checkbox would be a lie). See
             // `pickerAudioState` for why this replaced a plain boolean.
-            audioState: pickerAudioState(process.platform, os.release()),
+            audioState: offersNativeAudio
+              ? "checkbox"
+              : pickerAudioState(process.platform, os.release()),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -978,6 +1018,11 @@ function showSourcePicker(labeled) {
  */
 async function chooseDisplaySource(audioRequested) {
   const platform = process.platform;
+  // Read first and exactly once per request: an arm is good for the next
+  // share only, including one that ends at the permission dialog below.
+  const nativeAudio = platform === "win32" && shareAudioController?.consumeArm() === true;
+  // Whatever the last share left running belongs to a share that is over.
+  shareAudioController?.stop();
 
   if (screenPermission(platform, macScreenAccessStatus()) === "blocked") {
     await explainScreenPermission();
@@ -1017,7 +1062,7 @@ async function chooseDisplaySource(audioRequested) {
   const autoId = pickAutomatically(labeled);
   const choice = autoId
     ? { id: autoId, shareAudio: false }
-    : await showSourcePicker(labeled);
+    : await showSourcePicker(labeled, nativeAudio);
   if (!choice) {
     return null;
   }
@@ -1027,6 +1072,16 @@ async function chooseDisplaySource(audioRequested) {
   const source = raw.find((candidate) => candidate.id === choice.id);
   if (!source) {
     return null;
+  }
+  // NATIVE: the page armed it and asked Chromium for no audio at all, so the
+  // tick starts process loopback for this surface and the callback stays
+  // video-only. The sound reaches the page on its own port (`claim`). Never
+  // Chromium's loopback beside it: on Windows 10 that is the mixer, the call.
+  if (nativeAudio) {
+    if (choice.shareAudio === true) {
+      shareAudio().start({ sourceId: source.id });
+    }
+    return captureResponse(source, platform, false, os.release());
   }
   // The picker checkbox is the consent. `audioRequested` is only whether the
   // page asked for a track Chromium will accept; an auto-pick (one surface,
@@ -1316,7 +1371,13 @@ function createWindow(appUrl, allowedOrigin) {
     syncPushToTalkRegistration();
     syncNativePushToTalk();
     syncGlobalVoiceHotkeys();
+    shareAudioController?.stop();
   });
+
+  // The page that was playing a share's sound is gone (reload, crash, a new
+  // document): nobody is listening to the capture any more.
+  mainWindow.webContents.on("render-process-gone", () => shareAudioController?.stop());
+  mainWindow.webContents.on("did-navigate", () => shareAudioController?.stop());
 
   mainWindow.loadURL(appUrl);
 }
@@ -1743,9 +1804,88 @@ function collectDeepLinkFromArgv(argv) {
   }
 }
 
+/**
+ * `pqp --probe-share-audio`: answer "does process loopback work on this
+ * Windows build?" in one run, then quit. See `lib/win-share-audio-probe.js`.
+ *
+ * Runs INSTEAD of the app, with its own profile and without the single
+ * instance lock, so it works beside a pqp that is already open. The result is
+ * printed (a console that launched it is attached), copied to the clipboard,
+ * written to %TEMP%\pqp-share-audio-probe.txt, and shown in a dialog, because
+ * the person running it is on a gaming PC and not reading stdout. English on
+ * purpose: it is a diagnostic full of HRESULTs, read by whoever asked for it.
+ */
+function startShareAudioProbe() {
+  app.setPath("userData", path.join(app.getPath("temp"), "pqp-share-audio-probe"));
+  app.whenReady().then(async () => {
+    let toneWindow = null;
+    let text;
+    let exitCode = 1;
+    try {
+      const report = await runShareAudioProbe({
+        controller: shareAudio(),
+        ownPid: process.pid,
+        about: {
+          version: app.getVersion(),
+          electron: process.versions.electron,
+          release: os.release(),
+          arch: process.arch,
+        },
+        playTone: async () => {
+          toneWindow = new BrowserWindow({
+            show: false,
+            webPreferences: {
+              sandbox: true,
+              contextIsolation: true,
+              nodeIntegration: false,
+              autoplayPolicy: "no-user-gesture-required",
+              backgroundThrottling: false,
+            },
+          });
+          await toneWindow.loadURL(PROBE_TONE_PAGE);
+        },
+        stopTone: async () => {
+          if (toneWindow && !toneWindow.isDestroyed()) {
+            toneWindow.destroy();
+          }
+        },
+      });
+      text = formatShareAudioProbe(report);
+      exitCode = report.summary.exitCode;
+    } catch (err) {
+      text = `pqp share audio probe crashed: ${err?.stack ?? err}`;
+    }
+    console.log(text);
+    const file = path.join(app.getPath("temp"), "pqp-share-audio-probe.txt");
+    try {
+      fs.writeFileSync(file, `${text}\n`);
+    } catch {
+      // The dialog and the clipboard still have it.
+    }
+    try {
+      clipboard.writeText(text);
+    } catch {
+      // Same.
+    }
+    await dialog.showMessageBox({
+      type: exitCode === 0 ? "info" : "warning",
+      title: "pqp share audio probe",
+      message: text.split("\n").pop() ?? "",
+      detail: `${text}\n\nCopied to the clipboard and saved to ${file}.`,
+      buttons: ["OK"],
+      noLink: true,
+    });
+    shareAudioController?.dispose();
+    app.exit(exitCode);
+  });
+}
+
 // Single instance — required for deep links on Windows/Linux.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+const probingShareAudio = wantsShareAudioProbe(process.argv);
+const gotLock = probingShareAudio || app.requestSingleInstanceLock();
+if (probingShareAudio) {
+  startShareAudioProbe();
+} else if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
@@ -1935,6 +2075,47 @@ if (!gotLock) {
     return setGlobalVoiceHotkeys({ toggleMute, toggleDeafen });
   });
 
+  /**
+   * Native share audio (Windows). Every channel answers the app window only:
+   * the game-connection pages this shell keeps in-window share the preload,
+   * and none of them has any business arming a capture of the machine.
+   */
+  ipcMain.handle("pqp:native-share-audio-status", async (event) => {
+    if (process.platform !== "win32" || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { available: false, reason: "platform", stage: null, hr: null, build: 0 };
+    }
+    const status = await shareAudio().status();
+    return { ...status, build: windowsNtBuild(os.release()) };
+  });
+
+  ipcMain.handle("pqp:native-share-audio-arm", (event) => {
+    if (process.platform !== "win32" || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
+    return shareAudio().arm();
+  });
+
+  ipcMain.handle("pqp:native-share-audio-claim", async (event) => {
+    if (!shareAudioController || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { active: false, reason: "none", stage: null, hr: null };
+    }
+    const outcome = await shareAudioController.claim();
+    if (!outcome.active) {
+      return outcome;
+    }
+    const { port, ...rest } = outcome;
+    // The PCM port goes to the page on its own message: `invoke` can only
+    // return data, and a MessagePort is not data.
+    event.sender.postMessage("pqp:native-share-audio-port", { sessionId: rest.sessionId }, [port]);
+    return rest;
+  });
+
+  ipcMain.handle("pqp:native-share-audio-stop", (event, sessionId) => {
+    if (senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      shareAudioController?.stop(typeof sessionId === "string" ? sessionId : undefined);
+    }
+  });
+
   ipcMain.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);
     if (
@@ -2030,6 +2211,7 @@ if (!gotLock) {
     globalVoiceHotkeys = { toggleMute: null, toggleDeafen: null };
     globalVoiceRegistered = { toggleMute: null, toggleDeafen: null };
     globalShortcut.unregisterAll();
+    shareAudioController?.dispose();
     if (tray && !tray.isDestroyed()) {
       tray.destroy();
     }

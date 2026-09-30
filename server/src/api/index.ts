@@ -651,6 +651,7 @@ import {
   setGlobalFlag,
   setServerFlagOverride,
 } from "../lib/flags.js";
+import { shareConfigForServer } from "../lib/share-config.js";
 import {
   claimHandle,
   findUserIdByHandle,
@@ -2633,6 +2634,11 @@ router.delete("/api/dms/:channelId", async ({ user }, { channelId }) => {
 router.get("/api/ice-servers", async () => ({
   iceServers: await getIceServers(),
 }));
+
+// Screen-share switches the operator flips live (`lib/share-config.ts`).
+router.get("/api/share/config", async ({ url }) =>
+  shareConfigForServer(url.searchParams.get("serverId")),
+);
 
 router.get("/api/voice/backend", async () => {
   const backend = getServerVoiceBackend();

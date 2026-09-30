@@ -104,6 +104,15 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 
+Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`
+(`desktop_share_audio_native`, default off, **per server**), sound on a screen
+share from the Windows desktop app through WASAPI process loopback, Windows 10
+included, served to the client by `GET /api/share/config?serverId=`. It only
+does anything in a desktop build whose preload publishes
+`capabilities.nativeShareAudio` and whose self-test opened a process loopback
+stream on that machine; see `electron/lib/win-share-audio.js`. With the flag off
+the client never asks the shell anything.
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

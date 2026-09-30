@@ -64,6 +64,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   read_cache: offWords,
   community_home: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  desktop_share_audio_native: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
   party_fast_start: (raw) => raw === "true",
 };

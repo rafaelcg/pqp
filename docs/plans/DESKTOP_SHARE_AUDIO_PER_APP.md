@@ -50,6 +50,61 @@ API: `ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, ...)` w
 - **The one fact to verify before anything else**: which Windows 10 builds support process loopback. Microsoft's docs list build 20348; OBS says its application audio capture works on Windows 10 **2004 (19041)** and later, which would cover Windows 10 22H2 (19045), the common build. Chromium only enables its exclude mode at 22000, which may be their own caution. If 19041+ works, Windows 10 gets sound with no hooking. If it truly needs 20348, Windows 10 22H2 stays "no sound, explained", and the only route left is Discord-style injection into the target process, which we should **not** do (fragile, anti-cheat, antivirus).
 - Build: prebuilt binaries for `win32-x64` and `win32-arm64` in the Electron build workflow (`.github/workflows/electron.yml`), signed with the existing Windows signing.
 
+#### Built (branch `win-native-share-audio`, flag off)
+
+| Piece | Where |
+|---|---|
+| WASAPI process loopback, 48 kHz stereo float32, 10 ms chunks | `electron/native/win-share-audio/src/` (C++, plain N-API) |
+| Runs in a utility process, so a native crash costs the share its sound, not the app | `electron/lib/win-share-audio-host.js` |
+| Which process a window belongs to, and when INCLUDE would carry the call | `electron/lib/win-share-audio.js` |
+| Arm, picker box, start, hand the PCM port to the page | `electron/lib/win-share-audio-session.js`, `electron/main.js` |
+| Port to AudioWorklet to `MediaStreamTrack`, added to the share's stream | `client/src/lib/native-share-audio.ts`, `native-share-audio-worklet.js` |
+| Runtime flag `desktop_share_audio_native` (per server), `GET /api/share/config` | `server/src/lib/flags.ts`, `server/src/lib/share-config.ts` |
+| One-minute diagnostic | `pqp.exe --probe-share-audio` (`electron/lib/win-share-audio-probe.js`) |
+| Build, sign, CI smoke | `.github/workflows/win-share-audio.yml`, called by `electron.yml` |
+
+Why C++ and not Rust (napi-rs): WASAPI and COM are C++ APIs, and the two references (Microsoft's sample, OBS) are C++, so a reviewer can read the capture code line against line. It builds with the Visual Studio already on the Windows runner and nothing else, where napi-rs would add a Rust toolchain and the `windows` crate's COM layer for about 400 lines. Plain N-API rather than node-addon-api: five functions, no dependency, and the ABI is stable, so one binary built against Node's headers loads in Electron 44 and every later Electron.
+
+How a share gets its sound. The page (flag on, shell capable, self-test passed) calls `nativeShareAudioArm()` and then `getDisplayMedia({ audio: false })`. The shell's picker shows the sound box because of the arm. If it is ticked, main asks the utility process to capture that surface and answers Chromium with video only, so Chromium's loopback, the mixer, is never opened beside it. The page then claims the PCM port, plays it through an AudioWorklet into a `MediaStreamAudioDestinationNode`, and adds that track to the share's stream before anything reads it: LiveKit publishes it as `ScreenShareAudio`, mesh sends it on the share's audio sender, and the watch party mix, egress and moderation see an ordinary share audio track. With the flag off, or the add-on missing, or the self-test failing, the page never arms and every path is exactly today's (Windows 11 keeps Chromium's `loopback`, Windows 10 stays silent).
+
+What is captured:
+
+- **Screen**: `EXCLUDE_TARGET_PROCESS_TREE` with pqp's main PID. Everything on the machine except pqp.
+- **Window**: `INCLUDE_TARGET_PROCESS_TREE` with the window's app. `GetWindowThreadProcessId` on the HWND from `window:<HWND>:0`, then up the parent chain while the executable stays the same (a helper to its app, never a game up to its launcher), and for Store apps past `ApplicationFrameHost.exe` to the process that owns the CoreWindow. Chrome, Edge and Firefox windows belong to the browser's main process and their audio processes are its children, so the window's own PID already covers them.
+- **The leak INCLUDE has, and the fallback**: the target's tree includes pqp whenever pqp was started under the target. Sharing a File Explorer window targets explorer.exe, usually our own parent; a terminal started `electron:dev`; a browser can be the parent of a pqp opened from a link. Any window whose app is an ancestor of pqp, or is pqp, falls back to EXCLUDE on our own tree: everything but pqp, still call-free, which is what Windows 11 gets today.
+
+Limits, known and accepted: a game whose sound comes from a process that is neither the window's owner nor below it is silent (never leaky); PID reuse is guarded by creation time on our walk, but Windows's own tree judgement is its own; the worklet skips forward when more than 150 ms is buffered, so a clock that drifts produces a rare small skip rather than growing lag; process loopback sends nothing at all during silence, which the worklet plays as silence.
+
+CI. `win-share-audio.yml` builds x64 and arm64 on `windows-2022` and smoke tests x64 on `windows-2022` (Server 2022, build 20348) and `windows-latest` (Server 2025, build 26100): the binary loads, the process and window lookups answer, a screen resolves to EXCLUDE on our own PID, and activation in both modes returns a pinned result with the capture thread and queue torn down cleanly. Neither runner has an audio device, so CI never hears anything and never claims to; the pinned answers are what each image gives, so a change that breaks activation differently fails there. Measured on the first run: on 20348, activation succeeds in both modes and `Initialize` is refused with `0x88890010` (`AUDCLNT_E_SERVICE_NOT_RUNNING`, the image has Windows Audio off); on 26100 both modes activate, initialize and start. So activation itself is not what 20348 lacks, which says nothing yet about 19045: that is step 1 below.
+
+#### Test steps on a real PC (Windows 10 22H2 and Windows 11)
+
+A VM without an audio device reports silence and looks like a pass. Use a real PC with speakers or headphones, volume up.
+
+Get a build: run the Electron workflow on this branch (Actions, Electron, Run workflow, branch `win-native-share-audio`) and download `pqp-electron-win`. It has the portable exe (`pqp-0.1.9-x64-portable.exe`, `-arm64-` on an ARM PC) and the installer (`pqp-0.1.9-x64.exe`). The portable one is enough for step 1. Step 2 wants the installed one, because the portable launcher does not pass the app's log lines to the terminal; it installs over an existing pqp, per user, at `%LOCALAPPDATA%\Programs\pqp\pqp.exe` by default.
+
+**1. The build question (one minute, no account needed).**
+
+1. Settings, System, About: write down the OS build (for example `19045.5854`).
+2. In the folder with the exe, open a Command Prompt and run `pqp-0.1.9-x64-portable.exe --probe-share-audio` (installed: `"%LOCALAPPDATA%\Programs\pqp\pqp.exe" --probe-share-audio`; it runs beside a pqp that is already open). It plays a quiet 440 Hz beep for about four seconds; that is the test signal.
+3. A dialog shows the result. It is also on the clipboard and in `%TEMP%\pqp-share-audio-probe.txt`. Paste it on the PR.
+
+Reading it: `include own tree ... -> HEARS_PQP` proves process loopback works on this build and audio flows; `exclude own tree ... -> CLEAN` proves the call stays out. `verdict: SUPPORTED on build N` is the answer this plan has been waiting for. `NOT SUPPORTED ... failed at activate 0x...` means this build cannot, and it keeps today's behaviour. `INCONCLUSIVE` means the beep never reached Windows: check the volume and the output device, run again. `LEAK` must never happen; if it does, stop and report it.
+
+**2. The feature (only after `SUPPORTED`).** Needs the staging web and API from this branch (Actions, Deploy staging, branch `win-native-share-audio`) and the flag on for the test server (dashboard, controles, interruptores, `desktop_share_audio_native`, override for that server; or `DESKTOP_SHARE_AUDIO_NATIVE=true` on staging).
+
+1. Quit pqp from the tray, then point it at staging: `set PQP_APP_URL=https://staging.pqp-3yr.pages.dev` and run `"%LOCALAPPDATA%\Programs\pqp\pqp.exe"` from the same Command Prompt (it prints `[pqp] share audio: ...` lines there). Sign in as A. Put B (any other device, headphones) in the same voice channel.
+2. On A, open `https://staging.pqp-3yr.pages.dev/share-audio-tone.html` in Chrome (the 880 Hz "game"). In pqp, Ctrl+Shift+I, Console: `pqpShareAudioProbe.playCallTone()` (440 Hz from pqp, standing in for the call).
+3. **Window share, Chrome**: Share, pick the Chrome window, tick the sound box, Share. The terminal shows `capturing include (window-app, chrome.exe)`. Console: `await pqpShareAudioProbe.measure()` must print `PASS` (880 present, 440 at the floor). B hears the 880 tone and never hears 440 or their own voice come back.
+4. **Screen share**: stop, Share, Entire screen, tick, Share (`capturing exclude (screen)`). `measure()` must print `PASS`.
+5. **By ear, B listening**: a Firefox window playing a video, an Edge window, a game window, Spotify. Each: sound arrives, and B talking never hears themselves.
+6. **Fallback**: share a File Explorer window with the box ticked. The terminal says `target-contains-pqp`; the share carries the whole machine minus pqp; B still never hears the call.
+7. **A/V offset**: play any audio/video sync test (a flash with a beep) in the shared window; B judges the lag between flash and beep. Target under 80 ms, about two frames at 30 fps.
+8. **Cost**: Task Manager, Details, the `pqp.exe` utility process for `pqp share audio`: under 3% of a core while capturing.
+9. **Flag off**: turn the override off, reload. Windows 10 is back to no sound box; Windows 11 is back to Chromium's loopback, exactly as before.
+
+Record for each row: OS build, the probe's verdict, `measure()` output, what B heard, the offset, the CPU.
+
 ### macOS
 
 ScreenCaptureKit (macOS 13+): `SCStreamConfiguration.capturesAudio = true`, `excludesCurrentProcessAudio = true`; for a window share, filter to the owning `SCRunningApplication`. Needs the Screen Recording permission we already ask for. Check first whether Electron 44 already exposes this through `setDisplayMediaRequestHandler` with `audio: "loopback"` on macOS (it may, behind ScreenCaptureKit); if so, no add-on is needed on macOS at all, only the shell change in `captureResponse`.

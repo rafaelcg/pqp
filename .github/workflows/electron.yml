@@ -39,8 +39,19 @@ permissions:
   contents: write
 
 jobs:
+  # The Windows share-audio add-on, built and smoke tested once, then packed
+  # into the Windows installer below. electron-builder signs it with the rest
+  # (`win.signExts` in electron/package.json) on the WIN_CSC_LINK path.
+  win-share-audio:
+    uses: ./.github/workflows/win-share-audio.yml
+
   build:
     name: Build (${{ matrix.os }})
+    needs: win-share-audio
+    # Runs even when the add-on job failed: macOS and Linux do not carry it,
+    # and the Windows leg still fails, at "Fetch the Windows share-audio
+    # add-on", because there is no artifact to fetch.
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     # 60 minutes was plenty for mac/linux before this PR. Windows, when
     # SignPath is configured, now blocks on a human approving the signing
@@ -85,6 +96,16 @@ jobs:
 
       - name: Build shared
         run: pnpm --filter @pqp/shared build
+
+      # Missing it is not fatal to the app (native sound is simply unavailable
+      # and the shell keeps today's behaviour), which is exactly why it must
+      # not go missing quietly: download-artifact fails when it is absent.
+      - name: Fetch the Windows share-audio add-on
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v4
+        with:
+          name: win-share-audio-prebuilds
+          path: electron/native/win-share-audio/prebuilds
 
       - name: Build client
         env:
