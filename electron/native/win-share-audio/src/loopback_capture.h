@@ -64,8 +64,16 @@ class LoopbackCapture {
 
   // False when the thread or its events could not be created; nothing runs.
   bool Start();
-  // Idempotent. Joins the thread, so the Ended event has been handed to the
-  // sink by the time this returns.
+  // Asks the thread to finish and returns at once; it does not wait for it.
+  // Safe from any thread, idempotent, and a no-op before Start(). Every wait
+  // the capture thread makes (the activation round trip included) also
+  // watches this signal, so a cancelled capture unwinds in milliseconds, but
+  // "in milliseconds" is the thread's business: a caller that must not be
+  // held up (the JavaScript thread) cancels here and joins somewhere else.
+  void Cancel();
+  // Cancel(), then join the thread, so the Ended event has been handed to the
+  // sink by the time this returns. Idempotent. Blocks for as long as the
+  // thread takes to unwind; call it from a thread that may wait.
   void Stop();
 
  private:

@@ -134,6 +134,13 @@ function shareAudio() {
       createChannel: () => new MessageChannelMain(),
       ownPid: process.pid,
       log: (message) => console.log(`[pqp] share audio: ${message}`),
+      // The capture the page holds ended on its own: the app window (and only
+      // it) stops its track and frees its audio graph.
+      onSessionEnded: (info) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("pqp:native-share-audio-ended", info);
+        }
+      },
     });
   }
   return shareAudioController;
@@ -892,7 +899,9 @@ function showSourcePicker(labeled, offersNativeAudio) {
             sources: labeled,
             dark,
 // "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice, or any
-            // Windows while the shell's own capture is armed for this share) or
+            // Windows while the shell's own capture is armed for this share;
+            // drawn as a sound row whose switch starts ON, see
+            // `picker/audio-state.js`) or
             // "explain" (Windows 10, where the checkbox would be a lie). See
             // `pickerAudioState` for why this replaced a plain boolean.
             audioState: offersNativeAudio
@@ -909,6 +918,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
               shareAudioHint: t("share.audioHint"),
+              shareAudioOffNote: t("share.audioOffNote"),
               shareAudioWin10: t("share.audioWin10Unavailable"),
               shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
             },
@@ -1244,6 +1254,16 @@ function createWindow(appUrl, allowedOrigin) {
       webSecurity: true,
       allowRunningInsecureContent: false,
       spellcheck: true,
+      // A desktop app has no "first click to allow sound" gate to honour: the
+      // people in a call are heard without one, and so is a share's sound. The
+      // native share audio graph is created and resumed from the share click
+      // anyway; this is the belt to that braces, so a context the page makes
+      // outside a gesture (a window that was not focused, a click that went
+      // through the picker rather than the page) still starts `running`
+      // instead of `suspended`, which is a silent share that looks attached.
+      // This is Electron's own default; it is written down because the
+      // behaviour now depends on it.
+      autoplayPolicy: "no-user-gesture-required",
       // The shell's own version, for the renderer's capability object. A
       // sandboxed preload may only `require("electron")`, so it cannot read
       // package.json and cannot call `app.getVersion()`; `additionalArguments`

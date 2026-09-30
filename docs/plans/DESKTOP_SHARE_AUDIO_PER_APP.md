@@ -162,6 +162,16 @@ The bottleneck is machines, not code: Windows 10 and Windows 11 with real audio,
 3. If yes: Windows production behind the flag, turn it on for QG, then Macacolandia (cap1tao's server).
 4. Linux (#866) in parallel with Windows, since it is mostly QA now; then macOS.
 
+## Reading a failure from the field (30 Sep 2026)
+
+The first real test of the merged build: one Windows 11 PC shared with sound, a second did not (the box was ticked and the viewers saw "(no sound)": no audio track published at all). Every stage between the tick and the published track could fail on its own machine and every one ended in the same silent share, so there was nothing to read. What exists now:
+
+- **The graph is built at arm time**, in the share click, before the picker. A context that will not run (autoplay policy, a window that was not focused), a worklet that will not load or a sample rate that is not 48 kHz is found while Chromium's own loopback (Windows 11) is still available: the shell is not armed, the picker is asked for Chromium's audio, and the log says why. A context that was only suspended may run on the next click, so it does not stop native sound for the session; anything else does. Electron's window also sets `autoplayPolicy: "no-user-gesture-required"`.
+- **No silent share.** Box ticked and no live native track by the time the share is published means a notice on the share (`voice.notice.nativeShareAudioFailed` / `...Ended`), `isSharingScreenAudio` false, and the next share on the old path. A capture that ended before the page claimed it is answered as `ended` / `unclaimed`, never as `none` (the unticked box).
+- **`pqpShareAudioProbe.measure()` prints the handshake** on every row (`native share audio: flag=... shell=... graph=... ctx=state@rate armed=... claim=... port=... attached=... chunks=... peak=... FAILED at <stage>: <why>`), and the NO_TRACK note names the stage. Read it left to right: the first `-` or `FAILED` is where it stopped. `native-share-audio-diagnostics.ts`.
+- **Console lines**, low volume: `native share sound attached (...)`, `native track is delivering samples`, and a warning whenever the context is not `running` at share start or during the share.
+- **The viewer's "(no sound)"** is computed at render from the received stream's live audio tracks (`useReceivedShareAudio` in `call-stage.tsx`, kept current by `addtrack`, `removetrack` and each track's `ended`), not from a flag set at share start. It was right: no audio track reached the viewer because none was published.
+
 ## Open questions
 
 - Who has a Windows 10 22H2 machine? If nobody, a rented Windows VM **with an audio device** (not a GitHub runner, not Server 2022 without audio) needs Rafael's OK because it costs money.

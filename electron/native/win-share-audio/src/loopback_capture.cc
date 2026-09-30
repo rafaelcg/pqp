@@ -139,7 +139,9 @@ class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler,
 };
 
 // `stop` interrupts the wait: a share ended while the audio service is slow
-// to answer must not hold the caller of Stop(), who joins this thread.
+// to answer must not keep this thread (and whoever joins it) for the five
+// seconds below. It is the one wait that can be long; the calls around it
+// are local round trips to the audio service that answer in milliseconds.
 HRESULT ActivateProcessLoopback(DWORD pid, LoopbackMode mode, HANDLE stop,
                                 IAudioClient** out) {
   *out = nullptr;
@@ -293,10 +295,14 @@ bool LoopbackCapture::Start() {
   return true;
 }
 
-void LoopbackCapture::Stop() {
+void LoopbackCapture::Cancel() {
   if (stop_) {
     SetEvent(stop_);
   }
+}
+
+void LoopbackCapture::Stop() {
+  Cancel();
   if (thread_.joinable()) {
     thread_.join();
   }

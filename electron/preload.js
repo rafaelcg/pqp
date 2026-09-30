@@ -251,6 +251,30 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     );
   },
 
+  /**
+   * The native capture ended on its own (the stream failed, the device went
+   * away, the audio process died). The shell has already closed its end; this
+   * is how the page learns to stop its track and free its audio graph.
+   * `callback({ sessionId, reason })`; returns the unsubscribe.
+   */
+  onNativeShareAudioEnded(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, payload) => {
+      if (payload && typeof payload.sessionId === "string") {
+        callback({
+          sessionId: payload.sessionId,
+          reason: typeof payload.reason === "string" ? payload.reason : "ended",
+        });
+      }
+    };
+    ipcRenderer.on("pqp:native-share-audio-ended", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:native-share-audio-ended", handler);
+    };
+  },
+
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {
     if (typeof callback !== "function") {

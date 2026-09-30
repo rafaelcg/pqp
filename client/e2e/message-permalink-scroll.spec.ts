@@ -87,11 +87,26 @@ async function sendMessages(
 ): Promise<void> {
   const socket = new WebSocket(WS_URL);
   const answers = new Map<string, (frame: Answer) => void>();
+  // Rejects whenever the socket closes, and is raced against every wait below,
+  // the wait for `ready` included: a server that refuses the token or goes
+  // away before `ready` would otherwise leave `await ready` pending for a frame
+  // that never comes, and the whole suite stalls until its own timeout.
+  const closed = new Promise<never>((_, reject) => {
+    socket.addEventListener("close", (event) =>
+      reject(new Error(`socket closed (${event.code}) while seeding`)),
+    );
+  });
+  // Handled up front: our own `socket.close()` in `finally` (or a close with
+  // nothing racing it) must not surface as an unhandled rejection.
+  closed.catch(() => {});
   try {
-    await new Promise<void>((resolve, reject) => {
-      socket.addEventListener("open", () => resolve());
-      socket.addEventListener("error", () => reject(new Error("ws error")));
-    });
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        socket.addEventListener("open", () => resolve());
+        socket.addEventListener("error", () => reject(new Error("ws error")));
+      }),
+      closed,
+    ]);
     const ready = new Promise<void>((resolve) => {
       socket.addEventListener("message", (event) => {
         const frame = JSON.parse(String(event.data)) as Answer & {
@@ -108,12 +123,7 @@ async function sendMessages(
     socket.send(
       JSON.stringify({ type: "auth", token: `${DEV_TOKEN}:${suffix}` }),
     );
-    await ready;
-    const closed = new Promise<never>((_, reject) => {
-      socket.addEventListener("close", (event) =>
-        reject(new Error(`socket closed (${event.code}) while seeding`)),
-      );
-    });
+    await Promise.race([ready, closed]);
     socket.send(JSON.stringify({ type: "join-channel", channelId }));
     for (const [index, body] of bodies.entries()) {
       for (let attempt = 0; ; attempt += 1) {

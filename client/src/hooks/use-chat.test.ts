@@ -533,6 +533,36 @@ describe("optimistic sending", () => {
     ]);
   });
 
+  it("keeps somebody else's broadcast that arrived after the retry's snapshot but before its response", () => {
+    // The "Try again" path (and the reconnect refetch) read the newest page on
+    // the server, and while that request is in flight a live message can be
+    // broadcast: it is newer than the page, which cannot contain it, and the
+    // page replacing the window must not take it away. The page's own rows
+    // come first, in order; the live one follows.
+    const { chat } = setup();
+    const snapshot = [
+      serverMessage({ id: "00000000-0000-4000-8000-000000000001", body: "one" }),
+      serverMessage({ id: "00000000-0000-4000-8000-000000000002", body: "two" }),
+    ];
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-000000000003",
+        body: "arrived during the retry",
+        authorId: "00000000-0000-4000-8000-0000000000dd",
+        createdAt: "2099-01-01T00:00:00.000Z",
+      }),
+    } as never);
+
+    chat.setMessages(snapshot, false, false);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "one",
+      "two",
+      "arrived during the retry",
+    ]);
+  });
+
   it("does not append live traffic onto a jumped-to window of older history", () => {
     // A page that stops short of the newest message is a jump, not a re-sync;
     // hanging live messages off the end of it would show them an hour early.

@@ -193,32 +193,159 @@ h1 {
   padding: 12px 20px;
 }
 
-.audio {
+/*
+ * The sound option: a row, not a tick box. A missed box was a silent share, so
+ * it is the most visible thing in the footer (a speaker, what it does, a large
+ * switch that starts on, and in words what the viewers get when it is off).
+ * Same variables as everything else here; nothing new to keep in sync.
+ */
+.audio-row {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   flex: 1 1 auto;
   min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--tile);
   color: inherit;
   font: inherit;
   cursor: default;
 }
 
-.audio[hidden] {
+.audio-row[hidden] {
   display: none;
 }
 
-.audio input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
+.audio-row:has(input:focus-visible) {
+  border-color: var(--accent);
 }
 
-.audio .hint {
-  display: block;
-  margin-top: 2px;
+.audio-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.audio-row.is-off .audio-icon {
+  stroke: var(--text-dim);
+}
+
+.audio-icon .muted {
+  display: none;
+}
+
+.audio-row.is-off .audio-icon .waves {
+  display: none;
+}
+
+.audio-row.is-off .audio-icon .muted {
+  display: inline;
+}
+
+.audio-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.audio-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.audio-row .hint {
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.35;
+}
+
+/* Only drawn when the switch is off: what the viewers get instead. */
+.audio-note {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.audio-note[hidden] {
+  display: none;
+}
+
+.audio-row.no-switch .switch {
+  display: none;
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 26px;
+}
+
+/* The real control, stretched over the drawn one: keyboard, focus and screen
+   readers get a native checkbox, the eye gets a switch. */
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: default;
+}
+
+.switch .track {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--tile-empty);
+  transition: background-color 120ms ease;
+}
+
+.switch .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease;
+}
+
+.switch input:checked + .track {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.switch input:checked + .track .knob {
+  transform: translateX(20px);
+  background: var(--accent-text);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch .track,
+  .switch .knob {
+    transition: none;
+  }
 }
 
 .actions {

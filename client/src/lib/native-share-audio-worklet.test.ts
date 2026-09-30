@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { JITTER_DEFAULTS, PcmJitterBuffer } from "./native-share-audio-worklet.js";
 
 /** `frames` of interleaved stereo, left = value, right = -value. */
@@ -74,5 +74,90 @@ describe("PcmJitterBuffer", () => {
       expect(left.every((x) => x === round)).toBe(true);
       expect(right.every((x) => x === -round || (round === 0 && x === 0))).toBe(true);
     }
+  });
+});
+
+/**
+ * The processor itself, in a scope that has what an AudioWorkletGlobalScope
+ * has: `registerProcessor`, `AudioWorkletProcessor`, `sampleRate`. It reports to
+ * the page so a share that went silent can be told apart from one that never
+ * received anything.
+ */
+describe("the processor's reports to the page", () => {
+  type Sent = { postMessage: ReturnType<typeof vi.fn> };
+  type Processor = {
+    port: { onmessage: ((event: { data: unknown }) => void) | null } & Sent;
+    process: (inputs: unknown[], outputs: Float32Array[][]) => boolean;
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  async function load(): Promise<Processor> {
+    let registered: (new () => Processor) | null = null;
+    vi.stubGlobal("sampleRate", 48000);
+    vi.stubGlobal(
+      "AudioWorkletProcessor",
+      class {
+        port = { onmessage: null as ((event: { data: unknown }) => void) | null, postMessage: vi.fn() };
+      },
+    );
+    vi.stubGlobal("registerProcessor", (_name: string, processor: new () => Processor) => {
+      registered = processor;
+    });
+    vi.resetModules();
+    await import("./native-share-audio-worklet.js");
+    if (!registered) {
+      throw new Error("the processor did not register");
+    }
+    const Registered = registered as new () => Processor;
+    return new Registered();
+  }
+
+  function feed(processor: Processor, samples: Float32Array) {
+    const source = { onmessage: null as ((event: { data: unknown }) => void) | null, close: vi.fn() };
+    processor.port.onmessage?.({ data: { type: "port", port: source } });
+    source.onmessage?.({ data: samples });
+  }
+
+  function render(processor: Processor, quanta: number) {
+    const output = [new Float32Array(128), new Float32Array(128)];
+    for (let i = 0; i < quanta; i += 1) {
+      processor.process([], [output]);
+    }
+  }
+
+  it("says so once, the moment the shell's PCM first arrives", async () => {
+    const processor = await load();
+    feed(processor, chunk(480, 0.25));
+    expect(processor.port.postMessage).toHaveBeenCalledTimes(1);
+    expect(processor.port.postMessage).toHaveBeenCalledWith({ type: "first" });
+  });
+
+  it("reports what arrived about once a second, with the loudest sample since the last report", async () => {
+    const processor = await load();
+    feed(processor, chunk(480, 0.25));
+    processor.port.postMessage.mockClear();
+    render(processor, 374);
+    expect(processor.port.postMessage).not.toHaveBeenCalled();
+    render(processor, 1);
+    expect(processor.port.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "stats", chunks: 1, frames: 480, peak: 0.25 }),
+    );
+    // The peak is per interval: a silent second reads as silence.
+    processor.port.postMessage.mockClear();
+    render(processor, 375);
+    expect(processor.port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "stats", peak: 0 }));
+  });
+
+  it("counts a silent target's chunks too: zero peak, but the capture is alive", async () => {
+    const processor = await load();
+    feed(processor, new Float32Array(960));
+    render(processor, 375);
+    expect(processor.port.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "stats", chunks: 1, peak: 0 }),
+    );
   });
 });
