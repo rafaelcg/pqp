@@ -361,6 +361,13 @@ jobs:
         env:
           E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
 
+      # Real builds and a real service worker, no API and no database
+      # (client/playwright.stale-bundle.config.ts). It does not depend on the
+      # shard, so one shard carries it.
+      - name: E2E stale bundle (real service worker)
+        if: matrix.suite == 'core' && matrix.shard == 1
+        run: pnpm --filter @pqp/client e2e:stale-bundle
+
       - name: Upload E2E artifacts
         if: failure()
         uses: actions/upload-artifact@v4

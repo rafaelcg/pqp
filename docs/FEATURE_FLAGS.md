@@ -113,6 +113,14 @@ does anything in a desktop build whose preload publishes
 stream on that machine; see `electron/lib/win-share-audio.js`. With the flag off
 the client never asks the shell anything.
 
+`CLIENT_FORCE_UPDATE` (`client_force_update`, default off, global), born as a flag:
+every web or desktop client that is not on the latest build puts up the blocking
+"atualização necessária" screen, served by `GET /api/client-update/config`
+(`forceUpdate`). The client only asks when it already knows it is stale. Leave it on
+only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
+(ISO date or epoch ms) forces bundles built before a moment and is environment-only.
+See `docs/PWA.md` §"Nobody stays on an old bundle".
+
 Staying environment-only, on purpose:
 
 - **Boot-time wiring:** `CLUSTER_BUS`, `VOICE_REGISTRY`, `VOICE_REGISTRY_BATCH`,

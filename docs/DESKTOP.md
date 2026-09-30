@@ -93,11 +93,22 @@ has both, so a packaged build against pqp.gg shows those buttons.
 ### Consequence for update cadence
 
 Because the shell loads the hosted client, **the product updates itself on
-reload.** A web deploy reaches every desktop user through the service-worker
-prompt (`client/src/components/layout/update-prompt.tsx`), same as the browser.
-Auto-update (§5) only ships changes to the *shell* — main process, menus, deep
-links, permissions, entitlements. That is a much rarer event, which is why the
-shell updater is allowed to be patient.
+reload.** A web deploy reaches every desktop user the same way as a browser: the
+page compares its build to `/version.json`, shows the card, reloads by itself at a
+safe moment, and obeys an operator's forced update. All of it is in
+[`docs/PWA.md`](./PWA.md) ("Nobody stays on an old bundle"), including why a window
+that is never closed used to be stranded. Auto-update (§5) only ships changes to
+the *shell*: main process, menus, deep links, permissions, entitlements. That is a
+much rarer event, which is why the shell updater is allowed to be patient.
+
+The profile keeps the service worker and the HTTP cache across shell updates, and a
+shell update must not load the site out of the ones the previous shell left. So
+`electron/lib/web-cache.js` clears both (and only both: sign-in, drafts and
+everything else stay) the first time a shell version runs against a profile, before
+the first load. View > **Reload and clear cache** (Ctrl/Cmd+Shift+Alt+R) does the
+same on demand, for support: a plain Reload cannot fix a stale site while a worker
+is answering for the page. Those two are shell changes and reach a user with the
+next desktop release; the web-side fix needs only a web deploy.
 
 ### Voice across an API restart
 

@@ -652,6 +652,7 @@ import {
   setServerFlagOverride,
 } from "../lib/flags.js";
 import { shareConfigForServer } from "../lib/share-config.js";
+import { clientUpdateConfig } from "../lib/client-update-config.js";
 import {
   claimHandle,
   findUserIdByHandle,
@@ -2639,6 +2640,10 @@ router.get("/api/ice-servers", async () => ({
 router.get("/api/share/config", async ({ url }) =>
   shareConfigForServer(url.searchParams.get("serverId")),
 );
+
+// Whether the operator has forced every stale client to update
+// (`lib/client-update-config.ts`). Read per request, additive, default off.
+router.get("/api/client-update/config", async () => clientUpdateConfig());
 
 router.get("/api/voice/backend", async () => {
   const backend = getServerVoiceBackend();

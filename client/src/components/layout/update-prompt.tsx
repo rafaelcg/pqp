@@ -1,17 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
-import {
-  registerServiceWorker,
-  type ServiceWorkerControls,
-} from "@/lib/register-sw";
+import { applyUpdate } from "@/lib/apply-update";
+import { registerServiceWorker } from "@/lib/register-sw";
 import { snoozeRemainingMs } from "@/lib/update-snooze";
 import {
   setUpdatePromptShowing,
   setUpdateWaiting,
   shouldShowUpdateCard,
+  useBuildStaleness,
   useUpdateRequestedAt,
 } from "@/lib/update-prompt-state";
 import { useInCall } from "@/lib/in-call-state";
@@ -19,16 +18,17 @@ import { useInCall } from "@/lib/in-call-state";
 /**
  * "A new version is ready" — the visible half of `registerType: "prompt"`.
  *
- * The reload is never taken automatically. This client holds a live WebSocket,
- * unsent composer drafts, and possibly an active call; swapping the bundle out
- * from under any of those is a worse outcome than running yesterday's build for
- * another minute. So it asks.
+ * This card is the ASKING path. It never reloads by itself; `BuildWatcher`
+ * does that, and only at a safe moment (idle, not in a call, not typing; see
+ * `lib/update-policy.ts`). This client holds a live WebSocket, unsent composer
+ * drafts, and possibly an active call, and swapping the bundle out from under
+ * any of those is worse than running yesterday's build for another minute.
  *
- * "Later" SNOOZES, it does not dismiss. Under `registerType: "prompt"` the
- * waiting build never takes over on its own, not even on a hard reload, so a
- * permanent dismissal was the difference between "running yesterday's build for
- * another minute" and running it until every tab of the origin is closed. See
- * `update-snooze.ts` for the incident that made the distinction matter.
+ * "Later" SNOOZES, it does not dismiss: the card returns after twenty minutes.
+ * A permanent dismissal is how a person ended up on an old build for as long as
+ * they kept a tab open. See `update-snooze.ts` for the incident that made the
+ * distinction matter, and `docs/PWA.md` ("Nobody stays on an old bundle") for
+ * the rest of what now stands behind this card.
  *
  * ESCAPE DOES NOT CLOSE THIS ONE, and it is the only corner card that opts out.
  * Escape means "get the thing I just opened out of my way"; nobody opened this.
@@ -46,18 +46,25 @@ export function UpdatePrompt({
    * every rule above it would be unpinned.
    */
   register = registerServiceWorker,
+  apply = applyUpdate,
 }: {
   register?: typeof registerServiceWorker;
+  /** Test seam: a real apply reloads the page. */
+  apply?: (target?: string | null) => Promise<unknown>;
 } = {}) {
   const { t } = useTranslation();
-  const [needsRefresh, setNeedsRefresh] = useState(false);
+  // Two independent ways to learn a build is waiting, and either is enough: the
+  // service worker saying so (`register`), and the page comparing itself to
+  // `/version.json` (`BuildWatcher`). The second reaches a window that never
+  // navigates, which the first cannot.
+  const [workerNeedsRefresh, setWorkerNeedsRefresh] = useState(false);
+  const build = useBuildStaleness();
+  const needsRefresh = workerNeedsRefresh || build.stale;
   const [snoozedAt, setSnoozedAt] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
-  const controlsRef = useRef<ServiceWorkerControls | null>(null);
 
   useEffect(() => {
-    const controls = register(() => setNeedsRefresh(true));
-    controlsRef.current = controls;
+    const controls = register(() => setWorkerNeedsRefresh(true));
     return () => controls.dispose();
   }, [register]);
 
@@ -125,8 +132,9 @@ export function UpdatePrompt({
             disabled={updating}
             onClick={() => {
               setUpdating(true);
-              // The worker takes over and reloads the page itself.
-              void controlsRef.current?.update();
+              // Makes the new worker the active one, then reloads; `apply-update.ts`
+              // says why a plain reload is not enough.
+              void apply(build.latestBuild);
             }}
           >
             {updating ? t("update.updating") : t("update.reload")}

@@ -3,6 +3,8 @@
   "menu.view": "View",
   "menu.window": "Window",
   "menu.speech": "Speech",
+  "menu.reloadClean": "Reload and clear cache",
+  "menu.reloadCleanFailed": "The cached site could not be cleared, so nothing was reloaded. Try again, or quit and reopen pqp.",
   "menu.toggleMute": "Toggle Mute",
   "menu.toggleMuteHelp": "Toggle Mute (Cmd/Ctrl+Shift+M)",
   "menu.toggleDeafen": "Toggle Deafen",
