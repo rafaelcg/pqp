@@ -1356,6 +1356,7 @@
   "voice.notice.listenOnly": "Entraste sin micrófono, así que puedes escuchar pero no hablar. {reason}",
   "voice.notice.micMixFailed": "No se pudo meter tu micrófono en el stream. La sala te escucha; quienes ven desde afuera, no.",
   "voice.notice.nativeShareAudioFailed": "La app no pudo capturar el sonido de esa ventana, así que estás compartiendo sin sonido. El próximo vuelve al método de antes.",
+  "voice.notice.nativeShareAudioEnded": "La app perdió la captura de sonido de esta transmisión, así que ahora sale sin sonido. El próximo vuelve al método de antes.",
   "voice.notice.systemAudioStripped": "El sonido de la computadora quedó fuera de esta transmisión. En esta versión de Windows se habría ido la llamada con él.",
   "voice.notice.systemAudioStrippedWin10Tab": "El sonido de la computadora quedó fuera de esta transmisión. En esta versión de Windows no se puede mantener la llamada afuera, así que la única forma de mandar sonido es compartir una pestaña de Chrome con \"Compartir también el audio de la pestaña\".",
   "voice.notice.systemAudioStrippedWin10App": "El sonido de la computadora quedó fuera de esta transmisión. Desde el navegador, en esta versión de Windows no se puede mantener la llamada afuera: descarga la app de escritorio de pqp (pqp.gg/download) para compartir con sonido, o comparte una pestaña de Chrome con \"Compartir también el audio de la pestaña\".",

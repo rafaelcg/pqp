@@ -231,7 +231,10 @@ describe("a share's capture", () => {
     assert.equal(stops().length, 1);
     assert.equal(stops()[0].message.sessionId, id);
     assert.equal(lastChannel.port2.closed, true);
-    assert.equal((await api.claim()).reason, "none");
+    // A claim that comes late hears why. "none" is the box left unticked, and
+    // answering it here made a stopped capture look like nothing had happened.
+    assert.equal((await api.claim()).reason, "unclaimed");
+    assert.equal((await api.claim()).reason, "none", "told once");
   });
 
   it("does not stop a capture the page claimed in time", async (t) => {
@@ -313,7 +316,7 @@ describe("a share's capture", () => {
     assert.deepEqual(ended, [{ sessionId: id, reason: "host-exit" }]);
   });
 
-  it("has nobody to tell when a capture nobody claimed ends", async () => {
+  it("answers a claim for a capture that ended first with the reason, never with none", async () => {
     const ended = [];
     let reply;
     const { api } = controller({
@@ -327,7 +330,28 @@ describe("a share's capture", () => {
     });
     api.start({ sourceId: "window:1:0" });
     reply({ type: "session", state: "ended", stats: {} });
+    // Nobody holds it yet, so there is nobody to tell...
     assert.deepEqual(ended, []);
+    // ...but the claim that follows must not read as an unticked box.
+    assert.deepEqual(await api.claim(), { active: false, reason: "ended", stage: null, hr: null });
+    assert.equal((await api.claim()).reason, "none", "told once");
+  });
+
+  it("does not carry a capture's end over to the next share", async () => {
+    let reply;
+    const { api } = controller({
+      host: {
+        onStart: (_message, send) => {
+          reply = send;
+          started(send);
+        },
+      },
+    });
+    api.start({ sourceId: "window:1:0" });
+    reply({ type: "session", state: "ended", stats: {} });
+    // A new picker stops everything first (`stop()` in main), then the page
+    // claims: what ended before it is not that claim's answer.
+    api.stop();
     assert.equal((await api.claim()).reason, "none");
   });
 

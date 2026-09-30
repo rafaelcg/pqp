@@ -2380,18 +2380,31 @@ function useReceivedShareAudio(stream: MediaStream | null): boolean {
     if (!stream) {
       return;
     }
-    stream.addEventListener("addtrack", sync);
-    stream.addEventListener("removetrack", sync);
     // A track the presenter stops mid-share fires `ended` on the track itself
     // and nothing on the stream, so the stream listeners alone would miss it.
-    const tracks = stream.getAudioTracks();
-    for (const track of tracks) {
-      track.addEventListener("ended", sync);
-    }
+    // Tracks that arrive later (a late audio track, or one replaced) are
+    // listened to as they land, or a label that turned "with sound" would
+    // never turn back.
+    const watched = new Set<MediaStreamTrack>();
+    const watch = () => {
+      for (const track of stream.getAudioTracks()) {
+        if (!watched.has(track)) {
+          watched.add(track);
+          track.addEventListener("ended", sync);
+        }
+      }
+    };
+    const onTrackChange = () => {
+      watch();
+      sync();
+    };
+    stream.addEventListener("addtrack", onTrackChange);
+    stream.addEventListener("removetrack", onTrackChange);
+    watch();
     return () => {
-      stream.removeEventListener("addtrack", sync);
-      stream.removeEventListener("removetrack", sync);
-      for (const track of tracks) {
+      stream.removeEventListener("addtrack", onTrackChange);
+      stream.removeEventListener("removetrack", onTrackChange);
+      for (const track of watched) {
         track.removeEventListener("ended", sync);
       }
     };

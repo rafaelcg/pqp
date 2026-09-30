@@ -1348,6 +1348,7 @@
   "voice.notice.listenOnly": "Joined without a microphone, so you can listen but not speak. {reason}",
   "voice.notice.micMixFailed": "Could not put your mic in the stream. The room hears you; people watching from outside do not.",
   "voice.notice.nativeShareAudioFailed": "The app could not capture that window's sound, so you are sharing without sound. The next share goes back to the usual way.",
+  "voice.notice.nativeShareAudioEnded": "The app lost the sound capture for this share, so it is now going out without sound. The next share goes back to the usual way.",
   "voice.notice.systemAudioStripped": "Computer sound was left out of this share. On this Windows version it would have sent the call with it.",
   "voice.notice.systemAudioStrippedWin10Tab": "Computer sound was left out of this share. This Windows version cannot keep the call out of it, so the only way to send sound is to share a Chrome tab with \"Also share tab audio\".",
   "voice.notice.systemAudioStrippedWin10App": "Computer sound was left out of this share. A browser on this Windows version cannot keep the call out of it: download the pqp desktop app (pqp.gg/download) to share with sound, or share a Chrome tab with \"Also share tab audio\".",

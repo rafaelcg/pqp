@@ -4,9 +4,14 @@ const fetchShareConfig = vi.fn();
 vi.mock("./api", () => ({ fetchShareConfig: (...args: unknown[]) => fetchShareConfig(...args) }));
 
 import {
+  describeNativeShareAudio,
+  nativeShareAudioDiagnostics,
+} from "./native-share-audio-diagnostics";
+import {
   armNativeShareAudio,
   armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
+  discardPrimedNativeShareAudio,
   ensureNativeShareAudio,
   nativeShareAudioBridge,
   prefetchNativeShareAudio,
@@ -57,12 +62,21 @@ class FakeAudioContext {
   /** What the next context starts in, and what its resume() does. */
   static initialState = "running";
   static onResume: (context: FakeAudioContext) => Promise<void> = async () => {};
+  static instances: FakeAudioContext[] = [];
+  static workletError: Error | null = null;
   sampleRate: number;
   state: string = FakeAudioContext.initialState;
   closed = false;
-  audioWorklet = { addModule: vi.fn(async () => {}) };
+  audioWorklet = {
+    addModule: vi.fn(async () => {
+      if (FakeAudioContext.workletError) {
+        throw FakeAudioContext.workletError;
+      }
+    }),
+  };
   constructor(options: { sampleRate: number }) {
     this.sampleRate = options.sampleRate;
+    FakeAudioContext.instances.push(this);
   }
   createMediaStreamDestination() {
     const track = new FakeTrack("audio");
@@ -77,7 +91,14 @@ class FakeAudioContext {
 }
 
 class FakeWorkletNode {
-  port = { postMessage: (message: unknown) => posted.push(message) };
+  static instances: FakeWorkletNode[] = [];
+  port: { postMessage: (message: unknown) => void; onmessage: ((event: { data: unknown }) => void) | null } = {
+    postMessage: (message: unknown) => posted.push(message),
+    onmessage: null,
+  };
+  constructor() {
+    FakeWorkletNode.instances.push(this);
+  }
   connect() {}
   disconnect() {}
 }
@@ -127,6 +148,9 @@ beforeEach(() => {
   fetchShareConfig.mockReset();
   FakeAudioContext.initialState = "running";
   FakeAudioContext.onResume = async () => {};
+  FakeAudioContext.instances = [];
+  FakeAudioContext.workletError = null;
+  FakeWorkletNode.instances = [];
   posted.length = 0;
   resetNativeShareAudioForTests();
 });
@@ -524,5 +548,197 @@ describe("a capture that ends on its own", () => {
     fakeWindow.pqpDesktop = shell;
     const stream = new FakeStream();
     expect((await attachNativeShareAudio(stream as unknown as MediaStream)).attached).toBe(true);
+  });
+});
+
+describe("the graph is built at arm time, in the share click", () => {
+  const claim = { active: true, sessionId: "share-40", target: null } as const;
+
+  it("builds and runs the audio graph before arming the shell, and attaches to that same graph", async () => {
+    const shell = bridge({ ...claim });
+    fakeWindow.pqpDesktop = shell;
+    expect(await armNativeShareAudio()).toBe(true);
+    expect(FakeAudioContext.instances).toHaveLength(1);
+    expect(FakeAudioContext.instances[0]?.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    const stream = new FakeStream();
+    expect((await attachNativeShareAudio(stream as unknown as MediaStream)).attached).toBe(true);
+    // One context, one module load: the attach did not build a second graph.
+    expect(FakeAudioContext.instances).toHaveLength(1);
+    expect(FakeAudioContext.instances[0]?.audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    expect(stream.getAudioTracks()).toHaveLength(1);
+  });
+
+  it("does not arm the shell when the context will not run, and leaves the next share free to try again", async () => {
+    const shell = bridge({ ...claim });
+    fakeWindow.pqpDesktop = shell;
+    FakeAudioContext.initialState = "suspended";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await armNativeShareAudio()).toBe(false);
+    expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+    // A context that was suspended may run on the next click: not a verdict.
+    FakeAudioContext.initialState = "running";
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(true);
+  });
+
+  it("does not arm the shell when the worklet cannot load, and stops offering it this session", async () => {
+    const shell = bridge({ ...claim });
+    fakeWindow.pqpDesktop = shell;
+    FakeAudioContext.workletError = new DOMException("blocked", "AbortError");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await armNativeShareAudio()).toBe(false);
+    expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(false);
+  });
+
+  it("does not arm the shell when the context cannot run at the shell's sample rate", async () => {
+    const shell = bridge({ ...claim });
+    fakeWindow.pqpDesktop = shell;
+    class Rate44 extends FakeAudioContext {
+      constructor() {
+        super({ sampleRate: 44100 });
+      }
+    }
+    vi.stubGlobal("AudioContext", Rate44);
+    expect(await armNativeShareAudio()).toBe(false);
+    expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
+  });
+
+  it("closes the graph when the picker never produced a share", async () => {
+    fakeWindow.pqpDesktop = bridge({ ...claim });
+    expect(await armNativeShareAudio()).toBe(true);
+    discardPrimedNativeShareAudio();
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+  });
+
+  it("closes a graph nobody used after the arm's own lifetime", async () => {
+    fakeWindow.pqpDesktop = bridge({ ...claim });
+    expect(await armNativeShareAudio()).toBe(true);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+  });
+
+  it("closes the graph when the box was left unticked", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false, reason: "none" });
+    expect(await armNativeShareAudio()).toBe(true);
+    const result = await attachNativeShareAudio(new FakeStream() as unknown as MediaStream);
+    expect(result.reason).toBe("none");
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+  });
+});
+
+describe("a capture that ends while or after it is attached", () => {
+  it("fails the attach when the end arrives before the attach finished, rather than leave a silent track", async () => {
+    const shell = bridge({ active: true, sessionId: "share-50", target: null });
+    const deliver = shell.nativeShareAudioClaim;
+    // The shell reports the end in the middle of the attach: after the claim
+    // answered, before the graph is wired. One event, never replayed.
+    shell.nativeShareAudioClaim = vi.fn(async () => {
+      const answer = await deliver();
+      queueMicrotask(() => shell.ended.forEach((listener) => listener({ sessionId: "share-50", reason: "ended" })));
+      return answer;
+    });
+    fakeWindow.pqpDesktop = shell;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stream = new FakeStream();
+    const result = await attachNativeShareAudio(stream as unknown as MediaStream);
+    expect(result).toEqual({ attached: false, reason: "ended", target: null });
+    expect(stream.getAudioTracks()).toHaveLength(0);
+    expect(FakeAudioContext.instances[0]?.closed).toBe(true);
+    expect(shell.unsubscribed).toBe(1);
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(false);
+  });
+
+  it("tells the owner, stops the track and stops offering native sound when it ends under a live share", async () => {
+    const shell = bridge({ active: true, sessionId: "share-51", target: null });
+    fakeWindow.pqpDesktop = shell;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onEnded = vi.fn();
+    const stream = new FakeStream();
+    await attachNativeShareAudio(stream as unknown as MediaStream, { onEnded });
+    shell.ended[0]?.({ sessionId: "share-51", reason: "failed" });
+    expect(onEnded).toHaveBeenCalledWith({ reason: "failed" });
+    expect(stream.getAudioTracks()[0]?.readyState).toBe("ended");
+    expect(shell.nativeShareAudioStop).not.toHaveBeenCalled();
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    expect(await ensureNativeShareAudio(null)).toBe(false);
+  });
+
+  it("notices a context that stops running mid-share, asks it to resume, and gives up after three looks", async () => {
+    const shell = bridge({ active: true, sessionId: "share-52", target: null });
+    fakeWindow.pqpDesktop = shell;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onEnded = vi.fn();
+    const stream = new FakeStream();
+    await attachNativeShareAudio(stream as unknown as MediaStream, { onEnded });
+    const context = FakeAudioContext.instances[0]!;
+    const resume = vi.spyOn(context, "resume");
+    context.state = "suspended";
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(onEnded).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onEnded).toHaveBeenCalledWith({ reason: "context-suspended" });
+    // The shell's capture is stopped too: nothing is listening to it any more.
+    expect(shell.nativeShareAudioStop).toHaveBeenCalledWith("share-52");
+  });
+
+  it("does not give up on a context that recovers", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: true, sessionId: "share-53", target: null });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onEnded = vi.fn();
+    await attachNativeShareAudio(new FakeStream() as unknown as MediaStream, { onEnded });
+    const context = FakeAudioContext.instances[0]!;
+    context.state = "suspended";
+    await vi.advanceTimersByTimeAsync(2000);
+    context.state = "running";
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(onEnded).not.toHaveBeenCalled();
+  });
+});
+
+describe("what the worklet reports, and what the diagnostics say", () => {
+  it("logs once when the native track starts delivering, and records the level", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: true, sessionId: "share-60", target: null });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    await attachNativeShareAudio(new FakeStream() as unknown as MediaStream);
+    info.mockClear();
+    const node = FakeWorkletNode.instances[0]!;
+    node.port.onmessage?.({ data: { type: "first" } });
+    node.port.onmessage?.({ data: { type: "first" } });
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toMatch(/delivering samples/);
+    node.port.onmessage?.({ data: { type: "stats", chunks: 120, frames: 57600, peak: 0.42, underflows: 1 } });
+    const line = describeNativeShareAudio();
+    expect(line).toContain("chunks=120");
+    expect(line).toContain("peak=0.420");
+    expect(line).toContain("attached=true");
+  });
+
+  it("names the stage a failed share stopped at, for one console paste", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false, reason: "failed", stage: "initialize", hr: 0x88890010 });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await attachNativeShareAudio(new FakeStream() as unknown as MediaStream);
+    const diagnostics = nativeShareAudioDiagnostics();
+    expect(diagnostics.failedStage).toBe("claim");
+    expect(describeNativeShareAudio()).toMatch(/FAILED at claim: failed\/initialize\//);
+  });
+
+  it("names the graph as the failing stage when the context would not run", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false });
+    FakeAudioContext.initialState = "suspended";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await armNativeShareAudio();
+    expect(describeNativeShareAudio()).toMatch(/graph=fail:suspended.*FAILED at graph: suspended/);
+  });
+
+  it("records the flag and the self-test of the page", async () => {
+    fakeWindow.pqpDesktop = bridge({ active: false });
+    fetchShareConfig.mockResolvedValue({ desktopShareAudioNative: true });
+    await ensureNativeShareAudio("server-1");
+    expect(describeNativeShareAudio()).toContain("flag=true shell=ok");
   });
 });

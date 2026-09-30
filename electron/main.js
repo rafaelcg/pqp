@@ -1251,6 +1251,16 @@ function createWindow(appUrl, allowedOrigin) {
       webSecurity: true,
       allowRunningInsecureContent: false,
       spellcheck: true,
+      // A desktop app has no "first click to allow sound" gate to honour: the
+      // people in a call are heard without one, and so is a share's sound. The
+      // native share audio graph is created and resumed from the share click
+      // anyway; this is the belt to that braces, so a context the page makes
+      // outside a gesture (a window that was not focused, a click that went
+      // through the picker rather than the page) still starts `running`
+      // instead of `suspended`, which is a silent share that looks attached.
+      // This is Electron's own default; it is written down because the
+      // behaviour now depends on it.
+      autoplayPolicy: "no-user-gesture-required",
       // The shell's own version, for the renderer's capability object. A
       // sandboxed preload may only `require("electron")`, so it cannot read
       // package.json and cannot call `app.getVersion()`; `additionalArguments`

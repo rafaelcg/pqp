@@ -45,6 +45,7 @@ import {
 import {
   armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
+  discardPrimedNativeShareAudio,
   releaseNativeShareAudioFor,
 } from "@/lib/native-share-audio";
 import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
@@ -5940,6 +5941,8 @@ export function createVoiceController(transport: RealtimeTransport) {
             askedForAudio &&
             err instanceof Error &&
             err.name !== "NotAllowedError";
+          // The audio graph the arm built is for a share that did not happen.
+          discardPrimedNativeShareAudio();
           emit();
           return;
         }
@@ -5947,6 +5950,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         } catch {
           state.error = screenShareErrorMessage(err);
+          discardPrimedNativeShareAudio();
           emit();
           return;
         }
@@ -5956,6 +5960,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        discardPrimedNativeShareAudio();
         emit();
         return;
       }
@@ -5990,7 +5995,17 @@ export function createVoiceController(transport: RealtimeTransport) {
       // a Windows 11 machine that cannot do this gets Chromium's loopback
       // back after one silent share instead of every time.
       if (nativeAudio) {
-        const attach = await attachNativeShareAudio(stream);
+        const attach = await attachNativeShareAudio(stream, {
+          // The capture ended under a live share (the stream failed, the
+          // device went away, the graph stopped running). The track has been
+          // stopped and the next share takes the old path; the presenter and
+          // whoever watches their tile are told it is now without sound.
+          onEnded: () => {
+            state.isSharingScreenAudio = false;
+            state.notice = translateMessage("voice.notice.nativeShareAudioEnded");
+            emit();
+          },
+        });
         // The picture is fine and the sound is not: Chromium was asked for no
         // audio because the shell was going to supply it, so a failed attach
         // is a silent share. Say so rather than leave "why is there no sound"

@@ -125,6 +125,15 @@ if (typeof scope.registerProcessor === "function" && typeof scope.AudioWorkletPr
       this.buffer = new PcmJitterBuffer();
       this.source = null;
       this.scratch = new Float32Array(128);
+      // What is reported to the page, for diagnosis: a "first" the moment the
+      // shell's PCM starts arriving (the native track is delivering), then a
+      // "stats" about once a second. A few numbers a second is nothing next to
+      // the hundred chunks a second the port already carries.
+      this.chunks = 0;
+      this.frames = 0;
+      this.peak = 0;
+      this.quanta = 0;
+      this.statsEvery = Math.max(1, Math.round((scope.sampleRate || 48000) / 128));
       this.port.onmessage = (event) => {
         const message = event.data;
         if (message?.type === "port" && message.port) {
@@ -133,11 +142,22 @@ if (typeof scope.registerProcessor === "function" && typeof scope.AudioWorkletPr
           this.source.onmessage = (chunkEvent) => {
             const chunk = chunkEvent.data;
             if (ArrayBuffer.isView(chunk)) {
-              this.buffer.push(
+              const samples =
                 chunk instanceof Float32Array
                   ? chunk
-                  : new Float32Array(chunk.buffer, chunk.byteOffset, Math.floor(chunk.byteLength / 4)),
-              );
+                  : new Float32Array(chunk.buffer, chunk.byteOffset, Math.floor(chunk.byteLength / 4));
+              this.buffer.push(samples);
+              this.chunks += 1;
+              this.frames += Math.floor(samples.length / NATIVE_SHARE_AUDIO_CHANNELS);
+              for (let i = 0; i < samples.length; i += 1) {
+                const level = Math.abs(samples[i]);
+                if (level > this.peak) {
+                  this.peak = level;
+                }
+              }
+              if (this.chunks === 1) {
+                this.port.postMessage({ type: "first" });
+              }
             }
           };
         } else if (message?.type === "close") {
@@ -161,6 +181,18 @@ if (typeof scope.registerProcessor === "function" && typeof scope.AudioWorkletPr
         right = this.scratch;
       }
       this.buffer.pull(left, right);
+      this.quanta += 1;
+      if (this.quanta >= this.statsEvery) {
+        this.quanta = 0;
+        this.port.postMessage({
+          type: "stats",
+          chunks: this.chunks,
+          frames: this.frames,
+          peak: this.peak,
+          underflows: this.buffer.underflows,
+        });
+        this.peak = 0;
+      }
       return true;
     }
   }

@@ -6,10 +6,18 @@ import {
   analyseToneFrame,
   goertzelMagnitude,
   installShareAudioProbe,
+  formatShareAudioRow,
   judgeShareAudioRow,
+  measureShareAudioTrack,
   sineFrame,
   summariseToneFrames,
 } from "./share-audio-probe";
+import {
+  noteNativeShareAudio,
+  noteNativeShareAudioFailure,
+  resetNativeShareAudioDiagnosticsForTests,
+  startNativeShareAudioAttempt,
+} from "./native-share-audio-diagnostics";
 import { createShareRequestGuard } from "./share-request-guard";
 
 const SAMPLE_RATE = 48_000;
@@ -192,5 +200,41 @@ describe("runtime echo backstop is wired", () => {
     const token = guard.tryBegin();
     expect(token).not.toBeNull();
     expect(guard.tryBegin()).toBeNull();
+  });
+});
+
+describe("measureShareAudioTrack names the native stage that failed", () => {
+  afterEach(() => {
+    resetNativeShareAudioDiagnosticsForTests();
+  });
+
+  it("puts the stage in the NO_TRACK note and the whole handshake on the row", async () => {
+    startNativeShareAudioAttempt();
+    noteNativeShareAudio({
+      flag: true,
+      shell: "ok",
+      graph: "ok",
+      armed: true,
+      claim: "failed:activate/activate/2147942487",
+    });
+    noteNativeShareAudioFailure("claim", "activate/activate/2147942487");
+    const row = await measureShareAudioTrack(null);
+    expect(row.verdict).toBe("NO_TRACK");
+    expect(row.note).toContain("native capture failed at claim: activate/activate/2147942487");
+    expect(row.native).toContain("flag=true shell=ok graph=ok");
+    expect(row.native).toContain("FAILED at claim");
+    expect(formatShareAudioRow(row)).toContain(row.native);
+  });
+
+  it("says the box was not ticked when that is what the handshake recorded", async () => {
+    startNativeShareAudioAttempt();
+    noteNativeShareAudio({ claim: "none" });
+    const row = await measureShareAudioTrack(null);
+    expect(row.note).toContain("sound box was not ticked");
+  });
+
+  it("takes an explicit native line for a row, for a test or a pasted report", async () => {
+    const row = await measureShareAudioTrack(null, { native: "native share audio: test" });
+    expect(row.native).toBe("native share audio: test");
   });
 });

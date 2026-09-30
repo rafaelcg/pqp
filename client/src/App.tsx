@@ -2651,12 +2651,15 @@ function MainAppContent({
   // so "share screen" never waits on the API. The ref is set before the join
   // resolves, and a DM call leaves it null (the global answer). A no-op in a
   // browser, which never has the shell's bridge.
-  const hasVoiceSeat = Boolean(voiceState.voiceChannelId);
+  // Keyed on the seat's channel, not on having one: moving straight from a
+  // call in one server to a call in another keeps a seat the whole way and
+  // changes the server whose flag the next share reads.
+  const voiceSeatChannelId = voiceState.voiceChannelId ?? null;
   useEffect(() => {
-    if (hasVoiceSeat) {
+    if (voiceSeatChannelId) {
       prefetchNativeShareAudio(voiceServerIdRef.current);
     }
-  }, [hasVoiceSeat]);
+  }, [voiceSeatChannelId]);
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an

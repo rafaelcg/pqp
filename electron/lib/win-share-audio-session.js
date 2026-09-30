@@ -63,6 +63,8 @@ function createShareAudioController({
   let armedUntil = 0;
   let session = null;
   let counter = 0;
+  // A capture that ended before the page claimed it, waiting to be told to it.
+  let lastEnd = null;
 
   function settleSession(target, outcome) {
     if (!target || target.outcome) {
@@ -88,8 +90,15 @@ function createShareAudioController({
     }
     const wasActive = target.outcome?.active === true;
     stop(target.id);
-    if (!wasActive || !target.handed) {
-      // Nobody holds it: a capture the page never claimed has no listener to tell.
+    if (wasActive && !target.handed) {
+      // The page has not come for it yet, so there is nobody to tell: what
+      // `claim` says when it does is the answer, and it must not be "none",
+      // which means the box was left unticked. That mistake is a silent share
+      // with nothing recorded about why.
+      lastEnd = { reason };
+      return;
+    }
+    if (!wasActive) {
       return;
     }
     try {
@@ -152,6 +161,9 @@ function createShareAudioController({
         if (session === unclaimed && !unclaimed.handed) {
           log("the page never claimed the capture; stopping it");
           stop(unclaimed.id);
+          // A claim that comes late must hear why, not "none" (the box was
+          // left unticked), which would read as nothing having gone wrong.
+          lastEnd = { reason: "unclaimed" };
         }
       }, CLAIM_TIMEOUT_MS);
     } else if (message.state === "failed") {
@@ -290,6 +302,11 @@ function createShareAudioController({
    * share it has not attached yet.
    */
   function stop(sessionId) {
+    if (typeof sessionId !== "string") {
+      // A global stop (a new picker, the window going away) is a new start:
+      // what ended before it is not the next claim's business.
+      lastEnd = null;
+    }
     const current = session;
     if (!current || (typeof sessionId === "string" && sessionId !== current.id)) {
       return;
@@ -373,6 +390,11 @@ function createShareAudioController({
   async function claim() {
     const current = session;
     if (!current) {
+      if (lastEnd) {
+        const ended = lastEnd;
+        lastEnd = null;
+        return { active: false, reason: ended.reason, stage: null, hr: null };
+      }
       return { active: false, reason: "none", stage: null, hr: null };
     }
     const outcome = await current.promise;

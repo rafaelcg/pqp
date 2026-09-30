@@ -244,6 +244,7 @@ interface FakeCapture {
   getVideoTracks: () => FakeCaptureTrack[];
   getAudioTracks: () => FakeCaptureTrack[];
   removeTrack: (track: FakeCaptureTrack) => void;
+  addTrack: (track: FakeCaptureTrack) => void;
 }
 
 /**
@@ -295,6 +296,9 @@ function fakeCapture(
     removeTrack: (track) => {
       tracks = tracks.filter((t) => t !== track);
     },
+    addTrack: (track) => {
+      tracks.push(track);
+    },
   };
 }
 
@@ -344,7 +348,21 @@ function installBrowserStubs() {
       },
     },
   });
+  // What the Windows app's native share sound needs of WebAudio on top of the
+  // mic pipeline: a context at the rate the shell sends, that runs, and a
+  // worklet module to load into it.
+  g.AudioWorkletNode = class {
+    port = { postMessage: () => {}, onmessage: null };
+    connect() {}
+    disconnect() {}
+  };
   g.AudioContext = class {
+    sampleRate = 48000;
+    state = "running";
+    audioWorklet = { addModule: async () => {} };
+    resume() {
+      return Promise.resolve();
+    }
     createMediaStreamSource() {
       return { connect: () => {} };
     }
@@ -707,6 +725,45 @@ describe("screen share audio", () => {
       await voice.startScreenShare(false, { nativeShareAudio: true });
 
       expect(voice.getState().isSharingScreen).toBe(true);
+      expect(voice.getState().notice).toMatch(/without sound/i);
+    });
+
+    it("never arms the shell, and asks Chromium for audio, when the audio graph will not run (suspended context)", async () => {
+      const shell = desktopShell();
+      installShell(shell);
+      const g = globalThis as unknown as Record<string, unknown>;
+      const Working = g.AudioContext as new () => object;
+      g.AudioContext = class extends Working {
+        state = "suspended";
+        resume() {
+          // Resolves, and the context stays suspended: the autoplay policy's way of saying no.
+          return Promise.resolve();
+        }
+      };
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      displayMedia = async () => fakeCapture("cap-suspended", true, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      // The end state that matters: the picker was asked for Chromium's own
+      // audio (Windows 11's default path), not for none with nothing behind it.
+      expect((displayMediaCalls[0] as { audio?: unknown }).audio).not.toBe(false);
+      expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
+      expect(shell.nativeShareAudioClaim).not.toHaveBeenCalled();
+      expect(voice.getState().isSharingScreenAudio).toBe(true);
+    });
+
+    it("says so when the capture ended before the page could claim it, not a silent unticked-box share", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const shell = desktopShell({
+        nativeShareAudioClaim: vi.fn(async () => ({ active: false, reason: "ended" })),
+      });
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-ended-early", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      expect(voice.getState().isSharingScreenAudio).toBe(false);
       expect(voice.getState().notice).toMatch(/without sound/i);
     });
 

@@ -1348,6 +1348,7 @@
   "voice.notice.listenOnly": "Você entrou sem microfone, então dá para ouvir mas não para falar. {reason}",
   "voice.notice.micMixFailed": "Não deu pra colocar seu mic no stream. A sala te ouve; quem assiste de fora, não.",
   "voice.notice.nativeShareAudioFailed": "O app não conseguiu pegar o som dessa janela, então você está compartilhando sem som. O próximo compartilhamento volta pro jeito de antes.",
+  "voice.notice.nativeShareAudioEnded": "O app perdeu a captura de som dessa transmissão, então ela está saindo sem som. O próximo compartilhamento volta pro jeito de antes.",
   "voice.notice.systemAudioStripped": "Tirei o som do computador dessa transmissão. Nessa versão do Windows a call iria junto.",
   "voice.notice.systemAudioStrippedWin10Tab": "Tirei o som do computador dessa transmissão. Neste Windows não dá pra manter a call de fora, então a única forma de mandar som é compartilhar uma aba do Chrome com \"Também compartilhar áudio da guia\".",
   "voice.notice.systemAudioStrippedWin10App": "Tirei o som do computador dessa transmissão. Pelo navegador, neste Windows não dá pra manter a call de fora: baixe o app de desktop da pqp (pqp.gg/download) pra compartilhar com som, ou compartilhe uma aba do Chrome com \"Também compartilhar áudio da guia\".",
