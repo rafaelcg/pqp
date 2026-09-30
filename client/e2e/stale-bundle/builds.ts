@@ -17,7 +17,11 @@ const CLIENT_DIR = path.resolve(import.meta.dirname, "../..");
  * About four seconds a build. `VITE_DEV_AUTH_BYPASS` so the bundle boots
  * without a Clerk key; nothing here talks to an API.
  */
-export function buildFixture(name: string, buildId: string): string {
+export function buildFixture(
+  name: string,
+  buildId: string,
+  options: { legacyWorker?: boolean } = {},
+): string {
   const out = path.join(os.tmpdir(), "pqp-stale-bundle", name);
   mkdirSync(path.dirname(out), { recursive: true });
   execFileSync(
@@ -28,6 +32,7 @@ export function buildFixture(name: string, buildId: string): string {
       env: {
         ...process.env,
         VITE_PQP_BUILD_ID: buildId,
+        PQP_TEST_LEGACY_WORKER: options.legacyWorker ? "1" : "",
         VITE_DEV_AUTH_BYPASS: "true",
         // Never inherited from a developer's shell: the fixtures must be the
         // same tree apart from the id.
