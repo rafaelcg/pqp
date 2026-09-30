@@ -82,12 +82,12 @@ import {
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
-  wantsNativeShareAudio,
 } from "@/lib/screen-capture-audio";
 import {
-  armNativeShareAudio,
+  armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
   ensureNativeShareAudio,
+  prefetchNativeShareAudio,
 } from "@/lib/native-share-audio";
 import {
   blocksGoLive,
@@ -1143,6 +1143,11 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const checklistBlocked = blocksGoLive(checklistItems);
 
   useEffect(() => setName(party.name), [party.id, party.name]);
+  // The host is about to pick a share: have the per-server native-sound flag
+  // answered before they click, so the picker never waits on the API.
+  useEffect(() => {
+    prefetchNativeShareAudio(party.serverId ?? null);
+  }, [party.serverId]);
 
   // The preview stream belongs to this surface. Leaving the draft without
   // going live has to stop the capture, or the browser keeps showing "pqp is
@@ -1190,15 +1195,14 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         maxFrameRate: props.hlsMaxFrameRate,
         nativeShareAudio,
       };
-      let pickEnv = liveScreenCaptureEnvironment(intent);
       // The Windows desktop app's own per-process sound, the film without the
       // call, attached to the preview so go-live broadcasts what was checked.
       // A refused arm builds the options the old way instead.
-      let nativeAudio = wantsNativeShareAudio(false, pickEnv, intent);
-      if (nativeAudio && !(await armNativeShareAudio())) {
-        nativeAudio = false;
-        pickEnv = { ...pickEnv, shellNativeShareAudio: false };
-      }
+      const { nativeAudio, env: pickEnv } = await armOrFallBackToChromiumAudio(
+        false,
+        liveScreenCaptureEnvironment(intent),
+        intent,
+      );
       setNativeShareAudioOffered(nativeAudio);
       const options = screenCaptureOptions(false, pickEnv, intent);
       const picked = await navigator.mediaDevices.getDisplayMedia(options);

@@ -34,6 +34,11 @@
 import workletUrl from "./native-share-audio-worklet.js?url";
 import { fetchShareConfig } from "./api";
 import { getDesktop, type NativeShareAudioClaim, type PqpDesktop } from "./desktop";
+import {
+  wantsNativeShareAudio,
+  type ScreenCaptureEnvironment,
+  type ScreenCaptureIntent,
+} from "./screen-capture-audio";
 
 type Bridge = Required<
   Pick<
@@ -50,8 +55,27 @@ const PROCESSOR = "pqp-native-share-audio";
 const PORT_MESSAGE = "pqp:native-share-audio-port";
 /** After this a flag answer is refreshed, in the background. */
 const CONFIG_TTL_MS = 60_000;
-/** The first share for a server waits this long for the flag, at most. */
+/**
+ * A background lookup of the flag (a prefetch, or the refresh behind a stale
+ * answer) gives the API this long before it is read as "off for now".
+ */
 const CONFIG_TIMEOUT_MS = 1500;
+/**
+ * What the share-start path itself will wait for an answer that is not
+ * already known. The flag is prefetched when the person enters the call, so
+ * this is only ever spent when they click share inside the first moments of
+ * it, and it is short on purpose: a flag nobody has answered yet is OFF for
+ * this share, which is exactly the picker they had before this existed, and
+ * the answer lands in the cache for the next one. The ordinary picker is
+ * never held back by a slow API.
+ */
+const ENSURE_BUDGET_MS = 400;
+/**
+ * `AudioContext.resume()` can stay pending for ever when the page has no
+ * user activation yet (autoplay policy), and an attach that awaited it would
+ * hold the share with it.
+ */
+const RESUME_TIMEOUT_MS = 1500;
 /**
  * The first status call starts the shell's audio process and self-tests it,
  * which takes a few hundred milliseconds. This is the ceiling, paid once.
@@ -79,6 +103,8 @@ export function nativeShareAudioBridge(desktop: PqpDesktop | undefined = getDesk
 
 const flagCache = new Map<string, { at: number; value: boolean }>();
 const flagRefreshing = new Set<string>();
+/** Flag plus self-test, per server, while one is being worked out. */
+const readinessInFlight = new Map<string, Promise<boolean>>();
 /**
  * The shell's self-test result for this page's lifetime. The shell caches it
  * too; this saves the round trip, and the wait, on every share after the
@@ -96,6 +122,7 @@ let failedThisSession = false;
 export function resetNativeShareAudioForTests(): void {
   flagCache.clear();
   flagRefreshing.clear();
+  readinessInFlight.clear();
   statusAnswer = null;
   failedThisSession = false;
   if (active) {
@@ -174,22 +201,94 @@ function shellCanCapture(bridge: Bridge): Promise<boolean> {
 }
 
 /**
+ * The flag, then the shell's self-test, for one server. One lookup per server
+ * at a time: a prefetch and a share that start together share one request.
+ * Never rejects.
+ */
+function readinessFor(bridge: Bridge, serverId: string | null): Promise<boolean> {
+  const key = serverId ?? "";
+  let pending = readinessInFlight.get(key);
+  if (!pending) {
+    pending = flagFor(serverId)
+      .then((on) => (on ? shellCanCapture(bridge) : false))
+      .catch(() => false)
+      .finally(() => {
+        readinessInFlight.delete(key);
+      });
+    readinessInFlight.set(key, pending);
+  }
+  return pending;
+}
+
+/**
+ * Warm the answer for `ensureNativeShareAudio` off the share-start path: call
+ * it when the person enters a call or a watch party for `serverId` (null for
+ * a DM call). It fetches the per-server flag and, only when the flag is on,
+ * runs the shell's self-test, so by the time they click "share screen" both
+ * are cached and the picker opens at once. Fire and forget; a browser, an
+ * older shell and a session that already failed are all a no-op, so the web
+ * client never makes the request.
+ */
+export function prefetchNativeShareAudio(serverId?: string | null): void {
+  const bridge = nativeShareAudioBridge();
+  if (!bridge || failedThisSession) {
+    return;
+  }
+  void readinessFor(bridge, serverId ?? null);
+}
+
+/**
  * Decide, before the picker opens, whether THIS share's sound comes from the
  * shell. `serverId` is the server the call is in (null for a DM call), so a
  * per-server override can turn it on for one community first. The answer is
  * returned, never stored: the caller carries it on the share's intent
  * (`ScreenCaptureIntent.nativeShareAudio`), so two shares being set up for
  * two servers cannot read each other's flag.
+ *
+ * NEVER SLOWS THE ORDINARY PICKER. A server whose flag is known to be off
+ * answers at once, from the cache, however old it is (the refresh runs
+ * behind it). A server nobody has asked about yet gets `ENSURE_BUDGET_MS`
+ * and no more: past that the share takes the old path and the answer, when
+ * it comes, is there for the next one.
  */
 export async function ensureNativeShareAudio(serverId?: string | null): Promise<boolean> {
   const bridge = nativeShareAudioBridge();
   if (!bridge || failedThisSession) {
     return false;
   }
-  if (!(await flagFor(serverId ?? null))) {
+  const id = serverId ?? null;
+  const cached = flagCache.get(id ?? "");
+  if (cached && !cached.value) {
+    // Off, and known: no waiting of any kind. Refresh if it is stale.
+    void flagFor(id);
     return false;
   }
-  return shellCanCapture(bridge);
+  return withTimeout(readinessFor(bridge, id), ENSURE_BUDGET_MS, false);
+}
+
+/**
+ * Arm the shell for this share, or fall back to the old path for it. One
+ * place for both share paths (the call's share button and the watch party's
+ * setup picker), so neither can forget the half that matters: an arm the
+ * shell refused must rebuild the capture options WITHOUT native audio,
+ * because options built for it ask Chromium for no audio at all, and on
+ * Windows 11 that is sound the share used to have.
+ *
+ * `nativeAudio` says whether the caller attaches the shell's capture after
+ * `getDisplayMedia`; `env` is the environment its options are built from.
+ */
+export async function armOrFallBackToChromiumAudio(
+  shareSystemAudio: boolean,
+  env: ScreenCaptureEnvironment,
+  intent: ScreenCaptureIntent = {},
+): Promise<{ nativeAudio: boolean; env: ScreenCaptureEnvironment }> {
+  if (!wantsNativeShareAudio(shareSystemAudio, env, intent)) {
+    return { nativeAudio: false, env };
+  }
+  if (await armNativeShareAudio()) {
+    return { nativeAudio: true, env };
+  }
+  return { nativeAudio: false, env: { ...env, shellNativeShareAudio: false } };
 }
 
 /**
@@ -220,6 +319,8 @@ interface ActiveSession {
   context: AudioContext;
   node: AudioWorkletNode;
   timer: ReturnType<typeof setInterval>;
+  /** Unsubscribes from the shell's "capture ended on its own" event. */
+  offEnded?: () => void;
 }
 
 let active: ActiveSession | null = null;
@@ -229,6 +330,11 @@ function teardown(session: ActiveSession, stopShell: boolean): void {
     active = null;
   }
   clearInterval(session.timer);
+  try {
+    session.offEnded?.();
+  } catch {
+    // The listener is already gone.
+  }
   try {
     session.track.stop();
   } catch {
@@ -335,11 +441,16 @@ async function pcmTrack(port: MessagePort): Promise<Omit<ActiveSession, "session
     node.connect(destination);
     node.port.postMessage({ type: "port", port }, [port]);
     if (context.state !== "running") {
-      await context.resume().catch(() => {});
+      // Bounded, and a rejection is not an answer either: what decides is
+      // the state read after it.
+      await withTimeout(context.resume(), RESUME_TIMEOUT_MS, undefined);
     }
     const track = destination.stream.getAudioTracks()[0];
-    // A suspended context renders nothing: a track from it would be a silent
-    // share that reports itself as attached.
+    // A suspended context renders nothing (resume() rejected, hung, or
+    // resolved into a state that is still not running): a track from it would
+    // be a silent share that reports itself as attached. Treated as a graph
+    // failure, so the attach fails loudly and the next share takes the old
+    // path.
     if (!track || context.state !== "running") {
       void context.close().catch(() => {});
       return null;
@@ -349,6 +460,23 @@ async function pcmTrack(port: MessagePort): Promise<Omit<ActiveSession, "session
     console.warn("[share-audio] audio graph failed", err);
     void context.close().catch(() => {});
     return null;
+  }
+}
+
+function subscribeToCaptureEnded(
+  bridge: Bridge,
+  onEnded: (sessionId: string) => void,
+): (() => void) | undefined {
+  const desktop = bridge as PqpDesktop;
+  if (typeof desktop.onNativeShareAudioEnded !== "function") {
+    // A shell from before this event: the watch on the video track still
+    // ends the session with the share.
+    return undefined;
+  }
+  try {
+    return desktop.onNativeShareAudioEnded((event) => onEnded(event.sessionId));
+  } catch {
+    return undefined;
   }
 }
 
@@ -421,6 +549,17 @@ export async function attachNativeShareAudio(stream: MediaStream): Promise<Nativ
         }
       }, WATCH_INTERVAL_MS),
     };
+    // The capture can end without the share ending: the output device went
+    // away, the stream failed. The shell has already closed its end and
+    // cleaned up; this lets the page stop the track and release its audio
+    // graph too, instead of keeping a silent context alive for the rest of
+    // the share.
+    session.offEnded = subscribeToCaptureEnded(bridge, (endedId) => {
+      if (endedId === sessionId && active === session) {
+        console.warn("[share-audio] native capture ended on its own");
+        teardown(session, false);
+      }
+    });
     active = session;
     stream.addTrack(graph.track);
     return { attached: true, reason: null, target: claim.target ?? null };

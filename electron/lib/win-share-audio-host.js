@@ -166,6 +166,14 @@ function start(message, port) {
         }
       },
       (event) => {
+        // A session main already stopped (or that ended a moment ago) has
+        // nothing more to say: the late `started`, the abort a stop causes
+        // mid-activation and the trailing `ended` of a stop are all the
+        // echo of a decision already taken, and reporting them would only
+        // make main answer a session it no longer has.
+        if (sessions.get(sessionId) !== session) {
+          return;
+        }
         if (event.type === "started") {
           send({
             type: "session",

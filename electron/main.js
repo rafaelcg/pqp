@@ -134,6 +134,13 @@ function shareAudio() {
       createChannel: () => new MessageChannelMain(),
       ownPid: process.pid,
       log: (message) => console.log(`[pqp] share audio: ${message}`),
+      // The capture the page holds ended on its own: the app window (and only
+      // it) stops its track and frees its audio graph.
+      onSessionEnded: (info) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("pqp:native-share-audio-ended", info);
+        }
+      },
     });
   }
   return shareAudioController;

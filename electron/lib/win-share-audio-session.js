@@ -27,7 +27,16 @@
 const { formatHresult } = require("./win-share-audio");
 
 const ARM_TTL_MS = 120_000;
-/** Activation answers in milliseconds; this is the share waiting on a hung one. */
+/**
+ * Two deadlines, both this long, and both end in the same place: the capture
+ * is stopped and its port closed, deterministically, not merely "settled".
+ *
+ *   - from `start`: the host has to report `started` (activation answers in
+ *     milliseconds; this is the share waiting on a hung one);
+ *   - from `started`: the page has to `claim` the port. A capture nobody
+ *     claims would otherwise post a 10 ms chunk a hundred times a second
+ *     into a port nobody reads, for as long as the window lives.
+ */
 const CLAIM_TIMEOUT_MS = 4000;
 /** First status call forks the host and self-tests; later calls are cached. */
 const STATUS_TIMEOUT_MS = 6000;
@@ -41,6 +50,11 @@ function createShareAudioController({
   platform = process.platform,
   now = Date.now,
   log = () => {},
+  // Told when a capture the page HAS claimed ends without the page asking
+  // (`{ sessionId, reason }`): the stream failed, the device went away, the
+  // audio process died. Main forwards it to the window so the page can stop
+  // its track and release its audio graph; the page's own stop is not it.
+  onSessionEnded = () => {},
 }) {
   let host = null;
   let crashes = 0;
@@ -57,6 +71,32 @@ function createShareAudioController({
     clearTimeout(target.timer);
     target.outcome = outcome;
     target.resolve(outcome);
+  }
+
+  /**
+   * A capture that stopped on its own, for any reason the host reports: make
+   * the session's end complete, however far it had got. The host has already
+   * dropped its session and closed its port (see `stopSession` in the host);
+   * this drops ours, closes the port main still holds if the page never took
+   * it, and, when the page HAD the capture, tells the page. A failure that
+   * comes before the capture started does not come through here: `claim`
+   * reports it, with its stage and HRESULT, and stops the session itself.
+   */
+  function captureEnded(target, reason) {
+    if (!target || session !== target) {
+      return;
+    }
+    const wasActive = target.outcome?.active === true;
+    stop(target.id);
+    if (!wasActive || !target.handed) {
+      // Nobody holds it: a capture the page never claimed has no listener to tell.
+      return;
+    }
+    try {
+      onSessionEnded({ sessionId: target.id, reason });
+    } catch (err) {
+      log(`could not tell the page its capture ended: ${err?.message ?? err}`);
+    }
   }
 
   function onHostMessage(message) {
@@ -87,6 +127,14 @@ function createShareAudioController({
       }
       return;
     }
+    if (message.state === "started" && session.outcome) {
+      // The session was settled before its capture reported in (a failure, a
+      // host that was thought gone): nobody is going to claim this capture,
+      // so it is stopped now, and its port closed, instead of left to post
+      // into nothing.
+      stop(session.id);
+      return;
+    }
     if (message.state === "started") {
       log(
         `capturing ${message.target?.mode} (${message.target?.reason}${
@@ -98,24 +146,41 @@ function createShareAudioController({
         target: message.target ?? null,
         autoConvert: message.autoConvert === true,
       });
+      // Started is not claimed: the page has CLAIM_TIMEOUT_MS to take the port.
+      const unclaimed = session;
+      unclaimed.unclaimedTimer = setTimeout(() => {
+        if (session === unclaimed && !unclaimed.handed) {
+          log("the page never claimed the capture; stopping it");
+          stop(unclaimed.id);
+        }
+      }, CLAIM_TIMEOUT_MS);
     } else if (message.state === "failed") {
       log(
         `capture failed at ${message.stage} ${formatHresult(message.hr)}${
           message.reason ? ` (${message.reason})` : ""
         }`,
       );
-      settleSession(session, {
+      const failing = session;
+      const failedLive = failing.outcome?.active === true;
+      settleSession(failing, {
         active: false,
         reason: message.reason ?? "failed",
         stage: message.stage ?? null,
         hr: message.hr ?? null,
       });
+      // A failure AFTER the capture started (the stream broke mid-share) is
+      // the end of a capture the page holds; before it, `claim` reports the
+      // failure and stops the session itself.
+      if (failedLive) {
+        captureEnded(failing, message.reason ?? "failed");
+      }
     } else if (message.state === "ended") {
       log(`capture ended ${JSON.stringify(message.stats ?? {})}`);
-      // The host closed its end; the page hears silence from here, as it
-      // would from a share with no sound. Nothing left to stop.
-      settleSession(session, { active: false, reason: "ended", stage: null, hr: null });
-      stop(session.id);
+      // The host closed its end; the page hears silence from here unless it
+      // is told, which `captureEnded` does.
+      const ending = session;
+      settleSession(ending, { active: false, reason: "ended", stage: null, hr: null });
+      captureEnded(ending, "ended");
     }
   }
 
@@ -150,7 +215,14 @@ function createShareAudioController({
       selfTest = null;
       resolveSelfTest?.({ ok: false, stage: "host-exit", hr: null });
       resolveSelfTest = null;
-      settleSession(session, { active: false, reason: "host-exit", stage: null, hr: null });
+      const orphaned = session;
+      const heldLive = orphaned?.outcome?.active === true;
+      settleSession(orphaned, { active: false, reason: "host-exit", stage: null, hr: null });
+      // The process that owned the capture is gone, and its end of the port
+      // with it: a page that held the capture is told, and the session goes.
+      if (heldLive) {
+        captureEnded(orphaned, "host-exit");
+      }
     });
     host = current;
     return host;
@@ -223,6 +295,8 @@ function createShareAudioController({
       return;
     }
     session = null;
+    clearTimeout(current.timer);
+    clearTimeout(current.unclaimedTimer);
     settleSession(current, { active: false, reason: "stopped", stage: null, hr: null });
     try {
       host?.child.postMessage({ type: "stop", sessionId: current.id });
@@ -251,7 +325,16 @@ function createShareAudioController({
     const outcome = new Promise((done) => {
       resolve = done;
     });
-    const current = { id, resolve, promise: outcome, outcome: null, timer: null, port: null, handed: false };
+    const current = {
+      id,
+      resolve,
+      promise: outcome,
+      outcome: null,
+      timer: null,
+      unclaimedTimer: null,
+      port: null,
+      handed: false,
+    };
     session = current;
     if (!hostNow) {
       settleSession(current, { active: false, reason: "host-unavailable", stage: null, hr: null });
@@ -304,6 +387,7 @@ function createShareAudioController({
       return { active: false, reason: "claimed", stage: null, hr: null };
     }
     current.handed = true;
+    clearTimeout(current.unclaimedTimer);
     return { ...outcome, sessionId: current.id, port: current.port };
   }
 

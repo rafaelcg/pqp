@@ -565,7 +565,7 @@ import {
   steersAtBrowserTab,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
-import { ensureNativeShareAudio } from "@/lib/native-share-audio";
+import { ensureNativeShareAudio, prefetchNativeShareAudio } from "@/lib/native-share-audio";
 import {
   hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
@@ -2646,6 +2646,17 @@ function MainAppContent({
   const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // Windows desktop share sound: look up the call's per-server flag (and the
+  // shell's self-test, when the flag is on) as soon as they are in the call,
+  // so "share screen" never waits on the API. The ref is set before the join
+  // resolves, and a DM call leaves it null (the global answer). A no-op in a
+  // browser, which never has the shell's bridge.
+  const hasVoiceSeat = Boolean(voiceState.voiceChannelId);
+  useEffect(() => {
+    if (hasVoiceSeat) {
+      prefetchNativeShareAudio(voiceServerIdRef.current);
+    }
+  }, [hasVoiceSeat]);
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an

@@ -18,6 +18,8 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -46,12 +48,37 @@ struct Callbacks {
   napi_ref onEvent = nullptr;
   std::atomic<int> inFlight{0};
   std::atomic<uint64_t> dropped{0};
+  // Set by stop() before anything else. From then on the capture thread's
+  // audio is dropped at the source instead of queued for a JS thread that
+  // has already been told the share is over; its final events still go out.
+  std::atomic<bool> cancelled{false};
 };
 
+// THE STOP HANDSHAKE, because the JS thread must never wait for the capture
+// thread, and the capture thread must never outlive what it calls into.
+//
+//   JS thread, stop():      1. callbacks->cancelled = true   (chunks dropped)
+//                           2. capture->Cancel()             (signal only)
+//                           3. hand {capture, tsfn} to `cleaner`; return.
+//   cleaner thread:         4. capture->Stop()               (the join)
+//                           5. release the threadsafe function, which is
+//                              the LAST thing that touches it.
+//   JS thread, later:       6. the queue drains (the final "ended" event
+//                              included), then FinalizeCallbacks frees the
+//                              Callbacks the capture thread posted into.
+//
+// Nothing is freed while a thread can still reach it: `Callbacks` dies only
+// after the release in 5, which only happens after the join in 4, and the
+// capture thread is the only other user. The Session owns the `cleaner`
+// thread and joins it in its finalizer, so a stop that is still unwinding at
+// garbage collection or at environment teardown is waited for there (where
+// waiting is unavoidable) rather than detached and left to race the process
+// going away. A second stop() finds `stopped` set and does nothing.
 struct Session {
   napi_threadsafe_function tsfn = nullptr;
   Callbacks* callbacks = nullptr;
-  std::unique_ptr<pqp::LoopbackCapture> capture;
+  std::shared_ptr<pqp::LoopbackCapture> capture;
+  std::thread cleaner;
   bool stopped = false;
 };
 
@@ -178,26 +205,73 @@ void FinalizeCallbacks(napi_env env, void* data, void*) {
   delete callbacks;
 }
 
-void StopSession(Session* session) {
+// Steps 4 and 5 of the handshake above: join the (already cancelled) capture
+// thread, then give the threadsafe function back. `Stop` joins, so after it
+// returns the capture thread has posted its last message and will call into
+// the function no more.
+void FinishStop(std::shared_ptr<pqp::LoopbackCapture>& capture,
+                napi_threadsafe_function tsfn) {
+  if (capture) {
+    capture->Stop();
+    capture.reset();
+  }
+  if (tsfn) {
+    napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+  }
+}
+
+// Used where waiting is the point or the only choice: the finalizer, and a
+// capture that never started. The caller may block here.
+void StopSessionBlocking(Session* session) {
   if (session->stopped) {
     return;
   }
   session->stopped = true;
-  if (session->capture) {
-    // Joins the capture thread. Its last act is posting "ended", so after
-    // this nothing will call into the threadsafe function again.
-    session->capture->Stop();
-    session->capture.reset();
+  if (session->callbacks) {
+    session->callbacks->cancelled.store(true);
   }
-  if (session->tsfn) {
-    napi_release_threadsafe_function(session->tsfn, napi_tsfn_release);
-    session->tsfn = nullptr;
+  napi_threadsafe_function tsfn = session->tsfn;
+  session->tsfn = nullptr;
+  FinishStop(session->capture, tsfn);
+}
+
+// `stop()` from JavaScript: signal, and let another thread do the waiting.
+void StopSessionAsync(Session* session) {
+  if (session->stopped) {
+    return;
   }
+  session->stopped = true;
+  napi_threadsafe_function tsfn = session->tsfn;
+  session->tsfn = nullptr;
+  std::shared_ptr<pqp::LoopbackCapture> capture = std::move(session->capture);
+  if (session->callbacks) {
+    session->callbacks->cancelled.store(true);
+  }
+  if (!capture) {
+    FinishStop(capture, tsfn);
+    return;
+  }
+  capture->Cancel();
+  try {
+    // `capture` is copied into the thread, so if the thread cannot be made
+    // this function still owns it and finishes the stop itself below.
+    session->cleaner = std::thread([capture, tsfn]() mutable {
+      FinishStop(capture, tsfn);
+    });
+    return;
+  } catch (const std::system_error&) {
+    // Out of threads: block, exactly as before this existed, rather than
+    // leak a running capture.
+  }
+  FinishStop(capture, tsfn);
 }
 
 void FinalizeSession(napi_env, void* data, void*) {
   Session* session = static_cast<Session*>(data);
-  StopSession(session);
+  StopSessionBlocking(session);
+  if (session->cleaner.joinable()) {
+    session->cleaner.join();
+  }
   delete session;
 }
 
@@ -215,7 +289,7 @@ napi_value Stop(napi_env env, napi_callback_info info) {
   if (napi_unwrap(env, self, &data) != napi_ok || data == nullptr) {
     return Throw(env, "stop() called on something that is not a capture");
   }
-  StopSession(static_cast<Session*>(data));
+  StopSessionAsync(static_cast<Session*>(data));
   napi_value undefined;
   napi_get_undefined(env, &undefined);
   return undefined;
@@ -279,6 +353,9 @@ napi_value StartCapture(napi_env env, napi_callback_info info) {
   session->callbacks = callbacks;
 
   auto onChunk = [tsfn, callbacks](std::vector<float>&& samples) {
+    if (callbacks->cancelled.load()) {
+      return;
+    }
     if (callbacks->inFlight.load() >= kMaxInFlightChunks) {
       callbacks->dropped.fetch_add(1);
       return;
@@ -303,7 +380,7 @@ napi_value StartCapture(napi_env env, napi_callback_info info) {
       delete message;
     }
   };
-  session->capture = std::make_unique<pqp::LoopbackCapture>(
+  session->capture = std::make_shared<pqp::LoopbackCapture>(
       static_cast<DWORD>(pid), loopbackMode, onChunk, onEvent);
 
   napi_value handle;
@@ -314,14 +391,14 @@ napi_value StartCapture(napi_env env, napi_callback_info info) {
       napi_set_named_property(env, handle, "stop", stop) != napi_ok ||
       napi_wrap(env, handle, session, FinalizeSession, nullptr, nullptr) !=
           napi_ok) {
-    StopSession(session);
+    StopSessionBlocking(session);
     delete session;
     return Throw(env, "could not create the capture handle");
   }
   if (!session->capture->Start()) {
     // The handle's finalizer frees the session; stopping now releases the
     // queue so the process is not held open by a capture that never ran.
-    StopSession(session);
+    StopSessionBlocking(session);
     return Throw(env, "the capture thread could not start");
   }
   return handle;

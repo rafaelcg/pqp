@@ -43,6 +43,14 @@ export interface PqpDesktop {
   nativeShareAudioClaim?(): Promise<NativeShareAudioClaim>;
   /** The share is over; with its `sessionId`, only that capture. */
   nativeShareAudioStop?(sessionId?: string): Promise<void>;
+  /**
+   * The shell's capture ended on its own (the stream failed, the device went
+   * away) and has already cleaned up its side. Returns the unsubscribe.
+   * Absent in shells from before this event.
+   */
+  onNativeShareAudioEnded?(
+    callback: (event: { sessionId: string; reason: string }) => void,
+  ): () => void;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */

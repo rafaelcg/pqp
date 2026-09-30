@@ -14,12 +14,16 @@
  *
  * Starting and stopping also exercises the thread and queue teardown: the
  * script must exit on its own, which a leaked threadsafe function prevents.
+ * `stop()` must also hand control back at once, even while activation is still
+ * pending (the JavaScript thread is the audio host's only thread for protocol
+ * messages), and the capture must still report "ended" afterwards.
  *
  *   node smoke-test.mjs [--arch x64] [--expect exclude=error:activate:0x88890010]
  */
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import os from "node:os";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,11 +98,54 @@ function firstOutcome(mode) {
           // Let "ended" arrive through the queue, which is the teardown path.
           setImmediate(() => {
             capture.stop();
-            setTimeout(() => resolve({ first: event, events }), 200);
+            // The join happens off this thread, so "ended" arrives a moment
+            // after stop() returns: wait for it, not for a fixed time.
+            const deadline = Date.now() + 5_000;
+            const wait = () => {
+              if (events.some((e) => e.type === "ended") || Date.now() > deadline) {
+                resolve({ first: event, events });
+              } else {
+                setTimeout(wait, 20);
+              }
+            };
+            wait();
           });
         }
       },
     );
+  });
+}
+
+/**
+ * Stop right after start, before the audio service has answered (activation
+ * is asynchronous, so on any machine this lands mid-activation or just after
+ * it). The call must return at once, must be safe to repeat, and the capture
+ * must still report "ended": a stop that blocked for the activation timeout,
+ * or one that leaked the thread, fails here.
+ */
+function stopWhilePending(mode) {
+  return new Promise((resolve, reject) => {
+    const events = [];
+    const timer = setTimeout(() => reject(new Error(`${mode}: no "ended" after stop in 10 s`)), 10_000);
+    const capture = addon.startCapture(
+      process.pid,
+      mode,
+      () => {},
+      (event) => {
+        events.push(event);
+        if (event.type === "ended") {
+          clearTimeout(timer);
+          // Give a duplicate "ended" the chance to show itself.
+          setTimeout(() => resolve(events), 200);
+        }
+      },
+    );
+    const began = performance.now();
+    capture.stop();
+    const tookMs = performance.now() - began;
+    capture.stop();
+    assert.ok(tookMs < 1_000, `${mode}: stop() blocked the calling thread for ${Math.round(tookMs)} ms`);
+    console.log(`${mode}: stop() while pending returned in ${tookMs.toFixed(1)} ms`);
   });
 }
 
@@ -116,6 +163,15 @@ for (const mode of ["exclude", "include"]) {
     console.error(`::error::${mode}: expected ${want}, got ${seen}`);
     failures += 1;
   }
+}
+
+for (const mode of ["exclude", "include"]) {
+  const events = await stopWhilePending(mode);
+  assert.equal(
+    events.filter((e) => e.type === "ended").length,
+    1,
+    `${mode}: "ended" must be reported exactly once`,
+  );
 }
 
 if (failures > 0) {

@@ -39,12 +39,11 @@ import {
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
   stripLeakedSystemAudioTracks,
-  wantsNativeShareAudio,
   systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
 import {
-  armNativeShareAudio,
+  armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
   releaseNativeShareAudioFor,
 } from "@/lib/native-share-audio";
@@ -5891,11 +5890,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       // falls back to this share's old path before the options are built:
       // they would otherwise ask Chromium for no audio with nothing in its
       // place, which on Windows 11 is sound we used to have.
-      let nativeAudio =
-        !intent.stream && wantsNativeShareAudio(shareSystemAudio, captureEnv, captureIntent);
-      if (nativeAudio && !(await armNativeShareAudio())) {
-        nativeAudio = false;
-        captureEnv = { ...captureEnv, shellNativeShareAudio: false };
+      let nativeAudio = false;
+      if (!intent.stream) {
+        const armed = await armOrFallBackToChromiumAudio(
+          shareSystemAudio,
+          captureEnv,
+          captureIntent,
+        );
+        nativeAudio = armed.nativeAudio;
+        captureEnv = armed.env;
       }
       const options = screenCaptureOptions(shareSystemAudio, captureEnv, captureIntent);
       // What was actually asked for, not what was ticked. In a browser this is
@@ -5987,7 +5990,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       // a Windows 11 machine that cannot do this gets Chromium's loopback
       // back after one silent share instead of every time.
       if (nativeAudio) {
-        await attachNativeShareAudio(stream);
+        const attach = await attachNativeShareAudio(stream);
+        // The picture is fine and the sound is not: Chromium was asked for no
+        // audio because the shell was going to supply it, so a failed attach
+        // is a silent share. Say so rather than leave "why is there no sound"
+        // to be discovered by the audience. The box left unticked
+        // (`reason: "none"`) is the ordinary silent share and needs no line.
+        if (!attach.attached && attach.reason !== "none" && !state.notice) {
+          state.notice = translateMessage("voice.notice.nativeShareAudioFailed");
+        }
       }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries

@@ -5,6 +5,7 @@ import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 import { defaultMicProcessing } from "@/lib/audio-devices";
 import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
+import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 
@@ -604,6 +605,130 @@ describe("screen share audio", () => {
       await voice.startScreenShare(false, { hideCursor: true });
 
       expect(voice.getState().isShareCursorVisible).toBe(false);
+    });
+  });
+
+  /**
+   * Windows desktop, native share sound (flag `desktop_share_audio_native`).
+   * The capture options for a native share ask Chromium for NO audio because
+   * the shell is meant to supply it, so every way the shell can fail to must
+   * be handled on the side that built those options.
+   */
+  describe("the Windows desktop's native share sound", () => {
+    function desktopShell(overrides: Record<string, unknown> = {}) {
+      return {
+        isElectron: true,
+        platform: "win32",
+        sharePickerOffersAudio: true,
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          nativeShareAudio: true,
+          version: "0.2.0",
+        },
+        nativeShareAudioStatus: async () => ({
+          available: true,
+          reason: null,
+          stage: null,
+          hr: null,
+          build: 22631,
+        }),
+        nativeShareAudioArm: vi.fn(async () => true),
+        nativeShareAudioClaim: vi.fn(async () => ({ active: false, reason: "none" })),
+        nativeShareAudioStop: vi.fn(async () => {}),
+        ...overrides,
+      };
+    }
+
+    function installShell(shell: unknown) {
+      (globalThis as { window?: unknown }).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        pqpDesktop: shell,
+      };
+    }
+
+    beforeEach(() => {
+      resetNativeShareAudioForTests();
+    });
+
+    afterEach(() => {
+      resetNativeShareAudioForTests();
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("asks Chromium for no audio once the shell has armed, and attaches its capture", async () => {
+      const shell = desktopShell();
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-native", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      expect(shell.nativeShareAudioArm).toHaveBeenCalledTimes(1);
+      expect((displayMediaCalls[0] as { audio?: unknown }).audio).toBe(false);
+      expect(shell.nativeShareAudioClaim).toHaveBeenCalledTimes(1);
+      expect(voice.getState().isSharingScreen).toBe(true);
+    });
+
+    it("asks Chromium for audio again when the shell refuses the arm (Windows 11 keeps its sound)", async () => {
+      const shell = desktopShell({
+        nativeShareAudioArm: vi.fn(async () => {
+          throw new Error("ipc rejected");
+        }),
+      });
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-fallback", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      expect(shell.nativeShareAudioArm).toHaveBeenCalledTimes(1);
+      expect((displayMediaCalls[0] as { audio?: unknown }).audio).not.toBe(false);
+      // Nothing native to attach: the claim is never made for a share that
+      // was not armed.
+      expect(shell.nativeShareAudioClaim).not.toHaveBeenCalled();
+      expect(voice.getState().isSharingScreen).toBe(true);
+    });
+
+    it("says so when the capture was armed and then could not start, instead of a silent share", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const shell = desktopShell({
+        nativeShareAudioClaim: vi.fn(async () => ({
+          active: false,
+          reason: "failed",
+          stage: "initialize",
+          hr: 0x88890010,
+        })),
+      });
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-native-fail", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      expect(voice.getState().isSharingScreen).toBe(true);
+      expect(voice.getState().notice).toMatch(/without sound/i);
+    });
+
+    it("stays quiet when the box was simply left unticked", async () => {
+      const shell = desktopShell();
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-unticked", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { nativeShareAudio: true });
+
+      expect(voice.getState().notice).toBeFalsy();
+    });
+
+    it("never touches the shell when the flag answer was off", async () => {
+      const shell = desktopShell();
+      installShell(shell);
+      displayMedia = async () => fakeCapture("cap-flag-off", false, "monitor");
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
+      expect(shell.nativeShareAudioClaim).not.toHaveBeenCalled();
     });
   });
 
