@@ -61,7 +61,7 @@ describe("renderPrerenderHero", () => {
   });
 
   it("has no em dash, in any language", () => {
-    expect(html).not.toContain("—");
+    expect(html).not.toContain("\u2014");
   });
 
   it("links both calls to action to /app, which works before any script runs", () => {
