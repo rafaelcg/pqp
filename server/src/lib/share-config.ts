@@ -16,8 +16,8 @@ import { isEnabled } from "./flags.js";
  * switch does nothing in a browser or in an older desktop build.
  *
  * `shareHighMotionGuard`: the presenter's client watches its own screen-share
- * encoder and steps the capture down (resolution and bitrate first, frame rate
- * last) when a game at a very high frame rate starves it, and the desktop app
+ * encoder and steps the capture down (one resolution rung, then the frame rate,
+ * then more resolution) when a game at a very high frame rate starves it, and the desktop app
  * raises the priority of its processes while a share is live. Runtime flag
  * `share_high_motion_guard`, default off, `SHARE_HIGH_MOTION_GUARD` as its
  * environment default, per-server override. Nothing else reads it: with it off

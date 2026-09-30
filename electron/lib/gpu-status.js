@@ -10,11 +10,13 @@
  * `video_encode` that means the share is encoded on the CPU (OpenH264), which
  * is the expensive case next to a game.
  *
- * Nothing here enables or disables a feature. The bundled Chromium turns the
- * Media Foundation hardware encoder on by default on Windows, and the shell
- * passes no switch that would turn it off; what this adds is the ability to SEE
- * which one a given machine ended up with, in one log line at startup and in
- * `pqpShareHealth()`.
+ * Nothing here enables or disables a feature. `video_encode=enabled` says what
+ * the GPU CAN do, not what a given codec profile gets: LiveKit negotiates H.264
+ * `42e01f` (constrained baseline), which Chromium on Windows does not
+ * hardware-encode by default, so a share can still be OpenH264 on the CPU with
+ * this reading at `enabled`. What the share actually uses is in the sender's
+ * stats (`pqpShareHealth()` reports it); this adds the machine's side, in one log
+ * line at startup and in the same command.
  */
 
 /** @param {unknown} value */

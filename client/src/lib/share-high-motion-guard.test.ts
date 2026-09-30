@@ -25,8 +25,16 @@ function sample(at: number, over: Partial<ShareGuardSample> = {}): ShareGuardSam
   };
 }
 
+// An encoder that is behind and that WebRTC has not cut yet: slow frames, the
+// capture delivering, too few leaving. Its first step is one resolution rung.
 const starvedEncoder = (at: number) =>
-  sample(at, { limitedBy: "cpu", fps: 22, encodeMs: 14 });
+  sample(at, { limitedBy: "none", fps: 30, sourceFps: 58, encodeMs: 18 });
+// Behind at any rate, including 30.
+const starvedHard = (at: number) =>
+  sample(at, { limitedBy: "none", fps: 10, sourceFps: 58, encodeMs: 18 });
+// An encoder WebRTC has ALREADY cut and that still reports `cpu`.
+const cpuCut = (at: number) =>
+  sample(at, { limitedBy: "cpu", fps: 22, sourceFps: 58, encodeMs: 14 });
 const healthy = (at: number, over: Partial<ShareGuardSample> = {}) => sample(at, over);
 
 /** Feed one sample per 2 s from `from`, return the last decision. */
@@ -46,17 +54,17 @@ function run(
 }
 
 describe("buildShareGuardLadder", () => {
-  it("spends resolution before frame rate, and frame rate last", () => {
+  it("spends one resolution rung, then the frame rate, and only then more pixels", () => {
     const ladder = buildShareGuardLadder({ fps: 60, height: 1080 });
     expect(ladder.map((l) => [l.maxFps, l.maxHeight, l.step])).toEqual([
       [60, null, "base"],
       [60, 720, "resolution"],
-      [60, 540, "resolution"],
-      [30, 540, "frame-rate"],
+      [30, 720, "frame-rate"],
+      [30, 540, "resolution"],
     ]);
     expect(ladder[0]!.bitrateScale).toBe(1);
     expect(ladder[1]!.bitrateScale).toBeLessThan(1);
-    expect(ladder[2]!.bitrateScale).toBeLessThan(ladder[1]!.bitrateScale);
+    expect(ladder[3]!.bitrateScale).toBeLessThan(ladder[1]!.bitrateScale);
   });
 
   it("has no frame-rate step for a 30 fps capture", () => {
@@ -171,6 +179,16 @@ describe("the guard's state machine", () => {
     expect(fourth.level.maxFps).toBe(60);
   });
 
+  it("sends an encoder that WebRTC has already cut straight to the frame rate", () => {
+    // `cpu` means the encoder has been removing pixels by itself and is still
+    // behind: more pixels off is what has not helped.
+    const guard = createShareGuard(ladder);
+    const { decisions } = run(guard, 0, 8, cpuCut);
+    const down = decisions.find((d) => d.action === "down");
+    expect(down?.reason).toBe("cpu-limited");
+    expect(down?.level).toMatchObject({ index: 2, maxFps: 30, step: "frame-rate" });
+  });
+
   it("ignores a single bad reading", () => {
     const guard = createShareGuard(ladder);
     guard.observe([starvedEncoder(0)]);
@@ -201,16 +219,17 @@ describe("the guard's state machine", () => {
 
   it("walks the whole ladder under continued starvation and stops at the bottom", () => {
     const guard = createShareGuard(ladder);
-    const { decisions } = run(guard, 0, 120, starvedEncoder);
+    const { decisions } = run(guard, 0, 120, starvedHard);
     const downs = decisions.filter((d) => d.action === "down");
     expect(downs.map((d) => d.level.index)).toEqual([1, 2, 3]);
-    expect(downs.at(-1)!.level).toMatchObject({ maxFps: 30, step: "frame-rate" });
+    expect(downs[1]!.level).toMatchObject({ maxFps: 30, step: "frame-rate" });
+    expect(downs.at(-1)!.level).toMatchObject({ maxFps: 30, maxHeight: 540, step: "resolution" });
     expect(guard.level().index).toBe(3);
   });
 
   it("recovers slowly, one step at a time, frame rate first", () => {
     const guard = createShareGuard(ladder);
-    const down = run(guard, 0, 120, starvedEncoder);
+    const down = run(guard, 0, 120, starvedHard);
     expect(guard.level().index).toBe(3);
     // Healthy from here. Less than the wait: nothing moves.
     const early = run(guard, down.end, 40, (at) => healthy(at, { fps: 30, encodeMs: 3 }));
@@ -218,7 +237,8 @@ describe("the guard's state machine", () => {
     // Past 45 s of health: one step up, and it is the frame rate coming back.
     const later = run(guard, early.end, 10, (at) => healthy(at, { fps: 30, encodeMs: 3 }));
     const up = later.decisions.find((d) => d.action === "up");
-    expect(up?.level).toMatchObject({ index: 2, maxFps: 60, step: "resolution" });
+    // Pixels come back before frames do: 540 to 720 at 30 fps, then the frame rate.
+    expect(up?.level).toMatchObject({ index: 2, maxFps: 30, maxHeight: 720, step: "frame-rate" });
   });
 
   it("will not step up into a level the measured encode time says it cannot carry", () => {
@@ -311,7 +331,7 @@ describe("the guard's state machine", () => {
     const down = decisions.find((d) => d.action === "down");
     expect(down?.verdict).toBe("starved-capture");
     expect(down?.level).toMatchObject({ maxFps: 30, step: "frame-rate" });
-    expect(down?.level.index).toBe(3);
+    expect(down?.level.index).toBe(2);
   });
 
   it("has nothing to do for a starved capture that is already at 30 fps", () => {

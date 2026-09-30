@@ -2,6 +2,7 @@ import { getDesktop, type DesktopShareHealth } from "./desktop";
 import type { ShareGuardHandle } from "./share-guard-runtime";
 import {
   deriveShareSample,
+  h264ProfileOf,
   readShareEncodeStats,
   type ShareEncodeStats,
   type ShareGuardSnapshot,
@@ -51,6 +52,10 @@ export function setShareHealthSource(next: ShareHealthSource | null): void {
 export interface ShareHealthReport {
   transport: "sfu" | "mesh";
   codec: string | null;
+  /** The negotiated H.264 profile-level-id, for example `42e01f (constrained baseline)`. */
+  h264Profile: string | null;
+  /** Video encodes running for this share: simulcast layers on the SFU, one per peer on a mesh. */
+  encodes: number | null;
   encoder: string | null;
   /** True for a hardware encoder, false for a software one, null when the browser does not say. */
   hardwareEncode: boolean | null;
@@ -91,7 +96,7 @@ function pause(ms: number): Promise<void> {
 
 async function readOnce(
   src: ShareHealthSource,
-): Promise<ShareEncodeStats | null> {
+): Promise<{ reading: ShareEncodeStats; encodes: number } | null> {
   let reports: Array<Iterable<unknown>> = [];
   try {
     reports = await src.readReports();
@@ -101,8 +106,10 @@ async function readOnce(
     return null;
   }
   let worst: ShareEncodeStats | null = null;
+  let encodes = 0;
   for (const report of reports) {
     const reading = readShareEncodeStats(report, Date.now());
+    encodes += reading?.layerCount ?? 0;
     if (
       reading &&
       (worst === null || (reading.frameWidth ?? 0) >= (worst.frameWidth ?? 0))
@@ -110,7 +117,7 @@ async function readOnce(
       worst = reading;
     }
   }
-  return worst;
+  return worst ? { reading: worst, encodes } : null;
 }
 
 function trackSettings(track: MediaStreamTrack | null) {
@@ -133,9 +140,11 @@ export async function collectShareHealth(
   if (!src) {
     return null;
   }
-  const first = await readOnce(src);
+  const firstRead = await readOnce(src);
+  const first = firstRead?.reading ?? null;
   await pause(waitMs);
-  const second = await readOnce(src);
+  const secondRead = await readOnce(src);
+  const second = secondRead?.reading ?? null;
   const sample = second ? deriveShareSample(first, second) : null;
   const settings = trackSettings(src.track());
   const handle = src.guard();
@@ -148,6 +157,8 @@ export async function collectShareHealth(
   return {
     transport: src.transport,
     codec: second?.codec ?? null,
+    h264Profile: h264ProfileOf(second?.codecFmtp ?? null),
+    encodes: secondRead?.encodes ?? null,
     encoder: second?.encoderImplementation ?? null,
     hardwareEncode: classifyEncoder(
       second?.encoderImplementation ?? null,
@@ -183,7 +194,9 @@ export function formatShareHealth(report: ShareHealthReport | null): string {
   }
   const lines = [
     `share health (${report.transport})`,
-    `  codec          ${report.codec ?? "?"}`,
+    `  codec          ${report.codec ?? "?"}${report.h264Profile ? `, profile ${report.h264Profile}` : ""}${
+      report.encodes !== null ? `, ${report.encodes} encode${report.encodes === 1 ? "" : "s"} running` : ""
+    }`,
     `  encoder        ${report.encoder ?? "?"}  (${
       report.hardwareEncode === null
         ? "hardware or software unknown"

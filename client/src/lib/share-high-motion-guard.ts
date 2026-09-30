@@ -15,13 +15,23 @@
  *
  * WHAT IT DOES NOT DO: blame anybody. There is nothing user-facing here.
  *
- * THE LADDER, in the order the presenter's picture is spent (games are motion
- * content, so frame rate is the last thing to go and the first to come back):
+ * THE LADDER, in the order the presenter's picture is spent. Measured, not
+ * assumed (an investigation with real capture and a real SFU): under GPU
+ * contention most of a frame's capture cost is a FIXED wait (the readback), not
+ * pixels, WebRTC already cuts resolution on its own and reports `cpu`, and
+ * cutting 1080 to 540 saves about a fifth. 60 fps under that load was cut to
+ * 807 lines twice; 30 fps under the same load held full height with no
+ * limitation. So one resolution rung, then the frame rate, and only then more
+ * pixels:
  *
  *   0. what the presenter asked for
  *   1. resolution one rung down, bitrate scaled with it
- *   2. resolution two rungs down
- *   3. frame rate 60 to 30 (only when the capture was 60)
+ *   2. frame rate 60 to 30 (only when the capture was 60)
+ *   3. resolution two rungs down
+ *
+ * A reading that says WebRTC has ALREADY cut resolution (`cpu` limitation) or
+ * that the capture is behind goes straight to the frame-rate step: more pixels
+ * off is what it has been doing and what has not helped.
  *
  * HYSTERESIS, because a guard that oscillates is worse than no guard: a step
  * down needs about 5 s of sustained starvation; a step up needs 45 s of
@@ -83,19 +93,25 @@ export function buildShareGuardLadder(base: {
       step: "base",
     },
   ];
-  for (const rung of RESOLUTION_RUNGS) {
-    if (baseHeight - rung.height < MIN_RUNG_GAP) {
-      continue;
-    }
-    ladder.push({
-      index: ladder.length,
-      maxFps: base.fps,
-      maxHeight: rung.height,
-      height: rung.height,
-      bitrateScale: rung.bitrateScale,
-      step: "resolution",
-    });
+  const rungs = RESOLUTION_RUNGS.filter(
+    (rung) => baseHeight - rung.height >= MIN_RUNG_GAP,
+  );
+  const rungLevel = (
+    rung: { height: number; bitrateScale: number },
+    fps: ShareFps,
+  ): ShareGuardLevel => ({
+    index: ladder.length,
+    maxFps: fps,
+    maxHeight: rung.height,
+    height: rung.height,
+    bitrateScale: rung.bitrateScale,
+    step: "resolution",
+  });
+  // One resolution rung first.
+  if (rungs[0]) {
+    ladder.push(rungLevel(rungs[0], base.fps));
   }
+  // Then the frame rate, at whatever size the ladder is at.
   if (base.fps === 60) {
     const last = ladder[ladder.length - 1]!;
     ladder.push({
@@ -106,6 +122,10 @@ export function buildShareGuardLadder(base: {
       bitrateScale: last.bitrateScale,
       step: "frame-rate",
     });
+  }
+  // Only then further resolution, at the lower rate.
+  for (const rung of rungs.slice(1)) {
+    ladder.push(rungLevel(rung, ladder[ladder.length - 1]!.maxFps));
   }
   return ladder;
 }
@@ -128,6 +148,10 @@ export interface ShareEncodeStats {
   powerEfficientEncoder: boolean | null;
   /** `video/H264`, `video/VP8`, and so on. */
   codec: string | null;
+  /** The negotiated `a=fmtp` line for that codec, which names the H.264 profile. */
+  codecFmtp: string | null;
+  /** How many video encodes this sender is running (simulcast layers that are on). */
+  layerCount: number;
   /** What the capture handed the sender, frames per second. */
   sourceFps: number | null;
   sourceWidth: number | null;
@@ -154,6 +178,7 @@ interface StatLike {
   encoderImplementation?: string;
   powerEfficientEncoder?: boolean;
   mimeType?: string;
+  sdpFmtpLine?: string;
   width?: number;
   height?: number;
 }
@@ -184,6 +209,7 @@ export function readShareEncodeStats(
 ): ShareEncodeStats | null {
   const stats = entriesOf(report);
   let top: StatLike | null = null;
+  let layerCount = 0;
   for (const stat of stats) {
     if (stat.type !== "outbound-rtp") {
       continue;
@@ -191,6 +217,7 @@ export function readShareEncodeStats(
     if ((stat.kind ?? stat.mediaType) !== "video" || stat.active === false) {
       continue;
     }
+    layerCount += 1;
     if (
       top === null ||
       (stat.frameWidth ?? 0) > (top.frameWidth ?? 0) ||
@@ -231,6 +258,8 @@ export function readShareEncodeStats(
         ? top.powerEfficientEncoder
         : null,
     codec: typeof codec?.mimeType === "string" ? codec.mimeType : null,
+    codecFmtp: typeof codec?.sdpFmtpLine === "string" ? codec.sdpFmtpLine : null,
+    layerCount,
     sourceFps: num(source?.framesPerSecond),
     sourceWidth: num(source?.width),
     sourceHeight: num(source?.height),
@@ -525,15 +554,19 @@ export function createShareGuard(
   }
 
   /**
-   * Where a step down goes. An encoder that is behind is helped by fewer
-   * pixels first and frames last. A capture that is behind is NOT helped by
-   * fewer pixels: the readback costs the same whatever size the frame is
-   * scaled to afterwards, and the only thing that lightens it is being asked
-   * for fewer frames, so that verdict goes straight to the frame-rate level,
-   * and to nothing at all when the capture was already at 30.
+   * Where a step down goes. An encoder that is behind and has not yet been
+   * cut is given one resolution rung. A capture that is behind is NOT helped
+   * by fewer pixels (the readback costs the same whatever size the frame is
+   * scaled to afterwards), and neither is an encoder WebRTC has already cut
+   * (`cpu-limited`: it has been removing pixels and is still behind). Both go
+   * straight to the frame-rate level, and to nothing at all when the capture
+   * was already at 30.
    */
-  function nextDownIndex(verdict: ShareGuardVerdict): number | null {
-    if (verdict === "starved-capture") {
+  function nextDownIndex(
+    verdict: ShareGuardVerdict,
+    reason: ShareGuardJudgement["reason"],
+  ): number | null {
+    if (verdict === "starved-capture" || reason === "cpu-limited") {
       for (let at = index + 1; at < ladder.length; at += 1) {
         if (ladder[at]!.step === "frame-rate") {
           return at;
@@ -584,7 +617,7 @@ export function createShareGuard(
           badCount = 0;
         }
         badCount += 1;
-        const nextDown = nextDownIndex(judgement.verdict);
+        const nextDown = nextDownIndex(judgement.verdict, judgement.reason);
         if (
           badCount >= config.minBadSamples &&
           at - badSince >= config.downAfterMs &&
@@ -680,4 +713,29 @@ export function createShareGuard(
       return ladder[0]!;
     },
   };
+}
+
+/**
+ * The H.264 `profile-level-id` out of a negotiated fmtp line, spelled the way
+ * the profiles are named (`42e01f` is constrained baseline level 3.1, which is
+ * what LiveKit negotiates and what Chromium on Windows does not hardware
+ * encode by default). Null when the line has none.
+ */
+export function h264ProfileOf(fmtp: string | null): string | null {
+  const match = fmtp?.match(/profile-level-id=([0-9a-fA-F]{6})/);
+  if (!match) {
+    return null;
+  }
+  const id = match[1]!.toLowerCase();
+  const name =
+    id.startsWith("42e0") || id.startsWith("42c0")
+      ? "constrained baseline"
+      : id.startsWith("42")
+        ? "baseline"
+        : id.startsWith("4d")
+          ? "main"
+          : id.startsWith("64")
+            ? "high"
+            : "other";
+  return `${id} (${name})`;
 }

@@ -87,7 +87,7 @@ function harness(options: { blocked?: () => boolean; baseFps?: 30 | 60; height?:
       return [
         report(
           starved
-            ? { qualityLimitationReason: "cpu", framesPerSecond: 20, framesEncoded: frames, totalEncodeTime: frames * 0.012 }
+            ? { framesPerSecond: 30, framesEncoded: frames, totalEncodeTime: frames * 0.018 }
             : { framesEncoded: frames, totalEncodeTime: frames * 0.003 },
         ),
       ];

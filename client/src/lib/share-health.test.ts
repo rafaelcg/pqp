@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { h264ProfileOf } from "./share-high-motion-guard";
 import {
   classifyEncoder,
   collectShareHealth,
@@ -70,6 +71,64 @@ describe("classifyEncoder", () => {
   });
 });
 
+describe("an SFU share as LiveKit negotiates it", () => {
+  function layered(frames: number, encodeSeconds: number) {
+    const layer = (rid: string, width: number, height: number): [string, unknown] => [
+      `out-${rid}`,
+      {
+        id: `out-${rid}`,
+        type: "outbound-rtp",
+        kind: "video",
+        rid,
+        frameWidth: width,
+        frameHeight: height,
+        framesPerSecond: 60,
+        framesEncoded: frames,
+        totalEncodeTime: encodeSeconds,
+        bytesSent: frames * 1000,
+        targetBitrate: 2_000_000,
+        qualityLimitationReason: "none",
+        encoderImplementation: "SimulcastEncoderAdapter (OpenH264, OpenH264, OpenH264)",
+        codecId: "cdc",
+      },
+    ];
+    return new Map<string, unknown>([
+      layer("q", 640, 360),
+      layer("h", 1280, 720),
+      layer("f", 1920, 1080),
+      ["cdc", { id: "cdc", type: "codec", mimeType: "video/H264", sdpFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f" }],
+    ]);
+  }
+
+  it("says it is three software encodes on constrained baseline, from the stats and not an assumption", async () => {
+    let call = 0;
+    setShareHealthSource(
+      source({
+        readReports: async () => {
+          call += 1;
+          return [call === 1 ? layered(1000, 10) : layered(1060, 10.6)];
+        },
+      }),
+    );
+    const report = await collectShareHealth(5);
+    expect(report).toMatchObject({
+      encodes: 3,
+      h264Profile: "42e01f (constrained baseline)",
+      hardwareEncode: false,
+    });
+    const text = formatShareHealth(report);
+    expect(text).toContain("profile 42e01f (constrained baseline), 3 encodes running");
+    expect(text).toContain("software");
+  });
+
+  it("names the profiles it knows and stays quiet about one it does not", () => {
+    expect(h264ProfileOf("profile-level-id=64001f")).toBe("64001f (high)");
+    expect(h264ProfileOf("profile-level-id=4d001f")).toBe("4d001f (main)");
+    expect(h264ProfileOf("packetization-mode=1")).toBeNull();
+    expect(h264ProfileOf(null)).toBeNull();
+  });
+});
+
 describe("collectShareHealth", () => {
   it("says there is nothing to read when no share is live", async () => {
     expect(await collectShareHealth(0)).toBeNull();
@@ -78,7 +137,7 @@ describe("collectShareHealth", () => {
 
   it("reads two samples and reports what the capture and the encoder did between them", async () => {
     setShareHealthSource(source());
-    const report = await collectShareHealth(0);
+    const report = await collectShareHealth(5);
     expect(report).toMatchObject({
       transport: "sfu",
       codec: "video/H264",

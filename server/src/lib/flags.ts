@@ -252,7 +252,7 @@ export const FEATURE_FLAGS = {
   },
   share_high_motion_guard: {
     description:
-      "Compartilhamento de tela que aguenta jogo em taxa de quadros alta: o cliente mede o encoder e, se travar, baixa resolução e bitrate antes da taxa de quadros; o app desktop sobe a prioridade dos processos enquanto compartilha.",
+      "Compartilhamento de tela que aguenta jogo em taxa de quadros alta: o cliente mede o encoder e, se travar, baixa um degrau de resolução, depois a taxa de quadros; o app desktop sobe a prioridade dos processos enquanto compartilha.",
     env: "SHARE_HIGH_MOTION_GUARD",
     parseEnv: exactTrue,
     codeDefault: false,
