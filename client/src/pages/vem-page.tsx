@@ -1,5 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
-import { markSignupStartedNow } from "@/lib/acquisition";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
 import {
   ArrowDown,
@@ -222,7 +222,7 @@ function useOpenAuth() {
     }
     try {
       if (mode === "signUp") {
-        markSignupStartedNow();
+        noteSignupCta("vem", "");
       }
       const open =
         mode === "signUp"

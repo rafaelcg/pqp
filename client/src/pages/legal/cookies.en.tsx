@@ -295,11 +295,14 @@ export const cookiesEn: LegalDocument = {
               on every visit. It holds no data.
             </li>
             <li>
-              <code>pqp:signup-started</code>: the time you opened the sign-up
-              window, so we can tell how long sign-up takes. Only the length
-              of time, rounded to five seconds, is sent when your account is
-              ready; the time itself is deleted from your device and never
-              sent. It expires after 15 minutes.
+              <code>pqp:signup-cta</code>: when you tapped a sign-up button,
+              the kind of page it was on and, for a community page, that
+              community's address, so we can tell how long sign-up takes and
+              reopen the code step if your phone reloads the page while you
+              read your mail. Only the length of time, rounded to five
+              seconds, is sent when your account is ready; the time itself is
+              deleted from your device and never sent. It expires after an
+              hour.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the

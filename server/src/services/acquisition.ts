@@ -69,7 +69,23 @@ export async function recordAcquisition(
        AND created_at > now() - interval '1 day'`,
     [userId, ...values, signupSeconds],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) > 0) {
+    return true;
+  }
+  // Two tabs boot together and only one of them holds the sign-up timing (the
+  // client claims it across tabs), so the acquisition that arrived first may
+  // have won without it. The duration alone may still fill its own gap, under
+  // the same fresh-signup rule, and never overwrites one.
+  if (signupSeconds !== null) {
+    await getPool().query(
+      `UPDATE users SET acquisition_signup_s = $2
+        WHERE id = $1
+          AND acquisition_signup_s IS NULL
+          AND created_at > now() - interval '1 day'`,
+      [userId, signupSeconds],
+    );
+  }
+  return false;
 }
 
 export interface AcquisitionReportRow {

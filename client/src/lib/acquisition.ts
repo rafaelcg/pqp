@@ -326,8 +326,7 @@ export function peekAcquisition(
 }
 
 /**
- * The server accepted it (or refused it for good): clear the stash and the
- * sign-up stamp, and, only when something was actually sent, set the marker
+ * The server accepted it (or refused it for good): clear the stash and, only when something was actually sent, set the marker
  * that stops later plain visits being stashed again on this browser.
  */
 export function acknowledgeAcquisition(
@@ -339,100 +338,12 @@ export function acknowledgeAcquisition(
   }
   try {
     storage.removeItem(ACQUISITION_KEY);
-    storage.removeItem(SIGNUP_STARTED_KEY);
     if (sent) {
       storage.setItem(ACQUISITION_DONE_KEY, "1");
     }
   } catch {
     // Storage denied: the plain visit may repeat. Harmless, server-refused.
   }
-}
-
-/**
- * WHEN THE SIGN-UP MODAL OPENED, so the time it took can be told.
- *
- * `users.created_at` starts after Clerk finishes, which left the heaviest step
- * of the funnel (an emailed code, a captcha, an app switch on a phone)
- * unmeasured. The CTAs that open the modal call `markSignupStarted`; the first
- * ready bootstrap calls `takeSignupSeconds`, which turns the stamp into a
- * duration and deletes it. Only the DURATION leaves the browser (rounded to
- * 5 s), never the timestamp. First press wins, so a second tap on the CTA does
- * not restart the clock; a stamp older than 15 minutes is an abandoned attempt
- * and is dropped rather than reported as a very slow sign-up.
- */
-export const SIGNUP_STARTED_KEY = "pqp:signup-started";
-/**
- * 15 minutes, not an hour: a sign-up (even with an emailed code) that took
- * longer than that was two visits, and a duration that spans them measures
- * the person's day, not the modal.
- */
-export const SIGNUP_STARTED_TTL_MS = 15 * 60 * 1000;
-
-export function markSignupStarted(
-  storage: WritableStorage | null,
-  now: number = Date.now(),
-): void {
-  if (!storage) {
-    return;
-  }
-  try {
-    const raw = storage.getItem(SIGNUP_STARTED_KEY);
-    const previous = raw === null ? Number.NaN : Number(raw);
-    if (Number.isFinite(previous) && now - previous <= SIGNUP_STARTED_TTL_MS && previous <= now) {
-      return;
-    }
-    storage.setItem(SIGNUP_STARTED_KEY, String(now));
-  } catch {
-    // Storage denied: one sign-up goes unmeasured.
-  }
-}
-
-/** For the CTAs: the browser's own storage, or nothing where it is denied. */
-export function markSignupStartedNow(): void {
-  try {
-    markSignupStarted(window.localStorage);
-  } catch {
-    // Storage denied.
-  }
-}
-
-/** Read and CONSUME: a duration in seconds (5 s steps), or null. */
-export function takeSignupSeconds(
-  storage: WritableStorage | null,
-  now: number = Date.now(),
-): number | null {
-  const seconds = peekSignupSeconds(storage, now);
-  try {
-    storage?.removeItem(SIGNUP_STARTED_KEY);
-  } catch {
-    // Storage denied.
-  }
-  return seconds;
-}
-
-/** Read WITHOUT consuming; `acknowledgeAcquisition` clears it after the send. */
-export function peekSignupSeconds(
-  storage: WritableStorage | null,
-  now: number = Date.now(),
-): number | null {
-  if (!storage) {
-    return null;
-  }
-  let raw: string | null;
-  try {
-    raw = storage.getItem(SIGNUP_STARTED_KEY);
-  } catch {
-    return null;
-  }
-  const startedAt = raw === null ? Number.NaN : Number(raw);
-  if (!Number.isFinite(startedAt) || startedAt > now) {
-    return null;
-  }
-  const elapsed = now - startedAt;
-  if (elapsed > SIGNUP_STARTED_TTL_MS) {
-    return null;
-  }
-  return Math.round(elapsed / 1000 / 5) * 5;
 }
 
 function hasConsumedBefore(storage: WritableStorage | null): boolean {

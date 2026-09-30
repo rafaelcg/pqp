@@ -119,6 +119,28 @@ describeDb("recordAcquisition", () => {
     expect(clamped.rows[0]!.s).toBe(3600);
   });
 
+  it("lets the duration fill its gap when another tab's acquisition won without it, and never overwrites one", async () => {
+    const user = await freshUser("clerk-race");
+    expect(await recordAcquisition(user.id, { landing: "/c/moon" })).toBe(true);
+    expect(await recordAcquisition(user.id, { landing: "/c/moon", signupSeconds: 40 })).toBe(false);
+    const read = () =>
+      getPool().query<{ s: number | null; landing: string | null }>(
+        `SELECT acquisition_signup_s AS s, acquisition_landing AS landing FROM users WHERE id = $1`,
+        [user.id],
+      );
+    expect((await read()).rows[0]).toEqual({ s: 40, landing: "/c/moon" });
+    await recordAcquisition(user.id, { signupSeconds: 900 });
+    expect((await read()).rows[0]!.s).toBe(40);
+    // An old account gets neither.
+    const old = await freshUser("clerk-race-old");
+    await recordAcquisition(old.id, { landing: "/" });
+    await getPool().query(`UPDATE users SET created_at = now() - interval '2 days' WHERE id = $1`, [old.id]);
+    await recordAcquisition(old.id, { signupSeconds: 30 });
+    const oldRow = await getPool().query<{ s: number | null }>(
+      `SELECT acquisition_signup_s AS s FROM users WHERE id = $1`, [old.id]);
+    expect(oldRow.rows[0]!.s).toBeNull();
+  });
+
   it("reports the sign-up time as percentiles over the accounts that carry one", async () => {
     for (const [i, seconds] of [20, 40, 60, 80, 100].entries()) {
       const user = await freshUser(`clerk-p-${i}`);

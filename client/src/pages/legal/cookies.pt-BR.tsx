@@ -106,7 +106,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "3f79a862",
+      sourceRev: "1d565989",
       heading: "Armazenamento local",
       body: (
         <>
@@ -319,11 +319,14 @@ export const cookiesPtBr: LegalDocument = {
               salvo de novo a cada visita. Não guarda dado nenhum.
             </li>
             <li>
-              <code>pqp:signup-started</code>: a hora em que você abriu a
-              janela de cadastro, para a gente saber quanto tempo o cadastro
-              leva. Só a duração, arredondada para cinco segundos, é enviada
-              quando a sua conta fica pronta; a hora em si é apagada do seu
-              dispositivo e nunca enviada. Expira em 15 minutos.
+              <code>pqp:signup-cta</code>: a hora em que você tocou em um
+              botão de cadastro, o tipo de página em que estava e, numa página
+              de comunidade, o endereço dela, para a gente saber quanto tempo o
+              cadastro leva e reabrir a etapa do código se o seu celular
+              recarregar a página enquanto você lê o e-mail. Só a duração,
+              arredondada para cinco segundos, é enviada quando a sua conta
+              fica pronta; a hora em si é apagada do seu dispositivo e nunca
+              enviada. Expira em uma hora.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: o identificador da conta

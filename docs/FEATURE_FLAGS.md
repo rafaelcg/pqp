@@ -100,7 +100,8 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVE_HLS_CAMERA`, `LIVE_HLS_CAMERA_480`, `LIVE_HLS_VOICE_TRACK`,
 `LIVE_HLS_MIC_ARCHIVE`, `LIVE_HLS_REAP_ORPHANS`, `HLS_SHARER_RESUME_HOLD`,
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
-`TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`.
+`TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below).
 
 Staying environment-only, on purpose:
 
@@ -124,3 +125,27 @@ Staying environment-only, on purpose:
 Per-server overrides exist only where every reader knows the server. The camera
 switches, for example, are read by the egress side with no server in hand, so a
 per-server value would make the config endpoint and the transcoder disagree.
+
+## `party_newcomer_experience` (per server, client presentation only)
+
+The newcomer's first minutes in a live watch party, behind one flag
+(`PARTY_NEWCOMER_EXPERIENCE`, default off, `perServer: true`). The client learns
+it from `GET /api/live-hls/config?serverId=` as `newcomerExperience` (absent on
+an older API and on the deployment-wide answer, both read as off), through the
+same store and refresh pass as `enabled` / `lowLatency`. Three behaviours, all
+in the client (`client/src/lib/party-newcomer.ts`):
+
+- **Phone layout**, for every seatless viewer of a live party on a narrow
+  pane: the server rail leaves the flow (it returns over the page while the nav
+  drawer is open) and the chat keeps a floor under the picture.
+- **Context strip**, for an account whose first-run finished in the last 24 h
+  (`preferences.onboardedAt`, or the session that just finished the wizard): one
+  dismissible line, remembered in `pqp:party-newcomer-strip-2026-09`.
+- **No get-the-app strip** for that same newcomer while the party is live.
+
+Turn it on for one server from the dashboard (controles → interruptores, the
+server's override) or `PUT /api/admin/flag-overrides
+{ key: "party_newcomer_experience", serverId, enabled: true }` with the machine
+token. For MoonKase's server, `serverId` is the id of the server whose community
+slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
+that is already open follows within the 10 minute config refresh or on focus.

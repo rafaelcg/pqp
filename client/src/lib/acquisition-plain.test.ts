@@ -2,18 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   ACQUISITION_DONE_KEY,
   ACQUISITION_KEY,
-  SIGNUP_STARTED_KEY,
-  SIGNUP_STARTED_TTL_MS,
   acquisitionFromLocation,
   landingForStorage,
   acknowledgeAcquisition,
-  markSignupStarted,
   peekAcquisition,
-  peekSignupSeconds,
   referrerSource,
   rememberAcquisitionFromLocation,
   takeAcquisition,
-  takeSignupSeconds,
 } from "./acquisition";
 
 /**
@@ -224,17 +219,14 @@ describe("the stash outlives a failed send", () => {
       T,
       { referrer: "", hostname: "pqp.gg" },
     );
-    markSignupStarted(storage, T);
     // A request that fails: nothing is cleared, so the next load sends again.
     expect(peekAcquisition(storage, T + 10_000)).toEqual({ landing: "/c/moon" });
     expect(peekAcquisition(storage, T + 20_000)).toEqual({ landing: "/c/moon" });
-    expect(peekSignupSeconds(storage, T + 20_000)).toBe(20);
     expect(storage.map.has(ACQUISITION_DONE_KEY)).toBe(false);
     // A later plain visit is still recorded while nothing was accepted.
     // The server accepted: cleared, and only now is the marker set.
     acknowledgeAcquisition(storage, true);
     expect(storage.map.has(ACQUISITION_KEY)).toBe(false);
-    expect(storage.map.has(SIGNUP_STARTED_KEY)).toBe(false);
     expect(storage.map.has(ACQUISITION_DONE_KEY)).toBe(true);
   });
 
@@ -243,58 +235,5 @@ describe("the stash outlives a failed send", () => {
     storage.setItem(ACQUISITION_KEY, "{garbage");
     acknowledgeAcquisition(storage, false);
     expect(storage.map.size).toBe(0);
-  });
-});
-
-describe("time in sign-up", () => {
-  it("a sign-up that took longer than 15 minutes was two visits and is not reported", () => {
-    const storage = memoryStorage();
-    markSignupStarted(storage, 1_000_000);
-    expect(peekSignupSeconds(storage, 1_000_000 + 16 * 60_000)).toBeNull();
-    expect(peekSignupSeconds(storage, 1_000_000 + 14 * 60_000)).toBe(840);
-  });
-
-  let storage: ReturnType<typeof memoryStorage>;
-  beforeEach(() => {
-    storage = memoryStorage();
-  });
-
-  it("turns the modal-open stamp into a duration in 5 s steps, once", () => {
-    markSignupStarted(storage, 1_000_000);
-    expect(takeSignupSeconds(storage, 1_000_000 + 47_000)).toBe(45);
-    expect(takeSignupSeconds(storage, 1_000_000 + 50_000)).toBeNull();
-  });
-
-  it("first press wins, so tapping the CTA twice does not restart the clock", () => {
-    markSignupStarted(storage, 1_000_000);
-    markSignupStarted(storage, 1_020_000);
-    expect(takeSignupSeconds(storage, 1_060_000)).toBe(60);
-  });
-
-  it("drops an abandoned attempt older than an hour instead of reporting it", () => {
-    markSignupStarted(storage, 1_000_000);
-    expect(
-      takeSignupSeconds(storage, 1_000_000 + SIGNUP_STARTED_TTL_MS + 1),
-    ).toBeNull();
-    markSignupStarted(storage, 1_000_000);
-    markSignupStarted(storage, 1_000_000 + SIGNUP_STARTED_TTL_MS + 5_000);
-    expect(
-      takeSignupSeconds(storage, 1_000_000 + SIGNUP_STARTED_TTL_MS + 25_000),
-    ).toBe(20);
-  });
-
-  it("answers null for no stamp, garbage, a stamp from the future, and denied storage", () => {
-    expect(takeSignupSeconds(storage, 5)).toBeNull();
-    storage.setItem(SIGNUP_STARTED_KEY, "banana");
-    expect(takeSignupSeconds(storage, 5)).toBeNull();
-    markSignupStarted(storage, 9_000_000);
-    expect(takeSignupSeconds(storage, 1_000)).toBeNull();
-    expect(() => markSignupStarted(hostileStorage)).not.toThrow();
-    expect(takeSignupSeconds(hostileStorage)).toBeNull();
-  });
-
-  it("stores only a timestamp, never an id", () => {
-    markSignupStarted(storage, 1_000_000);
-    expect(storage.map.get(SIGNUP_STARTED_KEY)).toBe("1000000");
   });
 });

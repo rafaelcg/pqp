@@ -14,6 +14,21 @@ const NUDGE_DEBOUNCE_MS = 400;
  */
 const NUDGE_FLOOR_MS = 3_000;
 
+/** Rosters past this size are read on the poll cadence, not the fast one. */
+const LARGE_ROSTER = 40;
+
+/**
+ * Closest together two nudged reads may land for a roster this big. In a
+ * watch party joins and leaves never stop, so the 3 s floor was saturated for
+ * every viewer at once: 20 full-roster reads a minute each, on top of the
+ * poll, for a status pip that the 15 s poll already keeps fresh enough.
+ */
+const LARGE_ROSTER_NUDGE_FLOOR_MS = STATUS_REFRESH_MS;
+
+export function nudgeFloorMs(rosterSize: number): number {
+  return rosterSize > LARGE_ROSTER ? LARGE_ROSTER_NUDGE_FLOOR_MS : NUDGE_FLOOR_MS;
+}
+
 /**
  * The one members poll / presence nudge for a selected server.
  *
@@ -27,7 +42,10 @@ export function useMemberRosterRefresh(
   serverId: string | null,
   refreshNudge: number,
   onMembers: (members: ServerMember[]) => void,
+  rosterSize = 0,
 ): void {
+  const rosterSizeRef = useRef(rosterSize);
+  rosterSizeRef.current = rosterSize;
   const onMembersRef = useRef(onMembers);
   onMembersRef.current = onMembers;
   const lastLoadAt = useRef(0);
@@ -68,7 +86,13 @@ export function useMemberRosterRefresh(
     };
     const start = () => {
       stop();
-      timer = setInterval(() => void load(signal), STATUS_REFRESH_MS);
+      timer = setInterval(() => {
+        // A nudged read that landed a moment ago already answered this tick.
+        if (Date.now() - lastLoadAt.current < STATUS_REFRESH_MS - 1_000) {
+          return;
+        }
+        void load(signal);
+      }, STATUS_REFRESH_MS);
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
@@ -103,10 +127,23 @@ export function useMemberRosterRefresh(
       firstNudge.current = false;
       return;
     }
+    // Nobody is looking: the visibility handler reads once on return.
+    if (document.visibilityState !== "visible") {
+      return;
+    }
     const signal = { cancelled: false };
     const since = Date.now() - lastLoadAt.current;
-    const delay = Math.max(NUDGE_DEBOUNCE_MS, NUDGE_FLOOR_MS - since);
-    const timer = setTimeout(() => void load(signal), delay);
+    const delay = Math.max(
+      NUDGE_DEBOUNCE_MS,
+      nudgeFloorMs(rosterSizeRef.current) - since,
+    );
+    const timer = setTimeout(() => {
+      // The poll may have read in the same instant this was scheduled for.
+      if (Date.now() - lastLoadAt.current < NUDGE_DEBOUNCE_MS) {
+        return;
+      }
+      void load(signal);
+    }, delay);
     return () => {
       signal.cancelled = true;
       clearTimeout(timer);

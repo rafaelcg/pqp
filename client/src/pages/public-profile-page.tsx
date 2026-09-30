@@ -1,5 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
-import { markSignupStartedNow } from "@/lib/acquisition";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -219,7 +219,7 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
    */
   const rememberIntent = () => {
     stashAddIntent(intentStorage(), profile.handle);
-    markSignupStartedNow();
+    noteSignupCta("profile", "");
   };
   const appHref = `/app?add=${encodeURIComponent(profile.handle)}`;
 

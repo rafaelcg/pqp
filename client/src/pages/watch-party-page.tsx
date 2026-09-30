@@ -1,5 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
-import { markSignupStartedNow } from "@/lib/acquisition";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { ArrowRight, Clapperboard } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -87,7 +87,7 @@ function ClerkWaitlistCta({ className }: { className?: string }) {
           return;
         }
         try {
-          markSignupStartedNow();
+          noteSignupCta("watch-party", "");
           void Promise.resolve(
             clerk.openSignUp({ forceRedirectUrl: WATCH_PARTY_WAITLIST_HREF }),
           ).catch(go);

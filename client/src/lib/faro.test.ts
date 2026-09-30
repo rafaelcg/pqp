@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initFaro, resetFaroForTests, resolveFaroConfig } from "./faro";
+import { dropNoisyItems, initFaro, resetFaroForTests, resolveFaroConfig } from "./faro";
 
 afterEach(() => {
   resetFaroForTests();
@@ -86,6 +86,8 @@ describe("initFaro", () => {
       environment: "production",
     });
     expect(config.instrumentations.length).toBeGreaterThan(0);
+    // The volume guard is wired in.
+    expect((config as { beforeSend?: unknown }).beforeSend).toBe(dropNoisyItems);
     // No user identity is ever attached (PII posture).
     expect(config.user).toBeUndefined();
   });
@@ -96,5 +98,27 @@ describe("initFaro", () => {
     initFaro({ env, initialize: initialize as never });
     initFaro({ env, initialize: initialize as never });
     expect(initialize).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("dropNoisyItems", () => {
+  it("drops per-request resource timing events", () => {
+    expect(
+      dropNoisyItems({ type: "event", payload: { name: "faro.performance.resource" } }),
+    ).toBeNull();
+  });
+
+  it("keeps everything the dashboards and alerts rely on", () => {
+    const keep = [
+      { type: "event", payload: { name: "faro.performance.navigation" } },
+      { type: "event", payload: { name: "session_start" } },
+      { type: "event", payload: { name: "something_custom" } },
+      { type: "exception", payload: { type: "Error", value: "boom" } },
+      { type: "log", payload: { message: "console error" } },
+      { type: "measurement", payload: { type: "web-vitals", values: { lcp: 1 } } },
+    ];
+    for (const item of keep) {
+      expect(dropNoisyItems(item)).toBe(item);
+    }
   });
 });

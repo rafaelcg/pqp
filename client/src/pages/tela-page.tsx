@@ -1,5 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
-import { markSignupStartedNow } from "@/lib/acquisition";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
@@ -108,7 +108,7 @@ function CreateRoomButton({ className }: { className?: string }) {
     <>
       <SignedOut>
         <SignUpButton mode="modal" forceRedirectUrl="/app">
-          <Button className={classes} onClick={markSignupStartedNow}>
+          <Button className={classes} onClick={() => noteSignupCta("tela", "")}>
             {t("tela.cta.create")}
           </Button>
         </SignUpButton>
