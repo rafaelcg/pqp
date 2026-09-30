@@ -216,6 +216,9 @@ export default defineConfig({
           /^\/index\.md$/,
           /^\/robots\.txt$/,
           /^\/sitemap\.xml$/,
+          // Standalone diagnostic pages in client/public, not routes. Without
+          // this a worker from before they existed hands back the app shell.
+          /^\/share-diagnostic/,
         ],
         cleanupOutdatedCaches: true,
         // Adds the notificationclick handler. Android Chrome only permits
