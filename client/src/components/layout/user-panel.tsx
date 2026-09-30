@@ -1,4 +1,4 @@
-import { BellOff, Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
+import { BellOff, Bug, CircleHelp, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
@@ -57,6 +57,8 @@ interface UserPanelProps {
   onOpenSettings: () => void;
   /** Opens settings straight at the feedback section. */
   onOpenFeedback: () => void;
+  /** Opens settings straight at "Ajuda e contato". */
+  onOpenHelp?: () => void;
   /**
    * Opens settings straight at the profile section, where the display name
    * is. Deliberately not `onOpenSettings`: that one passes `null` so the
@@ -163,6 +165,7 @@ export function UserPanel({
   onOpenSettings,
   onOpenProfile,
   onOpenFeedback,
+  onOpenHelp,
   compact = false,
   hideDownloadHint = false,
 }: UserPanelProps) {
@@ -485,6 +488,20 @@ export function UserPanel({
             <Bug className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
             {t("userMenu.feedback")}
           </button>
+          {onOpenHelp && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+              onClick={() => {
+                onOpenHelp();
+                setOpen(false);
+              }}
+            >
+              <CircleHelp className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+              {t("userMenu.help")}
+            </button>
+          )}
           {showDownload && (
             <button
               type="button"
