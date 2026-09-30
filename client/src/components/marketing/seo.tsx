@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { useTranslation } from "@/lib/i18n";
+import { marketingPageFromMetaPath, marketingUrlsFor } from "@/lib/marketing-meta";
 
 interface SeoProps {
   title: string;
@@ -30,6 +32,7 @@ export function Seo({
   noIndex = false,
   image = "/images/og-image.jpg",
 }: SeoProps) {
+  const { locale } = useTranslation();
   const socialTitle = ogTitle ?? title;
   const socialDescription = ogDescription ?? description;
 
@@ -43,27 +46,39 @@ export function Seo({
     setMeta("og:type", "website", "property");
     setMeta("og:image", `${SITE_URL}${image}`, "property");
     setMeta("og:site_name", "pqp", "property");
-    // SEO i18n: the same URL serves both languages by negotiation, and ?lang=
-    // is the crawlable way to force each. hreflang tells engines the pairing,
-    // x-default that the bare URL negotiates. One canonical, so the lang
-    // variants are alternates rather than duplicate-content competitors.
-    setLink("canonical", `${SITE_URL}${path}`);
-    setLink("alternate", `${SITE_URL}${path}`, "x-default");
-    setLink("alternate", `${SITE_URL}${path}?lang=pt-BR`, "pt-BR");
-    setLink("alternate", `${SITE_URL}${path}?lang=en`, "en");
-    setLink("alternate", `${SITE_URL}${path}?lang=es`, "es");
+    // SEO i18n: the same URL serves each language by negotiation, and ?lang=
+    // is the crawlable way to force one. On the marketing pages the edge
+    // (`marketing-meta.ts`) writes a self-referencing canonical per language
+    // plus the hreflang set, and this mirrors it from the same function so a
+    // client-side render leaves the head the way the edge wrote it. Every
+    // other page (profiles, communities, blog) keeps one canonical and the
+    // bare-path alternates, as before.
+    const marketingPage = marketingPageFromMetaPath(path);
+    if (marketingPage) {
+      const urls = marketingUrlsFor(marketingPage, locale);
+      setLink("canonical", urls.canonical);
+      setMeta("og:url", urls.canonical, "property");
+      for (const alt of urls.alternates) {
+        setLink("alternate", alt.href, alt.hreflang);
+      }
+    } else {
+      setLink("canonical", `${SITE_URL}${path}`);
+      setLink("alternate", `${SITE_URL}${path}`, "x-default");
+      setLink("alternate", `${SITE_URL}${path}?lang=pt-BR`, "pt-BR");
+      setLink("alternate", `${SITE_URL}${path}?lang=en`, "en");
+      setLink("alternate", `${SITE_URL}${path}?lang=es`, "es");
+    }
     setMeta("twitter:card", "summary_large_image");
     setMeta("twitter:title", socialTitle);
     setMeta("twitter:description", socialDescription);
     setMeta("twitter:image", `${SITE_URL}${image}`);
-    setLink("canonical", `${SITE_URL}${path}`);
 
     if (noIndex) {
       setMeta("robots", "noindex, nofollow");
     } else {
       setMeta("robots", "index, follow");
     }
-  }, [title, description, socialTitle, socialDescription, path, noIndex, image]);
+  }, [title, description, socialTitle, socialDescription, path, noIndex, image, locale]);
 
   return null;
 }

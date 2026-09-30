@@ -157,15 +157,15 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera, código aberto",
-      en: "pqp: voice, screen share and chat for your crew, open source",
-      es: "pqp: voz, pantalla compartida y chat para tu gente, código abierto",
+      "pt-BR": "pqp: voz, tela e chat pra sua galera, código aberto",
+      en: "pqp: voice, screen share and chat, open source",
+      es: "pqp: voz, pantalla compartida y chat, código abierto",
     },
     description: {
       "pt-BR":
-        "Canal de voz, tela compartilhada com som e chat completo, direto no navegador. De graça, código aberto, e já rolou watch party com mais de cem pessoas. Cria a comunidade e manda o link.",
-      en: "Voice channels, screen share with sound and a full chat, straight from the browser. Free, open source, and a watch party for over a hundred people already ran on it. Make a community, send the link.",
-      es: "Canales de voz, pantalla compartida con sonido y un chat completo, directo desde el navegador. Gratis, código abierto, y ya aguantó una watch party de más de cien personas. Crea una comunidad y manda el link.",
+        "Voz, tela compartilhada e chat no navegador. De graça, código aberto, e já rolou watch party com mais de cem pessoas. Cria a comunidade e manda o link.",
+      en: "Voice, screen share and chat in the browser. Free, open source, and a watch party of 100+ people already ran on it. Make a community, send the link.",
+      es: "Voz, pantalla compartida y chat en el navegador. Gratis, código abierto, y ya aguantó una watch party de 100+ personas. Crea una comunidad y manda el link.",
     },
   },
   "/vs-discord": {
@@ -368,6 +368,11 @@ export const LANDING_FAQ: Record<
         "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
     },
     {
+      question: "Como eu entro?",
+      answer:
+        "Escolhe Google, Apple ou Twitch, autoriza e pronto. Se alguém te mandou um link de convite, abre ele e entra por lá.",
+    },
+    {
       question: "Preciso instalar alguma coisa?",
       answer:
         "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone se preferir.",
@@ -385,7 +390,7 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "Ficam em servidores em São Paulo, com backups noturnos na América do Norte. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie, relatório de erros e a tag do Google Ads; está tudo em pqp.gg/privacy.",
+        "Ficam em servidores em São Paulo, com backups noturnos na América do Norte. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
@@ -398,6 +403,11 @@ export const LANDING_FAQ: Record<
       question: "Is pqp really free?",
       answer:
         "Yes. Open source under AGPL, no paid plan and no artificial room limit. You can support the project with a donation, and donating unlocks nothing.",
+    },
+    {
+      question: "How do I sign in?",
+      answer:
+        "Pick Google, Apple or Twitch, authorize, and you're in. If somebody sent you an invite link, open it and sign in from there.",
     },
     {
       question: "Do I need to install anything?",
@@ -417,7 +427,7 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "It lives on servers in São Paulo, with nightly backups in North America. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics, error reporting and the Google Ads tag; all of it is at pqp.gg/privacy.",
+        "It lives on servers in São Paulo, with nightly backups in North America. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
     },
   ],
   es: [
@@ -430,6 +440,11 @@ export const LANDING_FAQ: Record<
       question: "¿pqp de verdad es gratis?",
       answer:
         "Sí. Código abierto bajo AGPL, sin plan de pago y sin límite artificial de salas. Puedes apoyar el proyecto con una donación, y donar no desbloquea nada.",
+    },
+    {
+      question: "¿Cómo entro?",
+      answer:
+        "Elige Google, Apple o Twitch, autoriza y listo. Si alguien te mandó un link de invitación, ábrelo y entra desde ahí.",
     },
     {
       question: "¿Tengo que instalar algo?",
@@ -449,7 +464,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Viven en servidores en São Paulo, con respaldos nocturnos en Norteamérica. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies, reporte de errores y la etiqueta de Google Ads; todo está en pqp.gg/privacy.",
+        "Viven en servidores en São Paulo, con respaldos nocturnos en Norteamérica. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
     },
   ],
 };
@@ -896,6 +911,58 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
 }
 
 /**
+ * What the product share card (`/images/og-image.jpg`, 1200 x 630) is, for
+ * `og:image:alt` and `twitter:image:alt`. Written for the card's job (the pqp
+ * name and what it is), not for its artwork, so it stays true when the picture
+ * is redrawn.
+ */
+const PRODUCT_CARD_ALT: LocalizedText = {
+  "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera",
+  en: "pqp: voice, screen share and chat for your crew",
+  es: "pqp: voz, pantalla compartida y chat para tu gente",
+};
+
+/**
+ * The canonical URL and the hreflang set for one page in one language.
+ *
+ * SELF-REFERENCING PER LOCALE. Portuguese is the site's default and lives at
+ * the bare path; English and Spanish live at `?lang=en` and `?lang=es`, and
+ * each of those declares ITSELF canonical. Before, every variant pointed its
+ * canonical at the bare path while hreflang pointed the alternates at the
+ * `?lang=` URLs, which is a contradiction Google resolves by ignoring the
+ * hreflang set (and Lighthouse reports as "canonical points to another
+ * hreflang location"). Now the three URLs each answer for themselves and each
+ * lists the same three, with the bare path as `x-default` and as Portuguese.
+ *
+ * A page with no Spanish copy (the policies, the status page) serves the
+ * English text at `?lang=es`. That document is English, so it canonicalises to
+ * `?lang=en` and does not advertise an `es` alternate, rather than claiming a
+ * Spanish URL for English words.
+ *
+ * Shared with the client `Seo`, so the head the edge writes and the head the
+ * browser leaves behind cannot disagree.
+ */
+export function marketingUrlsFor(
+  page: MarketingPage,
+  locale: MarketingLocale,
+): { canonical: string; alternates: { hreflang: string; href: string }[] } {
+  const copy = PAGE_COPY[page];
+  const base = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
+  const hasSpanish = copy.title.es !== undefined;
+  const contentLocale: MarketingLocale =
+    locale === "es" && !hasSpanish ? "en" : locale;
+  const withLang = (l: MarketingLocale) =>
+    l === "pt-BR" ? base : `${base}?lang=${l}`;
+  const alternates = [
+    { hreflang: "x-default", href: base },
+    { hreflang: "pt-BR", href: withLang("pt-BR") },
+    { hreflang: "en", href: withLang("en") },
+    ...(hasSpanish ? [{ hreflang: "es", href: withLang("es") }] : []),
+  ];
+  return { canonical: withLang(contentLocale), alternates };
+}
+
+/**
  * Every tag the rewrite manages, as one string.
  *
  * The same vocabulary the profile and community injectors emit, minus the
@@ -907,7 +974,7 @@ export function renderMarketingHead(
   locale: MarketingLocale,
 ): string {
   const copy = PAGE_COPY[page];
-  const url = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
+  const { canonical: url, alternates } = marketingUrlsFor(page, locale);
   const title = pick(copy.title, locale);
   const description = pick(copy.description, locale);
   const ogTitle = copy.ogTitle ? pick(copy.ogTitle, locale) : title;
@@ -916,26 +983,40 @@ export function renderMarketingHead(
     : description;
   const image = `${CANONICAL_ORIGIN}${copy.image ? pick(copy.image, locale) : "/images/og-image.jpg"}`;
   const e = escapeHtml;
-  const langSuffix = url.includes("?") ? "&" : "?";
 
   return [
     `<title>${e(title)}</title>`,
     `<meta name="description" content="${e(description)}" />`,
     `<link rel="canonical" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="x-default" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="pt-BR" href="${e(url)}${langSuffix}lang=pt-BR" />`,
-    `<link rel="alternate" hreflang="en" href="${e(url)}${langSuffix}lang=en" />`,
-    `<link rel="alternate" hreflang="es" href="${e(url)}${langSuffix}lang=es" />`,
+    ...alternates.map(
+      (a) =>
+        `<link rel="alternate" hreflang="${a.hreflang}" href="${e(a.href)}" />`,
+    ),
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="pqp" />`,
     `<meta property="og:url" content="${e(url)}" />`,
     `<meta property="og:title" content="${e(ogTitle)}" />`,
     `<meta property="og:description" content="${e(ogDescription)}" />`,
     `<meta property="og:image" content="${e(image)}" />`,
+    // The product card is exactly 1200 x 630 (1.91:1, what X and Facebook
+    // crop to). The per-locale `/vem` art has its own size, so it says
+    // nothing rather than something wrong.
+    ...(copy.image
+      ? []
+      : [
+          `<meta property="og:image:width" content="1200" />`,
+          `<meta property="og:image:height" content="630" />`,
+          `<meta property="og:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
+        ]),
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${e(ogTitle)}" />`,
     `<meta name="twitter:description" content="${e(ogDescription)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
+    ...(copy.image
+      ? []
+      : [
+          `<meta name="twitter:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
+        ]),
     `<meta name="robots" content="index, follow" />`,
     // The locale this document was negotiated in, for the client bundle to
     // read back. `detectLocale()` prefers it over `navigator.languages`,
@@ -956,7 +1037,7 @@ export function renderMarketingHead(
  * pre-paint theme script and the font preconnects all survive untouched.
  */
 const MANAGED_TAGS =
-  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|profile:[a-zA-Z:]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
+  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:_]+|twitter:[a-zA-Z:_]+|profile:[a-zA-Z:_]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
 
 /**
  * Rewrite a document's head for one marketing page.
