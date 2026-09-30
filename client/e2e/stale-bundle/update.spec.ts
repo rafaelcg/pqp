@@ -48,6 +48,10 @@ async function buildOf(page: Page): Promise<string | undefined> {
 async function openOn(page: Page, build: string) {
   await page.goto(`${server.origin}/`);
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", build);
+  // A first-time visitor on the landing page gets a worker on their first touch,
+  // click or key press (or after 20 s), not on load: see `lib/register-sw.ts`.
+  // The person in this spec is somebody who has started using the page.
+  await page.mouse.click(5, 5);
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
 }
 
@@ -122,6 +126,9 @@ test("a plain reload reaches the new build once its worker has taken over", asyn
     .poll(
       async () => {
         await page.reload();
+        // The landing page starts the app once its first screen has settled,
+        // so the build id is stamped a moment after load, not at load.
+        await page.waitForFunction(() => !!document.documentElement.dataset.pqpBuild);
         return buildOf(page);
       },
       { timeout: 30_000, intervals: [1_000] },
