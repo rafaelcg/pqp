@@ -22,6 +22,7 @@
  */
 
 import type { HtmlTagDescriptor, Plugin } from "vite";
+import { deferredScriptTag } from "./deferred-tag";
 
 export interface GoogleAdsEnv {
   VITE_GOOGLE_ADS_ID?: string;
@@ -49,14 +50,11 @@ export function googleAdsTags(env: GoogleAdsEnv): HtmlTagDescriptor[] {
   }
   const encoded = encodeURIComponent(id);
   return [
-    {
-      tag: "script",
-      injectTo: "head",
-      attrs: {
-        async: true,
-        src: `https://www.googletagmanager.com/gtag/js?id=${encoded}`,
-      },
-    },
+    // The library itself is requested once the page has loaded and the browser
+    // is idle (see `deferred-tag.ts`). The stub below is inline and immediate,
+    // so `gtag("config", ...)` and any later conversion call queue in
+    // `dataLayer` and are drained when the library arrives.
+    deferredScriptTag(`https://www.googletagmanager.com/gtag/js?id=${encoded}`),
     {
       tag: "script",
       injectTo: "head",

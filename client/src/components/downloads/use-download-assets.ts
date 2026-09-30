@@ -16,6 +16,30 @@ import {
  */
 let cachedPlan: DownloadPlan | null = null;
 
+/**
+ * Resolve the platform (and the Mac chip) ahead of the first render.
+ *
+ * The hero shows a one-line download link, and until the chip is known it
+ * shows both Mac builds for a frame, which is taller. Behind the prerendered
+ * landing page that frame would be painted, and everything under it would jump
+ * when the answer arrived. `main.tsx` calls this before the first render so the
+ * hook starts from the settled plan. Never rejects; gives up after `timeoutMs`
+ * and leaves the hook to resolve it itself, as it always did.
+ */
+export async function primeDownloadPlan(timeoutMs = 300): Promise<void> {
+  try {
+    const plan = await Promise.race([
+      detectDownloadPlan(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+    if (plan) {
+      cachedPlan = plan;
+    }
+  } catch {
+    // Detection failed: the hook falls back to its own path.
+  }
+}
+
 function seedPlan(): DownloadPlan | null {
   if (cachedPlan) {
     return cachedPlan;

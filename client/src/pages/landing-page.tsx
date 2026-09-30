@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { HeroBackground } from "@/components/marketing/hero-background";
 import { HeroDownload } from "@/components/marketing/hero-download";
 import { MarketingAuthCtas } from "@/components/marketing/marketing-auth-ctas";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
@@ -29,51 +30,10 @@ import {
 import { Seo } from "@/components/marketing/seo";
 import { WhereWeRun } from "@/components/marketing/where-we-run";
 import { useCommunitiesEnabled } from "@/hooks/use-communities-enabled";
-import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useScrollToHash } from "@/hooks/use-scroll-to-hash";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-
-/**
- * Whether the hero should fetch and play its painting loop (585 KB) on top of
- * the still that already stands in for it. Not on a phone-sized viewport, not
- * on a touch device, not when the visitor asked to save data, and not on a
- * connection that reports 3G or worse: for all of those the loop is bytes
- * spent on a backdrop that sits under a heavy scrim anyway. The still stays.
- * Read once at mount; nothing here needs to react to a resize.
- */
-function heroVideoAllowed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    if (window.matchMedia("(max-width: 767px), (pointer: coarse)").matches) {
-      return false;
-    }
-    const connection = (
-      navigator as Navigator & {
-        connection?: { saveData?: boolean; effectiveType?: string };
-      }
-    ).connection;
-    if (connection?.saveData) return false;
-    if (connection?.effectiveType && /^(slow-2g|2g|3g)$/.test(connection.effectiveType)) {
-      return false;
-    }
-  } catch {
-    // No matchMedia or a locked-down navigator: take the still.
-    return false;
-  }
-  return true;
-}
-
-/** Two widths of the same painting, so a phone does not pull the 1536 px file. */
-const HERO_SRCSET =
-  "/images/hero-background-768.jpg 768w, /images/hero-background.jpg 1536w";
-/**
- * The backdrop sits under a black scrim at 45 to 60 percent, so a phone gets
- * the small file whatever its pixel density: `250px` makes even a 3x screen
- * ask for 750 px, which the 768 px file covers.
- */
-const HERO_SIZES = "(max-width: 767px) 250px, 100vw";
 
 function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
@@ -251,32 +211,11 @@ const EYEBROW = "font-display text-xs font-bold uppercase tracking-[0.22em] text
 
 export function LandingPage() {
   const { t, locale } = useTranslation();
-  const reducedMotion = usePrefersReducedMotion();
-  const [heroPlaying, setHeroPlaying] = useState(false);
-  const [videoAllowed] = useState(heroVideoAllowed);
   const communitiesEnabled = useCommunitiesEnabled();
   const [overHero, setOverHero] = useState(true);
   const heroRef = useRef<HTMLElement>(null);
-  const heroVideo = useRef<HTMLVideoElement>(null);
   // `/#features` from the header of any other public page.
   useScrollToHash();
-
-  // `autoplay` alone is not enough: a tab that mounts in the background leaves
-  // the element idle and Chrome does not revisit that on its own. Ask directly,
-  // and ask again whenever the tab comes forward.
-  useEffect(() => {
-    const el = heroVideo.current;
-    if (!el) return;
-    const start = () => {
-      if (el.readyState === 0) el.load();
-      void el.play().catch(() => {
-        // Autoplay refused (Low Power Mode, strict settings): the still stands in.
-      });
-    };
-    start();
-    document.addEventListener("visibilitychange", start);
-    return () => document.removeEventListener("visibilitychange", start);
-  }, [reducedMotion, videoAllowed]);
 
   useEffect(() => {
     const el = heroRef.current;
@@ -324,33 +263,7 @@ export function LandingPage() {
           it looks like before they read a word. The scrim is heavier than
           before for the same reason. */}
       <section ref={heroRef} className="relative -mt-16 overflow-hidden">
-        <div className="hero-parallax pointer-events-none absolute inset-0" aria-hidden>
-          <img
-            src="/images/hero-background.jpg"
-            srcSet={HERO_SRCSET}
-            sizes={HERO_SIZES}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover object-center"
-            fetchPriority="high"
-            decoding="async"
-          />
-          {!reducedMotion && videoAllowed && (
-            <video
-              ref={heroVideo}
-              src="/images/hero-background.mp4"
-              className={cn(
-                "absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-[1200ms] ease-out",
-                heroPlaying ? "opacity-100" : "opacity-0",
-              )}
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="metadata"
-              onPlaying={() => setHeroPlaying(true)}
-            />
-          )}
-        </div>
+        <HeroBackground />
         <div
           className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/45 to-ink"
           aria-hidden
@@ -670,15 +583,11 @@ export function LandingPage() {
       </section>
 
       <section className="relative overflow-hidden px-5 py-24 text-center sm:px-8 sm:py-32">
-        <img
-          src="/images/hero-background.jpg"
-          srcSet={HERO_SRCSET}
-          sizes={HERO_SIZES}
-          alt=""
+        {/* The hero's own picture (same class, so the same file the browser
+            already has, sized for this viewport), dimmed. */}
+        <div
+          className="hero-bg-art pointer-events-none absolute inset-0 opacity-40"
           aria-hidden
-          loading="lazy"
-          decoding="async"
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center opacity-40"
         />
         <div
           className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink via-ink/70 to-ink"
