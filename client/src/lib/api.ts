@@ -745,6 +745,14 @@ export interface LiveHlsConfig {
    */
   llSegmentCadenceDecay?: boolean;
   /**
+   * The runtime flag `party_newcomer_experience` for THIS server (only a
+   * `?serverId=` answer carries it): a phone chat floor and no server rail for
+   * a viewer of a live party, a one-line "what is this" strip and no app
+   * invite for a new account. Absent on an older API or the deployment-wide
+   * answer, which reads as off. See `lib/party-newcomer.ts`.
+   */
+  newcomerExperience?: boolean;
+  /**
    * `party_fast_start` for this server (runtime flag, per server, off by
    * default): whether the viewer's browser uses its faster first-frame path.
    * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.

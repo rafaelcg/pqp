@@ -1060,7 +1060,10 @@ never initialises, so a self-host makes no request and defines no global (AGPL
 Build-time source-map upload (`@grafana/faro-rollup-plugin` in
 `client/vite.config.ts`) de-obfuscates the minified stack traces, gated on
 `FARO_SOURCEMAP_API_KEY` plus the app's endpoint/appId/stackId; absent means no
-upload and the build still succeeds. Faro is a separate Grafana product from the
+upload and the build still succeeds. Faro's per-request `faro.performance.resource`
+events are dropped client-side (`dropNoisyItems`): on 2026-09-29 they were 99.6% of
+Faro's Loki bytes (about 0.8 GB a day quiet, 3 to 6 GB on party days) and nothing
+reads them. Faro is a separate Grafana product from the
 Prometheus/Loki stack here and has its own UI; there is nothing to import.
 
 ## The activation funnel

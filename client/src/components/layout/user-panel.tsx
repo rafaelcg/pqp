@@ -71,6 +71,13 @@ interface UserPanelProps {
    * collapsed sidebar would be a way to get stranded muted.
    */
   compact?: boolean;
+  /**
+   * Hold back the "Get the app" strip above this row. Set for a newcomer in a
+   * live party on a flagged server (`suppressAppInviteForNewcomer`); the strip
+   * is a way out of the page for somebody who just arrived from a stream.
+   * Everyone else keeps it, and the Download entry in the status menu stays.
+   */
+  hideDownloadHint?: boolean;
 }
 
 /**
@@ -157,6 +164,7 @@ export function UserPanel({
   onOpenProfile,
   onOpenFeedback,
   compact = false,
+  hideDownloadHint = false,
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -182,7 +190,12 @@ export function UserPanel({
   // Not on the icons-only strip: the hint is a sentence and a button in a
   // 72px column, which renders as two unexplained glyphs. It comes back with
   // the labels, and it is a one-shot invitation rather than a control.
-  const showHint = showDownload && !hintDismissed && !onPhone && !compact;
+  const showHint =
+    showDownload &&
+    !hintDismissed &&
+    !onPhone &&
+    !compact &&
+    !hideDownloadHint;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write

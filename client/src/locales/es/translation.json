@@ -4089,5 +4089,10 @@
   "signedOut.invite.eyebrow": "Invitación",
   "signedOut.invite.title": "Te invitaron a {server}",
   "signedOut.invite.body": "Crea una cuenta y ya estás dentro. Toma un minuto.",
-  "signedOut.invite.haveAccount": "Ya tengo cuenta"
+  "signedOut.invite.haveAccount": "Ya tengo cuenta",
+  "partyNewcomer.body.beside": "Watch party en vivo: {name} está compartiendo su pantalla. El chat está a la derecha.",
+  "partyNewcomer.body.below": "Watch party en vivo: {name} está compartiendo su pantalla. El chat está justo debajo.",
+  "partyNewcomer.bodyNoName.beside": "Watch party en vivo: alguien está compartiendo su pantalla. El chat está a la derecha.",
+  "partyNewcomer.bodyNoName.below": "Watch party en vivo: alguien está compartiendo su pantalla. El chat está justo debajo.",
+  "partyNewcomer.dismiss": "Entendido"
 }

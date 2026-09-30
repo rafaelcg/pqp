@@ -4022,5 +4022,10 @@
   "signedOut.invite.eyebrow": "Convite",
   "signedOut.invite.title": "Você foi convidado pra {server}",
   "signedOut.invite.body": "Cria a conta e já entra. Leva um minuto.",
-  "signedOut.invite.haveAccount": "Já tenho conta"
+  "signedOut.invite.haveAccount": "Já tenho conta",
+  "partyNewcomer.body.beside": "Watch party ao vivo: {name} está compartilhando a tela. O chat fica na direita.",
+  "partyNewcomer.body.below": "Watch party ao vivo: {name} está compartilhando a tela. O chat fica logo abaixo.",
+  "partyNewcomer.bodyNoName.beside": "Watch party ao vivo: alguém está compartilhando a tela. O chat fica na direita.",
+  "partyNewcomer.bodyNoName.below": "Watch party ao vivo: alguém está compartilhando a tela. O chat fica logo abaixo.",
+  "partyNewcomer.dismiss": "Entendi"
 }

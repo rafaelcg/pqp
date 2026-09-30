@@ -222,6 +222,15 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/community-home/config (enabled)",
   },
+  party_newcomer_experience: {
+    description:
+      "Festa para quem chegou agora: chat garantido no celular, faixa que explica a sala, sem convite de app.",
+    env: "PARTY_NEWCOMER_EXPERIENCE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (newcomerExperience)",
+  },
   community_home_vip: {
     description: "Posts VIP do Baú (só vale com o Baú ligado).",
     env: "COMMUNITY_HOME_VIP_ENABLED",

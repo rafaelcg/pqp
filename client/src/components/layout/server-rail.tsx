@@ -108,6 +108,16 @@ interface ServerRailProps {
   onUnpinConversation?: (channelId: string) => void;
   /** Servers with a watch party on air right now: a red dot on the bubble. */
   liveServerIds?: ReadonlySet<string>;
+  /**
+   * PUT AWAY ON A PHONE (`party_newcomer_experience`): under `md` the 72px rail
+   * leaves the flow, which is 18% of a 390px screen a live party's viewer
+   * wants for the room. It is not gone: while the nav drawer is open
+   * (`mobileNavOpen`, the hamburger in the party bar) it is drawn over the
+   * page at the left edge, exactly where the drawer's own `left-[72px]`
+   * expects it. From `md` up nothing changes.
+   */
+  phoneHidden?: boolean;
+  mobileNavOpen?: boolean;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
@@ -153,6 +163,8 @@ export function ServerRail({
   onOpenSettings,
   onLeaveServer,
   onToggleProfileVisibility,
+  phoneHidden = false,
+  mobileNavOpen = false,
 }: ServerRailProps) {
   const { t } = useTranslation();
   // Subscribed once for the whole rail: hook rules forbid reading the store
@@ -162,7 +174,14 @@ export function ServerRail({
   return (
     <nav
       data-immersive-hide=""
-      className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3"
+      data-rail-phone-hidden={phoneHidden ? "" : undefined}
+      className={cn(
+        "flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        phoneHidden &&
+          (mobileNavOpen
+            ? "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:h-auto"
+            : "max-md:hidden"),
+      )}
     >
       {/* Above the servers, and separated from them: conversations belong to no
           server, so putting Home in the list would read as one more of them. */}

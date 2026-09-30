@@ -18,6 +18,7 @@ Adding one means adding a row here.
 | Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
 | QG invite | `components/layout/qg-hint.tsx` | Corner card with hero | QG is listed and not joined | `pqp:qg-hint-…` (impression) |
 | Voz limpa nudge | `components/voice/voice-clean-hint.tsx` | Inline CornerCard above the user bar | first voice call with the mic on since ship, desktop (≥640px), not presenting a watch party | `voiceCleanNudgeDismissedAt` (preference — "Ativar" or "Depois" both count). Narrower than 640px: no card, a NOVO dot on the Settings noise-suppression row instead |
+| Party newcomer strip | `components/onboarding/party-newcomer-strip.tsx`, rules in `lib/party-newcomer.ts` | One-line strip under the party bar, above the split | flag `party_newcomer_experience` on for the server, a live party, no seat, an account whose first-run finished under 24 h ago. While it is up the Watch party viewer hint below stands down | `pqp:party-newcomer-strip-2026-09` (dismiss). Same flag also puts the rail away and gives the chat a floor on a phone, and holds the Get the app strip back for that newcomer |
 | Mobile beta | `components/layout/mobile-beta-hint.tsx` | Corner card | phone browser, not the native app | `pqp:mobile-beta-hint-…` (impression) |
 | What's new (corner) | `components/layout/whats-new-prompt.tsx` | Corner card | pack id unseen | `pqp:whats-new` (impression) |
 | What's New (rail) | `components/layout/whats-new-view.tsx` + sparkle on `server-rail.tsx` | Rail icon, lime pip | newest `/blog` slug unseen | `pqp:whats-new-feed` (opening the feed) |
@@ -152,7 +153,7 @@ and is a no-op anywhere the tag was not injected (every self-host):
 `onboarding_start`, `onboarding_step_view`, `age_gate_pass` / `age_gate_block`,
 `onboarding_you_next`, `onboarding_room_door`, `onboarding_server_created`,
 `onboarding_invite_copied`, `onboarding_done`, `arrival_view`,
-`arrival_first_message`, `arrival_first_voice`, `invite_gate_view`. Links copied
+`arrival_first_message`, `arrival_first_voice`, `invite_gate_view`. The Clerk trip on a community poster is timed by `signup_cta_click` (the tap, with `webview` when it is an in-app browser) and `signup_return` (the account exists, with `seconds` and `bucket` since the tap), both from `lib/signup-assist.ts`. With `VITE_SIGNUP_ASSIST=true` (or `localStorage["pqp:signup-assist"]="on"`), a poster that reloads while Clerk holds a sign-up waiting on its emailed code reopens the modal and fires `signup_resume_open`. Links copied
 from first-run surfaces carry `?ref=onboarding`, so joins through them are
 counted apart from `convite` and `discord`.
 
