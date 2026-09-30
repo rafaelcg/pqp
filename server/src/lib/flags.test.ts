@@ -65,6 +65,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   community_home: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   party_newcomer_experience: (raw) => raw === "true",
+  party_fast_start: (raw) => raw === "true",
 };
 
 const SAMPLES = [

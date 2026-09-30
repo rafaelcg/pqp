@@ -102,6 +102,7 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below).
+`PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 
 Staying environment-only, on purpose:
 

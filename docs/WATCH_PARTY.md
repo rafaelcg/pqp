@@ -3991,6 +3991,20 @@ after A1.1 and A1.2: `docs/plans/BROADCAST_PIPELINE.md` §3, and
 `docs/plans/ALWAYS_ON.md` task A1.x for the R2 credential seam this depends
 on.
 
+## Fast first frame (`party_fast_start`)
+
+A runtime flag (`PARTY_FAST_START`, default off, per server, delivered as `fastStart` on `GET /api/live-hls/config`; dashboard: controles, interruptores, and the per-server override) that changes what a VIEWER's browser does while it waits for the first frame. Nothing about packaging, segment or part durations, egress, remux or LL moves. The client half is `client/src/lib/party-fast-start.ts`; the app shell writes the selected server's answer there and the player reads it once per mount.
+
+What it does, with the flag on:
+
+- **The bubbles film is held back.** The holding screen's looping film is 1.1 MB and downloads at exactly the moment the init segment and first media segment need the link. It stays a 36 KB poster for the first 8 s and is never fetched on a link the browser calls slow (`navigator.connection`). In the local bench this is the whole win when the app is service-worker controlled.
+- **The player chunk is fetched early** (`preloadHlsEngine`, from the app shell as soon as the server's answer says on) instead of when the playlist URL arrives. Worth about 0.6 s on a cold browser (a first visit, an in-app browser), about nothing behind the service worker.
+- **The wait is told truthfully.** Before the first frame the holding screen used to say "The stream stalled, reconnecting", the default answer of `resolveHoldingScreenReason`, which cannot tell a first load from a stall. It now says "Connecting to the stream", then "Loading the first seconds of the picture", then counts seconds out loud from 5 s. The two rotating lines with a censored swear are dropped.
+
+What it deliberately does not do: pick a lower first rung (hls.js already opens a multi-rung ladder on its lowest level, `testBandwidth`, and an LL master carries one rung), shorten manifest retries (the LL master retry is paced to the edge's `Retry-After` on purpose), or touch the LL governor's hold-back.
+
+Measure it with `tools/party-first-frame-bench/` (README there): local mock HLS origin, CDP throttle, modelled numbers, not a real egress.
+
 ## Client flag
 
 `VITE_WATCH_PARTY_CHANNELS=true` turns on the create affordance and the
