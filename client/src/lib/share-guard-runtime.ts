@@ -71,8 +71,14 @@ export interface ShareGuardHandle {
   tick(): Promise<ShareGuardDecision | null>;
   level(): ShareGuardLevel;
   snapshot(): ShareGuardSnapshot;
-  /** Move to a level by hand (`pqpShareHealth.force`). Null goes back to the top. */
-  force(index: number | null): Promise<ShareGuardLevel>;
+  /**
+   * Move to a level by hand (`pqpShareHealth.force`). Null goes back to the top
+   * and hands the decision back to the machine; any other level is HELD until
+   * released (`applied` says whether the capture and the senders both took it).
+   */
+  force(index: number | null): Promise<{ level: ShareGuardLevel; applied: boolean }>;
+  /** True while a forced level is being held. */
+  manual(): boolean;
   /** The presenter changed the capture rate: start the ladder over from it. */
   rebase(baseFps: ShareFps): Promise<void>;
   /** Put the current level back onto the capture (after something else wrote to it). */
@@ -186,16 +192,34 @@ export function startShareGuard(options: ShareGuardOptions): ShareGuardHandle {
   let ladder = buildShareGuardLadder({ fps: options.baseFps, height: baseHeight });
   const guard: ShareGuard = createShareGuard(ladder, options.config);
   let previous: Array<ShareEncodeStats | null> = [];
-  let busy = false;
+  let tickQueued = false;
   let stopped = false;
+  /** A person put the guard on a level (`pqpShareHealth.force`): automatic moves wait. */
+  let manualHold = false;
 
-  async function applyLevel(level: ShareGuardLevel): Promise<void> {
+  /**
+   * Everything that writes to the capture or the senders runs through one
+   * chain, so a stop cannot overtake a step that is still being applied (the
+   * step would land AFTER the restore and leave the share held), and a manual
+   * force cannot interleave with a tick's own apply.
+   */
+  let chain: Promise<unknown> = Promise.resolve();
+  function serial<T>(work: () => Promise<T>): Promise<T> {
+    const next = chain.then(work, work);
+    chain = next.catch(() => {});
+    return next;
+  }
+
+  /** Whether both halves of the level were accepted. */
+  async function applyLevel(level: ShareGuardLevel): Promise<boolean> {
+    let ok = true;
     if (typeof track.applyConstraints === "function") {
       try {
         await track.applyConstraints(captureConstraintsFor(baseConstraints, level));
       } catch (err) {
         // The capture keeps what it had. The encoder half below still lowers
         // the send rate and bitrate, which is most of the benefit.
+        ok = false;
         log("[pqp] share guard: capture kept its settings", {
           level: level.index,
           error: err instanceof Error ? err.name : String(err),
@@ -205,11 +229,13 @@ export function startShareGuard(options: ShareGuardOptions): ShareGuardHandle {
     try {
       await transport.applyCeiling(level.index === 0 ? null : level);
     } catch (err) {
+      ok = false;
       log("[pqp] share guard: senders kept their ceiling", {
         level: level.index,
         error: err instanceof Error ? err.name : String(err),
       });
     }
+    return ok;
   }
 
   function describe(level: ShareGuardLevel): Record<string, unknown> {
@@ -231,53 +257,63 @@ export function startShareGuard(options: ShareGuardOptions): ShareGuardHandle {
     };
   }
 
-  async function tick(): Promise<ShareGuardDecision | null> {
-    if (busy || stopped) {
+  async function tickBody(): Promise<ShareGuardDecision | null> {
+    if (stopped) {
       return null;
+    }
+    let reports: Array<Iterable<unknown>> = [];
+    try {
+      reports = await transport.readReports();
+    } catch {
+      reports = [];
+    }
+    if (stopped) {
+      return null;
+    }
+    const at = now();
+    const next: Array<ShareEncodeStats | null> = [];
+    const samples: ShareGuardSample[] = [];
+    reports.forEach((report, sender) => {
+      const reading = readShareEncodeStats(report, at);
+      next[sender] = reading;
+      if (reading) {
+        samples.push(deriveShareSample(previous[sender] ?? null, reading));
+      }
+    });
+    previous = next;
+    if (samples.length === 0 || manualHold) {
+      return null;
+    }
+    const decision = guard.observe(samples);
+    if (decision.action !== "hold") {
+      await applyLevel(decision.level);
+      log(
+        decision.action === "down"
+          ? "[pqp] share guard: stepped down"
+          : "[pqp] share guard: stepped up",
+        { ...describe(decision.level), verdict: decision.verdict, reason: decision.reason },
+      );
+    }
+    return decision;
+  }
+
+  function tick(): Promise<ShareGuardDecision | null> {
+    if (tickQueued || stopped) {
+      return Promise.resolve(null);
     }
     if (transport.blocked?.()) {
-      await api.stop();
-      return null;
+      // Not awaited: the stop queues behind this call's own chain slot.
+      void api.stop();
+      return Promise.resolve(null);
     }
-    busy = true;
-    try {
-      let reports: Array<Iterable<unknown>> = [];
+    tickQueued = true;
+    return serial(async () => {
       try {
-        reports = await transport.readReports();
-      } catch {
-        reports = [];
+        return await tickBody();
+      } finally {
+        tickQueued = false;
       }
-      if (stopped) {
-        return null;
-      }
-      const at = now();
-      const next: Array<ShareEncodeStats | null> = [];
-      const samples: ShareGuardSample[] = [];
-      reports.forEach((report, sender) => {
-        const reading = readShareEncodeStats(report, at);
-        next[sender] = reading;
-        if (reading) {
-          samples.push(deriveShareSample(previous[sender] ?? null, reading));
-        }
-      });
-      previous = next;
-      if (samples.length === 0) {
-        return null;
-      }
-      const decision = guard.observe(samples);
-      if (decision.action !== "hold") {
-        await applyLevel(decision.level);
-        log(
-          decision.action === "down"
-            ? "[pqp] share guard: stepped down"
-            : "[pqp] share guard: stepped up",
-          { ...describe(decision.level), verdict: decision.verdict, reason: decision.reason },
-        );
-      }
-      return decision;
-    } finally {
-      busy = false;
-    }
+    });
   }
 
   const handle = timers.set(() => {
@@ -288,48 +324,71 @@ export function startShareGuard(options: ShareGuardOptions): ShareGuardHandle {
     tick,
     level: () => guard.level(),
     snapshot: () => guard.snapshot(),
-    async stop() {
+    manual: () => manualHold,
+    stop() {
       if (stopped) {
-        return;
+        return chain.then(() => undefined);
       }
       stopped = true;
       timers.clear(handle);
       const wasLowered = guard.level().index > 0;
-      // Hand the senders back whatever they were held to.
-      try {
-        await transport.applyCeiling(null);
-      } catch {
-        // The share is going away anyway.
-      }
-      // A capture that is still live (the guard stopped because a party took
-      // the share over, not because the share ended) gets its own settings
-      // back. An ended track has nothing to restore, and is left alone.
-      if (
-        wasLowered &&
-        track.readyState === "live" &&
-        typeof track.applyConstraints === "function"
-      ) {
+      // Queued behind whatever step is still being applied, so the restore is
+      // the LAST thing written.
+      return serial(async () => {
+        // Hand the senders back whatever they were held to.
         try {
-          await track.applyConstraints(baseConstraints);
+          await transport.applyCeiling(null);
         } catch {
-          // Keeps what it has.
+          // The share is going away anyway.
         }
-      }
+        // A capture that is still live (the guard stopped because a party took
+        // the share over, not because the share ended) gets its own settings
+        // back. An ended track has nothing to restore, and is left alone.
+        if (
+          wasLowered &&
+          track.readyState === "live" &&
+          typeof track.applyConstraints === "function"
+        ) {
+          try {
+            await track.applyConstraints(baseConstraints);
+          } catch {
+            // Keeps what it has.
+          }
+        }
+      });
     },
-    async force(index) {
-      const level = guard.force(index, now());
-      await applyLevel(level);
-      log("[pqp] share guard: set by hand", describe(level));
-      return level;
+    force(index) {
+      return serial(async () => {
+        if (stopped) {
+          return { level: guard.level(), applied: false };
+        }
+        const level = guard.force(index, now());
+        // A level chosen by hand stays until somebody releases it: the
+        // automatic machine would otherwise move off it on the next reading.
+        manualHold = index !== null && level.index !== 0;
+        const applied = await applyLevel(level);
+        log("[pqp] share guard: set by hand", { ...describe(level), applied });
+        return { level, applied };
+      });
     },
-    async rebase(baseFps) {
-      ladder = buildShareGuardLadder({ fps: baseFps, height: baseHeight });
-      const top = guard.rebase(ladder);
-      previous = [];
-      await applyLevel(top);
+    rebase(baseFps) {
+      return serial(async () => {
+        if (stopped) {
+          return;
+        }
+        ladder = buildShareGuardLadder({ fps: baseFps, height: baseHeight });
+        const top = guard.rebase(ladder);
+        previous = [];
+        manualHold = false;
+        await applyLevel(top);
+      });
     },
-    async reapply() {
-      await applyLevel(guard.level());
+    reapply() {
+      return serial(async () => {
+        if (!stopped) {
+          await applyLevel(guard.level());
+        }
+      });
     },
   };
   return api;

@@ -275,6 +275,62 @@ describe("startShareGuard", () => {
     await h.guard.stop();
   });
 
+  it("holds a level chosen by hand until it is released, however starved the share is", async () => {
+    const h = harness();
+    const forced = await h.guard.force(1);
+    expect(forced).toMatchObject({ applied: true, level: { index: 1 } });
+    expect(h.guard.manual()).toBe(true);
+    // Starved for a minute: the machine would have walked down the ladder.
+    await h.advance(60, true);
+    expect(h.guard.level().index).toBe(1);
+    // Healthy for two minutes: it would have walked back up.
+    await h.advance(120, false);
+    expect(h.guard.level().index).toBe(1);
+    // Released: the machine decides again.
+    await h.guard.force(null);
+    expect(h.guard.manual()).toBe(false);
+    expect(h.guard.level().index).toBe(0);
+    await h.advance(20, true);
+    expect(h.guard.level().index).toBeGreaterThan(0);
+    await h.guard.stop();
+  });
+
+  it("says so when the browser refused part of a forced level", async () => {
+    const h = harness();
+    h.raw.applyConstraints.mockRejectedValue(new Error("OverconstrainedError"));
+    const forced = await h.guard.force(2);
+    expect(forced.applied).toBe(false);
+    expect(forced.level.index).toBe(2);
+    await h.guard.stop();
+  });
+
+  it("does not let a step that is still being applied land after the stop", async () => {
+    const h = harness();
+    // Starve until a step is decided, with the capture write held open.
+    let release: () => void = () => {};
+    h.raw.applyConstraints.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await h.advance(6, true);
+    const stepping = h.advance(2, true);
+    await Promise.resolve();
+    // The share ends (or a watch party takes it) while the write is in flight.
+    const stopped = h.guard.stop();
+    release();
+    await stepping;
+    release();
+    await stopped;
+    // The last thing written to the senders is the release, never a step.
+    expect(h.ceilings.at(-1)).toBeNull();
+    // And nothing is applied after the stop.
+    const writes = h.ceilings.length;
+    await h.advance(30, true);
+    expect(h.ceilings).toHaveLength(writes);
+  });
+
   it("asks the timer, not a tight loop: one sampling pass per tick", async () => {
     const h = harness();
     expect(typeof h.fire()).toBe("function");

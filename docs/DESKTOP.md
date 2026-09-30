@@ -251,7 +251,8 @@ WebRTC's sources, not measured on a 360 Hz PC (that is the test below):
    ceiling and a bitrate scale on the senders. In place: no republish, no new
    sid, no picker.
 4. **Shell priority boost** (`electron/lib/share-priority.js`, Windows only):
-   while a share is live the browser, renderer, GPU, audio and video-capture
+   while a share is live the browser, renderer, GPU, audio, video-capture and
+   network-service (where WebRTC's sockets live)
    processes go to `ABOVE_NORMAL` and back to exactly what each had. It never
    goes higher, never lowers a process that is already above, and is undone when
    the page reloads, its renderer dies, or the app quits. It does **not** change

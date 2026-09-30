@@ -36,12 +36,32 @@ const DEFAULT_PRIORITIES = Object.freeze({
 });
 
 const RESCAN_MS = 5_000;
+const RESTORE_RETRY_MS = 2_000;
+const RESTORE_RETRIES = 5;
+
+/**
+ * The utility services the share depends on: the audio service (the
+ * microphone), video capture, and the NETWORK service, which is where
+ * Chromium's WebRTC UDP sockets live, so every packet of the share leaves
+ * through it.
+ *
+ * `serviceName` is the non-localized name Electron reports (for example
+ * `audio.mojom.AudioService`); `name` is localized for the built-in services,
+ * so a Portuguese install says "Servico de audio". Both are matched, with the
+ * accents stripped, so neither a locale nor a missing `serviceName` hides one.
+ */
+const SHARE_SERVICE = /audio|capture|captura|network|rede/;
+
+/** @param {string} value */
+function plain(value) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
 
 /**
  * Which of `app.getAppMetrics()`'s entries are part of the share's pipeline.
  * The browser process (desktop capture), renderers ("Tab"), the GPU process,
- * and the two utility services the call depends on: audio and video capture.
- * The network service, the crashpad handler and the rest stay where they are.
+ * and the utility services above. The crashpad handler and the rest stay where
+ * they are.
  *
  * @param {{ pid: number, type?: string, name?: string, serviceName?: string }} metric
  */
@@ -55,8 +75,7 @@ function isShareProcess(metric) {
     case "GPU":
       return true;
     case "Utility": {
-      const label = `${metric.name ?? ""} ${metric.serviceName ?? ""}`;
-      return /audio|capture/i.test(label);
+      return SHARE_SERVICE.test(plain(`${metric.name ?? ""} ${metric.serviceName ?? ""}`));
     }
     default:
       return false;
@@ -86,6 +105,7 @@ function createSharePriority(deps) {
   const raised = new Map();
   let live = false;
   let timer = null;
+  let retryTimer = null;
   let boost = supported ? "idle" : "unsupported";
 
   function status() {
@@ -140,20 +160,55 @@ function createSharePriority(deps) {
         raised.delete(pid);
       }
     }
-    boost = raised.size > 0 ? "raised" : refused > 0 ? "failed" : boost;
+    // Read off what is true now: every tracked process exiting must not leave
+    // the last scan's "raised" standing.
+    boost = raised.size > 0 ? "raised" : refused > 0 ? "failed" : "idle";
   }
 
+  /**
+   * Put every raised process back. A write that fails on a process that is
+   * still alive is KEPT for another try (an exited process is dropped), so a
+   * transient refusal cannot leave something boosted for good.
+   * @returns how many processes are still to be restored
+   */
   function restore() {
-    for (const [pid, previous] of raised) {
+    for (const [pid, previous] of [...raised]) {
       try {
         deps.setPriority(pid, previous);
+        raised.delete(pid);
       } catch {
-        // Exited since the last scan.
+        let alive = true;
+        try {
+          deps.getPriority(pid);
+        } catch {
+          alive = false;
+        }
+        if (!alive) {
+          raised.delete(pid);
+        }
       }
     }
-    const count = raised.size;
-    raised.clear();
-    return count;
+    return raised.size;
+  }
+
+  /** Retry a restore that did not finish, a few times, then give up loudly. */
+  function scheduleRestoreRetry(attempt) {
+    if (raised.size === 0 || attempt >= RESTORE_RETRIES || live) {
+      if (raised.size > 0 && !live) {
+        log(`[pqp] share priority: could not restore ${raised.size} processes`);
+      }
+      return;
+    }
+    retryTimer = setTimer(() => {
+      clearTimer(retryTimer);
+      retryTimer = null;
+      if (live) {
+        return;
+      }
+      restore();
+      boost = raised.size > 0 ? "failed" : "restored";
+      scheduleRestoreRetry(attempt + 1);
+    }, RESTORE_RETRY_MS);
   }
 
   return {
@@ -164,6 +219,10 @@ function createSharePriority(deps) {
       }
       if (live) {
         return status();
+      }
+      if (retryTimer !== null) {
+        clearTimer(retryTimer);
+        retryTimer = null;
       }
       live = true;
       boost = "idle";
@@ -184,10 +243,14 @@ function createSharePriority(deps) {
       if (!supported) {
         return status();
       }
-      const restored = restore();
+      const before = raised.size;
+      const left = restore();
       if (wasLive) {
-        boost = "restored";
-        log(`[pqp] share priority: restored ${restored} processes`);
+        boost = left > 0 ? "failed" : "restored";
+        log(`[pqp] share priority: restored ${before - left} of ${before} processes`);
+      }
+      if (left > 0) {
+        scheduleRestoreRetry(0);
       }
       return status();
     },

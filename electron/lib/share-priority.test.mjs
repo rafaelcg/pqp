@@ -60,7 +60,8 @@ function machine(initial) {
 const ALL = { 10: NORMAL, 11: NORMAL, 12: NORMAL, 13: NORMAL, 14: NORMAL, 15: NORMAL, 16: NORMAL };
 
 describe("isShareProcess", () => {
-  it("picks the browser, renderers, the GPU process and the audio and capture services", () => {
+  it("picks the browser, renderers, the GPU process and the audio, capture and network services", () => {
+    assert.equal(isShareProcess({ pid: 1, type: "Utility", serviceName: "network.mojom.NetworkService" }), true);
     assert.equal(isShareProcess({ pid: 1, type: "Browser" }), true);
     assert.equal(isShareProcess({ pid: 1, type: "Tab" }), true);
     assert.equal(isShareProcess({ pid: 1, type: "GPU" }), true);
@@ -68,8 +69,15 @@ describe("isShareProcess", () => {
     assert.equal(isShareProcess({ pid: 1, type: "Utility", name: "Video Capture" }), true);
   });
 
-  it("leaves the network service, helpers and nonsense alone", () => {
-    assert.equal(isShareProcess({ pid: 1, type: "Utility", serviceName: "network.mojom.NetworkService" }), false);
+  it("finds a service by its localized name when there is no serviceName", () => {
+    assert.equal(isShareProcess({ pid: 1, type: "Utility", name: "Servi\u00e7o de \u00e1udio" }), true);
+    assert.equal(isShareProcess({ pid: 1, type: "Utility", name: "Captura de v\u00eddeo" }), true);
+    assert.equal(isShareProcess({ pid: 1, type: "Utility", name: "Servi\u00e7o de rede" }), true);
+  });
+
+  it("leaves other services, helpers and nonsense alone", () => {
+    assert.equal(isShareProcess({ pid: 1, type: "Utility", serviceName: "storage.mojom.StorageService" }), false);
+    assert.equal(isShareProcess({ pid: 1, type: "Utility" }), false);
     assert.equal(isShareProcess({ pid: 1, type: "Zygote" }), false);
     assert.equal(isShareProcess({ pid: 0, type: "GPU" }), false);
     assert.equal(isShareProcess({ pid: 1.5, type: "GPU" }), false);
@@ -82,14 +90,13 @@ describe("createSharePriority", () => {
     const os = machine(ALL);
     const priority = createSharePriority(os.deps);
     const status = priority.start();
-    assert.deepEqual(status, { live: true, boost: "raised", processes: 5 });
+    assert.deepEqual(status, { live: true, boost: "raised", processes: 6 });
     assert.deepEqual(
       os.writes.map(([pid]) => pid).sort((a, b) => a - b),
-      [10, 11, 12, 13, 15],
+      [10, 11, 12, 13, 14, 15],
     );
     assert.ok(os.writes.every(([, p]) => p === ABOVE));
-    // The network service and the zygote are where they were.
-    assert.equal(os.priorities.get(14), NORMAL);
+    // The zygote is where it was.
     assert.equal(os.priorities.get(16), NORMAL);
   });
 
@@ -140,7 +147,7 @@ describe("createSharePriority", () => {
     priority.start();
     os.priorities.delete(11);
     os.tick();
-    assert.equal(priority.status().processes, 4);
+    assert.equal(priority.status().processes, 5);
     assert.doesNotThrow(() => priority.stop());
   });
 
@@ -150,6 +157,53 @@ describe("createSharePriority", () => {
     const priority = createSharePriority(os.deps);
     assert.deepEqual(priority.start(), { live: true, boost: "failed", processes: 0 });
     assert.doesNotThrow(() => priority.stop());
+  });
+
+  it("keeps a failed restore and tries again, instead of leaving a process boosted for good", () => {
+    const os = machine({ 10: NORMAL, 11: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(11);
+    const status = priority.stop();
+    assert.deepEqual(status, { live: false, boost: "failed", processes: 1 });
+    assert.equal(os.priorities.get(10), NORMAL);
+    assert.equal(os.priorities.get(11), ABOVE);
+    // The refusal clears; the retry timer finishes the job.
+    os.refuse();
+    os.tick();
+    assert.equal(os.priorities.get(11), NORMAL);
+    assert.deepEqual(priority.status(), { live: false, boost: "restored", processes: 0 });
+  });
+
+  it("drops a failed restore for a process that has exited", () => {
+    const os = machine({ 10: NORMAL, 11: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(11);
+    os.priorities.delete(11);
+    assert.deepEqual(priority.stop(), { live: false, boost: "restored", processes: 0 });
+  });
+
+  it("does not keep saying raised once every tracked process has exited", () => {
+    const os = machine({ 10: NORMAL, 11: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.priorities.clear();
+    os.tick();
+    assert.deepEqual(priority.status(), { live: true, boost: "idle", processes: 0 });
+  });
+
+  it("a new share cancels a pending restore retry", () => {
+    const os = machine({ 10: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(10);
+    priority.stop();
+    assert.equal(os.timers.filter(Boolean).length, 1);
+    os.refuse();
+    priority.start();
+    assert.equal(priority.status().live, true);
+    priority.stop();
   });
 
   it("does nothing outside Windows, where a normal user cannot raise priority", () => {

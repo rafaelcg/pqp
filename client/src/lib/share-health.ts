@@ -92,7 +92,14 @@ function pause(ms: number): Promise<void> {
 async function readOnce(
   src: ShareHealthSource,
 ): Promise<ShareEncodeStats | null> {
-  const reports = await src.readReports();
+  let reports: Array<Iterable<unknown>> = [];
+  try {
+    reports = await src.readReports();
+  } catch {
+    // The share or its transport closed mid-command: an unavailable sample,
+    // not a failed command.
+    return null;
+  }
   let worst: ShareEncodeStats | null = null;
   for (const report of reports) {
     const reading = readShareEncodeStats(report, Date.now());
@@ -148,7 +155,9 @@ export async function collectShareHealth(
     ),
     sentFps: sample?.fps ?? null,
     captureFps: sample?.sourceFps ?? null,
-    requestedFps: settings.frameRate,
+    // What was ASKED for, from the start of the share; the track's own current
+    // setting (`trackSettings`) moves when the guard steps the capture down.
+    requestedFps: src.captureCheck()?.requested ?? settings.frameRate,
     encodeMs: sample?.encodeMs ?? null,
     limitedBy: sample?.limitedBy ?? null,
     width: second?.frameWidth ?? null,
@@ -242,10 +251,10 @@ const api = Object.assign(
       if (!handle) {
         return "pqpShareHealth.force: the guard is not running on this share (flag off, or no share).";
       }
-      const next = await handle.force(level);
-      return `guard on step ${next.index} (${next.step}, max ${next.maxFps} fps${
+      const { level: next, applied } = await handle.force(level);
+      return `guard ${level === null || next.index === 0 ? "released to" : "held on"} step ${next.index} (${next.step}, max ${next.maxFps} fps${
         next.maxHeight ? `, ${next.maxHeight}p` : ""
-      })`;
+      })${applied ? "" : ", but the browser refused part of it (see the warnings above)"}`;
     },
     help: () => HELP,
   },

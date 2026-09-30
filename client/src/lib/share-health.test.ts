@@ -97,6 +97,31 @@ describe("collectShareHealth", () => {
     expect(report?.captureCheck).toMatchObject({ enforced: true, reported: 144, after: 60 });
   });
 
+  it("reports the rate that was asked for, not the capture's current setting", async () => {
+    setShareHealthSource(
+      source({
+        track: () =>
+          ({ getSettings: () => ({ frameRate: 30, width: 1280, height: 720 }) }) as MediaStreamTrack,
+        captureCheck: () => ({ requested: 60, reported: 60, enforced: false, after: 60 }),
+      }),
+    );
+    const report = await collectShareHealth(0);
+    expect(report?.requestedFps).toBe(60);
+    expect(report?.trackSettings.frameRate).toBe(30);
+  });
+
+  it("returns a partial report when the stats cannot be read", async () => {
+    setShareHealthSource(
+      source({
+        readReports: async () => {
+          throw new Error("transport closed");
+        },
+      }),
+    );
+    const report = await collectShareHealth(0);
+    expect(report).toMatchObject({ transport: "sfu", encoder: null, sentFps: null });
+  });
+
   it("includes the shell's half when the desktop bridge answers", async () => {
     vi.stubGlobal("window", {
       pqpDesktop: {
