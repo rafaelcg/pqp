@@ -37,6 +37,8 @@ import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
   createHlsPresenceBeat,
+  createHlsVisibilityMeter,
+  hlsDeviceClass,
   createHlsTelemetryQueue,
   encodeToPaintLatencyMs,
   hasHlsViewerToken,
@@ -1316,13 +1318,26 @@ export function HlsWatchPlayer({
       return;
     }
     let cancelled = false;
+    // Coarse device class and foreground / background time ride on the beat
+    // (no request of their own, no user agent; `hlsDeviceClass`).
+    const device = hlsDeviceClass();
+    const meter = createHlsVisibilityMeter({
+      isHidden: () => document.visibilityState === "hidden",
+      isPlaying: () => !video.paused && !video.ended,
+    });
+    const onVisibility = () => meter.change();
+    document.addEventListener("visibilitychange", onVisibility);
+    for (const name of ["playing", "pause", "ended", "play"] as const) {
+      video.addEventListener(name, onVisibility);
+    }
     const presence = createHlsPresenceBeat({
       sessionToken: presenceToken,
       isPlaying: () => !video.paused && !video.ended,
       send: (sessionToken) => {
+        const { visibleMs, hiddenMs } = meter.take();
         void getAuthToken().then((token) => {
           if (!cancelled) {
-            sendHlsPresence(sessionToken, token);
+            sendHlsPresence(sessionToken, token, { device, visibleMs, hiddenMs });
           }
         });
       },
@@ -1335,6 +1350,10 @@ export function HlsWatchPlayer({
       cancelled = true;
       presence.stop();
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      for (const name of ["playing", "pause", "ended", "play"] as const) {
+        video.removeEventListener(name, onVisibility);
+      }
       video.removeEventListener("playing", onPlaying);
     };
   }, [getVideo, presenceToken]);

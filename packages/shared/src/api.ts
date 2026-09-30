@@ -1163,6 +1163,12 @@ export const acquisitionSchema = z
     gclid: z.string().trim().max(200),
     ref: z.string().trim().max(100),
     landing: z.string().trim().max(200),
+    /**
+     * How long the sign-up took, seconds, from the modal opening to the
+     * account being ready, measured by the client. Coarse by design (the
+     * client rounds to 5 s); the server clamps rather than trusts it.
+     */
+    signupSeconds: z.number().int().min(0).max(3600),
   })
   .partial();
 

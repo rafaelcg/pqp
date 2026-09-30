@@ -194,9 +194,29 @@ export function isSampledForHlsTelemetry(
  */
 export const LIVE_HLS_PRESENCE_INTERVAL_MS = 30_000;
 
+/** Coarse device classes a watch-party viewer reports. Nothing finer exists. */
+export const LIVE_HLS_DEVICE_CLASSES = ["phone", "tablet", "desktop"] as const;
+export type LiveHlsDeviceClass = (typeof LIVE_HLS_DEVICE_CLASSES)[number];
+
+/** The most foreground or background time one beat may report, ms (4 beats). */
+export const LIVE_HLS_PRESENCE_MAX_SPAN_MS = 120_000;
+
 export const liveHlsPresenceSchema = z.object({
   /** The `?t=` viewer token from the playlist URL the player is attached to. */
   sessionToken: z.string().min(1).max(512),
+  /**
+   * What kind of screen this is: phone, tablet or desktop, judged by the
+   * client from viewport size and pointer type. Never a user agent. Absent on
+   * clients that predate it.
+   */
+  device: z.enum(LIVE_HLS_DEVICE_CLASSES).optional(),
+  /**
+   * Foreground and background milliseconds since this player's previous beat
+   * (`visibilityState`). Summed per viewer server-side, so "how much of the
+   * show was this tab hidden" is one division.
+   */
+  visibleMs: z.number().int().min(0).max(LIVE_HLS_PRESENCE_MAX_SPAN_MS).optional(),
+  hiddenMs: z.number().int().min(0).max(LIVE_HLS_PRESENCE_MAX_SPAN_MS).optional(),
 });
 
 export type LiveHlsPresence = z.infer<typeof liveHlsPresenceSchema>;

@@ -283,7 +283,26 @@ export const cookiesEn: LegalDocument = {
               after you sign in, it is sent to your account once and deleted
               from your device, and if the account was created in the last day, our server keeps
               those values on it. Otherwise they are discarded. If you never
-              sign up it simply expires.
+              sign up it simply expires. A link with no campaign parameters
+              still saves the page you landed on and, if your browser
+              volunteers one, the name of the site that sent you (the host
+              only, never the address of the page you were on), so a sign-up
+              from a plain link is not a blank.
+            </li>
+            <li>
+              <code>pqp:acquisition-done</code>: a marker that the value above
+              has already been sent from this device, so it is not saved again
+              on every visit. It holds no data.
+            </li>
+            <li>
+              <code>pqp:signup-cta</code>: when you tapped a sign-up button,
+              the kind of page it was on and, for a community page, that
+              community's address, so we can tell how long sign-up takes and
+              reopen the code step if your phone reloads the page while you
+              read your mail. Only the length of time, rounded to five
+              seconds, is sent when your account is ready; the time itself is
+              deleted from your device and never sent. It expires after an
+              hour.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: the identifier of the

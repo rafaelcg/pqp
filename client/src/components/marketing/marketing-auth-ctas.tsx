@@ -1,4 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
+import { noteSignupCta } from "@/lib/signup-assist";
 import type { ComponentProps, ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -69,9 +70,10 @@ function ClerkAuthCtas(props: MarketingAuthCtasProps) {
     <AuthPair
       {...props}
       signedIn={isSignedIn === true}
-      onJoin={() =>
-        openOrGo(() => clerk.openSignUp({ forceRedirectUrl: AFTER_AUTH }))
-      }
+      onJoin={() => {
+        noteSignupCta("marketing", "");
+        openOrGo(() => clerk.openSignUp({ forceRedirectUrl: AFTER_AUTH }));
+      }}
       onSignIn={() =>
         openOrGo(() => clerk.openSignIn({ forceRedirectUrl: AFTER_AUTH }))
       }

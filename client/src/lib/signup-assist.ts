@@ -184,7 +184,9 @@ export function clerkAccountCreatedAtMs(): number | null {
  * otherwise read as a completed sign-up. So the account must have been created
  * at or after the tap (`accountCreatedAtMs`, from Clerk, with a minute of
  * clock skew allowed); an unknown creation time counts nothing. The record is
- * consumed either way.
+ * consumed either way. Returns the trip in seconds (5 s steps, at most 15
+ * minutes) when it was counted, else null: the same number goes to the
+ * account as `acquisition.signupSeconds`, so the two never disagree.
  *
  * COUNTED ONCE ACROSS TABS. Two tabs that boot together both read the record
  * before either removes it, so removing is not a claim. A short-lived lock key
@@ -198,16 +200,16 @@ export function noteSignupReturn(
   now: number = Date.now(),
   ua: string = callerUa(),
   accountCreatedAtMs: number | null = clerkAccountCreatedAtMs(),
-): void {
+): number | null {
   const cta = readCta(storage, now);
   try {
     storage?.removeItem(SIGNUP_CTA_KEY);
   } catch {
     // Nothing to do about it.
   }
-  if (!cta) return;
-  if (accountCreatedAtMs === null || accountCreatedAtMs < cta.at - SIGNUP_CLOCK_SKEW_MS) return;
-  if (!claimReturn(storage, now)) return;
+  if (!cta) return null;
+  if (accountCreatedAtMs === null || accountCreatedAtMs < cta.at - SIGNUP_CLOCK_SKEW_MS) return null;
+  if (!claimReturn(storage, now)) return null;
   const seconds = Math.round((now - cta.at) / 1000);
   const data: TrackData = {
     surface: cta.surface,
@@ -217,7 +219,15 @@ export function noteSignupReturn(
   const webview = webviewKind(ua);
   if (webview) data.webview = webview;
   track("signup_return", data);
+  // What the ACQUISITION carries, rounded to 5 s. Past 15 minutes it was two
+  // visits, and a duration spanning them measures the person's day, not the
+  // modal, so the event above keeps it (its bucket says "5m+") and the
+  // account's column does not.
+  return seconds <= SIGNUP_DURATION_MAX_S ? Math.round(seconds / 5) * 5 : null;
 }
+
+/** The longest sign-up reported as a single trip. */
+export const SIGNUP_DURATION_MAX_S = 15 * 60;
 
 function claimReturn(storage: ReadWriteStorage | null, now: number): boolean {
   if (!storage) return false;

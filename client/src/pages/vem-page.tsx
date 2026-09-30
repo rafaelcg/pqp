@@ -1,4 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
 import {
   ArrowDown,
@@ -220,6 +221,9 @@ function useOpenAuth() {
       return;
     }
     try {
+      if (mode === "signUp") {
+        noteSignupCta("vem", "");
+      }
       const open =
         mode === "signUp"
           ? clerk.openSignUp({ forceRedirectUrl: target })

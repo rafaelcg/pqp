@@ -106,7 +106,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "349bb814",
+      sourceRev: "1d565989",
       heading: "Armazenamento local",
       body: (
         <>
@@ -307,7 +307,26 @@ export const cookiesPtBr: LegalDocument = {
               vez que o app carrega depois do seu login, ele é enviado uma única
               vez para a sua conta e apagado do seu dispositivo, e, se a conta foi criada no último dia, o nosso servidor guarda
               esses valores nela. Se não, eles são descartados. Se você nunca se
-              cadastrar, ele simplesmente expira.
+              cadastrar, ele simplesmente expira. Um link sem parâmetros de
+              campanha também salva a página em que você chegou e, se o seu
+              navegador informar, o nome do site que enviou você (só o
+              domínio, nunca o endereço da página em que você estava), para
+              que um cadastro vindo de um link simples não fique em branco.
+            </li>
+            <li>
+              <code>pqp:acquisition-done</code>: uma marca de que o valor acima
+              já foi enviado a partir deste dispositivo, para que ele não seja
+              salvo de novo a cada visita. Não guarda dado nenhum.
+            </li>
+            <li>
+              <code>pqp:signup-cta</code>: a hora em que você tocou em um
+              botão de cadastro, o tipo de página em que estava e, numa página
+              de comunidade, o endereço dela, para a gente saber quanto tempo o
+              cadastro leva e reabrir a etapa do código se o seu celular
+              recarregar a página enquanto você lê o e-mail. Só a duração,
+              arredondada para cinco segundos, é enviada quando a sua conta
+              fica pronta; a hora em si é apagada do seu dispositivo e nunca
+              enviada. Expira em uma hora.
             </li>
             <li>
               <code>pqp:ads-signup-reported</code>: o identificador da conta

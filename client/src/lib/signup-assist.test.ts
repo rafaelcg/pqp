@@ -94,6 +94,22 @@ describe("the CTA to return timing", () => {
     expect(storage.map.has(SIGNUP_CTA_KEY)).toBe(false);
   });
 
+  it("hands back the trip as the acquisition's duration: 5 s steps, null past 15 minutes or when uncounted", () => {
+    const storage = memoryStorage();
+    noteSignupCta("profile", "", storage, 1_000, ANDROID_CHROME);
+    expect(noteSignupReturn(storage, 1_000 + 47_000, ANDROID_CHROME, 20_000)).toBe(45);
+    // Consumed: the same trip is never reported twice (one key, one lock).
+    expect(noteSignupReturn(storage, 1_000 + 48_000, ANDROID_CHROME, 20_000)).toBeNull();
+    // Two visits: the event still fires, the account's column does not.
+    noteSignupCta("tela", "", storage, 100_000, ANDROID_CHROME);
+    expect(
+      noteSignupReturn(storage, 100_000 + 16 * 60_000, ANDROID_CHROME, 100_000 + 16 * 60_000 - 1_000),
+    ).toBeNull();
+    // An account that predates the tap is not a sign-up this tap caused.
+    noteSignupCta("tela", "", storage, 5_000_000, ANDROID_CHROME);
+    expect(noteSignupReturn(storage, 5_030_000, ANDROID_CHROME, 1_000)).toBeNull();
+  });
+
   it("counts a return once, and not at all for a stale or foreign record", () => {
     const umami = { track: vi.fn() };
     (window as { umami?: unknown }).umami = umami;

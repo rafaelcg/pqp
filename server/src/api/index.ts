@@ -9309,7 +9309,13 @@ router.post("/api/live-hls/presence", async ({ req, res, user }) => {
   if (!claims || claims.userId !== user.id) {
     throw new HttpError(400, "Invalid session token");
   }
-  noteHlsViewer(claims.channelId, claims.startedAt, user.id, "presence");
+  // Coarse class and foreground / background time ride along on the beat, so
+  // they cost no request and no query of their own (`HlsViewerDetail`).
+  noteHlsViewer(claims.channelId, claims.startedAt, user.id, "presence", {
+    device: body.device,
+    visibleMs: body.visibleMs,
+    hiddenMs: body.hiddenMs,
+  });
   return { ok: true };
 });
 
