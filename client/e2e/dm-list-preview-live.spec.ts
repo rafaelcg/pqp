@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 /**
  * A conversation's list row follows the messages sent while it is open.
@@ -73,12 +73,26 @@ async function seed(aSuffix: string, bSuffix: string): Promise<string> {
   return conversation.channelId;
 }
 
+/**
+ * Every person gets a browser context of their own (their own localStorage, so
+ * their own dev identity). A context made by hand is not closed by the `page`
+ * fixture, so they are tracked here and closed after the test, pass or fail:
+ * left open, their pages and sockets outlive the test on a worker that goes on
+ * to run others.
+ */
+const openedContexts: BrowserContext[] = [];
+
+test.afterEach(async () => {
+  await Promise.all(openedContexts.splice(0).map((context) => context.close().catch(() => {})));
+});
+
 async function openConversation(
   browser: Browser,
   suffix: string,
   channelId: string,
 ): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  openedContexts.push(context);
   const page = await context.newPage();
   await page.addInitScript((s) => localStorage.setItem("pqp:dev-user-suffix", s), suffix);
   await page.goto(`/app/dm/${channelId}?lang=en`);

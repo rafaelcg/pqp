@@ -17,6 +17,7 @@ import {
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
+  wantsNativeShareAudio,
   systemAudioStrippedNoticeKey,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
@@ -1145,5 +1146,52 @@ describe("ensureOsCanExcludeCallAudio", () => {
         value: previous,
       });
     }
+  });
+});
+
+describe("native share audio on the Windows desktop app", () => {
+  /** Windows 10: Chromium cannot keep the call out of its loopback. */
+  const win10Shell: ScreenCaptureEnvironment = {
+    isDesktopShell: true,
+    shellPlatform: "win32",
+    supportsRestrictOwnAudio: true,
+    osCanExcludeCallAudio: false,
+    sharePickerOffersAudio: true,
+    shellSystemAudio: "none",
+    shellRestrictOwnAudio: false,
+  };
+  const win10Native: ScreenCaptureEnvironment = { ...win10Shell, shellNativeShareAudio: true };
+
+  it("offers sound on Windows 10 only once the native capture is ready", () => {
+    expect(offersShellSystemAudio(win10Shell)).toBe(false);
+    expect(offersShellSystemAudio(win10Native)).toBe(true);
+    expect(wantsNativeShareAudio(false, win10Shell)).toBe(false);
+    expect(wantsNativeShareAudio(false, win10Native)).toBe(true);
+  });
+
+  it("asks Chromium for no audio at all, so its mixer tap can never ride along", () => {
+    const options = screenCaptureOptions(true, win10Native);
+    expect(options.audio).toBe(false);
+    expect(options.systemAudio).toBe("exclude");
+    // Windows 11 too: with native on, Chromium's loopback is not asked for.
+    const win11Native = { ...capableShell, shellNativeShareAudio: true };
+    expect(screenCaptureOptions(true, win11Native).audio).toBe(false);
+    expect(screenCaptureOptions(true, capableShell).audio).not.toBe(false);
+  });
+
+  it("never applies in a browser, whatever the flag says", () => {
+    const flagged = { ...browser, shellNativeShareAudio: true };
+    expect(wantsNativeShareAudio(true, flagged)).toBe(false);
+    expect(screenCaptureOptions(false, flagged).systemAudio).toBe("include");
+  });
+
+  it("is still consent: a shell whose picker cannot ask needs the page's yes", () => {
+    const noPicker = { ...win10Native, sharePickerOffersAudio: false };
+    expect(wantsNativeShareAudio(false, noPicker)).toBe(false);
+    expect(wantsNativeShareAudio(true, noPicker)).toBe(true);
+  });
+
+  it("covers a desktop watch party, which has no tab to take sound from", () => {
+    expect(wantsNativeShareAudio(false, win10Native, { preferBrowserTab: true })).toBe(true);
   });
 });

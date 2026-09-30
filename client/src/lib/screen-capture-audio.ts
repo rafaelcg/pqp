@@ -168,6 +168,13 @@ export interface ScreenCaptureIntent {
    * which asked for a share minutes ago is still the one on screen.
    */
   party?: { id: string; channelId: string };
+  /**
+   * `ensureNativeShareAudio`'s answer for THIS share's server, decided before
+   * the picker and carried with the request rather than left in a module
+   * variable, so two shares being set up for two servers cannot read each
+   * other's per-server flag. See `lib/native-share-audio.ts`.
+   */
+  nativeShareAudio?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */
@@ -234,6 +241,16 @@ export interface ScreenCaptureEnvironment {
    * machine's mixer, because that offer is the 23 Aug 2026 echo.
    */
   shellRestrictOwnAudio: boolean | null;
+  /**
+   * The shell captures this share's sound itself, per process
+   * (`lib/native-share-audio.ts`): the runtime flag is on, the shell has the
+   * capability, and its self-test opened a process loopback stream on this
+   * machine. The call is outside that capture by construction, so this is
+   * safe on Windows 10 where Chromium's loopback is not. When true the page
+   * asks Chromium for NO audio: the sound arrives on its own port. Absent
+   * reads as false, which is every environment built before it existed.
+   */
+  shellNativeShareAudio?: boolean;
 }
 
 /**
@@ -307,6 +324,7 @@ export function screenCaptureEnvironment(
     shellSystemAudio?: "loopback" | "none" | null;
     shellRestrictOwnAudio?: boolean | null;
     osCanExcludeCallAudio?: boolean;
+    shellNativeShareAudio?: boolean;
   } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
@@ -328,6 +346,7 @@ export function screenCaptureEnvironment(
     sharePickerOffersAudio: extras.sharePickerOffersAudio === true,
     shellSystemAudio: extras.shellSystemAudio ?? null,
     shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
+    shellNativeShareAudio: isDesktopShell && extras.shellNativeShareAudio === true,
   };
 }
 
@@ -345,7 +364,9 @@ export function screenCaptureEnvironment(
  * makes every branch in this file reachable from a Node test, which is the only
  * place the shell's branches are ever exercised before a user hits them.
  */
-export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
+export function liveScreenCaptureEnvironment(
+  scoped: Pick<ScreenCaptureIntent, "nativeShareAudio"> = {},
+): ScreenCaptureEnvironment {
   const capabilities = desktopShareCapabilities();
   return screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null, {
     sharePickerOffersAudio:
@@ -354,6 +375,8 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
     osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
+    // Only from the caller: a fact about this share's server, never global.
+    shellNativeShareAudio: scoped.nativeShareAudio === true,
   });
 }
 
@@ -616,6 +639,11 @@ export function offersBrowserSystemAudio(
  * treated as unable: asking for audio there is how every share echoed.
  */
 export function offersShellSystemAudio(env: ScreenCaptureEnvironment): boolean {
+  // Native capture never taps the mixer, so neither gate below is about it:
+  // the call is not in a capture of one app, or of everything but pqp.
+  if (env.isDesktopShell && env.shellNativeShareAudio === true) {
+    return true;
+  }
   // `shellRestrictOwnAudio === false` is a shell stating it cannot strip its
   // own playback even though the renderer knows the constraint. Null is every
   // build that never said, and those are already gated by the renderer test
@@ -635,6 +663,27 @@ export function offersShellSystemAudio(env: ScreenCaptureEnvironment): boolean {
  */
 export function needsShareAudioPrompt(env: ScreenCaptureEnvironment): boolean {
   return offersShellSystemAudio(env) && !env.sharePickerOffersAudio;
+}
+
+/**
+ * Does this share take its sound from the shell's native capture?
+ *
+ * Same consent as the Chromium path it replaces: the shell's picker box
+ * (`sharePickerOffersAudio`), or the page's own prompt on a shell whose
+ * picker cannot ask. When true, `screenCaptureOptions` asks Chromium for no
+ * audio at all and the caller arms and attaches the native capture.
+ */
+export function wantsNativeShareAudio(
+  shareSystemAudio: boolean,
+  env: ScreenCaptureEnvironment,
+  intent: ScreenCaptureIntent = {},
+): boolean {
+  return (
+    env.isDesktopShell &&
+    env.shellNativeShareAudio === true &&
+    (env.sharePickerOffersAudio || shareSystemAudio) &&
+    !steersAtBrowserTab(env, intent)
+  );
 }
 
 /**
@@ -691,7 +740,11 @@ export function screenCaptureOptions(
   // the 13 Sep 2026 report. The picker's checkbox is still the consent.
   const tabSteer = steersAtBrowserTab(env, intent);
   const browserOffersCheckbox = offersBrowserSystemAudio(env, intent);
+  // Native capture (`wantsNativeShareAudio`) is the shell's own sound path,
+  // so Chromium is asked for none: a loopback track beside it would be the
+  // mixer, which on Windows 10 is the call.
   const shellWantsAudio =
+    env.shellNativeShareAudio !== true &&
     offersShellSystemAudio(env) &&
     (env.sharePickerOffersAudio || shareSystemAudio) &&
     !tabSteer;

@@ -1,14 +1,51 @@
 # Cloudflare Pages response headers.
 #
-# The service worker and the manifest must never be served from a cache. A
-# stale `sw.js` is the one file that can pin a user to an old build
+# Everything that decides WHICH BUILD somebody runs must never be served from a
+# cache: the page that names the bundle, the service worker that serves it, what
+# that worker imports, and the file a running page reads to learn it is out of
+# date. A stale `sw.js` is the one file that can pin a user to an old build
 # indefinitely: the browser only learns there is a new worker by re-fetching
 # this exact file, so if an intermediary answers it from cache the update check
 # can never succeed.
+#
+# CHECKED AGAINST PRODUCTION ON 2026-09-30, AND THIS FILE IS NOT THE WHOLE
+# STORY: `pqp-3yr.pages.dev/sw.js` answered `no-cache`, as written below, while
+# `pqp.gg/sw.js` answered `max-age=14400` with `cf-cache-status: EXPIRED`. The
+# Cloudflare zone in front of Pages applies its Browser Cache TTL (4 hours) to
+# cacheable extensions (`.js`, `.css`) and overrides what is written here. Files
+# that are not on that list (`.json`, `.webmanifest`, HTML) keep these headers,
+# which is why `version.json` is the file the client trusts and `sw.js` is not.
+# The page-level fix for the zone is in the dashboard (Caching > Configuration >
+# Browser Cache TTL: "Respect Existing Headers", or a Cache Rule that bypasses
+# `/sw.js` and `/sw-notification-click.js`); nothing in this repo can set it.
+# Browsers fetch the worker's MAIN script past their own cache, so a 4-hour TTL
+# there is latent rather than live, but it does govern the imported script below.
 /sw.js
   Cache-Control: no-cache
 
+# Imported by the worker (`workbox.importScripts`), so the browser's own cache
+# rules apply to it, not the "main script bypasses the cache" exemption.
+/sw-notification-click.js
+  Cache-Control: no-cache
+
 /manifest.webmanifest
+  Cache-Control: no-cache
+
+# Written by every build (`pqp-version-manifest` in vite.config.ts): the deployed
+# build's id and build time. The running client reads it on focus and on a timer
+# to find out whether it is stale (`src/lib/version-watch.ts`).
+/version.json
+  Cache-Control: no-store
+
+# The page that names the bundle. Pages already sends
+# `public, max-age=0, must-revalidate` for HTML with no rule at all; it is stated
+# here because a stale index.html is the other way to pin somebody to an old
+# build, and a rule in the repo is harder to lose than a default. Only `/`,
+# deliberately: a `/*` rule would ALSO match `/assets/*` below, and Pages joins
+# the values of every matching rule.
+/
+  Cache-Control: no-cache
+/index.html
   Cache-Control: no-cache
 
 # Vite emits content-hashed filenames under /assets, so those are immutable by

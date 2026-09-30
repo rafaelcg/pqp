@@ -537,7 +537,7 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
-import { setInCall } from "@/lib/in-call-state";
+import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import {
@@ -565,6 +565,7 @@ import {
   steersAtBrowserTab,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { ensureNativeShareAudio, prefetchNativeShareAudio } from "@/lib/native-share-audio";
 import {
   hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
@@ -2565,24 +2566,34 @@ function MainAppContent({
       }
       void (async () => {
         try {
-          await ensureOsCanExcludeCallAudio();
+          // The call's server, not the one on screen: the per-server switch
+          // for native Windows share audio follows where the share goes. A DM
+          // call has none and gets the global answer.
+          const [, nativeShareAudio] = await Promise.all([
+            ensureOsCanExcludeCallAudio(),
+            ensureNativeShareAudio(voiceServerIdRef.current),
+          ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
           }
-          const env = liveScreenCaptureEnvironment();
+          // Carried on the intent, so the answer for THIS share's server is
+          // the one its capture is built with, however long a prompt or the
+          // HLS disclosure holds it.
+          const shareIntent: ScreenCaptureIntent = { ...intent, nativeShareAudio };
+          const env = liveScreenCaptureEnvironment(shareIntent);
           // "Wants a tab" is only true where tabs exist. In the desktop shell a
           // watch party is a window or a screen, and the machine's sound (minus
           // this app's own output) is the only sound it can carry, so the audio
           // question has to be asked there as it is for any other share.
-          const tabSteer = steersAtBrowserTab(env, intent ?? {});
+          const tabSteer = steersAtBrowserTab(env, shareIntent);
           if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
-            setShareAudioPrompt({ intent });
+            setShareAudioPrompt({ intent: shareIntent });
             return;
           }
           const audio = tabSteer
             ? false
             : env.sharePickerOffersAudio && offersShellSystemAudio(env);
-          startScreenShareGated(audio, intent);
+          startScreenShareGated(audio, shareIntent);
         } finally {
           shareRequestGuardRef.current.end(token);
         }
@@ -2635,6 +2646,20 @@ function MainAppContent({
   const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // Windows desktop share sound: look up the call's per-server flag (and the
+  // shell's self-test, when the flag is on) as soon as they are in the call,
+  // so "share screen" never waits on the API. The ref is set before the join
+  // resolves, and a DM call leaves it null (the global answer). A no-op in a
+  // browser, which never has the shell's bridge.
+  // Keyed on the seat's channel, not on having one: moving straight from a
+  // call in one server to a call in another keeps a seat the whole way and
+  // changes the server whose flag the next share reads.
+  const voiceSeatChannelId = voiceState.voiceChannelId ?? null;
+  useEffect(() => {
+    if (voiceSeatChannelId) {
+      prefetchNativeShareAudio(voiceServerIdRef.current);
+    }
+  }, [voiceSeatChannelId]);
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an
@@ -8281,6 +8306,12 @@ function MainAppContent({
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
   }, [voiceState.status]);
+  // The same for a viewer looking at a live party: no seat, but not somebody an
+  // automatic update may reload (`lib/update-policy.ts`).
+  useEffect(() => {
+    setWatchingParty(watchingAParty);
+    return () => setWatchingParty(false);
+  }, [watchingAParty]);
 
   const handleQgHintWantedChange = useCallback((wanted: boolean) => {
     setQgHintReady(true);

@@ -82,7 +82,15 @@ import {
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
+  shareStreamHasAudio,
 } from "@/lib/screen-capture-audio";
+import {
+  armOrFallBackToChromiumAudio,
+  attachNativeShareAudio,
+  discardPrimedNativeShareAudio,
+  ensureNativeShareAudio,
+  prefetchNativeShareAudio,
+} from "@/lib/native-share-audio";
 import {
   blocksGoLive,
   desktopSharesTabAudio,
@@ -1092,7 +1100,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // The most common "it doesn't work" from the QA runbook (step 3): the host
   // picked the tab and left "share tab audio" unticked, and nobody hears the
   // film. Say so under the preview, before anyone is watching.
-  const silentPick = stream !== null && stream.getAudioTracks().length === 0;
+  //
+  // A track that has ENDED is no sound either: the Windows app's native
+  // capture can end under a live preview (`nativeAudioNotice` says so).
+  const silentPick = stream !== null && !shareStreamHasAudio(stream.getAudioTracks());
   // WHAT TO DO ABOUT IT DEPENDS ON WHERE THEY ARE. "Tick share tab audio" is
   // the answer in a browser and nonsense in the desktop app, which has no tabs
   // to tick anything on: there the answer is the picker's own sound box, and on
@@ -1106,14 +1117,22 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // surface never offers the page-owned `shareSystemAudio` prompt that could
   // stand in for one, so "desktop" would point the presenter at a box that is
   // not there. That build gets the same honest answer as macOS.
-  const captureEnv = liveScreenCaptureEnvironment();
+  // Whether the last pick could carry the Windows app's native sound: a
+  // silent pick there means the box was left unticked, the desktop hint.
+  const [nativeShareAudioOffered, setNativeShareAudioOffered] = useState(false);
+  // The native capture was armed and did not deliver (`failed`: it could not
+  // start, or its graph would not run), or was delivering and stopped
+  // (`ended`). The plain "sem som" hint tells the host to tick a box that WAS
+  // ticked, which is the wrong answer here.
+  const [nativeAudioNotice, setNativeAudioNotice] = useState<"failed" | "ended" | null>(null);
+  const captureEnv = liveScreenCaptureEnvironment({ nativeShareAudio: nativeShareAudioOffered });
   const silentPickHint = !isDesktopApp()
     ? undefined
     : offersShellSystemAudio(captureEnv) && captureEnv.sharePickerOffersAudio
       ? { context: "desktop" }
       : { context: "desktopSilent" };
   const hasAudioTrack =
-    stream === null ? null : stream.getAudioTracks().length > 0;
+    stream === null ? null : shareStreamHasAudio(stream.getAudioTracks());
   const checklistItems = useMemo(
     () =>
       goLiveChecklist({
@@ -1134,6 +1153,11 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const checklistBlocked = blocksGoLive(checklistItems);
 
   useEffect(() => setName(party.name), [party.id, party.name]);
+  // The host is about to pick a share: have the per-server native-sound flag
+  // answered before they click, so the picker never waits on the API.
+  useEffect(() => {
+    prefetchNativeShareAudio(party.serverId ?? null);
+  }, [party.serverId]);
 
   // The preview stream belongs to this surface. Leaving the draft without
   // going live has to stop the capture, or the browser keeps showing "pqp is
@@ -1164,6 +1188,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 
   const pick = async () => {
     setPickError(null);
+    setNativeAudioNotice(null);
     try {
       // Same builder every ordinary share uses. `preferBrowserTab` is the
       // watch-party product: the player tab and its sound, never the machine
@@ -1172,13 +1197,34 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // used to build its own and leave out the shell's picker flag, so a
       // Windows desktop host was asked for a capture with no audio at all while
       // the shell's own picker stood ready to offer the box. One reader now.
-      await ensureOsCanExcludeCallAudio();
-      const options = screenCaptureOptions(
+      const [, nativeShareAudio] = await Promise.all([
+        ensureOsCanExcludeCallAudio(),
+        ensureNativeShareAudio(party.serverId ?? null),
+      ]);
+      const intent = {
+        preferBrowserTab: true,
+        maxFrameRate: props.hlsMaxFrameRate,
+        nativeShareAudio,
+      };
+      // The Windows desktop app's own per-process sound, the film without the
+      // call, attached to the preview so go-live broadcasts what was checked.
+      // A refused arm builds the options the old way instead.
+      const { nativeAudio, env: pickEnv } = await armOrFallBackToChromiumAudio(
         false,
-        liveScreenCaptureEnvironment(),
-        { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
+        liveScreenCaptureEnvironment(intent),
+        intent,
       );
+      setNativeShareAudioOffered(nativeAudio);
+      const options = screenCaptureOptions(false, pickEnv, intent);
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
+      if (nativeAudio) {
+        const attach = await attachNativeShareAudio(picked, {
+          onEnded: () => setNativeAudioNotice("ended"),
+        });
+        if (!attach.attached && attach.reason !== "none") {
+          setNativeAudioNotice("failed");
+        }
+      }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
       // must clear the preview, not leave a frozen last frame that they then
@@ -1188,6 +1234,8 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       });
       setStream(picked);
     } catch (error) {
+      // The audio graph the arm built is for a pick that did not happen.
+      discardPrimedNativeShareAudio();
       // Cancelling the picker is the common case and is not an error worth a
       // red line; only a genuine failure is.
       if (error instanceof Error && error.name === "NotAllowedError") {
@@ -1297,7 +1345,11 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   data-testid="watch-party-no-audio"
                   className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
                 >
-                  {t("watchParty.setup.noAudio", silentPickHint)}
+                  {nativeAudioNotice === "ended"
+                    ? t("voice.notice.nativeShareAudioEnded")
+                    : nativeAudioNotice === "failed"
+                      ? t("voice.notice.nativeShareAudioFailed")
+                      : t("watchParty.setup.noAudio", silentPickHint)}
                 </p>
               )}
             </>

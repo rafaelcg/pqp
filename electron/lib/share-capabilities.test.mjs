@@ -129,3 +129,47 @@ describe("who answers a display-media request", () => {
     assert.match(preload, /--pqp-shell-version=/);
   });
 });
+
+describe("native share audio (Windows process loopback)", () => {
+  it("is a separate capability, never folded into systemAudio", () => {
+    // Every client already deployed reads `systemAudio: "loopback"` as "ask
+    // Chromium for audio and it arrives on the display stream". Native sound
+    // arrives on a port instead, after asking Chromium for none; telling an
+    // old client "loopback" on Windows 10 would hand it the mixer, the call.
+    assert.match(preload, /nativeShareAudio:\s*process\.platform === "win32"/);
+    assert.match(clientContract, /\n\s+nativeShareAudio\?:/);
+  });
+
+  it("answers the app window only, on every channel", () => {
+    for (const channel of ["status", "arm", "claim", "stop"]) {
+      const at = main.indexOf(`ipcMain.handle("pqp:native-share-audio-${channel}"`);
+      assert.notEqual(at, -1, `no handler for ${channel}`);
+      const body = main.slice(at, main.indexOf("});", at));
+      assert.match(body, /senderMatchesAppOrigin\(event, sessionAppOrigin\)/, channel);
+    }
+  });
+
+  it("never lets Chromium loopback ride beside a native capture", () => {
+    // An armed share asks Chromium for no audio, and the handler answers it
+    // video-only whatever the box says: two captures of one share would be
+    // the mixer (the call, on Windows 10) plus the clean one.
+    const at = main.indexOf("if (nativeAudio) {");
+    assert.notEqual(at, -1);
+    const body = main.slice(at, main.indexOf("\n  }\n", at));
+    assert.match(body, /captureResponse\(source, platform, false, os\.release\(\)\)/);
+  });
+
+  it("runs the add-on in a utility process, not in main", () => {
+    assert.match(
+      main,
+      /utilityProcess\.fork\(path\.join\(__dirname, "lib", "win-share-audio-host\.js"\)/,
+    );
+    assert.ok(!/require\([^)]*pqp_share_audio/.test(main));
+  });
+
+  it("ships the prebuilds unpacked, and signs them with the app", () => {
+    assert.ok(pkg.build.files.includes("native/win-share-audio/prebuilds/**/*"));
+    assert.ok(pkg.build.asarUnpack.includes("native/win-share-audio/prebuilds/**/*"));
+    assert.ok(pkg.build.win.signExts.includes(".node"));
+  });
+});

@@ -39,8 +39,24 @@ permissions:
   contents: write
 
 jobs:
+  # The Windows share-audio add-on, built and smoke tested once, then packed
+  # into the Windows installer below. electron-builder signs it with the rest
+  # (`win.signExts` in electron/package.json) on the WIN_CSC_LINK path.
+  win-share-audio:
+    uses: ./.github/workflows/win-share-audio.yml
+
   build:
     name: Build (${{ matrix.os }})
+    needs: win-share-audio
+    # Runs even when the add-on job failed or was skipped: macOS and Linux do
+    # not carry the add-on, so a Windows-only build or smoke-test failure must
+    # not cost their artifacts. `needs` gates ORDER for every leg (the Windows
+    # one needs the artifact), `!cancelled()` replaces the implicit
+    # `success()` that would otherwise skip them all, and the Windows leg
+    # alone turns the add-on's result into a failure, first thing, at
+    # "Require the Windows share-audio add-on". The matrix context is not
+    # available in a job-level `if`, which is why that decision is a step.
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}
     # 60 minutes was plenty for mac/linux before this PR. Windows, when
     # SignPath is configured, now blocks on a human approving the signing
@@ -70,6 +86,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The Windows installer packs the add-on and signs it with the rest of
+      # the app. Without it the app would ship with no native share sound and
+      # nobody would notice, so this leg fails, at once and with the reason,
+      # when the add-on job did not succeed. The other two legs never read it.
+      - name: Require the Windows share-audio add-on
+        if: matrix.platform == 'win' && needs.win-share-audio.result != 'success'
+        env:
+          ADDON_RESULT: ${{ needs.win-share-audio.result }}
+        run: |
+          echo "::error::The Windows share-audio add-on job finished as '${ADDON_RESULT}', so this Windows build would ship without it. Fix that job and re-run."
+          exit 1
+
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.
         uses: pnpm/action-setup@v4
@@ -85,6 +113,16 @@ jobs:
 
       - name: Build shared
         run: pnpm --filter @pqp/shared build
+
+      # Missing it is not fatal to the app (native sound is simply unavailable
+      # and the shell keeps today's behaviour), which is exactly why it must
+      # not go missing quietly: download-artifact fails when it is absent.
+      - name: Fetch the Windows share-audio add-on
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v4
+        with:
+          name: win-share-audio-prebuilds
+          path: electron/native/win-share-audio/prebuilds
 
       - name: Build client
         env:

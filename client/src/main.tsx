@@ -46,6 +46,8 @@ import { I18nProvider, loadLocale, useTranslation } from "./lib/i18n";
 import { detectLocale, type Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
+import { BuildWatcher } from "./components/layout/build-watcher";
+import { ForcedUpdateScreen } from "./components/layout/forced-update-screen";
 import { UpdatePrompt } from "./components/layout/update-prompt";
 import { StaleChunkBanner } from "./components/layout/stale-chunk-banner";
 import { recoverFromChunkLoadError } from "./lib/chunk-reload";
@@ -209,7 +211,9 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   const { t } = useTranslation();
   return (
     <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
+      <BuildWatcher />
       <UpdatePrompt />
+      <ForcedUpdateScreen />
       <StaleChunkBanner />
       <Routes>
         <Route element={<DarkRoutes />}>

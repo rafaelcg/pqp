@@ -42,6 +42,12 @@ import {
   systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import {
+  armOrFallBackToChromiumAudio,
+  attachNativeShareAudio,
+  discardPrimedNativeShareAudio,
+  releaseNativeShareAudioFor,
+} from "@/lib/native-share-audio";
 import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
@@ -3385,6 +3391,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     rememberShareAudioTrack(null);
+    // Before the tracks stop: the native capture is found by its track, and
+    // stopping it now spares the shell a second of capturing for nobody.
+    releaseNativeShareAudioFor([
+      ...screenCaptureStream.getTracks(),
+      ...(screenCaptureSource?.getTracks() ?? []),
+    ]);
     for (const track of screenCaptureStream.getTracks()) {
       track.stop();
     }
@@ -5869,16 +5881,27 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the intent still wins, so a caller can override it for one share.
       await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
-      // Captured once and reused below for the strip notice
-      // (`systemAudioStrippedNoticeKey`): the same read of "what can this
-      // machine actually do" should decide both what we ask for and how we
-      // explain it if the OS could not keep its promise.
-      const captureEnv = liveScreenCaptureEnvironment();
-      const options = screenCaptureOptions(
-        shareSystemAudio,
-        captureEnv,
-        { ...intent, hideCursor },
-      );
+      const captureIntent = { ...intent, hideCursor };
+      let captureEnv = liveScreenCaptureEnvironment(intent);
+      // WINDOWS DESKTOP, NATIVE SOUND: Chromium is asked for no audio (see
+      // `wantsNativeShareAudio`) and the shell is told to offer its own box
+      // on the picker that is about to open. A stream the caller already
+      // opened (the watch party preview) attached its sound when it was
+      // picked, so it is not armed again here. An arm the shell refused
+      // falls back to this share's old path before the options are built:
+      // they would otherwise ask Chromium for no audio with nothing in its
+      // place, which on Windows 11 is sound we used to have.
+      let nativeAudio = false;
+      if (!intent.stream) {
+        const armed = await armOrFallBackToChromiumAudio(
+          shareSystemAudio,
+          captureEnv,
+          captureIntent,
+        );
+        nativeAudio = armed.nativeAudio;
+        captureEnv = armed.env;
+      }
+      const options = screenCaptureOptions(shareSystemAudio, captureEnv, captureIntent);
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
       // that is a request which can fail on its own; in the shell it is only
@@ -5918,6 +5941,8 @@ export function createVoiceController(transport: RealtimeTransport) {
             askedForAudio &&
             err instanceof Error &&
             err.name !== "NotAllowedError";
+          // The audio graph the arm built is for a share that did not happen.
+          discardPrimedNativeShareAudio();
           emit();
           return;
         }
@@ -5925,6 +5950,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         } catch {
           state.error = screenShareErrorMessage(err);
+          discardPrimedNativeShareAudio();
           emit();
           return;
         }
@@ -5934,6 +5960,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        discardPrimedNativeShareAudio();
         emit();
         return;
       }
@@ -5958,6 +5985,35 @@ export function createVoiceController(transport: RealtimeTransport) {
             desktopAppAvailable: false,
           }),
         );
+      }
+      // The shell's capture joins the stream here, after the strip (it is
+      // not the mixer, so there is nothing in it to strip) and before
+      // anything reads the stream's audio: the probe, the watch party mix,
+      // the publish. Box unticked or capture refused: a silent share, as
+      // before, which the "(sem som)" line already says. A refusal also
+      // sends the NEXT share back to the old path (`failedThisSession`), so
+      // a Windows 11 machine that cannot do this gets Chromium's loopback
+      // back after one silent share instead of every time.
+      if (nativeAudio) {
+        const attach = await attachNativeShareAudio(stream, {
+          // The capture ended under a live share (the stream failed, the
+          // device went away, the graph stopped running). The track has been
+          // stopped and the next share takes the old path; the presenter and
+          // whoever watches their tile are told it is now without sound.
+          onEnded: () => {
+            state.isSharingScreenAudio = false;
+            state.notice = translateMessage("voice.notice.nativeShareAudioEnded");
+            emit();
+          },
+        });
+        // The picture is fine and the sound is not: Chromium was asked for no
+        // audio because the shell was going to supply it, so a failed attach
+        // is a silent share. Say so rather than leave "why is there no sound"
+        // to be discovered by the audience. The box left unticked
+        // (`reason: "none"`) is the ordinary silent share and needs no line.
+        if (!attach.attached && attach.reason !== "none" && !state.notice) {
+          state.notice = translateMessage("voice.notice.nativeShareAudioFailed");
+        }
       }
       rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries

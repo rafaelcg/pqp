@@ -91,3 +91,7 @@ local.properties
 
 # Local run config for the desktop app browser pane (per machine)
 .claude/launch.json
+
+# Windows share-audio add-on: node-gyp output and CI-built binaries
+electron/native/win-share-audio/build/
+electron/native/win-share-audio/prebuilds/

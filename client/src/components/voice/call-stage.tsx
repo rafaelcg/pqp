@@ -86,6 +86,7 @@ import {
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
+import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
@@ -2181,36 +2182,40 @@ function ActiveCall({
                     for somebody else's we know what arrived on this machine,
                     which is the same question the person asking "why can't I
                     hear it" is trying to answer. */}
-                {!focusedShareHasAudio && (
+                {/* OUR OWN share: a small indicator with the state in words
+                    ("Sound shared: on" / "No sound"), so a silent share is
+                    known by the person sharing it before anybody tells them.
+                    It also says, for the screen reader, that the machine's
+                    output is what is going out (the call itself is kept out
+                    of that tap, `restrictOwnAudio`). */}
+                {focusedIsLocal && (
+                  <ShareSoundIndicator on={focusedShareHasAudio} />
+                )}
+                {focusedIsLocal &&
+                  focusedShareHasAudio &&
+                  voiceState.isSharingSystemAudio && (
+                    <span className="sr-only">
+                      {t("voice.share.systemAudioLive")}
+                    </span>
+                  )}
+                {!focusedIsLocal && !focusedShareHasAudio && (
                   <span className="ml-1 inline-flex items-center gap-1 text-paper-muted">
                     <span>({t("voice.share.noAudioShort")})</span>
-                    {/* For a REMOTE presenter only: the local sharer already
-                        knows why (the strip notice, or their own picker,
-                        already said so). A one-line "not a bug" for whoever is
-                        watching, so "sem som" reads as a platform fact rather
-                        than something broken on their end. Kept to an icon
+                    {/* A one-line "not a bug" for whoever is watching, so
+                        "sem som" reads as a platform fact rather than
+                        something broken on their end. Kept to an icon
                         because the overlay is already crowded, and the
                         Tooltip's own contract is hover/keyboard focus, not a
                         tap: see `components/ui/tooltip.tsx`. */}
-                    {!focusedIsLocal && (
-                      <Tooltip label={t("voice.share.noAudioTooltip")}>
-                        <button
-                          type="button"
-                          aria-label={t("voice.share.noAudioTooltip")}
-                          className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
-                        >
-                          <Info className="h-3 w-3" aria-hidden="true" />
-                        </button>
-                      </Tooltip>
-                    )}
-                  </span>
-                )}
-                {/* Said while it is happening, so the presenter knows the
-                    machine's output is going out. The call itself is kept
-                    out of that tap (`restrictOwnAudio`). */}
-                {voiceState.isSharingSystemAudio && (
-                  <span className="ml-1 block text-paper-muted">
-                    {t("voice.share.systemAudioLive")}
+                    <Tooltip label={t("voice.share.noAudioTooltip")}>
+                      <button
+                        type="button"
+                        aria-label={t("voice.share.noAudioTooltip")}
+                        className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
+                      >
+                        <Info className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </Tooltip>
                   </span>
                 )}
                 {/* The honest half of the cursor preference. They asked for
@@ -2380,18 +2385,31 @@ function useReceivedShareAudio(stream: MediaStream | null): boolean {
     if (!stream) {
       return;
     }
-    stream.addEventListener("addtrack", sync);
-    stream.addEventListener("removetrack", sync);
     // A track the presenter stops mid-share fires `ended` on the track itself
     // and nothing on the stream, so the stream listeners alone would miss it.
-    const tracks = stream.getAudioTracks();
-    for (const track of tracks) {
-      track.addEventListener("ended", sync);
-    }
+    // Tracks that arrive later (a late audio track, or one replaced) are
+    // listened to as they land, or a label that turned "with sound" would
+    // never turn back.
+    const watched = new Set<MediaStreamTrack>();
+    const watch = () => {
+      for (const track of stream.getAudioTracks()) {
+        if (!watched.has(track)) {
+          watched.add(track);
+          track.addEventListener("ended", sync);
+        }
+      }
+    };
+    const onTrackChange = () => {
+      watch();
+      sync();
+    };
+    stream.addEventListener("addtrack", onTrackChange);
+    stream.addEventListener("removetrack", onTrackChange);
+    watch();
     return () => {
-      stream.removeEventListener("addtrack", sync);
-      stream.removeEventListener("removetrack", sync);
-      for (const track of tracks) {
+      stream.removeEventListener("addtrack", onTrackChange);
+      stream.removeEventListener("removetrack", onTrackChange);
+      for (const track of watched) {
         track.removeEventListener("ended", sync);
       }
     };

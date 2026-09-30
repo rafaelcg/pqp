@@ -1,7 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
+const nodeCrypto = require("node:crypto");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -55,7 +55,7 @@ function inlineScriptHashes(html) {
     if (type && !/^(module|text\/javascript)$/i.test(type[1])) {
       continue;
     }
-    const digest = crypto.createHash("sha256").update(match[2]).digest("base64");
+    const digest = nodeCrypto.createHash("sha256").update(match[2]).digest("base64");
     hashes.push(`'sha256-${digest}'`);
   }
   return hashes;

@@ -239,6 +239,17 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/community-home/config (vipEnabled)",
   },
+  desktop_share_audio_native: {
+    description:
+      "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",
+    env: "DESKTOP_SHARE_AUDIO_NATIVE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // The one reader is `GET /api/share/config`, which is asked with the
+    // server the call is in; a DM call asks with none and gets the global.
+    perServer: true,
+    clientVia: "GET /api/share/config (desktopShareAudioNative)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
@@ -247,6 +258,15 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: true,
     clientVia: "GET /api/live-hls/config (fastStart)",
+  },
+  client_force_update: {
+    description:
+      "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
+    env: "CLIENT_FORCE_UPDATE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/client-update/config (forceUpdate)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 
