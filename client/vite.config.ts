@@ -6,6 +6,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import faroUploader from "@grafana/faro-rollup-plugin";
 import { googleAds } from "./src/lib/google-ads-tag";
+import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -128,6 +129,14 @@ const BUILD_TIME = Date.now();
  * up to date" without this. The name carries the build so the URL changes with
  * it and no cache can hand back another build's stamp.
  */
+/**
+ * TEST ONLY: `PQP_TEST_LEGACY_WORKER=1` builds the worker the way it was before
+ * this existed (waits instead of taking over, no network-first navigation), so
+ * the stale-bundle e2e can stand up "a person on the old worker, then the fix is
+ * deployed". Never set in CI deploys.
+ */
+const LEGACY_WORKER = process.env.PQP_TEST_LEGACY_WORKER === "1";
+
 const SW_BUILD_FILE = `sw-build-${BUILD_ID.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16) || "dev"}.js`;
 
 function versionManifest(): Plugin {
@@ -143,15 +152,7 @@ function versionManifest(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: SW_BUILD_FILE,
-        source: [
-          `self.__PQP_BUILD__ = ${JSON.stringify(BUILD_ID)};`,
-          `self.addEventListener("message", function (event) {`,
-          `  if (event.data && event.data.type === "PQP_BUILD" && event.ports && event.ports[0]) {`,
-          `    event.ports[0].postMessage({ build: self.__PQP_BUILD__ });`,
-          `  }`,
-          `});`,
-          ``,
-        ].join("\n"),
+        source: swBuildScript(BUILD_ID, { navigation: !LEGACY_WORKER }),
       });
     },
   };
@@ -292,24 +293,17 @@ export default defineConfig(({ command }) => ({
         // would otherwise be handed the SPA shell. Nothing that grades this
         // site runs a service worker, so this is for the human who clicks one
         // of these links.
-        navigateFallbackDenylist: [
-          /^\/api\//,
-          /^\/status\.json$/,
-          /^\/ws/,
-          /^\/r\//,
-          /^\/\.well-known\//,
-          /^\/llms(-full)?\.txt$/,
-          /^\/index\.md$/,
-          /^\/robots\.txt$/,
-          /^\/sitemap\.xml$/,
-        ],
+        // Shared with the navigation handler in the imported `sw-build-*.js`
+        // (`src/lib/sw-build-script.ts`), which answers navigations
+        // network-first and must leave exactly these alone.
+        navigateFallbackDenylist: NAVIGATE_DENYLIST,
         cleanupOutdatedCaches: true,
         // See `registerType` above. Safe for the open tabs this swaps under
         // because the page keeps running the code it already loaded; the price
         // is that a lazy chunk an old tab has not fetched yet may be gone, and
         // `src/lib/chunk-reload.ts` already recovers from exactly that.
-        skipWaiting: true,
-        clientsClaim: true,
+        skipWaiting: !LEGACY_WORKER,
+        clientsClaim: !LEGACY_WORKER,
         // Adds the notificationclick handler. Android Chrome only permits
         // notifications raised from a worker, and their clicks arrive here
         // rather than in the page — without it, tapping one does nothing.

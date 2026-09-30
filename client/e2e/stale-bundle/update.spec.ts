@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import path from "node:path";
 import { buildFixture } from "./builds";
 import { startPagesServer, type PagesServer } from "./pages-server";
@@ -22,10 +22,13 @@ const CARD = '[data-corner-card="update"]';
 let server: PagesServer;
 let oldDir: string;
 let newDir: string;
+/** A worker from BEFORE the fix: it waits instead of taking over, and answers navigations from its precache. */
+let legacyDir: string;
 
 test.beforeAll(async () => {
   oldDir = buildFixture("old", OLD);
   newDir = buildFixture("new", NEW);
+  legacyDir = buildFixture("legacy", "fixture-legacy", { legacyWorker: true });
   server = await startPagesServer({
     headersFile: path.resolve(import.meta.dirname, "../../public/_headers"),
   });
@@ -206,4 +209,101 @@ test("the files that decide the build are served uncacheable", async ({ page }) 
   expect(await headers("/version.json")).toBe("no-store");
   const version = await (await page.request.get(`${server.origin}/version.json`)).json();
   expect(version.build).toBe(NEW);
+});
+
+// ---------------------------------------------------------------- the language
+
+/**
+ * Reported from the web on 2026-09-30: somebody on an old version hard-reloaded
+ * (Ctrl+Shift+R) and got the new site, then changed the language and the OLD site
+ * came back. A hard reload bypasses the service worker for ONE load; the language
+ * change is a full navigation (`location.replace`), which the worker answers, and
+ * a worker that is still the old one answers it from the old precache. It needs a
+ * second tab of the site open on the old page: that tab keeps the old worker
+ * controlling, so a waiting one cannot take over.
+ */
+
+/** A second tab on the old page, then a hard reload of the first onto whatever is deployed. */
+async function hardReloadWithAnotherTabOpen(
+  context: BrowserContext,
+  page: Page,
+  deploy: () => void,
+) {
+  await page.goto(`${server.origin}/`);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload();
+  const other = await context.newPage();
+  await other.goto(`${server.origin}/`);
+  await other.evaluate(() => navigator.serviceWorker.ready);
+  await other.reload();
+  await page.bringToFront();
+
+  deploy();
+  // Ctrl+Shift+R: this one load skips the worker.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.setBypassServiceWorker", { bypass: true });
+  await page.reload();
+  await cdp.send("Network.setBypassServiceWorker", { bypass: false });
+}
+
+async function chooseEnglish(page: Page) {
+  await page.getByRole("button", { name: /Idioma/ }).first().click();
+  await page.getByRole("menuitem", { name: /English|Inglês/ }).click();
+  await page.waitForLoadState("load");
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+}
+
+/** Which build the ACTIVE worker says it is, or null (a worker from before it could say). */
+async function activeWorkerBuild(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const worker = registration?.active;
+    if (!worker) {
+      return null;
+    }
+    return new Promise<string | null>((resolve) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => resolve(null), 1000);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        resolve((event.data as { build?: string })?.build ?? null);
+      };
+      worker.postMessage({ type: "PQP_BUILD" }, [channel.port2]);
+    });
+  });
+}
+
+test("hard reload onto the new build, then a language change: still the new build, at once", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await hardReloadWithAnotherTabOpen(context, page, () => server.serve(newDir));
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+
+  // No waiting for the new worker: the language change comes right behind the
+  // hard reload, when the worker in charge is still the old build's.
+  await page.goto(`${server.origin}/`);
+  await chooseEnglish(page);
+
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await context.close();
+});
+
+test("a person on a worker from before the fix: once the fixed worker is in, a language change stays on the new build", async ({
+  browser,
+}) => {
+  server.serve(legacyDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await hardReloadWithAnotherTabOpen(context, page, () => server.serve(newDir));
+
+  // The fixed worker installs and takes over from the old one even with the
+  // other tab still open: that is what `skipWaiting` is for.
+  await expect.poll(() => activeWorkerBuild(page), { timeout: 30_000 }).toBe(NEW);
+
+  await chooseEnglish(page);
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await context.close();
 });
