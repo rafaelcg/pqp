@@ -582,3 +582,79 @@ describe("CallSplit sizes the audience's chat as a column, not a proportion", ()
     expect(stagePx).toBe(Math.round(usable * 0.5));
   });
 });
+
+describe("the phone chat floor (party_newcomer_experience)", () => {
+  const PHONE = { width: 390, height: 600 };
+  const UNMOVED: CallSplitPreference = { ...CALL_SPLIT_DEFAULT };
+
+  function floorSplit(
+    props: {
+      phoneChatFloor?: boolean;
+      preference?: CallSplitPreference;
+      paneSize?: { width: number; height: number };
+      kind?: "call" | "watch" | "watch-audience";
+    } = {},
+  ) {
+    return render(
+      <CallSplit
+        shape="expanded"
+        kind={props.kind ?? "watch-audience"}
+        preference={props.preference ?? UNMOVED}
+        onPreferenceChange={() => {}}
+        paneSize={props.paneSize ?? PHONE}
+        phoneChatFloor={props.phoneChatFloor}
+        stage={<div data-testid="stage" />}
+      >
+        <div data-testid="chat" />
+      </CallSplit>,
+    );
+  }
+
+  const stageHeight = (html: string) =>
+    Number(/data-call-split-stage=""[^>]*style="height:(\d+)px"/.exec(html)?.[1]);
+
+  it("does nothing with the flag off: the stage keeps its own rule", () => {
+    const html = floorSplit({ phoneChatFloor: false });
+    expect(html).not.toContain("data-call-split-phone-floor");
+    expect(html).not.toContain("data-call-split-sized");
+    expect(Number.isNaN(stageHeight(html))).toBe(true);
+  });
+
+  it("sizes the stage to the picture and leaves the chat its floor", () => {
+    const html = floorSplit({ phoneChatFloor: true });
+    expect(html).toContain("data-call-split-phone-floor");
+    const stage = stageHeight(html);
+    expect(stage).toBeGreaterThanOrEqual(MIN_STAGE_HEIGHT_PX);
+    expect(PHONE.height - CALL_SPLIT_DIVIDER_PX - stage).toBeGreaterThanOrEqual(
+      MIN_CHAT_HEIGHT_PX,
+    );
+  });
+
+  it("yields to a divider the person has moved", () => {
+    const html = floorSplit({ phoneChatFloor: true, preference: DRAGGED });
+    expect(html).not.toContain("data-call-split-phone-floor");
+    expect(html).toContain("data-call-split-sized");
+  });
+
+  it("leaves a wide window and a seated call alone", () => {
+    expect(
+      floorSplit({
+        phoneChatFloor: true,
+        paneSize: { width: 1000, height: 700 },
+      }),
+    ).not.toContain("data-call-split-phone-floor");
+    expect(floorSplit({ phoneChatFloor: true, kind: "watch" })).not.toContain(
+      "data-call-split-phone-floor",
+    );
+  });
+
+  it("gives a pane too short for a divider a stage that leaves the chat room", () => {
+    const html = floorSplit({
+      phoneChatFloor: true,
+      paneSize: { width: 360, height: 360 },
+    });
+    expect(html).toContain("data-call-split-phone-floor");
+    expect(html).toContain('data-call-split="off"');
+    expect(stageHeight(html)).toBeLessThan(360 / 2);
+  });
+});

@@ -147,6 +147,14 @@ import {
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import {
+  dismissPartyNewcomerStrip,
+  isNewcomerAccount,
+  isPartyNewcomerStripDismissed,
+  partyNewcomerStripVisible,
+  partyPhoneLayoutOn,
+  suppressAppInviteForNewcomer,
+} from "@/lib/party-newcomer";
+import {
   shouldOfferVoiceCleanNudge,
   voiceCleanNudgeDismissedPatch,
 } from "@/lib/voice-clean";
@@ -419,6 +427,7 @@ import { takeAcquisition } from "@/lib/acquisition";
 import { noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import {
@@ -1290,6 +1299,11 @@ function MainAppContent({
     window.location.reload();
   }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // `party_newcomer_experience`: the one-line strip was closed on this
+  // device. Read once; the write is `dismissPartyNewcomerStrip`.
+  const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
+    isPartyNewcomerStripDismissed(),
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -8567,6 +8581,28 @@ function MainAppContent({
   const isWatchPartySplit =
     splitKind === "watch" || splitKind === "watch-audience";
   /**
+   * `party_newcomer_experience` (`lib/party-newcomer.ts`), the runtime flag
+   * answered per server on `GET /api/live-hls/config?serverId=`. Off, and on
+   * any server the operator has not switched on, every value below is false
+   * and nothing on screen differs from before.
+   */
+  const partyNewcomerFacts = {
+    flagOn: liveHlsConfig?.newcomerExperience,
+    partyLive: Boolean(selectedPartyLive),
+    audience: splitKind === "watch-audience",
+    // `justOnboarded` because the wizard does not patch the local `user`
+    // (`finish()` in `onboarding-flow.tsx`): in the very session a sign-up
+    // finishes, `onboardedAt` is on the server and not yet in this state, and
+    // that session is exactly the one this is for. A reload reads it back.
+    newcomer:
+      justOnboarded || isNewcomerAccount(user?.preferences?.onboardedAt),
+    dismissed: partyNewcomerStripClosed,
+  };
+  const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
+  const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
+  const hideDownloadHintForNewcomer =
+    suppressAppInviteForNewcomer(partyNewcomerFacts);
+  /**
    * THE PARTY BAR IS THE CHANNEL HEADER WHILE A PARTY IS LIVE (2026-09-18,
    * `docs/plans/WATCH_PARTY_UI.md` pass 1). Eight regions were counted on
    * the host's screen and four of them were bars; the first two said the
@@ -8978,6 +9014,7 @@ function MainAppContent({
       )}
       <UserPanel
         compact={compact}
+        hideDownloadHint={hideDownloadHintForNewcomer}
         displayName={user?.displayName ?? "User"}
         tag={user?.tag ?? null}
         handle={user?.handle ?? null}
@@ -9382,7 +9419,9 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              seen: false,
+              // The newcomer strip already says what this is; two
+              // explanations at once cost the picture its height.
+              seen: partyNewcomerStrip,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -9581,6 +9620,25 @@ function MainAppContent({
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
+      {/* WHAT IS THIS, for an account that arrived a moment ago
+          (`party_newcomer_experience`). Under the party bar and above the
+          split, so it costs one line of height and sits where the eye is
+          already looking; nothing when the flag is off. */}
+      {partyNewcomerStrip && (
+        <PartyNewcomerStrip
+          hostName={
+            watchParties.byChannel[selectedChannel.id]?.hostDisplayName ?? ""
+          }
+          chatBeside={
+            splitState.canSideBySide &&
+            effectiveOrientation(callSplit, splitKind) === "side-by-side"
+          }
+          onDismiss={() => {
+            dismissPartyNewcomerStrip();
+            setPartyNewcomerStripClosed(true);
+          }}
+        />
+      )}
       <CallDockProvider
         viewingChannelId={selectedChannel.id}
         onOccupiedChange={setCallDockOnScreen}
@@ -9588,6 +9646,7 @@ function MainAppContent({
       <CallSplit
         shape={stageShape}
         kind={splitKind}
+        phoneChatFloor={partyPhoneLayout}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
@@ -9701,7 +9760,9 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              seen: false,
+              // The newcomer strip already says what this is; two
+              // explanations at once cost the picture its height.
+              seen: partyNewcomerStrip,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -10406,6 +10467,8 @@ function MainAppContent({
 
       <ServerRail
         liveServerIds={watchParties.liveServerIds}
+        phoneHidden={partyPhoneLayout}
+        mobileNavOpen={mobileNavOpen}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}

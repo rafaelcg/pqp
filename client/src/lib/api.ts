@@ -744,6 +744,14 @@ export interface LiveHlsConfig {
    * an older server, which reads as off -- exactly today's behaviour.
    */
   llSegmentCadenceDecay?: boolean;
+  /**
+   * The runtime flag `party_newcomer_experience` for THIS server (only a
+   * `?serverId=` answer carries it): a phone chat floor and no server rail for
+   * a viewer of a live party, a one-line "what is this" strip and no app
+   * invite for a new account. Absent on an older API or the deployment-wide
+   * answer, which reads as off. See `lib/party-newcomer.ts`.
+   */
+  newcomerExperience?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

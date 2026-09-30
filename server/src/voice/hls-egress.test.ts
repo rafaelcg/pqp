@@ -607,6 +607,7 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        newcomerExperience: false,
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
       });
@@ -618,6 +619,7 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        newcomerExperience: false,
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
       });

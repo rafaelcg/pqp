@@ -36,6 +36,11 @@ import {
   type CallStageShape,
 } from "@/lib/call-split";
 import { useTranslation } from "@/lib/i18n";
+import {
+  PHONE_PANE_MAX_WIDTH_PX,
+  phoneShortStageHeight,
+  phoneStageTarget,
+} from "@/lib/party-newcomer";
 import { cn } from "@/lib/utils";
 
 /**
@@ -112,6 +117,14 @@ export interface CallSplitProps {
    * the video is hidden the header offers "Mostrar vídeo".
    */
   chatHeader?: CallSplitChatHeader;
+  /**
+   * PHONE CHAT FLOOR (`party_newcomer_experience`, `lib/party-newcomer.ts`).
+   * A seatless viewer of a live watch party on a narrow pane whose divider
+   * nobody has moved: the stage takes the 16:9 the picture can use instead of
+   * `68svh`, and the chat gets the rest, never less than a share of the pane.
+   * Off (the default) changes nothing. A drag stores a fraction, which wins.
+   */
+  phoneChatFloor?: boolean;
 }
 
 export interface CallSplitChatHeader {
@@ -187,6 +200,7 @@ export function CallSplit({
   stage,
   children,
   chatHeader,
+  phoneChatFloor = false,
 }: CallSplitProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const stagePaneRef = useRef<HTMLDivElement>(null);
@@ -249,8 +263,44 @@ export function CallSplit({
     shape === "expanded" &&
     collapsed === "none" &&
     splitAvailable(container, orientation, kind);
-  const sized = resizable && fraction !== null;
-  const stagePx = sized ? clampSplit({ fraction, container, ...bounds }) : null;
+  // The phone floor only speaks where nobody has an opinion yet: stacked, a
+  // narrow pane, `stacked` still null. The person's own drag stores a fraction
+  // and from then on it is theirs.
+  const phoneNarrow =
+    phoneChatFloor &&
+    isWatchAudience &&
+    shape === "expanded" &&
+    collapsed === "none" &&
+    !sideBySide &&
+    fraction === null &&
+    width > 0 &&
+    width < PHONE_PANE_MAX_WIDTH_PX;
+  const phoneFloor = phoneNarrow && resizable;
+  // A pane too short for both minimums (a small phone, the keyboard up, the
+  // browser's own bars) would fall back to the `68svh` stage and push the chat
+  // off the screen, which is the whole thing this is for. There the stage
+  // simply takes under half and there is no divider to offer.
+  const phoneShort = phoneNarrow && !resizable && container > 0;
+  const sized = (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+  const stagePx = !sized
+    ? null
+    : phoneShort
+      ? phoneShortStageHeight(container)
+      : phoneFloor
+        ? clampSplit({
+            fraction: splitFraction(
+              phoneStageTarget(
+                container,
+                width,
+                bounds.minChat,
+                CALL_SPLIT_DIVIDER_PX,
+              ),
+              container,
+            ),
+            container,
+            ...bounds,
+          })
+        : clampSplit({ fraction: fraction ?? 0, container, ...bounds });
   /** Where the divider is right now, dragged or not. */
   const dividerAt =
     stagePx ?? (sideBySide ? naturalStage.width : naturalStage.height);
@@ -385,6 +435,7 @@ export function CallSplit({
       ref={paneRef}
       data-call-split={resizable ? orientation : "off"}
       data-call-split-sized={sized ? "" : undefined}
+      data-call-split-phone-floor={phoneFloor || phoneShort ? "" : undefined}
       data-call-split-collapsed={collapsed === "none" ? undefined : collapsed}
       className={cn(
         "flex min-h-0 min-w-0 flex-1",
