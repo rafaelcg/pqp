@@ -39,8 +39,12 @@ async function ask(): Promise<boolean> {
       `${getApiBaseUrl()}/api/public/communities/config`,
       { headers: { accept: "application/json" } },
     );
+    // Always drain the body, even for an answer we throw away: an unread body
+    // leaves the request "in flight" as far as the browser is concerned, which
+    // keeps `networkidle` from ever firing (it stalled an e2e shard).
+    const text = await response.text();
     if (response.status !== 200) throw new Error(`status ${response.status}`);
-    const body = (await response.json()) as { enabled?: unknown };
+    const body = JSON.parse(text) as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") throw new Error("malformed");
     answer = body.enabled;
     failedAt = 0;

@@ -34,10 +34,30 @@ async function expectLandedOn(page: Page, id: string) {
     .toBeLessThan(140);
 }
 
+/**
+ * The Communities band and its links follow the server's public config
+ * (`GET /api/public/communities/config`, `COMMUNITIES_ENABLED`, off by
+ * default and in CI). Specs about that link say what the server answers
+ * instead of depending on the environment.
+ */
+async function mockCommunities(
+  page: Page,
+  answer: { status: number; body: unknown },
+) {
+  await page.route("**/api/public/communities/config", (route) =>
+    route.fulfill({
+      status: answer.status,
+      contentType: "application/json",
+      body: JSON.stringify(answer.body),
+    }),
+  );
+}
+
 test.describe("landing section links", () => {
   test("header links from another page scroll to the section", async ({
     page,
   }) => {
+    await mockCommunities(page, { status: 200, body: { enabled: true } });
     for (const id of ["features", "communities", "hosting"]) {
       await page.goto("/download");
       await page.locator(`header nav a[href="/#${id}"]`).click();
@@ -71,4 +91,33 @@ test.describe("landing section links", () => {
     await expect(page.locator("#features")).toBeAttached();
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
   });
+
+  test("the Communities band and both links show when the server says enabled", async ({
+    page,
+  }) => {
+    await mockCommunities(page, { status: 200, body: { enabled: true } });
+    await page.goto("/");
+    await expect(page.locator("#communities")).toBeAttached();
+    await expect(page.locator('header nav a[href="/#communities"]')).toBeAttached();
+    await expect(page.locator('footer a[href="/#communities"]')).toBeAttached();
+  });
+
+  for (const [name, answer] of [
+    ["enabled: false", { status: 200, body: { enabled: false } }],
+    ["404 (an older API)", { status: 404, body: { error: "not found" } }],
+  ] as const) {
+    test(`the Communities band and both links are hidden on ${name}`, async ({
+      page,
+    }) => {
+      await mockCommunities(page, answer);
+      await page.goto("/");
+      // The rest of the page has rendered, so absence is not just "not yet".
+      await expect(page.locator("#features")).toBeAttached();
+      await expect(page.locator('footer a[href="/#hosting"]')).toBeAttached();
+      await page.waitForTimeout(500);
+      await expect(page.locator("#communities")).toHaveCount(0);
+      await expect(page.locator('header nav a[href="/#communities"]')).toHaveCount(0);
+      await expect(page.locator('footer a[href="/#communities"]')).toHaveCount(0);
+    });
+  }
 });
