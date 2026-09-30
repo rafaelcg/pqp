@@ -463,6 +463,11 @@
           $("start").disabled = false;
           return;
         }
+        // Everything after the picker can still fail (a codec the browser
+        // refuses, a description it will not set). Give the capture back and
+        // the Start button with it instead of leaving a half-built run.
+        const pending = { pcs: [] };
+        try {
         const track = stream.getVideoTracks()[0];
         try {
           track.contentHint = "motion";
@@ -471,6 +476,7 @@
 
         const a = new RTCPeerConnection();
         const b = new RTCPeerConnection();
+        pending.pcs.push(a, b);
         a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate).catch(() => {});
         b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate).catch(() => {});
         const transceiver = a.addTransceiver(track, { direction: "sendonly", streams: [stream] });
@@ -583,11 +589,32 @@
           `Capture: ${settings.displaySurface || "?"} ${settings.width || "?"}x${settings.height || "?"}, ` +
           `asked for at most ${fps} fps, browser says ${fmt(num(settings.frameRate))} fps. Codec asked: ${codecWanted}.`;
         const seconds = Number(params.get("seconds"));
-        if (seconds > 0) setTimeout(stop, seconds * 1000);
+        // Owned by this run, so a restart cannot be ended by the last one's timer.
+        if (seconds > 0) run.autoStop = setTimeout(stop, seconds * 1000);
+        } catch (err) {
+          if (run && run.timer) clearInterval(run.timer);
+          run = null;
+          for (const t of stream.getTracks()) t.stop();
+          for (const pc of pending.pcs) pc.close();
+          $("stop").disabled = true;
+          $("start").disabled = false;
+          setVerdict("bad", "Could not start", `The capture opened but the test connection failed (${(err && (err.name || err.message)) || err}).`);
+        }
       }
 
-      async function sample() {
-        if (!run) return;
+      // One sample at a time: a slow getStats must not let two overlap and
+      // write their deltas out of order.
+      function sample() {
+        if (!run || run.sampling) return run ? run.sampling : undefined;
+        const current = run;
+        current.sampling = takeSample().finally(() => {
+          current.sampling = null;
+        });
+        return current.sampling;
+      }
+
+      async function takeSample(final = false) {
+        if (!run || (run.stopped && !final)) return;
         const now = performance.now();
         const t = (now - run.startedAt) / 1000;
         let report;
@@ -701,7 +728,9 @@
         return {
           seconds: list.length,
           captured: mean(valuesOf(list, "captured")),
-          gapMax: Math.max(0, ...valuesOf(list, "gapMax")),
+          // null when the capturer's frames could not be counted: unknown is
+          // not the same as "no gaps".
+          gapMax: valuesOf(list, "gapMax").length ? Math.max(0, ...valuesOf(list, "gapMax")) : null,
           bigGaps: valuesOf(list, "bigGaps").reduce((s, x) => s + x, 0),
           srcFps: mean(valuesOf(list, "srcFps")),
           sentFps: mean(valuesOf(list, "sentFps")),
@@ -726,7 +755,7 @@
           return ["warn", "Not enough data", "Run it for at least 30 seconds with the game in front."];
         }
         const capturedFps = capturedUnsupported ? s.srcFps : s.captured;
-        const captureOk = capturedFps !== null && capturedFps >= fps * 0.8 && s.gapMax <= 100;
+        const captureOk = capturedFps !== null && capturedFps >= fps * 0.8 && s.gapMax !== null && s.gapMax <= 100;
         const capturePoor = capturedFps !== null && (capturedFps < fps * 0.6 || s.bigGaps >= Math.max(3, s.seconds / 5));
         const cpuLimited = (s.limitedShare.cpu || 0) >= 0.2;
         const encodeSlow = s.encMs !== null && s.encMs > (1000 / fps) * 0.9;
@@ -748,6 +777,14 @@
               `${encodeSlow ? `, at ${fmt(s.encMs, 1)} ms each (the budget at ${fps} fps is ${fmt(1000 / fps, 1)} ms)` : ""}` +
               `${cpuLimited ? `, and the encoder reported it was limited by "cpu" ${Math.round((s.limitedShare.cpu || 0) * 100)}% of the time` : ""}. ` +
               "WebRTC says \"cpu\" whenever encoding falls behind, including when a hardware encoder waits on a busy graphics card.",
+          ];
+        }
+        if (s.gapMax === null && !capturePoor) {
+          return [
+            "warn",
+            "Capture gaps not measured",
+            `This browser cannot count the capturer's frames one by one, so long pauses in the capture are unknown. ` +
+              `It reported ${fmt(capturedFps)} fps and encoded ${fmt(s.sentFps)} fps. Use a recent Chrome or Edge for the full picture.`,
           ];
         }
         if (captureOk) {
@@ -805,7 +842,9 @@
         if (!run || run.stopped) return;
         run.stopped = true;
         clearInterval(run.timer);
-        await sample();
+        clearTimeout(run.autoStop);
+        if (run.sampling) await run.sampling;
+        await takeSample(true);
         updateSummary(true);
         run.counter.stop();
         if (run.preview) run.preview.video.remove();

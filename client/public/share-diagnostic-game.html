@@ -86,7 +86,10 @@
       "use strict";
       const params = new URLSearchParams(location.search);
       const LOADS = { light: 60, heavy: 600, extreme: 1000 };
-      let iters = LOADS[params.get("load")] || Number(params.get("load")) || LOADS.heavy;
+      // Clamped: the count is compiled into a loop run for every pixel of
+      // every frame, and a link must not be able to hang the graphics card.
+      const clampLoad = (n) => Math.min(2000, Math.max(1, Math.round(n)));
+      let iters = clampLoad(LOADS[params.get("load")] || Number(params.get("load")) || LOADS.heavy);
       let cap = params.get("cap") === "60" ? 60 : 0;
       const canvas = document.getElementById("c");
       const gl = canvas.getContext("webgl2", { antialias: false, powerPreference: "high-performance" });
@@ -134,7 +137,11 @@
         gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
         uT = gl.getUniformLocation(p, "t");
         uR = gl.getUniformLocation(p, "r");
+        if (program) gl.deleteProgram(program);
         program = p;
+        showButtons();
+      }
+      function showButtons() {
         document.querySelectorAll("[data-load]").forEach((b) => b.setAttribute("aria-pressed", String(LOADS[b.dataset.load] === iters)));
         document.getElementById("cap").setAttribute("aria-pressed", String(cap === 60));
       }
@@ -147,7 +154,7 @@
       );
       document.getElementById("cap").addEventListener("click", () => {
         cap = cap ? 0 : 60;
-        build();
+        showButtons();
       });
       let frames = 0;
       let last = performance.now();

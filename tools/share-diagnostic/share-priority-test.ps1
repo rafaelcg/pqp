@@ -36,7 +36,7 @@
 .PARAMETER Mode
   status: show priorities, hardware GPU scheduling and Game Mode.
   gpu:    raise the GPU scheduling priority class.
-  cpu:    raise the CPU priority class (browser and GPU process only).
+  cpu:    raise the CPU priority class (browser, GPU and renderer processes).
   both:   gpu and cpu.
   reset:  put both back to normal.
 
@@ -123,7 +123,10 @@ foreach ($p in $procs) {
   $actions = @()
   if ($Mode -in @('gpu', 'both')) { $actions += ('gpu ' + (Set-GpuClass $p.Id $gpuTarget)) }
   if ($Mode -eq 'reset') { $actions += ('gpu ' + (Set-GpuClass $p.Id 2)) }
-  if ($Mode -in @('cpu', 'both', 'reset') -and $p.Role -in @('browser', 'gpu')) {
+  # Renderers too: a software encoder (OpenH264, libvpx) runs in the renderer
+  # of the page that shares. Chrome may move a renderer's priority back on its
+  # own, so -Mode status afterwards says whether it held.
+  if ($Mode -in @('cpu', 'both', 'reset') -and $p.Role -in @('browser', 'gpu', 'renderer')) {
     try {
       $sp = [System.Diagnostics.Process]::GetProcessById($p.Id)
       $sp.PriorityClass = $(if ($Mode -eq 'reset') { 'Normal' } else { 'High' })
