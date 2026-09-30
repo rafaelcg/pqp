@@ -249,6 +249,12 @@ function createSharePriority(deps) {
       if (!supported) {
         return status();
       }
+      // A stop with no share live and a retry already pending changes nothing:
+      // it must neither replace that timer nor hand the restore a fresh budget
+      // (repeated calls would otherwise keep it from ever giving up).
+      if (!wasLive && retryTimer !== null) {
+        return status();
+      }
       const before = raised.size;
       const left = restore();
       if (wasLive) {

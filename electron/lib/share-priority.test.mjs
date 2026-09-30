@@ -190,6 +190,21 @@ describe("createSharePriority", () => {
     assert.equal(os.priorities.get(10), NORMAL);
   });
 
+  it("repeated stops do not reset the retry budget or keep the retry from running", () => {
+    const os = machine({ 10: NORMAL });
+    const priority = createSharePriority(os.deps);
+    priority.start();
+    os.refuse(10);
+    priority.stop();
+    for (let i = 0; i < 10; i += 1) {
+      priority.stop();
+      os.tick();
+    }
+    // The retries ran (one per tick) and gave up; the stops did not restart them.
+    assert.equal(os.timers.filter(Boolean).length, 0);
+    assert.equal(priority.status().boost, "failed");
+  });
+
   it("gives up after a few retries instead of retrying forever", () => {
     const os = machine({ 10: NORMAL });
     const priority = createSharePriority(os.deps);
