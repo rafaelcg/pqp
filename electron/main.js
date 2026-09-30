@@ -899,7 +899,9 @@ function showSourcePicker(labeled, offersNativeAudio) {
             sources: labeled,
             dark,
 // "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice, or any
-            // Windows while the shell's own capture is armed for this share) or
+            // Windows while the shell's own capture is armed for this share;
+            // drawn as a sound row whose switch starts ON, see
+            // `picker/audio-state.js`) or
             // "explain" (Windows 10, where the checkbox would be a lie). See
             // `pickerAudioState` for why this replaced a plain boolean.
             audioState: offersNativeAudio
@@ -916,6 +918,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
               shareAudioHint: t("share.audioHint"),
+              shareAudioOffNote: t("share.audioOffNote"),
               shareAudioWin10: t("share.audioWin10Unavailable"),
               shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
             },
