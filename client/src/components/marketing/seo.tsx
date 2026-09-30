@@ -58,6 +58,14 @@ export function Seo({
       const urls = marketingUrlsFor(marketingPage, locale);
       setLink("canonical", urls.canonical);
       setMeta("og:url", urls.canonical, "property");
+      // Recomputed on every route change: a page with no Spanish copy has no
+      // `es` alternate, and the one a previous page left in <head> must go.
+      const wanted = new Set(urls.alternates.map((alt) => alt.hreflang));
+      document.head
+        .querySelectorAll("link[rel='alternate'][hreflang]")
+        .forEach((el) => {
+          if (!wanted.has(el.getAttribute("hreflang") ?? "")) el.remove();
+        });
       for (const alt of urls.alternates) {
         setLink("alternate", alt.href, alt.hreflang);
       }
