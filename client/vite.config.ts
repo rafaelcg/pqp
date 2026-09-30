@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import faroUploader from "@grafana/faro-rollup-plugin";
 import { googleAds } from "./src/lib/google-ads-tag";
 
@@ -81,6 +82,82 @@ function edgeConfig(): Plugin {
 }
 
 /**
+ * WHICH BUILD IS THIS, stated twice by the same build: baked into the bundle
+ * (`__PQP_BUILD_ID__`, `__PQP_BUILD_TIME__`, read through `src/lib/build-info.ts`)
+ * and written beside it as `/version.json`.
+ *
+ * A running page compares the first to a fresh read of the second. That is how a
+ * window that has been open for a week finds out it is a week old, which nothing
+ * in the service worker's own update check can tell it: the worker only looks
+ * when the page navigates, and an always-open window (the desktop app, a pinned
+ * tab) never does. See `src/lib/version-watch.ts` and `docs/PWA.md`.
+ *
+ * The id is the deployed commit. CI already passes it as `VITE_FARO_APP_VERSION`
+ * (so a Faro stack trace and this agree on what "the release" is);
+ * `VITE_PQP_BUILD_ID` overrides it (the stale-bundle e2e builds two of these from
+ * one tree), and a local build falls back to the current commit, then to "dev",
+ * which the client reads as "never compare me".
+ */
+function resolveBuildId(): string {
+  const fromEnv =
+    process.env.VITE_PQP_BUILD_ID?.trim() ||
+    process.env.VITE_FARO_APP_VERSION?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  try {
+    return execSync("git rev-parse HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "dev";
+  }
+}
+
+const BUILD_ID = resolveBuildId();
+const BUILD_TIME = Date.now();
+
+/**
+ * The service worker's own build stamp, a script the worker imports. It gives
+ * the page a way to ask "which build are YOU?" (`PQP_BUILD` message, answered
+ * below), which is what lets `src/lib/apply-update.ts` tell a worker that is
+ * current from one that only looks idle: a stale `sw.js` served by a CDN finds
+ * nothing to install, and from the page that is indistinguishable from "already
+ * up to date" without this. The name carries the build so the URL changes with
+ * it and no cache can hand back another build's stamp.
+ */
+const SW_BUILD_FILE = `sw-build-${BUILD_ID.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16) || "dev"}.js`;
+
+function versionManifest(): Plugin {
+  return {
+    name: "pqp-version-manifest",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: JSON.stringify({ build: BUILD_ID, builtAt: BUILD_TIME }),
+      });
+      this.emitFile({
+        type: "asset",
+        fileName: SW_BUILD_FILE,
+        source: [
+          `self.__PQP_BUILD__ = ${JSON.stringify(BUILD_ID)};`,
+          `self.addEventListener("message", function (event) {`,
+          `  if (event.data && event.data.type === "PQP_BUILD" && event.ports && event.ports[0]) {`,
+          `    event.ports[0].postMessage({ build: self.__PQP_BUILD__ });`,
+          `  }`,
+          `});`,
+          ``,
+        ].join("\n"),
+      });
+    },
+  };
+}
+
+/**
  * The Umami tag, injected only when this build was told which site it is.
  *
  * WHY THIS IS NOT JUST A `<script>` IN index.html. pqp is AGPL and meant to be
@@ -123,6 +200,7 @@ export default defineConfig({
   plugins: [
     react(),
     edgeConfig(),
+    versionManifest(),
     umami(),
     // Same gate as Umami above, same reason. See `src/lib/google-ads-tag.ts`;
     // it lives under `src/` so `vitest` can prove the gate holds.
@@ -132,10 +210,18 @@ export default defineConfig({
     ...(faroSourcemapPlugin ? [faroSourcemapPlugin] : []),
     tailwindcss(),
     VitePWA({
-      // `prompt`, never `autoUpdate`. This client holds live WebSocket state and
-      // re-syncs history on reconnect, so swapping the shell out from under a
-      // running session can leave a stale bundle talking to a newer API. The
-      // user gets a toast and picks the moment.
+      // `prompt`: the PAGE is never reloaded behind the user's back by the
+      // plugin. This client holds live WebSocket state, unsent drafts and
+      // possibly a call, so the moment to reload is chosen in
+      // `src/lib/update-policy.ts`, not by the plugin's `autoUpdate` reload.
+      //
+      // That is the page. The WORKER is a different thing and is told below to
+      // take over as soon as it is installed (`skipWaiting` + `clientsClaim`).
+      // Before, a new worker sat WAITING for every window of the origin to close,
+      // and until it took over, a plain reload was answered from the OLD
+      // precache: three reloads in a row served the previous bundle
+      // (reproduced in `e2e/stale-bundle/`). An always-open desktop window never
+      // closes, so it was stranded for as long as it lived.
       registerType: "prompt",
       // The marketing pages are prerendered-ish static routes people may reach
       // first; `/app` is the thing worth installing.
@@ -183,7 +269,7 @@ export default defineConfig({
         // the wasm beside it is not a `.js` and is never precached, so the
         // advanced suppressor could not start offline either way. It is
         // fetched on demand, like the wasm.
-        globIgnores: ["**/workletProcessor-*.js"],
+        globIgnores: ["**/workletProcessor-*.js", "**/sw-build-*.js"],
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
@@ -218,10 +304,16 @@ export default defineConfig({
           /^\/sitemap\.xml$/,
         ],
         cleanupOutdatedCaches: true,
+        // See `registerType` above. Safe for the open tabs this swaps under
+        // because the page keeps running the code it already loaded; the price
+        // is that a lazy chunk an old tab has not fetched yet may be gone, and
+        // `src/lib/chunk-reload.ts` already recovers from exactly that.
+        skipWaiting: true,
+        clientsClaim: true,
         // Adds the notificationclick handler. Android Chrome only permits
         // notifications raised from a worker, and their clicks arrive here
         // rather than in the page — without it, tapping one does nothing.
-        importScripts: ["sw-notification-click.js"],
+        importScripts: ["sw-notification-click.js", SW_BUILD_FILE],
       },
       devOptions: {
         // Off by default: a service worker in dev caches the very assets Vite
@@ -234,6 +326,10 @@ export default defineConfig({
   // so the `.map` files are generated for upload without being served publicly.
   build: {
     sourcemap: faroSourcemapPlugin ? "hidden" : false,
+  },
+  define: {
+    __PQP_BUILD_ID__: JSON.stringify(BUILD_ID),
+    __PQP_BUILD_TIME__: String(BUILD_TIME),
   },
   resolve: {
     alias: {

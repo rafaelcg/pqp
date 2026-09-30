@@ -3,6 +3,7 @@
   "menu.view": "Ver",
   "menu.window": "Ventana",
   "menu.speech": "Voz",
+  "menu.reloadClean": "Recargar y limpiar caché",
   "menu.toggleMute": "Silenciar / activar micrófono",
   "menu.toggleMuteHelp": "Silenciar / activar micrófono (Cmd/Ctrl+Shift+M)",
   "menu.toggleDeafen": "Desactivar / activar audio",

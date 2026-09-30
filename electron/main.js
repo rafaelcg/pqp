@@ -31,6 +31,10 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const {
+  clearWebCache,
+  clearWebCacheIfShellUpdated,
+} = require("./lib/web-cache");
 const { loginItemSupported } = require("./lib/login-item");
 const { createDesktopAuthController } = require("./lib/desktop-auth-session");
 const { senderMatchesAppOrigin } = require("./lib/ipc-origin");
@@ -590,6 +594,18 @@ function registerProtocolClient() {
   }
 }
 
+/** View > "Reload and clear cache": the cached site is dropped, then the page is fetched fresh. */
+async function reloadCleanFromNetwork() {
+  try {
+    await clearWebCache(session.defaultSession);
+  } catch (err) {
+    console.warn("[pqp] could not clear the cached site:", err?.message ?? err);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.reloadIgnoringCache();
+  }
+}
+
 function createAppMenu() {
   const isMac = process.platform === "darwin";
 
@@ -641,6 +657,18 @@ function createAppMenu() {
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
+        // For support: drops the cached site (HTTP cache, service worker and its
+        // precache; NOT the sign-in) and reloads from the network. The answer
+        // for "the app shows an old version of the site", which is what a
+        // plain Reload cannot do while a service worker is answering for the
+        // page (see `lib/web-cache.js`).
+        {
+          label: t("menu.reloadClean"),
+          accelerator: "CommandOrControl+Shift+Alt+R",
+          click: () => {
+            void reloadCleanFromNetwork();
+          },
+        },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -2182,6 +2210,16 @@ if (probingShareAudio) {
 
     console.log(`[pqp] Loading ${appUrl}`);
     const allowedOrigin = configureSessionSecurity(appUrl);
+    // A shell that has just been updated must not load the site out of the
+    // service worker and HTTP cache the PREVIOUS shell left in this profile: a
+    // Windows PC ran the new shell around the old website that way on
+    // 2026-09-30. Once per shell version, before the first load; never fatal.
+    await clearWebCacheIfShellUpdated({
+      userDataPath: app.getPath("userData"),
+      version: app.getVersion(),
+      session: session.defaultSession,
+      log: (...args) => console.warn("[pqp]", ...args),
+    });
     recreateWindow = () => createWindow(appUrl, allowedOrigin);
     createWindow(appUrl, allowedOrigin);
     initAutoUpdate(() => mainWindow);

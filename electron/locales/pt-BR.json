@@ -3,6 +3,7 @@
   "menu.view": "Exibir",
   "menu.window": "Janela",
   "menu.speech": "Fala",
+  "menu.reloadClean": "Recarregar e limpar cache",
   "menu.toggleMute": "Alternar mute",
   "menu.toggleMuteHelp": "Alternar mute (Cmd/Ctrl+Shift+M)",
   "menu.toggleDeafen": "Alternar deafen",

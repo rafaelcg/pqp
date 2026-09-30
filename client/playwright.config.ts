@@ -72,7 +72,9 @@ const projects: E2EProject[] = [
   {
     name: "chromium",
     use: { ...devices["Desktop Chrome"] },
-    testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC],
+    // `e2e/stale-bundle/` has its own config (real builds, no API, no
+    // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
+    testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC, /stale-bundle[\\/]/],
   },
   {
     name: "chromium-media",

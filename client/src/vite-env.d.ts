@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   /** `true` turns on the sign-up resume (`lib/signup-assist.ts`). Public, not a secret. */
   readonly VITE_SIGNUP_ASSIST?: string;
   readonly VITE_WS_URL?: string;
+  /** Hours past which a page that is out of date reloads without asking; 0 is off. Default 12. */
+  readonly VITE_UPDATE_MAX_STALE_HOURS?: string;
   readonly VITE_TURN_URL?: string;
   readonly VITE_TURN_USERNAME?: string;
   readonly VITE_TURN_CREDENTIAL?: string;
@@ -84,6 +86,13 @@ interface ImportMeta {
 }
 
 declare global {
+  /**
+   * Stamped into the bundle by `client/vite.config.ts` (`define`), which also
+   * writes the same two values to `/version.json`. Absent under vitest, which
+   * does not load that config: read them through `lib/build-info.ts`, never raw.
+   */
+  const __PQP_BUILD_ID__: string;
+  const __PQP_BUILD_TIME__: number;
   interface Window {
     pqpDesktop?: PqpDesktop;
     /**

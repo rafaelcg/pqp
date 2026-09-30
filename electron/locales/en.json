@@ -3,6 +3,7 @@
   "menu.view": "View",
   "menu.window": "Window",
   "menu.speech": "Speech",
+  "menu.reloadClean": "Reload and clear cache",
   "menu.toggleMute": "Toggle Mute",
   "menu.toggleMuteHelp": "Toggle Mute (Cmd/Ctrl+Shift+M)",
   "menu.toggleDeafen": "Toggle Deafen",
