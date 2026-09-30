@@ -4,7 +4,7 @@ Essa comparação é sobre o que roda hoje, não sobre uma promessa. Onde o pqp 
 
 ## O que o pqp já faz melhor
 
-**Tela compartilhada com som, sem plugin.** No Discord, compartilhar tela com áudio depende do sistema e às vezes falha silenciosamente. No pqp, compartilhando uma guia do Chrome ou Edge com a caixinha de áudio marcada, o som vai junto, e o app avisa antes de você entrar ao vivo se alguma coisa está errada (navegador sem suporte, mic mutado, câmera desligada). Veja o [guia de compartilhar tela com áudio](/compartilhar-tela-com-audio) pra cada plataforma.
+**Tela compartilhada com som, sem plugin.** No Discord, compartilhar tela com áudio depende do sistema e às vezes falha silenciosamente. No pqp, compartilhando uma guia do Chrome ou Edge com a caixinha de áudio marcada, o som vai junto, e o app avisa antes de você entrar ao vivo se alguma coisa está errada (navegador sem suporte, mic mutado, câmera desligada). Veja o [guia de compartilhar tela com áudio](/blog/compartilhar-tela-com-audio) pra cada plataforma.
 
 **Watch party embutida.** Criar uma sessão pra assistir filme, jogo ou live junto com a galera é um botão dentro da call, não uma extensão de terceiros. Já rodou uma watch party de mais de 500 pessoas assistindo ao mesmo tempo no pqp, com mixer pra balancear microfone e áudio do filme, e qualidade que você escolhe (720p ou 1080p). Passo a passo em [como assistir um filme junto online](/blog/watch-party-assistir-filme-com-amigos).
 

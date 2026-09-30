@@ -111,3 +111,24 @@ export function allowedModerationActions(
 export function canManageMessages(actorRole: MemberRole | null): boolean {
   return actorRole === "owner" || actorRole === "admin";
 }
+
+/**
+ * Why a server just left this person's list, told to every socket they hold.
+ *
+ * Kick, ban and delete all remove a membership from under an open session.
+ * The server already refuses every read and send that follows, but a client
+ * that is never told keeps drawing the rail, the channels and a member list
+ * with the person still in it, and learns the truth only on reload. This frame
+ * is the notice. Addressed per person, never fanned out on a channel: the
+ * people it concerns are, by then, exactly the ones no channel reaches.
+ *
+ * `kicked` and `banned` go to the one member removed; `deleted` to every
+ * member the server had. It carries no name: a client that does not already
+ * hold this server has nothing to update and nothing to say.
+ */
+export const serverRemovedSchema = z.object({
+  type: z.literal("server-removed"),
+  serverId: z.string().uuid(),
+  reason: z.enum(["kicked", "banned", "deleted"]),
+});
+export type ServerRemoved = z.infer<typeof serverRemovedSchema>;

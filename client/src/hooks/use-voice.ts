@@ -34,11 +34,13 @@ import {
 } from "@/lib/desktop";
 import {
   capturesSystemAudio,
+  ensureConfirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
   stripLeakedSystemAudioTracks,
   wantsNativeShareAudio,
+  systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
 import {
@@ -46,6 +48,7 @@ import {
   attachNativeShareAudio,
   releaseNativeShareAudioFor,
 } from "@/lib/native-share-audio";
+import { detectPlatform, readPlatformSignals } from "@/lib/downloads";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -5878,23 +5881,6 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the intent still wins, so a caller can override it for one share.
       await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
-      const captureIntent = { ...intent, hideCursor };
-      let captureEnv = liveScreenCaptureEnvironment(intent);
-      // WINDOWS DESKTOP, NATIVE SOUND: Chromium is asked for no audio (see
-      // `wantsNativeShareAudio`) and the shell is told to offer its own box
-      // on the picker that is about to open. A stream the caller already
-      // opened (the watch party preview) attached its sound when it was
-      // picked, so it is not armed again here. An arm the shell refused
-      // falls back to this share's old path before the options are built:
-      // they would otherwise ask Chromium for no audio with nothing in its
-      // place, which on Windows 11 is sound we used to have.
-      let nativeAudio =
-        !intent.stream && wantsNativeShareAudio(shareSystemAudio, captureEnv, captureIntent);
-      if (nativeAudio && !(await armNativeShareAudio())) {
-        nativeAudio = false;
-        captureEnv = { ...captureEnv, shellNativeShareAudio: false };
-      }
-      const options = screenCaptureOptions(shareSystemAudio, captureEnv, captureIntent);
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
       // that is a request which can fail on its own; in the shell it is only
@@ -5956,7 +5942,24 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Fail closed before anyone else hears the mixer. Strip only when
       // exclude is known not to have applied; undefined settings stay.
       if (stripLeakedSystemAudioTracks(stream)) {
-        state.notice = translateMessage("voice.notice.systemAudioStripped");
+        // A second, separate UA-CH read from `ensureOsCanExcludeCallAudio`
+        // above: that one answers "can I offer computer sound", this one
+        // answers "do I actually KNOW this is old Windows" -- see
+        // `systemAudioStrippedNoticeKey`'s doc comment for why conflating
+        // them once asserted "Windows 10" on a platform nobody confirmed.
+        const confirmedOldWindows = await ensureConfirmedOldWindowsFromUa();
+        state.notice = translateMessage(
+          systemAudioStrippedNoticeKey({
+            isDesktopShell: captureEnv.isDesktopShell,
+            platform: detectPlatform(readPlatformSignals()),
+            osCanExcludeCallAudio: captureEnv.osCanExcludeCallAudio,
+            confirmedOldWindows,
+            // TODO(desktop_share_audio_native): once that runtime flag ships
+            // and is exposed to the client (docs/FEATURE_FLAGS.md), read its
+            // live value here instead of the constant `false` below.
+            desktopAppAvailable: false,
+          }),
+        );
       }
       // The shell's capture joins the stream here, after the strip (it is
       // not the mixer, so there is nothing in it to strip) and before

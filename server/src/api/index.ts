@@ -111,6 +111,7 @@ import {
   channelOverwriteSchema,
   completeConnectionSchema,
   updateConnectionSchema,
+  DISPLAY_NAME_MAX_LENGTH,
   updateProfileSchema,
   updateServerSchema,
   USER_SEARCH_PAGE_SIZE,
@@ -122,7 +123,9 @@ import {
   discordImportSourceSchema,
   DiscordImportCapError,
   DiscordImportParseError,
+  isDiscordInviteLink,
   parseDiscordTemplateCode,
+  type DiscordImportErrorCode,
   claimCommunityHomeMediaSchema,
   COMMUNITY_HOME_MAX_BYTES,
   pinCommunityHomePostSchema,
@@ -212,7 +215,11 @@ import {
   evictVoiceUser,
   evictVoiceUsersExcept,
   notifyPermissionsUpdate,
+  notifyCommunityHomeSwitch,
   notifyCommunityHomeUpdate,
+  notifyChannelsUpdate,
+  resolveChannelsUpdateAudience,
+  notifyServerRemoved,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -1397,8 +1404,30 @@ router.post("/api/me/age-check", async ({ req, user }) => {
   return { ageGate: result.status };
 });
 
+/**
+ * `updateProfileSchema` binds a NEW display name to `DISPLAY_NAME_MAX_LENGTH`.
+ * This route parses with a looser ceiling first, because a name that predates
+ * the limit (a Clerk full name is stored untruncated) is still what an already
+ * installed iOS build sends back on every Settings save. The limit is enforced
+ * below, and only when the name actually changes.
+ */
+const patchProfileSchema = updateProfileSchema.extend({
+  displayName: z.string().trim().min(1).max(1000).optional(),
+});
+
 router.patch("/api/me", async ({ req, user, ageGate }) => {
-  const body = updateProfileSchema.parse(await readJsonBody(req));
+  const body = patchProfileSchema.parse(await readJsonBody(req));
+  if (body.displayName !== undefined) {
+    if (body.displayName === user.display_name.trim()) {
+      // The stored name sent back unchanged is not an edit, whatever its length.
+      body.displayName = undefined;
+    } else if (body.displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw new HttpError(
+        400,
+        `Display name must be ${DISPLAY_NAME_MAX_LENGTH} characters or fewer.`,
+      );
+    }
+  }
   // BEFORE the profile write, and in its own statement.
   //
   // A handle is the one field on this form that can fail for a reason nothing
@@ -3493,32 +3522,63 @@ router.post("/api/servers", async ({ req, user }) => {
   return replayed ? payload : created(payload);
 });
 
+/**
+ * An import failure with a `code` beside the English sentence, so the client
+ * can say it in the reader's language (`DiscordImportErrorCode`).
+ */
+function discordImportError(
+  status: number,
+  message: string,
+  code: DiscordImportErrorCode,
+): HttpErrorWithDetail {
+  return new HttpErrorWithDetail(status, message, { code });
+}
+
 function throwDiscordImportHttp(
   error: unknown,
   res: { setHeader: (name: string, value: string) => void },
 ): never {
   if (error instanceof DiscordImportParseError) {
-    throw new HttpError(400, error.message);
+    throw discordImportError(400, error.message, "notATemplate");
   }
   if (error instanceof DiscordImportCapError) {
-    throw new HttpError(400, error.message);
+    throw discordImportError(400, error.message, "tooMany");
   }
   if (error instanceof DiscordTemplateNotFoundError) {
-    throw new NotFound(error.message);
+    throw discordImportError(404, error.message, "notFound");
   }
   if (error instanceof DiscordTemplateRateLimitedError) {
     if (error.retryAfterSeconds != null) {
       res.setHeader("Retry-After", String(error.retryAfterSeconds));
     }
-    throw new HttpError(429, error.message);
+    throw discordImportError(429, error.message, "rateLimited");
   }
   if (error instanceof DiscordTemplateTooLargeError) {
-    throw new HttpError(413, error.message);
+    throw discordImportError(413, error.message, "tooLarge");
   }
   if (error instanceof DiscordTemplateUnavailableError) {
-    throw new HttpError(502, error.message);
+    throw discordImportError(502, error.message, "unavailable");
   }
   throw error;
+}
+
+/** Refuses a paste that is not a template link, before any limiter token. */
+function requireDiscordTemplateSource(source: string): void {
+  if (parseDiscordTemplateCode(source)) {
+    return;
+  }
+  if (isDiscordInviteLink(source)) {
+    throw discordImportError(
+      400,
+      "That is a Discord invite link. Paste the server template link (discord.new/…).",
+      "inviteLink",
+    );
+  }
+  throw discordImportError(
+    400,
+    "Paste a discord.new link or a Discord template code.",
+    "notATemplate",
+  );
 }
 
 function takeDiscordImportLimiters(
@@ -3531,14 +3591,14 @@ function takeDiscordImportLimiters(
       "Retry-After",
       String(discordImportLimiter.retryAfter(userKey)),
     );
-    throw new HttpError(429, "Slow down");
+    throw discordImportError(429, "Slow down", "rateLimited");
   }
   if (!discordFetchLimiter.take("discord")) {
     res.setHeader(
       "Retry-After",
       String(discordFetchLimiter.retryAfter("discord")),
     );
-    throw new HttpError(429, "Slow down");
+    throw discordImportError(429, "Slow down", "rateLimited");
   }
 }
 
@@ -3547,12 +3607,7 @@ router.post("/api/import/discord/preview", async ({ req, user, res }) => {
     throw new Forbidden("Character accounts cannot create servers");
   }
   const body = discordImportSourceSchema.parse(await readJsonBody(req));
-  if (!parseDiscordTemplateCode(body.source)) {
-    throw new HttpError(
-      400,
-      "Paste a discord.new link or a Discord template code.",
-    );
-  }
+  requireDiscordTemplateSource(body.source);
   takeDiscordImportLimiters(user.id, res);
   try {
     const { plan } = await fetchMappedDiscordTemplate(body.source);
@@ -3567,12 +3622,7 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
     throw new Forbidden("Character accounts cannot create servers");
   }
   const body = discordImportSourceSchema.parse(await readJsonBody(req));
-  if (!parseDiscordTemplateCode(body.source)) {
-    throw new HttpError(
-      400,
-      "Paste a discord.new link or a Discord template code.",
-    );
-  }
+  requireDiscordTemplateSource(body.source);
   const idempotencyKey = normalizeIdempotencyKey(req.headers["idempotency-key"]);
   if (idempotencyKey) {
     // A cheap read ahead of the outbound Discord fetch and the rate-limit
@@ -4032,7 +4082,12 @@ router.get(
     if (!server) {
       throw new NotFound("Server not found");
     }
-    return { enabled: server.community_home_enabled ?? false };
+    // The version lets a client reconciling after a reconnect tell whether
+    // this answer is newer than the copy it already holds.
+    return {
+      enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
+    };
   },
 );
 
@@ -4045,8 +4100,18 @@ router.patch(
       await readJsonBody(req),
     );
     const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    // Members with the app open keep their own copy of this flag, so they are
+    // told the new value and its version instead of waiting for a reload. Not
+    // awaited past the first attempt: a failed member lookup or a bus that is
+    // down is retried in the background (see `notifyCommunityHomeSwitch`), and
+    // the owner's write has already succeeded either way.
+    await notifyCommunityHomeSwitch(serverId!, {
+      enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
+    });
     return {
       enabled: server.community_home_enabled ?? false,
+      version: server.community_home_version ?? 0,
       server: mapServer(server),
     };
   },
@@ -4980,7 +5045,12 @@ router.patch(
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
   await requireOwner(serverId!, user.id);
   const channelIds = await listServerChannelIds(serverId!);
-  await deleteServer(serverId!);
+  // The members as of the delete itself, read under the same lock: the rows
+  // cascade with the server, and afterwards there is nobody left to tell.
+  const memberIds = await deleteServer(serverId!);
+  if (memberIds) {
+    notifyServerRemoved(serverId!, "deleted", memberIds);
+  }
   for (const channelId of channelIds) {
     evictVoiceChannel(channelId);
     evictChannelViewers(channelId);
@@ -5035,6 +5105,10 @@ router.post(
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
     }
+    // After the creator's own access row, so a private channel's audience
+    // already holds them, and before the audit write, so a failed audit
+    // cannot cost the members a change that has already committed.
+    pingChannels(serverId!, { channelIds: [channel.id] });
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -5078,6 +5152,13 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     Permission.MANAGE_CHANNELS,
   );
   const body = updateChannelSchema.parse(await readJsonBody(req));
+  const privacyChanged =
+    body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
+  // A privacy flip changes who can see the channel, so the people who are
+  // about to lose it are read now: they must see it go.
+  const audienceBefore = privacyChanged
+    ? await resolveChannelsUpdateAudience(channel.server_id, [channelId!])
+    : null;
   const updated = await updateChannel(channelId!, {
     name: body.name,
     isPrivate: body.isPrivate,
@@ -5088,6 +5169,31 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   });
   if (!updated) {
     throw new NotFound("Channel not found");
+  }
+
+  // `channel` (read for the authorization check above) already carries the
+  // pre-update row, so the diff costs nothing extra to compute here.
+  const changes = (
+    [
+      ["name", channel.name, updated.name],
+      ["topic", channel.topic, updated.topic],
+      ["isPrivate", channel.is_private, updated.is_private],
+      ["imageUrl", channel.image_url, updated.image_url],
+      ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
+      ["voiceTransport", channel.voice_transport, updated.voice_transport],
+    ] as const
+  )
+    .filter(([, oldValue, newValue]) => oldValue !== newValue)
+    .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+  // Right after the write, before the eviction work below and the audit
+  // write, so neither can cost the members a change that has committed. A
+  // privacy flip sends this too, beside `permissions-update`: the web client
+  // refetches its list on either frame, but the phones only on this one.
+  if (changes.length > 0) {
+    pingChannels(channel.server_id, {
+      channelIds: [channelId!],
+      before: audienceBefore,
+    });
   }
 
   // Turning a channel private must immediately cut off anyone watching or
@@ -5115,24 +5221,10 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   if (!updated.is_private && channel.is_private) {
     void cancelPrivateVoiceResweep(channelId!);
   }
-  if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
+  if (privacyChanged) {
     pingPermissions(channel.server_id);
   }
 
-  // `channel` (read for the authorization check above) already carries the
-  // pre-update row, so the diff costs nothing extra to compute here.
-  const changes = (
-    [
-      ["name", channel.name, updated.name],
-      ["topic", channel.topic, updated.topic],
-      ["isPrivate", channel.is_private, updated.is_private],
-      ["imageUrl", channel.image_url, updated.image_url],
-      ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
-      ["voiceTransport", channel.voice_transport, updated.voice_transport],
-    ] as const
-  )
-    .filter(([, oldValue, newValue]) => oldValue !== newValue)
-    .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
   if (changes.length > 0) {
     await logAudit({
       serverId: channel.server_id,
@@ -5154,9 +5246,18 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  // Read before the delete: afterwards there is no row to ask who could see
+  // it. A failure here fails the request with nothing deleted, so no nudge
+  // is owed.
+  const audienceBefore = await resolveChannelsUpdateAudience(
+    channel.server_id,
+    [channelId!],
+    { carriesChildren: true },
+  );
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);
+  pingChannels(channel.server_id, { channelIds: [], before: audienceBefore });
   await logAudit({
     serverId: channel.server_id,
     actorId: user.id,
@@ -5170,12 +5271,9 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
 
 /**
  * Reorder or re-parent one channel. Answers with the whole server's fresh
- * channel list rather than a delta, matching how create/rename/delete already
- * behave here: none of the three broadcast live either, so the actor's own
- * client updates from its own response and everyone else sees the new order
- * on their next load. Adding a live broadcast for reorders only, while the
- * other three mutations stay silent, would be an inconsistency worth its own
- * change rather than a side effect of this one.
+ * channel list rather than a delta, so the actor's own client updates from
+ * its own response. Everyone else hears `channels-update`, like create,
+ * rename and delete, and refetches.
  */
 router.patch(
   "/api/channels/:channelId/move",
@@ -5197,6 +5295,11 @@ router.patch(
       throw error;
     }
 
+    // Before the audit write, for the same reason as on create.
+    pingChannels(channel.server_id, {
+      channelIds: [channelId!],
+      carriesChildren: true,
+    });
     await logAudit({
       serverId: channel.server_id,
       actorId: user.id,
@@ -5279,6 +5382,7 @@ router.post("/api/channels/:channelId/read", async ({ req, user }, { channelId }
     channelId!,
     user.id,
     body.lastReadAt ? new Date(body.lastReadAt) : undefined,
+    { forwardOnly: body.forwardOnly === true },
   );
   return {
     ok: true as const,
@@ -7797,6 +7901,20 @@ function pingPermissions(serverId: string): void {
   });
 }
 
+/**
+ * The sidebars of the members who can see the change refetch the channel
+ * list. See `notifyChannelsUpdate`, which also says why a failure is logged
+ * and not widened.
+ */
+function pingChannels(
+  serverId: string,
+  change: Parameters<typeof notifyChannelsUpdate>[1],
+): void {
+  void notifyChannelsUpdate(serverId, change).catch((error) => {
+    console.error("[api] channels-update failed:", error);
+  });
+}
+
 router.get(
   "/api/channels/:channelId/overwrites",
   async ({ user }, { channelId }) => {
@@ -8126,6 +8244,10 @@ router.delete(
     } else {
       await kickMember(serverId!, userId!);
     }
+    // Told the moment the removal commits, before the audit row and the
+    // channel lookup: either can fail, and the removal cannot be undone or
+    // repeated, so a notice sent after them could be lost for good.
+    notifyServerRemoved(serverId!, body.ban ? "banned" : "kicked", [userId!]);
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -8581,7 +8703,18 @@ router.post(
     }
     await requireOutranked(serverId!, user.id, body.userId, "ban");
 
-    await banMember(serverId!, body.userId, user.id, body.reason);
+    const wasMember = await banMember(
+      serverId!,
+      body.userId,
+      user.id,
+      body.reason,
+    );
+    // Told the moment the ban commits, before the audit row and the channel
+    // lookup, for the reason the kick route gives. A pre-emptive ban has no
+    // open session to update.
+    if (wasMember) {
+      notifyServerRemoved(serverId!, "banned", [body.userId]);
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -9182,7 +9315,13 @@ router.post("/api/live-hls/presence", async ({ req, res, user }) => {
   if (!claims || claims.userId !== user.id) {
     throw new HttpError(400, "Invalid session token");
   }
-  noteHlsViewer(claims.channelId, claims.startedAt, user.id, "presence");
+  // Coarse class and foreground / background time ride along on the beat, so
+  // they cost no request and no query of their own (`HlsViewerDetail`).
+  noteHlsViewer(claims.channelId, claims.startedAt, user.id, "presence", {
+    device: body.device,
+    visibleMs: body.visibleMs,
+    hiddenMs: body.hiddenMs,
+  });
   return { ok: true };
 });
 

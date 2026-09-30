@@ -11,6 +11,7 @@ import {
   mapImportedEveryonePermissions,
   mapImportedOverwriteBits,
   mapImportedRolePermissions,
+  isDiscordInviteLink,
   parseDiscordTemplateCode,
   sanitiseImportedRoleName,
 } from "./discord-import.js";
@@ -79,6 +80,41 @@ describe("parseDiscordTemplateCode", () => {
       null,
     );
     expect(parseDiscordTemplateCode("not a code!")).toBe(null);
+    expect(parseDiscordTemplateCode("evil.example/hgM48av5Q69A")).toBe(null);
+    expect(parseDiscordTemplateCode("ftp://discord.new/hgM48av5Q69A")).toBe(
+      null,
+    );
+  });
+
+  it("accepts a link typed without https://", () => {
+    expect(parseDiscordTemplateCode("discord.new/hgM48av5Q69A")).toBe(
+      "hgM48av5Q69A",
+    );
+    expect(parseDiscordTemplateCode("www.discord.new/hgM48av5Q69A")).toBe(
+      "hgM48av5Q69A",
+    );
+    expect(parseDiscordTemplateCode("discord.com/template/hgM48av5Q69A")).toBe(
+      "hgM48av5Q69A",
+    );
+    expect(parseDiscordTemplateCode("  discord.new/hgM48av5Q69A\n")).toBe(
+      "hgM48av5Q69A",
+    );
+  });
+});
+
+describe("isDiscordInviteLink", () => {
+  it("spots a server invite, with or without https://", () => {
+    expect(isDiscordInviteLink("https://discord.gg/abcdefg")).toBe(true);
+    expect(isDiscordInviteLink("discord.gg/abcdefg")).toBe(true);
+    expect(isDiscordInviteLink("https://discord.com/invite/abcdefg")).toBe(true);
+    expect(isDiscordInviteLink("discordapp.com/invite/abcdefg")).toBe(true);
+  });
+
+  it("is false for templates and anything else", () => {
+    expect(isDiscordInviteLink("https://discord.new/hgM48av5Q69A")).toBe(false);
+    expect(isDiscordInviteLink("hgM48av5Q69A")).toBe(false);
+    expect(isDiscordInviteLink("https://discord.gg/")).toBe(false);
+    expect(isDiscordInviteLink("https://discord.com/channels/1/2")).toBe(false);
   });
 });
 

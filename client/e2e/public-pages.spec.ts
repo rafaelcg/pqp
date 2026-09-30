@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { DISPLAY_NAME_MAX_LENGTH } from "@pqp/shared";
 import { ensureServer } from "./fixtures";
 
 /**
@@ -42,6 +43,9 @@ const FILLER = "public-filler";
 /** Pinned so a run is repeatable; a handle only moves once every 30 days. */
 const SUBJECT_HANDLE = "e2e_publico";
 const AUTHOR_HANDLE = "e2e_autor";
+/** The account whose display name is one very long word. */
+const LONG_NAME = "public-longname";
+const LONG_NAME_HANDLE = "e2e_nome_longo";
 
 test.setTimeout(120_000);
 
@@ -443,5 +447,90 @@ test.describe("the public community page", () => {
       "slug",
       "tagline",
     ]);
+  });
+});
+
+/**
+ * How far `inner` sticks out of `outer` on either side, in CSS pixels. Zero
+ * when it sits inside. Measured from the rendered boxes rather than
+ * `scrollWidth`, because a centred flex child that overflows grows its own box
+ * with it: the h1 on a phone was 885px wide and "fit" itself perfectly.
+ */
+async function overhang(page: Page, inner: string, outer: string) {
+  return page.evaluate(
+    ([innerSel, outerSel]) => {
+      const a = document.querySelector(innerSel)!.getBoundingClientRect();
+      const b = document.querySelector(outerSel)!.getBoundingClientRect();
+      return Math.max(0, b.left - a.left, a.right - b.right);
+    },
+    [inner, outer],
+  );
+}
+
+test.describe("long unbroken words on the public pages", () => {
+  // A phone, where it was worst: the profile's h1 is centred there and was
+  // clipped on both sides.
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test.beforeEach(async () => {
+    await ensureServer();
+  });
+
+  test("a one-word display name wraps inside the profile card", async ({
+    browser,
+  }) => {
+    await ensureAccount(LONG_NAME);
+    await ensureHandle(LONG_NAME, LONG_NAME_HANDLE);
+    // As long as a display name may be (32), and still one word far wider
+    // than the card on a phone: without the h1's wrap it sticks out about
+    // 57px on each side.
+    const name = `Zé ${"Longonome".repeat(4)}`.slice(
+      0,
+      DISPLAY_NAME_MAX_LENGTH,
+    );
+    const renamed = await api(LONG_NAME, "PATCH", "/api/me", {
+      displayName: name,
+    });
+    expect(renamed.ok).toBe(true);
+
+    const { page, close } = await anonymousPage(browser);
+    await page.goto(`/@${LONG_NAME_HANDLE}`);
+    await expect(page.getByRole("heading", { name })).toBeVisible({
+      timeout: 20_000,
+    });
+    expect(await overhang(page, "article h1", "article")).toBe(0);
+    await close();
+  });
+
+  test("a pasted URL in the about wraps inside the poster column", async ({
+    browser,
+  }) => {
+    await ensureAccount(OWNER);
+    await ensureAccount(FILLER);
+    await clearDirectory();
+    const community = await seedCommunity("Link Comprido e2e");
+    const about = `https://exemplo.com.br/${"x".repeat(600)}`;
+    const patched = await api(
+      OWNER,
+      "PATCH",
+      `/api/servers/${community.id}/community`,
+      { about },
+    );
+    expect(patched.ok).toBe(true);
+
+    const { page, close } = await anonymousPage(browser);
+    await page.goto(`/c/${community.slug}`);
+    await expect(page.locator("[data-community-about] p")).toBeVisible({
+      timeout: 20_000,
+    });
+    // The paragraph's own box is the column; the text is what overflowed it.
+    const spill = await page
+      .locator("[data-community-about] p")
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(spill).toBeLessThanOrEqual(1);
+    // And the wrapped text is tall enough to earn the "more" control, which
+    // is the clamp seeing it for the first time.
+    await expect(page.locator("[data-community-about-toggle]")).toBeVisible();
+    await close();
   });
 });

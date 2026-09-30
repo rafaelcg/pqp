@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 
@@ -70,6 +70,7 @@ vi.mock("../services/threads.js", () => ({
 }));
 
 import { handleChatMessage } from "./chat.js";
+import { deleteAuthenticatedSocket, setAuthenticatedSocket } from "./sockets.js";
 import {
   applyManualStatus,
   isInvisible,
@@ -402,5 +403,68 @@ describe("invisibility", () => {
       [hidden, watcher].sort(),
     );
     expect(resolveStatus(hidden)).toBe("online");
+  });
+});
+
+describe("telling the account's own sockets", () => {
+  /**
+   * The status registry is a pull surface for other people, so a change reaches
+   * them by their next read. The account's own other tabs read nothing: they
+   * were told once at bootstrap and stayed on the old value until a reload.
+   */
+  const open: Recorder[] = [];
+
+  async function connect(userId: string): Promise<Recorder> {
+    const recorder = recordingSocket();
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    await registerStatusSocket(recorder.socket, userId);
+    open.push(recorder);
+    return recorder;
+  }
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("reaches every tab the account holds, including the one that chose", async () => {
+    const userId = randomUUID();
+    const first = await connect(userId);
+    const second = await connect(userId);
+
+    applyManualStatus(userId, "away");
+
+    for (const tab of [first, second]) {
+      expect(framesOfType(tab.received, "own-status")).toEqual([
+        { type: "own-status", status: "away" },
+      ]);
+    }
+  });
+
+  it("carries invisible to the owner and to nobody else", async () => {
+    const hidden = randomUUID();
+    const bystander = randomUUID();
+    const hiddenTab = await connect(hidden);
+    const bystanderTab = await connect(bystander);
+
+    applyManualStatus(hidden, "invisible");
+
+    expect(framesOfType(hiddenTab.received, "own-status")).toEqual([
+      { type: "own-status", status: "invisible" },
+    ]);
+    expect(bystanderTab.received).toHaveLength(0);
+  });
+
+  it("still tells a stale tab when the registry already agrees", async () => {
+    // A tab showing the wrong value is exactly the one that needs correcting,
+    // and the server's own copy being right says nothing about it.
+    const userId = randomUUID();
+    const tab = await connect(userId);
+    applyManualStatus(userId, "dnd");
+    applyManualStatus(userId, "dnd");
+
+    expect(framesOfType(tab.received, "own-status")).toHaveLength(2);
   });
 });

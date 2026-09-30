@@ -8,9 +8,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
+  DISPLAY_NAME_MAX_LENGTH,
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
   HANDLE_MAX_LENGTH,
@@ -183,6 +184,7 @@ import {
   type BlockingOwnedServer,
 } from "@/lib/api";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
+import { HelpSection } from "@/components/layout/help-section";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -502,6 +504,7 @@ type SectionId =
   | "privacy"
   | "data"
   | "feedback"
+  | "help"
   | "moderation";
 
 /** For callers that open the dialog at a particular section (the user menu). */
@@ -568,6 +571,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.feedback",
     description: "settings.feedback.description",
     icon: Bug,
+  },
+  {
+    id: "help",
+    label: "settings.section.help",
+    description: "help.description",
+    icon: CircleHelp,
   },
   // Hidden from the rail unless `canModerateInstance` resolves true — see
   // `visibleSections` where `SettingsModal` filters this out for everyone
@@ -3569,6 +3578,7 @@ function ProfileSection({
         </span>
         <Input
           value={displayName}
+          maxLength={DISPLAY_NAME_MAX_LENGTH}
           onChange={(e) => onDisplayName(e.target.value)}
         />
       </label>
@@ -4129,6 +4139,15 @@ export function SettingsModal({
   }
 
   async function handleSave() {
+    // Checked before anything is saved. A blank name used to be dropped from
+    // the request, so the dialog closed as if it had worked and kept the old
+    // name. Device settings are not written either: a Save that fails should
+    // leave nothing half applied.
+    if (user && displayName.trim() === "") {
+      setSection("profile");
+      setError(t("settings.profile.displayNameRequired"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -4136,7 +4155,12 @@ export function SettingsModal({
       saveLocalSettings(draftLocal);
       if (user) {
         const updated = await updateMe({
-          displayName: displayName.trim() || undefined,
+          // Only when it changed. An account whose name predates the limit
+          // would otherwise fail every save of an unrelated field.
+          displayName:
+            displayName.trim() !== user.displayName
+              ? displayName.trim()
+              : undefined,
           username: username.trim() || undefined,
           avatarUrl: avatarUrl.trim() || null,
           // Omitted rather than sent empty when the field is blank. An absent
@@ -4267,6 +4291,10 @@ export function SettingsModal({
             )}
 
             {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+
+            {section === "help" && (
+              <HelpSection onOpenFeedback={() => setSection("feedback")} />
+            )}
 
             {section === "moderation" &&
               (canModerateInstance ? (

@@ -170,6 +170,7 @@ describe("live HLS egress", () => {
       lowLatency: { available: false },
       cameraHeight: 480,
       llSegmentCadenceDecay: false,
+      fastStart: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -607,8 +608,10 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        newcomerExperience: false,
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
+        fastStart: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -618,8 +621,10 @@ describe("live HLS egress", () => {
         micArchive: false,
         voiceTrack: false,
         lowLatency: { available: false },
+        newcomerExperience: false,
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
+        fastStart: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -631,6 +636,7 @@ describe("live HLS egress", () => {
         lowLatency: { available: false },
         cameraHeight: 480,
         llSegmentCadenceDecay: false,
+        fastStart: false,
       });
     });
 
@@ -679,6 +685,19 @@ describe("live HLS egress", () => {
       delete process.env.LIVE_HLS_LL;
       delete process.env.LIVE_HLS_LL_ALLOWLIST;
       delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    });
+
+    it("fastStart follows PARTY_FAST_START, off by default, and is answered per server", async () => {
+      enableHls();
+      expect(liveHlsConfig().fastStart).toBe(false);
+      expect((await liveHlsConfigForServer(SERVER)).fastStart).toBe(false);
+      process.env.PARTY_FAST_START = "true";
+      try {
+        expect(liveHlsConfig().fastStart).toBe(true);
+        expect((await liveHlsConfigForServer(SERVER)).fastStart).toBe(true);
+      } finally {
+        delete process.env.PARTY_FAST_START;
+      }
     });
 
     it("llSegmentCadenceDecay follows LIVE_HLS_LL_SEGMENT_CADENCE_DECAY, off by default, same on every server", async () => {

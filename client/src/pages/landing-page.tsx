@@ -28,10 +28,52 @@ import {
 } from "@/components/marketing/product-frames";
 import { Seo } from "@/components/marketing/seo";
 import { WhereWeRun } from "@/components/marketing/where-we-run";
+import { useCommunitiesEnabled } from "@/hooks/use-communities-enabled";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { useScrollToHash } from "@/hooks/use-scroll-to-hash";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+/**
+ * Whether the hero should fetch and play its painting loop (585 KB) on top of
+ * the still that already stands in for it. Not on a phone-sized viewport, not
+ * on a touch device, not when the visitor asked to save data, and not on a
+ * connection that reports 3G or worse: for all of those the loop is bytes
+ * spent on a backdrop that sits under a heavy scrim anyway. The still stays.
+ * Read once at mount; nothing here needs to react to a resize.
+ */
+function heroVideoAllowed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.matchMedia("(max-width: 767px), (pointer: coarse)").matches) {
+      return false;
+    }
+    const connection = (
+      navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string };
+      }
+    ).connection;
+    if (connection?.saveData) return false;
+    if (connection?.effectiveType && /^(slow-2g|2g|3g)$/.test(connection.effectiveType)) {
+      return false;
+    }
+  } catch {
+    // No matchMedia or a locked-down navigator: take the still.
+    return false;
+  }
+  return true;
+}
+
+/** Two widths of the same painting, so a phone does not pull the 1536 px file. */
+const HERO_SRCSET =
+  "/images/hero-background-768.jpg 768w, /images/hero-background.jpg 1536w";
+/**
+ * The backdrop sits under a black scrim at 45 to 60 percent, so a phone gets
+ * the small file whatever its pixel density: `250px` makes even a 3x screen
+ * ask for 750 px, which the 768 px file covers.
+ */
+const HERO_SIZES = "(max-width: 767px) 250px, 100vw";
 
 function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
@@ -44,7 +86,7 @@ function stagger(i: number): CSSProperties {
  */
 const PROOF: { key: MessageKey; href?: string; external?: boolean }[] = [
   { key: "landing.proof.openSource", href: SOURCE_REPO_URL, external: true },
-  { key: "landing.proof.watchParty", href: "/#voice" },
+  { key: "landing.proof.watchParty", href: "/watch-party" },
   { key: "landing.proof.region", href: "/#where" },
   { key: "landing.proof.platforms", href: "/download" },
   { key: "landing.proof.languages" },
@@ -95,6 +137,12 @@ const PILLARS: {
   body: MessageKey;
   points: MessageKey[];
   frame: ReactNode;
+  /**
+   * One honest line under the points, with a link to where the detail lives.
+   * Used where a headline claim has conditions a first-time visitor would
+   * otherwise find out the hard way (sound on a share, watch party access).
+   */
+  note?: { text: MessageKey; link: MessageKey; to: string };
 }[] = [
   {
     id: "voice",
@@ -102,6 +150,11 @@ const PILLARS: {
     body: "landing.voice.body",
     points: ["landing.voice.point1", "landing.voice.point2", "landing.voice.point3"],
     frame: <VoiceFrame />,
+    note: {
+      text: "landing.voice.note",
+      link: "landing.voice.noteLink",
+      to: "/watch-party",
+    },
   },
   {
     id: "screen",
@@ -109,6 +162,11 @@ const PILLARS: {
     body: "landing.screen.body",
     points: ["landing.screen.point1", "landing.screen.point2", "landing.screen.point3"],
     frame: <ScreenFrame />,
+    note: {
+      text: "landing.screen.note",
+      link: "landing.screen.noteLink",
+      to: "/blog/som-na-tela",
+    },
   },
   {
     id: "import",
@@ -177,7 +235,15 @@ const COMMUNITY_POINTS = [
  * two copies together in this order, so a question added here without its
  * edge twin fails the suite rather than silently drifting.
  */
-export const LANDING_FAQ_IDS = ["safe", "free", "install", "capacity", "import", "data"] as const;
+export const LANDING_FAQ_IDS = [
+  "safe",
+  "free",
+  "signin",
+  "install",
+  "capacity",
+  "import",
+  "data",
+] as const;
 
 const SECTION = "scroll-mt-20 px-5 py-20 sm:px-8 sm:py-28";
 const H2 = "font-display text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl";
@@ -187,9 +253,13 @@ export function LandingPage() {
   const { t, locale } = useTranslation();
   const reducedMotion = usePrefersReducedMotion();
   const [heroPlaying, setHeroPlaying] = useState(false);
+  const [videoAllowed] = useState(heroVideoAllowed);
+  const communitiesEnabled = useCommunitiesEnabled();
   const [overHero, setOverHero] = useState(true);
   const heroRef = useRef<HTMLElement>(null);
   const heroVideo = useRef<HTMLVideoElement>(null);
+  // `/#features` from the header of any other public page.
+  useScrollToHash();
 
   // `autoplay` alone is not enough: a tab that mounts in the background leaves
   // the element idle and Chrome does not revisit that on its own. Ask directly,
@@ -206,7 +276,7 @@ export function LandingPage() {
     start();
     document.addEventListener("visibilitychange", start);
     return () => document.removeEventListener("visibilitychange", start);
-  }, [reducedMotion]);
+  }, [reducedMotion, videoAllowed]);
 
   useEffect(() => {
     const el = heroRef.current;
@@ -227,10 +297,28 @@ export function LandingPage() {
         path="/"
       />
 
+      {/* First Tab stop: jumps over the header's links, language picker and
+          sign-in buttons. Hidden until it has focus. It moves focus itself
+          rather than leaning on the hash, because the router owns the URL and
+          a native #main jump would add a history entry for nothing. */}
+      <a
+        href="#main"
+        onClick={(event) => {
+          event.preventDefault();
+          const main = document.getElementById("main");
+          main?.focus({ preventScroll: true });
+          main?.scrollIntoView({ block: "start" });
+        }}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-paper focus:px-5 focus:py-3 focus:text-sm focus:font-semibold focus:text-ink focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-signal"
+      >
+        {t("nav.skipToContent")}
+      </a>
+
       <div className="sticky top-0 z-30">
         <MarketingNav variant={overHero ? "hero" : "solid"} />
       </div>
 
+      <main id="main" tabIndex={-1} className="outline-none">
       {/* Hero. The painting stays as the backdrop, but the product now sits in
           front of it: a real screenshot of the app, so a visitor knows what
           it looks like before they read a word. The scrim is heavier than
@@ -239,12 +327,14 @@ export function LandingPage() {
         <div className="hero-parallax pointer-events-none absolute inset-0" aria-hidden>
           <img
             src="/images/hero-background.jpg"
+            srcSet={HERO_SRCSET}
+            sizes={HERO_SIZES}
             alt=""
             className="absolute inset-0 h-full w-full object-cover object-center"
             fetchPriority="high"
             decoding="async"
           />
-          {!reducedMotion && (
+          {!reducedMotion && videoAllowed && (
             <video
               ref={heroVideo}
               src="/images/hero-background.mp4"
@@ -256,7 +346,7 @@ export function LandingPage() {
               muted
               loop
               playsInline
-              preload="auto"
+              preload="metadata"
               onPlaying={() => setHeroPlaying(true)}
             />
           )}
@@ -292,7 +382,7 @@ export function LandingPage() {
           </div>
 
           <p className="animate-rise mt-4 max-w-md text-sm text-white/65" style={stagger(4)}>
-            {t("landing.hero.hint")}
+            {t("landing.hero.hint")} {t("landing.hero.providers")}
           </p>
           <HeroDownload className="animate-rise mt-4" style={stagger(5)} />
 
@@ -303,11 +393,18 @@ export function LandingPage() {
 
         <ul className="relative z-10 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-5 pb-10 sm:px-8">
           {PROOF.map((item, i) => {
+            // `min-h-11` on a touch screen: at 11 px these are 14 px tall, far
+            // under a thumb. The row keeps its look on a pointer.
             const cls =
-              "text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70";
+              "inline-flex items-center text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70 [@media(pointer:coarse)]:min-h-11";
+            const internal = item.href?.startsWith("/") && !item.href.startsWith("/#");
             return (
               <li key={item.key} className="animate-rise" style={stagger(7 + i)}>
-                {item.href ? (
+                {item.href && internal ? (
+                  <Link to={item.href} className={cls}>
+                    {t(item.key)}
+                  </Link>
+                ) : item.href ? (
                   <a
                     href={item.href}
                     {...(item.external ? { target: "_blank", rel: "noopener" } : {})}
@@ -356,7 +453,7 @@ export function LandingPage() {
                 <h3 className="mt-5 font-display text-xl font-bold">{t(card.title)}</h3>
                 <p className="mt-2 text-paper-muted">{t(card.body)}</p>
                 {card.hint && (
-                  <p className="mt-2 text-sm text-paper-muted/70">{t(card.hint)}</p>
+                  <p className="mt-2 text-sm text-paper-muted">{t(card.hint)}</p>
                 )}
                 {card.link && (
                   <p className="mt-auto pt-5">
@@ -423,6 +520,17 @@ export function LandingPage() {
                       </li>
                     ))}
                   </ul>
+                  {pillar.note && (
+                    <p className="mt-5 text-sm text-paper-muted">
+                      {t(pillar.note.text)}{" "}
+                      <Link
+                        to={pillar.note.to}
+                        className="text-signal underline decoration-signal/40 underline-offset-4 hover:decoration-signal"
+                      >
+                        {t(pillar.note.link)}
+                      </Link>
+                    </p>
+                  )}
                 </div>
                 <div className={cn("lg:col-span-7", i % 2 === 1 && "lg:order-1")}>
                   {pillar.frame}
@@ -466,7 +574,11 @@ export function LandingPage() {
 
       {/* Communities. The directory itself sits behind sign-in and hides rooms
           the viewer is banned from, so this band is the only public statement
-          that it exists. */}
+          that it exists. It is shown only while the SERVER says the directory
+          is on (`useCommunitiesEnabled`); a deployment without it must not
+          advertise it, and the header and footer links to this anchor follow
+          the same answer. */}
+      {communitiesEnabled && (
       <section
         id="communities"
         className={cn(SECTION, "border-b border-ink-4/40 bg-signal/[0.04]")}
@@ -491,6 +603,7 @@ export function LandingPage() {
           </div>
         </div>
       </section>
+      )}
 
       {/* Where it runs: the three voice boxes, the edge, the numbers we
           measured, and a live reading of the boxes. The page's answer to "is
@@ -559,6 +672,8 @@ export function LandingPage() {
       <section className="relative overflow-hidden px-5 py-24 text-center sm:px-8 sm:py-32">
         <img
           src="/images/hero-background.jpg"
+          srcSet={HERO_SRCSET}
+          sizes={HERO_SIZES}
           alt=""
           aria-hidden
           loading="lazy"
@@ -592,6 +707,8 @@ export function LandingPage() {
           </p>
         </div>
       </section>
+
+      </main>
 
       <MarketingFooter />
     </div>

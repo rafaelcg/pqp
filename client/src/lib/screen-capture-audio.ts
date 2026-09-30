@@ -66,6 +66,8 @@ import {
   cursorConstraintFor,
   type CursorCaptureConstraint,
 } from "./screen-capture-cursor";
+import type { Platform } from "./downloads";
+import type { MessageKey } from "@/lib/i18n";
 
 /**
  * The display-capture options the DOM lib does not know about yet.
@@ -462,6 +464,32 @@ export function osCanExcludeCallFromUa(
   return false;
 }
 
+/**
+ * True only when UA-CH told us, in as many words, that this is an OLD
+ * Windows: platform is `"Windows"` and `platformVersion` parses to a major
+ * below 13 without reaching the Windows 11 NT build (>= 22000) exception.
+ *
+ * Deliberately NOT `!osCanExcludeCallFromUa(...)`. That helper answers
+ * `false` for three different situations -- not Windows, no usable
+ * `platformVersion` (a browser with no `userAgentData` at all, or one whose
+ * probe merely threw), and a confirmed old Windows -- and a notice that says
+ * "neste Windows" over any of the first two is asserting a fact the browser
+ * never actually gave us. This is the one case where it did.
+ */
+export function confirmedOldWindowsFromUa(
+  platform: string | undefined,
+  platformVersion: string | undefined,
+): boolean {
+  if (platform !== "Windows" || !platformVersion) {
+    return false;
+  }
+  const major = Number.parseInt(platformVersion.split(".")[0] ?? "", 10);
+  if (!Number.isFinite(major)) {
+    return false;
+  }
+  return !osCanExcludeCallFromUa(platform, platformVersion);
+}
+
 type NavigatorWithUaData = Navigator & {
   userAgentData?: {
     platform?: string;
@@ -507,6 +535,43 @@ export async function ensureOsCanExcludeCallAudio(): Promise<boolean> {
   }
   osCanExcludeCallAudioCache = probed;
   return probed;
+}
+
+let confirmedOldWindowsCache: boolean | undefined;
+
+/**
+ * Warms `confirmedOldWindowsFromUa`, kept as its own probe and its own cache
+ * rather than folded into `ensureOsCanExcludeCallAudio` above: the two
+ * answer different questions. That one is "can I offer computer sound",
+ * which is `false` for macOS, Linux, a browser with no `userAgentData`
+ * (Safari, Firefox) and old Windows alike. This one is "do I actually KNOW
+ * this is old Windows", which is `false` for everything except the last of
+ * those -- the distinction `systemAudioStrippedNoticeKey` needs so it never
+ * tells somebody "Windows 10" on a platform we could not identify.
+ *
+ * Same non-caching-on-failure shape as `ensureOsCanExcludeCallAudio`: a
+ * thrown probe is not "not old Windows", so it is not remembered as one.
+ */
+export async function ensureConfirmedOldWindowsFromUa(): Promise<boolean> {
+  if (confirmedOldWindowsCache !== undefined) {
+    return confirmedOldWindowsCache;
+  }
+  try {
+    const ua = (navigator as NavigatorWithUaData).userAgentData;
+    if (!ua || typeof ua.getHighEntropyValues !== "function") {
+      return false;
+    }
+    const values = await ua.getHighEntropyValues(["platformVersion"]);
+    const confirmed = confirmedOldWindowsFromUa(ua.platform, values.platformVersion);
+    confirmedOldWindowsCache = confirmed;
+    return confirmed;
+  } catch {
+    return false;
+  }
+}
+
+export function resetConfirmedOldWindowsForTests(): void {
+  confirmedOldWindowsCache = undefined;
 }
 
 /**
@@ -913,4 +978,71 @@ export function shareStreamHasAudio(
   audioTracks: readonly { readyState?: string }[],
 ): boolean {
   return audioTracks.some((track) => track.readyState !== "ended");
+}
+
+/**
+ * Which `voice.notice.systemAudioStripped*` line explains a track this
+ * machine just stripped for carrying the call.
+ *
+ * `voice.notice.systemAudioStripped` says WHY (this OS cannot exclude the
+ * call) but not HOW to get sound at all. A Windows BROWSER that cannot
+ * exclude is the one case with a real answer, because a Chrome TAB share is a
+ * completely different capture path: it carries that tab's own sound and
+ * `systemAudio` never enters it. This is the live case the quick win in
+ * `docs/plans/DESKTOP_SHARE_AUDIO_PER_APP.md` exists for (27 Sep 2026,
+ * `cap1tao`, "está compartilhando (sem som)" with no way forward).
+ *
+ * SCOPED TO THE BROWSER on purpose. The desktop app's own picker now
+ * explains the same thing before the share even starts
+ * (`electron/picker/picker.js`, `pickerAudioState`), so a shell reaching this
+ * strip path would be repeating a line the person already read once. Every
+ * other platform this sees (macOS, Linux, an old shell) has no better answer
+ * to give than the original notice, so it keeps that one.
+ *
+ * `confirmedOldWindows` IS THE WHOLE POINT of the `Win10` vs plain wording
+ * split, and it is not the same thing as `osCanExcludeCallAudio === false`.
+ * That flag is false for every reason this OS might not be able to exclude
+ * the call -- an old Windows build, a browser with no `userAgentData` at all
+ * (Safari, Firefox), or a UA-CH probe that merely threw -- and the first
+ * cut of this notice said "Windows 10" for all three, which is an assertion
+ * the browser never actually made for the last two. `confirmedOldWindows`
+ * (`confirmedOldWindowsFromUa`) is true only when UA-CH said so in as many
+ * words, and the copy is worded to match: "neste Windows" when confirmed,
+ * a platform-neutral "no seu sistema" otherwise. Both still give the same
+ * Chrome-tab answer, because that advice is true either way.
+ *
+ * `desktopAppAvailable` is the native per-app capture add-on
+ * (`desktop_share_audio_native`), which is still unshipped work, not a live
+ * feature — see the plan doc's "native audio add-on" section. TODO(desktop
+ * share audio native): once that flag exists and is exposed to the client
+ * through a config read (the pattern `docs/FEATURE_FLAGS.md` describes for a
+ * flag the client needs to know), pass its live value here instead of the
+ * `false` every caller uses today, so a Windows browser is pointed at the
+ * desktop app instead of only a Chrome tab.
+ */
+export function systemAudioStrippedNoticeKey(input: {
+  /** True inside the Electron shell. See the scoping note above. */
+  isDesktopShell: boolean;
+  platform: Platform;
+  /** False whenever this OS could not (or is not known to) exclude the call. */
+  osCanExcludeCallAudio: boolean;
+  /** `confirmedOldWindowsFromUa` -- see the doc comment above. */
+  confirmedOldWindows: boolean;
+  desktopAppAvailable?: boolean;
+}): MessageKey {
+  const isWindowsBrowserStrip =
+    !input.isDesktopShell &&
+    input.platform === "windows" &&
+    !input.osCanExcludeCallAudio;
+  if (!isWindowsBrowserStrip) {
+    return "voice.notice.systemAudioStripped";
+  }
+  if (input.confirmedOldWindows) {
+    return input.desktopAppAvailable
+      ? "voice.notice.systemAudioStrippedWin10App"
+      : "voice.notice.systemAudioStrippedWin10Tab";
+  }
+  return input.desktopAppAvailable
+    ? "voice.notice.systemAudioStrippedGenericApp"
+    : "voice.notice.systemAudioStrippedGenericTab";
 }

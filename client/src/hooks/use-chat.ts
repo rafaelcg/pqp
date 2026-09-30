@@ -422,6 +422,22 @@ export function createChatController(
    * closing the gap the forward cursor still has to walk.
    */
   let newestLoadedId: string | null = null;
+  /**
+   * Bumped whenever a page replaces the window. A page that was fetched to
+   * extend the old window is about a different stretch of history once this
+   * moves, so it is dropped rather than stitched onto the new one. Sending
+   * from a jump made that race routine: the send goes back to the present
+   * while a page forward is often still in flight.
+   */
+  let windowGeneration = 0;
+  /**
+   * Bumped by every jump, every return to the tail and every send. A page
+   * fetched around a message is dropped when this moved while it was out:
+   * the reader has since asked for something newer (another message, the
+   * present, their own send), and the late page would replace the window
+   * they are now in with the one they left.
+   */
+  let jumpSeq = 0;
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
   /**
@@ -885,6 +901,7 @@ export function createChatController(
       revokeLocalPreviews(message);
     }
     messages = [];
+    windowGeneration += 1;
     presence = [];
     // The sequence belongs to the channel, not to the socket, so switching
     // channels must forget it. Keeping it would make the new channel's
@@ -925,8 +942,27 @@ export function createChatController(
     // a jump both replace the window outright, and hanging live messages off
     // the end of an older one would show them an hour early.
     const carryLive = !hasNewer && !newerAvailable;
+    // One exception to "only when both are the tail": the reader's own send
+    // from a jump into history. Sending takes them back to the present
+    // (`message-list.tsx`), and when the broadcast confirms the row before the
+    // tail page lands, it is no longer optimistic and would be dropped. A row
+    // carrying a nonce was sent from this client (a fetched page never has
+    // one). The nonce stays on the row after it is confirmed, so it alone
+    // does not say "racing this page". A send older than the page's first row
+    // sits outside the page, and carrying it would hang it above the page with
+    // a gap between, so it goes. A send inside the page's span or after it and
+    // missing from the page was not committed when the page was read: the
+    // server stamps `createdAt` when its transaction starts, so a message that
+    // committed sooner can be in the page with a later time than the send.
+    const pageStart = next.length > 0 ? toStoredMessage(next[0]) : null;
+    const racedThePage = (message: ChatMessage) =>
+      !newerAvailable &&
+      message.nonce !== undefined &&
+      (pageStart === null || byPosition(message, pageStart) > 0);
     const inFlight = messages.filter(
-      (message) => !stored.has(message.id) && (carryLive || isOptimistic(message)),
+      (message) =>
+        !stored.has(message.id) &&
+        (carryLive || isOptimistic(message) || racedThePage(message)),
     );
 
     // A reconnect resync (`transport.onReady` in App.tsx) refetches only the
@@ -945,6 +981,7 @@ export function createChatController(
       ...inFlight.filter((message) => !isOptimistic(message)),
     ].sort(byPosition);
     messages = [...settled, ...inFlight.filter(isOptimistic)];
+    windowGeneration += 1;
     hasMore = moreAvailable;
     hasNewer = newerAvailable;
     newestLoadedId = next[next.length - 1]?.id ?? null;
@@ -1138,13 +1175,14 @@ export function createChatController(
         return 0;
       }
       loadingOlder = true;
+      const generation = windowGeneration;
       emit();
       try {
         const page = await fetchHistory(target, {
           before: oldest.id,
           limit: MESSAGE_PAGE_SIZE,
         });
-        if (channelId !== target) {
+        if (channelId !== target || windowGeneration !== generation) {
           return 0;
         }
         const known = new Set(messages.map((message) => message.id));
@@ -1175,13 +1213,14 @@ export function createChatController(
         return 0;
       }
       loadingNewer = true;
+      const generation = windowGeneration;
       emit();
       try {
         const page = await fetchHistory(target, {
           after: newestLoadedId,
           limit: MESSAGE_PAGE_SIZE,
         });
-        if (channelId !== target) {
+        if (channelId !== target || windowGeneration !== generation) {
           return 0;
         }
         const known = new Set(messages.map((message) => message.id));
@@ -1216,6 +1255,8 @@ export function createChatController(
      * channel this window is not showing.
      */
     async jumpTo(messageId: string): Promise<boolean> {
+      jumpSeq += 1;
+      const seq = jumpSeq;
       const target = channelId;
       if (!target) {
         return false;
@@ -1228,7 +1269,7 @@ export function createChatController(
           around: messageId,
           limit: MESSAGE_PAGE_SIZE,
         });
-        if (channelId !== target) {
+        if (channelId !== target || jumpSeq !== seq) {
           return false;
         }
         applyPage(page.messages, page.hasMore, page.hasNewer);
@@ -1240,6 +1281,7 @@ export function createChatController(
 
     /** Leave a history window behind and reload the newest page. */
     async resetToTail(): Promise<boolean> {
+      jumpSeq += 1;
       const target = channelId;
       if (!target) {
         return false;
@@ -1321,6 +1363,8 @@ export function createChatController(
       if (!clamped && attachments.length === 0) {
         return;
       }
+      // The send is where the reader is going now, not a page still out.
+      jumpSeq += 1;
       const nonce = createNonce();
       /**
        * The local files, so an image is on screen the instant Enter is pressed
@@ -1697,11 +1741,20 @@ export function createChatController(
               // later, unrelated update its stable key back to the id — the
               // swap itself is the one every send goes through.
               incoming.nonce = message.nonce;
-              messages = [
-                ...messages.slice(0, index),
-                incoming,
-                ...messages.slice(index + 1),
-              ];
+              // A page fetched while the send was in flight (the jump back to
+              // the present that sending from history triggers) can already
+              // hold the stored row. Swapping the bubble in as well would show
+              // it twice, so the bubble just goes.
+              const alreadyStored = messages.some(
+                (entry, at) => at !== index && entry.id === incoming.id,
+              );
+              messages = alreadyStored
+                ? [...messages.slice(0, index), ...messages.slice(index + 1)]
+                : [
+                    ...messages.slice(0, index),
+                    incoming,
+                    ...messages.slice(index + 1),
+                  ];
               emit();
               return;
             }

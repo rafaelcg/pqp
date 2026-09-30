@@ -187,3 +187,15 @@ jobs:
           done
           echo "::error::Staging API never reported the deployed commit. It is probably still serving the previous build."
           exit 1
+
+      # When the deploy or its verification fails, print what Fly itself says:
+      # a machine that crashes on boot (a bad secret, an unreachable
+      # database) only shows up as "no answer" in the verify step above.
+      - name: Fly diagnostics on failure
+        if: failure()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+        run: |
+          flyctl status -a pqp-api-staging || true
+          flyctl machine list -a pqp-api-staging || true
+          flyctl logs -a pqp-api-staging --no-tail 2>&1 | tail -n 200 || true

@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
-import { messageRoutePath } from "@/lib/app-route";
+import { messageLinkState, messageRoutePath } from "@/lib/app-route";
 import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { appendUniqueResults, clampSelection } from "./search-results";
@@ -132,7 +132,9 @@ export function SearchDialog({
 
   const openResult = useCallback(
     (result: MessageSearchResult) => {
-      navigate(messageRoutePath(serverId, result.channelId, result.messageId));
+      navigate(messageRoutePath(serverId, result.channelId, result.messageId), {
+        state: messageLinkState(),
+      });
       onNavigate?.();
       onClose();
     },

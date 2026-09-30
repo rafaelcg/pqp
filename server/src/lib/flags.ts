@@ -222,6 +222,15 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/community-home/config (enabled)",
   },
+  party_newcomer_experience: {
+    description:
+      "Festa para quem chegou agora: chat garantido no celular, faixa que explica a sala, sem convite de app.",
+    env: "PARTY_NEWCOMER_EXPERIENCE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/live-hls/config?serverId= (newcomerExperience)",
+  },
   community_home_vip: {
     description: "Posts VIP do Baú (só vale com o Baú ligado).",
     env: "COMMUNITY_HOME_VIP_ENABLED",
@@ -240,6 +249,15 @@ export const FEATURE_FLAGS = {
     // server the call is in; a DM call asks with none and gets the global.
     perServer: true,
     clientVia: "GET /api/share/config (desktopShareAudioNative)",
+  },
+  party_fast_start: {
+    description:
+      "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
+    env: "PARTY_FAST_START",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/live-hls/config (fastStart)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

@@ -31,6 +31,12 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  applyCommunityHomeRead,
+  applyCommunityHomeSwitch,
+  mergeServerUpdate,
+  type CommunityHomeSwitchState,
+} from "./switch-version";
+export {
   COMMUNITY_HOME_POST_TOAST_MS,
   shouldOfferCommunityHomePostToast,
 } from "./post-toast";
@@ -46,12 +52,14 @@ export {
 export {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeEmbedUrl,
+  createPickSequence,
   formatHomeBytes,
   homeMediaKindFromFile,
   instagramCanonicalUrl,
   instagramEmbedSrc,
   isHomeImageFile,
   isHomeVideoFile,
+  isRealHomeImage,
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,

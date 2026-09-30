@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy, Quote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -216,7 +217,10 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
    * survive — the same lesson `signedOutRedirectPath` learned about invites, in
    * the one shape a path cannot carry. See `lib/handle-intent.ts`.
    */
-  const rememberIntent = () => stashAddIntent(intentStorage(), profile.handle);
+  const rememberIntent = () => {
+    stashAddIntent(intentStorage(), profile.handle);
+    noteSignupCta("profile", "");
+  };
   const appHref = `/app?add=${encodeURIComponent(profile.handle)}`;
 
   /**
@@ -286,7 +290,11 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
               fallbackClassName="bg-signal text-4xl text-ink"
             />
             <div className="mt-3 min-w-0 flex-1 sm:mt-0 sm:pb-1">
-              <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+              {/* `anywhere`, not `break-words`: this h1 is centred in a column
+                  flex on a phone, so it is sized by its min-content, and only
+                  `anywhere` lets a 60-letter word shrink that. Otherwise the
+                  name overflows the card on BOTH sides and is clipped. */}
+              <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                 {profile.displayName}
               </h1>
               <p className="mt-1 font-mono text-sm text-signal">

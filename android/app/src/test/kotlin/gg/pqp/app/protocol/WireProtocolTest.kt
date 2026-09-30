@@ -228,6 +228,10 @@ class WireProtocolTest {
         // Permissions are enforced server-side and this client draws no
         // manager controls, so a version bump has nothing to invalidate.
         "permissions-update" to "no permission-gated controls on the phone to refresh",
+        // Tells the account's OTHER tabs and devices which status it just
+        // chose. The phone draws no status picker or own-status pip yet, so
+        // there is nothing on it that could go stale.
+        "own-status" to "no status picker on the phone to keep in sync",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
         // The party's own CHAT frame, which the phone has no panel to put
@@ -268,6 +272,12 @@ class WireProtocolTest {
         // yet — same follow-up as the warning itself, and no correctness
         // gap: the phone was never showing a stale countdown to begin with.
         "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
+        // Kicked, banned, or the server deleted, told to the people it
+        // happened to. The web drops the server live. The phone re-reads its
+        // server list every time the list screen opens, and every read or
+        // send in the lost server is already refused by the API, so nothing
+        // leaks; the live drop and its one-line reason are a follow-up.
+        "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
     )
 
     /**

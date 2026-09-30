@@ -1841,6 +1841,13 @@ export interface LiveHlsConfig {
    */
   lowLatency: { available: boolean };
   /**
+   * `party_newcomer_experience` for THIS server (`?serverId=` only; absent on
+   * the deployment-wide answer, which reads as off). Client-side presentation
+   * only: a phone chat floor, a one-line strip for a new account, no app
+   * invite while the party is live.
+   */
+  newcomerExperience?: boolean;
+  /**
    * The tallest camera a watch-party PRESENTER may publish while their share
    * is on air: 480 while `LIVE_HLS_CAMERA_480` is on (the default), 360 when
    * it is switched off. The browser reads it to size the camera cap, so the
@@ -1860,6 +1867,14 @@ export interface LiveHlsConfig {
    * `hls-remux.ts` and `LlLatencyGovernor.decayFloorToRecentCadence`.
    */
   llSegmentCadenceDecay: boolean;
+  /**
+   * `party_fast_start` (runtime flag, off by default, per server): whether a
+   * VIEWER's browser may use its faster first-frame path (preload the player
+   * chunk, hold the heavy waiting film back, say what it is waiting for).
+   * Purely a client behaviour switch: nothing about the stream itself moves.
+   * Absent on an older API, which reads as off.
+   */
+  fastStart: boolean;
 }
 
 /**
@@ -1878,6 +1893,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     lowLatency: { available: liveHlsLLAvailable(null) },
     cameraHeight: liveHlsCamera480Enabled() ? 480 : 360,
     llSegmentCadenceDecay: liveHlsLLSegmentCadenceDecayEnabled(),
+    fastStart: isEnabled("party_fast_start"),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -1911,6 +1927,9 @@ export async function liveHlsConfigForServer(
     // asked to publish a track for it.
     micArchive: enabled && micArchiveEnabled(),
     voiceTrack: enabled && liveHlsVoiceTrackEnabled(),
+    // Per-server override first, so the operator can turn it on for one
+    // community (`feature_flag_overrides`) ahead of everybody else.
+    fastStart: isEnabled("party_fast_start", { serverId }),
     // Independent of `enabled`/`allowlisted` above (those gate the egress
     // itself, `LIVE_HLS_ENABLED` / `live_hls_enabled`): LL-HLS has its own
     // flag and its own allowlist, so a server with ordinary HLS on can still
@@ -1922,6 +1941,11 @@ export async function liveHlsConfigForServer(
         await liveHlsLLServerOverride(serverId),
       ),
     },
+    // The `party_newcomer_experience` runtime flag (`lib/flags.ts`), per
+    // server. Independent of `enabled`: it changes how a room looks to a
+    // newcomer, not whether a stream exists. Only a `?serverId=` answer
+    // carries it, so the deployment-wide answer never turns it on.
+    newcomerExperience: isEnabled("party_newcomer_experience", { serverId }),
   };
 }
 

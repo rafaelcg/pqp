@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { ensureServer, leaveVoiceIfConnected, openApp } from "./fixtures";
+import {
+  ensureServer,
+  leaveVoiceIfConnected,
+  openApp,
+  unreachableStageControls,
+} from "./fixtures";
 
 /**
  * Turning a camera on in a server voice channel must grow the shared stage,
@@ -157,4 +162,78 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     timeout: 10_000,
   });
   await expect(page.getByTestId("call-stage")).toHaveCount(0);
+});
+
+test("a phone-width stage keeps every call control on screen", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+  await page.getByRole("button", { name: /lobby/i }).first().dblclick();
+  await expect(page.getByText("Voice connected")).toBeVisible({
+    timeout: 20_000,
+  });
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera on", exact: true })
+    .click();
+  await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
+
+  // The stage's pill was one unbreakable row of ~33rem, centred in a stage
+  // of ~20rem on a 390 phone: mute and raise hand sat under the server rail,
+  // hang-up past the right edge. 320 is the narrowest phone still sold.
+  const bar = page.getByTestId("call-controls-bar");
+  // What the stage hands the strip and the self-preview for the pill's extra
+  // lines, beside what those lines actually measure: the pill's height past
+  // its one-line height on this same stage. The stage measures the row the
+  // pill sits in, so this is what catches a row that counts one line as
+  // anything but the pill's own padded line.
+  const rowExtra = () =>
+    page.evaluate(() => {
+      const stage = document.querySelector<HTMLElement>(
+        '[style*="--call-row-extra"]',
+      )!;
+      const pill = document
+        .querySelector(
+          '[data-testid="call-controls-bar"] button[aria-label="Leave"]',
+        )!
+        .closest<HTMLElement>('[class*="rounded-[1.625rem]"]')!;
+      return {
+        handed: Number.parseFloat(
+          stage.style.getPropertyValue("--call-row-extra"),
+        ),
+        pill: pill.offsetHeight,
+      };
+    });
+  await expect.poll(async () => (await rowExtra()).handed).toBe(0);
+  const oneLine = (await rowExtra()).pill;
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(bar.getByRole("button", { name: "Leave" })).toBeAttached();
+    await expect
+      .poll(() => unreachableStageControls(page), { timeout: 5_000 })
+      .toEqual([]);
+    await expect
+      .poll(async () => {
+        const { handed, pill } = await rowExtra();
+        return pill > oneLine && handed === pill - oneLine;
+      })
+      .toBe(true);
+  }
+  // And the wide stage still draws them on one line.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect
+    .poll(async () => {
+      const tops = await bar
+        .getByRole("button")
+        .evaluateAll((buttons) =>
+          buttons
+            .map((b) => b.getBoundingClientRect())
+            .filter((r) => r.width > 0)
+            .map((r) => Math.round(r.top)),
+        );
+      return new Set(tops).size;
+    })
+    .toBe(1);
 });

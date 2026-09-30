@@ -761,6 +761,20 @@ export interface LiveHlsConfig {
    * an older server, which reads as off -- exactly today's behaviour.
    */
   llSegmentCadenceDecay?: boolean;
+  /**
+   * The runtime flag `party_newcomer_experience` for THIS server (only a
+   * `?serverId=` answer carries it): a phone chat floor and no server rail for
+   * a viewer of a live party, a one-line "what is this" strip and no app
+   * invite for a new account. Absent on an older API or the deployment-wide
+   * answer, which reads as off. See `lib/party-newcomer.ts`.
+   */
+  newcomerExperience?: boolean;
+  /**
+   * `party_fast_start` for this server (runtime flag, per server, off by
+   * default): whether the viewer's browser uses its faster first-frame path.
+   * Absent on an older API, which reads as off. See `lib/party-fast-start.ts`.
+   */
+  fastStart?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
@@ -1214,14 +1228,27 @@ export const moveChannel = (
     index,
   });
 
-export const markChannelRead = (channelId: string, lastReadAt?: string) =>
+/**
+ * With no cursor, reads the channel up to the server's NOW(). With one, sets
+ * it there (Mark unread), or with `forwardOnly` only moves it forward (the
+ * live read ack, which must never undo a newer read).
+ */
+export const markChannelRead = (
+  channelId: string,
+  lastReadAt?: string,
+  options: { forwardOnly?: boolean } = {},
+) =>
   post<{
     ok: boolean;
     previousLastReadAt?: string | null;
     lastReadAt?: string;
   }>(
     `/api/channels/${channelId}/read`,
-    lastReadAt ? { lastReadAt } : undefined,
+    lastReadAt
+      ? options.forwardOnly
+        ? { lastReadAt, forwardOnly: true }
+        : { lastReadAt }
+      : undefined,
   );
 
 // ----------------------------------------------------------------- messages

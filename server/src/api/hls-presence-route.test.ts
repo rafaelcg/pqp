@@ -135,6 +135,19 @@ describeDb("POST /api/live-hls/presence", () => {
     });
   });
 
+  it("accepts the coarse device and foreground / background time, and hands them to the counter", async () => {
+    const sessionToken = tokenFor(viewer.id);
+    const result = await post(
+      "/api/live-hls/presence",
+      { sessionToken, device: "phone", visibleMs: 25_000, hiddenMs: 5_000 },
+      viewer,
+    );
+    expect(result.status).toBe(200);
+    // The route's job ends at the map; the flush that stores it is pinned on
+    // a real broadcast in `voice/hls-viewer-counts.test.ts`.
+    expect(hlsViewerCounter.stats().viewersHere).toBe(1);
+  });
+
   it("refuses somebody else's token, so nobody can count anybody but themselves", async () => {
     const result = await post(
       "/api/live-hls/presence",

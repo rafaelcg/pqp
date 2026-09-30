@@ -785,6 +785,28 @@ describeDb("the operator's two levers", () => {
       }
     });
 
+    it("party_newcomer_experience reaches the live-hls config of the overridden server only", async () => {
+      const newcomer = async (query: string) =>
+        (
+          await asUser<{ newcomerExperience?: boolean }>(
+            ana,
+            "GET",
+            `/api/live-hls/config${query}`,
+          )
+        ).body.newcomerExperience;
+      expect(await newcomer(`?serverId=${serverId}`)).toBe(false);
+      const on = await asMachine("PUT", "/api/admin/flag-overrides", {
+        key: "party_newcomer_experience",
+        serverId,
+        enabled: true,
+      });
+      expect(on.status).toBe(200);
+      expect(await newcomer(`?serverId=${serverId}`)).toBe(true);
+      // No server in the question, no answer: the deployment-wide read never
+      // turns it on.
+      expect(await newcomer("")).not.toBe(true);
+    });
+
     it("refuses an unknown key, a flag with no overrides, and a server that does not exist", async () => {
       expect(
         (await asMachine("PUT", "/api/admin/flags", { key: "made_up", enabled: true })).status,

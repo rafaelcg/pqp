@@ -26,7 +26,7 @@ O outro: você marcava a caixinha de som, escolhia a tela, e simplesmente não a
 
 ## A nossa política de privacidade estava errada
 
-Ela dizia que não tinha rastreador nenhum. Isso deixou de ser verdade quando entrou o nosso contador de visitas e a tag do Google Ads, e o texto ficou pra trás. Corrigimos: o pqp.gg usa um contador de visitas sem cookie e uma tag que só conta cadastro. Não fazemos remarketing e não montamos lista de público. Quem roda o pqp no próprio servidor não herda nada disso.
+Ela dizia que não tinha rastreador nenhum. Isso deixou de ser verdade quando entrou o nosso contador de visitas e a tag do Google Ads, e o texto ficou pra trás. Corrigimos: o pqp.gg usa um contador de visitas sem cookie e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google. O Google pode usar essas visualizações pra montar públicos de remarketing. Quem roda o pqp no próprio servidor não herda nada disso.
 
 ## Tudo que mudou
 

@@ -19,7 +19,7 @@ Voice, screen share and chat for your group of friends. Open source (AGPL), Braz
 
 - Open the app: https://pqp.gg/app (creates an account)
 - iOS beta: https://pqp.gg/beta
-- Android beta: https://pqp.gg/android
+- Android (Google Play, APK also available): https://pqp.gg/android
 - Desktop: https://pqp.gg/download
 
 ## Read more

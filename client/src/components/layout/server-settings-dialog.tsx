@@ -1,4 +1,9 @@
-import type { AuditLogEntry, Server } from "@pqp/shared";
+import type {
+  AuditAction,
+  AuditLogEntry,
+  AutomodRuleKind,
+  Server,
+} from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Image as ImageIcon,
@@ -40,12 +45,12 @@ const TRANSFER_PHRASE = "TRANSFER";
 /**
  * Every action the log can carry, as a catalogue key.
  *
- * A `Record` rather than a template string built at the call site, so a new
- * `AuditAction` that nobody wrote copy for is a compile error here rather than
- * a raw `member.voice_mute` rendered to an owner. The fallback below still
- * exists for a server newer than the client during a rolling deploy.
+ * Keyed by `AuditAction`, so a new action that nobody wrote copy for is a
+ * compile error here rather than a raw `member.voice_mute` rendered to an
+ * owner. The lookup below is widened to `string` because the fallback still
+ * has to exist for a server newer than the client during a rolling deploy.
  */
-const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
+const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "member.kick": "serverSettings.audit.action.member.kick",
   "member.ban": "serverSettings.audit.action.member.ban",
   "member.unban": "serverSettings.audit.action.member.unban",
@@ -110,7 +115,42 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
     "serverSettings.audit.action.channel.voice_transport_update",
   "channel.sfu_region_update":
     "serverSettings.audit.action.channel.sfu_region_update",
+  "member.timeout": "serverSettings.audit.action.member.timeout",
+  "member.timeout_lift": "serverSettings.audit.action.member.timeout_lift",
+  "member.voice_disconnect":
+    "serverSettings.audit.action.member.voice_disconnect",
+  "member.voice_move": "serverSettings.audit.action.member.voice_move",
+  "member.voice_mute": "serverSettings.audit.action.member.voice_mute",
+  "member.voice_unmute": "serverSettings.audit.action.member.voice_unmute",
 };
+
+/**
+ * The rule kind an `automod.block` row stores as its reason. The server writes
+ * the raw kind (`keywords`), not copy, so the name comes from the same strings
+ * the AutoMod pane uses for that rule.
+ */
+const AUDIT_AUTOMOD_KIND_KEYS: Record<AutomodRuleKind, MessageKey> = {
+  keywords: "automod.keywords.title",
+  invite_links: "automod.inviteLinks.title",
+  mention_spam: "automod.mentionSpam.title",
+};
+
+/**
+ * The reason to show after the action, translated when the server stored a
+ * code instead of text. Every other action stores what a person typed.
+ */
+export function auditReasonKey(
+  entry: Pick<AuditLogEntry, "action" | "reason">,
+): MessageKey | null {
+  if (entry.action !== "automod.block" || !entry.reason) {
+    return null;
+  }
+  return (
+    (AUDIT_AUTOMOD_KIND_KEYS as Partial<Record<string, MessageKey>>)[
+      entry.reason
+    ] ?? null
+  );
+}
 
 /* ------------------------------------------------------------------ layout */
 
@@ -342,13 +382,19 @@ function AuditLogSection({ serverId }: { serverId: string }) {
       {entries.length > 0 && (
         <ul className="space-y-1.5">
           {entries.map((entry) => {
-            const key = AUDIT_ACTION_KEYS[entry.action];
+            const key = (
+              AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
+            )[entry.action];
+            const reasonKey = auditReasonKey(entry);
             return (
               <li
                 key={entry.id}
                 className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
               >
-                <p className="text-paper">
+                {/* A reason is free text and can be one unbroken run of
+                    characters, so it wraps anywhere rather than pushing the
+                    card wider than the pane. */}
+                <p className="text-paper [overflow-wrap:anywhere]">
                   <span className="font-semibold">
                     {entry.actorName ??
                       t("serverSettings.audit.departedActor")}
@@ -358,7 +404,10 @@ function AuditLogSection({ serverId }: { serverId: string }) {
                       blank would not be. */}
                   {key ? t(key) : entry.action}
                   {entry.reason && (
-                    <span className="text-paper-muted"> — {entry.reason}</span>
+                    <span className="text-paper-muted">
+                      {" "}
+                      — {reasonKey ? t(reasonKey) : entry.reason}
+                    </span>
                   )}
                 </p>
                 <p className="text-xs text-paper-muted">

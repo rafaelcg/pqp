@@ -2966,6 +2966,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_gclid TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_ref TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_landing TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_at TIMESTAMPTZ;
+-- Seconds between the sign-up modal opening and the account being ready, as
+-- the person's own browser clocked it (rounded to 5 s, capped at an hour;
+-- absent when the two ends were not in the same visit). `created_at` starts
+-- after Clerk finishes, so without this the heaviest step of the funnel is
+-- unmeasured. A duration, never a timestamp: it identifies nobody and is read
+-- only as percentiles by GET /api/admin/acquisition.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_signup_s INTEGER;
 
 -- --------------------------------------------------------------- connections
 --
@@ -3877,6 +3884,11 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+-- Bumped by every write of community_home_enabled, in the same UPDATE, so the
+-- row lock orders it: the member's open app keeps the value with the highest
+-- version and a late or duplicated community-home-update frame cannot undo a
+-- newer flip. Same idea as permissions_version.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_version INTEGER NOT NULL DEFAULT 0;
 
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
@@ -4848,3 +4860,18 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
+
+-- Who watched a party, by coarse class only. `device_class` is one of
+-- phone / tablet / desktop as the viewer's own browser judged it from screen
+-- size and pointer type (no user agent is read or stored); NULL for a client
+-- that predates it. `detail` is foreground / background milliseconds as
+-- CUMULATIVE per-process totals, `{"<instance>:<firstSeenMs>": {"v": ms, "h": ms}}`:
+-- a flush SETS its own key instead of adding to a running sum, so a retried
+-- statement (a timeout that had in fact committed) writes the same value
+-- twice and counts once, and two API machines each own a key so their beats
+-- still add up. The row is already pruned a day after the last sighting, and
+-- every reader aggregates (`hlsViewerAudience` in voice/hls-viewer-counts.ts).
+-- Additive, constant defaults, safe on a live table.
+ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS device_class TEXT
+  CHECK (device_class IN ('phone', 'tablet', 'desktop'));
+ALTER TABLE hls_session_viewers ADD COLUMN IF NOT EXISTS detail JSONB NOT NULL DEFAULT '{}'::jsonb;

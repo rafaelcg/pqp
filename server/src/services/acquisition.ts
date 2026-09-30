@@ -44,7 +44,14 @@ export async function recordAcquisition(
     orNull(input.ref),
     orNull(input.landing),
   ];
-  if (values.every((value) => value === null)) {
+  // A duration the client measured, so it is clamped rather than trusted, and
+  // rounded to 5 s here as well as there: this column is read as percentiles
+  // and finer than that is a fingerprint of nothing useful.
+  const signupSeconds =
+    typeof input.signupSeconds === "number" && Number.isFinite(input.signupSeconds)
+      ? Math.round(Math.min(Math.max(input.signupSeconds, 0), 3600) / 5) * 5
+      : null;
+  if (values.every((value) => value === null) && signupSeconds === null) {
     return false;
   }
   const result = await getPool().query(
@@ -55,13 +62,30 @@ export async function recordAcquisition(
        acquisition_gclid = $5,
        acquisition_ref = $6,
        acquisition_landing = $7,
+       acquisition_signup_s = $8,
        acquisition_at = now()
      WHERE id = $1
        AND acquisition_at IS NULL
        AND created_at > now() - interval '1 day'`,
-    [userId, ...values],
+    [userId, ...values, signupSeconds],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) > 0) {
+    return true;
+  }
+  // Two tabs boot together and only one of them holds the sign-up timing (the
+  // client claims it across tabs), so the acquisition that arrived first may
+  // have won without it. The duration alone may still fill its own gap, under
+  // the same fresh-signup rule, and never overwrites one.
+  if (signupSeconds !== null) {
+    await getPool().query(
+      `UPDATE users SET acquisition_signup_s = $2
+        WHERE id = $1
+          AND acquisition_signup_s IS NULL
+          AND created_at > now() - interval '1 day'`,
+      [userId, signupSeconds],
+    );
+  }
+  return false;
 }
 
 export interface AcquisitionReportRow {
@@ -88,6 +112,12 @@ export interface AcquisitionReport {
   rows: AcquisitionReportRow[];
   /** The same window broken down by the page the person first landed on. */
   landings: AcquisitionLandingRow[];
+  /**
+   * How long sign-up took, modal open to account ready, as the browsers
+   * clocked it. `measured` is how many accounts carry one (the rest signed up
+   * across two visits, or on a client that predates it).
+   */
+  signup: { measured: number; p50Seconds: number | null; p90Seconds: number | null };
 }
 
 export interface AcquisitionLandingRow {
@@ -108,7 +138,18 @@ export interface AcquisitionLandingRow {
  */
 export async function acquisitionReport(days: number): Promise<AcquisitionReport> {
   const pool = getPool();
-  const [grouped, total, landings] = await Promise.all([
+  const [signup, grouped, total, landings] = await Promise.all([
+    pool.query<{ measured: string; p50: number | null; p90: number | null }>(
+      `SELECT COUNT(acquisition_signup_s)::text AS measured,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY acquisition_signup_s) AS p50,
+              percentile_cont(0.9) WITHIN GROUP (ORDER BY acquisition_signup_s) AS p90
+         FROM users
+        WHERE created_at >= now() - ($1::int * interval '1 day')
+          AND NOT is_webhook
+          AND NOT is_character
+          AND acquisition_signup_s IS NOT NULL`,
+      [days],
+    ),
     pool.query<{
       source: string | null;
       medium: string | null;
@@ -166,6 +207,11 @@ export async function acquisitionReport(days: number): Promise<AcquisitionReport
       landing: row.landing,
       signups: Number(row.signups),
     })),
+    signup: {
+      measured: Number(signup.rows[0]?.measured ?? 0),
+      p50Seconds: signup.rows[0]?.p50 ?? null,
+      p90Seconds: signup.rows[0]?.p90 ?? null,
+    },
   };
 }
 

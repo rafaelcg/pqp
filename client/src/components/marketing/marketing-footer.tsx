@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { LanguagePicker } from "@/components/marketing/language-picker";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { useCommunitiesEnabled } from "@/hooks/use-communities-enabled";
 import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { playStoreUrl } from "@/lib/play-store";
@@ -11,6 +12,7 @@ const FOOTER_LINK =
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
+  const communitiesEnabled = useCommunitiesEnabled();
   // Hosted-only: a self-hosted build has no donation links and gets no link
   // to a page that would only redirect home. See `lib/support-links.ts`.
   const supportEnabled = isSupportPageEnabled();
@@ -55,9 +57,11 @@ export function MarketingFooter() {
             <a href="/#features" className={FOOTER_LINK}>
               {t("nav.features")}
             </a>
-            <a href="/#communities" className={FOOTER_LINK}>
-              {t("nav.communities")}
-            </a>
+            {communitiesEnabled && (
+              <a href="/#communities" className={FOOTER_LINK}>
+                {t("nav.communities")}
+              </a>
+            )}
             <a
               href="/#hosting"
               className={FOOTER_LINK}
@@ -119,11 +123,19 @@ export function MarketingFooter() {
             <Link to="/cookies" className={FOOTER_LINK}>
               {t("footer.cookies")}
             </Link>
+            {/* The one address every legal page and security.txt already
+                give. A question about the service should not need the terms
+                opened first. */}
+            <a href="mailto:contato@pqp.gg" className={FOOTER_LINK}>
+              {t("footer.contact")}
+            </a>
           </div>
         </div>
       </div>
       <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
         {t("footer.copyright", { year: new Date().getFullYear() })}
+        {" · "}
+        {t("footer.madeBy")}
         {" · "}
         <a
           href="https://rafael.ltd"

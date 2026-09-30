@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   COMMUNITY_HOME_MAX_BYTES,
+  createPickSequence,
   formatHomeBytes,
   instagramEmbedSrc,
+  isRealHomeImage,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
   tiktokEmbedSrc,
@@ -63,5 +65,48 @@ describe("community home media helpers", () => {
     ).toBe(
       "https://player.twitch.tv/?channel=moonkaselive&parent=pqp.gg&autoplay=false",
     );
+  });
+});
+
+describe("isRealHomeImage", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+
+  it("accepts a file whose bytes match its declared image type", async () => {
+    const file = new File([png], "a.png", { type: "image/png" });
+    expect(await isRealHomeImage(file)).toBe(true);
+  });
+
+  it("refuses a text file named .png", async () => {
+    const file = new File(["this is not a png"], "notimage.png", {
+      type: "image/png",
+    });
+    expect(await isRealHomeImage(file)).toBe(false);
+  });
+
+  it("accepts a real image whose bytes are another allowed type than its name", async () => {
+    const file = new File([png], "a.jpg", { type: "image/jpeg" });
+    expect(await isRealHomeImage(file)).toBe(true);
+  });
+
+  it("leaves non-image files to their own checks", async () => {
+    const file = new File(["%PDF-1.7"], "a.pdf", { type: "application/pdf" });
+    expect(await isRealHomeImage(file)).toBe(true);
+  });
+});
+
+describe("createPickSequence", () => {
+  it("keeps only the newest pick current, whatever order checks finish in", async () => {
+    const nextPick = createPickSequence();
+    const started: string[] = [];
+    // Pick A's byte check is slow and pick B's is fast, so A finishes last.
+    async function pick(name: string, checkMs: number) {
+      const isCurrent = nextPick();
+      await new Promise((resolve) => setTimeout(resolve, checkMs));
+      if (isCurrent()) {
+        started.push(name);
+      }
+    }
+    await Promise.all([pick("A", 20), pick("B", 1)]);
+    expect(started).toEqual(["B"]);
   });
 });

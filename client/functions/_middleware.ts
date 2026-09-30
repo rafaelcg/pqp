@@ -1,4 +1,5 @@
 import { isNoIndexAppPath } from "../src/lib/app-robots";
+import { isUnknownSpaPath } from "../src/lib/spa-routes";
 import {
   blogTargetFromMetaPath,
   injectBlogHead,
@@ -250,6 +251,31 @@ function isHashedAssetPath(pathname: string): boolean {
   return pathname.startsWith("/assets/") || /^\/workbox-[\w-]+\.js$/.test(pathname);
 }
 
+/**
+ * The SPA shell answering for an address nothing serves, turned into a 404.
+ *
+ * The body is kept: the app still loads and its catch-all still sends a
+ * person to `/`, so nobody who mistypes a URL sees an error page. What changes
+ * is what a crawler is told: a real 404 and `noindex`, instead of a 200 copy
+ * of the home page under every mistyped address. Anything that is not an
+ * `ok` HTML response (a real file, a redirect, an error) is returned as it is.
+ */
+function notFoundIfShell(response: Response): Response {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.includes("text/html")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set("x-robots-tag", "noindex, nofollow");
+  headers.set("cache-control", "no-store");
+  headers.delete("content-length");
+  return new Response(response.body, {
+    status: 404,
+    statusText: "Not Found",
+    headers,
+  });
+}
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   const url = new URL(context.request.url);
 
@@ -348,10 +374,16 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   // is in front of every request the site serves, including every hashed
   // asset. All five parsers are pure string checks — nothing is awaited
   // before this return.
-  if (
-    (!handle && !slug && !marketing && !blog && !inviteCode) ||
-    context.request.method !== "GET"
-  ) {
+  if (!handle && !slug && !marketing && !blog && !inviteCode) {
+    // Still a pure string check. Only a GET for a path the SPA has no route
+    // for pays for the content-type look, and only to turn the shell's
+    // 200 into a real 404. See `spa-routes.ts`.
+    if (context.request.method === "GET" && isUnknownSpaPath(url.pathname)) {
+      return notFoundIfShell(await context.next());
+    }
+    return context.next();
+  }
+  if (context.request.method !== "GET") {
     return context.next();
   }
 

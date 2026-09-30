@@ -44,6 +44,7 @@ const {
   captureResponse,
   windowsBuildAllowsOwnAudioExclude,
   windowsNtBuild,
+  pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
 const {
@@ -110,10 +111,6 @@ function canExcludeOwnAudioOnThisOs() {
     process.platform !== "win32" ||
     windowsBuildAllowsOwnAudioExclude(os.release())
   );
-}
-
-function windowsLoopbackAllowed() {
-  return process.platform === "win32" && canExcludeOwnAudioOnThisOs();
 }
 
 /**
@@ -841,9 +838,9 @@ async function explainNoSources() {
  * Resolves with `{ id, shareAudio }`, or null for every way of saying no: the
  * Cancel button, Escape, closing the window, a page that never loads.
  * `shareAudio` is only meaningful on Windows; the handler still ignores it
- * everywhere else. `offersAudio` is whether the sound box is drawn at all.
+ * everywhere else. `offersNativeAudio` is true when the shell's own per-process capture is armed for this share, which draws the sound box on any Windows.
  */
-function showSourcePicker(labeled, offersAudio) {
+function showSourcePicker(labeled, offersNativeAudio) {
   // One at a time. A second voice channel asking mid-decision would stack two
   // identical windows with no way to tell which call each belongs to.
   if (pickerWindow && !pickerWindow.isDestroyed()) {
@@ -894,7 +891,13 @@ function showSourcePicker(labeled, offersAudio) {
         ? {
             sources: labeled,
             dark,
-            offersAudio,
+// "hidden" (mac/Linux), "checkbox" (Windows 11, a real choice, or any
+            // Windows while the shell's own capture is armed for this share) or
+            // "explain" (Windows 10, where the checkbox would be a lie). See
+            // `pickerAudioState` for why this replaced a plain boolean.
+            audioState: offersNativeAudio
+              ? "checkbox"
+              : pickerAudioState(process.platform, os.release()),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -906,6 +909,8 @@ function showSourcePicker(labeled, offersAudio) {
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
               shareAudioHint: t("share.audioHint"),
+              shareAudioWin10: t("share.audioWin10Unavailable"),
+              shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
             },
           }
         : null;
@@ -1057,7 +1062,7 @@ async function chooseDisplaySource(audioRequested) {
   const autoId = pickAutomatically(labeled);
   const choice = autoId
     ? { id: autoId, shareAudio: false }
-    : await showSourcePicker(labeled, nativeAudio || windowsLoopbackAllowed());
+    : await showSourcePicker(labeled, nativeAudio);
   if (!choice) {
     return null;
   }
