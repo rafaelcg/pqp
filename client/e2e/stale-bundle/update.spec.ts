@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { buildFixture } from "./builds";
 import { startPagesServer, type PagesServer } from "./pages-server";
@@ -306,4 +307,26 @@ test("a person on a worker from before the fix: once the fixed worker is in, a l
   await chooseEnglish(page);
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
   await context.close();
+});
+
+test("offline, a navigation is still answered: the precached shell is the fallback", async ({
+  browser,
+}) => {
+  server.serve(newDir);
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await openOn(page, NEW);
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await context.close();
+});
+
+test("exactly one handler answers a navigation: Workbox's own navigation route is not built in", async () => {
+  // Two fetch listeners that both call `respondWith` make the second throw
+  // `InvalidStateError`. The network-first handler is the one; the legacy
+  // fixture (a worker from before it) is the only build that has Workbox's.
+  expect(readFileSync(path.join(newDir, "sw.js"), "utf8")).not.toContain("NavigationRoute");
+  expect(readFileSync(path.join(legacyDir, "sw.js"), "utf8")).toContain("NavigationRoute");
 });
