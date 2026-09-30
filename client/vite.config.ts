@@ -196,7 +196,7 @@ function umami(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     edgeConfig(),
@@ -328,7 +328,9 @@ export default defineConfig({
     sourcemap: faroSourcemapPlugin ? "hidden" : false,
   },
   define: {
-    __PQP_BUILD_ID__: JSON.stringify(BUILD_ID),
+    // `dev` under `vite dev`: a developer's own tab must never poll for, or be
+    // told about, a deploy (`src/lib/build-info.ts`). Only a BUILD has an id.
+    __PQP_BUILD_ID__: JSON.stringify(command === "build" ? BUILD_ID : "dev"),
     __PQP_BUILD_TIME__: String(BUILD_TIME),
   },
   resolve: {
@@ -356,4 +358,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

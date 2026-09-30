@@ -4,6 +4,7 @@
   "menu.window": "Ventana",
   "menu.speech": "Voz",
   "menu.reloadClean": "Recargar y limpiar caché",
+  "menu.reloadCleanFailed": "No se pudo limpiar la caché del sitio, así que no se recargó nada. Inténtalo de nuevo, o cierra y abre pqp.",
   "menu.toggleMute": "Silenciar / activar micrófono",
   "menu.toggleMuteHelp": "Silenciar / activar micrófono (Cmd/Ctrl+Shift+M)",
   "menu.toggleDeafen": "Desactivar / activar audio",

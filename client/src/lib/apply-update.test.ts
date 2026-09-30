@@ -20,14 +20,21 @@ function makeDeps(registration: {
   /** Called on every poll, to let a worker "finish installing". */
   onPoll?: (reg: { installing: FakeWorker; waiting: FakeWorker }, polls: number) => void;
   updateHangs?: boolean;
-  /** What the active worker says it was built from; undefined answers null. */
-  workerBuild?: string;
+  /**
+   * What the controlling worker says it was built from; undefined answers null.
+   * A function models a worker that takes over a beat after it activates.
+   */
+  workerBuild?: string | ((asked: number) => string);
+  /** No worker controls the page. */
+  uncontrolled?: boolean;
+  offline?: boolean;
   updateRejects?: boolean;
   none?: boolean;
 }) {
   const log: string[] = [];
   let now = 0;
   let polls = 0;
+  let asked = 0;
   const reg = {
     installing: registration.installing ?? null,
     waiting: registration.waiting ?? null,
@@ -44,10 +51,19 @@ function makeDeps(registration: {
   };
   const deps: ApplyUpdateDeps = {
     getRegistration: async () => (registration.none ? undefined : reg),
-    workerBuild: async () => {
+    controllerBuild: async () => {
       log.push("ask-worker");
-      return registration.workerBuild ?? null;
+      asked += 1;
+      if (registration.uncontrolled) {
+        return { controlled: false, build: null };
+      }
+      const build =
+        typeof registration.workerBuild === "function"
+          ? registration.workerBuild(asked)
+          : (registration.workerBuild ?? null);
+      return { controlled: true, build };
     },
+    online: () => !registration.offline,
     deleteAllCaches: async () => {
       log.push("purge");
     },
@@ -132,10 +148,32 @@ describe("applyUpdate", () => {
     expect(log).toEqual(["update", "purge", "reload"]);
   });
 
-  it("carries on when the update check itself fails", async () => {
+  it("does not call a failed update check 'activated' when it has no target to verify against", async () => {
+    // The prompt path: a worker announced a waiting build, then the check
+    // failed and nothing is waiting. Nothing says the active worker is current.
     const { deps, log } = harness({ updateRejects: true });
-    expect(await applyUpdate(null, deps)).toBe("activated");
+    expect(await applyUpdate(null, deps)).toBe("purged");
+    expect(log).toEqual(["update", "purge", "reload"]);
+  });
+
+  it("keeps the caches offline: with no network they are the only copy of the app", async () => {
+    const { deps, log } = harness({ updateRejects: true, offline: true });
+    expect(await applyUpdate(null, deps)).toBe("offline");
     expect(log).toEqual(["update", "reload"]);
+  });
+
+  it("still trusts a worker that was waiting when the update check then failed", async () => {
+    const { deps, log } = harness({
+      waiting: { postMessage: () => {} },
+      updateRejects: true,
+      onPoll: (r, polls) => {
+        if (polls === 1) {
+          r.waiting = null;
+        }
+      },
+    });
+    expect(await applyUpdate(null, deps)).toBe("activated");
+    expect(log.at(-1)).toBe("reload");
   });
 
   describe("with a target build to reach", () => {
@@ -145,16 +183,42 @@ describe("applyUpdate", () => {
       expect(log).toEqual(["update", "ask-worker", "reload"]);
     });
 
+    it("waits for the new worker to take control of THIS page before it reloads", async () => {
+      // `registration.active` is the new worker a beat before `clients.claim()`
+      // makes it the controller; a reload in that beat is served by the old one.
+      const { deps, log } = harness({
+        workerBuild: (asked) => (asked < 3 ? "abc123" : "def456"),
+      });
+      expect(await applyUpdate("def456", deps)).toBe("activated");
+      expect(log.filter((entry) => entry === "ask-worker")).toHaveLength(3);
+      expect(log).not.toContain("purge");
+      expect(log.at(-1)).toBe("reload");
+    });
+
+    it("has nothing to wait for when no worker controls the page", async () => {
+      const { deps, log } = harness({ uncontrolled: true });
+      expect(await applyUpdate("def456", deps)).toBe("activated");
+      expect(log).not.toContain("purge");
+    });
+
     it("purges when nothing was installing but the worker is an older build (a stale sw.js at the CDN)", async () => {
       const { deps, log } = harness({ workerBuild: "abc123" });
       expect(await applyUpdate("def456", deps)).toBe("purged");
-      expect(log).toEqual(["update", "ask-worker", "purge", "reload"]);
+      // It asks repeatedly (the new worker may still be taking over) and only
+      // then gives up.
+      expect(log[0]).toBe("update");
+      expect(log.filter((entry) => entry === "ask-worker").length).toBeGreaterThan(1);
+      expect(log.slice(-2)).toEqual(["purge", "reload"]);
     });
 
     it("purges when the worker cannot say which build it is (one from before it could)", async () => {
       const { deps, log } = harness({});
       expect(await applyUpdate("def456", deps)).toBe("purged");
-      expect(log).toEqual(["update", "ask-worker", "purge", "reload"]);
+      // It asks repeatedly (the new worker may still be taking over) and only
+      // then gives up.
+      expect(log[0]).toBe("update");
+      expect(log.filter((entry) => entry === "ask-worker").length).toBeGreaterThan(1);
+      expect(log.slice(-2)).toEqual(["purge", "reload"]);
     });
 
     it("has no worker to question when there is no registration, and just reloads", async () => {

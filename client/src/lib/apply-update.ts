@@ -30,6 +30,8 @@
  */
 
 export const STEP_TIMEOUT_MS = 15_000;
+/** How long a worker that is active may take to start answering for THIS page. */
+export const CONTROL_TIMEOUT_MS = 3_000;
 const POLL_MS = 200;
 
 interface WorkerLike {
@@ -43,46 +45,57 @@ interface RegistrationLike {
   waiting: WorkerLike | null;
 }
 
+/** What the worker that answers THIS page says about itself. */
+export interface ControllerAnswer {
+  /** False when no worker controls the page: a reload is then served by the network. */
+  controlled: boolean;
+  /**
+   * The build id the controlling worker says it was made from (`sw-build` in
+   * `vite.config.ts`), or null when it cannot say: a worker from before this
+   * existed, or no answer in time.
+   */
+  build: string | null;
+}
+
 export interface ApplyUpdateDeps {
   getRegistration: () => Promise<RegistrationLike | undefined>;
-  /**
-   * The build id the ACTIVE worker says it was made from (`sw-build` in
-   * `vite.config.ts`), or null when it cannot say: a worker from before this
-   * existed, none at all, or no answer in time.
-   */
-  workerBuild: () => Promise<string | null>;
+  controllerBuild: () => Promise<ControllerAnswer>;
   deleteAllCaches: () => Promise<void>;
   reload: () => void;
+  online: () => boolean;
   sleep: (ms: number) => Promise<void>;
   /** Resolves after `ms`; a separate seam from `sleep` so a test can make one fire and not the other. */
   timeout: (ms: number) => Promise<void>;
   now: () => number;
 }
 
-export type ApplyUpdateResult = "activated" | "purged";
+export type ApplyUpdateResult = "activated" | "purged" | "offline";
 
-/** Ask the worker that is answering this page which build it belongs to. */
-async function askActiveWorkerBuild(): Promise<string | null> {
+/**
+ * Ask the worker that CONTROLS this page which build it belongs to. The
+ * controller, not the registration's `active` worker: a worker can be `active`
+ * a beat before `clients.claim()` makes it this tab's controller, and the reload
+ * is answered by the controller.
+ */
+async function askControllerBuild(): Promise<ControllerAnswer> {
   try {
-    // The registration's ACTIVE worker, not `controller`: the moment a new
-    // worker activates it is `active`, while `controller` follows a beat later.
-    const registration = await navigator.serviceWorker?.getRegistration();
-    const worker = registration?.active ?? navigator.serviceWorker?.controller;
+    const worker = navigator.serviceWorker?.controller;
     if (!worker) {
-      return null;
+      return { controlled: false, build: null };
     }
-    return await new Promise<string | null>((resolve) => {
+    const build = await new Promise<string | null>((resolve) => {
       const channel = new MessageChannel();
       const timer = setTimeout(() => resolve(null), 2_000);
       channel.port1.onmessage = (event) => {
         clearTimeout(timer);
-        const build = (event.data as { build?: unknown } | null)?.build;
-        resolve(typeof build === "string" ? build : null);
+        const answer = (event.data as { build?: unknown } | null)?.build;
+        resolve(typeof answer === "string" ? answer : null);
       };
       worker.postMessage({ type: "PQP_BUILD" }, [channel.port2]);
     });
+    return { controlled: true, build };
   } catch {
-    return null;
+    return { controlled: true, build: null };
   }
 }
 
@@ -96,15 +109,23 @@ function browserDeps(): ApplyUpdateDeps {
         | RegistrationLike
         | undefined;
     },
-    workerBuild: askActiveWorkerBuild,
+    controllerBuild: askControllerBuild,
     deleteAllCaches: async () => {
       if (typeof caches === "undefined") {
         return;
       }
       const keys = await caches.keys();
-      await Promise.all(keys.map((key) => caches.delete(key)));
+      // Every deletion is waited for, successful or not: a reload that starts
+      // while one is still pending can be served from the cache being deleted.
+      const results = await Promise.allSettled(
+        keys.map((key) => caches.delete(key)),
+      );
+      if (results.some((result) => result.status === "rejected")) {
+        throw new Error("a cache could not be deleted");
+      }
     },
     reload: () => window.location.reload(),
+    online: () => typeof navigator === "undefined" || navigator.onLine !== false,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     timeout: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
@@ -112,30 +133,60 @@ function browserDeps(): ApplyUpdateDeps {
 }
 
 /**
- * Bring the newest worker up. Resolves true when nothing is installing or
- * waiting any more (so the active worker is the newest one), false on timeout.
+ * Bring the newest worker up. Resolves `ready` when nothing is installing or
+ * waiting any more, `failed` on timeout, or when the update check itself failed
+ * and there was no worker to bring up (nothing says the active one is current).
  */
 async function activateNewestWorker(
   registration: RegistrationLike,
   deps: ApplyUpdateDeps,
-): Promise<boolean> {
+): Promise<"ready" | "failed"> {
   const deadline = deps.now() + STEP_TIMEOUT_MS;
+  let updateFailed = false;
+  let sawNewWorker = false;
   // `update()` settles once the new worker has been fetched and handed to
   // `installing`, which is what the loop below needs to see. On a bad network
   // it can hang, so it is raced against the deadline rather than trusted.
   await Promise.race([
-    registration.update().catch(() => {}),
+    registration.update().catch(() => {
+      updateFailed = true;
+    }),
     deps.timeout(STEP_TIMEOUT_MS),
   ]);
   while (deps.now() < deadline) {
     if (registration.waiting) {
+      sawNewWorker = true;
       registration.waiting.postMessage?.({ type: "SKIP_WAITING" });
-    } else if (!registration.installing) {
-      return true;
+    } else if (registration.installing) {
+      sawNewWorker = true;
+    } else {
+      return updateFailed && !sawNewWorker ? "failed" : "ready";
     }
     await deps.sleep(POLL_MS);
   }
-  return false;
+  return "failed";
+}
+
+/**
+ * Waits until the worker answering this page is the target build (or there is
+ * none answering it). `clients.claim()` follows activation by a beat, so the
+ * first answer can still be the old worker's.
+ */
+async function controllerReaches(
+  target: string,
+  deps: ApplyUpdateDeps,
+): Promise<boolean> {
+  const deadline = deps.now() + CONTROL_TIMEOUT_MS;
+  for (;;) {
+    const answer = await deps.controllerBuild();
+    if (!answer.controlled || answer.build === target) {
+      return true;
+    }
+    if (deps.now() >= deadline) {
+      return false;
+    }
+    await deps.sleep(POLL_MS);
+  }
 }
 
 /**
@@ -143,13 +194,18 @@ async function activateNewestWorker(
  * `reload` (in a browser the page is gone by then).
  *
  * `target` is the build the page is trying to reach (`/version.json`'s). With
- * it, "nothing is installing" is not taken on faith: the active worker is asked
- * which build it is, and anything but `target` is treated as a worker that did
- * not update, because that is what a stale `sw.js` at a CDN looks like from
- * here. The browser found nothing new, so there is nothing installing, and a
- * plain reload would be answered by the old precache with the update "done".
- * Without a target (the worker itself announced a waiting build) there is
- * nothing to compare to and the worker is trusted.
+ * it, "nothing is installing" is not taken on faith: the worker that controls
+ * the page is asked which build it is, and anything but `target` is treated as a
+ * worker that did not update, because that is what a stale `sw.js` at a CDN
+ * looks like from here. The browser found nothing new, so there is nothing
+ * installing, and a plain reload would be answered by the old precache with the
+ * update "done". Without a target (the worker itself announced a waiting build)
+ * there is nothing to compare to and the worker is trusted, unless the update
+ * check failed with no new worker in sight.
+ *
+ * OFFLINE is the one case that never purges: with no network the caches are the
+ * only copy of the app there is, and deleting them turns a stale page into no
+ * page.
  */
 export async function applyUpdate(
   target: string | null = null,
@@ -158,12 +214,14 @@ export async function applyUpdate(
   let activated = false;
   try {
     const registration = await deps.getRegistration();
-    // No worker at all: the reload is already served by the network.
-    activated = registration
-      ? await activateNewestWorker(registration, deps)
-      : true;
-    if (activated && registration && target) {
-      activated = (await deps.workerBuild()) === target;
+    if (!registration) {
+      // No worker at all: the reload is already served by the network.
+      activated = true;
+    } else {
+      activated = (await activateNewestWorker(registration, deps)) === "ready";
+      if (activated && target) {
+        activated = await controllerReaches(target, deps);
+      }
     }
   } catch {
     activated = false;
@@ -171,6 +229,10 @@ export async function applyUpdate(
   if (activated) {
     deps.reload();
     return "activated";
+  }
+  if (!deps.online()) {
+    deps.reload();
+    return "offline";
   }
   try {
     await deps.deleteAllCaches();

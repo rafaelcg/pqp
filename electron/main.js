@@ -599,7 +599,12 @@ async function reloadCleanFromNetwork() {
   try {
     await clearWebCache(session.defaultSession);
   } catch (err) {
+    // NOT reloaded: with the worker still in place a reload would show the same
+    // stale site and throw away whatever the person had half typed. Say so, and
+    // let them retry.
     console.warn("[pqp] could not clear the cached site:", err?.message ?? err);
+    dialog.showErrorBox(app.name, t("menu.reloadCleanFailed"));
+    return;
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.reloadIgnoringCache();

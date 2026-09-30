@@ -2,12 +2,11 @@ import {
   NO_FORCE,
   isForcedBuild,
   isStaleBuild,
-  parseForceConfig,
   parseVersionManifest,
   type ForceConfig,
   type LatestBuild,
 } from "@/lib/client-version";
-import type { BuildIdentity } from "@/lib/build-info";
+import { DEV_BUILD_ID, type BuildIdentity } from "@/lib/build-info";
 import { FRESH_BUILD, type BuildStaleness } from "@/lib/update-prompt-state";
 
 /**
@@ -164,6 +163,11 @@ export function startVersionWatch(options: {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return () => {};
   }
+  // A dev build compares to nothing, so asking would only be noise (and a 404
+  // in the console under `vite dev`, which has no `/version.json`).
+  if (options.running.build === DEV_BUILD_ID) {
+    return () => {};
+  }
   const watch = createVersionWatch({
     running: options.running,
     fetchLatest: () => fetchLatestBuild(),
@@ -217,4 +221,3 @@ export function startVersionWatch(options: {
   };
 }
 
-export { parseForceConfig };
