@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NO_SCREEN_FULLSCREEN,
+  escapeExitsExpandedFullscreen,
   nextSoloPeerId,
   reconcileScreenFullscreen,
   syncScreenFullscreen,
@@ -108,6 +109,20 @@ describe("reconcileScreenFullscreen", () => {
   it("does not touch a whole-stage fullscreen", () => {
     const state = { active: true, soloPeerId: null };
     expect(reconcileScreenFullscreen(state, [])).toBe(state);
+  });
+});
+
+describe("escapeExitsExpandedFullscreen", () => {
+  it("takes over only in the in-page fallback, and only while active", () => {
+    // `element`: the browser owns Escape already (`fullscreenchange` is what
+    // tells `syncScreenFullscreen`, not a keydown here).
+    expect(escapeExitsExpandedFullscreen("element", true)).toBe(false);
+    // `video`: the native player, no keyboard on the device that reaches it.
+    expect(escapeExitsExpandedFullscreen("video", true)).toBe(false);
+    // `expand`: nothing else owns Escape, so this file must.
+    expect(escapeExitsExpandedFullscreen("expand", true)).toBe(true);
+    // Not fullscreen at all: no listener has anything to exit.
+    expect(escapeExitsExpandedFullscreen("expand", false)).toBe(false);
   });
 });
 

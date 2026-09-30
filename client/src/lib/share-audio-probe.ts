@@ -10,6 +10,11 @@
  * as the echo gate. See `client/e2e/share-audio-echo/README.md`.
  */
 
+import {
+  describeNativeShareAudio,
+  nativeShareAudioDiagnostics,
+} from "./native-share-audio-diagnostics";
+
 export const CALL_TONE_HZ = 440;
 export const GAME_TONE_HZ = 880;
 export const HISS_TONE_HZ = 1320;
@@ -51,6 +56,12 @@ export interface ShareAudioProbeRow extends ShareAudioToneLevels {
   caps: string;
   verdict: ShareAudioProbeVerdict;
   note: string;
+  /**
+   * What the Windows app's native share-sound handshake did, stage by stage
+   * (`native-share-audio-diagnostics.ts`). One line, so a failed row names the
+   * exact stage that stopped it.
+   */
+  native: string;
 }
 
 export interface ShareAudioTrackLabels {
@@ -62,6 +73,8 @@ export interface ShareAudioTrackLabels {
   caps?: readonly boolean[] | string;
   control?: boolean;
   hasTrack?: boolean;
+  /** Overrides the recorded native handshake line (tests). */
+  native?: string;
 }
 
 /**
@@ -220,6 +233,7 @@ export function formatShareAudioRow(row: ShareAudioProbeRow): string {
     `floor=${n(row.floor)}  call440=${n(row.call440)}  game880=${n(row.game880)}  hiss1320=${n(row.hiss1320)}`,
     `snr440=${n(row.snr440)}  snr880=${n(row.snr880)}`,
     `${row.verdict}  ${row.note}`,
+    row.native,
   ].join("\n");
 }
 
@@ -301,8 +315,29 @@ function rowFrom(
           typeof labels.caps === "string" ? labels.caps : undefined,
         ),
     verdict: judged.verdict,
-    note: judged.note,
+    note: noTrackNote(judged),
+    native: labels.native ?? describeNativeShareAudio(),
   };
+}
+
+/**
+ * A row with no track says WHERE the native capture gave up when it was the
+ * native path that was meant to supply one. Without this the row reads "no
+ * share-audio track" and the only way to learn which stage failed was to ask
+ * the person to reproduce it with the devtools open.
+ */
+function noTrackNote(judged: { verdict: ShareAudioProbeVerdict; note: string }): string {
+  if (judged.verdict !== "NO_TRACK") {
+    return judged.note;
+  }
+  const diagnostics = nativeShareAudioDiagnostics();
+  if (diagnostics.failedStage) {
+    return `${judged.note}; native capture failed at ${diagnostics.failedStage}: ${diagnostics.failure ?? "?"}`;
+  }
+  if (diagnostics.claim === "none") {
+    return `${judged.note}; the native capture was offered but the sound box was not ticked`;
+  }
+  return judged.note;
 }
 
 function stringifyLabel(value: string | boolean | undefined): string {

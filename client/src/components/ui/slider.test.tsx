@@ -38,6 +38,15 @@ describe("Slider", () => {
     expect(html).not.toContain("data-readonly");
   });
 
+  it("names the thumb, the element a screen reader calls a slider", () => {
+    const html = renderToStaticMarkup(
+      <Slider value={12} max={40} aria-label="Posição" aria-valuetext="0:12 / 0:40" />,
+    );
+    const thumb = /<span[^>]*role="slider"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(thumb).toContain('aria-label="Posição"');
+    expect(thumb).toContain('aria-valuetext="0:12 / 0:40"');
+  });
+
   it("draws the compact-player edge as a square top fill", () => {
     const html = renderToStaticMarkup(
       <Slider variant="edge" readOnly value={40} max={100} aria-label="Andamento" />,

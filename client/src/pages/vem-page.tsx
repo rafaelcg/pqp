@@ -1,4 +1,5 @@
 import { useAuth, useClerk } from "@clerk/clerk-react";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
 import {
   ArrowDown,
@@ -11,14 +12,8 @@ import {
   Lock,
   Mic,
 } from "lucide-react";
-import {
-  Fragment,
-  useEffect,
-  useRef,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Fragment, useRef, type CSSProperties, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import type { DiscordImportPlan } from "@pqp/shared";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
@@ -26,6 +21,7 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { useScrollReveal } from "@/hooks/use-scroll-reveal";
+import { useScrollToHash } from "@/hooks/use-scroll-to-hash";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import {
@@ -35,6 +31,7 @@ import {
   type CreateIntent,
 } from "@/lib/handle-intent";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -224,6 +221,9 @@ function useOpenAuth() {
       return;
     }
     try {
+      if (mode === "signUp") {
+        noteSignupCta("vem", "");
+      }
       const open =
         mode === "signUp"
           ? clerk.openSignUp({ forceRedirectUrl: target })
@@ -1267,29 +1267,15 @@ function Compare() {
   );
 }
 
-/**
- * `/vem#importar` has to land on the section even though the page is a lazy
- * chunk the browser's own anchor jump runs before. One effect, once, after the
- * first paint of this page.
- */
-function useScrollToHash() {
-  const { hash } = useLocation();
-  useEffect(() => {
-    if (!hash) return;
-    const id = decodeURIComponent(hash.slice(1));
-    const target = document.getElementById(id);
-    if (target) {
-      target.scrollIntoView({ block: "start" });
-    }
-  }, [hash]);
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export function VemPage() {
   const { t, locale } = useTranslation();
+  // The footer link always goes to /android; only the label changes, so a
+  // self-host that hides the Play badge never claims a listing it lacks.
+  const hasPlay = Boolean(playStoreUrl());
   const mainRef = useRef<HTMLElement>(null);
   useScrollToHash();
   useScrollReveal(mainRef);
@@ -1632,7 +1618,7 @@ export function VemPage() {
             </Link>{" "}
             {t("vem.footer.android")}{" "}
             <Link to="/android" className={INLINE_LINK}>
-              {t("vem.footer.androidLink")}
+              {t(hasPlay ? "vem.footer.androidLink.play" : "vem.footer.androidLink")}
             </Link>{" "}
             {t("vem.footer.code")}{" "}
             <a

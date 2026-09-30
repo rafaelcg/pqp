@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, Copy, Eraser, Eye, History } from "lucide-react";
+import { Check, Clapperboard, Copy, Eraser, Eye, History } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { LivePill } from "@/components/watch-party/live-pill";
@@ -105,6 +105,7 @@ export function LivePartyBlock({
   historyChannels = [],
   onOpenHistory,
   recoveringChannelId = null,
+  teaser = null,
 }: {
   /** Live parties in this server, newest first. Usually exactly one. */
   parties: readonly WatchParty[];
@@ -143,6 +144,13 @@ export function LivePartyBlock({
   historyChannels?: readonly { id: string; name: string }[];
   /** Opens `WatchPartyHistoryDialog` on the given channel. Required to use `historyChannels`. */
   onOpenHistory?: (channelId: string) => void;
+  /**
+   * The waitlist teaser, for a server where watch parties are NOT on
+   * (`shouldOfferWatchPartyTeaser`). Only ever drawn in the branch where there
+   * is no party and no create control, so a server that can run a party never
+   * sees it: that server has `canStart` and takes the branch above.
+   */
+  teaser?: { onList: boolean; onOpen: () => void } | null;
 }) {
   const { t } = useTranslation();
   // The uptime ticks once a minute while a party is on, and not at all
@@ -206,6 +214,42 @@ export function LivePartyBlock({
       );
     }
     if (!canStart || !onCreate) {
+      if (teaser) {
+        return (
+          <div className="mb-3 px-1" data-testid="live-party-teaser">
+            <button
+              type="button"
+              data-live-party-teaser={teaser.onList ? "on-list" : "open"}
+              aria-label={t("watchParty.waitlist.teaser.aria")}
+              className="flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper"
+              onClick={teaser.onOpen}
+            >
+              {/* Two lines, the same anatomy as the pending card above: the
+                  name, and under it the one word that says what state this
+                  is. A pill beside the name cut "Watch party" to "Watc..."
+                  in a 230px rail. */}
+              <Clapperboard className="h-4 w-4 shrink-0" aria-hidden />
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-medium">
+                  {t("watchParty.waitlist.teaser.label")}
+                </span>
+                <span
+                  className={cn(
+                    "flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider",
+                    teaser.onList ? "text-success" : "text-accent",
+                  )}
+                >
+                  {teaser.onList && <Check className="h-3 w-3" aria-hidden />}
+                  {teaser.onList
+                    ? t("watchParty.waitlist.teaser.onList")
+                    : t("watchParty.waitlist.teaser.badge")}
+                </span>
+              </span>
+            </button>
+            {historyLinks}
+          </div>
+        );
+      }
       if (!historyLinks) {
         return null;
       }

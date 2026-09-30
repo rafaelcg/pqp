@@ -93,6 +93,8 @@ describe("validateHandle", () => {
 
   it("reserves the screen-share landing's path", () => {
     expect(validateHandle("tela")).toBe("reserved");
+    expect(validateHandle("watch-party")).toBe("reserved");
+    expect(validateHandle("watchparty")).toBe("reserved");
   });
 
   it("reserves the desktop browser-login path", () => {

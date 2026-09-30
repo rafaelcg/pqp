@@ -390,6 +390,48 @@ func (f *Fragmenter) SetTimelineOffset(ticks int64) {
 	f.timelineOffset = ticks
 }
 
+// RebaseSource puts a NEW publisher clock on this fragmenter's timeline,
+// mid-session: the presenter's screen track was replaced (a republish, a
+// reconnect under a new identity) and internal/session has started feeding
+// access units from it, whose PTS count from zero again on a clock that has
+// nothing to do with the old one. ticks is where raw PTS zero of the new
+// source belongs on the session timeline: how long after the session's epoch
+// its first packet arrived, exactly the value SetTimelineOffset is given for
+// the session's first source.
+//
+// Everything already published stays where it is. Parts keep numbering,
+// segments keep numbering, and the next IDR (the new source's first, which is
+// all internal/session lets through until it arrives) closes the open segment
+// and opens a new one on it, the same forced boundary a parameter-set change
+// takes, so no frame from the new encoder is ever listed in a segment that
+// began on the old one. The timeline never rewinds: the new source's first
+// frame opens where the old source's published media ended (the resume and
+// synthAhead rules below, which already exist for a quiet source), and the
+// offset rises past what was published if the wall-clock mapping would land
+// behind it.
+//
+// Before the session's first IDR there is no timeline to protect yet, and
+// this is simply SetTimelineOffset.
+func (f *Fragmenter) RebaseSource(ticks int64) {
+	if ticks < 0 {
+		ticks = 0
+	}
+	if !f.haveFirstIDR {
+		f.ptsOffset = ticks
+		f.timelineOffset = ticks
+		return
+	}
+	f.ptsOffset = ticks
+	f.timelineOffset = ticks
+	f.forceSegmentBoundary = true
+	if f.pending != nil {
+		// The held sample is the old source's last frame (or a repeat of
+		// it). The new source's first frame must land after it, and the
+		// synthAhead rule is exactly "raise the offset until it does".
+		f.synthAhead = true
+	}
+}
+
 // PTSOffset is how far this fragmenter has shifted the publisher's clock
 // later to keep the timeline from rewinding (see ptsOffset), in ticks. The
 // session's own timeline anchor (SetTimelineOffset) is not a shift and is

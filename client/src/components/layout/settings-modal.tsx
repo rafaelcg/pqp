@@ -8,9 +8,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
+  DISPLAY_NAME_MAX_LENGTH,
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
   HANDLE_MAX_LENGTH,
@@ -62,6 +63,12 @@ import {
   type ShortcutOverrides,
 } from "@/lib/keyboard-shortcuts";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
+import { ObsVirtualCameraHint } from "@/components/voice/obs-virtual-camera-hint";
+import {
+  dismissObsVirtualCameraHint,
+  isObsVirtualCameraHintDismissed,
+  isObsVirtualCameraLabel,
+} from "@/lib/obs-virtual-camera";
 import {
   DEFAULT_VIDEO_QUALITY,
   parseVideoQuality,
@@ -177,10 +184,15 @@ import {
   type BlockingOwnedServer,
 } from "@/lib/api";
 import { AllReportsSection } from "@/components/layout/all-reports-section";
+import { HelpSection } from "@/components/layout/help-section";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { requestConnectionCheck } from "@/lib/settings-request";
+import {
+  buildFeedbackContext,
+  type FeedbackVoiceContext,
+} from "@/lib/feedback-context";
 import { cn } from "@/lib/utils";
 
 export interface LocalSettings {
@@ -462,6 +474,8 @@ interface SettingsModalProps {
   requestedSection?: SectionId | null;
   /** Open the shortcut map. Settings stays up; the overlay stacks on top. */
   onShowShortcutOverlay?: () => void;
+  /** The call half of a feedback item's context, which only `App` knows. */
+  feedbackVoice?: FeedbackVoiceContext | null;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -490,6 +504,7 @@ type SectionId =
   | "privacy"
   | "data"
   | "feedback"
+  | "help"
   | "moderation";
 
 /** For callers that open the dialog at a particular section (the user menu). */
@@ -556,6 +571,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.feedback",
     description: "settings.feedback.description",
     icon: Bug,
+  },
+  {
+    id: "help",
+    label: "settings.section.help",
+    description: "help.description",
+    icon: CircleHelp,
   },
   // Hidden from the rail unless `canModerateInstance` resolves true — see
   // `visibleSections` where `SettingsModal` filters this out for everyone
@@ -1216,6 +1237,9 @@ function VoiceSection({
   // change while the dialog is open, and re-evaluating it per render would run
   // a media query on every slider tick.
   const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  const [obsHintDismissed, setObsHintDismissed] = useState(
+    isObsVirtualCameraHintDismissed,
+  );
   const selectClass =
     "h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal";
 
@@ -1459,24 +1483,40 @@ function VoiceSection({
         </span>
       </label>
 
-      <label className="block">
-        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-          {t("settings.voice.cameraDevice")}
-        </span>
-        <select
-          value={draftLocal.cameraDeviceId}
-          onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
-          onFocus={() => onRevealCameras()}
-          className={selectClass}
-        >
-          <option value="">{t("settings.voice.systemDefault")}</option>
-          {cameras.map((device) => (
-            <option key={device.deviceId} value={device.deviceId}>
-              {device.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div>
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.cameraDevice")}
+          </span>
+          <select
+            value={draftLocal.cameraDeviceId}
+            onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+            onFocus={() => onRevealCameras()}
+            className={selectClass}
+          >
+            <option value="">{t("settings.voice.systemDefault")}</option>
+            {cameras.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ObsVirtualCameraHint
+          show={
+            !obsHintDismissed &&
+            isObsVirtualCameraLabel(
+              cameras.find(
+                (device) => device.deviceId === draftLocal.cameraDeviceId,
+              )?.label ?? "",
+            )
+          }
+          onDismiss={() => {
+            dismissObsVirtualCameraHint();
+            setObsHintDismissed(true);
+          }}
+        />
+      </div>
 
       <div>
         <label className="block">
@@ -3538,6 +3578,7 @@ function ProfileSection({
         </span>
         <Input
           value={displayName}
+          maxLength={DISPLAY_NAME_MAX_LENGTH}
           onChange={(e) => onDisplayName(e.target.value)}
         />
       </label>
@@ -3754,7 +3795,7 @@ function BannerField({
  * badge, which is the entire gamification budget of this feature: one fun
  * consequence, no points, no leaderboard.
  */
-function FeedbackSection() {
+function FeedbackSection({ voice }: { voice: FeedbackVoiceContext | null }) {
   const { t } = useTranslation();
   const [kind, setKind] = useState<FeedbackKind>("bug");
   const [body, setBody] = useState("");
@@ -3787,7 +3828,11 @@ function FeedbackSection() {
     setSending(true);
     setError(null);
     try {
-      await sendFeedback({ kind, body: body.trim() });
+      await sendFeedback({
+        kind,
+        body: body.trim(),
+        context: buildFeedbackContext(voice),
+      });
       setSent(true);
     } catch {
       setError(t("settings.feedback.error"));
@@ -3848,6 +3893,7 @@ function FeedbackSection() {
           </p>
         )}
       </div>
+      <p className="text-xs text-paper-muted">{t("settings.feedback.attached")}</p>
     </div>
   );
 }
@@ -3871,6 +3917,7 @@ export function SettingsModal({
   onAudioSettingsLive,
   requestedSection = null,
   onShowShortcutOverlay,
+  feedbackVoice = null,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
@@ -4092,6 +4139,15 @@ export function SettingsModal({
   }
 
   async function handleSave() {
+    // Checked before anything is saved. A blank name used to be dropped from
+    // the request, so the dialog closed as if it had worked and kept the old
+    // name. Device settings are not written either: a Save that fails should
+    // leave nothing half applied.
+    if (user && displayName.trim() === "") {
+      setSection("profile");
+      setError(t("settings.profile.displayNameRequired"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -4099,7 +4155,12 @@ export function SettingsModal({
       saveLocalSettings(draftLocal);
       if (user) {
         const updated = await updateMe({
-          displayName: displayName.trim() || undefined,
+          // Only when it changed. An account whose name predates the limit
+          // would otherwise fail every save of an unrelated field.
+          displayName:
+            displayName.trim() !== user.displayName
+              ? displayName.trim()
+              : undefined,
           username: username.trim() || undefined,
           avatarUrl: avatarUrl.trim() || null,
           // Omitted rather than sent empty when the field is blank. An absent
@@ -4229,7 +4290,11 @@ export function SettingsModal({
               />
             )}
 
-            {section === "feedback" && <FeedbackSection />}
+            {section === "feedback" && <FeedbackSection voice={feedbackVoice} />}
+
+            {section === "help" && (
+              <HelpSection onOpenFeedback={() => setSection("feedback")} />
+            )}
 
             {section === "moderation" &&
               (canModerateInstance ? (

@@ -34,6 +34,31 @@ struct LiveHlsStream: Decodable, Equatable, Sendable {
     let topHeight: Int?
     /// Highest fps a started rung encodes. Presenter-side; ignored by the player.
     let topFramerate: Int?
+    /**
+     A SECOND playlist, carrying the presenter's camera and nothing else.
+     Mirrors `LiveHlsStream.cameraHlsUrl` (`packages/shared/src/live-hls.ts`).
+     Same session as `hlsUrl` for as long as the camera stays on: it never
+     mints its own identity, so `WatchCameraStreamSwap` keys on the URL's own
+     path rather than on `startedAt`. Absent means no camera is running right
+     now (off, refused for budget, or a server that predates this field).
+     */
+    let cameraHlsUrl: String?
+    /// Whether `cameraHlsUrl` actually carries a picture. Absent or true is
+    /// every camera before `LIVE_HLS_VOICE_TRACK` existed; false is the
+    /// audio-only "separada" shape, where the rung exists but has nothing to
+    /// paint.
+    let cameraHasVideo: Bool?
+    /// Whether `cameraHlsUrl` carries the presenter's MICROPHONE separately
+    /// from `hlsUrl`. Absent or false keeps a camera silent, exactly as it
+    /// always was.
+    let cameraHasVoiceAudio: Bool?
+
+    /// Whether `cameraHlsUrl` should be drawn with a picture. Defaults true
+    /// when the field is absent, same as the web reads it.
+    var resolvedCameraHasVideo: Bool { cameraHasVideo ?? true }
+    /// Whether `cameraHlsUrl` should be unmuted. Defaults false, same as the
+    /// web reads it.
+    var resolvedCameraHasVoiceAudio: Bool { cameraHasVoiceAudio ?? false }
 }
 
 /**
@@ -62,6 +87,23 @@ func liveStreamURL(hlsUrl: String, apiBaseURL: URL) -> URL? {
         return absolute
     }
     return URL(string: trimmed, relativeTo: apiBaseURL)?.absoluteURL
+}
+
+/**
+ THE `?t=` VIEWER TOKEN, PULLED BACK OUT OF `hlsUrl`.
+
+ The same capability that authorises the playlist fetch is what
+ `POST /api/live-hls/presence` wants back (`WatchModel`'s presence beat,
+ mirroring `client/src/lib/hls-playback.ts`'s `sendHlsPresence`), so this is
+ just the query string read the other direction. Works on either shape
+ `hlsUrl` comes in (API-relative or an absolute bucket URL): both are query
+ strings, and `URLComponents` does not care which.
+ */
+func hlsSessionToken(from hlsUrl: String) -> String? {
+    URLComponents(string: hlsUrl)?
+        .queryItems?
+        .first(where: { $0.name == "t" })?
+        .value
 }
 
 /// What the player currently holds, so the swap rule can compare it against

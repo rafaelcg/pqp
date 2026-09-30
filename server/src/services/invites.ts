@@ -5,7 +5,7 @@ import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
 import type { PublicInvitePreview } from "@pqp/shared";
 
-type Queryable = Pick<PoolClient, "query">;
+export type Queryable = Pick<PoolClient, "query">;
 
 function generateInviteCode(): string {
   return randomBytes(5).toString("base64url").slice(0, 8);
@@ -51,8 +51,13 @@ export async function createInvite(
   return createInviteWith(getPool(), serverId, createdBy, options);
 }
 
-export async function listInvites(serverId: string): Promise<DbInvite[]> {
-  const result = await getPool().query<DbInvite>(
+/** `db` defaults to the pool; pass an open transaction's client to read
+ * inside it instead of borrowing a second connection off the pool. */
+export async function listInvites(
+  serverId: string,
+  db: Queryable = getPool(),
+): Promise<DbInvite[]> {
+  const result = await db.query<DbInvite>(
     `SELECT id, server_id, code, created_by, max_uses, uses, expires_at, created_at
      FROM server_invites
      WHERE server_id = $1
@@ -80,7 +85,8 @@ export async function getInviteByCode(code: string): Promise<DbInvite | null> {
  * `options.ref` is the `?ref=` tag the invite link carried, already normalised
  * (`normalizeJoinRef`). It is written onto the membership only when this call
  * creates it: re-opening a link you already used neither counts a use nor
- * re-attributes the join.
+ * re-attributes the join. `join_source` is always `'invite'` here, tag or no
+ * tag: it is the door, and this is the only door this function is.
  */
 export async function redeemInvite(
   code: string,
@@ -117,8 +123,8 @@ export async function redeemInvite(
     }
 
     const inserted = await client.query(
-      `INSERT INTO server_members (server_id, user_id, role, join_ref)
-       VALUES ($1, $2, 'member', $3)
+      `INSERT INTO server_members (server_id, user_id, role, join_ref, join_source)
+       VALUES ($1, $2, 'member', $3, 'invite')
        ON CONFLICT DO NOTHING`,
       [invite.server_id, userId, options.ref ?? null],
     );
@@ -139,7 +145,7 @@ export async function redeemInvite(
 
     await client.query("COMMIT");
     if (joinedNow) {
-      invalidateServerAudience(invite.server_id);
+      invalidateServerAudience(invite.server_id, { joinedUserId: userId });
       // Funnel step `first_join`, and AFTER the commit on purpose: the stamp is
       // its own statement on the pool, never inside this transaction. Only a
       // real join (a fresh membership row) counts; re-opening an invite you

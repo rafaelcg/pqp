@@ -15,6 +15,22 @@ export const liveHlsStreamSchema = z.object({
   hlsUrl: z.string().min(1),
   startedAt: z.number().int().nonnegative(),
   presenterPeerId: z.string().min(1),
+  /**
+   * The PERSON presenting, beside the peer id above. A peer id is one socket,
+   * and since the presenter-return grace (#817) a session outlives the socket
+   * that started it: a presenter who reloads comes back under a new peer id
+   * and continues the same session, while this frame still names the old
+   * one until the server rebinds. For that window the returning presenter is
+   * seated under an id the stream does not name, and the audience count
+   * (`liveStateFromStream`) used to count them as a viewer: production
+   * rehearsal C, 2026-09-25, "2 assistindo" with one viewer and three
+   * "+1 assistindo" lines in the host's activity feed within a minute.
+   *
+   * Stamped by the API from what it saw share; absent on a server that
+   * predates it or could not name the person, where the count falls back to
+   * the peer id alone. Optional, so iOS and Android parse the frame as before.
+   */
+  presenterUserId: z.string().uuid().optional(),
   /** What the badge should claim, from the server that started the egress. */
   delaySeconds: z.number().int().positive().optional(),
   /**

@@ -410,6 +410,32 @@ func (d *Depacketizer) GapHistogram() [GapBucketCount]uint64 { return d.gapHisto
 // happened.
 func (d *Depacketizer) LastGap() uint64 { return d.lastGap }
 
+// ResetSource forgets everything this depacketizer knows about the RTP
+// stream it was fed -- sequence numbers, the timestamp it unwraps from, any
+// half-assembled access unit and parameter sets waiting for one -- so a
+// DIFFERENT stream (the presenter republished their screen on a new track,
+// with its own SSRC, sequence space and timestamp base) can be fed through
+// it next, with PTS counting from zero at that stream's first packet. The
+// loss counters (LostPackets, GapHistogram, LastGap) are kept: they are
+// cumulative for the session, and a stats line computing window deltas off
+// a counter that went back to zero would print a four-billion-packet loss.
+func (d *Depacketizer) ResetSource() {
+	d.buf = nil
+	d.units = nil
+	d.haveTimestamp = false
+	d.lastRaw = 0
+	d.extended = 0
+	d.auExtended = 0
+	d.auStarted = false
+	d.auClosable = false
+	d.pendingSPS = nil
+	d.pendingPPS = nil
+	d.haveSeq = false
+	d.lastSeq = 0
+	d.dropUntilMarker = false
+	d.resetReassembly()
+}
+
 func (d *Depacketizer) discardIncompleteAU() {
 	d.buf = nil
 	d.units = nil

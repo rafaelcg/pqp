@@ -48,6 +48,8 @@ export type MarketingPage =
   | "/download"
   | "/garanta"
   | "/claim"
+  | "/watch-party"
+  | "/watchparty"
   | "/privacy"
   | "/terms"
   | "/cookies"
@@ -76,6 +78,8 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/download",
   "/garanta",
   "/claim",
+  "/watch-party",
+  "/watchparty",
   "/privacy",
   "/terms",
   "/cookies",
@@ -130,19 +134,38 @@ interface PageCopy {
  * are catalogue duplicates (see the file comment); the policy and status pages
  * have no catalogue SEO keys, so their strings live only here.
  */
+/**
+ * `/watch-party` and `/watchparty`: one page under two spellings, canonical
+ * `/watch-party`, same arrangement as `/garanta` and `/claim`. Duplicates of
+ * `watchPartyPage.seo.*`, pinned by `marketing-meta.test.ts`.
+ */
+const WATCH_PARTY_COPY: PageCopy = {
+  canonicalPath: "/watch-party",
+  title: {
+      "pt-BR": "Watch party no pqp | Assistam juntos, com o servidor inteiro",
+      en: "Watch party on pqp | Watch together with your whole server",
+      es: "Watch party en pqp | Miren juntos con todo el servidor",
+    },
+  description: {
+      "pt-BR": "Compartilhe a tela e deixe centenas de pessoas assistirem no navegador, com baixa latência, a sua câmera no palco e o chat do lado. Entre na lista do acesso antecipado.",
+      en: "Share your screen and let hundreds watch in the browser, with low latency, your camera on stage and the chat beside it. Join the early access waitlist.",
+      es: "Comparte tu pantalla y deja que cientos miren en el navegador, con baja latencia, tu cámara en el escenario y el chat al lado. Entra a la lista de acceso anticipado.",
+    },
+};
+
 const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera, código aberto",
-      en: "pqp: voice, screen share and chat for your crew, open source",
-      es: "pqp: voz, pantalla compartida y chat para tu gente, código abierto",
+      "pt-BR": "pqp: voz, tela e chat pra sua galera, código aberto",
+      en: "pqp: voice, screen share and chat, open source",
+      es: "pqp: voz, pantalla compartida y chat, código abierto",
     },
     description: {
       "pt-BR":
-        "Canal de voz, tela compartilhada com som e chat completo, direto no navegador. De graça, código aberto, e já rolou watch party com mais de cem pessoas. Cria a comunidade e manda o link.",
-      en: "Voice channels, screen share with sound and a full chat, straight from the browser. Free, open source, and a watch party for over a hundred people already ran on it. Make a community, send the link.",
-      es: "Canales de voz, pantalla compartida con sonido y un chat completo, directo desde el navegador. Gratis, código abierto, y ya aguantó una watch party de más de cien personas. Crea una comunidad y manda el link.",
+        "Voz, tela compartilhada e chat no navegador. De graça, código aberto, e já rolou watch party com mais de cem pessoas. Cria a comunidade e manda o link.",
+      en: "Voice, screen share and chat in the browser. Free, open source, and a watch party of 100+ people already ran on it. Make a community, send the link.",
+      es: "Voz, pantalla compartida y chat en el navegador. Gratis, código abierto, y ya aguantó una watch party de 100+ personas. Crea una comunidad y manda el link.",
     },
   },
   "/vs-discord": {
@@ -219,15 +242,15 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/android": {
     canonicalPath: "/android",
     title: {
-      "pt-BR": "Beta do Android · pqp em APK",
-      en: "Android beta · pqp APK",
-      es: "Beta de Android · pqp en APK",
+      "pt-BR": "pqp no Android · Google Play",
+      en: "pqp on Android · Google Play",
+      es: "pqp en Android · Google Play",
     },
     description: {
       "pt-BR":
-        "Acesso antecipado ao pqp no Android. Versão 0.4.0, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
-      en: "Early access to pqp on Android. Version 0.4.0, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
-      es: "Acceso anticipado a pqp en Android. Versión 0.4.0, beta. La voz funciona en todas las salas, de las chiquitas a las watch parties grandes. Descarga el APK, permite la instalación una vez y ya estás dentro. Gratis.",
+        "O pqp já está na Google Play. Baixa, autoriza as permissões de sempre e tá dentro. A voz funciona em toda sala, das pequenas às watch parties grandes. De graça.",
+      en: "pqp is live on Google Play. Download it, allow the usual permissions, and you're in. Voice works in every room, from small ones to big watch parties. Free.",
+      es: "pqp ya está en Google Play. Descárgalo, permite los permisos de siempre y ya estás dentro. La voz funciona en todas las salas, de las chiquitas a las watch parties grandes. Gratis.",
     },
   },
   "/download": {
@@ -239,9 +262,9 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "App de desktop pra Windows, Mac e Linux, um beta de iPhone pelo TestFlight, e um beta de Android em APK. O navegador continua funcionando sem instalar nada.",
-      en: "Desktop app for Windows, Mac, and Linux, an iPhone beta on TestFlight, and an Android beta as an APK. The browser still works with nothing to install.",
-      es: "App de escritorio para Windows, Mac y Linux, una beta para iPhone en TestFlight y una beta para Android en APK. El navegador sigue funcionando sin instalar nada.",
+        "App de desktop pra Windows, Mac e Linux, um beta de iPhone pelo TestFlight, e o app de Android na Google Play. O navegador continua funcionando sem instalar nada.",
+      en: "Desktop app for Windows, Mac, and Linux, an iPhone beta on TestFlight, and the Android app on Google Play. The browser still works with nothing to install.",
+      es: "App de escritorio para Windows, Mac y Linux, una beta para iPhone en TestFlight y la app de Android en Google Play. El navegador sigue funcionando sin instalar nada.",
     },
   },
   "/garanta": {
@@ -272,6 +295,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
   },
+  "/watch-party": WATCH_PARTY_COPY,
+  "/watchparty": WATCH_PARTY_COPY,
   "/privacy": {
     canonicalPath: "/privacy",
     title: {
@@ -343,9 +368,14 @@ export const LANDING_FAQ: Record<
         "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
     },
     {
+      question: "Como eu entro?",
+      answer:
+        "Escolhe Google, Apple ou Twitch, autoriza e pronto. Se alguém te mandou um link de convite, abre ele e entra por lá.",
+    },
+    {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone e Android se preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone se preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -360,7 +390,7 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo. Quando a chamada de voz é repassada, ela passa pelo servidor mais perto, São Paulo, Miami ou Londres; chamada menor é direta entre as pessoas e não passa por servidor nenhum. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
+        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo, com backups noturnos na América do Norte. Quando a chamada de voz é repassada, ela passa pelo servidor mais perto, São Paulo, Miami ou Londres; chamada menor é direta entre as pessoas e não passa por servidor nenhum. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
@@ -375,9 +405,14 @@ export const LANDING_FAQ: Record<
         "Yes. Open source under AGPL, no paid plan and no artificial room limit. You can support the project with a donation, and donating unlocks nothing.",
     },
     {
+      question: "How do I sign in?",
+      answer:
+        "Pick Google, Apple or Twitch, authorize, and you're in. If somebody sent you an invite link, open it and sign in from there.",
+    },
+    {
       question: "Do I need to install anything?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone and Android if you prefer.",
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta if you prefer.",
     },
     {
       question: "How many people fit in one call?",
@@ -392,7 +427,7 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "Your account and community live on our server in São Paulo. When a voice call is relayed, it touches whichever media server is nearest, São Paulo, Miami or London; smaller calls go direct between people and touch no server at all. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
+        "Your account and community live on our server in São Paulo, with nightly backups in North America. When a voice call is relayed, it touches whichever media server is nearest, São Paulo, Miami or London; smaller calls go direct between people and touch no server at all. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
     },
   ],
   es: [
@@ -407,9 +442,14 @@ export const LANDING_FAQ: Record<
         "Sí. Código abierto bajo AGPL, sin plan de pago y sin límite artificial de salas. Puedes apoyar el proyecto con una donación, y donar no desbloquea nada.",
     },
     {
+      question: "¿Cómo entro?",
+      answer:
+        "Elige Google, Apple o Twitch, autoriza y listo. Si alguien te mandó un link de invitación, ábrelo y entra desde ahí.",
+    },
+    {
       question: "¿Tengo que instalar algo?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, y betas para iPhone y Android si lo prefieres.",
+        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone si lo prefieres.",
     },
     {
       question: "¿Cuántas personas caben en una llamada?",
@@ -424,7 +464,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo. Cuando una llamada de voz se retransmite, pasa por el servidor más cercano: São Paulo, Miami o Londres; las llamadas chicas son directas entre las personas y no pasan por ningún servidor. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina.",
+        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo, con respaldos nocturnos en Norteamérica. Cuando una llamada de voz se retransmite, pasa por el servidor más cercano: São Paulo, Miami o Londres; las llamadas chicas son directas entre las personas y no pasan por ningún servidor. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
     },
   ],
 };
@@ -544,12 +584,12 @@ export const TELA_FAQ: Record<
     {
       question: "Tem no celular?",
       answer:
-        "No Android tem um beta em APK em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois. Ainda não está nas lojas.",
+        "O app de Android já está na Google Play, em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois.",
     },
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
     {
       question:
@@ -582,12 +622,12 @@ export const TELA_FAQ: Record<
     {
       question: "Does it work on a phone?",
       answer:
-        "On Android there is an APK beta at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both. Neither is on the stores yet.",
+        "The Android app is live on Google Play, at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both.",
     },
     {
       question: "What do you keep about me?",
       answer:
-        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
     },
     {
       question: "Why is Discord screen share suspended in Brazil?",
@@ -619,12 +659,12 @@ export const TELA_FAQ: Record<
     {
       question: "¿Funciona en el celular?",
       answer:
-        "En Android hay una beta en APK en pqp.gg/android. En iPhone, TestFlight en pqp.gg/beta. El navegador sigue funcionando en los dos. Ninguna está en las tiendas todavía.",
+        "La app de Android ya está en Google Play, en pqp.gg/android. En iPhone, TestFlight en pqp.gg/beta. El navegador sigue funcionando en los dos.",
     },
     {
       question: "¿Qué guardan sobre mí?",
       answer:
-        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami) y una etiqueta de conversión de Google Ads que solo cuenta registros. Sin remarketing, sin listas de audiencia.",
+        "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
     },
     {
       question: "¿Por qué compartir pantalla desde el navegador?",
@@ -672,7 +712,7 @@ export const VEM_FAQ: Record<
     {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone (TestFlight) e Android (APK), se você preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se você preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -714,7 +754,7 @@ export const VEM_FAQ: Record<
     {
       question: "Do I have to install anything?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone (TestFlight) and Android (APK), if you prefer.",
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta on TestFlight, if you prefer.",
     },
     {
       question: "How many people fit in a call?",
@@ -756,7 +796,7 @@ export const VEM_FAQ: Record<
     {
       question: "¿Tengo que instalar algo?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay app de escritorio para Mac, Windows y Linux, y beta para iPhone (TestFlight) y Android (APK), si prefieres.",
+        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone en TestFlight, si prefieres.",
     },
     {
       question: "¿Cuántas personas caben en una llamada?",
@@ -785,18 +825,16 @@ export function escapeHtml(value: string): string {
  *
  * Every page carries the WebSite node, and now an Organization node beside
  * it: one stable identity for the publisher, independent of which page a
- * crawler landed on first, with `sameAs` pointing at the two other places the
- * same product answers for itself — the source repository and the Play Store
- * listing. Both are checked-in facts, not guesses: the repo is the one this
- * codebase lives in, and the Play listing is the one `docs/ANDROID_RELEASE.md`
- * records production access as open for. The App Store is deliberately absent
- * — TestFlight is a beta enrollment, not a public listing, and `sameAs` is for
- * pages anyone can already land on.
+ * crawler landed on first, with `sameAs` pointing at the other place the same
+ * product answers for itself: the source repository this codebase lives in,
+ * and the Play listing (the same URL as `PLAY_STORE_LISTING_URL` in
+ * `lib/play-store.ts`), public since 2026-09-28.
+ * `sameAs` is for pages anyone can already land on, so the App Store is
+ * absent: TestFlight is a beta enrollment, not a public listing.
  *
  * The landing adds SoftwareApplication — the page is the product — mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer) and, since the redesign, its own FAQPage, plus the same Play Store
- * link on `sameAs` for the one app-store URL that is public today. `/vs-discord`
+ * Offer) and, since the redesign, its own FAQPage, with the same `sameAs`. `/vs-discord`
  * adds FAQPage too, whose questions are the FAQ section actually rendered on
  * the page — schema for copy a visitor can read, never schema alone. `/tela`
  * does the same with its own seven.
@@ -805,6 +843,15 @@ const ORGANIZATION_SAME_AS = [
   "https://github.com/rafaelcg/pqp",
   "https://play.google.com/store/apps/details?id=gg.pqp.app",
 ];
+
+/**
+ * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
+ * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
+ * the Electron builds for all three systems, iPhone the TestFlight beta, and
+ * Android the Google Play app. `client/index.html` carries the same string for every page
+ * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
+ */
+export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";
 
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -827,7 +874,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       "@type": "SoftwareApplication",
       name: "pqp",
       applicationCategory: "CommunicationApplication",
-      operatingSystem: "Web, Windows, macOS, Linux, Android",
+      operatingSystem: SOFTWARE_OPERATING_SYSTEMS,
       url: `${CANONICAL_ORIGIN}/`,
       description: pick(PAGE_COPY["/"].description, locale),
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
@@ -864,6 +911,58 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
 }
 
 /**
+ * What the product share card (`/images/og-image.jpg`, 1200 x 630) is, for
+ * `og:image:alt` and `twitter:image:alt`. Written for the card's job (the pqp
+ * name and what it is), not for its artwork, so it stays true when the picture
+ * is redrawn.
+ */
+const PRODUCT_CARD_ALT: LocalizedText = {
+  "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera",
+  en: "pqp: voice, screen share and chat for your crew",
+  es: "pqp: voz, pantalla compartida y chat para tu gente",
+};
+
+/**
+ * The canonical URL and the hreflang set for one page in one language.
+ *
+ * SELF-REFERENCING PER LOCALE. Portuguese is the site's default and lives at
+ * the bare path; English and Spanish live at `?lang=en` and `?lang=es`, and
+ * each of those declares ITSELF canonical. Before, every variant pointed its
+ * canonical at the bare path while hreflang pointed the alternates at the
+ * `?lang=` URLs, which is a contradiction Google resolves by ignoring the
+ * hreflang set (and Lighthouse reports as "canonical points to another
+ * hreflang location"). Now the three URLs each answer for themselves and each
+ * lists the same three, with the bare path as `x-default` and as Portuguese.
+ *
+ * A page with no Spanish copy (the policies, the status page) serves the
+ * English text at `?lang=es`. That document is English, so it canonicalises to
+ * `?lang=en` and does not advertise an `es` alternate, rather than claiming a
+ * Spanish URL for English words.
+ *
+ * Shared with the client `Seo`, so the head the edge writes and the head the
+ * browser leaves behind cannot disagree.
+ */
+export function marketingUrlsFor(
+  page: MarketingPage,
+  locale: MarketingLocale,
+): { canonical: string; alternates: { hreflang: string; href: string }[] } {
+  const copy = PAGE_COPY[page];
+  const base = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
+  const hasSpanish = copy.title.es !== undefined;
+  const contentLocale: MarketingLocale =
+    locale === "es" && !hasSpanish ? "en" : locale;
+  const withLang = (l: MarketingLocale) =>
+    l === "pt-BR" ? base : `${base}?lang=${l}`;
+  const alternates = [
+    { hreflang: "x-default", href: base },
+    { hreflang: "pt-BR", href: withLang("pt-BR") },
+    { hreflang: "en", href: withLang("en") },
+    ...(hasSpanish ? [{ hreflang: "es", href: withLang("es") }] : []),
+  ];
+  return { canonical: withLang(contentLocale), alternates };
+}
+
+/**
  * Every tag the rewrite manages, as one string.
  *
  * The same vocabulary the profile and community injectors emit, minus the
@@ -875,7 +974,7 @@ export function renderMarketingHead(
   locale: MarketingLocale,
 ): string {
   const copy = PAGE_COPY[page];
-  const url = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
+  const { canonical: url, alternates } = marketingUrlsFor(page, locale);
   const title = pick(copy.title, locale);
   const description = pick(copy.description, locale);
   const ogTitle = copy.ogTitle ? pick(copy.ogTitle, locale) : title;
@@ -884,26 +983,40 @@ export function renderMarketingHead(
     : description;
   const image = `${CANONICAL_ORIGIN}${copy.image ? pick(copy.image, locale) : "/images/og-image.jpg"}`;
   const e = escapeHtml;
-  const langSuffix = url.includes("?") ? "&" : "?";
 
   return [
     `<title>${e(title)}</title>`,
     `<meta name="description" content="${e(description)}" />`,
     `<link rel="canonical" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="x-default" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="pt-BR" href="${e(url)}${langSuffix}lang=pt-BR" />`,
-    `<link rel="alternate" hreflang="en" href="${e(url)}${langSuffix}lang=en" />`,
-    `<link rel="alternate" hreflang="es" href="${e(url)}${langSuffix}lang=es" />`,
+    ...alternates.map(
+      (a) =>
+        `<link rel="alternate" hreflang="${a.hreflang}" href="${e(a.href)}" />`,
+    ),
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="pqp" />`,
     `<meta property="og:url" content="${e(url)}" />`,
     `<meta property="og:title" content="${e(ogTitle)}" />`,
     `<meta property="og:description" content="${e(ogDescription)}" />`,
     `<meta property="og:image" content="${e(image)}" />`,
+    // The product card is exactly 1200 x 630 (1.91:1, what X and Facebook
+    // crop to). The per-locale `/vem` art has its own size, so it says
+    // nothing rather than something wrong.
+    ...(copy.image
+      ? []
+      : [
+          `<meta property="og:image:width" content="1200" />`,
+          `<meta property="og:image:height" content="630" />`,
+          `<meta property="og:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
+        ]),
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${e(ogTitle)}" />`,
     `<meta name="twitter:description" content="${e(ogDescription)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
+    ...(copy.image
+      ? []
+      : [
+          `<meta name="twitter:image:alt" content="${e(pick(PRODUCT_CARD_ALT, locale))}" />`,
+        ]),
     `<meta name="robots" content="index, follow" />`,
     // The locale this document was negotiated in, for the client bundle to
     // read back. `detectLocale()` prefers it over `navigator.languages`,
@@ -924,7 +1037,7 @@ export function renderMarketingHead(
  * pre-paint theme script and the font preconnects all survive untouched.
  */
 const MANAGED_TAGS =
-  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|profile:[a-zA-Z:]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
+  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:_]+|twitter:[a-zA-Z:_]+|profile:[a-zA-Z:_]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
 
 /**
  * Rewrite a document's head for one marketing page.

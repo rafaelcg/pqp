@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.core.IdempotencyAttempt
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.invites.ui.InviteSheet
@@ -90,6 +91,12 @@ fun ServersScreen(
 
     var refreshing by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
+    // One key per create attempt, reused across a retry of the same name so
+    // a lost response never makes a second room. Scoped to the screen, not
+    // the dialog, so it survives the dialog closing on submit (see the
+    // create call below) and still catches the person reopening it and
+    // retyping the same name.
+    val createAttempt = remember { IdempotencyAttempt() }
     var leaving by remember { mutableStateOf<ServerSummary?>(null) }
     var deleting by remember { mutableStateOf<ServerSummary?>(null) }
     var reporting by remember { mutableStateOf<ServerSummary?>(null) }
@@ -233,9 +240,14 @@ fun ServersScreen(
             onDismiss = { creating = false },
             onCreate = { name ->
                 creating = false
-                session.createServer(name) { message ->
-                    scope.launch { snackbars.showSnackbar(message.ifBlank { "" }) }
-                }
+                session.createServer(
+                    name = name,
+                    idempotencyKey = createAttempt.keyFor(name),
+                    onSuccess = { createAttempt.reset() },
+                    onError = { message ->
+                        scope.launch { snackbars.showSnackbar(message.ifBlank { "" }) }
+                    },
+                )
             },
         )
     }

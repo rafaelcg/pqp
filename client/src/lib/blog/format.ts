@@ -1,4 +1,4 @@
-import type { BlogLocale } from "./posts";
+import type { BlogReadLocale } from "./posts";
 
 function utcStamp(iso: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -11,7 +11,7 @@ function utcStamp(iso: string): number | null {
 
 function formatUtc(
   iso: string,
-  locale: BlogLocale,
+  locale: BlogReadLocale,
   options: Intl.DateTimeFormatOptions,
 ): string {
   const at = utcStamp(iso);
@@ -36,7 +36,7 @@ function formatUtc(
  * Returns the raw string for anything that is not a date, which is what makes
  * this safe to call on data that only a test would ever get wrong.
  */
-export function formatPostDate(iso: string, locale: BlogLocale): string {
+export function formatPostDate(iso: string, locale: BlogReadLocale): string {
   return formatUtc(iso, locale, {
     day: "numeric",
     month: "long",
@@ -45,7 +45,7 @@ export function formatPostDate(iso: string, locale: BlogLocale): string {
 }
 
 /** Compact date for a list of notes: day and month, no year. */
-export function formatPostShortDate(iso: string, locale: BlogLocale): string {
+export function formatPostShortDate(iso: string, locale: BlogReadLocale): string {
   return formatUtc(iso, locale, {
     day: "numeric",
     month: "short",

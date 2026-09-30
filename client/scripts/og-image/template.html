@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>pqp og image</title>
+<!-- Same families the site loads (client/index.html). Fetched at render time only. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Gabarito:wght@600;700;900&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /* Tokens copied from client/src/index.css (dark theme, the brand default). */
+  :root {
+    --surface-0: oklch(0.16 0.012 250);
+    --surface-1: oklch(0.2 0.014 250);
+    --border: oklch(0.3 0.018 250);
+    --border-strong: oklch(0.38 0.02 250);
+    --text: oklch(0.93 0.015 95);
+    --text-secondary: oklch(0.82 0.015 95);
+    --accent: oklch(0.88 0.19 125);
+    --on-accent: oklch(0.16 0.012 250);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; background: var(--surface-0); }
+  body { position: relative; font-family: "Instrument Sans", system-ui, sans-serif; color: var(--text); }
+
+  .bg { position: absolute; inset: 0;
+    background:
+      radial-gradient(620px 460px at 880px 300px, oklch(0.35 0.12 125 / 0.42), transparent 70%),
+      radial-gradient(500px 400px at 60px 640px, oklch(0.3 0.08 250 / 0.5), transparent 70%),
+      var(--surface-0); }
+  .grid { position: absolute; inset: 0; opacity: .5;
+    background-image: radial-gradient(oklch(0.4 0.02 250 / 0.55) 1.2px, transparent 1.3px);
+    background-size: 28px 28px;
+    -webkit-mask-image: radial-gradient(700px 500px at 900px 320px, #000, transparent 75%);
+            mask-image: radial-gradient(700px 500px at 900px 320px, #000, transparent 75%); }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: var(--accent); }
+
+  .brand { position: absolute; left: 68px; top: 58px; display: flex; align-items: center; gap: 18px; }
+  .brand svg { width: 64px; height: auto; display: block; }
+  .word { font-family: "Dela Gothic One", "Gabarito", sans-serif; font-size: 54px; line-height: 1; letter-spacing: -0.01em; }
+
+  h1 { position: absolute; left: 66px; top: 190px; font-family: "Gabarito", sans-serif; font-weight: 900;
+    font-size: 96px; line-height: 0.98; letter-spacing: -0.025em; }
+  h1 span { display: block; }
+  h1 .a { color: var(--accent); }
+  .sub { position: absolute; left: 68px; top: 412px; width: 520px; font-size: 27px; line-height: 1.32; white-space: pre-line;
+    font-weight: 500; color: var(--text-secondary); }
+  .chips { position: absolute; left: 68px; bottom: 54px; display: flex; gap: 12px; align-items: center; }
+  .chip { font-weight: 600; font-size: 20px; padding: 9px 18px; border-radius: 999px;
+    border: 2px solid var(--border-strong); background: oklch(0.2 0.014 250 / 0.8); color: var(--text); }
+  .chip.url { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+
+  /* Stage: a watch party in a call */
+  .stage { position: absolute; left: 640px; top: 96px; width: 500px; }
+  .screen { position: relative; width: 500px; height: 281px; border-radius: 22px; overflow: hidden;
+    border: 2px solid var(--border-strong); box-shadow: 0 30px 70px oklch(0.05 0.01 250 / .7), 0 0 0 8px oklch(0.2 0.014 250 / .6); }
+  .screen svg.art { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .live { position: absolute; left: 16px; top: 16px; display: flex; align-items: center; gap: 8px;
+    background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 15px; letter-spacing: .08em;
+    padding: 6px 12px 6px 10px; border-radius: 999px; }
+  .live i { width: 9px; height: 9px; border-radius: 50%; background: var(--on-accent); display: block; }
+  .ctrl { position: absolute; left: 0; right: 0; bottom: 0; height: 54px; padding: 0 18px;
+    display: flex; align-items: center; gap: 14px;
+    background: linear-gradient(transparent, oklch(0.1 0.01 250 / .85)); }
+  .ctrl .track { flex: 1; height: 6px; border-radius: 3px; background: oklch(1 0 0 / .25); position: relative; }
+  .ctrl .track b { position: absolute; left: 0; top: 0; bottom: 0; width: 62%; border-radius: 3px; background: var(--accent); }
+  .ctrl .track b::after { content: ""; position: absolute; right: -6px; top: -4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
+
+  .voice { margin-top: 30px; display: flex; gap: 18px; align-items: center; justify-content: space-between;
+    background: oklch(0.2 0.014 250 / .92); border: 2px solid var(--border); border-radius: 26px; padding: 22px 28px; }
+  .av { position: relative; width: 76px; height: 76px; border-radius: 50%; overflow: hidden; flex: none; }
+  .av svg { width: 100%; height: 100%; display: block; }
+  .avw { flex: none; border-radius: 50%; }
+  .avw.speak { box-shadow: 0 0 0 4px var(--surface-1), 0 0 0 8px var(--accent); }
+  .wave { display: flex; gap: 5px; align-items: center; height: 40px; }
+  .wave i { display: block; width: 6px; border-radius: 3px; background: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="bg"></div><div class="grid"></div><div class="bar"></div>
+
+  <div class="brand">
+    <!-- Logo mark: the app icon's bubble (client/public/icons/icon-512.png), redrawn as vectors. -->
+    <svg viewBox="98 122 318 322" aria-hidden="true">
+      <path fill="oklch(0.88 0.19 125)" d="M168 122h178c39 0 70 31 70 70v108c0 39-31 70-70 70h-110l-54 73 -8-75-16-2c-32-6-58-34-58-68V192c0-39 31-70 70-70z"/>
+      <circle cx="181" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+      <circle cx="256" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+      <circle cx="331" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+    </svg>
+    <span class="word">pqp</span>
+  </div>
+
+  <h1><span id="h1a"></span><span class="a" id="h1b"></span></h1>
+  <p class="sub" id="sub"></p>
+  <div class="chips"><span class="chip" id="c1"></span><span class="chip url">pqp.gg</span></div>
+
+  <div class="stage">
+    <div class="screen">
+      <svg class="art" viewBox="0 0 500 281" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="oklch(0.32 0.09 285)"/>
+            <stop offset=".6" stop-color="oklch(0.48 0.14 20)"/>
+            <stop offset="1" stop-color="oklch(0.7 0.15 60)"/>
+          </linearGradient>
+        </defs>
+        <rect width="500" height="281" fill="url(#sky)"/>
+        <circle cx="360" cy="150" r="46" fill="oklch(0.92 0.12 85)"/>
+        <path d="M0 200 L90 130 L160 190 L250 110 L350 200 L430 145 L500 195 V281 H0Z" fill="oklch(0.24 0.05 275)"/>
+        <path d="M0 232 L110 180 L210 228 L320 172 L420 224 L500 190 V281 H0Z" fill="oklch(0.17 0.03 260)"/>
+      </svg>
+      <div class="live"><i></i><span id="live"></span></div>
+      <svg style="position:absolute;left:206px;top:96px;width:88px;height:88px" viewBox="0 0 88 88" aria-hidden="true">
+        <circle cx="44" cy="44" r="42" fill="oklch(0.16 0.012 250 / .62)" stroke="oklch(1 0 0 / .5)" stroke-width="2"/>
+        <path d="M35 27 L64 44 L35 61Z" fill="#fff"/>
+      </svg>
+      <div class="ctrl"><div class="track"><b></b></div></div>
+    </div>
+
+    <div class="voice" id="voice"></div>
+  </div>
+
+<script>
+  const L = {
+    pt: {
+      lang: "pt-BR",
+      h1a: "Voz. Texto.", h1b: "Watch party.",
+      sub: "Chat de voz e texto pra sua galera.\nFeito por dois irmãos.",
+      c1: "Código aberto · de graça",
+      live: "AO VIVO"
+    },
+    en: {
+      lang: "en",
+      h1a: "Voice. Text.", h1b: "Watch party.",
+      sub: "Voice and text chat for your crew.\nMade by two brothers.",
+      c1: "Open source · free",
+      live: "LIVE"
+    }
+  };
+  const lang = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "pt";
+  const t = L[lang];
+  document.documentElement.lang = t.lang;
+  for (const k of ["h1a", "h1b", "sub", "c1", "live"]) document.getElementById(k).textContent = t[k];
+
+  // Abstract avatars (silhouette on a hue), never a real person or photo.
+  const hues = [250, 20, 200, 320];
+  document.getElementById("voice").innerHTML = hues.map((h, i) => `
+    <div class="avw${i === 1 ? " speak" : ""}"><div class="av">
+      <svg viewBox="0 0 84 84" aria-hidden="true">
+        <rect width="84" height="84" fill="oklch(0.55 0.13 ${h})"/>
+        <circle cx="42" cy="34" r="15" fill="oklch(0.94 0.03 ${h})"/>
+        <ellipse cx="42" cy="82" rx="28" ry="24" fill="oklch(0.94 0.03 ${h})"/>
+      </svg></div>
+    </div>`).join("") + `
+    <div class="wave">${[16, 30, 40, 24, 34, 14].map((h) => `<i style="height:${h}px"></i>`).join("")}</div>`;
+</script>
+</body>
+</html>

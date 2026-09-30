@@ -1,6 +1,6 @@
 {
   "name": "@pqp/electron",
-  "version": "0.1.9",
+  "version": "0.2.1",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
@@ -22,6 +22,7 @@
     "dist:win": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
     "test": "node --test lib/*.test.mjs",
+    "build:share-audio": "node native/win-share-audio/build.mjs",
     "test:smoke": "playwright test --config=playwright.config.mjs"
   },
   "dependencies": {
@@ -52,11 +53,13 @@
       "preload.js",
       "lib/**/*",
       "picker/**/*",
+      "native/win-share-audio/prebuilds/**/*",
       "package.json",
       "node_modules/**/*"
     ],
     "asarUnpack": [
-      "node_modules/uiohook-napi/**/*"
+      "node_modules/uiohook-napi/**/*",
+      "native/win-share-audio/prebuilds/**/*"
     ],
     "npmRebuild": false,
     "publish": [
@@ -132,6 +135,9 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "signExts": [
+        ".node"
+      ],
       "target": [
         "nsis",
         "portable"

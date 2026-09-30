@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import {
   forwardRef,
+  memo,
   useEffect,
   useId,
   useMemo,
@@ -241,6 +242,11 @@ interface ChannelListProps {
   /** Opens the setup flow. Absent for anyone who may not start one. */
   onCreateWatchParty?: () => void;
   /**
+   * The waitlist teaser, only for a server where watch parties are off
+   * (`shouldOfferWatchPartyTeaser` in `App.tsx`). See `LivePartyBlock.teaser`.
+   */
+  watchPartyTeaser?: { onList: boolean; onOpen: () => void } | null;
+  /**
    * `watch_party` channels on this server that this person may see the
    * history of AND that have a broadcast to show (`watchPartyHistoryCandidates`
    * + `useWatchPartyHistoryAvailability` in `App.tsx`) -- START_WATCH_PARTY
@@ -367,7 +373,7 @@ export function liveStateForChannel(
     : liveStateFromRoster(participants);
 }
 
-export function ChannelList({
+export const ChannelList = memo(function ChannelList({
   server,
   threadsByChannel = {},
   unreadThreadIds = EMPTY_THREAD_IDS,
@@ -394,6 +400,7 @@ export function ChannelList({
   onWatchLiveParty,
   canStartWatchParty,
   onCreateWatchParty,
+  watchPartyTeaser = null,
   watchPartyHistoryChannels = [],
   onOpenWatchPartyHistory,
   currentUserId = null,
@@ -1508,6 +1515,17 @@ export function ChannelList({
                 }
                 historyChannels={watchPartyHistoryChannels}
                 onOpenHistory={onOpenWatchPartyHistory}
+                teaser={
+                  watchPartyTeaser
+                    ? {
+                        onList: watchPartyTeaser.onList,
+                        onOpen: () => {
+                          watchPartyTeaser.onOpen();
+                          onMobileClose?.();
+                        },
+                      }
+                    : null
+                }
               />
             )}
 
@@ -1731,7 +1749,7 @@ export function ChannelList({
       {footer}
     </aside>
   );
-}
+});
 
 /**
  * Icon, name and chevron: the one control that opens the server menu.

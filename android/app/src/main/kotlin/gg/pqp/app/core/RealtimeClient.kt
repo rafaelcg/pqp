@@ -459,8 +459,15 @@ class RealtimeClient(
          * the person seated in a room whose media they cannot reach, which is
          * strictly worse than the `voice-transport-unsupported` drop it
          * replaces.
+         *
+         * `sfu-region`: this build dials whatever `url` `POST /api/voice/token`
+         * answers (`LiveKitEngine`, `created.connect(credentials.url, ...)`,
+         * minted fresh per attempt), so a room it opens may be placed on any
+         * SFU region. The server trusts every build by default (all shipped
+         * builds keep this promise, audited 2026-09-24); the declaration makes
+         * it explicit and survives the rollback `LIVEKIT_REGION_REQUIRE_CAP`.
          */
-        val WIRE_CAPS = listOf("voice-roster-delta", "voice-transport-changed")
+        val WIRE_CAPS = listOf("voice-roster-delta", "voice-transport-changed", "sfu-region")
 
         /**
          * The handshake, as a value rather than as a side effect.

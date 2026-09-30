@@ -71,7 +71,7 @@ asks "what is playing here" has to ask both (`liveHlsStreamFor ?? llStreamFor`)
 |---|---|---|
 | Presenter starts sharing | `set-sharing-screen` -> `pushLiveHls` | `startRoom` |
 | Roster event (join, leave, camera, mute) | `pushLiveHls` | Reconcile; usually a no-op |
-| Sharer vanishes | `pickHlsSharer` finds nobody, 5 s grace (`HLS_NO_SHARER_GRACE_MS`) | `stopRoom("no-share")` |
+| Sharer vanishes | `pickHlsSharer` finds nobody, 5 s grace (`HLS_NO_SHARER_GRACE_MS`); a presenter who left or stopped sharing is waited for `HLS_PRESENTER_RETURN_GRACE_MS` (60 s), and the same person back inside it continues the session | `stopRoom("no-share")` |
 | Presenter republishes their screen (new sid) | same-presenter branch | `stopRoom("screen-track-replaced")` then `startRoom` |
 | Somebody else takes the share | `presenter-changed` | Stop, then start |
 | Party ends | `noteWatchPartyState` -> the live listener -> `pushLiveHls` | `sharer` forced to null, so `stopRoom("no-share")`, with `voice.hlsPartyOver` naming it |

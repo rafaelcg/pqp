@@ -2,25 +2,11 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  CHANNEL_NAME_MAX_LENGTH,
+  sanitizeChannelName,
+} from "@/lib/channel-name";
 import { useTranslation } from "@/lib/i18n";
-
-/**
- * What a typed channel name becomes, keystroke by keystroke.
- *
- * Accents FOLD instead of vanishing — a Brazilian keyboard produces `ç` and
- * `ã` by reflex, and stripping them turns "caça-bugs" into "caa-bugs", a
- * misspelling nobody typed. Same argument `normalizeHandle` makes for
- * handles. Spaces become hyphens for the same reason: "mesa de rpg" means
- * "mesa-de-rpg", not "mesaderpg".
- */
-export function sanitizeChannelName(raw: string): string {
-  return raw
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-_]/g, "");
-}
 
 interface PromptDialogProps {
   open: boolean;
@@ -42,6 +28,11 @@ interface PromptDialogProps {
   secondaryPlaceholder?: string;
   secondaryMaxLength?: number;
   onClose: () => void;
+  /**
+   * A rejection is shown inside the dialog, under the field, and the dialog
+   * stays open with what was typed. A page-level banner would sit behind the
+   * modal overlay, where nobody reads it.
+   */
   onConfirm: (
     value: string,
     checked: boolean,
@@ -70,6 +61,7 @@ export function PromptDialog({
   const [secondary, setSecondary] = useState("");
   const [checked, setChecked] = useState(checkboxDefault);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const formId = useId();
 
   useEffect(() => {
@@ -78,6 +70,7 @@ export function PromptDialog({
       setSecondary("");
       setChecked(checkboxDefault);
       setBusy(false);
+      setError(null);
     }
   }, [open, initialValue, checkboxDefault]);
 
@@ -90,8 +83,15 @@ export function PromptDialog({
       return;
     }
     setBusy(true);
+    setError(null);
     try {
       await onConfirm(trimmed, checked, secondary.trim());
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : t("chrome.channelActionFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -127,12 +127,23 @@ export function PromptDialog({
           </span>
           <Input
             value={value}
-            onChange={(e) => setValue(sanitizeChannelName(e.target.value))}
+            onChange={(e) => {
+              setValue(sanitizeChannelName(e.target.value));
+              setError(null);
+            }}
             placeholder={placeholder}
+            maxLength={CHANNEL_NAME_MAX_LENGTH}
+            aria-invalid={error ? true : undefined}
             disabled={busy}
             autoFocus
           />
         </label>
+
+        {error && (
+          <p className="text-sm text-danger" role="alert">
+            {error}
+          </p>
+        )}
 
         {secondaryPlaceholder !== undefined && (
           <label className="block">

@@ -150,7 +150,7 @@ export function QgHint({
     }
     setJoining(true);
     try {
-      const result = await joinCommunity(communityId);
+      const result = await joinCommunity(communityId, "qg_hint");
       setOpen(false);
       onJoined({
         serverId: result.serverId,

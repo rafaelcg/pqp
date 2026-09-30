@@ -1060,7 +1060,10 @@ never initialises, so a self-host makes no request and defines no global (AGPL
 Build-time source-map upload (`@grafana/faro-rollup-plugin` in
 `client/vite.config.ts`) de-obfuscates the minified stack traces, gated on
 `FARO_SOURCEMAP_API_KEY` plus the app's endpoint/appId/stackId; absent means no
-upload and the build still succeeds. Faro is a separate Grafana product from the
+upload and the build still succeeds. Faro's per-request `faro.performance.resource`
+events are dropped client-side (`dropNoisyItems`): on 2026-09-29 they were 99.6% of
+Faro's Loki bytes (about 0.8 GB a day quiet, 3 to 6 GB on party days) and nothing
+reads them. Faro is a separate Grafana product from the
 Prometheus/Loki stack here and has its own UI; there is nothing to import.
 
 ## The activation funnel
@@ -1397,3 +1400,13 @@ restart and would churn the series set for nothing.
 | `server/src/services/status.ts` | The app's own per-minute component probes, which `status-components` and `uptime-24h` read |
 | `server/src/services/readiness.ts` | `GET /up`: the status-code endpoint an external monitor points at, and the whole 200-vs-503 decision |
 | `server/src/services/readiness.test.ts` | The grace window, the recovery reset, the flapping case and the probe coalescing |
+
+## Acquisition and audience instrumentation (2026-09-29)
+
+Added after the 09-26 party report, where 210 of 213 viewers had no acquisition row and phone share, background time and sign-up time were unmeasured. No new Grafana metric, so none of the three manual pipeline steps apply. Everything is on the operator endpoints:
+
+- `GET /api/admin/acquisition?days=N`: a bare `/c/<slug>` link now lands in `landings` (and the referring site, host only, in `rows` as `source` with `medium: referral`; an Android Custom Tab shows as `android-app:<package>`). New `signup: { measured, p50Seconds, p90Seconds }` is modal open to account ready as the browser clocked it (accounts that signed up across two visits carry none).
+- `GET /api/admin/metrics`, `liveHls.viewers.audience`: per broadcast that still has viewer rows (a day), `byDevice` and `newAccountsByDevice` (phone / tablet / desktop / unknown = client older than the report), `visibleSeconds`, `hiddenSeconds`, `hiddenShare`. Rows are pruned 24 h after the last sighting, so read it the day of the party.
+- SQL, same day: `SELECT device_class, count(*), sum(hidden_ms)/1000 AS hidden_s, sum(visible_ms)/1000 AS visible_s FROM hls_session_viewers WHERE channel_id = :channel AND started_at_ms = :started_ms GROUP BY 1;` and join `users.acquisition_signup_s`, `acquisition_source`, `acquisition_landing` for retention by sign-up time or by door.
+
+Privacy: device class is judged from pointer type and screen size in the browser (never a user agent), spans ride the existing 30 s presence beat, the sign-up stamp leaves the device only as a duration rounded to 5 s. Listed in the cookie notice (`pqp:acquisition-done`, `pqp:signup-started`).

@@ -75,6 +75,31 @@ export function resolveFaroConfig(env: FaroEnv): FaroConfig | null {
   };
 }
 
+/**
+ * Faro event names that are never sent. `faro.performance.resource` is one
+ * event per completed browser request (fetch, script, image): every API call,
+ * Clerk token refresh and sound file. Measured 2026-09-29 on Grafana Loki it was
+ * 99.6% of all Faro bytes (801 MB of 805 MB of events in 24 h, 463k lines at
+ * ~1.7 KB each), about 99% of everything in Loki, and nothing reads it: the
+ * API's own logs and metrics time the same requests, and no dashboard or alert
+ * queries it. Errors, console errors, Web Vitals (`kind=measurement`), the
+ * navigation timing and session events are all kept.
+ */
+const DROPPED_EVENT_NAMES = new Set(["faro.performance.resource"]);
+
+/** `beforeSend` hook: drop the noisy event names, pass everything else through untouched. */
+export function dropNoisyItems<T extends { type: string; payload: unknown }>(
+  item: T,
+): T | null {
+  if (item.type === "event") {
+    const name = (item.payload as { name?: unknown } | null)?.name;
+    if (typeof name === "string" && DROPPED_EVENT_NAMES.has(name)) {
+      return null;
+    }
+  }
+  return item;
+}
+
 let faro: Faro | null = null;
 
 export interface InitFaroDeps {
@@ -110,9 +135,25 @@ export function initFaro(deps: InitFaroDeps = {}): Faro | null {
     // Errors (uncaught + unhandled rejection), console errors, and Web Vitals,
     // plus session/view tracking. No tracing (see the file header).
     instrumentations: getWebInstrumentations(),
+    // Per-request resource timings are dropped (see DROPPED_EVENT_NAMES).
+    beforeSend: dropNoisyItems,
     // No `user` is set: this app attaches no account identity to telemetry.
   });
   return faro;
+}
+
+/**
+ * This tab's Faro session id, or null when Faro is off (every self-host, and
+ * local dev). The feedback box attaches it so the operator can open the
+ * errors around the moment a bug was reported. It is Faro's own random id and
+ * identifies a browser session, not an account.
+ */
+export function faroSessionId(): string | null {
+  try {
+    return faro?.api.getSession()?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Test seam: forget the instance so a later `initFaro` runs again. */

@@ -115,15 +115,23 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the seven routes, and account deletion is not one of them", () => {
+  it("is exactly the fifteen routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
+      ["GET", "/api/admin/user-activity"],
+      ["GET", "/api/admin/feedback"],
+      ["PUT", "/api/admin/feedback/resolve"],
       ["GET", "/api/admin/servers"],
       ["GET", "/api/admin/server-channels"],
       ["PUT", "/api/admin/server-live-hls"],
       ["PUT", "/api/admin/channel-voice-transport"],
       ["PUT", "/api/admin/channel-sfu-region"],
+      ["GET", "/api/admin/watch-party-waitlist"],
+      ["PUT", "/api/admin/watch-party-waitlist/decline"],
+      ["GET", "/api/admin/flags"],
+      ["PUT", "/api/admin/flags"],
+      ["PUT", "/api/admin/flag-overrides"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -140,6 +148,14 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/metrics"],
       ["GET", "/api/admin/servers/"],
       ["GET", "/api/servers"],
+      ["POST", "/api/admin/watch-party-waitlist"],
+      ["GET", "/api/admin/watch-party-waitlist/decline"],
+      ["GET", "/api/watch-party/waitlist"],
+      ["POST", "/api/admin/flags"],
+      ["DELETE", "/api/admin/flags"],
+      ["GET", "/api/admin/flag-overrides"],
+      ["DELETE", "/api/admin/flag-overrides"],
+      ["PUT", "/api/admin/flags/watch_party_waitlist"],
     ] as const;
     for (const [method, path] of refused) {
       expect(matchAdminMachineRoute(method, path)).toBeNull();
@@ -691,6 +707,316 @@ describeDb("the operator's two levers", () => {
       // which is how the two are told apart from the outside.
       const { status } = await asMachine("GET", "/api/admin/servers");
       expect(status).toBe(404);
+    });
+  });
+
+  describe("runtime feature flags", () => {
+    afterEach(async () => {
+      // Neither the rows nor the snapshot a write loaded may answer for a
+      // later case, or for another suite on the same database.
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+      const { resetFeatureFlagsForTests } = await import("../lib/flags.js");
+      resetFeatureFlagsForTests();
+    });
+
+    beforeEach(async () => {
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+    });
+
+    it("the machine token lists, sets and clears, and the next read follows", async () => {
+      const list = await asMachine<{ flags: { key: string; effective: boolean }[] }>(
+        "GET",
+        "/api/admin/flags",
+      );
+      expect(list.status).toBe(200);
+      expect(list.body.flags.map((flag) => flag.key)).toContain("live_hls_camera_480");
+
+      const config = async () =>
+        (await asUser<{ cameraHeight: number }>(ana, "GET", "/api/live-hls/config")).body
+          .cameraHeight;
+      expect(await config()).toBe(480);
+      const off = await asMachine<{ effective: boolean; source: string }>(
+        "PUT",
+        "/api/admin/flags",
+        { key: "live_hls_camera_480", enabled: false },
+      );
+      expect(off.status).toBe(200);
+      expect(off.body).toMatchObject({ effective: false, source: "global" });
+      expect(await config()).toBe(360);
+      await asMachine("PUT", "/api/admin/flags", { key: "live_hls_camera_480", enabled: null });
+      expect(await config()).toBe(480);
+
+      const audit = await getPool().query<{ actor_kind: string; actor_id: string | null }>(
+        `SELECT actor_kind, actor_id FROM feature_flag_audit ORDER BY id`,
+      );
+      expect(audit.rows).toEqual([
+        { actor_kind: "dashboard", actor_id: null },
+        { actor_kind: "dashboard", actor_id: null },
+      ]);
+    });
+
+    it("a per-server override reaches that server's waitlist answer only", async () => {
+      process.env.WATCH_PARTY_WAITLIST = "on";
+      try {
+        const override = await asMachine("PUT", "/api/admin/flag-overrides", {
+          key: "watch_party_waitlist",
+          serverId,
+          enabled: false,
+        });
+        expect(override.status).toBe(200);
+        const here = await asUser<{ campaign: boolean }>(
+          ana,
+          "GET",
+          `/api/watch-party/waitlist?serverId=${serverId}`,
+        );
+        expect(here.body.campaign).toBe(false);
+        const nowhere = await asUser<{ campaign: boolean }>(
+          ana,
+          "GET",
+          "/api/watch-party/waitlist",
+        );
+        expect(nowhere.body.campaign).toBe(true);
+      } finally {
+        delete process.env.WATCH_PARTY_WAITLIST;
+      }
+    });
+
+    it("party_newcomer_experience reaches the live-hls config of the overridden server only", async () => {
+      const newcomer = async (query: string) =>
+        (
+          await asUser<{ newcomerExperience?: boolean }>(
+            ana,
+            "GET",
+            `/api/live-hls/config${query}`,
+          )
+        ).body.newcomerExperience;
+      expect(await newcomer(`?serverId=${serverId}`)).toBe(false);
+      const on = await asMachine("PUT", "/api/admin/flag-overrides", {
+        key: "party_newcomer_experience",
+        serverId,
+        enabled: true,
+      });
+      expect(on.status).toBe(200);
+      expect(await newcomer(`?serverId=${serverId}`)).toBe(true);
+      // No server in the question, no answer: the deployment-wide read never
+      // turns it on.
+      expect(await newcomer("")).not.toBe(true);
+    });
+
+    it("refuses an unknown key, a flag with no overrides, and a server that does not exist", async () => {
+      expect(
+        (await asMachine("PUT", "/api/admin/flags", { key: "made_up", enabled: true })).status,
+      ).toBe(400);
+      expect(
+        (
+          await asMachine("PUT", "/api/admin/flag-overrides", {
+            key: "live_hls_camera_480",
+            serverId,
+            enabled: true,
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await asMachine("PUT", "/api/admin/flag-overrides", {
+            key: "watch_party_waitlist",
+            serverId: "00000000-0000-4000-8000-000000000009",
+            enabled: true,
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("a moderator's session writes as that moderator; anybody else gets a 404", async () => {
+      expect(
+        (await asUser(ana, "PUT", "/api/admin/flags", { key: "community_home", enabled: true }))
+          .status,
+      ).toBe(404);
+      expect((await asUser(ana, "GET", "/api/admin/flags")).status).toBe(404);
+      const write = await asUser(operator, "PUT", "/api/admin/flags", {
+        key: "community_home",
+        enabled: true,
+      });
+      expect(write.status).toBe(200);
+      const audit = await getPool().query<{ actor_kind: string; actor_id: string | null }>(
+        `SELECT actor_kind, actor_id FROM feature_flag_audit`,
+      );
+      expect(audit.rows).toEqual([{ actor_kind: "moderator", actor_id: operator.id }]);
+    });
+  });
+
+  describe("the feedback queue", () => {
+    it("stores where the person was and shows the operator who sent it", async () => {
+      const sent = await asUser(ana, "POST", "/api/feedback", {
+        kind: "bug",
+        body: "a transmissão está indo sem som",
+        context: {
+          platform: "desktop",
+          appVersion: "4718c63",
+          path: "/app",
+          viewport: "1440x900",
+          locale: "pt-BR",
+          voice: { inCall: true, transport: "livekit", watchParty: true },
+          faroSessionId: "abc_123",
+        },
+      });
+      expect(sent.status).toBe(201);
+      await asUser(ana, "POST", "/api/feedback", { kind: "idea", body: "redução de ruído" });
+
+      const page = await asMachine<{
+        items: {
+          id: string;
+          kind: string;
+          body: string;
+          context: Record<string, unknown> | null;
+          author: { tag: string; displayName: string; sent: number } | null;
+        }[];
+        next: string | null;
+        counts: { open: number; openByKind: Record<string, number> };
+      }>("GET", "/api/admin/feedback?status=open");
+      expect(page.status).toBe(200);
+      expect(page.body.counts.open).toBe(2);
+      expect(page.body.counts.openByKind).toEqual({ bug: 1, idea: 1, other: 0 });
+      expect(page.body.items.map((i) => i.kind)).toEqual(["idea", "bug"]);
+      const bug = page.body.items[1]!;
+      expect(bug.body).toBe("a transmissão está indo sem som");
+      expect(bug.author).toMatchObject({ displayName: "Ana", sent: 2 });
+      expect(bug.author!.tag).toMatch(/#/);
+      expect(bug.context).toMatchObject({
+        platform: "desktop",
+        appVersion: "4718c63",
+        voice: { inCall: true, transport: "livekit", watchParty: true },
+        faroSessionId: "abc_123",
+      });
+      // Read from the request's own header, never from the body.
+      expect(typeof bug.context!.userAgent).toBe("string");
+      // An older client that sends no context still gets the user agent.
+      expect(page.body.items[0]!.context).toEqual({
+        userAgent: expect.any(String),
+      });
+      // No account id on this route, only the tag.
+      expect(JSON.stringify(page.body)).not.toContain(ana.id);
+
+      const bugsOnly = await asMachine<{ items: unknown[] }>(
+        "GET",
+        "/api/admin/feedback?status=all&kind=bug",
+      );
+      expect(bugsOnly.body.items).toHaveLength(1);
+
+      const paged = await asMachine<{ items: { id: string }[]; next: string | null }>(
+        "GET",
+        "/api/admin/feedback?status=all&limit=1",
+      );
+      expect(paged.body.items).toHaveLength(1);
+      expect(paged.body.next).toBe(paged.body.items[0]!.id);
+    });
+
+    it("confirms a bug from the dashboard and grants the badge", async () => {
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "tela preta" });
+      const [item] = (
+        await asMachine<{ items: { id: string }[] }>("GET", "/api/admin/feedback")
+      ).body.items;
+
+      const confirmed = await asMachine<{ feedback: { status: string } }>(
+        "PUT",
+        "/api/admin/feedback/resolve",
+        { id: item!.id, status: "confirmed" },
+      );
+      expect(confirmed.status).toBe(200);
+      expect(confirmed.body.feedback.status).toBe("confirmed");
+      // The machine token never carries an account id, on writes either.
+      expect(JSON.stringify(confirmed.body)).not.toContain(ana.id);
+      const badge = await getPool().query(
+        `SELECT 1 FROM user_badges WHERE user_id = $1 AND badge = 'caca-bugs'`,
+        [ana.id],
+      );
+      expect(badge.rowCount).toBe(1);
+
+      const missing = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "999999",
+        status: "closed",
+      });
+      expect(missing.status).toBe(404);
+      const junk = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "1; DROP TABLE feedback",
+        status: "closed",
+      });
+      expect(junk.status).toBe(400);
+      const overflow = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: "9999999999999999999",
+        status: "closed",
+      });
+      expect(overflow.status).toBe(400);
+      const cursor = await asMachine("GET", "/api/admin/feedback?before=9999999999999999999");
+      expect(cursor.status).toBe(200);
+    });
+
+    it("confirms a group of reports in one write, badging every bug author once", async () => {
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "som alto" });
+      await asUser(ana, "POST", "/api/feedback", { kind: "bug", body: "som alto!" });
+      await asUser(operator, "POST", "/api/feedback", { kind: "bug", body: "som muito alto" });
+      const ids = (
+        await asMachine<{ items: { id: string }[] }>("GET", "/api/admin/feedback")
+      ).body.items.map((item) => item.id);
+      expect(ids).toHaveLength(3);
+
+      const group = await asMachine<{ feedback: { id: string; status: string }[] }>(
+        "PUT",
+        "/api/admin/feedback/resolve",
+        { ids: [...ids, "999999"], status: "confirmed" },
+      );
+      expect(group.status).toBe(200);
+      expect(group.body.feedback.map((item) => item.status)).toEqual([
+        "confirmed",
+        "confirmed",
+        "confirmed",
+      ]);
+      const badges = await getPool().query(
+        `SELECT user_id FROM user_badges WHERE badge = 'caca-bugs' ORDER BY user_id`,
+      );
+      expect(badges.rows.map((row) => row.user_id).sort()).toEqual([ana.id, operator.id].sort());
+      expect(JSON.stringify(group.body)).not.toContain(ana.id);
+
+      const both = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        id: ids[0],
+        ids,
+        status: "closed",
+      });
+      expect(both.status).toBe(400);
+      const none = await asMachine("PUT", "/api/admin/feedback/resolve", {
+        ids: ["999998"],
+        status: "closed",
+      });
+      expect(none.status).toBe(404);
+    });
+
+    it("saves the feedback when the context is unreadable, and drops only the context", async () => {
+      const sent = await asUser(ana, "POST", "/api/feedback", {
+        kind: "bug",
+        body: "contexto de um build futuro",
+        context: { platform: "web", voice: { inCall: true, transport: "quantum" } },
+      });
+      expect(sent.status).toBe(201);
+      const page = await asMachine<{ items: { context: Record<string, unknown> | null }[] }>(
+        "GET",
+        "/api/admin/feedback",
+      );
+      expect(page.body.items[0]!.context).toEqual({ userAgent: expect.any(String) });
+    });
+
+    it("is 404 for an ordinary account and for a wrong token", async () => {
+      expect((await asUser(ana, "GET", "/api/admin/feedback")).status).toBe(404);
+      expect(
+        (await asUser(ana, "PUT", "/api/admin/feedback/resolve", { id: "1", status: "closed" }))
+          .status,
+      ).toBe(404);
+      expect(
+        (await asMachine("GET", "/api/admin/feedback", undefined, WRONG_TOKEN)).status,
+      ).not.toBe(200);
     });
   });
 });

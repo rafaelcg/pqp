@@ -27,6 +27,7 @@ vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 const ll = vi.hoisted(() => ({
   stream: null as LiveHlsStream | null,
   mode: "ll" as "ll" | "conventional",
+  rebind: vi.fn(async (_channelId: string, _peerId: string, _detail?: unknown) => true),
 }));
 vi.mock("./hls-remux.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./hls-remux.js")>();
@@ -41,6 +42,31 @@ vi.mock("./hls-remux.js", async (importOriginal) => {
       ll.stream = null;
     },
     sweepLlDemotions: async () => [],
+    rebindLlForReplacedTrack: ll.rebind,
+    // The real one writes the LL room's stream; here that stream is `ll.stream`.
+    setLlCameraSlot: (
+      _channelId: string,
+      startedAt: number,
+      slot: { cameraHlsUrl: string; cameraHasVideo: boolean; cameraHasVoiceAudio: boolean } | null,
+    ) => {
+      const current = ll.stream;
+      if (!current || current.startedAt !== startedAt) {
+        return false;
+      }
+      if (slot) {
+        if (current.cameraHlsUrl === slot.cameraHlsUrl) {
+          return false;
+        }
+        ll.stream = { ...current, ...slot };
+        return true;
+      }
+      if (current.cameraHlsUrl === undefined) {
+        return false;
+      }
+      const { cameraHlsUrl: _u, cameraHasVideo: _v, cameraHasVoiceAudio: _a, ...rest } = current;
+      ll.stream = rest;
+      return true;
+    },
   };
 });
 
@@ -52,7 +78,9 @@ const {
   parkLlCompanion,
   reconcileLiveHls,
   resetLiveHlsForTests,
+  setLiveHlsChangeListener,
   setLiveHlsTestHooks,
+  setVoiceTrackSeparated,
 } = await import("./hls-egress.js");
 type LiveHlsEgressApi = import("./hls-egress.js").LiveHlsEgressApi;
 
@@ -94,6 +122,7 @@ function disableHls() {
     "LIVE_HLS_S3_SECRET_ACCESS_KEY",
     "LIVE_HLS_S3_ENDPOINT",
     "LIVE_HLS_MIC_ARCHIVE",
+    "LIVE_HLS_VOICE_TRACK",
   ]) {
     delete process.env[name];
   }
@@ -132,6 +161,7 @@ function fakeLiveKit() {
     startTrack,
     stop,
     isActive: (egressId: string) => statuses.get(egressId) === EgressStatus.EGRESS_ACTIVE,
+    kill: (egressId: string) => statuses.set(egressId, EgressStatus.EGRESS_FAILED),
   };
 }
 
@@ -166,6 +196,7 @@ beforeEach(() => {
   STARTED_AT = Date.now();
   ll.stream = llStream();
   ll.mode = "ll";
+  ll.rebind.mockClear();
   logEvent.mockClear();
   query.mockClear();
 });
@@ -201,9 +232,84 @@ describe("an LL broadcast's camera and mic archive", () => {
     for (const [sql] of query.mock.calls.filter(([sql]) =>
       sql.includes("INSERT INTO hls_sessions"),
     )) {
-      expect(sql).toMatch(/keep_replay\)\s+VALUES \(.*, TRUE\)/);
+      // `keep_replay` is the tenth column and TRUE its tenth value.
+      expect(sql).toMatch(/keep_replay, runs\)\s+VALUES \([^)]*\), \$4, \$5, \$6, \$7, \$8, \$9, TRUE,/);
     }
     expect(liveHlsActivity()).toMatchObject({ sessions: 0, micArchives: 1, cameraSessions: 1 });
+  });
+
+  it("states the camera on the LL stream the audience is handed, and asks for a push", async () => {
+    // THE 2026-09-25 REHEARSAL: 773 s of camera recorded, and the only viewer
+    // was shown the film alone, because the camera URL lived on the
+    // companion's private copy of the stream and `llStreamFor` never had it.
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    const reasons: string[] = [];
+    setLiveHlsChangeListener((_channelId, reason) => {
+      reasons.push(reason);
+    });
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(ll.stream?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+    );
+    expect(ll.stream?.cameraHasVideo).toBe(true);
+    expect(ll.stream?.cameraHasVoiceAudio).toBe(false);
+    // The LL film itself is untouched.
+    expect(ll.stream?.hlsUrl).toBe(llStream().hlsUrl);
+    expect(reasons).toEqual(["camera-started"]);
+
+    // A resume rebuilds the LL stream without the camera; the next reconcile
+    // states it again and hands back the stream that says so.
+    ll.stream = llStream();
+    const again = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(again?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+    );
+  });
+
+  it("takes a dead camera off the LL stream and asks for the push that says so", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.stream?.cameraHlsUrl).toBeTruthy();
+    const reasons: string[] = [];
+    setLiveHlsChangeListener((_channelId, reason) => {
+      reasons.push(reason);
+    });
+
+    const camera = lk.startComposite.mock.results[0]!.value as Promise<{ egressId: string }>;
+    lk.kill((await camera).egressId);
+    await checkLiveHlsHealth(Date.now() + 120_000);
+
+    expect(ll.stream?.cameraHlsUrl).toBeUndefined();
+    expect(reasons).toContain("camera-ended");
+  });
+
+  it("takes the camera off the LL stream when the presenter closes it", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.stream?.cameraHlsUrl).toBeTruthy();
+
+    setLiveHlsTestHooks({
+      egress: lk.api,
+      findTracks: async () => ({
+        videoTrackId: "TR_SCREEN",
+        micArchiveTrackId: "TR_MIC_ARCHIVE",
+      }),
+    });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(ll.stream?.cameraHlsUrl).toBeUndefined();
   });
 
   it("is idempotent across reconciles: one camera, one archive", async () => {
@@ -313,5 +419,124 @@ describe("an LL broadcast's camera and mic archive", () => {
     await flush();
 
     expect(lk.startTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe("an LL broadcast's companions across a presenter track change", () => {
+  function tracks(t: {
+    screen: string;
+    camera?: string;
+    voice?: string;
+  }) {
+    return async () => ({
+      videoTrackId: t.screen,
+      cameraTrackId: t.camera ?? "TR_CAM",
+      micArchiveTrackId: "TR_MIC_ARCHIVE",
+      ...(t.voice ? { voiceTrackId: t.voice } : {}),
+    });
+  }
+
+  it("a republished screen nudges the box to rebind, and the camera and archive ride through", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.rebind).not.toHaveBeenCalled();
+
+    // The presenter's client resumed after a deploy and republished.
+    setLiveHlsTestHooks({ findTracks: tracks({ screen: "TR_SCREEN_2" }) });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    // The same LL session, still stating the camera that rode through.
+    expect(stream).toMatchObject(llStream());
+    expect(stream?.cameraHlsUrl).toContain("cam360p30");
+    expect(ll.rebind).toHaveBeenCalledTimes(1);
+    expect(ll.rebind).toHaveBeenCalledWith(CHANNEL, "peer-1", {
+      videoFrom: "TR_SCREEN",
+      videoTo: "TR_SCREEN_2",
+    });
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsTrackReplaced",
+      expect.objectContaining({ channelId: CHANNEL, mode: "ll", from: "TR_SCREEN", to: "TR_SCREEN_2" }),
+    );
+    // Nothing of the broadcast was stopped or started again.
+    expect(lk.stop).not.toHaveBeenCalled();
+    expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    expect(lk.startComposite).toHaveBeenCalledTimes(1);
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlCompanionsStopped", expect.anything());
+
+    // Seen once is seen: the next roster event does not nudge again.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.rebind).toHaveBeenCalledTimes(1);
+  });
+
+  it("a nudge the control API never heard is sent again on the next reconcile, and only until it lands", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    setLiveHlsTestHooks({ findTracks: tracks({ screen: "TR_SCREEN_2" }) });
+    ll.rebind.mockResolvedValueOnce(false);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.rebind).toHaveBeenCalledTimes(2);
+    expect(ll.rebind.mock.calls[1]).toEqual([
+      CHANNEL,
+      "peer-1",
+      { videoFrom: "TR_SCREEN", videoTo: "TR_SCREEN_2" },
+    ]);
+  });
+
+  it("a moment with no screen track at all (between unpublish and publish) nudges nothing", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    setLiveHlsTestHooks({ findTracks: tracks({ screen: "" }) });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(ll.rebind).not.toHaveBeenCalled();
+  });
+
+  it("a presenter rebound under a new peer id keeps the companions, and their separated voice", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    setLiveHlsTestHooks({ egress: lk.api, findTracks: tracks({ screen: "TR_SCREEN", voice: "TR_MIC" }) });
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(lk.startComposite).toHaveBeenCalledTimes(1);
+    expect(lk.startComposite.mock.calls[0]![2].audioTrackId).toBe("TR_MIC");
+
+    // The same person is back as peer-2 and the box was rebound: the LL
+    // session is the same one (same startedAt), and their reconnect
+    // republished the camera and the mic on new sids.
+    ll.stream = llStream("peer-2");
+    setLiveHlsTestHooks({
+      findTracks: tracks({ screen: "TR_SCREEN_B", camera: "TR_CAM_B", voice: "TR_MIC_B" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+    await flush();
+
+    expect(stream?.startedAt).toBe(STARTED_AT);
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlCompanionsStopped", expect.anything());
+    // The archive is not restarted (one file per broadcast); the camera
+    // follows its new track, WITH the voice the presenter separated.
+    expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    const last = lk.startComposite.mock.calls.at(-1)!;
+    expect(last[2].videoTrackId).toBe("TR_CAM_B");
+    expect(last[2].audioTrackId).toBe("TR_MIC_B");
+    // A presenter change is the rebind path's business, not a track nudge.
+    expect(ll.rebind).not.toHaveBeenCalled();
   });
 });

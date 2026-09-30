@@ -4,7 +4,7 @@ This comparison is about what runs today, not a roadmap promise. Where pqp still
 
 ## Where pqp already does better
 
-**Screen share with audio, no plugin.** On Discord, sharing a screen with audio depends on the operating system and sometimes fails silently. On pqp, sharing a Chrome or Edge tab with the audio checkbox ticked sends the sound along automatically, and the app warns you before you go live if something is wrong (unsupported browser, a muted mic, camera off). See the [screen share with audio guide](/compartilhar-tela-com-audio) for every platform.
+**Screen share with audio, no plugin.** On Discord, sharing a screen with audio depends on the operating system and sometimes fails silently. On pqp, sharing a Chrome or Edge tab with the audio checkbox ticked sends the sound along automatically, and the app warns you before you go live if something is wrong (unsupported browser, a muted mic, camera off). See the [screen share with audio guide](/blog/compartilhar-tela-com-audio) (in Portuguese) for every platform.
 
 **A built-in watch party.** Starting a session to watch a film, a game, or a stream together is a button inside the call, not a third-party extension. A watch party with over 500 people watching at once has already run on pqp, with a mixer to balance the microphone against the film's audio, and a quality you pick yourself (720p or 1080p). Step-by-step guide: [how to watch a film together online](/blog/watch-party-assistir-filme-com-amigos).
 

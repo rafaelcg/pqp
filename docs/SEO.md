@@ -49,15 +49,15 @@ component.
 
 **Added in this PR:**
 
-- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`),
-  with `sameAs` pointing at the two other public places this product answers
-  for itself today: the GitHub repository and the Google Play listing
-  (`docs/ANDROID_RELEASE.md` records production access as open for it). The
-  App Store is deliberately absent: TestFlight is a beta enrollment, not a
-  public listing.
+- An `Organization` JSON-LD node on every marketing page (`marketing-meta.ts`).
+  Its `sameAs` (`ORGANIZATION_SAME_AS`) names the GitHub repository and the
+  Google Play listing. The Play listing has been public since 2026-09-28. The
+  App Store is absent: TestFlight is a beta enrollment, not a public listing.
 - The landing's `SoftwareApplication` node now carries that same `sameAs` and
   an `operatingSystem` list that names every platform the product actually
-  ships on (Web, Windows, macOS, Linux, Android) instead of just "Web".
+  ships on (`SOFTWARE_OPERATING_SYSTEMS`: Web, Windows, macOS, Linux, Android,
+  iOS) instead of just "Web". `client/index.html` carries the same list, and
+  a test keeps the two equal.
 - `Article` + `FAQPage` + `BreadcrumbList` JSON-LD on the six new guides
   (`blog-meta.ts`'s `jsonLdForArticle`), built from the same FAQ copy the page
   renders, same rule the marketing pages already follow.
@@ -121,12 +121,11 @@ explanation for each, to revisit once the exact URLs are in hand:
 - **The Search Console buckets without exact URLs** (see above) are read from
   Rafael's count snapshot, not verified against the live Search Console UI.
   Confirm the exact URLs before spending more effort on any one bucket.
-- **Play Store and TestFlight are not full public store listings yet.** The
-  Play listing has production access open (per `docs/ANDROID_RELEASE.md`) and
-  is linked from the new guides and from `Organization.sameAs`; TestFlight is
-  a beta enrollment and is deliberately kept out of structured data for that
-  reason. Update `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once an App
-  Store listing exists.
+- **iOS has no public store listing yet.** The Google Play listing has been public
+  since 2026-09-28. It is linked from the guides and from `Organization.sameAs`.
+  TestFlight is a beta enrollment, so structured data leaves it out. Add the
+  App Store listing to `ORGANIZATION_SAME_AS` in `marketing-meta.ts` once it
+  exists.
 
 ## Keyword plan
 
@@ -256,10 +255,25 @@ What ships now:
 - **Canonicals pinned to `https://pqp.gg`** in the edge-injected heads, so the
   `pqp-3yr.pages.dev` twin votes for pqp.gg instead of competing with it.
   `/claim` canonicalises to `/garanta` (one page, two names).
-- **hreflang**: one URL serves both languages by negotiation; `?lang=pt-BR` /
-  `?lang=en` are the crawlable variants, `x-default` is the bare negotiated
-  URL. That is the honest ceiling of this architecture, separate per-language
-  URLs would need per-language routes (see §4).
+- **hreflang**: one URL serves each language by negotiation; `?lang=pt-BR` /
+  `?lang=en` / `?lang=es` are the crawlable variants, `x-default` is the bare
+  negotiated URL. That is the honest ceiling of this architecture, separate
+  per-language URLs would need per-language routes (see §4).
+  **Canonical is self-referencing per language** (2026-09-30, `marketingUrlsFor`
+  in `marketing-meta.ts`, mirrored by `Seo`): Portuguese is the bare path,
+  English and Spanish declare `?lang=en` / `?lang=es` as their own canonical.
+  Before, every variant canonicalised to the bare path while hreflang pointed
+  at the `?lang=` URLs, which Google reads as a contradiction and answers by
+  ignoring the hreflang set (Lighthouse: "canonical points to another hreflang
+  location"). This supersedes the "Alternate page with proper canonical" note
+  in the Search Console section above. A page with no Spanish copy (policies,
+  status) canonicalises its `?lang=es` request to `?lang=en` and lists no `es`
+  alternate.
+- **Unknown paths are a real 404** (2026-09-30, `spa-routes.ts`): the edge keeps
+  the SPA body but answers `404` plus `X-Robots-Tag: noindex` for a path the
+  router has no route for, instead of a 200 copy of the home page.
+  `spa-routes.test.ts` reads `main.tsx`, so a new route that the list does not
+  know fails the suite.
 - **`robots.txt` + `sitemap.xml`** (`client/public/`): sitemap now lists all
   eight public routes including `/vs-discord` and `/status`.
 - **JSON-LD**: `WebSite` everywhere, `SoftwareApplication` on `/` only,

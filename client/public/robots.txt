@@ -25,6 +25,9 @@ Allow: /vs-discord
 # Brazil actually type. Same explicit line, same reason.
 Allow: /tela
 
+# The watch party waitlist page, the one link the campaign shares.
+Allow: /watch-party
+
 # Invite links, and the one exception under /app. This is not permission to
 # index them — the edge middleware writes `noindex, nofollow` into every one of
 # these pages (see client/src/lib/invite-meta.ts). It is permission to FETCH

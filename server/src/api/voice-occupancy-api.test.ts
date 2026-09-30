@@ -83,13 +83,14 @@ async function call<T = Record<string, unknown>>(
 describe("occupancyQuery", () => {
   it("takes the narrower request when both are present", () => {
     const params = new URLSearchParams("days=90&day=2026-09-06");
-    expect(occupancyQuery(params)).toEqual({ days: 90, day: "2026-09-06" });
+    expect(occupancyQuery(params)).toEqual({ days: 90, day: "2026-09-06", heatmap: false });
   });
 
   it("drops a malformed day instead of failing the request", () => {
     expect(occupancyQuery(new URLSearchParams("day=06%2F09%2F2026"))).toEqual({
       days: DEFAULT_OCCUPANCY_DAYS,
       day: null,
+      heatmap: false,
     });
   });
 
@@ -218,6 +219,34 @@ describeDb("GET /api/admin/voice-occupancy", () => {
     expect(day.body.granularity).toBe("minute");
     expect(day.body.points).toHaveLength(1);
     expect(day.body.points[0]!.livekit).toBe(28);
+  });
+
+  it("averages every kept minute by São Paulo weekday and hour for ?shape=weekday-hour", async () => {
+    // 2026-09-26 is a Saturday; 01:30Z on the 27th is 22:30 in São Paulo,
+    // so both samples land in Saturday 22h and a UTC reading would not.
+    await getPool().query(
+      `INSERT INTO voice_occupancy_samples
+         (bucket_at, participants, mesh_participants, livekit_participants,
+          rooms, mesh_rooms, livekit_rooms, largest_room)
+       VALUES ('2026-09-27T01:30:00Z', 100, 0, 100, 1, 0, 1, 100),
+              ('2026-09-27T01:31:00Z', 60, 0, 60, 1, 0, 1, 60),
+              ('2026-09-28T15:00:00Z', 7, 7, 0, 2, 2, 0, 4)`,
+    );
+    process.env.ADMIN_METRICS_TOKEN = TOKEN;
+    const map = await call<{
+      granularity: string;
+      days: number;
+      lastSampleAt: string | null;
+      cells: { weekday: number; hour: number; average: number; samples: number }[];
+    }>(null, "/api/admin/voice-occupancy?shape=weekday-hour", `Bearer ${TOKEN}`);
+    expect(map.status).toBe(200);
+    expect(map.body.granularity).toBe("weekday-hour");
+    expect(map.body.days).toBe(2);
+    expect(map.body.lastSampleAt).toBe("2026-09-28T15:00:00.000Z");
+    expect(map.body.cells).toEqual([
+      { weekday: 0, hour: 12, average: 7, samples: 1 },
+      { weekday: 5, hour: 22, average: 80, samples: 2 },
+    ]);
   });
 });
 

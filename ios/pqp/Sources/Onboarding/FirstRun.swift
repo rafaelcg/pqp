@@ -90,9 +90,10 @@ enum FirstRun {
     /// "no thanks" does not stick is a card that nags forever), already dismissed,
     /// or nothing left to offer.
     ///
-    /// Nothing here consults an onboarding flag. iOS onboarding is three marketing
-    /// beats and a sign-in, recorded in a device-local `UserDefaults` bool that
-    /// says nothing about whether this account has a server, a friend or a face.
+    /// Nothing here consults `onboardedAt`. The wizard and this card are two
+    /// answers to different questions: the wizard is "walk me through it once",
+    /// the card is "what is still missing", and skipping the first is exactly
+    /// when the second is useful.
     static func shouldShow(_ inputs: Inputs) -> Bool {
         guard let preferences = inputs.preferences else { return false }
         guard !isDismissed(preferences) else { return false }

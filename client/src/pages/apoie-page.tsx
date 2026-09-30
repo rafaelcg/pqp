@@ -17,8 +17,9 @@ import { supportLinks, type SupportLinks } from "@/lib/support-links";
  * product does not change for anyone who gives. That is said on the page in
  * plain words because a donation page that hints at benefits is a store, and a
  * store has obligations (delivery, consumer law, receipts) this project is not
- * set up to carry. The copy names the real number, on the order of US$50 a
- * month, so the ask is sized to the truth rather than to what a reader might
+ * set up to carry. The copy names the real number, about US$350 a month (the
+ * 2026-09-28 infra review: mostly the Vultr boxes for the API, the database,
+ * the SFU and the egress), so the ask is sized to the truth rather than to what a reader might
  * fear.
  *
  * Both links come from `lib/support-links.ts`, which is empty on a self-hosted

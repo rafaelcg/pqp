@@ -36,6 +36,13 @@ struct WatchStageView: View {
     @Environment(VoiceModel.self) private var voice
 
     let channel: Channel
+    /// Whether `ChatView` is drawing the host's own card above this stage
+    /// (`WatchPartyStageHostView`: Create, the setup card, or a live party
+    /// with no seat). Read only by the idle/`.unknown` notice below, which
+    /// steps aside for it: "Nobody is streaming yet" under a Create button or
+    /// a Go live card says the same thing twice. False is the safe default
+    /// for every other caller.
+    var hostCardShown: Bool = false
     /// Only used in the theater, where the system nav bar's own back
     /// chevron is hidden so it does not sit over the film immune to the
     /// autohide the rest of the chrome follows. `ChatView` hands in its own
@@ -123,6 +130,51 @@ struct WatchStageView: View {
     /// not that class, though, because that one is what this phone SENDS.
     @AppStorage("pqp.watchQuality") private var pinnedLines = 0
 
+    // MARK: - The presenter's camera
+
+    /// The camera's own `AVPlayer`, independent of the film's: two decoders,
+    /// never one asked to serve two pictures. `nil` whenever nothing is
+    /// worth drawing (`cameraLayoutOffered`), including the whole time no
+    /// camera egress is announced.
+    @State private var cameraPlayer: AVPlayer?
+    @State private var cameraAttached: CameraAttachedStream?
+    /// How many camera failures in a row `checkCameraHealth()` has acted on
+    /// without a confirmed healthy stretch in between. Drives
+    /// `WatchCameraFailureBackoff.delay`; survives attach on purpose (see
+    /// that function's comment) and resets only once `cameraHealthyTicks`
+    /// proves the latest attach is actually holding.
+    @State private var cameraFailureAttempt = 0
+    /// The earliest moment `checkCameraHealth()` may act on another failed
+    /// item. `nil` means no failure has been acted on yet -- the first one
+    /// is handled immediately, same as before this backoff existed.
+    @State private var cameraFailureNextRetryAt: Date?
+    /// Consecutive watchdog ticks (~1/s) the camera has spent confirmed
+    /// advancing since the last failure. Only counted once a failure has
+    /// actually happened (`cameraFailureAttempt > 0`); a camera that has
+    /// never failed has nothing to earn back.
+    @State private var cameraHealthyTicks = 0
+    /// The camera's playhead on the previous tick, so this tick can tell
+    /// "reported playing" from "actually advancing" -- the same distinction
+    /// `lastHealthCheckPosition` makes for the film.
+    @State private var cameraLastPosition: Double?
+    /// A camera that froze without failing. See `WatchCameraStallWatch`.
+    @State private var cameraStall = WatchCameraStallWatch()
+    /// Corner, and which of the four layouts. Remembered per phone
+    /// (`CameraPipPref`), same storage shape as `pinnedLines` above.
+    @AppStorage("pqp.watchCameraPip") private var cameraPref: CameraPipPref = .default
+    /// The corner box's live drag, reset to zero the moment a drag ends and
+    /// the preference's corner has already snapped to wherever it landed.
+    @GestureState private var cameraDragTranslation: CGSize = .zero
+
+    /// AUTOMATIC RECOVERY FROM "THE PICTURE STOPPED" (`WatchDeadRetry`,
+    /// mirroring the web's PR #824). How many automatic retries this failure
+    /// episode has made; reset once the watchdog confirms a healthy,
+    /// advancing attach (same place `recoveryClearedAttachedAt` is set)
+    /// rather than on the optimistic flip back to `.live`, so the backoff
+    /// keeps growing across a run of failures instead of restarting on every
+    /// attempt.
+    @State private var deadRetryAttempt = 0
+
     private var isSeated: Bool { voice.isLive && voice.channelId == channel.id }
 
     private var choice: WatchQualityChoice {
@@ -144,6 +196,7 @@ struct WatchStageView: View {
         .preference(key: WatchTheaterPreference.self, value: isLandscape)
         .task(id: channel.id) { await model.open(channelId: channel.id, session: session) }
         .task { await watchdog() }
+        .task { await deadRetryLoop() }
         .onDisappear {
             // NOT WHILE THE FILM IS ON. A view that is off screen because the
             // stage is filling the screen is not a view somebody navigated
@@ -153,6 +206,7 @@ struct WatchStageView: View {
             // 31 did.
             guard !isLandscape else { return }
             tearDown()
+            deadRetryAttempt = 0
             model.close()
             WatchOrientation.leaveTheater()
         }
@@ -168,7 +222,21 @@ struct WatchStageView: View {
         // rule is what stops that being a re-buffer every thirty seconds, and
         // it is also what performs the hourly token renewal: at fifty minutes
         // the very next frame is the one that gets attached.
-        .onChange(of: model.stream, initial: true) { _, _ in reconcile() }
+        .onChange(of: model.stream, initial: true) { _, _ in
+            reconcile()
+            reconcileCamera()
+        }
+        // The presenter can flip "junto"/"separada" mid-party without the
+        // camera's path ever changing, so the mute state is applied in
+        // place, same as `WatchCameraPip`'s sibling effect on the web:
+        // never a reason to rebuild the player.
+        .onChange(of: model.stream?.resolvedCameraHasVoiceAudio) { _, hasVoice in
+            cameraPlayer?.isMuted = !(hasVoice ?? false)
+        }
+        // Picking "hide camera" with nothing to hear either should stop the
+        // stream right away, not wait for the next `channel-live` (up to 30s
+        // away) to notice (Farol review, PR 833).
+        .onChange(of: cameraPref.layout) { _, _ in reconcileCamera() }
         .onChange(of: model.phase) { _, phase in
             if phase != .live {
                 tearDown()
@@ -237,6 +305,7 @@ struct WatchStageView: View {
     private func watchdog() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1))
+            checkCameraHealth()
             guard let player, attached != nil else { continue }
             guard let item = player.currentItem else { continue }
             if item.status == .failed {
@@ -277,6 +346,11 @@ struct WatchStageView: View {
                recoveryClearedAttachedAt != attached.attachedAt {
                 recovery.reset()
                 recoveryClearedAttachedAt = attached.attachedAt
+                // A confirmed, advancing attach is the only signal that a
+                // failure episode is actually over -- the optimistic
+                // `phase = .live` flip inside `WatchModel.retry()` is not,
+                // so `deadRetryLoop()` does not reset here on every attempt.
+                deadRetryAttempt = 0
             }
 
             edge.learnSegmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
@@ -388,6 +462,46 @@ struct WatchStageView: View {
         }
     }
 
+    /**
+     "THE PICTURE STOPPED" TRIES AGAIN BY ITSELF.
+
+     `WatchFailureRecovery` already refetches and reattaches on the first
+     three failures inside a five minute window; this is what happens once
+     that budget is spent and `model.phase` has become `.failed`. Sitting on
+     that card until somebody notices and taps "Try again" is thirty seconds
+     of a broadcast that may well still be running -- the same reasoning as
+     the film's own live-edge recovery, just aimed at the card instead of the
+     playhead. See `WatchDeadRetry` for the schedule.
+
+     Cheap to poll every second while nothing has failed: no timer setup, no
+     teardown to coordinate with `watchdog()`, and cancelled the same way
+     everything else in this view is, by `onDisappear`'s `Task` cancellation.
+     */
+    private func deadRetryLoop() async {
+        while !Task.isCancelled {
+            guard case .failed = model.phase else {
+                try? await Task.sleep(for: .seconds(1))
+                continue
+            }
+            let wait = WatchDeadRetry.delay(
+                attempt: deadRetryAttempt, jitter: { Double.random(in: 0...1) }
+            )
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, case .failed = model.phase else { continue }
+            deadRetryAttempt += 1
+            recovery.reset()
+            model.retry()
+            reconcile(force: true)
+            // NOT forced (Farol review, PR 833): `force` on the camera's own
+            // swap bypasses its same-session keep rule unconditionally, so a
+            // healthy camera would restart -- a fresh rebuffer -- every time
+            // the FILM alone needed a kick. The plain reconcile still picks
+            // up a genuinely fresh URL or session; only the camera's own
+            // failure (`cameraWatchdogTick`) has a reason to force it.
+            reconcileCamera()
+        }
+    }
+
     /// The playlist's sliding window, as the item sees it.
     ///
     /// `seekableTimeRanges` is one range for a healthy live playlist and can be
@@ -431,7 +545,13 @@ struct WatchStageView: View {
     private var stage: some View {
         switch model.phase {
         case .unknown, .idle:
-            if channel.isWatchParty {
+            // A DEEP LINK OR A LIST TAP CAN LAND A HOST HERE BEFORE THEY HAVE
+            // JOINED ANYTHING, and "Nobody is streaming yet" reads as a dead
+            // end to exactly the person who is about to fix that. Their own
+            // card (Create, or the setup card with Go live) is drawn right
+            // above this one by `ChatView`, with no seat needed, so the
+            // notice steps aside for it.
+            if channel.isWatchParty, !hostCardShown {
                 notice(
                     icon: "movieclapper.fill",
                     title: "Watch party",
@@ -498,8 +618,10 @@ struct WatchStageView: View {
         ZStack {
             Color.black
             if player != nil {
-                WatchVideoSurface(picture: picturePlane)
-                    .onTapGesture { chrome.tap(at: Date()) }
+                GeometryReader { proxy in
+                    stageLayers(size: proxy.size)
+                }
+                .onTapGesture { chrome.tap(at: Date()) }
                 overlay(isTheater: isTheater)
             } else {
                 connecting
@@ -524,8 +646,188 @@ struct WatchStageView: View {
             onCollapse: isTheater ? nil : { isMinimised = true },
             qualityMenu: {
                 if ladder.isWorthOffering { qualityMenu }
+            },
+            cameraMenu: {
+                if cameraLayoutIsOffered { cameraLayoutMenu }
             }
         )
+    }
+
+    // MARK: - The stage's two pictures
+
+    /// Whether the current broadcast has a camera worth a layout choice at
+    /// all. Mirrors `cameraLayoutOffered`.
+    private var cameraLayoutIsOffered: Bool {
+        cameraLayoutOffered(
+            cameraSrc: model.stream?.cameraHlsUrl,
+            cameraHasVideo: model.stream?.resolvedCameraHasVideo ?? true
+        )
+    }
+
+    /// The film, and the camera on top of it in whichever of the four
+    /// arrangements the viewer picked (`CameraPipPref`). `size` is the
+    /// stage's own box, read by `GeometryReader` so the corner and the
+    /// drag's end point can be worked out in the same coordinates.
+    @ViewBuilder
+    private func stageLayers(size: CGSize) -> some View {
+        let hasVoice = model.stream?.resolvedCameraHasVoiceAudio ?? false
+        let cameraAnnounced = model.stream?.cameraHlsUrl != nil
+        let layout: CameraLayout = cameraLayoutIsOffered
+            ? effectiveCameraLayout(pref: cameraPref, cameraHasVideo: true)
+            : .pip
+
+        switch layout {
+        case .side where cameraLayoutIsOffered:
+            sideBySide(size: size)
+        case .camera where cameraLayoutIsOffered:
+            ZStack {
+                // COVERED, NOT TORN DOWN: the film keeps decoding underneath
+                // so switching back to it is instant, and it is still the
+                // only place the party's sound plays from.
+                WatchVideoSurface(picture: picturePlane)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                WatchCameraSurface(player: cameraPlayer, fit: .resizeAspect)
+            }
+        default:
+            // `pip` (the default) and `stream` ("hide camera") both draw the
+            // film full bleed; the only difference is whether a picture goes
+            // in the corner. A camera that carries no picture but does carry
+            // the presenter's voice still gets the corner, drawn as the
+            // voice-only indicator, in every layout except `camera`.
+            ZStack {
+                WatchVideoSurface(picture: picturePlane)
+                if cameraLayoutIsOffered, cameraPref.layout != .stream {
+                    cameraCornerBox(size: size)
+                } else if hasVoice, cameraAnnounced {
+                    voiceOnlyCornerBox(size: size)
+                }
+            }
+        }
+    }
+
+    /// Side by side when the stage is wider than it is tall, stacked (film
+    /// on top) otherwise. Reads the stage's own aspect rather than
+    /// `isTheater`, so a squarish window (an iPad split view, say) still
+    /// gets a sensible arrangement.
+    private func sideBySide(size: CGSize) -> some View {
+        Group {
+            if size.width >= size.height {
+                HStack(spacing: 2) {
+                    WatchVideoSurface(picture: picturePlane)
+                    WatchCameraSurface(player: cameraPlayer, fit: .resizeAspect)
+                }
+            } else {
+                VStack(spacing: 2) {
+                    WatchVideoSurface(picture: picturePlane)
+                    WatchCameraSurface(player: cameraPlayer, fit: .resizeAspect)
+                }
+            }
+        }
+    }
+
+    /// The corner box's size: a portrait rectangle, never wider than about a
+    /// third of the stage, so it never competes with the film for attention.
+    static func cameraCornerSize(in stage: CGSize) -> CGSize {
+        let width = min(110, max(60, stage.width * 0.32))
+        return CGSize(width: width, height: width * 4 / 3)
+    }
+
+    /// The box's centre for a given corner, inset by `margin` on both axes.
+    static func cameraCornerOrigin(
+        corner: CameraPipCorner, boxSize: CGSize, stageSize: CGSize, margin: CGFloat
+    ) -> CGPoint {
+        let x = (corner == .topLeading || corner == .bottomLeading)
+            ? margin + boxSize.width / 2
+            : stageSize.width - margin - boxSize.width / 2
+        let y = (corner == .topLeading || corner == .topTrailing)
+            ? margin + boxSize.height / 2
+            : stageSize.height - margin - boxSize.height / 2
+        return CGPoint(x: x, y: y)
+    }
+
+    private static let cameraCornerMargin: CGFloat = 10
+
+    /// The draggable webcam. A tap or a short press passes straight through
+    /// (the drag gesture never fires under `minimumDistance`), so it does
+    /// not steal the "tap the film to see the chrome" gesture underneath it.
+    private func cameraCornerBox(size: CGSize) -> some View {
+        let boxSize = Self.cameraCornerSize(in: size)
+        let anchor = Self.cameraCornerOrigin(
+            corner: cameraPref.corner, boxSize: boxSize, stageSize: size,
+            margin: Self.cameraCornerMargin
+        )
+        return WatchCameraSurface(player: cameraPlayer, fit: .resizeAspectFill)
+            .frame(width: boxSize.width, height: boxSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+            .position(
+                x: anchor.x + cameraDragTranslation.width,
+                y: anchor.y + cameraDragTranslation.height
+            )
+            .animation(Motion.standard, value: cameraPref.corner)
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .updating($cameraDragTranslation) { value, state, _ in
+                        state = value.translation
+                    }
+                    .onEnded { value in
+                        let landed = CGPoint(
+                            x: anchor.x + value.translation.width,
+                            y: anchor.y + value.translation.height
+                        )
+                        cameraPref.corner = CameraPipCorner.nearest(to: landed, in: size)
+                    }
+            )
+            .accessibilityLabel("Your camera")
+            .accessibilityAction(named: Text("Move the camera to another corner")) {
+                cameraPref.corner = cameraPref.corner.clockwise()
+            }
+    }
+
+    /// The audio-only shape of "separada": no picture, just the fact that a
+    /// voice is here to hear, in the same corner a webcam would use.
+    private func voiceOnlyCornerBox(size: CGSize) -> some View {
+        let boxSize = Self.cameraCornerSize(in: size)
+        let anchor = Self.cameraCornerOrigin(
+            corner: cameraPref.corner, boxSize: boxSize, stageSize: size,
+            margin: Self.cameraCornerMargin
+        )
+        return ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.72))
+            Image(systemName: "mic.fill")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Palette.paper.opacity(0.85))
+        }
+        .frame(width: boxSize.width, height: boxSize.height)
+        .position(x: anchor.x, y: anchor.y)
+        .accessibilityLabel("Presenter's voice")
+    }
+
+    /// `Camera layout` (`voice.hls.cameraLayout` on the web): offered only
+    /// while a camera with a picture is actually running.
+    private var cameraLayoutMenu: some View {
+        Menu {
+            Picker("Camera layout", selection: $cameraPref.layout) {
+                Text("Default").tag(CameraLayout.pip)
+                Text("Side by side").tag(CameraLayout.side)
+                Text("Hide camera").tag(CameraLayout.stream)
+                Text("Hide stream").tag(CameraLayout.camera)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            WatchGlyphWell {
+                Image(systemName: "rectangle.inset.bottomright.filled")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.paper)
+            }
+        }
+        .accessibilityLabel("Camera layout")
     }
 
     private var connecting: some View {
@@ -802,6 +1104,196 @@ struct WatchStageView: View {
         }
     }
 
+    // MARK: - The camera
+
+    /// Same reasoning as `reconcile()`, aimed at the camera's own player.
+    /// `force` is true from a manual retry, the film's auto-retry loop
+    /// picking up a fresh URL, and this view's own camera watchdog tick
+    /// recovering a failed camera item.
+    private func reconcileCamera(force: Bool = false) {
+        guard !isSeated else { return }
+        let hasVoice = model.stream?.resolvedCameraHasVoiceAudio ?? false
+        let move = WatchCameraStreamSwap.next(
+            attached: cameraAttached,
+            latestUrl: cameraUrlWorthStreaming(
+                cameraHlsUrl: model.stream?.cameraHlsUrl,
+                hasVoiceAudio: hasVoice,
+                layoutOffered: cameraLayoutIsOffered,
+                layout: cameraPref.layout
+            ),
+            hasVideo: model.stream?.resolvedCameraHasVideo ?? true,
+            hasVoiceAudio: hasVoice,
+            failed: force,
+            now: Date()
+        )
+        switch move {
+        case .keep:
+            return
+        case .detach:
+            tearDownCamera()
+        case .attach(let url):
+            attachCamera(url: url)
+        }
+    }
+
+    private func attachCamera(url: String) {
+        guard let resolved = liveStreamURL(
+            hlsUrl: url, apiBaseURL: Backend.current.apiBaseURL
+        ) else { return }
+        cameraPlayer?.pause()
+        let item = AVPlayerItem(url: resolved)
+        let player = AVPlayer(playerItem: item)
+        // Silent, unless this is the one shape where the camera carries the
+        // presenter's own voice ("separada") -- see `LiveHlsStream`'s doc.
+        // The audience's sound otherwise comes off the FILM's player, which
+        // is the only place it is mixed; a second audible source a couple of
+        // seconds out of step with the first is worse than silence.
+        player.isMuted = !(model.stream?.resolvedCameraHasVoiceAudio ?? false)
+        player.automaticallyWaitsToMinimizeStalling = true
+        cameraAttached = CameraAttachedStream(
+            sessionKey: cameraSessionKey(url), attachedAt: Date()
+        )
+        cameraPlayer = player
+        cameraStall.forgetPosition()
+        // NOT `cameraFailureAttempt = 0` HERE (Farol review, PR 833, second
+        // pass). A rebuild triggered BY a failure is itself an attach, and
+        // resetting the backoff on every attach is exactly what made a
+        // replacement that fails again land back at attempt zero -- a tight
+        // loop bounded only by the 1s watchdog tick, hammering the same HLS
+        // endpoint every second instead of backing off. The attempt counter
+        // only resets once `checkCameraHealth` has seen this attach actually
+        // hold for a while; `cameraHealthyTicks` below is what proves that.
+        player.play()
+    }
+
+    private func tearDownCamera() {
+        cameraPlayer?.pause()
+        cameraPlayer = nil
+        cameraAttached = nil
+        // A deliberate teardown (hidden by the viewer, the stage leaving the
+        // screen) is a clean slate, unlike an attach: there is no camera
+        // running for a backoff to apply to, and if one starts again later
+        // it deserves a fresh attempt at the fast end of the schedule.
+        cameraFailureAttempt = 0
+        cameraFailureNextRetryAt = nil
+        cameraHealthyTicks = 0
+        cameraLastPosition = nil
+        cameraStall = WatchCameraStallWatch()
+    }
+
+    /**
+     THE CAMERA GETS RECOVERY TOO (Farol review, PR 833), ON A REAL BACKOFF
+     (Farol review, PR 833, second pass).
+
+     Silent, like every other camera failure on this stage: no card, no
+     retry button, the corner just comes back on its own once a reattach
+     lands. Unlike the film, a hard `AVPlayerItem` failure here has no
+     server to ask -- the camera never mints its own session, so there is no
+     fresher URL to fetch, only the one `reconcileCamera` already knows.
+     `force: true` on an unchanged session still reattaches (see
+     `WatchCameraStreamSwap`), which is exactly what a stuck item needs: a
+     brand new `AVPlayerItem` on the same playlist, past whatever segment
+     killed the last one.
+
+     THE BUG THE FIRST VERSION OF THIS HAD. It debounced on a timestamp that
+     `attachCamera` cleared on every attach -- including the very reattach
+     this function had just triggered. A replacement that failed again
+     immediately (a genuinely broken camera egress, not a one-off blip) was
+     therefore rebuilt again on the very next 1s watchdog tick, and the tick
+     after that, for as long as it kept failing: a tight loop hammering the
+     same HLS endpoint roughly once a second instead of backing off from it.
+
+     THE FIX. `cameraFailureAttempt` and `cameraFailureNextRetryAt` survive
+     attach on purpose (see the comment in `attachCamera`) and only grow
+     while failures keep happening: `WatchCameraFailureBackoff.delay` is
+     2s, 4s, 8s... doubling up to a minute, jittered so a run of viewers
+     whose cameras failed together do not all retry in the same instant.
+     They reset to zero only once THIS attach has proven itself --
+     `cameraHealthyTicks` counting `WatchCameraFailureBackoff.healthyTicksToReset`
+     straight seconds of a genuinely advancing playhead, the same "confirmed,
+     not merely reported" standard the film's own `recoveryConfirmTicks`
+     uses and for the same reason: a decoder can sit at a non-failed status
+     while wedged.
+     */
+    private func checkCameraHealth() {
+        guard let item = cameraPlayer?.currentItem else {
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
+            return
+        }
+        let now = Date()
+        if item.status == .failed {
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
+            rebuildCamera(now: now)
+            return
+        }
+        // A frozen camera is not a failed one: the item stays ready while the
+        // picture sits on one frame. See `WatchCameraStallWatch`.
+        let stallAction = cameraStall.observe(
+            position: cameraPlayer?.currentTime().seconds ?? .nan,
+            eligible: UIApplication.shared.applicationState == .active,
+            now: now
+        )
+        switch stallAction {
+        case .none:
+            break
+        case .nudge:
+            nudgeCamera(item)
+        case .rebuild:
+            cameraHealthyTicks = 0
+            cameraLastPosition = nil
+            rebuildCamera(now: now)
+            return
+        }
+        guard cameraFailureAttempt > 0 || cameraFailureNextRetryAt != nil else {
+            // Nothing has failed this camera yet; no backoff to earn back.
+            return
+        }
+        let position = cameraPlayer?.currentTime().seconds ?? 0
+        let advanced = cameraLastPosition.map { position > $0 } ?? false
+        cameraLastPosition = position
+        guard advanced else {
+            cameraHealthyTicks = 0
+            return
+        }
+        cameraHealthyTicks += 1
+        if cameraHealthyTicks >= WatchCameraFailureBackoff.healthyTicksToReset {
+            cameraFailureAttempt = 0
+            cameraFailureNextRetryAt = nil
+        }
+    }
+
+    /// A fresh item on the freshest URL, on the failure backoff: a failed
+    /// item and a frozen one spend from the same schedule, so neither can
+    /// become a loop against the playlist proxy.
+    private func rebuildCamera(now: Date) {
+        guard WatchCameraFailureBackoff.isDue(
+            nextRetryAt: cameraFailureNextRetryAt, now: now
+        ) else { return }
+        let wait = WatchCameraFailureBackoff.delay(
+            attempt: cameraFailureAttempt, jitter: { Double.random(in: 0...1) }
+        )
+        cameraFailureNextRetryAt = now.addingTimeInterval(wait)
+        cameraFailureAttempt += 1
+        reconcileCamera(force: true)
+    }
+
+    /// The cheap first move on a frozen camera: back into the live window,
+    /// and play. Nothing is dropped, so a camera that only fell behind or
+    /// paused on its own is moving again within a segment.
+    private func nudgeCamera(_ item: AVPlayerItem) {
+        guard let cameraPlayer else { return }
+        if let window = Self.liveWindow(of: item) {
+            cameraPlayer.seek(
+                to: CMTime(seconds: WatchLiveEdge.jumpTarget(in: window), preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: CMTime(seconds: 2, preferredTimescale: 600)
+            )
+        }
+        cameraPlayer.play()
+    }
+
     /// Re-tune the item that is already playing.
     ///
     /// Both of these are live properties, so a viewer changing rung mid film
@@ -1013,5 +1505,15 @@ struct WatchStageView: View {
         pip.attach(nil)
         WatchNowPlaying.end()
         WatchAudioSession.deactivate()
+        tearDownCamera()
+        // NOT `deadRetryAttempt = 0` HERE (Farol review, PR 833). This runs
+        // on every `.failed` entry too (`.onChange(of: model.phase)` calls
+        // `tearDown()` for any non-`.live` phase), so resetting it here
+        // rewound the backoff to its first step on every single automatic
+        // retry -- the counter never grew past 8-15s no matter how many
+        // times the stream kept failing. The only two places that may
+        // legitimately call this a fresh episode are a confirmed healthy
+        // attach (`watchdog()`, once `healthyPlaybackTicks` proves it) and
+        // actually leaving the screen (`onDisappear`, below).
     }
 }

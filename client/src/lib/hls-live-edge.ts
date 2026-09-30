@@ -1554,3 +1554,109 @@ export function hasSafariPresentationMode(video: unknown): boolean {
     ).webkitSupportsPresentationMode("picture-in-picture")
   );
 }
+
+/** Just the two fields `newSegmentDurationsSince` reads off an hls.js `Fragment`. */
+export interface FragSnDuration {
+  sn: number | "initSegment";
+  duration: number;
+}
+
+/**
+ * Every REAL duration a `LEVEL_UPDATED` firing adds beyond what this player
+ * has already fed the LL governor (`LlLatencyGovernor.onSegmentDuration`),
+ * oldest first, plus the newest sequence number seen so the caller can hold
+ * it for the next call, and whether the caller should also call
+ * `LlLatencyGovernor.resetSegmentCadence()` first.
+ *
+ * WHY THIS EXISTS, NOT JUST `.at(-1)` (Farol, this PR). `LEVEL_UPDATED`
+ * fires once per part under the blocking reload, but nothing guarantees
+ * this process sees every single firing -- a delayed tick, a missed one, a
+ * rebuild that reattaches mid-window -- so between two calls the manifest
+ * can legitimately list several segments this player has not fed yet.
+ * Reading only the last fragment would silently skip a long one sitting
+ * earlier in that gap while a short one right after it still fills the
+ * cadence window, which is exactly the false "all clear" the decay's
+ * safety margin (`LL_SEGMENT_CADENCE_WINDOW`) exists to prevent.
+ *
+ * `reset` (Farol, this PR): a live media sequence only ever grows -- until
+ * a remux restart or a new run's media-sequence base (pitfall 20 in
+ * CLAUDE.md) makes the SAME attach start seeing LOWER `sn`s than it
+ * already recorded. Comparing every fragment's `sn` against the OLD
+ * `lastSeenSn` in that case would read every one of them as "already
+ * seen" forever, silently freezing the cadence window on stale, pre-
+ * restart evidence. Detected here off the manifest alone (the newest
+ * fragment this call is handed is BEHIND what was already seen): treated
+ * exactly like a fresh attach (`lastSeenSn` effectively `null` for this
+ * call, so every currently-listed fragment counts as real, recent
+ * evidence) and flagged so the caller also clears the governor's own
+ * window -- pre- and post-restart readings must never be averaged
+ * together as if they described one continuous cadence.
+ *
+ * `fragments` is hls.js's own oldest-first order, so the result is too.
+ * `lastSeenSn === null` (a fresh attach) takes every currently-listed
+ * fragment as real, recent evidence -- there is nothing before it to miss.
+ *
+ * NEVER THROWS OUT OF AN hls.js EVENT HANDLER (Farol, this PR). This runs
+ * inside `LEVEL_UPDATED`, alongside the manifest-driven floor raise and
+ * the part-advance watchdog feed -- an uncaught exception here would take
+ * the REST of that handler down with it for every viewer on this build,
+ * not just skip a cadence reading. Two concrete risks, both guarded: an
+ * unexpectedly huge `fragments` array (a malformed manifest, a future
+ * regression upstream) is capped at `MAX_FRAGMENTS_PER_LEVEL_UPDATE`
+ * before anything else runs, and the newest-`sn` scan is a plain loop, not
+ * `Math.max(...array)` -- spreading a large enough array into a function
+ * call is a real V8 stack overflow, not a theoretical one. The whole body
+ * is also wrapped in a `try`/`catch` as the last line of defence: any
+ * failure degrades to "no new durations this update, tracker unchanged",
+ * exactly what a caller that never wired this in at all would see.
+ */
+const MAX_FRAGMENTS_PER_LEVEL_UPDATE = 2000;
+
+export function newSegmentDurationsSince(
+  fragments: readonly FragSnDuration[],
+  lastSeenSn: number | null,
+): { durations: number[]; lastSeenSn: number | null; reset: boolean } {
+  try {
+    // The newest fragments matter most (recency is the whole point of the
+    // cadence window), so a pathologically large list is trimmed from the
+    // front, not the back.
+    const bounded =
+      fragments.length > MAX_FRAGMENTS_PER_LEVEL_UPDATE
+        ? fragments.slice(-MAX_FRAGMENTS_PER_LEVEL_UPDATE)
+        : fragments;
+
+    let newestListedSn: number | null = null;
+    for (const fragment of bounded) {
+      const sn = fragment.sn;
+      if (typeof sn === "number" && Number.isFinite(sn)) {
+        if (newestListedSn === null || sn > newestListedSn) {
+          newestListedSn = sn;
+        }
+      }
+    }
+    const reset =
+      lastSeenSn !== null && newestListedSn !== null && newestListedSn < lastSeenSn;
+    const effectiveLastSeenSn = reset ? null : lastSeenSn;
+
+    const durations: number[] = [];
+    let newestSn = effectiveLastSeenSn;
+    for (const fragment of bounded) {
+      const sn = fragment.sn;
+      if (typeof sn !== "number" || !Number.isFinite(sn)) {
+        continue;
+      }
+      if (effectiveLastSeenSn !== null && sn <= effectiveLastSeenSn) {
+        continue;
+      }
+      if (Number.isFinite(fragment.duration)) {
+        durations.push(fragment.duration);
+      }
+      if (newestSn === null || sn > newestSn) {
+        newestSn = sn;
+      }
+    }
+    return { durations, lastSeenSn: newestSn, reset };
+  } catch {
+    return { durations: [], lastSeenSn, reset: false };
+  }
+}

@@ -12,8 +12,10 @@ import "../site/insights.js";
  * pool queue alone means exhaustion, and that the three daily voice maxima
  * are a split of one another.
  */
-const { latencyInsight, poolInsight, voiceInsight, buildInsights, liveHlsState } =
-  globalThis.PQPInsights;
+const {
+  latencyInsight, poolInsight, voiceInsight, buildInsights, liveHlsState,
+  liveHlsLlState, audienceBucketLabel, waitlistBucketHistogram, waitlistStatusLabel
+} = globalThis.PQPInsights;
 
 const NAMES = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
 
@@ -506,4 +508,108 @@ test("a row from an API that does not send the field is off, not on", () => {
   // not known is never drawn as the reassuring answer.
   assert.equal(liveHlsState(null).tone, "off");
   assert.equal(liveHlsState({}).tone, "off");
+});
+
+/* ------------------------------------------------------------------ *
+ * liveHlsLlState: the low-latency switch, same four sources as above,
+ * but its own function because the two switches can disagree.
+ * ------------------------------------------------------------------ */
+
+test("low latency ON says which of the three inputs turned it on", () => {
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: true, liveHlsLlSource: "server" }), {
+    tone: "on",
+    label: "ligada",
+    why: "decisão desta página"
+  });
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: true, liveHlsLlSource: "allowlist" }), {
+    tone: "on",
+    label: "ligada",
+    why: "está na variável"
+  });
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: true, liveHlsLlSource: "open" }), {
+    tone: "on",
+    label: "ligada",
+    why: "sem allowlist: todo servidor"
+  });
+});
+
+test("low latency OFF says why, same three whys as the availability switch", () => {
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: false, liveHlsLlSource: "master-off" }), {
+    tone: "off",
+    label: "sem baixa latência",
+    why: "watch party desligado ou sem suporte"
+  });
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: false, liveHlsLlSource: "server" }), {
+    tone: "off",
+    label: "desligada",
+    why: "decisão desta página"
+  });
+  assert.deepEqual(liveHlsLlState({ liveHlsLlEffective: false, liveHlsLlSource: "allowlist" }), {
+    tone: "off",
+    label: "desligada",
+    why: "não está na variável"
+  });
+});
+
+test("low latency effective decides the tone, never the source, and an older API is off", () => {
+  assert.equal(
+    liveHlsLlState({ liveHlsLlEffective: false, liveHlsLlSource: "server" }).tone,
+    "off"
+  );
+  assert.equal(
+    liveHlsLlState({ liveHlsLlEffective: true, liveHlsLlSource: "server" }).tone,
+    "on"
+  );
+  assert.equal(liveHlsLlState(null).tone, "off");
+  assert.equal(liveHlsLlState({}).tone, "off");
+});
+
+/* ------------------------------------------------------------------ *
+ * audienceBucketLabel / waitlistBucketHistogram / waitlistStatusLabel:
+ * pure formatting for the "lista de espera" table on controles.
+ * ------------------------------------------------------------------ */
+
+test("audienceBucketLabel covers all five survey buckets in Portuguese", () => {
+  assert.equal(audienceBucketLabel("under-20"), "até 20");
+  assert.equal(audienceBucketLabel("20-50"), "20 a 50");
+  assert.equal(audienceBucketLabel("50-150"), "50 a 150");
+  assert.equal(audienceBucketLabel("150-500"), "150 a 500");
+  assert.equal(audienceBucketLabel("500-plus"), "mais de 500");
+});
+
+test("audienceBucketLabel is empty for a skipped or unrecognized bucket", () => {
+  assert.equal(audienceBucketLabel(null), "");
+  assert.equal(audienceBucketLabel(undefined), "");
+  assert.equal(audienceBucketLabel("whatever"), "");
+});
+
+test("waitlistBucketHistogram sorts the biggest group first", () => {
+  assert.equal(
+    waitlistBucketHistogram({ "20-50": 1, "50-150": 2 }),
+    "50 a 150 ×2 · 20 a 50 ×1"
+  );
+});
+
+test("waitlistBucketHistogram breaks a tie by the survey's own order", () => {
+  // Same count on two buckets: the smaller-audience bucket comes first,
+  // matching the ladder a requester picked from, not insertion order.
+  assert.equal(
+    waitlistBucketHistogram({ "500-plus": 1, "under-20": 1 }),
+    "até 20 ×1 · mais de 500 ×1"
+  );
+});
+
+test("waitlistBucketHistogram drops zero counts and is empty for nothing at all", () => {
+  assert.equal(waitlistBucketHistogram({ "under-20": 0, "50-150": 3 }), "50 a 150 ×3");
+  assert.equal(waitlistBucketHistogram({}), "");
+  assert.equal(waitlistBucketHistogram(null), "");
+  assert.equal(waitlistBucketHistogram(undefined), "");
+});
+
+test("waitlistStatusLabel covers all three states and falls back to the raw value", () => {
+  assert.equal(waitlistStatusLabel("waiting"), "esperando");
+  assert.equal(waitlistStatusLabel("approved"), "liberado");
+  assert.equal(waitlistStatusLabel("declined"), "recusado");
+  assert.equal(waitlistStatusLabel("whatever"), "whatever");
+  assert.equal(waitlistStatusLabel(null), "");
 });

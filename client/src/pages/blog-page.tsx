@@ -3,7 +3,14 @@ import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { ARTICLES, articleSummary, articleTitle } from "@/lib/blog/articles";
-import { POSTS, type BlogLocale } from "@/lib/blog/posts";
+import {
+  POSTS,
+  blogLocaleFor,
+  blogReadLocaleFor,
+  postLocale,
+  postSummary,
+  postTitle,
+} from "@/lib/blog/posts";
 import { useTranslation } from "@/lib/i18n";
 import { formatPostDate } from "@/lib/blog/format";
 
@@ -22,7 +29,8 @@ import { formatPostDate } from "@/lib/blog/format";
  */
 export function BlogPage() {
   const { t, locale } = useTranslation();
-  const blogLocale: BlogLocale = locale === "pt-BR" ? "pt-BR" : "en";
+  const blogLocale = blogLocaleFor(locale);
+  const readLocale = blogReadLocaleFor(locale);
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-paper">
@@ -97,7 +105,7 @@ export function BlogPage() {
                       dateTime={post.date}
                       className="text-xs uppercase tracking-[0.14em] text-paper-muted/70"
                     >
-                      {formatPostDate(post.date, blogLocale)}
+                      {formatPostDate(post.date, postLocale(post, readLocale))}
                     </time>
                     <h3 className="mt-2 text-balance font-display text-xl font-semibold leading-snug sm:text-2xl">
                       {/* The whole card is not a link: a heading link keeps
@@ -108,11 +116,11 @@ export function BlogPage() {
                         to={`/blog/${post.slug}`}
                         className="transition-colors hover:text-signal focus-visible:text-signal"
                       >
-                        {post.title[blogLocale]}
+                        {postTitle(post, readLocale)}
                       </Link>
                     </h3>
                     <p className="mt-3 text-pretty leading-relaxed text-paper-muted">
-                      {post.summary[blogLocale]}
+                      {postSummary(post, readLocale)}
                     </p>
                   </article>
                 </li>

@@ -13,10 +13,12 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
+    "e2e:stale-bundle": "playwright test -c playwright.stale-bundle.config.ts",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",
-    "i18n:check": "node scripts/check-i18n.mjs"
+    "i18n:check": "node scripts/check-i18n.mjs",
+    "og:image": "node scripts/og-image/render.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.22.4",

@@ -1,7 +1,10 @@
 import { Link } from "react-router-dom";
+import { LanguagePicker } from "@/components/marketing/language-picker";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { useCommunitiesEnabled } from "@/hooks/use-communities-enabled";
 import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { playStoreUrl } from "@/lib/play-store";
 import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
 
 const FOOTER_LINK =
@@ -9,9 +12,14 @@ const FOOTER_LINK =
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
+  const communitiesEnabled = useCommunitiesEnabled();
   // Hosted-only: a self-hosted build has no donation links and gets no link
   // to a page that would only redirect home. See `lib/support-links.ts`.
   const supportEnabled = isSupportPageEnabled();
+  // The link always goes to /android; only the label changes, so a self-host
+  // that hides the Play badge with a single space never claims a listing it
+  // does not have.
+  const hasPlay = Boolean(playStoreUrl());
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -24,6 +32,13 @@ export function MarketingFooter() {
           <p className="mt-2 max-w-xs text-sm text-paper-muted">
             {t("footer.tagline")}
           </p>
+          {/* The header's picker sits in a cramped mobile bar next to the
+              nav's beta tag and Join button; the footer gives a mobile
+              visitor a second, roomier place to find it. Hidden from `sm`
+              up, where the header copy is already there. */}
+          <div className="mt-4 sm:hidden">
+            <LanguagePicker />
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-x-10 gap-y-6 text-sm">
@@ -42,9 +57,11 @@ export function MarketingFooter() {
             <a href="/#features" className={FOOTER_LINK}>
               {t("nav.features")}
             </a>
-            <a href="/#communities" className={FOOTER_LINK}>
-              {t("nav.communities")}
-            </a>
+            {communitiesEnabled && (
+              <a href="/#communities" className={FOOTER_LINK}>
+                {t("nav.communities")}
+              </a>
+            )}
             <a
               href="/#hosting"
               className={FOOTER_LINK}
@@ -68,7 +85,7 @@ export function MarketingFooter() {
               {t("footer.iosBeta")}
             </Link>
             <Link to="/android" className={FOOTER_LINK}>
-              {t("footer.androidBeta")}
+              {t(hasPlay ? "footer.androidBeta.play" : "footer.androidBeta")}
             </Link>
             <Link to="/blog" className={FOOTER_LINK}>
               {t("nav.blog")}
@@ -106,11 +123,19 @@ export function MarketingFooter() {
             <Link to="/cookies" className={FOOTER_LINK}>
               {t("footer.cookies")}
             </Link>
+            {/* The one address every legal page and security.txt already
+                give. A question about the service should not need the terms
+                opened first. */}
+            <a href="mailto:contato@pqp.gg" className={FOOTER_LINK}>
+              {t("footer.contact")}
+            </a>
           </div>
         </div>
       </div>
       <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
         {t("footer.copyright", { year: new Date().getFullYear() })}
+        {" · "}
+        {t("footer.madeBy")}
         {" · "}
         <a
           href="https://rafael.ltd"

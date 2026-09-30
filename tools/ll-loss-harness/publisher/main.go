@@ -90,6 +90,17 @@ func main() {
 		rm.Disconnect()
 		return
 	}
+	if after := republishAfter(); after > 0 {
+		// A MID-SHOW REPUBLISH: what a presenter's client does when it
+		// resumes after an API deploy, or when they pick something else to
+		// share. The file starts over on the new track, so the new source's
+		// parameter sets differ from the old one's (the ramp begins at 360p
+		// again), which is the init change the box has to carry inside the
+		// same session. REPUBLISH=identity also leaves and rejoins under a
+		// new identity: a reconnect that could not resume.
+		republishMidShow(rm, url, key, secret, room, file, pubOpts, after)
+		return
+	}
 	track, err := lksdk.NewLocalFileTrack(file, lksdk.ReaderTrackWithFrameDuration(33*time.Millisecond), lksdk.ReaderTrackWithOnWriteComplete(func() { close(done) }))
 	if err != nil {
 		log.Fatal(err)

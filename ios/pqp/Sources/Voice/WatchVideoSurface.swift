@@ -17,6 +17,19 @@ import SwiftUI
  IT STILL REPORTS ITS OWN SIZE IN PIXELS. `WatchLadder.resolutionCap` turns
  that into a ceiling, so Auto holds 720p in the strip and allows 1080p the
  moment the viewer opens the theater, without either number being hard coded.
+
+ THE NEWEST RECTANGLE HOLDS THE PICTURE, WHATEVER ORDER SWIFTUI CALLS US IN.
+ TestFlight 1.0.6 (106701): turn the phone and the film went black, and
+ turning it back did not bring it back, while the camera corner kept playing.
+ Since #833 the surface sits inside a `GeometryReader`, and on a rotation the
+ outgoing reader lays its content out ONE more time after the incoming one has
+ been made: make(new), update(old), dismantle(old). The old rule was "every
+ update mounts here", so that last update pulled the layer back into the box
+ that was about to be dismantled, the dismantle took it out of the window, and
+ nothing ever updated the new box again. Reproduced on the simulator with
+ exactly that call order. So a rectangle now CLAIMS the picture when it is
+ made and GIVES IT BACK when it is dismantled, and an update only asks the
+ picture to settle into the newest rectangle still standing.
  */
 struct WatchVideoSurface: UIViewRepresentable {
     let picture: WatchPicture
@@ -24,24 +37,39 @@ struct WatchVideoSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let holder = UIView()
         holder.backgroundColor = .black
-        picture.mount(in: holder)
+        context.coordinator.picture = picture
+        picture.claim(holder)
         return holder
     }
 
     func updateUIView(_ holder: UIView, context: Context) {
-        picture.mount(in: holder)
+        if context.coordinator.picture !== picture {
+            context.coordinator.picture?.release(holder)
+            context.coordinator.picture = picture
+            picture.claim(holder)
+        }
+        picture.settle()
     }
 
-    /// Empty the rectangle that is going away, and NEVER touch the player.
+    /// Hand the layer on, and NEVER touch the player.
     ///
     /// The layer is not this view's to destroy; it belongs to `WatchPicture`
-    /// and it is on its way to the theater (or back from it). Whichever of
-    /// mount and dismantle SwiftUI runs first, the result is the same layer in
-    /// a new box, still holding the same `AVPlayer`, still decoding.
-    static func dismantleUIView(_ holder: UIView, coordinator: ()) {
-        for sub in holder.subviews where sub is WatchPlayerCanvas {
-            sub.removeFromSuperview()
-        }
+    /// and it is on its way to the theater (or back from it). Releasing moves
+    /// it into whichever rectangle is still claiming it, so the result is the
+    /// same layer in the new box, still holding the same `AVPlayer`, still
+    /// decoding.
+    static func dismantleUIView(_ holder: UIView, coordinator: Coordinator) {
+        coordinator.picture?.release(holder)
+        coordinator.picture = nil
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Which picture this rectangle claimed, so the dismantle (a static
+    /// function with no `self`) can give it back.
+    @MainActor
+    final class Coordinator {
+        weak var picture: WatchPicture?
     }
 }
 
@@ -98,15 +126,41 @@ final class WatchPicture {
         pip.attach(controller)
     }
 
-    /// Put the picture in this rectangle. Idempotent, and a move rather than a
-    /// copy: `addSubview` takes the canvas out of whatever held it before.
-    /// Autoresizing rather than constraints precisely because it is a move —
-    /// constraints tying it to the old box die with the old box.
-    func mount(in holder: UIView) {
-        guard canvas.superview !== holder else { return }
-        canvas.frame = holder.bounds
+    /// Every rectangle currently offering to show the picture, oldest first.
+    /// Weak, so a box SwiftUI dropped without a dismantle cannot keep a claim.
+    private var claims: [WeakHolder] = []
+
+    /// A rectangle was just made: it is the newest, so the picture goes there.
+    func claim(_ holder: UIView) {
+        claims.removeAll { $0.view == nil || $0.view === holder }
+        claims.append(WeakHolder(view: holder))
+        settle()
+    }
+
+    /// A rectangle is going away. If it was showing the picture, the picture
+    /// moves to the newest one still standing; with none left it simply
+    /// leaves the window, keeping its player, until the next claim.
+    func release(_ holder: UIView) {
+        claims.removeAll { $0.view == nil || $0.view === holder }
+        if canvas.superview === holder { canvas.removeFromSuperview() }
+        settle()
+    }
+
+    /// Put the picture in the newest rectangle still claiming it. Idempotent,
+    /// and a move rather than a copy: `addSubview` takes the canvas out of
+    /// whatever held it before. Autoresizing rather than constraints
+    /// precisely because it is a move: constraints tying it to the old box
+    /// die with the old box.
+    ///
+    /// NEVER "the rectangle that asked". An outgoing rectangle can still be
+    /// updated after its replacement was made (see `WatchVideoSurface`), and
+    /// letting it take the picture back is the black film of build 106701.
+    func settle() {
+        claims.removeAll { $0.view == nil }
+        guard let newest = claims.last?.view, canvas.superview !== newest else { return }
+        canvas.frame = newest.bounds
         canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        holder.addSubview(canvas)
+        newest.addSubview(canvas)
     }
 
     private func report(_ pixels: CGSize) {
@@ -117,6 +171,12 @@ final class WatchPicture {
         lastReported = pixels
         onSurfacePixels?(pixels)
     }
+}
+
+/// One claim on the picture. A struct around a weak reference, because an
+/// array cannot hold weak references directly.
+private struct WeakHolder {
+    weak var view: UIView?
 }
 
 /// The one `AVPlayerLayer` the overlay, the theater and PiP all share.

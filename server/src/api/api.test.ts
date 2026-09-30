@@ -438,8 +438,29 @@ describeDb("API authorization", () => {
     expect(enabled.body.enabled).toBe(true);
     expect(enabled.body.server.communityHomeEnabled).toBe(true);
 
-    const persisted = await call<{ enabled: boolean }>(member, "GET", path);
+    const persisted = await call<{ enabled: boolean; version: number }>(
+      member,
+      "GET",
+      path,
+    );
     expect(persisted.body.enabled).toBe(true);
+
+    // Every flip bumps the version, so an app holding two frames keeps the
+    // newer one whatever order they arrive in.
+    const disabled = await call<{
+      enabled: boolean;
+      version: number;
+      server: { communityHomeEnabled: boolean; communityHomeVersion: number };
+    }>(admin, "PATCH", path, { enabled: false });
+    expect(disabled.body.enabled).toBe(false);
+    expect(disabled.body.version).toBe(persisted.body.version + 1);
+    expect(disabled.body.server.communityHomeVersion).toBe(disabled.body.version);
+    const reread = await call<{ enabled: boolean; version: number }>(
+      member,
+      "GET",
+      path,
+    );
+    expect(reread.body).toEqual({ enabled: false, version: disabled.body.version });
     delete process.env.COMMUNITY_HOME_ENABLED;
   });
 
@@ -564,6 +585,13 @@ describeDb("API authorization", () => {
             [serverId, userId],
           )
         ).rows[0]?.join_ref;
+      const sourceOf = async (userId: string) =>
+        (
+          await getPool().query<{ join_source: string | null }>(
+            `SELECT join_source FROM server_members WHERE server_id = $1 AND user_id = $2`,
+            [serverId, userId],
+          )
+        ).rows[0]?.join_source;
 
       // A tagged link: the tag lands on the membership, lower-cased.
       expect(
@@ -571,6 +599,8 @@ describeDb("API authorization", () => {
           .status,
       ).toBe(200);
       expect(await refOf(outsider.id)).toBe("discord");
+      // join_source names the door (invite) independently of the ref tag.
+      expect(await sourceOf(outsider.id)).toBe("invite");
 
       // Re-opening a link with another tag does not re-attribute the join.
       await call(outsider, "POST", `/api/invites/${code}/join`, { ref: "convite" });
@@ -596,6 +626,8 @@ describeDb("API authorization", () => {
       });
       expect((await call(bare, "POST", `/api/invites/${code}/join`)).status).toBe(200);
       expect(await refOf(bare.id)).toBeNull();
+      // No tag, but still the invite door.
+      expect(await sourceOf(bare.id)).toBe("invite");
     });
 
     it("lets members create invites but not list them", async () => {
@@ -2261,6 +2293,61 @@ describeDb("API authorization", () => {
       expect(
         unread.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(1);
+    });
+
+    it("never moves the cursor back for a forward-only cursor", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         VALUES ($1, $2, 'older', NOW() - INTERVAL '2 minutes'),
+                ($1, $2, 'newer', NOW() - INTERVAL '1 minute')`,
+        [textChannelId, owner.id],
+      );
+      const older = await getPool().query<{ created_at: Date }>(
+        `SELECT created_at FROM messages
+          WHERE channel_id = $1 AND body = 'older'`,
+        [textChannelId],
+      );
+      const pastOlder = new Date(
+        older.rows[0]!.created_at.getTime() + 1,
+      ).toISOString();
+
+      // The open's read, to NOW(), lands first.
+      const opened = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+      );
+      expect(opened.status).toBe(200);
+
+      // Then the live ack of the older message, from an earlier visit.
+      const acked = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+        { lastReadAt: pastOlder, forwardOnly: true },
+      );
+      expect(acked.status).toBe(200);
+      expect(acked.body.lastReadAt).toBe(opened.body.lastReadAt);
+
+      const unread = await call<{
+        unread: Array<{ channelId: string; count: number }>;
+      }>(member, "GET", `/api/servers/${serverId}/unread`);
+      expect(
+        unread.body.unread.find((u) => u.channelId === textChannelId)?.count ??
+          0,
+      ).toBe(0);
+
+      // Forward still moves it: a first ack on a channel never opened.
+      const { textChannelId: fresh } = await makeServer();
+      const first = await call<{ lastReadAt: string }>(
+        member,
+        "POST",
+        `/api/channels/${fresh}/read`,
+        { lastReadAt: pastOlder, forwardOnly: true },
+      );
+      expect(first.status).toBe(200);
+      expect(first.body.lastReadAt).toBe(pastOlder);
     });
   });
 

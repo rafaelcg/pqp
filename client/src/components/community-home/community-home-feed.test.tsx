@@ -2,7 +2,7 @@ import type { PublicUser } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CommunityHomePost } from "@/lib/community-home";
-import { PostCard } from "./community-home-feed";
+import { PostCard, scheduledLabel } from "./community-home-feed";
 
 /**
  * The card's contract, rendered without the feed's network around it.
@@ -503,6 +503,39 @@ describe("PostCard", () => {
     expect(member).not.toContain("data-home-lock");
   });
 
+  it("a file post keeps its download link clear of the staff menu", () => {
+    const pdf = post({
+      media: {
+        kind: "file",
+        name: "regulamento.pdf",
+        contentType: "application/pdf",
+        byteSize: 1_150_000,
+        url: "https://bucket.example/regulamento.pdf?sig=1",
+        youtubeUrl: null,
+        twitchUrl: null,
+      },
+      hasMedia: true,
+    });
+    const staff = render(
+      <PostCard
+        post={pdf}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        onEdit={() => {}}
+      />,
+    );
+    expect(staff).toContain("data-home-card-menu");
+    expect(staff).toContain("data-home-media-reserve-corner");
+
+    const member = render(
+      <PostCard post={pdf} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
+    );
+    expect(member).not.toContain("data-home-card-menu");
+    expect(member).not.toContain("data-home-media-reserve-corner");
+  });
+
   it("a Twitch post embeds the player with the page host as parent", () => {
     const html = render(
       <PostCard
@@ -528,5 +561,28 @@ describe("PostCard", () => {
     expect(html).toContain("parent=localhost");
     expect(html).toContain("autoplay=false");
     expect(html).toContain('loading="lazy"');
+  });
+});
+
+describe("scheduledLabel", () => {
+  const at = "2026-10-12T12:05:00.000Z";
+
+  it("speaks the app's language and names the zone", () => {
+    const pt = scheduledLabel(at, "America/Sao_Paulo", "pt-BR");
+    expect(pt).toContain("12 de out");
+    expect(pt).toContain("09:05");
+    expect(pt).toMatch(/BRT|GMT-3/);
+    const en = scheduledLabel(at, "America/Sao_Paulo", "en");
+    expect(en).toContain("Oct 12, 2026");
+    expect(en).toContain("9:05");
+    expect(en).toContain("GMT-3");
+  });
+
+  it("reads the same instant in the post's own zone", () => {
+    expect(scheduledLabel(at, "Europe/London", "en")).toContain("1:05");
+  });
+
+  it("falls back to a plain date when the zone is not one Intl knows", () => {
+    expect(scheduledLabel(at, "Nowhere/Atlantis", "en")).toContain("2026");
   });
 });

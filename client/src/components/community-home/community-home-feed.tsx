@@ -75,10 +75,12 @@ import {
   communityHomeEmbedMedia,
   communityHomeEmbedUrl,
   composeSubmitEmbedUrl,
+  createPickSequence,
   formatHomeBytes,
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
   isPostLockedForViewer,
+  isRealHomeImage,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
   parseCommunityHomeEmbed,
@@ -95,6 +97,7 @@ import {
 } from "@/lib/community-home";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
+import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
 import { UnlockedMedia } from "./community-home-media";
@@ -168,6 +171,7 @@ type StaffTab = "feed" | "compose" | "drafts";
 function relativeDayLabel(
   iso: string,
   t: (key: MessageKey, vars?: MessageVars) => string,
+  locale: Locale,
 ): string {
   const posted = new Date(iso);
   if (Number.isNaN(posted.getTime())) {
@@ -192,18 +196,25 @@ function relativeDayLabel(
   if (dayDiff <= 7) {
     return t("communityHome.postedDays", { count: dayDiff });
   }
-  return posted.toLocaleDateString();
+  return posted.toLocaleDateString(intlLocale(locale));
 }
 
-function scheduledLabel(iso: string, timezone: string | null): string {
+// In the app's language, not the browser's, and with the zone named: staff in
+// London and in São Paulo read the same post, so a bare "00:00" is ambiguous.
+export function scheduledLabel(iso: string, timezone: string | null, locale: Locale): string {
+  const date = new Date(iso);
   try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
+    return new Intl.DateTimeFormat(intlLocale(locale), {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
       ...(timezone ? { timeZone: timezone } : {}),
-    });
+    }).format(date);
   } catch {
-    return new Date(iso).toLocaleString();
+    return date.toLocaleString(intlLocale(locale));
   }
 }
 
@@ -336,7 +347,7 @@ function CommentRow({
   canDelete: boolean;
   onDelete: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   return (
     <li className="flex gap-2.5" data-home-comment>
       <UserAvatar
@@ -352,7 +363,7 @@ function CommentRow({
             {comment.author.displayName}
           </span>
           <span className="shrink-0 text-[11px] text-paper-muted">
-            {relativeDayLabel(comment.createdAt, t)}
+            {relativeDayLabel(comment.createdAt, t, locale)}
           </span>
           {canDelete && (
             <button
@@ -694,7 +705,7 @@ export function PostCard({
   onTogglePin,
   onToggleLock,
 }: PostCardProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [liking, setLiking] = useState(false);
@@ -703,6 +714,9 @@ export function PostCard({
   const interactive = mode === "feed" && post.status === "published";
   const showLockPlate = locked && post.hasMedia;
   const showMedia = !locked && post.media;
+  // A file post opens with a one-line row, not a picture: the menu sits in
+  // that row beside the download link instead of floating over it.
+  const fileRow = Boolean(showMedia && post.media?.kind === "file");
   const posterUrl =
     post.posterUrl ??
     (post.media?.kind === "youtube"
@@ -760,14 +774,21 @@ export function PostCard({
       data-home-post-locked={locked ? "1" : "0"}
     >
       {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
-      {showMedia && post.media ? <UnlockedMedia media={post.media} flush /> : null}
+      {showMedia && post.media ? (
+        <UnlockedMedia media={post.media} flush reserveCorner={showStaffMenu} />
+      ) : null}
       {showStaffMenu && (
-        <div className="absolute right-3 top-3 z-10">
+        <div
+          className={cn(
+            "absolute z-10",
+            fileRow ? "right-2 top-1" : "right-3 top-3",
+          )}
+        >
           <button
             type="button"
             className={cn(
               "inline-flex h-8 w-8 items-center justify-center rounded-md",
-              showLockPlate || showMedia
+              showLockPlate || (showMedia && !fileRow)
                 ? "bg-ink/65 text-paper hover:bg-ink/85"
                 : "text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
@@ -895,7 +916,7 @@ export function PostCard({
 
       <div className={cn("p-5", showStaffMenu && "pr-12")}>
         {post.title && (
-          <h2 className="font-display text-2xl font-bold leading-snug tracking-tight text-text">
+          <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
             {post.title}
           </h2>
         )}
@@ -903,7 +924,7 @@ export function PostCard({
           <span>
             {isPreview
               ? t("communityHome.compose.previewNow")
-              : relativeDayLabel(post.publishedAt ?? post.createdAt, t)}
+              : relativeDayLabel(post.publishedAt ?? post.createdAt, t, locale)}
           </span>
           {locked && !showLockPlate && (
             <span
@@ -932,7 +953,7 @@ export function PostCard({
             <span className="inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
               <CalendarClock className="h-2.5 w-2.5" aria-hidden />
               {t("communityHome.status.scheduledFor", {
-                when: scheduledLabel(post.scheduledAt, post.scheduleTimezone),
+                when: scheduledLabel(post.scheduledAt, post.scheduleTimezone, locale),
               })}
             </span>
           )}
@@ -941,7 +962,7 @@ export function PostCard({
         {locked ? (
           <>
             {summary && summary !== post.title?.trim() && (
-              <p className="mt-3 text-sm leading-relaxed text-text">
+              <p className="mt-3 break-words text-sm leading-relaxed text-text">
                 {summary}
               </p>
             )}
@@ -1174,6 +1195,7 @@ function ComposeCard({
   const [busy, setBusy] = useState<ComposeAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadAbort = useRef<AbortController | null>(null);
+  const nextPick = useMemo(createPickSequence, []);
   const timezone = useMemo(browserTimezone, []);
 
   const hasMedia =
@@ -1195,6 +1217,10 @@ function ComposeCard({
     if (!file) {
       return;
     }
+    // The byte check below is async: a newer pick may land while it runs, and
+    // only the newest pick may go on to abort the current upload and start its
+    // own.
+    const isCurrentPick = nextPick();
     setError(null);
     if (file.size > COMMUNITY_HOME_MAX_BYTES) {
       setError(
@@ -1206,6 +1232,24 @@ function ComposeCard({
       );
       return;
     }
+    let realImage: boolean;
+    try {
+      realImage = await isRealHomeImage(file);
+    } catch {
+      // The browser could not read the file (moved, deleted, permission gone),
+      // so the upload could not have read it either.
+      if (isCurrentPick()) {
+        setError(t("communityHome.compose.uploadFailed"));
+      }
+      return;
+    }
+    if (!isCurrentPick()) {
+      return;
+    }
+    if (!realImage) {
+      setError(t("communityHome.compose.notAnImage"));
+      return;
+    }
     uploadAbort.current?.abort();
     const controller = new AbortController();
     uploadAbort.current = controller;
@@ -1215,6 +1259,9 @@ function ComposeCard({
         signal: controller.signal,
         onProgress: (fraction) => setUploading(fraction),
       });
+      if (controller.signal.aborted) {
+        return;
+      }
       const previewUrl =
         uploaded.kind === "file" ? null : URL.createObjectURL(file);
       setState((prev) => ({
@@ -1229,8 +1276,12 @@ function ComposeCard({
         setError(errorMessage(error, t("communityHome.compose.uploadFailed")));
       }
     } finally {
-      setUploading(null);
-      uploadAbort.current = null;
+      // A superseded upload must not clear the progress and the abort handle
+      // of the upload that replaced it.
+      if (uploadAbort.current === controller) {
+        setUploading(null);
+        uploadAbort.current = null;
+      }
     }
   }
 
@@ -1861,7 +1912,7 @@ export function CommunityHomeFeed({
   channels = [],
   onOpenChannel,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -2231,6 +2282,11 @@ export function CommunityHomeFeed({
   }
 
   const feedEmpty = posts !== null && posts.length === 0;
+  // A scheduled post lives in the drafts list, not the feed, so after a reload
+  // it looked deleted. Staff get a strip on the feed that says it is still coming.
+  const scheduled = drafts
+    .filter((p) => p.status === "scheduled" && p.scheduledAt)
+    .sort((a, b) => new Date(a.scheduledAt!).getTime() - new Date(b.scheduledAt!).getTime());
   const showIntro = !introDismissed && !canManageServer;
 
   function openCompose() {
@@ -2472,6 +2528,24 @@ export function CommunityHomeFeed({
                   <Button size="sm" variant="secondary" onClick={() => void load(false)}>
                     <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
                     {t("communityHome.error.retry")}
+                  </Button>
+                </div>
+              )}
+
+              {canManageServer && scheduled.length > 0 && (
+                <div
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface-1 px-4 py-3 text-sm text-text"
+                  data-home-scheduled-strip
+                >
+                  <CalendarClock className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    {t("communityHome.scheduledStrip", {
+                      count: scheduled.length,
+                      when: scheduledLabel(scheduled[0]!.scheduledAt!, scheduled[0]!.scheduleTimezone, locale),
+                    })}
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={openDrafts}>
+                    {t("communityHome.scheduledStrip.open")}
                   </Button>
                 </div>
               )}

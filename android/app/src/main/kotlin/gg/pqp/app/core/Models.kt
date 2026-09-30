@@ -50,6 +50,20 @@ data class Me(
      * unfinished.
      */
     val ageGate: String? = null,
+    /**
+     * The account's stored preferences, of which only `onboardedAt` is read
+     * here. Null means the API predates the preference store, which is read
+     * as "this deployment cannot record that onboarding ran", so the wizard
+     * never runs rather than running on every launch forever. Same rule as
+     * `shouldRunOnboarding` in `client/src/lib/onboarding.ts`.
+     */
+    val preferences: MePreferences? = null,
+)
+
+@Serializable
+data class MePreferences(
+    /** Finished, skipped, or grandfathered. Present means "not again", on every device. */
+    val onboardedAt: String? = null,
 )
 
 // --- servers and channels ---
@@ -474,9 +488,11 @@ data class VoiceSessionResponse(
     /**
      * The SFU region the room is pinned to (`sao`, `mia`, ...), present only
      * when the deployment runs more than one. Informational: [url] already
-     * names the box, and that is what `LiveKitEngine` dials. This build does
-     * not declare the `sfu-region` capability, so rooms it opens stay in São
-     * Paulo; see `docs/plans/SFU_REGIONS.md`.
+     * names the box, and that is what `LiveKitEngine` dials, so a room this
+     * build opens follows the server's region policy like any other. It
+     * declares `sfu-region` in `RealtimeClient.WIRE_CAPS`, and builds that do
+     * not are trusted too unless the server sets `LIVEKIT_REGION_REQUIRE_CAP`;
+     * see `docs/plans/SFU_REGIONS.md`.
      */
     val region: String? = null,
 )
@@ -492,6 +508,15 @@ data class VoiceSessionResponse(
 data class VoiceLeaveBeacon(
     val resumePeerId: String,
     val resumeToken: String,
+)
+
+/**
+ * The body of `POST /api/live-hls/presence`, mirroring `liveHlsPresenceSchema`.
+ * See `ApiClient.sendHlsPresence` and `WatchPane`'s presence beat.
+ */
+@Serializable
+data class LiveHlsPresenceRequest(
+    val sessionToken: String,
 )
 
 // --- errors ---

@@ -28,16 +28,41 @@ import { useSyncExternalStore } from "react";
  * own card.
  */
 
+/**
+ * What `lib/version-watch.ts` has learned about the deployed build, which is a
+ * SECOND and independent way of knowing an update exists. The service worker
+ * only reports a new build when the page navigates; this is asked on focus and
+ * on a timer, so it is the one that reaches a window that never reloads.
+ */
+export interface BuildStaleness {
+  stale: boolean;
+  /** The operator made the update mandatory (`/api/client-update/config`). */
+  forced: boolean;
+  /** The deployed build's id, for the loop guard and for support. */
+  latestBuild: string | null;
+  /** When the deployed build was built, or when this page first saw it. */
+  since: number | null;
+}
+
+export const FRESH_BUILD: BuildStaleness = {
+  stale: false,
+  forced: false,
+  latestBuild: null,
+  since: null,
+};
+
 interface UpdateState {
   waiting: boolean;
   showing: boolean;
   requestedAt: number | null;
+  build: BuildStaleness;
 }
 
 let state: UpdateState = {
   waiting: false,
   showing: false,
   requestedAt: null,
+  build: FRESH_BUILD,
 };
 const listeners = new Set<() => void>();
 
@@ -46,7 +71,8 @@ function set(next: Partial<UpdateState>): void {
   if (
     merged.waiting === state.waiting &&
     merged.showing === state.showing &&
-    merged.requestedAt === state.requestedAt
+    merged.requestedAt === state.requestedAt &&
+    merged.build === state.build
   ) {
     return;
   }
@@ -59,6 +85,31 @@ function set(next: Partial<UpdateState>): void {
 /** The service worker has a new build precached and ready to take over. */
 export function setUpdateWaiting(next: boolean): void {
   set({ waiting: next, ...(next ? {} : { requestedAt: null }) });
+}
+
+/**
+ * Publish what the version poll found. A new object only when something moved,
+ * so subscribers are not woken every twelve minutes to learn nothing changed.
+ */
+export function setBuildStaleness(next: BuildStaleness): void {
+  const current = state.build;
+  if (
+    current.stale === next.stale &&
+    current.forced === next.forced &&
+    current.latestBuild === next.latestBuild &&
+    current.since === next.since
+  ) {
+    return;
+  }
+  set({ build: next });
+}
+
+export function getBuildStaleness(): BuildStaleness {
+  return state.build;
+}
+
+export function useBuildStaleness(): BuildStaleness {
+  return useSyncExternalStore(subscribe, getBuildStaleness, () => FRESH_BUILD);
 }
 
 export function setUpdatePromptShowing(next: boolean): void {
@@ -90,7 +141,12 @@ export function updateRequestedAt(): number | null {
 
 /** Test seam. Nothing in the app resets a module singleton. */
 export function resetUpdateState(): void {
-  state = { waiting: false, showing: false, requestedAt: null };
+  state = {
+    waiting: false,
+    showing: false,
+    requestedAt: null,
+    build: FRESH_BUILD,
+  };
   for (const listener of listeners) {
     listener();
   }

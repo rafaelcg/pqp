@@ -1,4 +1,5 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { noteSignupCta } from "@/lib/signup-assist";
 import { Ban, Check, Minus, X, type LucideIcon } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
@@ -184,7 +185,9 @@ function CreateRoomButton({ className }: { className?: string }) {
     <>
       <SignedOut>
         <SignUpButton mode="modal" forceRedirectUrl="/app">
-          <Button className={classes}>{t("vsDiscord.cta.create")}</Button>
+          <Button className={classes} onClick={() => noteSignupCta("vs-discord", "")}>
+            {t("vsDiscord.cta.create")}
+          </Button>
         </SignUpButton>
       </SignedOut>
       <SignedIn>

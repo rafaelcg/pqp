@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReplyExcerpt,
   normalizeJoinRef,
+  normalizeCommunityJoinVia,
   createChannelSchema,
   extractMentions,
   extractMentionUsernames,
@@ -13,6 +14,7 @@ import {
   reactionEmojiSchema,
   REPLY_EXCERPT_MAX_LENGTH,
   serverSchema,
+  DISPLAY_NAME_MAX_LENGTH,
   updateProfileSchema,
   usernameSchema,
   userPreferencesSchema,
@@ -156,6 +158,20 @@ describe("createChannelSchema", () => {
 });
 
 describe("updateProfileSchema", () => {
+  it("bounds the display name to the one limit every screen uses", () => {
+    const at = "N".repeat(DISPLAY_NAME_MAX_LENGTH);
+    expect(DISPLAY_NAME_MAX_LENGTH).toBe(32);
+    expect(updateProfileSchema.safeParse({ displayName: at }).success).toBe(true);
+    expect(updateProfileSchema.safeParse({ displayName: `${at}N` }).success).toBe(
+      false,
+    );
+    expect(updateProfileSchema.safeParse({ displayName: "" }).success).toBe(false);
+    expect(updateProfileSchema.safeParse({ displayName: "   " }).success).toBe(false);
+    expect(updateProfileSchema.parse({ displayName: "  Rafa  " }).displayName).toBe(
+      "Rafa",
+    );
+  });
+
   it("requires an http(s) or root-relative avatar", () => {
     expect(
       updateProfileSchema.safeParse({ avatarUrl: "https://x.example/a.png" }).success,
@@ -643,5 +659,23 @@ describe("normalizeJoinRef", () => {
     expect(normalizeJoinRef("a b")).toBeNull();
     expect(normalizeJoinRef("rafa@example.com")).toBeNull();
     expect(normalizeJoinRef("x".repeat(33))).toBeNull();
+  });
+});
+
+describe("normalizeCommunityJoinVia", () => {
+  it("keeps the doors a client may claim", () => {
+    expect(normalizeCommunityJoinVia("community_address")).toBe("community_address");
+    expect(normalizeCommunityJoinVia("community_directory")).toBe("community_directory");
+    expect(normalizeCommunityJoinVia("qg_hint")).toBe("qg_hint");
+  });
+
+  it("drops anything else, including a door only the server may write", () => {
+    expect(normalizeCommunityJoinVia(undefined)).toBeNull();
+    expect(normalizeCommunityJoinVia(null)).toBeNull();
+    expect(normalizeCommunityJoinVia(42)).toBeNull();
+    expect(normalizeCommunityJoinVia("")).toBeNull();
+    expect(normalizeCommunityJoinVia("invite")).toBeNull();
+    expect(normalizeCommunityJoinVia("default_placement")).toBeNull();
+    expect(normalizeCommunityJoinVia("Community_Address")).toBeNull();
   });
 });

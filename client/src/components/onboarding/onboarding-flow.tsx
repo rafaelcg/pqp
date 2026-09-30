@@ -15,7 +15,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { Invite, User } from "@pqp/shared";
+import { DISPLAY_NAME_MAX_LENGTH, type Invite, type User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,7 @@ import {
 import { confettiSpent, sessionStore, spendConfetti } from "@/lib/arrival";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import { uploadAvatar } from "@/lib/avatar-upload";
+import { IdempotencyAttempt } from "@/lib/idempotency";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   handleErrorMessage,
@@ -588,7 +589,7 @@ function useYouStep({
             ref={nameRef}
             value={displayName}
             disabled={saving}
-            maxLength={32}
+            maxLength={DISPLAY_NAME_MAX_LENGTH}
             autoComplete="nickname"
             placeholder={t("onboarding.you.namePlaceholder")}
             onChange={(event) => {
@@ -1021,6 +1022,12 @@ function useRoomStep({
    */
   const [joinedId, setJoinedId] = useState<string | null>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
+  /**
+   * One key per create attempt, reused across a retry of the same name so a
+   * lost response never makes a second room; an edited name starts a fresh
+   * attempt. See `@/lib/idempotency`.
+   */
+  const createAttemptRef = useRef(new IdempotencyAttempt());
 
   function openDoor(door: Door) {
     if (busy) {
@@ -1049,12 +1056,13 @@ function useRoomStep({
     try {
       ({
         server: { id: serverId },
-      } = await createServer(trimmed));
+      } = await createServer(trimmed, createAttemptRef.current.keyFor(trimmed)));
     } catch {
       setErrorKey("onboarding.room.create.error");
       setBusy(null);
       return;
     }
+    createAttemptRef.current.reset();
     track("onboarding_server_created");
     // From here the room exists, so nothing below may send the person back
     // to a Criar that would make a second one. The invite and the parent

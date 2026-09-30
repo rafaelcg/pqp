@@ -23,6 +23,8 @@ vi.mock("../services/users.js", () => ({
     user: { display_name: string },
   ) => user.display_name,
   canAccessChannel: vi.fn(async () => true),
+  // Who is back in a server before a delayed removal notice is republished.
+  listCurrentMemberships: vi.fn(async () => new Set<string>()),
 }));
 
 // The timeout chokepoint queries Postgres, and this suite deliberately runs
@@ -53,7 +55,7 @@ vi.mock("../services/servers.js", () => ({
 vi.mock("../services/permissions.js", () => ({
   bumpPermissionsVersion: async () => 1,
   computeMemberPermissions: vi.fn(async () => 0n),
-  listServerMemberIds: async () => [],
+  listServerMemberIds: vi.fn(async (): Promise<string[]> => []),
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -135,8 +137,14 @@ vi.mock("../services/slow-mode.js", () => ({
 
 const {
   broadcastToChannel,
+  deliverCommunityHomeUpdate,
   deliverPermissionsUpdate,
+  notifyServerRemoved,
+  flushServerRemovedRetries,
+  resetServerRemovedRetries,
+  SERVER_REMOVED_RETRY_WINDOW_MS,
   handleChatMessage,
+  notifyCommunityHomeSwitch,
   notifyFriendActivity,
   postChannelMessage,
   resetChatRateLimits,
@@ -144,12 +152,18 @@ const {
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
-const { canAccessChannel } = await import("../services/users.js");
+const { canAccessChannel, listCurrentMemberships } = await import(
+  "../services/users.js"
+);
+const bus = await import("../lib/bus.js");
 const { isDmSendBlocked, restoreDmParticipants } = await import(
   "../services/dms.js"
 );
 const { getChannel } = await import("../services/servers.js");
-const { computeMemberPermissions } = await import("../services/permissions.js");
+const { computeMemberPermissions, listServerMemberIds } = await import(
+  "../services/permissions.js"
+);
+const { setBusTransport } = await import("../lib/bus.js");
 const { createMessage, findMessageByNonce, getReplyParent } = await import(
   "../services/messages.js"
 );
@@ -478,6 +492,439 @@ describe("deliverPermissionsUpdate", () => {
       deliverPermissionsUpdate(serverId, 1, [member]),
     ).not.toThrow();
     expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * The Baú nudge doubles as the "owner flipped the switch" message: with
+ * `enabled` and `version` set, a member's open app rewrites its copy of the
+ * server when the version is newer than the one it holds.
+ */
+describe("deliverCommunityHomeUpdate", () => {
+  const member = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const serverId = "33333333-3333-3333-3333-333333333333";
+  const open: Recorder[] = [];
+
+  function connect(userId: string): Recorder {
+    const recorder = recordingSocket(1);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("carries the new value and its version when the owner flips the switch", () => {
+    const target = connect(member);
+
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: true, version: 1 });
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: false, version: 2 });
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: true, version: 1 },
+      { type: "community-home-update", serverId, enabled: false, version: 2 },
+    ]);
+  });
+
+  it("leaves the value out for a publish, pin or delete", () => {
+    const target = connect(member);
+
+    deliverCommunityHomeUpdate(serverId, [member]);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId },
+    ]);
+  });
+
+  it("reaches members only", () => {
+    const other = connect(bystander);
+
+    deliverCommunityHomeUpdate(serverId, [member], { enabled: true, version: 1 });
+
+    expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * The switch's frame is the only way an open app learns the owner's flip
+ * without a reload, so a failed member lookup or a bus that was down is
+ * retried rather than only logged. Retries are safe because the client keeps
+ * the highest version it has seen.
+ */
+describe("notifyCommunityHomeSwitch", () => {
+  const member = "44444444-4444-4444-4444-444444444444";
+  const open: Recorder[] = [];
+  let published: { topic: string; data: unknown }[];
+  let busUp: boolean;
+  let relay: ((frame: { origin: string; topic: string; data: unknown }) => void) | null;
+
+  function connect(userId: string): Recorder {
+    const recorder = recordingSocket(1);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  function installBus(): void {
+    published = [];
+    busUp = true;
+    relay = null;
+    setBusTransport({
+      name: "test",
+      publish: (frame) => {
+        published.push({ topic: frame.topic, data: frame.data });
+      },
+      onFrame: (handler) => {
+        relay = handler;
+      },
+      connected: () => busUp,
+      close: async () => {},
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(listServerMemberIds).mockImplementation(async () => [member]);
+  });
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+    setBusTransport(null);
+    vi.mocked(listServerMemberIds).mockImplementation(async () => []);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("delivers locally and publishes the same value and version", async () => {
+    const serverId = randomUUID();
+    installBus();
+    const target = connect(member);
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 7 });
+
+    const frame = { type: "community-home-update", serverId, enabled: true, version: 7 };
+    expect(framesOfType(target.received, "community-home-update")).toEqual([frame]);
+    expect(published).toEqual([{ topic: "chat.community-home", data: frame }]);
+  });
+
+  it("retries the member lookup when it fails, instead of leaving members stale", async () => {
+    const serverId = randomUUID();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    await expect(
+      notifyCommunityHomeSwitch(serverId, { enabled: true, version: 2 }),
+    ).resolves.toBeUndefined();
+    expect(target.received).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: true, version: 2 },
+    ]);
+  });
+
+  it("stops retrying an older flip once a newer one went out", async () => {
+    const serverId = randomUUID();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 2 });
+    await notifyCommunityHomeSwitch(serverId, { enabled: false, version: 3 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: false, version: 3 },
+    ]);
+  });
+
+  it("publishes again while the bus is down, and stops once it is up", async () => {
+    const serverId = randomUUID();
+    installBus();
+    busUp = false;
+
+    await notifyCommunityHomeSwitch(serverId, { enabled: true, version: 4 });
+    expect(published).toHaveLength(1);
+
+    busUp = true;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(published).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(published).toHaveLength(2);
+  });
+
+  it("delivers a frame relayed from another instance with its version, retrying a failed lookup", async () => {
+    const serverId = randomUUID();
+    installBus();
+    const target = connect(member);
+    vi.mocked(listServerMemberIds).mockRejectedValueOnce(new Error("pool"));
+
+    relay?.({
+      origin: "another-instance",
+      topic: "chat.community-home",
+      data: { type: "community-home-update", serverId, enabled: false, version: 9 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(target.received).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(framesOfType(target.received, "community-home-update")).toEqual([
+      { type: "community-home-update", serverId, enabled: false, version: 9 },
+    ]);
+  });
+});
+
+/**
+ * Kick, ban and delete: addressed to the people who lost the server, on every
+ * socket they hold, here and on the other machine. The addressees ride the bus
+ * frame because after a delete nobody can look them up again.
+ */
+describe("notifyServerRemoved", () => {
+  const removed = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const serverId = "33333333-3333-3333-3333-333333333333";
+  const open: Recorder[] = [];
+
+  function connect(userId: string, readyState = 1): Recorder {
+    const recorder = recordingSocket(readyState);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  /** A transport whose only job is to hand this instance a foreign frame. */
+  function installForeignBus(): (data: unknown) => void {
+    let dispatch: ((frame: {
+      origin: string;
+      topic: string;
+      data: unknown;
+    }) => void) | null = null;
+    bus.setBusTransport({
+      name: "test",
+      publish: () => {},
+      onFrame: (next) => {
+        dispatch = next;
+      },
+      close: async () => {},
+    });
+    return (data) =>
+      dispatch?.({ origin: "another-instance", topic: "chat.membership", data });
+  }
+
+  /** A transport that records what is published and can be taken down. */
+  function installFlakyBus(): {
+    published: unknown[];
+    setUp: (up: boolean) => void;
+  } {
+    const published: unknown[] = [];
+    let up = false;
+    bus.setBusTransport({
+      name: "flaky",
+      publish: (frame) => {
+        // A real transport drops while it reconnects; this one only records
+        // the frames it would actually have delivered.
+        if (up && frame.topic === "chat.membership") {
+          published.push(frame.data);
+        }
+      },
+      onFrame: () => {},
+      connected: () => up,
+      close: async () => {},
+    });
+    return { published, setUp: (next) => (up = next) };
+  }
+
+  afterEach(() => {
+    bus.setBusTransport(null);
+    resetServerRemovedRetries();
+    vi.mocked(listCurrentMemberships).mockReset();
+    vi.mocked(listCurrentMemberships).mockResolvedValue(new Set());
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("republishes a notice the bus dropped once the bus is back", async () => {
+    const flaky = installFlakyBus();
+
+    notifyServerRemoved(serverId, "deleted", [removed, bystander]);
+    expect(flaky.published).toEqual([]);
+
+    // Still down on the first retry: held, not lost.
+    await flushServerRemovedRetries();
+    expect(flaky.published).toEqual([]);
+
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([
+      {
+        type: "server-removed",
+        serverId,
+        reason: "deleted",
+        userIds: [removed, bystander],
+      },
+    ]);
+    // A delete needs no membership check: nobody rejoins a deleted server.
+    expect(listCurrentMemberships).not.toHaveBeenCalled();
+
+    // Delivered once; nothing is left to send again.
+    await flushServerRemovedRetries();
+    expect(flaky.published).toHaveLength(1);
+  });
+
+  it("does not republish a kick to somebody who has rejoined since", async () => {
+    const flaky = installFlakyBus();
+    const otherServer = "44444444-4444-4444-4444-444444444444";
+    // Back in the first server, still out of the second.
+    vi.mocked(listCurrentMemberships).mockResolvedValue(
+      new Set([`${serverId}:${removed}`]),
+    );
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+    notifyServerRemoved(otherServer, "banned", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    // The whole backlog is checked in one query, not one per notice.
+    expect(listCurrentMemberships).toHaveBeenCalledTimes(1);
+    expect(listCurrentMemberships).toHaveBeenCalledWith([
+      { serverId, userId: removed },
+      { serverId: otherServer, userId: removed },
+    ]);
+    expect(flaky.published).toEqual([
+      {
+        type: "server-removed",
+        serverId: otherServer,
+        reason: "banned",
+        userIds: [removed],
+      },
+    ]);
+  });
+
+  it("still republishes a kick when the membership check fails", async () => {
+    const flaky = installFlakyBus();
+    vi.mocked(listCurrentMemberships).mockRejectedValue(new Error("db down"));
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([
+      { type: "server-removed", serverId, reason: "kicked", userIds: [removed] },
+    ]);
+  });
+
+  it("gives up on a notice older than the retry window", async () => {
+    const flaky = installFlakyBus();
+
+    notifyServerRemoved(serverId, "deleted", [removed]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries(
+      Date.now() + SERVER_REMOVED_RETRY_WINDOW_MS + 1,
+    );
+
+    expect(flaky.published).toEqual([]);
+  });
+
+  it("queues nothing when the bus took the frame", async () => {
+    const flaky = installFlakyBus();
+    flaky.setUp(true);
+
+    notifyServerRemoved(serverId, "banned", [removed]);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toHaveLength(1);
+  });
+
+  it("reaches every socket the removed person holds, and nobody else", () => {
+    const laptop = connect(removed);
+    const phone = connect(removed);
+    const other = connect(bystander);
+
+    notifyServerRemoved(serverId, "kicked", [removed]);
+
+    for (const recorder of [laptop, phone]) {
+      expect(framesOfType(recorder.received, "server-removed")).toEqual([
+        { type: "server-removed", serverId, reason: "kicked" },
+      ]);
+    }
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("canonicalises ids a route passed in uppercase", () => {
+    const target = connect(removed);
+
+    notifyServerRemoved(serverId.toUpperCase(), "kicked", [removed.toUpperCase()]);
+
+    expect(framesOfType(target.received, "server-removed")).toEqual([
+      { type: "server-removed", serverId, reason: "kicked" },
+    ]);
+  });
+
+  it("checks rejoins with canonical ids when a route passed them in uppercase", async () => {
+    const flaky = installFlakyBus();
+    vi.mocked(listCurrentMemberships).mockResolvedValue(
+      new Set([`${serverId}:${removed}`]),
+    );
+
+    notifyServerRemoved(serverId.toUpperCase(), "kicked", [removed.toUpperCase()]);
+    flaky.setUp(true);
+    await flushServerRemovedRetries();
+
+    expect(flaky.published).toEqual([]);
+  });
+
+  it("skips a socket that is not open rather than throwing at the route", () => {
+    const closing = connect(removed, 3 /* CLOSED */);
+
+    expect(() => notifyServerRemoved(serverId, "banned", [removed])).not.toThrow();
+    expect(closing.received).toHaveLength(0);
+  });
+
+  it("delivers a frame from another instance to the people it names", () => {
+    const deliver = installForeignBus();
+    const target = connect(removed);
+    const other = connect(bystander);
+
+    deliver({
+      type: "server-removed",
+      serverId,
+      reason: "deleted",
+      userIds: [removed],
+    });
+
+    expect(framesOfType(target.received, "server-removed")).toEqual([
+      { type: "server-removed", serverId, reason: "deleted" },
+    ]);
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("drops a relayed frame with no addressees or a reason clients refuse", () => {
+    const deliver = installForeignBus();
+    const target = connect(removed);
+
+    deliver({ type: "server-removed", serverId, reason: "deleted" });
+    deliver({
+      type: "server-removed",
+      serverId,
+      reason: "vanished",
+      userIds: [removed],
+    });
+
+    expect(target.received).toHaveLength(0);
   });
 });
 

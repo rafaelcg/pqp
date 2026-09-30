@@ -364,15 +364,30 @@ In order, in the Play Console:
 
 ### 4b. Turn on the web funnel (`/android`)
 
-`pqp.gg/android` is the APK landing, and a dismissible corner card in `/app`
-tells phone browsers it exists. Desktop users get three marks in the existing
-**Baixa o app** sheet (this computer / iPhone / Android). No Google Group.
+`pqp.gg/android` is the download landing, and a dismissible corner card in
+`/app` tells phone browsers it exists. Desktop users get three marks in the
+existing **Baixa o app** sheet (this computer / iPhone / Android). No Google
+Group.
 
-The download button reads **one** build-time variable:
+**Google Play went live 2026-09-28 (`gg.pqp.app`, verified 200), and it is now
+the primary action everywhere Android is offered**, not just here: the
+landing hero's Android link, `/download`'s Android button, the footer,
+`/vem`'s footer line, and the corner card all lead with Play. The two
+variables involved:
 
 | Variable | Value |
 |---|---|
-| `VITE_ANDROID_APK_URL` | Direct URL of the signed APK. Empty uses the GitHub default below. A single space hides the button. |
+| `VITE_PLAY_STORE_URL` | Public Play listing URL. Empty uses the code default (`play-store.ts`, `https://play.google.com/store/apps/details?id=gg.pqp.app`). A single space hides the badge and reverts `/android` to the pre-Play, APK-only page (sideload steps included) — the same trick the APK variable below has always used. |
+| `VITE_ANDROID_APK_URL` | Direct URL of the signed APK, offered as a small secondary "ou baixa o APK" link on `/android` only. Empty uses the GitHub default below. A single space hides that link. |
+
+The official "Get it on Google Play" / "Disponível no Google Play" /
+"Descárgalo en Google Play" badge is Google's own artwork
+(`GooglePlayBadge` in `client/src/components/marketing/google-play-badge.tsx`),
+one locale-correct PNG per catalogue language under
+`client/public/images/google-play-badge-*.png`, downloaded byte-for-byte from
+Google's badge CDN and never recolored or re-encoded, per their brand
+guidelines. The link itself carries `&hl=<locale>` (`es` maps to `es-419`,
+matching `intlLocale()` in `lib/locale.ts`).
 
 **GitHub is the default, and CI attaches the file.** Do not upload `pqp.apk`
 by hand. `.github/workflows/android.yml` builds the `sideload` variant
@@ -409,11 +424,16 @@ URL. The old `VITE_ANDROID_BETA_GROUP_URL` / `VITE_ANDROID_BETA_URL` pair is
 gone; do not set them.
 
 The first `/android` click after a merge may 404 for a few minutes, until
-the Android workflow's publish job finishes. That is expected.
+the Android workflow's publish job finishes. That is expected. This only
+matters for the secondary APK link now; the primary button is the Play
+badge and does not depend on that job.
 
-Do not link `play.google.com/store/apps/details?id=gg.pqp.app` while the track
-is closed (it 404s). When Play opens, `/android` stays and the button becomes
-a store link — rewrite `androidPage.how.*` and `androidPage.honest` then.
+**Done, 2026-09-28.** `androidPage.how.*`, `androidPage.honest`,
+`androidPage.badge`, `androidPage.title` and `androidPage.body` all got
+Play-aware siblings (`androidPage.honest.play`, `androidPage.badge.play`,
+`androidPage.title.play`, `androidPage.body.play`) rather than being
+rewritten in place, so the pre-Play copy still renders correctly on a
+self-host that hides the Play badge with `VITE_PLAY_STORE_URL=" "`.
 
 The in-app phone card queues with QG, dice/polls, and cargos
 (`client/src/lib/corner-hints.ts`). One corner at a time. Playwright and
@@ -575,6 +595,12 @@ scanned; answer from it rather than from optimism.
 
 ---
 
+## 8b. Getting a tagged build to production (the one-line rule)
+
+**Promote, never re-run.** A pushed `android-vX.Y.Z` tag builds, signs and uploads that `versionCode` to the **internal** track. To ship it to everyone, open Play Console → Testing → Internal testing → that release → **Promote release → Production**, paste the "What's new" text, and start the rollout.
+
+Do **not** run the workflow with `track=production` for a version the tag already uploaded: it rebuilds the same `versionCode` and Play refuses it with `Version code N has already been used` (what happened with 0.4.2 on 2026-09-28, run 36423076492). A `workflow_dispatch` run to production is only for a `versionCode` that has never been uploaded to any track.
+
 ## 9. What's new text, per release
 
 There is no `fastlane/metadata` directory in this repo, and
@@ -592,6 +618,12 @@ automatically**. Paste it by hand into either:
 - Play Console → Release → the release's "What's new" fields, once a build
   from the internal track is being promoted to production, since Play asks
   for one string per locale there regardless of what the upload carried.
+
+### 0.4.2 (`versionCode` 9)
+
+Watch party no celular: tela do filme com a câmera de quem apresenta, dá pra apresentar direto do celular, e a lista de canais mostra só a watch party ao vivo ou o botão pra criar uma.
+
+Since 0.4.1: watch-party stage and camera PiP (#832), hosting from the phone (#834, #836), the channel list follows the web (#840), setup without joining the call (#844).
 
 ### 0.4.0 (`versionCode` 7)
 
@@ -616,6 +648,29 @@ Voice calls now ring and behave like a real phone call, with a call screen
 and answer/decline buttons. New blocked users list in settings. Mentions
 (@name) look better in chat. Fixed: long watch party streams could stop
 playing after a while.
+```
+
+### 0.4.1 (`versionCode` 8)
+
+Since 0.4.0 (`versionCode` 7): a rebuilt first-run flow, a full-screen wizard
+instead of a dialog, with the age gate, handle and room steps, an invite
+link with a share sheet, and an arrival banner (#806); plus small parity
+fixes against recent web changes, carrying the SFU region field through
+voice sessions like the other clients already do (#804).
+
+**pt-BR** (used first; this is the audience):
+
+```
+Primeiro acesso reformulado: um assistente em tela cheia para escolher seu
+nome, criar ou entrar numa sala e compartilhar o convite. Pequenos ajustes
+de paridade com o app web.
+```
+
+**en-US**:
+
+```
+Reworked first run: a full-screen wizard to pick your name, create or join
+a room, and share the invite. Small parity fixes with the web app.
 ```
 
 ---

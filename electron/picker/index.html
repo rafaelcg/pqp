@@ -33,11 +33,41 @@
     </main>
 
     <footer class="foot">
-      <label id="audio-row" class="audio" hidden>
-        <input type="checkbox" id="share-audio" />
-        <span>
-          <span id="audio-label"></span>
+      <!--
+        THE SOUND OPTION, as a row you cannot miss: a speaker, what it does, a
+        switch that starts ON, and (only when it is off) what the viewers get
+        instead. The whole row is the label, so anywhere on it toggles; the
+        name and description are wired explicitly so a screen reader reads
+        "Share this computer's sound, switch, on" and then the hint, not the
+        whole row run together. Windows 10 without the native capture gets the
+        same row with the explanation and no switch.
+      -->
+      <label id="audio-row" class="audio-row" hidden>
+        <svg class="audio-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path class="speaker" d="M11 5 6 9H3v6h3l5 4V5Z" />
+          <g class="waves">
+            <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+            <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+          </g>
+          <g class="muted">
+            <path d="m16 9 5 6" />
+            <path d="m21 9-5 6" />
+          </g>
+        </svg>
+        <span class="audio-text">
+          <span id="audio-label" class="audio-label"></span>
           <span id="audio-hint" class="hint"></span>
+          <span id="audio-note" class="audio-note" role="status" aria-live="polite" hidden></span>
+        </span>
+        <span class="switch" id="audio-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            id="share-audio"
+            aria-labelledby="audio-label"
+            aria-describedby="audio-hint audio-note"
+          />
+          <span class="track" aria-hidden="true"><span class="knob"></span></span>
         </span>
       </label>
       <div class="actions">
@@ -46,6 +76,7 @@
       </div>
     </footer>
 
+    <script src="audio-state.js"></script>
     <script src="picker.js"></script>
   </body>
 </html>

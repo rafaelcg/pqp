@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import {
   COMMUNITY_HOME_COMMENTS_LIMIT,
   COMMUNITY_HOME_FEED_LIMIT,
+  COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
   COMMUNITY_HOME_MAX_BYTES,
+  COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeMediaKindFromContentType,
   hasPermission,
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   Permission,
+  sniffCommunityHomeImageType,
   youtubePosterUrl,
   type CommunityHomeAuthorBadge,
   type CommunityHomeComment,
@@ -19,9 +22,11 @@ import {
   type PublicUser,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
+import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
 import {
   deleteObject,
+  getObjectPrefix,
   headObject,
   isStorageConfigured,
   presignGet,
@@ -33,6 +38,11 @@ import {
   memberHasPermission,
 } from "./permissions.js";
 import { toPublicUserSummary } from "./users.js";
+
+/** The allowlisted content types a Baú image may be stored under. */
+const IMAGE_CONTENT_TYPES: ReadonlySet<string> = new Set(
+  COMMUNITY_HOME_MIME_ALLOWLIST.filter((type) => type.startsWith("image/")),
+);
 
 /**
  * Community Home (Baú): durable posts, flat comments, likes, schedule.
@@ -66,7 +76,8 @@ const EXTENSION_BY_CONTENT_TYPE: Record<CommunityHomeContentType, string> = {
  * sweep stays idle, and the client hides the row. Default off.
  */
 export function isCommunityHomeEnabled(): boolean {
-  return process.env.COMMUNITY_HOME_ENABLED === "true";
+  // Runtime flag `community_home`; `COMMUNITY_HOME_ENABLED` is its default.
+  return isEnabled("community_home");
 }
 
 /**
@@ -77,7 +88,8 @@ export function isCommunityHomeEnabled(): boolean {
  * "preview as" inspector. Requires the main flag; on its own it does nothing.
  */
 export function isCommunityHomeVipEnabled(): boolean {
-  return isCommunityHomeEnabled() && process.env.COMMUNITY_HOME_VIP_ENABLED === "true";
+  // Runtime flag `community_home_vip`; `COMMUNITY_HOME_VIP_ENABLED` is its default.
+  return isCommunityHomeEnabled() && isEnabled("community_home_vip");
 }
 
 export function isCommunityHomeMediaConfigured(): boolean {
@@ -1523,6 +1535,20 @@ export async function claimCommunityHomeMediaUpload(input: {
   if (!isCommunityHomeKey(input.serverId, upload.storage_key)) {
     throw new CommunityHomeError("invalid", "Invalid storage key");
   }
+  // An image's first bytes are read alongside the HEAD rather than after it,
+  // so the byte check costs no extra round trip on the claim. The read settles
+  // into a value here, so a HEAD that throws first never leaves it as an
+  // unhandled rejection.
+  const prefixRead =
+    upload.kind === "image"
+      ? getObjectPrefix(
+          upload.storage_key,
+          COMMUNITY_HOME_IMAGE_SNIFF_BYTES,
+        ).then(
+          (bytes) => ({ ok: true as const, bytes }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+      : null;
   let head;
   try {
     head = await headObject(upload.storage_key);
@@ -1539,20 +1565,57 @@ export async function claimCommunityHomeMediaUpload(input: {
   if (head.contentLength > COMMUNITY_HOME_MAX_BYTES) {
     throw new CommunityHomeError("over_limit", "File too large");
   }
-  if (head.contentType !== upload.content_type) {
+  // An image's stored type may legitimately differ from the row's: a claim
+  // relabels the row to what the bytes are, and a re-claim then sees the type
+  // the object was signed with. The byte check below is the real test for an
+  // image, so here it only has to be an allowlisted image type.
+  const storedTypeOk =
+    upload.kind === "image"
+      ? IMAGE_CONTENT_TYPES.has(head.contentType ?? "")
+      : head.contentType === upload.content_type;
+  if (!storedTypeOk) {
     throw new CommunityHomeError("not_verified", "Content type mismatch");
+  }
+  let contentType = upload.content_type;
+  if (prefixRead) {
+    // The stored Content-Type is only what the uploader signed for, and the
+    // browser derives that from the file name. Look at the bytes too, so a
+    // text file called `x.png` never becomes a broken image on the feed.
+    const read = await prefixRead;
+    if (!read.ok) {
+      console.error(
+        `[community-home] GET prefix failed for ${upload.storage_key}:`,
+        read.error instanceof Error ? read.error.message : read.error,
+      );
+      throw new CommunityHomeError(
+        "not_verified",
+        "Upload could not be verified",
+      );
+    }
+    // Any allowlisted image passes, whatever the file name said: a real JPEG
+    // saved as `meme.png` is a fine image. Only bytes that are not an
+    // allowlisted image at all (a text file called `x.png`) are refused. The
+    // row keeps what the bytes are, so the post shows the right type.
+    const sniffed = read.bytes ? sniffCommunityHomeImageType(read.bytes) : null;
+    if (!sniffed) {
+      throw new CommunityHomeError(
+        "not_verified",
+        "The file is not a valid image",
+      );
+    }
+    contentType = sniffed;
   }
   await pool.query(
     `UPDATE community_home_media_uploads
-        SET verified_at = NOW(), byte_size = $2
+        SET verified_at = NOW(), byte_size = $2, content_type = $3
       WHERE id = $1`,
-    [upload.id, head.contentLength],
+    [upload.id, head.contentLength, contentType],
   );
   return {
     uploadId: upload.id,
     kind: upload.kind,
     name: upload.filename,
-    contentType: upload.content_type as CommunityHomeContentType,
+    contentType: contentType as CommunityHomeContentType,
     byteSize: head.contentLength,
   };
 }

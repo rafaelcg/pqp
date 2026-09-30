@@ -14,21 +14,28 @@
  *     machine token, then merged with the Android distribution block this
  *     Worker owns (button clicks in KV, GitHub `download_count`);
  *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
- *     token and only the `days` and `day` parameters forwarded; `/health`
+ *     token and only the `days` and `day` parameters forwarded;
+ *     `/activity` is `${API_ORIGIN}/api/admin/user-activity` the same way
+ *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Four `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Two reads (find a server, list its voice channels) and two PUTs
- *     (watch party availability per server, a channel's transport pin). They
- *     are in `OPERATOR_ROUTES` below, an exact (method, path) table for the
- *     same reason the API keeps one: the blast radius of the password plus
- *     the machine token should be readable in one glance, and a prefix is a
- *     thing somebody widens by accident. Everything else stays GET-only.
+ *     Twelve `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Five reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags, the feedback queue) and
+ *     seven PUTs (watch party availability and low latency per server, a
+ *     channel's transport pin, a channel's SFU region, declining a server's
+ *     waitlist, a feature flag globally, a feature flag for one server,
+ *     confirming or closing a feedback item). They are in `OPERATOR_ROUTES` below, an
+ *     exact (method, path) table for the same reason the API keeps one: the
+ *     blast radius of the password plus the machine token should be readable
+ *     in one glance, and a prefix is a thing somebody widens by accident.
+ *     Everything else stays GET-only.
  *  3. Serve. `/` is the static page from the assets binding, and
  *     `/insights.js` the one script it loads (the three verdicts on "agora",
- *     kept in their own file so they can be unit tested). Both sit behind the
- *     gate. Anything else is a 404 from an allowlist, not a passthrough, so
+ *     kept in their own file so they can be unit tested). `/novo` is the
+ *     redesigned view, with `novo.css`, `novo.js` and `novo-model.js`. All of
+ *     it sits behind the gate. Anything else is a 404 from an allowlist, not a passthrough, so
  *     the Worker cannot be used as an open proxy or an asset lister.
  *
  * Every response carries `Cache-Control: no-store` and `Referrer-Policy:
@@ -66,6 +73,13 @@ export interface Env {
   GITHUB_REPO?: string;
   /** Click counter. Unset: /apk-click is a no-op and the tile says so. */
   APK_CLICKS?: KVNamespace;
+  /**
+   * What the hosted instance costs a month, in US dollars, for "custo por
+   * pessoa ativa" on the /activity card. A secret rather than a var only
+   * because this repository is public: `wrangler secret put
+   * MONTHLY_COST_USD`. Unset, the card asks for it instead of guessing.
+   */
+  MONTHLY_COST_USD?: string;
 }
 
 const DEFAULT_USER = "operador";
@@ -251,6 +265,9 @@ async function metricsWithDistribution(
     });
   }
   body.distribution = distributionBlock(clicks.state, clicks.configured, github);
+  // Which API this Worker reads, so a page pointed at staging or a local API
+  // says so next to its numbers.
+  body.apiHost = new URL(url).host;
   return json(200, body);
 }
 
@@ -326,6 +343,22 @@ const OPERATOR_ROUTES: {
     path: "/operator/server-live-hls",
     forward: (_url, origin) => `${origin}/api/admin/server-live-hls`,
   },
+  // The waitlist: one read (every server with a request, waiting or not,
+  // with its requests, its interest count and its bucket histogram) and one
+  // write (decline). The other write that touches a waitlist row is not
+  // here: turning a server on with `/operator/server-live-hls` approves its
+  // waiting rows and notifies those people as a side effect on the API, so
+  // "Ativar" in the waitlist table calls that same route, not a new one.
+  {
+    method: "GET",
+    path: "/operator/watch-party-waitlist",
+    forward: (_url, origin) => `${origin}/api/admin/watch-party-waitlist`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/watch-party-waitlist-decline",
+    forward: (_url, origin) => `${origin}/api/admin/watch-party-waitlist/decline`,
+  },
   {
     method: "PUT",
     path: "/operator/channel-transport",
@@ -336,7 +369,51 @@ const OPERATOR_ROUTES: {
     path: "/operator/channel-sfu-region",
     forward: (_url, origin) => `${origin}/api/admin/channel-sfu-region`,
   },
+  // The feedback queue ("moderação"): the whole text, the author's tag and
+  // handle, where they were; and confirm or close, which can grant the
+  // caça-bugs badge. Only these four parameters are forwarded.
+  {
+    method: "GET",
+    path: "/operator/feedback",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/feedback`);
+      for (const name of ["status", "kind", "before", "limit"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
+  },
+  {
+    method: "PUT",
+    path: "/operator/feedback-resolve",
+    forward: (_url, origin) => `${origin}/api/admin/feedback/resolve`,
+  },
+  // Runtime feature flags ("interruptores"): the list with effective values,
+  // overrides and the audit trail; a global decision; a per-server override.
+  // The API only parses keys in its own registry, so this cannot invent one.
+  {
+    method: "GET",
+    path: "/operator/flags",
+    forward: (_url, origin) => `${origin}/api/admin/flags`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/flags",
+    forward: (_url, origin) => `${origin}/api/admin/flags`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/flag-overrides",
+    forward: (_url, origin) => `${origin}/api/admin/flag-overrides`,
+  },
 ];
+
+/** A positive number of dollars, or null for unset and anything else. */
+export function parseMonthlyCost(raw: string | undefined): number | null {
+  const n = Number((raw ?? "").trim());
+  return raw && Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function matchOperatorRoute(method: string, path: string) {
   return (
@@ -412,7 +489,7 @@ export default {
     // timeout, same headers as /metrics; a separate route because it is a
     // separate read on a much slower cadence, and because the page asks for a
     // single day at minute resolution when somebody drills into one. Only
-    // `days` and `day` are forwarded: the upstream ignores anything else and
+    // `days`, `day` and `shape` are forwarded: the upstream ignores anything else and
     // an open query passthrough is a proxy nobody asked for.
     if (path === "/occupancy") {
       if (!origin || !env.ADMIN_METRICS_TOKEN) {
@@ -423,8 +500,44 @@ export default {
       const day = url.searchParams.get("day");
       if (days) upstream.searchParams.set("days", days);
       if (day) upstream.searchParams.set("day", day);
+      // The redesigned page's heatmap: one aggregate instead of 21 days of
+      // minutes. Only the one known value passes.
+      if (url.searchParams.get("shape") === "weekday-hour") {
+        upstream.searchParams.set("shape", "weekday-hour");
+      }
       return proxyJson(upstream.toString(), {
         Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+    }
+
+    // Actives and signup retention (`/api/admin/user-activity`), fetched when
+    // "ao longo do tempo" opens. Only `days` and `weeks` are forwarded. The
+    // operator's monthly cost is added here, next to the counts it divides,
+    // so it never has to reach the API or the page source.
+    if (path === "/activity") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "activity not configured" });
+      }
+      const upstream = new URL(`${origin}/api/admin/user-activity`);
+      const days = url.searchParams.get("days");
+      const weeks = url.searchParams.get("weeks");
+      if (days) upstream.searchParams.set("days", days);
+      if (weeks) upstream.searchParams.set("weeks", weeks);
+      const response = await proxyJson(upstream.toString(), {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
+      if (!response.ok) {
+        return response;
+      }
+      let report: Record<string, unknown>;
+      try {
+        report = (await response.json()) as Record<string, unknown>;
+      } catch {
+        return json(502, { error: "upstream answered with something that is not JSON" });
+      }
+      return json(200, {
+        ...report,
+        operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
       });
     }
 
@@ -435,14 +548,19 @@ export default {
       return proxyJson(`${origin}/status.json`, {});
     }
 
-    // The page and the one script it loads. An allowlist rather than a
+    // The pages and the files they load. An allowlist rather than a
     // passthrough to the assets binding: this Worker must not be usable as an
-    // asset lister or an open proxy, so a path that is not one of these two is
-    // a 404 whatever happens to be in the bucket.
+    // asset lister or an open proxy, so a path that is not one of these is a
+    // 404 whatever happens to be in the bucket. `/novo` is the redesigned
+    // view; `/` stays the classic one while both exist.
     const ASSETS: Record<string, string> = {
       "/": "/",
       "/index.html": "/",
       "/insights.js": "/insights.js",
+      "/novo": "/novo",
+      "/novo.css": "/novo.css",
+      "/novo.js": "/novo.js",
+      "/novo-model.js": "/novo-model.js",
     };
     const asset = ASSETS[path];
     if (asset) {

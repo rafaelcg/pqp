@@ -1919,6 +1919,57 @@ describeDb("voice across two instances", () => {
       expect(frames(smallRoom, "welcome")[0]?.transport).toBe("mesh");
     });
 
+    it("a LiveKit room joined on A then B is one room, and the join logs say which number is whose", async () => {
+      // 2026-09-26, channel 318a0954: a watch party host seated on api-a and
+      // the co-host on api-b both logged `voice.join roomSize=1`, which read
+      // like a split. It was not: one pin, one roster, one LiveKit room. The
+      // number was this process's map. Pinned here with the registry on,
+      // which is what production runs.
+      backend.configured = "livekit";
+      backend.profile = { isCommunity: true, memberCount: 3 };
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const channel = randomUUID();
+      const lines = () =>
+        vi
+          .mocked(console.log)
+          .mock.calls.map((call) => String(call[0]))
+          .filter((line) => line.includes(channel));
+
+      const host = await join(a, randomUUID(), channel);
+      await settle();
+      const cohost = await join(b, randomUUID(), channel);
+      await settle();
+
+      // One room: the same pinned transport, one row, and B's welcome lists
+      // the host A holds.
+      expect(frames(host, "welcome")[0]?.transport).toBe("livekit");
+      expect(frames(cohost, "welcome")[0]?.transport).toBe("livekit");
+      expect(await roomRow(channel)).toBe("livekit");
+      expect(
+        (frames(cohost, "welcome")[0]?.peers as { peerId: string }[]).map(
+          (p) => p.peerId,
+        ),
+      ).toEqual([host.peerId]);
+
+      // The logs: B holds one seat of a room of two, and B's pin is A's.
+      const joins = lines().filter((line) => line.startsWith("[pqp] voice.join "));
+      expect(joins).toHaveLength(2);
+      expect(joins[0]).toContain(`peerId=${host.peerId}`);
+      expect(joins[0]).toContain("localPeers=1 roomPeers=1");
+      expect(joins[1]).toContain(`peerId=${cohost.peerId}`);
+      expect(joins[1]).toContain("localPeers=1 roomPeers=2");
+      expect(joins.join("\n")).not.toContain("roomSize=");
+      const pins = lines().filter((line) =>
+        line.startsWith("[pqp] voice.transportPinned "),
+      );
+      expect(pins).toHaveLength(2);
+      expect(pins[0]).toContain("adopted=false");
+      expect(pins[1]).toContain("adopted=true");
+    });
+
     it("a cold join on B whose policy says LiveKit moves the mesh pin on A rather than splitting the call", async () => {
       // The server crossed the member threshold while the call was on: A's
       // room is pinned mesh and B's policy now answers LiveKit for the same

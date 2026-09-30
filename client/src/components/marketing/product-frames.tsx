@@ -48,18 +48,30 @@ function ProductShot({
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    // The dialog is portalled into <body>, next to #root, so making the app
+    // root inert takes the page behind it out of the tab order and out of the
+    // accessibility tree. `aria-modal` alone is not honoured everywhere.
+    const root = document.getElementById("root");
+    root?.setAttribute("inert", "");
     closeRef.current?.focus();
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
         setOpen(false);
+      } else if (event.key === "Tab") {
+        // The close button is the only control in here, so the trap is
+        // simple: Tab and Shift+Tab both stay on it.
+        event.preventDefault();
+        closeRef.current?.focus();
       }
     }
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKeyDown, true);
+      // Un-inert BEFORE returning focus: an inert element cannot take it.
+      root?.removeAttribute("inert");
       if (triggerRef.current?.isConnected) {
         triggerRef.current.focus();
       }

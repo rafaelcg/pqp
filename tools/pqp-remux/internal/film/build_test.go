@@ -473,3 +473,53 @@ func TestBuildKeepsPictureAndSoundInSyncAcrossARestart(t *testing.T) {
 		}
 	}
 }
+
+// A REBIND IS ONE CLOCK. The presenter republished their screen in the
+// middle of the show (a new track, a smaller window) and the box bound it
+// inside the same session (internal/session.BeginVideoSource): the video
+// playlist switches init with a discontinuity, but the tfdt carries straight
+// on, and the audio never noticed. The film must come out as one continuous
+// file of the show's length, with no shift where the rebind was and nothing
+// dropped around it.
+func TestBuildJoinsARebindIntoOneContinuousFilm(t *testing.T) {
+	needFFmpeg(t)
+	store := newMemStore()
+	prefix := "live/ch/3-ll"
+	v1 := cmafGroup(t, store, prefix, "video", "1280x720", 0.5, 6, "video-init.mp4", "video-seg", 0)
+	v2 := cmafGroup(t, store, prefix, "video", "640x360", 6.5, 5, "video-init-2.mp4", "video-seg", 6)
+	a := cmafGroup(t, store, prefix, "audio", "", 0, 11.5, "audio-init.mp4", "audio-seg", 0)
+	video := playlist(
+		append([]string{`#EXT-X-MAP:URI="video-init.mp4"`}, v1...),
+		append([]string{"#EXT-X-DISCONTINUITY", `#EXT-X-MAP:URI="video-init-2.mp4"`}, v2...),
+	)
+	audio := playlist(append([]string{`#EXT-X-MAP:URI="audio-init.mp4"`}, a...))
+	store.objects[prefix+"/video.m3u8"] = []byte(video)
+	store.objects[prefix+"/audio.m3u8"] = []byte(audio)
+	job := Job{Prefix: prefix, VideoPlaylist: video, AudioPlaylist: audio}
+
+	out := filepath.Join(t.TempDir(), "film.mp4")
+	film, err := Build(context.Background(), store, Config{}, job, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(film.DurationSeconds-11.5) > 0.4 {
+		t.Fatalf("duration %.2f, want ~11.5: the rebind was read as a restart and the film re-laid", film.DurationSeconds)
+	}
+	if film.MissingSegments != 0 {
+		t.Fatalf("missing %d", film.MissingSegments)
+	}
+	p := probe(t, out)
+	for _, s := range p.Streams {
+		if s.CodecType == "video" {
+			if math.Abs(f(s.StartTime)-0.5) > 0.1 {
+				t.Fatalf("video starts at %s, want ~0.5 (the anchor offset, untouched)", s.StartTime)
+			}
+			if end := f(s.StartTime) + f(s.Duration); math.Abs(end-11.5) > 0.4 {
+				t.Fatalf("video ends at %.2f, want ~11.5", end)
+			}
+		}
+	}
+	if out, err := exec.Command("ffmpeg", "-v", "error", "-xerror", "-i", out, "-f", "null", "-").CombinedOutput(); err != nil {
+		t.Fatalf("film does not decode cleanly: %v %s", err, out)
+	}
+}

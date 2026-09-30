@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/utils";
 import {
   LIVE_HLS_PRESENCE_INTERVAL_MS,
+  LIVE_HLS_PRESENCE_MAX_SPAN_MS,
+  type LiveHlsDeviceClass,
   LIVE_HLS_TELEMETRY_FLUSH_MS,
   type LiveHlsTelemetryBatch,
   type LiveHlsTelemetrySample,
@@ -208,6 +210,93 @@ export function hlsViewerTokenFromUrl(url: string): string | null {
     return null;
   }
   return new URLSearchParams(url.slice(query + 1)).get("t");
+}
+
+/**
+ * The two clock claims of the `?t=` viewer token a playlist URL carries: when
+ * it expires (`e`) and when it was minted (`i`), epoch ms on the SERVER's
+ * clock, each null when absent or unreadable. Null altogether when there is
+ * no token or its payload cannot be read.
+ *
+ * READ UNVERIFIED, and only ever used to decide WHEN to hand the element a
+ * fresher URL (the native camera player, `watch-camera-pip.tsx`), never
+ * whether anybody may watch: the server checks the signature on every
+ * request. The token is `<base64url JSON claims>.<signature>`
+ * (`mintHlsViewerToken` in `server/src/voice/hls-viewer-token.ts`).
+ */
+export function hlsViewerTokenTimes(
+  url: string,
+): { expiresAt: number | null; issuedAt: number | null } | null {
+  const token = hlsViewerTokenFromUrl(url);
+  if (!token) {
+    return null;
+  }
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) {
+    return null;
+  }
+  try {
+    const base64 = token.slice(0, dot).replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(base64)) as { e?: unknown; i?: unknown };
+    const time = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+    return { expiresAt: time(claims.e), issuedAt: time(claims.i) };
+  } catch {
+    return null;
+  }
+}
+
+/** `hlsViewerTokenTimes(url)?.expiresAt`, or null. */
+export function hlsViewerTokenExpiresAt(url: string): number | null {
+  return hlsViewerTokenTimes(url)?.expiresAt ?? null;
+}
+
+/**
+ * How close to its expiry the native camera player's token may get before a
+ * restamped URL is worth reloading the element for. Wider than the gap the
+ * server leaves when it re-mints on its own clock (fifty minutes into an
+ * hour-long token, `HLS_VIEWER_TOKEN_REMINT_MS`), so that re-mint is always
+ * applied even when it is the only restamp that arrives.
+ */
+export const NATIVE_TOKEN_REFRESH_MARGIN_MS = 15 * 60 * 1000;
+/** Same decision for a token whose expiry cannot be read: by age alone. */
+export const NATIVE_TOKEN_REFRESH_UNREADABLE_MS = 30 * 60 * 1000;
+
+/**
+ * Whether a native `<video>` playing `attachedUrl` since `attachedAtMs`
+ * should be handed the restamped `freshUrl` now.
+ *
+ * THE NATIVE PLAYER HAS NO LOADER TO REWRITE, so the only way a fresher `?t=`
+ * reaches it is a new `src`, and a new `src` is the element's whole load
+ * algorithm: the picture blanks, the buffer is gone, playback starts over.
+ * The server restamps every thirty seconds, and paying that twice a minute
+ * is the same bug the hls.js path had (rehearsal E, 2026-09-25). So the
+ * element keeps the URL it has until that URL's token is close to expiring,
+ * which is once an hour instead of a hundred and twenty times.
+ *
+ * "CLOSE" IS MEASURED ON THE SERVER'S CLOCK, NOT THIS DEVICE'S (Farol, PR
+ * 828): the attached token's expiry against the moment the fresh one was
+ * minted, both stamped by the server. A phone whose clock runs minutes slow
+ * would otherwise think it had time left and keep an expired token. The
+ * device clock is only the fallback for a fresh token with no mint time,
+ * and the only clock at all for one with no readable expiry, where it is
+ * compared with itself (`attachedAtMs`), so skew cancels.
+ */
+export function nativeTokenRefreshDue(
+  attachedUrl: string | null,
+  freshUrl: string,
+  attachedAtMs: number,
+  now: number,
+): boolean {
+  if (attachedUrl === null) {
+    return true;
+  }
+  const expiresAt = hlsViewerTokenExpiresAt(attachedUrl);
+  if (expiresAt !== null) {
+    const serverNow = hlsViewerTokenTimes(freshUrl)?.issuedAt ?? now;
+    return expiresAt - serverNow <= NATIVE_TOKEN_REFRESH_MARGIN_MS;
+  }
+  return now - attachedAtMs >= NATIVE_TOKEN_REFRESH_UNREADABLE_MS;
 }
 
 /**
@@ -808,6 +897,91 @@ export function isHlsStartupSample(
  * `tick` runs more often than the interval so the first beat goes out soon
  * after playback starts; `beat` itself enforces one per interval.
  */
+/**
+ * phone / tablet / desktop, from what the screen IS and never from the user
+ * agent string: a coarse pointer (touch) on a short side under 600 CSS px is a
+ * phone, a coarse pointer on a larger screen is a tablet, everything else is a
+ * desktop. Three values, no finer, so it cannot fingerprint anybody. The
+ * inputs are injectable because a test has no screen.
+ */
+export function hlsDeviceClass(
+  input: { coarsePointer: boolean; shortSidePx: number } = readScreen(),
+): LiveHlsDeviceClass {
+  if (!input.coarsePointer) {
+    return "desktop";
+  }
+  return input.shortSidePx < 600 ? "phone" : "tablet";
+}
+
+function readScreen(): { coarsePointer: boolean; shortSidePx: number } {
+  try {
+    return {
+      coarsePointer: window.matchMedia("(pointer: coarse)").matches,
+      shortSidePx: Math.min(window.screen.width, window.screen.height),
+    };
+  } catch {
+    return { coarsePointer: false, shortSidePx: Number.POSITIVE_INFINITY };
+  }
+}
+
+/**
+ * Foreground and background milliseconds WHILE THE PICTURE PLAYS, accumulated
+ * across `visibilitychange` and play/pause and handed out per beat. Time spent
+ * paused (or ended) is discarded, never held for the next beat: a viewer who
+ * paused for ten minutes was not audience for ten minutes. `take()` returns what has built
+ * up since the last `take()` (each capped at one span the server accepts) and
+ * starts again. Bucketed by the state at the moment it changed, so a tab
+ * hidden for 25 of a beat's 30 seconds reports 25 hidden and 5 visible.
+ */
+export interface HlsVisibilityMeter {
+  /** Call from `visibilitychange` and from every play / pause / ended event. */
+  change(): void;
+  take(): { visibleMs: number; hiddenMs: number };
+}
+
+export function createHlsVisibilityMeter(input: {
+  isHidden: () => boolean;
+  isPlaying?: () => boolean;
+  now?: () => number;
+}): HlsVisibilityMeter {
+  const now = input.now ?? Date.now;
+  const isPlaying = input.isPlaying ?? (() => true);
+  let hidden = input.isHidden();
+  let playing = isPlaying();
+  let since = now();
+  let visibleMs = 0;
+  let hiddenMs = 0;
+  function settle(): void {
+    const at = now();
+    const span = Math.max(0, at - since);
+    if (playing) {
+      if (hidden) {
+        hiddenMs += span;
+      } else {
+        visibleMs += span;
+      }
+    }
+    since = at;
+  }
+  return {
+    change() {
+      settle();
+      hidden = input.isHidden();
+      playing = isPlaying();
+    },
+    take() {
+      settle();
+      const out = {
+        visibleMs: Math.min(Math.round(visibleMs), LIVE_HLS_PRESENCE_MAX_SPAN_MS),
+        hiddenMs: Math.min(Math.round(hiddenMs), LIVE_HLS_PRESENCE_MAX_SPAN_MS),
+      };
+      visibleMs = 0;
+      hiddenMs = 0;
+      return out;
+    },
+  };
+}
+
 export interface HlsPresenceBeat {
   /** Call on a timer and on `playing`: sends when due and playing. */
   beat(): void;
@@ -847,14 +1021,22 @@ export function createHlsPresenceBeat(input: {
  * Fire-and-forget, like telemetry: a missed beat is one fewer sighting, and
  * the next one is 30 s away. `token` is the Bearer the caller already holds.
  */
-export function sendHlsPresence(sessionToken: string, token: string | null): void {
+export function sendHlsPresence(
+  sessionToken: string,
+  token: string | null,
+  extras: {
+    device?: LiveHlsDeviceClass;
+    visibleMs?: number;
+    hiddenMs?: number;
+  } = {},
+): void {
   fetch(`${getApiBaseUrl()}/api/live-hls/presence`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ sessionToken }),
+    body: JSON.stringify({ sessionToken, ...extras }),
   }).catch(() => {
     // Dropped. See the doc comment above.
   });

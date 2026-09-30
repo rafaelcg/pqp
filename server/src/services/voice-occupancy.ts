@@ -457,3 +457,66 @@ export async function voiceOccupancyReport(options: {
     })),
   };
 }
+
+export interface VoiceOccupancyHeatmap {
+  generatedAt: string;
+  timezone: string;
+  granularity: "weekday-hour";
+  /** Distinct local days the minute samples cover (at most the retention). */
+  days: number;
+  lastSampleAt: string | null;
+  /**
+   * The average number of people in calls for each weekday (0 = Monday) and
+   * local hour, over every minute sample kept. Only cells with a sample are
+   * listed; a missing cell means "no sample", never zero.
+   */
+  cells: { weekday: number; hour: number; average: number; samples: number }[];
+}
+
+/**
+ * The "when does pqp fill up" map, aggregated here in one query over the
+ * minute table (about 30,000 rows at the 21-day retention) instead of the
+ * page fetching 21 separate days and averaging them itself.
+ */
+export async function voiceOccupancyHeatmap(): Promise<VoiceOccupancyHeatmap> {
+  // One statement, so the freshness stamp and the averages come from the
+  // same snapshot: a sample written in between cannot be counted in one and
+  // missing from the other.
+  const result = await getPool().query<{
+    weekday: number;
+    hour: number;
+    average: number;
+    samples: number;
+    days: number;
+    last_sample_at: Date | null;
+  }>(
+    `WITH local AS (
+       SELECT bucket_at, bucket_at AT TIME ZONE $1 AS at, participants
+         FROM voice_occupancy_samples
+     )
+     SELECT (EXTRACT(ISODOW FROM at)::int - 1) AS weekday,
+            EXTRACT(HOUR FROM at)::int AS hour,
+            AVG(participants)::float8 AS average,
+            COUNT(*)::int AS samples,
+            (SELECT COUNT(DISTINCT at::date)::int FROM local) AS days,
+            (SELECT MAX(bucket_at) FROM local) AS last_sample_at
+       FROM local
+      GROUP BY 1, 2
+      ORDER BY 1, 2`,
+    [OCCUPANCY_TIMEZONE],
+  );
+  const first = result.rows[0];
+  return {
+    generatedAt: new Date().toISOString(),
+    timezone: OCCUPANCY_TIMEZONE,
+    granularity: "weekday-hour",
+    days: first?.days ?? 0,
+    lastSampleAt: first?.last_sample_at ? first.last_sample_at.toISOString() : null,
+    cells: result.rows.map((row) => ({
+      weekday: row.weekday,
+      hour: row.hour,
+      average: Math.round(row.average * 10) / 10,
+      samples: row.samples,
+    })),
+  };
+}

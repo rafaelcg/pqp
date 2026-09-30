@@ -7,6 +7,8 @@ import {
   Eye,
   EyeOff,
   Hand,
+  Info,
+  LayoutGrid,
   Loader2,
   Maximize2,
   MonitorPlay,
@@ -38,6 +40,7 @@ import {
   type ReactElement,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
   type RefObject,
   type SyntheticEvent,
 } from "react";
@@ -82,6 +85,8 @@ import {
   type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
+import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
+import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
@@ -110,6 +115,7 @@ import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   NO_SCREEN_FULLSCREEN,
+  escapeExitsExpandedFullscreen,
   reconcileScreenFullscreen,
   syncScreenFullscreen,
   toggleScreenFullscreen,
@@ -297,13 +303,27 @@ const PIP_CORNER_CLASS: Record<PipCorner, string> = {
 
 /**
  * The same corners with the listener row underneath: the preview sits above
- * it rather than on top of the last few chips.
+ * it rather than on top of the last few chips. The strip rises with every
+ * line the control row folds onto (`--call-row-extra`), so the preview does.
  */
 const PIP_CORNER_CLASS_WITH_STRIP: Record<PipCorner, string> = {
   tl: "left-3 top-3",
   tr: "right-3 top-3",
-  bl: "bottom-28 left-3",
-  br: "bottom-28 right-3",
+  bl: "bottom-[calc(7rem+var(--call-row-extra,0px))] left-3",
+  br: "bottom-[calc(7rem+var(--call-row-extra,0px))] right-3",
+};
+
+/**
+ * No strip, and the control row folded onto more than one line: the pill is
+ * then as wide as the stage, so a bottom corner is on top of hang-up. The
+ * preview sits on the bar's reserve instead, the same height the strip
+ * would stop at.
+ */
+const PIP_CORNER_CLASS_ABOVE_FOLDED_BAR: Record<PipCorner, string> = {
+  tl: "left-3 top-3",
+  tr: "right-3 top-3",
+  bl: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] left-3",
+  br: "bottom-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] right-3",
 };
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
@@ -515,6 +535,27 @@ function useStageFullscreen(
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // ESCAPE HAS TO WORK IN `expand` TOO — see `escapeExitsExpandedFullscreen`.
+  // `element` and `video` are covered above and by the platform itself; a
+  // person stuck in an in-page solo picture with no keyboard escape and a
+  // hard-to-find corner button is exactly the report this fixes.
+  useEffect(() => {
+    if (mode !== "expand") {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        !escapeExitsExpandedFullscreen(mode, stateRef.current.active)
+      ) {
+        return;
+      }
+      apply({ next: NO_SCREEN_FULLSCREEN, request: "exit" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [apply, mode]);
 
   const toggle = useCallback(() => {
     apply(toggleStageFullscreen(stateRef.current));
@@ -1517,9 +1558,36 @@ function ActiveCall({
     })()
   ) : null;
 
+  // How far the stage's control row stands above its one-line height: zero
+  // until a narrow stage folds the pill onto a second line (see the pill in
+  // `CallControls`). The strip's reserve for the bar grows by this much,
+  // because the strip is stacked above the bar and would otherwise cover the
+  // pill's top line, which is where mute and raise hand go; so does the
+  // self-preview's bottom corner, for the same reason.
+  const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
+  const controlRowRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      const rem =
+        Number.parseFloat(getComputedStyle(document.documentElement).fontSize) ||
+        16;
+      setControlRowExtraPx(
+        Math.max(0, Math.round(node.offsetHeight - STAGE_CONTROL_ROW_REM * rem)),
+      );
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      setControlRowExtraPx(0);
+    };
+  }, []);
+
   const controls = (
     <CallControls
       voiceState={voiceState}
+      rowRef={controlRowRef}
       collapsed={collapsed || dockComposer}
       leading={collapsedLeading}
       canExpand={hasVideo}
@@ -1676,6 +1744,8 @@ function ActiveCall({
       }}
       onKeyDownCapture={chrome.wake}
       onFocusCapture={chrome.wake}
+      // Read by the strip's reserve and the self-preview's bottom corners.
+      style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
     >
       {/* --- the stage's content -------------------------------------------
           One rule, whatever the transport carried it: a picture is a tile and
@@ -1881,6 +1951,31 @@ function ActiveCall({
                and the state a voice call spends most of its life in. */
             <RoomView people={listeners} youLabel={t("voice.tile.you")} />
           )}
+          {/* Picking one stream and clicking away from it used to leave no
+              obvious way back — reported verbatim, 2026-09-27, as counter-
+              intuitive and even obscure. The corner minimize button and
+              Escape (above) both still work; this is the same exit spelled
+              out in words, drawn every time one picture is alone on the
+              stage rather than only on hover, so it survives an idle mouse,
+              a touch device and a person who never noticed the small icon. */}
+          {(soloPerson || soloTile) && (
+            <button
+              type="button"
+              data-testid="stage-show-all-streams"
+              className={cn(
+                "absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs font-medium text-paper shadow-lg ring-1 ring-ink-4/60 hover:bg-ink-2",
+                STAGE_LAYER.badges,
+              )}
+              onClick={() => {
+                if (fullscreen.soloPeerId !== null) {
+                  fullscreen.toggleScreen(fullscreen.soloPeerId);
+                }
+              }}
+            >
+              <LayoutGrid aria-hidden="true" className="h-3.5 w-3.5" />
+              {t("voice.stage.showAllStreams")}
+            </button>
+          )}
         </div>
         {/* The strip: everybody the stage did not take. Skipped while one
             picture is alone on the stage (that is what "alone" means) and
@@ -1916,10 +2011,12 @@ function ActiveCall({
           />
           {/* The bar's own territory. The strip stops here so the hang-up
               button is never under a chip, and the chips are never under the
-              bar's box. Grows with the home indicator, like the bar does. */}
+              bar's box. Grows with the home indicator, like the bar does, and
+              with every line the control row folds onto past its first. */}
           <div
             aria-hidden="true"
-            className="h-[max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))] shrink-0"
+            data-testid="call-stage-bar-reserve"
+            className="h-[calc(max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))+var(--call-row-extra,0px))] shrink-0"
           />
           </>
         )}
@@ -1943,7 +2040,9 @@ function ActiveCall({
             !pipDrag &&
               (showStrip
                 ? PIP_CORNER_CLASS_WITH_STRIP
-                : PIP_CORNER_CLASS)[pipCorner],
+                : controlRowExtraPx > 0
+                  ? PIP_CORNER_CLASS_ABOVE_FOLDED_BAR
+                  : PIP_CORNER_CLASS)[pipCorner],
           )}
           style={pipStyle}
           onPointerDown={onPipPointerDown}
@@ -2083,17 +2182,40 @@ function ActiveCall({
                     for somebody else's we know what arrived on this machine,
                     which is the same question the person asking "why can't I
                     hear it" is trying to answer. */}
-                {!focusedShareHasAudio && (
-                  <span className="ml-1 text-paper-muted">
-                    ({t("voice.share.noAudioShort")})
-                  </span>
+                {/* OUR OWN share: a small indicator with the state in words
+                    ("Sound shared: on" / "No sound"), so a silent share is
+                    known by the person sharing it before anybody tells them.
+                    It also says, for the screen reader, that the machine's
+                    output is what is going out (the call itself is kept out
+                    of that tap, `restrictOwnAudio`). */}
+                {focusedIsLocal && (
+                  <ShareSoundIndicator on={focusedShareHasAudio} />
                 )}
-                {/* Said while it is happening, so the presenter knows the
-                    machine's output is going out. The call itself is kept
-                    out of that tap (`restrictOwnAudio`). */}
-                {voiceState.isSharingSystemAudio && (
-                  <span className="ml-1 block text-paper-muted">
-                    {t("voice.share.systemAudioLive")}
+                {focusedIsLocal &&
+                  focusedShareHasAudio &&
+                  voiceState.isSharingSystemAudio && (
+                    <span className="sr-only">
+                      {t("voice.share.systemAudioLive")}
+                    </span>
+                  )}
+                {!focusedIsLocal && !focusedShareHasAudio && (
+                  <span className="ml-1 inline-flex items-center gap-1 text-paper-muted">
+                    <span>({t("voice.share.noAudioShort")})</span>
+                    {/* A one-line "not a bug" for whoever is watching, so
+                        "sem som" reads as a platform fact rather than
+                        something broken on their end. Kept to an icon
+                        because the overlay is already crowded, and the
+                        Tooltip's own contract is hover/keyboard focus, not a
+                        tap: see `components/ui/tooltip.tsx`. */}
+                    <Tooltip label={t("voice.share.noAudioTooltip")}>
+                      <button
+                        type="button"
+                        aria-label={t("voice.share.noAudioTooltip")}
+                        className="pointer-events-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-paper-muted/70 hover:text-paper-muted focus-visible:outline focus-visible:outline-1"
+                      >
+                        <Info className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </Tooltip>
                   </span>
                 )}
                 {/* The honest half of the cursor preference. They asked for
@@ -2177,7 +2299,11 @@ function ActiveCall({
           watchPartyChrome
             ? "pointer-events-none [&>*]:pointer-events-auto"
             : "bg-gradient-to-t from-ink/80 to-transparent",
-          "absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
+          // `@container`: the controls fold on the STAGE's width, which on a
+          // phone is the screen minus the server rail and on a tablet or a
+          // narrow desktop pane is less than the window says. See the pill
+          // in `CallControls`.
+          "@container absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
           chromeClass,
         )}
         onPointerEnter={(event) => {
@@ -2207,6 +2333,18 @@ function ActiveCall({
           visible={!chrome.hidden}
         />
         <CinemaHint visible={screenStream !== null} />
+        {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
+            share button, before the picker opens, since that is where the
+            question actually gets asked. Gone once the share is already
+            running, since by then the picker has already been answered. */}
+        <LinuxShareAudioHint
+          visible={
+            !chrome.hidden &&
+            Boolean(onStartScreenShare) &&
+            !voiceState.isSharingScreen
+          }
+          isDesktopShell={isDesktopApp()}
+        />
         {watchPartyChrome ? null : controls}
       </div>
         </>
@@ -2247,18 +2385,31 @@ function useReceivedShareAudio(stream: MediaStream | null): boolean {
     if (!stream) {
       return;
     }
-    stream.addEventListener("addtrack", sync);
-    stream.addEventListener("removetrack", sync);
     // A track the presenter stops mid-share fires `ended` on the track itself
     // and nothing on the stream, so the stream listeners alone would miss it.
-    const tracks = stream.getAudioTracks();
-    for (const track of tracks) {
-      track.addEventListener("ended", sync);
-    }
+    // Tracks that arrive later (a late audio track, or one replaced) are
+    // listened to as they land, or a label that turned "with sound" would
+    // never turn back.
+    const watched = new Set<MediaStreamTrack>();
+    const watch = () => {
+      for (const track of stream.getAudioTracks()) {
+        if (!watched.has(track)) {
+          watched.add(track);
+          track.addEventListener("ended", sync);
+        }
+      }
+    };
+    const onTrackChange = () => {
+      watch();
+      sync();
+    };
+    stream.addEventListener("addtrack", onTrackChange);
+    stream.addEventListener("removetrack", onTrackChange);
+    watch();
     return () => {
-      stream.removeEventListener("addtrack", sync);
-      stream.removeEventListener("removetrack", sync);
-      for (const track of tracks) {
+      stream.removeEventListener("addtrack", onTrackChange);
+      stream.removeEventListener("removetrack", onTrackChange);
+      for (const track of watched) {
         track.removeEventListener("ended", sync);
       }
     };
@@ -2323,6 +2474,12 @@ function renderCallHints(
 }
 
 /**
+ * One line of the stage's control row: a 2.5rem tile inside the pill's 0.375rem
+ * padding, top and bottom. What the row measures past this is extra lines.
+ */
+const STAGE_CONTROL_ROW_REM = 3.25;
+
+/**
  * The control bar under the stage. Exported for the unit test that pins the
  * audience rule below; `CallStage` is the only runtime caller.
  */
@@ -2358,9 +2515,15 @@ export function CallControls({
   canLowerHands = false,
   onLowerHand,
   leading = null,
+  rowRef,
 }: {
   voiceState: VoiceState;
   collapsed: boolean;
+  /**
+   * Expanded only: the row of tiles, so the stage can see it fold onto a
+   * second line on a narrow screen and keep the strip clear of it.
+   */
+  rowRef?: Ref<HTMLDivElement>;
   /**
    * Collapsed only: the people cell (faces, names, hands, music) that the
    * bar lays out ahead of its controls. Owned by the row so the hold-to-talk
@@ -2465,6 +2628,10 @@ export function CallControls({
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-9 w-9" : "h-10 w-10";
   const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
+  // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
+  // wrapping row one by one. The bell's group keeps its own rule (hidden
+  // below `sm`), which a `contents` here would override.
+  const stageGroup = collapsed ? undefined : "@max-[40rem]:contents";
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from
@@ -2582,6 +2749,7 @@ export function CallControls({
           The pill is capped at 22rem so a 1440px window does not turn it
           into a slab; what it leaves goes to the people. */}
       <div
+        ref={collapsed ? undefined : rowRef}
         className={cn(
           "flex items-center gap-2",
           collapsed
@@ -2638,13 +2806,25 @@ export function CallControls({
         ~238px wide and six 36px tiles fill it to the pixel (mute, hand,
         camera, share, music, leave; cursor, watch party and bell hide
         under 22rem). Anything the width budget did not foresee goes to a
-        second line, where it can still be pressed, instead of off the edge. */}
+        second line, where it can still be pressed, instead of off the edge.
+
+        The stage's pill wraps too. It used to be one unbreakable row of
+        ~33rem centred in a stage that is ~20rem on a 390 phone, and the
+        stage clips, so mute and raise hand sat under the server rail and
+        hang-up past the right edge of the screen. Under 40rem of bar (the
+        whole desktop set with the bell and the hairlines, and some to
+        spare) the clusters dissolve into the pill (`contents` on each
+        `CallControlGroup`), so the tiles fold one at a time rather than a
+        cluster at a time, at the clusters' own 4px gap. The radius is half
+        the one-row height, not `rounded-full`: identical on one row, and a
+        rounded box rather than a stadium that the corner tiles poke out of
+        on two. */}
     <div
       className={cn(
         "flex items-center gap-1",
         collapsed
           ? "w-full flex-wrap justify-end @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
-          : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
+          : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
@@ -2720,7 +2900,7 @@ export function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      <CallControlGroup>
+      <CallControlGroup className={stageGroup}>
       {/* Raising a hand is the one control here that a listen-only seat needs
           MORE than anyone else, so it is never hidden by `listenOnly` and
           never disabled: lowering your own hand has to work whatever else the
@@ -2751,7 +2931,7 @@ export function CallControls({
         container={collapsed}
         className={collapsed ? "my-1" : "my-1.5"}
       />
-      <CallControlGroup>
+      <CallControlGroup className={stageGroup}>
       {!noVideo && (
       <Tooltip
         label={

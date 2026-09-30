@@ -75,7 +75,9 @@ describe("the slow-mode nudge, unrelated to guests", () => {
  * `goLive`) and out of any deployment `GET /api/live-hls/config` did not say
  * yes to (`lowLatencyAvailable`) -- neither is a case of disabling the row,
  * both are cases of it not existing at all, same as the deployment-gated
- * `micArchive`/`voiceTrack` rows elsewhere in this panel's family.
+ * `micArchive`/`voiceTrack` rows elsewhere in this panel's family. The one
+ * disabled case is "not answered yet" (`null`), so the row is never missing
+ * from the first frame a host sees.
  */
 describe("the low-latency switch: visibility", () => {
   const render = (props: Partial<Parameters<typeof WatchPartyOptionsPanel>[0]>) =>
@@ -102,6 +104,23 @@ describe("the low-latency switch: visibility", () => {
     const html = render({ isHost: true, lowLatencyAvailable: true });
     expect(html).toContain("data-watch-party-low-latency");
     expect(html).toContain("Low latency (beta)");
+    expect(html).not.toContain("data-watch-party-low-latency-pending");
+  });
+
+  it("is drawn, disabled, while the deployment has not answered yet", () => {
+    // Production rehearsal C, 2026-09-25: the row arrived after the rest of
+    // the setup card, and a scripted toggle ran before it existed. A host
+    // must see the option from the first frame, even if they cannot flip it
+    // until the config lands.
+    const html = render({ isHost: true, lowLatencyAvailable: null });
+    expect(html).toContain("data-watch-party-low-latency-pending");
+    expect(html).toContain("Low latency (beta)");
+    const row = html.slice(html.indexOf("data-watch-party-low-latency"));
+    expect(row).toMatch(/role="switch"[^>]*disabled|disabled[^>]*role="switch"/);
+    // Still host-only.
+    expect(render({ isHost: false, lowLatencyAvailable: null })).not.toContain(
+      "data-watch-party-low-latency",
+    );
   });
 
   it("checks the switch to the party's own saved preference", () => {

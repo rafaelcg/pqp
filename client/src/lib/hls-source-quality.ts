@@ -124,3 +124,70 @@ export function hlsSourceFor(input: {
     limitedBy: input.limitedBy ?? null,
   };
 }
+
+/**
+ * The inputs `hlsSourceFor` reads off the voice state, as one comparable
+ * value. `use-voice.ts` asks `refreshHlsSource` again whenever this changes,
+ * whatever changed it.
+ *
+ * WHY A LEVEL AND NOT AN EVENT. The answer depends on three facts and only
+ * one of them arrives as a `voice-stream` frame; the other two (this machine
+ * sharing, this machine on the SFU) change on this page with no frame at all.
+ * It used to be asked on the frame and on the 2 s sampler the frame arms, so
+ * a share that went up AFTER the frame was never pinned: a reloaded presenter
+ * is told the stream when it joins, before it shares, and a presenter who
+ * re-shares on the same page is told nothing, because the server's stream did
+ * not change. Production rehearsal E, 2026-09-25: after a reload the share
+ * went out on `maintain-framerate` with no `scaleResolutionDownBy`, and the
+ * whole party watched it at 280x180 for the rest of the show.
+ */
+export function hlsSourceInputsKey(input: {
+  stream: {
+    topHeight?: number | null;
+    mode?: "conventional" | "ll";
+  } | null;
+  isSharingScreen: boolean;
+  usingSfu: boolean;
+}): string {
+  const stream = input.stream
+    ? `${input.stream.topHeight ?? ""}:${input.stream.mode ?? ""}`
+    : "none";
+  return `${input.usingSfu ? 1 : 0}|${input.isSharingScreen ? 1 : 0}|${stream}`;
+}
+
+/**
+ * Whether the presenter's camera is held at the watch-party cap
+ * (`applyWatchPartyCameraCap` in `use-voice.ts`).
+ *
+ * While this machine feeds the egress (`hlsSourceFor` answered), and ALSO
+ * while the server still holds a live session presented by this very peer
+ * with the share momentarily down. The server waits for a presenter who
+ * stopped sharing (`HLS_PRESENTER_RETURN_GRACE_MS`, 60 s) and sends nothing
+ * until it gives up, so the stream frame still naming this peer is the
+ * server's own word that the party expects the share back. Lifting the cap in
+ * that window cost a camera republish on the way up and another on the way
+ * back down, and each republish is a new camera track, so each one restarted
+ * the camera egress: production rehearsal C, 2026-09-25, 3.1 s cut from the
+ * presenter's camera recording by a two-second screen re-share.
+ *
+ * Only this peer's session: somebody else presenting never caps this camera,
+ * and a presenter who reloaded (a new peer id) is capped again the moment
+ * their share feeds the egress.
+ */
+export function watchPartyCameraCapWanted(input: {
+  /** `hlsSourceFor(...) !== null`. */
+  hlsSourceWanted: boolean;
+  usingSfu: boolean;
+  /** `presenterPeerId` of the room's live `voice-stream`, null when none. */
+  streamPresenterPeerId: string | null;
+  ownPeerId: string | null;
+}): boolean {
+  if (input.hlsSourceWanted) {
+    return true;
+  }
+  return (
+    input.usingSfu &&
+    input.ownPeerId !== null &&
+    input.streamPresenterPeerId === input.ownPeerId
+  );
+}

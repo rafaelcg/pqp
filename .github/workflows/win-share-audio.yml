@@ -1,0 +1,101 @@
+name: Windows share audio add-on
+
+# The native half of desktop share audio on Windows
+# (electron/native/win-share-audio, docs/plans/DESKTOP_SHARE_AUDIO_PER_APP.md).
+#
+# Runs on a PR that touches it, and is CALLED by electron.yml, so the packaged
+# app carries exactly the binaries this workflow built and smoke tested rather
+# than a second build of the same source.
+#
+# What CI can and cannot say. No hosted Windows runner has an audio device, so
+# nothing here ever hears a capture; the smoke test pins the activation answer
+# each image gives instead (see its header). Hearing needs a real PC and the
+# probe: `pqp.exe --probe-share-audio`.
+on:
+  pull_request:
+    paths:
+      - "electron/native/win-share-audio/**"
+      - "electron/lib/win-share-audio*.js"
+      - ".github/workflows/win-share-audio.yml"
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (win32 x64 + arm64)
+    # windows-2022 on purpose, not windows-latest: it is the image whose Visual
+    # Studio the pinned node-gyp knows, and its OS is build 20348, the one
+    # Microsoft's documentation names for process loopback.
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # N-API against Node's own headers: the same .node loads in Electron 44
+      # and every later Electron, so there is no Electron ABI to build for.
+      - name: Build the add-on
+        working-directory: electron
+        run: node native/win-share-audio/build.mjs x64 arm64
+
+      - name: Upload prebuilds
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-share-audio-prebuilds
+          path: electron/native/win-share-audio/prebuilds/
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Smoke test (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Server 2022, build 20348: activation succeeds, Initialize is
+          # refused with AUDCLNT_E_SERVICE_NOT_RUNNING (the Windows Audio
+          # service is off on this image). Measured on the first run of #873.
+          - os: windows-2022
+            expect: "exclude=error:initialize:0x88890010 include=error:initialize:0x88890010"
+          # Server 2025, build 26100: the service runs, and both modes open
+          # and start a stream (with nothing to hear).
+          - os: windows-latest
+            expect: "exclude=started:-:0x00000000 include=started:-:0x00000000"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          name: win-share-audio-prebuilds
+          path: electron/native/win-share-audio/prebuilds
+
+      - name: Load, look up, activate, tear down
+        working-directory: electron
+        shell: bash
+        env:
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          set -euo pipefail
+          args=(--arch x64)
+          for spec in $EXPECT; do
+            args+=(--expect "$spec")
+          done
+          node native/win-share-audio/smoke-test.mjs "${args[@]}"

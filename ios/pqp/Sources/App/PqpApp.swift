@@ -17,6 +17,12 @@ struct PqpApp: App {
     /// a question owned by that screen would be destroyed before it could be
     /// asked.
     @State private var ratings = CallRatingModel()
+    /// App-wide for the same reason `voice` is: hosting a watch party spans
+    /// `ChatView` (before a room exists) and `VoiceView` (the full-screen
+    /// cover once one does), and the busy/error state an in-flight Ir ao
+    /// vivo/Encerrar carries must survive whichever of those is on top. See
+    /// `WatchPartyHostController`'s own doc.
+    @State private var watchPartyHost = WatchPartyHostController()
     /// The one CXProvider/CXCallController pair for the process. Registering
     /// it here, at launch, and not lazily on the first call is what lets a
     /// cold-launched app still answer a call CallKit is already presenting.
@@ -48,6 +54,7 @@ struct PqpApp: App {
                 .environment(call)
                 .environment(voice)
                 .environment(ratings)
+                .environment(watchPartyHost)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that
@@ -98,6 +105,9 @@ struct RootView: View {
     /// came back "no APNs key configured".
     @State private var serverSupportsApns: Bool?
     @State private var showingPushExplainer = false
+    /// Shared by the welcome's big mark and the wizard's small one, so the
+    /// hand-off between them is one mark moving, not two views swapping.
+    @Namespace private var brand
 
     var body: some View {
         @Bindable var call = call
@@ -110,23 +120,34 @@ struct RootView: View {
                 SplashView()
                     .transition(.opacity)
             case .onboarding:
-                OnboardingView()
-                    .transition(.asymmetric(
-                        insertion: .opacity,
-                        removal: .opacity.combined(with: .scale(scale: 1.04))
-                    ))
-            case .ageGate:
-                AgeGateView()
+                OnboardingView(brand: brand)
                     .transition(.opacity)
             case .blocked:
                 AgeBlockedView()
                     .transition(.opacity)
-            case .ready:
-                HomeView()
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.98)),
-                        removal: .opacity
-                    ))
+            // ONE case for both, on purpose: the age gate and the rest of the
+            // wizard are one shell, and keeping them in the same branch is what
+            // keeps that shell (and its dots and mark) the same view when the
+            // gate passes, instead of tearing it down and building it again.
+            case .ageGate, .ready:
+                ZStack {
+                    if session.phase == .ready {
+                        HomeView()
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .scale(scale: 0.98)),
+                                removal: .opacity
+                            ))
+                    }
+                    if let run = session.firstRun {
+                        FirstRunFlowView(run: run, brand: brand)
+                            .transition(.asymmetric(
+                                insertion: .opacity,
+                                removal: .opacity.combined(with: .scale(scale: 1.03))
+                            ))
+                            .zIndex(1)
+                    }
+                }
+                .animation(Motion.gentle, value: session.firstRun == nil)
             }
         }
         // The ring floats above whatever is on screen. Only ever while signed
@@ -254,9 +275,31 @@ struct RootView: View {
         // Notifications are set up on arrival at `.ready` and nowhere earlier:
         // `/api/push/config` needs a token, and asking for permission before
         // somebody has seen the product is the prompt everybody declines.
+        //
+        // Not while the first-run wizard is up either: a permission sheet over
+        // "How should people see you?" is two questions at once. It waits for
+        // the wizard to close, and for the arrival moment to have been seen.
         .onChange(of: session.phase) { _, phase in
-            guard phase == .ready else { return }
+            guard phase == .ready, session.firstRun == nil else { return }
             Task { await setUpNotifications() }
+        }
+        .onChange(of: session.firstRun == nil) { _, closed in
+            guard closed, session.phase == .ready else { return }
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                await setUpNotifications()
+            }
+        }
+        // The invitee's arrival: confetti and "You're in {server}" over the room
+        // they just walked into. The organizer had theirs on the ready step.
+        .overlay(alignment: .top) {
+            if session.phase == .ready, let celebration = session.arrivalCelebration {
+                ArrivalToast(celebration: celebration) {
+                    withAnimation(Motion.standard) { session.arrivalCelebration = nil }
+                }
+                .transition(.opacity)
+                .zIndex(2)
+            }
         }
     }
 

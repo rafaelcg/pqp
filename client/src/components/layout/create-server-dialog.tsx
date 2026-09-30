@@ -1,16 +1,27 @@
 import { Check, ChevronRight, Copy, LayoutList } from "lucide-react";
 import { intlLocale } from "@/lib/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Channel, DiscordImportPlan, Invite, Server } from "@pqp/shared";
+import {
+  isDiscordInviteLink,
+  MAX_IMPORT_CATEGORIES,
+  MAX_IMPORT_CHANNELS,
+  type Channel,
+  type DiscordImportErrorCode,
+  type DiscordImportPlan,
+  type Invite,
+  type Server,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl } from "@/lib/share-invite";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
+import { IdempotencyAttempt } from "@/lib/idempotency";
 import {
+  ApiError,
   applyDiscordImport,
   createInvite,
   createServer,
@@ -37,6 +48,59 @@ interface CreateServerDialogProps {
   startSource?: string | null;
   onClose: () => void;
   onCreated: (created: CreatedServerPayload) => Promise<void> | void;
+}
+
+const IMPORT_ERROR_KEYS: Record<DiscordImportErrorCode, MessageKey> = {
+  notATemplate: "importDiscord.error.notATemplate",
+  inviteLink: "importDiscord.error.inviteLink",
+  notFound: "importDiscord.error.notFound",
+  tooMany: "importDiscord.error.tooMany",
+  tooLarge: "importDiscord.error.tooLarge",
+  rateLimited: "importDiscord.error.rateLimited",
+  unavailable: "importDiscord.error.unavailable",
+};
+
+/** Slots for `importDiscord.error.tooMany`, so the copy follows the caps. */
+const IMPORT_CAPS = {
+  channels: MAX_IMPORT_CHANNELS,
+  categories: MAX_IMPORT_CATEGORIES,
+};
+
+/**
+ * The sentence for a failed preview or apply, in the reader's language. The
+ * server's `error` is English, so it is never shown; its `code` picks the
+ * key, and a server that predates the code falls back on the status.
+ */
+export function discordImportErrorKey(
+  error: unknown,
+  fallback: MessageKey,
+): MessageKey {
+  if (!(error instanceof ApiError)) {
+    return fallback;
+  }
+  const details = error.details as { code?: unknown } | null;
+  const code = typeof details?.code === "string" ? details.code : null;
+  if (code && Object.prototype.hasOwnProperty.call(IMPORT_ERROR_KEYS, code)) {
+    return IMPORT_ERROR_KEYS[code as DiscordImportErrorCode];
+  }
+  switch (error.status) {
+    case 0:
+      return "importDiscord.error.network";
+    case 503:
+      return "importDiscord.error.serverBusy";
+    case 400:
+      return "importDiscord.error.notATemplate";
+    case 404:
+      return "importDiscord.error.notFound";
+    case 413:
+      return "importDiscord.error.tooLarge";
+    case 429:
+      return "importDiscord.error.rateLimited";
+    case 502:
+      return "importDiscord.error.unavailable";
+    default:
+      return fallback;
+  }
 }
 
 /**
@@ -84,6 +148,14 @@ export function CreateServerDialog({
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
+  /**
+   * One key per create attempt, reused across a retry of the same content
+   * so a lost response never makes a second room. Two separate holders: the
+   * name-based create and the Discord import are independent attempts. See
+   * `@/lib/idempotency`.
+   */
+  const createAttemptRef = useRef(new IdempotencyAttempt());
+  const importAttemptRef = useRef(new IdempotencyAttempt());
 
   useEffect(() => {
     if (open) {
@@ -97,6 +169,8 @@ export function CreateServerDialog({
     setBusy(false);
     setDone(null);
     setCopied(null);
+    createAttemptRef.current.reset();
+    importAttemptRef.current.reset();
   }, [open]);
 
   useEffect(
@@ -129,7 +203,16 @@ export function CreateServerDialog({
     setBusy(true);
     setError(null);
     try {
-      const created = await createServer(trimmed);
+      const created = await createServer(
+        trimmed,
+        createAttemptRef.current.keyFor(trimmed),
+      );
+      // The room now exists on the server. Both branches below already
+      // swallow their own errors, so nothing after this point can still
+      // report "create failed" and send a retry back through this key; only
+      // now does the key retire, so a failure before this line is safely
+      // retried with the room already made.
+      createAttemptRef.current.reset();
       const [invite] = await Promise.all([
         createInvite(created.server.id, { expiresInHours: 168 })
           .then((result) => result.invite)
@@ -179,6 +262,12 @@ export function CreateServerDialog({
     if (!source.trim() || busy) {
       return;
     }
+    // An invite is the wrong link people have at hand. Say so here, without
+    // a round trip, instead of letting it read as "not a template".
+    if (isDiscordInviteLink(source)) {
+      setError(t("importDiscord.error.inviteLink"));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -187,7 +276,7 @@ export function CreateServerDialog({
       setStep("preview");
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : t("importDiscord.error.previewFailed"),
+        t(discordImportErrorKey(err, "importDiscord.error.previewFailed"), IMPORT_CAPS),
       );
     } finally {
       setBusy(false);
@@ -201,11 +290,21 @@ export function CreateServerDialog({
     setBusy(true);
     setError(null);
     try {
-      const created = await applyDiscordImport(source.trim());
+      const trimmedSource = source.trim();
+      const created = await applyDiscordImport(
+        trimmedSource,
+        importAttemptRef.current.keyFor(trimmedSource),
+      );
       if (created.invite) {
         rememberInviteCode(created.server.id, created.invite.code);
       }
+      // `onCreated` is awaited directly and can still throw, unlike the
+      // create-by-name path above: keep the key alive until every step that
+      // could still land in the catch below has finished, so a failure here
+      // reports "import failed" but a retry replays the room this call
+      // already made instead of importing a second one.
       await onCreated({ server: created.server, channels: created.channels });
+      importAttemptRef.current.reset();
       setDone({
         serverName: created.server.name,
         serverId: created.server.id,
@@ -215,7 +314,7 @@ export function CreateServerDialog({
       setStep("done");
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : t("importDiscord.error.applyFailed"),
+        t(discordImportErrorKey(err, "importDiscord.error.applyFailed"), IMPORT_CAPS),
       );
     } finally {
       setBusy(false);

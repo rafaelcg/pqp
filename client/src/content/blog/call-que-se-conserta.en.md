@@ -26,7 +26,7 @@ The other one: you ticked the sound box, picked a screen, and nothing happened a
 
 ## Our privacy policy was wrong
 
-It said there were no trackers at all. That stopped being true when our visit counter and the Google Ads tag shipped, and the text was left behind. Corrected: pqp.gg uses a cookie-less visit counter and a tag that only counts sign-ups. We do not do remarketing and we do not build audience lists. Anyone running pqp on their own server inherits none of it.
+It said there were no trackers at all. That stopped being true when our visit counter and the Google Ads tag shipped, and the text was left behind. Corrected: pqp.gg uses a cookie-less visit counter and the Google Ads tag, which counts sign-ups and reports page views to Google. Google can use those page views to build remarketing audiences. Anyone running pqp on their own server inherits none of it.
 
 ## Everything that changed
 

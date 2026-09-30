@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { LiveReactionCount } from "@pqp/shared";
+import { liveStateFromStream, type LiveReactionCount } from "@pqp/shared";
+import type { ChannelLive } from "@/hooks/use-voice";
 import { subscribeToLiveReactions } from "@/lib/live-reactions";
 
 /**
@@ -52,13 +53,38 @@ export function newHands(
   return next.filter((person) => !seen.has(person.userId));
 }
 
+/**
+ * The count the feed compares, or `null` while it is not known. The same sum
+ * as `watchAudienceCount` (the header and the sidebar), except that "no
+ * `channel-live` yet" is unknown rather than zero: see `audienceCount` below.
+ */
+export function feedAudienceCount(
+  live: ChannelLive | undefined,
+  participants:
+    | readonly { peerId: string; sharingScreen: boolean; userId?: string }[]
+    | undefined,
+): number | null {
+  if (!live) {
+    return null;
+  }
+  return liveStateFromStream(live.stream, participants, live.watching).viewerCount;
+}
+
 export function useWatchPartyActivity({
   channelId,
   audienceCount,
   hands,
 }: {
   channelId: string;
-  audienceCount: number;
+  /**
+   * `null` while this client has not been told the channel's live state yet
+   * (no `channel-live` frame since the page loaded). NOT zero: a presenter
+   * who reloads mid-party mounts this feed before the first frame lands, and
+   * a zero baseline turned the audience already watching into a fresh
+   * "+1 assistindo" (production rehearsal C, 2026-09-25). The baseline is
+   * the first count this client actually knows.
+   */
+  audienceCount: number | null;
   hands: readonly ActivityPerson[];
 }): ActivityEvent[] {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
@@ -88,6 +114,10 @@ export function useWatchPartyActivity({
   // header already carries, and a feed of departures is not what a host
   // wants to read mid-show.
   useEffect(() => {
+    if (audienceCount === null) {
+      // Not known yet: neither a line nor a baseline.
+      return;
+    }
     const prev = lastCount.current;
     lastCount.current = audienceCount;
     if (prev !== null && audienceCount > prev) {

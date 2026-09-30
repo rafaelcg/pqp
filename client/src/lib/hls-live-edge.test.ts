@@ -72,6 +72,8 @@ import {
   llLatencyCeilingSeconds,
   llMaxLatencySeconds,
   mediaSeekableEnd,
+  newSegmentDurationsSince,
+  type FragSnDuration,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
@@ -1218,5 +1220,175 @@ describe("the governor's target reaches the edge helpers (2026-09-23)", () => {
     };
     expect(m.bufferAheadSeconds({ currentTime: 3, buffered })).toBe(2);
     expect(m.bufferAheadSeconds({ currentTime: 5.5, buffered })).toBe(0);
+  });
+});
+
+describe("newSegmentDurationsSince", () => {
+  it("feeds every fragment on a fresh attach (lastSeenSn null), oldest first", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 },
+      { sn: 11, duration: 4.3 },
+      { sn: 12, duration: 9.0 },
+    ];
+    expect(newSegmentDurationsSince(fragments, null)).toEqual({
+      durations: [4.1, 4.3, 9.0],
+      lastSeenSn: 12,
+      reset: false,
+    });
+  });
+
+  it("feeds nothing already seen, even across several fragments in one call", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 },
+      { sn: 11, duration: 4.3 },
+      { sn: 12, duration: 4.2 },
+    ];
+    expect(newSegmentDurationsSince(fragments, 10)).toEqual({
+      durations: [4.3, 4.2],
+      lastSeenSn: 12,
+      reset: false,
+    });
+    expect(newSegmentDurationsSince(fragments, 12)).toEqual({
+      durations: [],
+      lastSeenSn: 12,
+      reset: false,
+    });
+  });
+
+  // Farol, this PR: reading only the LAST fragment silently drops a long
+  // segment sitting earlier in a gap between two `LEVEL_UPDATED` firings,
+  // which is exactly the false "all clear" the cadence window exists to
+  // prevent -- pin the whole gap, not just its tail.
+  it("does not drop a long segment buried earlier in a multi-segment gap", () => {
+    const fragments = [
+      { sn: 10, duration: 4.1 }, // already seen
+      { sn: 11, duration: 9.0 }, // a slow one, missed in the gap
+      { sn: 12, duration: 4.2 }, // short again right after it
+    ];
+    expect(newSegmentDurationsSince(fragments, 10)).toEqual({
+      durations: [9.0, 4.2],
+      lastSeenSn: 12,
+      reset: false,
+    });
+  });
+
+  it("skips the init segment and any fragment with a non-finite duration, and still advances past a finite one", () => {
+    const fragments = [
+      { sn: "initSegment" as const, duration: 0 },
+      { sn: 10, duration: Number.NaN },
+      { sn: 11, duration: 4.1 },
+    ];
+    expect(newSegmentDurationsSince(fragments, null)).toEqual({
+      durations: [4.1],
+      lastSeenSn: 11,
+      reset: false,
+    });
+  });
+
+  it("an empty fragment list changes nothing", () => {
+    expect(newSegmentDurationsSince([], 5)).toEqual({
+      durations: [],
+      lastSeenSn: 5,
+      reset: false,
+    });
+  });
+
+  // Farol, this PR: a remux restart or a new run's media-sequence base
+  // (pitfall 20 in CLAUDE.md) can make the SAME attach start seeing LOWER
+  // sequence numbers than it already recorded. Comparing every fragment
+  // against the stale `lastSeenSn` would read every one of them as
+  // "already seen" forever, freezing the cadence window on pre-restart
+  // evidence.
+  describe("a media-sequence reset", () => {
+    it("detects the newest listed fragment sitting behind what was already seen", () => {
+      const fragments = [
+        { sn: 0, duration: 4.0 },
+        { sn: 1, duration: 4.1 },
+      ];
+      expect(newSegmentDurationsSince(fragments, 500)).toEqual({
+        durations: [4.0, 4.1],
+        lastSeenSn: 1,
+        reset: true,
+      });
+    });
+
+    it("treats a reset like a fresh attach: every listed fragment counts, none skipped as 'already seen'", () => {
+      // Without reset detection, sn 0 and 1 would both be <= 500 and
+      // silently dropped forever.
+      const fragments = [{ sn: 0, duration: 9.0 }];
+      const result = newSegmentDurationsSince(fragments, 500);
+      expect(result.durations).toEqual([9.0]);
+      expect(result.reset).toBe(true);
+    });
+
+    it("is not confused by an ordinary empty-progress poll (nothing new, sequence unchanged)", () => {
+      const fragments = [
+        { sn: 10, duration: 4.1 },
+        { sn: 11, duration: 4.2 },
+      ];
+      // The newest listed fragment (11) is NOT behind lastSeenSn (11):
+      // this is "no new segment yet", not a reset.
+      expect(newSegmentDurationsSince(fragments, 11)).toEqual({
+        durations: [],
+        lastSeenSn: 11,
+        reset: false,
+      });
+    });
+
+    it("an all-non-numeric fragment list (e.g. only an init segment) is never mistaken for a reset", () => {
+      const fragments = [{ sn: "initSegment" as const, duration: 0 }];
+      expect(newSegmentDurationsSince(fragments, 500)).toEqual({
+        durations: [],
+        lastSeenSn: 500,
+        reset: false,
+      });
+    });
+  });
+
+  // Farol, this PR's third pass: this runs inside `LEVEL_UPDATED`, so a
+  // throw here would take the rest of that handler down for every viewer
+  // on this build, not just skip a cadence reading.
+  describe("never throws out of the hls.js event handler", () => {
+    it("a pathologically large fragments array does not throw (the old Math.max(...array) spread would)", () => {
+      const huge = Array.from({ length: 200_000 }, (_, i) => ({
+        sn: i,
+        duration: 4.1,
+      }));
+      expect(() => newSegmentDurationsSince(huge, null)).not.toThrow();
+      const result = newSegmentDurationsSince(huge, null);
+      // Still correct on the part that matters: the newest fragment is
+      // found and durations are real numbers, even bounded.
+      expect(result.lastSeenSn).toBe(199_999);
+      expect(result.durations.length).toBeGreaterThan(0);
+      expect(result.durations.every((d) => d === 4.1)).toBe(true);
+    });
+
+    it("a fragment whose fields throw on access falls back to 'no new durations', tracker unchanged", () => {
+      const hostile = {
+        get sn(): number {
+          throw new Error("boom");
+        },
+        get duration(): number {
+          throw new Error("boom");
+        },
+      };
+      expect(
+        newSegmentDurationsSince(
+          [hostile as unknown as FragSnDuration],
+          42,
+        ),
+      ).toEqual({ durations: [], lastSeenSn: 42, reset: false });
+    });
+
+    it("a fragments array that throws on iteration falls back the same way", () => {
+      const hostile: Iterable<FragSnDuration> = {
+        [Symbol.iterator]() {
+          throw new Error("boom");
+        },
+      };
+      expect(
+        newSegmentDurationsSince(hostile as readonly FragSnDuration[], 7),
+      ).toEqual({ durations: [], lastSeenSn: 7, reset: false });
+    });
   });
 });

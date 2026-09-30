@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import { isEnabled } from "../lib/flags.js";
 import {
   markChannelShareStarted,
   markChannelShareStopped,
@@ -118,10 +119,11 @@ import {
   releaseLiveHlsSession,
   setLiveHlsChangeListener,
   setLiveHlsPresenterCheck,
+  setLiveHlsPresenterIdentity,
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
-import { isLiveHlsLLEnabled, llStreamFor } from "../voice/hls-remux.js";
+import { isLiveHlsLLEnabled, llStreamFor, setLlPresenterIdentity } from "../voice/hls-remux.js";
 import { liveOtherInstances } from "../voice/hls-ownership.js";
 import {
   liveHlsForcesSfu,
@@ -141,6 +143,7 @@ import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
   SFU_REGION_CAP,
   decideSfuRegion,
+  regionCapRequired,
   defaultRegionId,
   forgetRoomRegion,
   pinRoomRegion,
@@ -151,6 +154,7 @@ import {
   socketCountry,
   type SfuRegionDecision,
 } from "../voice/regions.js";
+import { serverMemberCountries } from "../voice/region-audience.js";
 import {
   adoptVoicePeer,
   clearMusicIfEmpty,
@@ -908,10 +912,13 @@ export function isRoomPinnedLocally(voiceChannelId: string): boolean {
  *
  * Null in single-region mode, which is every deployment without
  * `LIVEKIT_REGIONS`: nothing below reads a header, issues a query or writes a
- * column then. With regions on, it is decided from the FIRST joiner's
- * `CF-IPCountry` and `sfu-region` capability, whatever the room's transport:
- * a mesh room carries a region too, so a mid-call promotion onto the SFU has
- * a box to go to that the first joiner chose, not whoever clicked a camera.
+ * column then. With regions on, it is decided when the FIRST joiner opens the
+ * room (`decideSfuRegion`: the override, else the server's people, else that
+ * joiner's `CF-IPCountry`), whatever the room's transport: a mesh room
+ * carries a region too, so a mid-call promotion onto the SFU has a box to go
+ * to that was chosen when the room opened, not by whoever clicked a camera.
+ * The joiner's `sfu-region` capability is consulted only under the rollback
+ * `LIVEKIT_REGION_REQUIRE_CAP` (`regionCapRequired`).
  */
 async function decideRoomRegion(
   channel: ChannelRow,
@@ -922,10 +929,14 @@ async function decideRoomRegion(
     return null;
   }
   const clientDeclaresRegions = socketHasCap(socket, SFU_REGION_CAP);
+  const requireRegionCap = regionCapRequired();
+  // Whether this joiner may open the room off home at all. True for every
+  // client unless the rollback switch asks for the cap.
+  const clientMayMove = clientDeclaresRegions || !requireRegionCap;
   let override: string | null = null;
   // The override query is skipped wherever the policy answers without it.
   if (
-    clientDeclaresRegions &&
+    clientMayMove &&
     channel.kind === "server" &&
     !isWatchPartyChannelType(channel.type)
   ) {
@@ -936,6 +947,27 @@ async function decideRoomRegion(
       console.error("[voice] sfu region override lookup failed:", error);
     }
   }
+  // Where the server's people are. Read only where the policy would reach
+  // it (no override naming a configured region: a stale override is ignored
+  // by the policy, so the tally must still be there for it), cached per
+  // server for hours, and a failed read is "no data", which falls back to
+  // the first joiner's country as before.
+  const overrideApplies =
+    override !== null && regions.some((region) => region.id === override);
+  let serverCountries: Map<string, number> | null = null;
+  if (
+    clientMayMove &&
+    channel.kind === "server" &&
+    !isWatchPartyChannelType(channel.type) &&
+    !overrideApplies &&
+    channel.server_id
+  ) {
+    try {
+      serverCountries = await serverMemberCountries(channel.server_id);
+    } catch (error) {
+      console.error("[voice] sfu region member tally failed:", error);
+    }
+  }
   return decideSfuRegion({
     regionIds: regions.map((region) => region.id),
     defaultRegion: defaultRegionId(regions),
@@ -943,6 +975,8 @@ async function decideRoomRegion(
     channel: { kind: channel.kind, type: channel.type, sfuRegion: override },
     country: socketCountry(socket),
     clientDeclaresRegions,
+    requireRegionCap,
+    serverCountries,
   });
 }
 
@@ -2241,6 +2275,111 @@ function noSharerGraceMs(): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : 5_000;
 }
 
+/**
+ * HOW LONG A WATCH PARTY WAITS FOR ITS PRESENTER TO COME BACK.
+ *
+ * Production rehearsal B, 2026-09-24 ~17:15Z: the presenter reloaded the page.
+ * A reload is a clean leave, so the seat is gone rather than held for resume,
+ * the five-second no-sharer grace ran out before the page was back, the LL
+ * session ended, and the presenter's return (a new peer id) started a NEW
+ * session: a new `startedAt`, every viewer re-attached, and the recording
+ * split in two. Now a presenter who left or stopped sharing, in a party that
+ * is not over, holds the broadcast this long (the audience keeps the frozen
+ * tail). The same PERSON sharing again inside it continues the same session
+ * (the LL box is rebound, the ladder restarts in place); anybody else sharing
+ * is a new session at once; nobody sharing by the end of it ends the session
+ * exactly as before. `HLS_PRESENTER_RETURN_GRACE_MS`, default 60 s; `0` is the
+ * old behaviour and the rollback.
+ */
+function presenterReturnGraceMs(): number {
+  const raw = Number(process.env.HLS_PRESENTER_RETURN_GRACE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
+}
+
+/**
+ * Who each channel's live session was last presented by, as a person: the
+ * peer id AND the user id, recorded whenever this process sees them sharing.
+ * A presenter who left cleanly has no seat left anywhere to name them, and
+ * the return hold needs to know who it is waiting for.
+ */
+const lastPresenterByChannel = new Map<string, { peerId: string; userId: string }>();
+/**
+ * Every presenter peer this process saw share per channel, peer id to user
+ * id, bounded. Separate from `lastPresenterByChannel` because the drivers ask
+ * about the OLD peer after the new one has already become "last" (Farol
+ * review, PR #817): the reconcile that decides "same person" runs after the
+ * returning peer is recorded.
+ */
+const presenterPeopleByChannel = new Map<string, Map<string, string>>();
+const PRESENTER_PEOPLE_MAX = 8;
+
+function rememberPresenter(channelId: string, peerId: string, userId: string): void {
+  lastPresenterByChannel.set(channelId, { peerId, userId });
+  const people = presenterPeopleByChannel.get(channelId) ?? new Map<string, string>();
+  people.delete(peerId);
+  people.set(peerId, userId);
+  while (people.size > PRESENTER_PEOPLE_MAX) {
+    const oldest = people.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    people.delete(oldest);
+  }
+  presenterPeopleByChannel.set(channelId, people);
+}
+
+/**
+ * The person behind a presenter peer id this process saw share in this
+ * channel, after the peer itself is gone (a reload leaves nothing else that
+ * names them). What lets the drivers recognise the same person coming back.
+ */
+function lastPresenterUserOf(channelId: string, peerId: string): string | null {
+  return presenterPeopleByChannel.get(channelId)?.get(peerId) ?? null;
+}
+
+/**
+ * The stream with the PERSON presenting it (`LiveHlsStream.presenterUserId`)
+ * filled in when this process can name them: the peer is seated here, or it
+ * is a presenter this process saw share in this channel (which is what still
+ * names them after a reload took the peer away).
+ *
+ * Why the audience needs it: since the return grace a session outlives its
+ * presenter's socket, and until the reconcile rebinds it the frame names a
+ * peer that is gone while the same person sits in the room under a new one.
+ * Counted by peer id alone, the presenter was their own viewer (rehearsal C,
+ * 2026-09-25: "2 assistindo" with one viewer, and three "+1 assistindo"
+ * lines in the host's feed). An id already on the stream is kept: it came
+ * from the machine that saw them share, which knows better than this one.
+ */
+function withPresenterUser(channelId: string, stream: LiveHlsStream): LiveHlsStream {
+  if (stream.presenterUserId) {
+    return stream;
+  }
+  const userId =
+    peers.get(stream.presenterPeerId)?.userId ??
+    lastPresenterUserOf(channelId, stream.presenterPeerId);
+  return userId ? { ...stream, presenterUserId: userId } : stream;
+}
+
+/** Every stream a socket is handed: the person named, then the viewer's own token. */
+function viewerStreamFor(
+  channelId: string,
+  stream: LiveHlsStream,
+  userId: string,
+): LiveHlsStream {
+  return stampViewerStream(withPresenterUser(channelId, stream), userId);
+}
+
+/** Whether a return hold is running for this channel and presenter. */
+function presenterReturnHeld(channelId: string, presenterPeerId: string, now = Date.now()): boolean {
+  const since = noSharerSince.get(channelId);
+  const last = lastPresenterByChannel.get(channelId);
+  if (since === undefined || !last || last.peerId !== presenterPeerId) {
+    return false;
+  }
+  return now - since < presenterReturnGraceMs();
+}
+
 /** When each channel's sharer went missing, while a stream is still up. */
 const noSharerSince = new Map<string, number>();
 
@@ -2255,6 +2394,8 @@ const noSharerSince = new Map<string, number>();
  * every party at once).
  */
 const SHARER_RECHECK_MS = 10_000;
+/** The backstop look inside a presenter's return window (`presenterReturnGraceMs`). */
+const RETURN_RECHECK_MS = 20_000;
 /** After a handover that could not be made (the rows did not move). */
 const HANDOVER_RETRY_MS = 5_000;
 
@@ -2276,8 +2417,8 @@ const ADOPTED_SHARER_HOLD_MS = 30_000;
  * never ends anything.
  */
 function sharerResumeHoldEnabled(): boolean {
-  const raw = (process.env.HLS_SHARER_RESUME_HOLD ?? "").trim().toLowerCase();
-  return !(raw === "off" || raw === "false" || raw === "0");
+  // Runtime flag `hls_sharer_resume_hold`; the variable is its default.
+  return isEnabled("hls_sharer_resume_hold");
 }
 
 type VanishedSharer =
@@ -2343,7 +2484,14 @@ function locateVanishedSharer(
   // its callers are fire-and-forget: a throw here would be an unhandled
   // rejection. Anything unexpected is "could not ask", which holds exactly
   // like a failed registry read does.
-  const answer = lookUpVanishedSharer(channelId, presenterPeerId, since, now).catch(
+  const last = lastPresenterByChannel.get(channelId);
+  const answer = lookUpVanishedSharer(
+    channelId,
+    presenterPeerId,
+    since,
+    now,
+    last && last.peerId === presenterPeerId ? last.userId : null,
+  ).catch(
     (error: unknown): VanishedSharer => {
       logEvent("voice.hlsSharerLookupFailed", {
         channelId,
@@ -2373,6 +2521,7 @@ async function lookUpVanishedSharer(
   presenterPeerId: string,
   since: number,
   now: number,
+  presenterUserId: string | null = null,
 ): Promise<VanishedSharer> {
   const hold = (
     reason: Extract<VanishedSharer, { kind: "held" }>["reason"],
@@ -2399,6 +2548,33 @@ async function lookUpVanishedSharer(
       return hold("lookup-failed", since + VOICE_RESUME_TTL_MS);
     }
     const seat = rows.find((row) => row.peerId === presenterPeerId);
+    // THE SAME PERSON, SHARING UNDER A NEW PEER ID ON THE OTHER MACHINE: a
+    // reconnect that could not resume, landing there. Their old seat is
+    // still in the registry (held for its resume window, or not yet
+    // released), which is what names them. The session is handed to the
+    // machine holding the new seat, whose adoption recognises the person and
+    // keeps the session (the LL remux is rebound in place). Without this the
+    // old seat's resume hold froze the broadcast here for up to the whole
+    // window, while the machine with the presenter stood down.
+    // The person comes from the old seat while it exists, and from this
+    // process's own record of who was presenting once it does not (a clean
+    // leave, a page reload: the seat is gone at once, not held).
+    const personId = seat?.userId ?? presenterUserId;
+    const sameUserElsewhere = personId
+      ? rows.find(
+          (row) =>
+            row.peerId !== presenterPeerId &&
+            row.userId === personId &&
+            row.sharingScreen &&
+            row.canStream &&
+            !row.orphanedAt &&
+            row.instanceId !== INSTANCE_ID &&
+            liveOthers!.has(row.instanceId),
+        )
+      : undefined;
+    if (sameUserElsewhere) {
+      return { kind: "elsewhere", instanceId: sameUserElsewhere.instanceId };
+    }
     if (!seat || !seat.sharingScreen || !seat.canStream) {
       return { kind: "gone" };
     }
@@ -2423,6 +2599,89 @@ async function lookUpVanishedSharer(
     return hold("adopted-recently", adoptedAt + ADOPTED_SHARER_HOLD_MS);
   }
   return { kind: "gone" };
+}
+
+/**
+ * The instance where `userId` is seated and sharing in this room under a peer
+ * id OTHER than `orphanPeerId`, live and not itself orphaned, on another
+ * machine that is answering its heartbeat; null for anything else, including
+ * a registry that could not be read (the orphan's resume hold then applies,
+ * as it always did). One read per channel at a time: every roster event of a
+ * party can reach here while the presenter's old seat is held.
+ */
+const reconnectLookupInFlight = new Map<string, Promise<string | null>>();
+/**
+ * When a channel's last look found nobody. A party's roster events arrive in
+ * bursts, and a presenter held for their resume window would otherwise put a
+ * room-wide `voice_peers` read behind every one of them; the answer that
+ * matters (their new seat appearing) is at most this late.
+ */
+const reconnectLookupMissAt = new Map<string, number>();
+const RECONNECT_LOOKUP_MISS_TTL_MS = 2_000;
+
+function locateReconnectedPresenter(
+  channelId: string,
+  userId: string,
+  orphanPeerId: string,
+): Promise<string | null> {
+  // KEYED BY WHO IS BEING LOOKED FOR, not just the channel (Farol review,
+  // PR #813): an answer about one orphaned presenter must never be handed to
+  // a lookup for another, or a session would be released to the machine
+  // where somebody else is sharing.
+  const key = `${channelId}\u0000${userId}\u0000${orphanPeerId}`;
+  const inFlight = reconnectLookupInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
+  }
+  const missAt = reconnectLookupMissAt.get(key);
+  if (missAt !== undefined && Date.now() - missAt < RECONNECT_LOOKUP_MISS_TTL_MS) {
+    return Promise.resolve(null);
+  }
+  const answer = (async () => {
+    try {
+      const [rows, liveOthers] = await Promise.all([
+        listVoicePeersInRoom(channelId),
+        liveOtherInstances(),
+      ]);
+      if (!liveOthers) {
+        return null;
+      }
+      const seat = rows.find(
+        (row) =>
+          row.peerId !== orphanPeerId &&
+          row.userId === userId &&
+          row.sharingScreen &&
+          row.canStream &&
+          !row.orphanedAt &&
+          row.instanceId !== INSTANCE_ID &&
+          liveOthers.has(row.instanceId),
+      );
+      if (!seat) {
+        const at = Date.now();
+        if (reconnectLookupMissAt.size > 64) {
+          for (const [channel, missed] of reconnectLookupMissAt) {
+            if (at - missed >= RECONNECT_LOOKUP_MISS_TTL_MS) {
+              reconnectLookupMissAt.delete(channel);
+            }
+          }
+        }
+        reconnectLookupMissAt.set(key, at);
+        return null;
+      }
+      reconnectLookupMissAt.delete(key);
+      return seat.instanceId;
+    } catch {
+      return null;
+    }
+  })();
+  reconnectLookupInFlight.set(key, answer);
+  const settle = () => {
+    if (reconnectLookupInFlight.get(key) === answer) {
+      reconnectLookupInFlight.delete(key);
+    }
+  };
+  answer.then(settle, settle);
+  return answer;
 }
 
 /** One pending look per channel, keeping whichever is due soonest. */
@@ -2551,6 +2810,41 @@ export function liveHlsFrameChanged(
     (prev?.cameraHlsUrl ?? null) !== (next?.cameraHlsUrl ?? null) ||
     (prev?.mode ?? null) !== (next?.mode ?? null) ||
     (prev?.partTargetMs ?? null) !== (next?.partTargetMs ?? null)
+  );
+}
+
+/**
+ * Whether the AUDIENCE is still owed the camera slot of the session it is
+ * watching: the stream it was last told (`hlsAudience.stream`) and the one
+ * the reconcile just answered are the same session and disagree about the
+ * camera.
+ *
+ * `liveHlsFrameChanged(prev, next)` alone cannot see this, and that is the
+ * bug this exists for. `prev` is read from the room's own map, and the camera
+ * reconcile mutates that map in the queue link AFTER the push that caused it
+ * has already sent its frame, so from the next push on, `prev` and `next`
+ * both carry the camera and nothing is ever sent. A viewer got the webcam
+ * only when an unrelated push happened to straddle the camera start: busy
+ * parties mostly, quiet ones never (2026-09-25 LL rehearsal, one viewer).
+ * The camera reconcile now asks for a push when the slot moves
+ * (`reconcileCameraEgress` in `hls-egress.ts`), and this is what makes that
+ * push actually say something.
+ *
+ * Same session only. A different `startedAt` is a new session, which
+ * `liveHlsFrameChanged` already sends; and a null on either side is a start
+ * or an end, likewise.
+ */
+export function liveHlsCameraUntold(
+  told: LiveHlsStream | null,
+  next: LiveHlsStream | null,
+): boolean {
+  if (!told || !next || told.startedAt !== next.startedAt) {
+    return false;
+  }
+  return (
+    (told.cameraHlsUrl ?? null) !== (next.cameraHlsUrl ?? null) ||
+    (told.cameraHasVideo ?? true) !== (next.cameraHasVideo ?? true) ||
+    (told.cameraHasVoiceAudio ?? false) !== (next.cameraHasVoiceAudio ?? false)
   );
 }
 
@@ -2699,7 +2993,69 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (over && prev && sharing) {
     logWatchPartyOverStop(voiceChannelId, sharing.id);
   }
+  // THE PRESENTER'S SEAT HERE IS AN ORPHAN AND THE SAME PERSON IS SHARING ON
+  // THE OTHER MACHINE: a reconnect that could not resume (a fresh peer id)
+  // landed there. The orphan still counts as the sharer here for its whole
+  // resume window, so without this the broadcast sat frozen on this machine
+  // for up to that window while the machine with the presenter stood down,
+  // and then ended for a new session. Hand it over now; the new owner's
+  // adoption recognises the person and keeps the session (the LL remux is
+  // rebound in place, `rebindLlSession` in `hls-remux.ts`).
+  if (
+    sharing &&
+    !over &&
+    prev &&
+    sharing.orphanedAt !== undefined &&
+    prev.presenterPeerId === sharing.id &&
+    registryOn()
+  ) {
+    const target = await locateReconnectedPresenter(voiceChannelId, sharing.userId, sharing.id);
+    if (target) {
+      const released = await releaseLiveHlsSession({
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        toInstanceId: target,
+        presenterPeerId: prev.presenterPeerId,
+        stillAbsent: () => {
+          const now = pickHlsSharer(getRoomPeers(voiceChannelId));
+          return !now || now.orphanedAt !== undefined;
+        },
+      });
+      if (released) {
+        logEvent("voice.hlsPresenterReconnectedElsewhere", {
+          channelId: voiceChannelId,
+          startedAt: prev.startedAt,
+          from: sharing.id,
+          toInstanceId: target,
+        });
+        hlsSessionMoves.handedOver += 1;
+        relayHlsReconcile(voiceChannelId, Date.now(), true);
+        return;
+      }
+    }
+  }
   if (sharing) {
+    const wasAway = noSharerSince.get(voiceChannelId);
+    const last = lastPresenterByChannel.get(voiceChannelId);
+    if (
+      wasAway !== undefined &&
+      prev &&
+      last &&
+      last.peerId === prev.presenterPeerId &&
+      last.peerId !== sharing.id
+    ) {
+      // Narrated either way: the reconcile below decides what it means (the
+      // same person continues the session, anybody else starts a new one).
+      logEvent("voice.hlsPresenterReturned", {
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        from: last.peerId,
+        to: sharing.id,
+        samePerson: last.userId === sharing.userId,
+        awayMs: Date.now() - wasAway,
+      });
+    }
+    rememberPresenter(voiceChannelId, sharing.id, sharing.userId);
     noSharerSince.delete(voiceChannelId);
     clearSharerRecheck(voiceChannelId);
     sharerHeldReason.delete(voiceChannelId);
@@ -2799,13 +3155,50 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       );
       return;
     }
-    const grace = noSharerGraceMs();
+    // THE PRESENTER'S RETURN WINDOW (`presenterReturnGraceMs`): a presenter
+    // who left or stopped sharing in a party that is not over is waited for,
+    // not just the five-second blink. Known only for a presenter this
+    // process saw share; anything else keeps the short grace.
+    const last = lastPresenterByChannel.get(voiceChannelId);
+    const returnGrace =
+      last && last.peerId === prev.presenterPeerId ? presenterReturnGraceMs() : 0;
+    const grace = Math.max(noSharerGraceMs(), returnGrace);
     if (grace > 0 && now - since < grace) {
+      if (returnGrace > noSharerGraceMs() && sharerHeldReason.get(voiceChannelId) !== "presenter-return") {
+        sharerHeldReason.set(voiceChannelId, "presenter-return");
+        logEvent("voice.hlsPresenterReturnHeld", {
+          channelId: voiceChannelId,
+          startedAt: prev.startedAt,
+          presenterPeerId: prev.presenterPeerId,
+          graceMs: returnGrace,
+        });
+      }
       // Nothing else will look again: the sharer going away is the last event
       // this channel produces until somebody does something. So the grace has
-      // to wake itself up.
-      scheduleSharerRecheck(voiceChannelId, since + grace + 100 - now);
+      // to wake itself up. Looked at every few seconds inside a long return
+      // window, so a presenter who came back on the OTHER machine is found
+      // and handed the session well before the window closes.
+      // A presenter returning on the OTHER machine reaches this one at once
+      // (the machine holding them relays a reconcile to the owner), so the
+      // look inside a long window is only a backstop, and a sparse one: every
+      // RETURN_RECHECK_MS, not every few seconds for the whole minute
+      // (Farol review, PR #817).
+      scheduleSharerRecheck(
+        voiceChannelId,
+        Math.min(
+          since + grace + 100 - now,
+          returnGrace > noSharerGraceMs() ? RETURN_RECHECK_MS : SHARER_RECHECK_MS,
+        ),
+      );
       return;
+    }
+    if (returnGrace > noSharerGraceMs()) {
+      logEvent("voice.hlsPresenterReturnExpired", {
+        channelId: voiceChannelId,
+        startedAt: prev.startedAt,
+        presenterPeerId: prev.presenterPeerId,
+        graceMs: returnGrace,
+      });
     }
     noSharerSince.delete(voiceChannelId);
     clearSharerRecheck(voiceChannelId);
@@ -2825,15 +3218,22 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     // between and no way to tell why. It is a map read (see
     // `hlsServerIdFor`), so the lookup was never worth the ambiguity.
     const serverId = await hlsServerIdFor(voiceChannelId);
-    const next = await reconcileLiveHls(
+    const reconciled = await reconcileLiveHls(
       voiceChannelId,
       sharer?.id ?? null,
       serverId,
       sharer?.sourceHeight ?? null,
     );
-    if (!liveHlsFrameChanged(prev, next)) {
+    if (
+      !liveHlsFrameChanged(prev, reconciled) &&
+      !liveHlsCameraUntold(hlsAudience.stream(voiceChannelId), reconciled)
+    ) {
       return;
     }
+    // The person as well as the peer, on the copy every consumer below keeps
+    // (`hlsAudience`, the bus): the other machine has no record of who shared
+    // here, and it is the one serving most of the audience.
+    const next = reconciled ? withPresenterUser(voiceChannelId, reconciled) : null;
     // STAMPED HERE, BEFORE THE FAN-OUT'S AWAITS. `publishChannelLive` used to
     // read the clock when it ran, which is after this function has awaited
     // the audience: a start and a stop reconciling at once could then publish
@@ -2849,7 +3249,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       send(peer.socket, {
         type: "voice-stream",
         channelId: voiceChannelId,
-        stream: next ? stampViewerStream(next, peer.userId) : null,
+        stream: next ? viewerStreamFor(voiceChannelId, next, peer.userId) : null,
       });
       peersTold += 1;
     }
@@ -2931,7 +3331,43 @@ setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
   if (watchPartyKnownOver(channelId)) {
     return false;
   }
-  return pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId;
+  // A presenter being waited for (`presenterReturnGraceMs`) is still this
+  // session's presenter: the media path must not end the session under the
+  // hold (a ladder whose egress died because the share went away would
+  // otherwise read "presenter gone" and stop).
+  return (
+    pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId ||
+    presenterReturnHeld(channelId, presenterPeerId)
+  );
+});
+
+// Which person a peer is, so a presenter who came back under a fresh peer id
+// (a reconnect that could not resume) keeps their party's session: the ladder
+// restarts in place instead of minting a new one (`samePresenterPerson`).
+// Only this process's own peers: a presenter the egress process is about to
+// restart for has to be seated here for it to be reconciling at all.
+setLiveHlsPresenterIdentity(
+  (channelId, peerId) => peers.get(peerId)?.userId ?? lastPresenterUserOf(channelId, peerId),
+);
+
+// Which person a peer is, so an LL presenter who came back under a fresh peer
+// id (a reconnect that could not resume) keeps their party's session: the
+// remux box is told to follow the new identity (`rebindLlSession` in
+// `hls-remux.ts`) instead of the session being replaced.
+setLlPresenterIdentity((channelId, peerId) => {
+  const local = peers.get(peerId)?.userId ?? lastPresenterUserOf(channelId, peerId);
+  if (local) {
+    return local;
+  }
+  // The presenter's previous socket may have been on the other machine
+  // (a reconnect that landed here during a rolling deploy): its row is
+  // held in the registry for the resume window.
+  if (!registryOn()) {
+    return null;
+  }
+  return getVoicePeerRow(peerId)
+    .then((row) => row?.userId ?? null)
+    .catch(() => null);
 });
 
 /**
@@ -3378,7 +3814,7 @@ function channelLiveFrameWith(
   return {
     type: "channel-live",
     channelId,
-    stream: stream ? stampViewerStream(stream, userId) : null,
+    stream: stream ? viewerStreamFor(channelId, stream, userId) : null,
     watching: hlsAudience.count(channelId),
     ...(stream === null && known ? { ended: true } : {}),
   };
@@ -4316,7 +4752,7 @@ async function remintHlsAudienceTokens(
       send(socket, {
         type: "channel-live",
         channelId,
-        stream: stampViewerStream(stream, user.id),
+        stream: viewerStreamFor(channelId, stream, user.id),
         watching: hlsAudience.count(channelId),
       });
       hlsTokenRemint.tokens += 1;
@@ -4930,6 +5366,21 @@ function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
   }
 }
 
+/**
+ * Somebody hung up on purpose: `leave-voice-room`, or the tab-close beacon.
+ * Everything `removePeer` does, plus the one thing a reconnect must not do:
+ * an unanswered ring in a call that is now empty ends within
+ * `CALL_HANGUP_CONFIRM_MS`, not after the empty-room grace (see
+ * `endRingOnHangup`).
+ */
+function hangUpPeer(peerId: string): void {
+  const voiceChannelId = peers.get(peerId)?.voiceChannelId;
+  removePeer(peerId);
+  if (voiceChannelId) {
+    endRingOnHangup(voiceChannelId);
+  }
+}
+
 function removePeer(peerId: string) {
   const peer = peers.get(peerId);
   if (!peer) {
@@ -4992,7 +5443,10 @@ function removePeer(peerId: string) {
     peerId,
     userId: peer.userId,
     voiceChannelId,
-    roomSize: getLiveRoomPeers(voiceChannelId).length,
+    // This instance's live seats left in the room, NOT the room: with the
+    // registry on, seats held on another machine are not in this map (see
+    // the `voice.join` log for the cluster-wide count).
+    localPeers: getLiveRoomPeers(voiceChannelId).length,
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId, { kind: "left", peerId });
@@ -5227,7 +5681,7 @@ export async function leaveVoiceByResumeToken(
     ) {
       return false;
     }
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
   if (!registryOn()) {
@@ -5258,10 +5712,10 @@ export async function leaveVoiceByResumeToken(
   // The row may have come home while the read was out (a resume landed
   // here); the map is exact for what this process holds.
   if (peers.has(resumePeerId)) {
-    removePeer(resumePeerId);
+    hangUpPeer(resumePeerId);
     return true;
   }
-  releaseForeignPeer(row, "beacon");
+  releaseForeignPeer(row, "beacon", { hangup: true });
   return true;
 }
 
@@ -5276,7 +5730,11 @@ export async function leaveVoiceByResumeToken(
  * orphan timer would fire later and announce a departure the room already
  * saw.
  */
-function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
+function releaseForeignPeer(
+  row: VoicePeerRow,
+  reason: string,
+  { hangup = false }: { hangup?: boolean } = {},
+): void {
   const { peerId, channelId } = row;
   trackRowWrite(channelId, peerId, () =>
     deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
@@ -5286,7 +5744,7 @@ function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
     peerId,
     userId: row.userId,
     voiceChannelId: channelId,
-    roomSize: getLiveRoomPeers(channelId).length,
+    localPeers: getLiveRoomPeers(channelId).length,
     foreign: true,
     reason,
   });
@@ -5295,6 +5753,9 @@ function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
       channelId,
       kind: "adopted",
       peerId,
+      // The owner holds the ring, if there is one; this tells it the seat
+      // went because its person hung up, not because a resume moved it.
+      ...(hangup ? { hangup: true } : {}),
     } satisfies VoiceRoomFrame);
   }
   broadcastToRoom(channelId, { type: "peer-left", peerId });
@@ -5460,10 +5921,11 @@ export async function runVoiceReconcile(): Promise<{
  * read), and from that moment every phone build already in the field stops
  * leaving mesh ghosts, with no app update and no client deploy.
  *
- * Read per call, never cached: a restart is the only other way it changes.
+ * Runtime flag `voice_mesh_resume_requires_cap` (`lib/flags.ts`), with the
+ * variable as its default: flipping it is a dashboard click, no restart.
  */
 function meshResumeRequiresCap(): boolean {
-  return process.env.VOICE_MESH_RESUME_REQUIRES_CAP === "true";
+  return isEnabled("voice_mesh_resume_requires_cap");
 }
 
 /**
@@ -5900,6 +6362,9 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
+  reconnectLookupMissAt.clear();
+  lastPresenterByChannel.clear();
+  presenterPeopleByChannel.clear();
   resetRosterSequences();
   hlsAudience.reset();
   for (const peer of peers.values()) {
@@ -6221,10 +6686,6 @@ export function voiceChannelAccessCacheStats(): {
 }
 
 /**
- * Send current voice occupancy to a newly authenticated socket — but only for
- * the rooms this user is allowed to see.
- */
-/**
  * Every room's roster from this process's memory (`sentRosters`, with the
  * events queued since replayed, not consumed: the coalesced run still owns
  * the queue), for a socket that connects while the rows cannot be read.
@@ -6248,7 +6709,54 @@ function rostersFromMemory(now = Date.now()): Map<string, VoiceParticipant[]> {
   return rooms;
 }
 
-export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
+/**
+ * Send current voice occupancy to a newly authenticated socket — but only for
+ * the rooms this user is allowed to see. Also the live streams and the music
+ * rows those rooms carry.
+ *
+ * `channelIds` narrows all of it to one server's channels, for a socket whose
+ * account just became a member there (`catchUpNewMembership` in
+ * `ws/index.ts`). Without it the socket would hold nothing for that server's
+ * rooms until each one next changed, and a delta for a room it holds nothing
+ * for reads as a gap until the next keyframe. Narrowed at the source, not on
+ * the way out: the registry read, this process's peers, the live streams and
+ * the music rows are each enumerated for those channels only.
+ *
+ * `target` may be several sockets of the SAME account (what the frames say
+ * depends on `user.id` alone), so the rooms are read and the access checks
+ * run once for all of them. A socket whose send throws is skipped and the
+ * rest still get the frame.
+ */
+export async function sendAllVoiceRosters(
+  target: WebSocket | readonly WebSocket[],
+  user: DbUser,
+  options: { channelIds?: ReadonlySet<string> } = {},
+) {
+  const sockets: readonly WebSocket[] = Array.isArray(target)
+    ? (target as readonly WebSocket[])
+    : [target as WebSocket];
+  /** Sends to every open target; answers how many it reached. */
+  const sendToTargets = (message: VoiceSignalingMessage): number => {
+    let payload: string | null = null;
+    let reached = 0;
+    for (const socket of sockets) {
+      if (socket.readyState !== 1) {
+        continue;
+      }
+      try {
+        payload ??= JSON.stringify(message);
+        socket.send(payload);
+        reached += 1;
+      } catch (error) {
+        // A socket that died between the check and the send is the close
+        // handler's problem; the account's other sockets still get theirs.
+        console.error("[voice] catch-up send failed:", error);
+      }
+    }
+    return reached;
+  };
+  const channelIds = options.channelIds;
+  const wanted = (channelId: string) => !channelIds || channelIds.has(channelId);
   const rooms = new Map<
     string,
     {
@@ -6272,7 +6780,10 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   if (registryOn()) {
     try {
       await Promise.all([...pendingRowWrites.values()]);
-      for (const row of await listVoiceRosters()) {
+      const rows = channelIds
+        ? await listVoiceRosters({ channelIds: [...channelIds] })
+        : await listVoiceRosters();
+      for (const row of rows) {
         const room = roomOf(row.channelId);
         room.transport = row.transport;
         noteRemoteTransport(row.channelId, row.transport);
@@ -6291,6 +6802,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       // during a database outage must not be told the other machine's
       // seats are empty.
       for (const [voiceChannelId, participants] of rostersFromMemory()) {
+        if (!wanted(voiceChannelId)) {
+          continue;
+        }
         const room = roomOf(voiceChannelId);
         for (const participant of participants) {
           room.participants.set(participant.peerId, participant);
@@ -6300,6 +6814,9 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
     }
   }
   for (const peer of peers.values()) {
+    if (!wanted(peer.voiceChannelId)) {
+      continue;
+    }
     const room = roomOf(peer.voiceChannelId);
     room.participants.set(peer.id, toParticipant(peer));
     room.orphaned.set(peer.id, peer.orphanedAt !== undefined);
@@ -6324,7 +6841,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         console.error("[voice] roster membership check failed:", error);
         return;
       }
-      send(socket, {
+      sendToTargets({
         type: "voice-roster",
         voiceChannelId,
         participants: collapseOrphanedDuplicates(
@@ -6367,7 +6884,13 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   // having learned something newer than the snapshot: re-read it, and say
   // `ended` rather than shipping a session that is over or an unknown null
   // the client is now written to ignore.
-  const live = hlsAudience.liveChannels().map((channelId) => ({
+  //
+  // Scoped to one server, the server's own channels are asked instead of
+  // walking every live stream on the process.
+  const liveIds = channelIds
+    ? [...channelIds].filter((channelId) => hlsAudience.stream(channelId) !== null)
+    : hlsAudience.liveChannels();
+  const live = liveIds.map((channelId) => ({
     channelId,
     stream: hlsAudience.stream(channelId),
     generation: streamGeneration.get(channelId) ?? 0,
@@ -6387,8 +6910,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       const stream = moved
         ? hlsAudience.stream(entry.channelId)
         : entry.stream;
-      send(
-        socket,
+      hlsAudienceFramesSent.frames += sendToTargets(
         // A null this process installed itself is an answer, not silence.
         channelLiveFrameWith(
           entry.channelId,
@@ -6397,16 +6919,18 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
           stream !== null || moved,
         ),
       );
-      hlsAudienceFramesSent.frames += 1;
     }),
   );
   // And every room with music this user may view, for the sidebar row.
   // Off the audience cache (`getChannelAudience`, one query per channel per
   // TTL, shared by every socket), not one access query per socket per room.
-  for (const channelId of musicChannels()) {
+  const musicIds = channelIds
+    ? [...channelIds].filter((channelId) => getMusicState(channelId) !== null)
+    : musicChannels();
+  for (const channelId of musicIds) {
     const audience = await getChannelAudience(channelId).catch(() => null);
     if (audience?.has(user.id)) {
-      send(socket, await channelMusicFrame(channelId));
+      sendToTargets(await channelMusicFrame(channelId));
     }
   }
 }
@@ -6548,10 +7072,16 @@ function adoptMusicFromRow(
   }
 }
 
+/**
+ * Returns how many OTHER live peers the welcome listed. With the registry on
+ * that is the whole room across every instance (the rows), which is the only
+ * honest room size a join log can report: this process's own map holds just
+ * the seats whose sockets landed here.
+ */
 async function welcomeVoicePeer(
   peer: VoicePeer,
   resumed: boolean,
-): Promise<void> {
+): Promise<number> {
   const transport = getRoomTransport(peer.voiceChannelId);
   const resumeToken = mintVoiceResumeToken({
     userId: peer.userId,
@@ -6678,7 +7208,7 @@ async function welcomeVoicePeer(
     send(peer.socket, {
       type: "voice-stream",
       channelId: peer.voiceChannelId,
-      stream: stampViewerStream(liveStream, peer.userId),
+      stream: viewerStreamFor(peer.voiceChannelId, liveStream, peer.userId),
     });
   }
 
@@ -6689,6 +7219,7 @@ async function welcomeVoicePeer(
   );
   noteConversationCallJoin(peer.voiceChannelId, peer.userId);
   await broadcastRoster(peer.voiceChannelId, { kind: "joined", peer: self });
+  return existingPeers.length;
 }
 
 async function reattachVoicePeer(
@@ -7690,7 +8221,17 @@ export async function handleVoiceMessage(
           resume.kind === "reconstruct" || resume.kind === "adopt"
             ? "resume"
             : (openingRegion?.reason ?? "adopted"),
+        // Same meaning as on `voice.transportPinned`: the row decided first.
+        adopted: pinPredatesThisJoin,
         country: socketCountry(socket),
+        // The server tally behind `server-majority` / `server-mixed`.
+        ...(openingRegion?.sample && resume.kind === "cold"
+          ? {
+              share: Math.round(openingRegion.sample.share * 100) / 100,
+              sample: openingRegion.sample.total,
+              byRegion: openingRegion.sample.byRegion,
+            }
+          : {}),
       });
     }
     if (!wasPinned) {
@@ -7704,6 +8245,12 @@ export async function handleVoiceMessage(
           resume.kind === "reconstruct" || resume.kind === "adopt"
             ? "resume"
             : opening?.reason,
+        // True when `voice_rooms` already held the pin (another machine, or
+        // this one before a restart, opened the room): this line is then the
+        // local copy of that decision, not a second one. `reason` is still
+        // this join's own opinion, which the stored pin agreed with or
+        // overrode (`voice.transportAdopted`).
+        adopted: pinPredatesThisJoin,
       });
     }
     // Connected: a peer is seated (a fresh join or a resume reattaching a
@@ -7723,33 +8270,43 @@ export async function handleVoiceMessage(
     // repeat (the in-process memo skips the DB after this user's first join),
     // which matters on the path a watch party runs several hundred times a night.
     await recordActivationStep(user.id, "first_voice");
-    logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
-      peerId,
-      userId: user.id,
-      voiceChannelId: payload.voiceChannelId,
-      roomSize: getRoomPeers(payload.voiceChannelId).length,
-      resumed: resume.kind === "reconstruct" || resume.kind === "adopt",
-    });
+    // Read before the welcome's awaits, so it is the map this join landed in.
+    const localPeers = getRoomPeers(payload.voiceChannelId).length;
     // After the pin so the row carries the room's transport. For an adopted
     // seat this re-writes the row the adopt just claimed with the same
     // content plus whatever the permission re-check changed.
     writePeerRow(peer);
 
-    await welcomeVoicePeer(
+    const othersWelcomed = await welcomeVoicePeer(
       peer,
       resume.kind === "reconstruct" || resume.kind === "adopt",
     );
+    // TWO NUMBERS, BECAUSE ONE OF THEM USED TO BE MISREAD. This line said
+    // `roomSize=` and counted this process's map, so with two API machines a
+    // host on one and a co-host on the other both logged `roomSize=1` while
+    // sharing one room, one roster and one LiveKit room (2026-09-26, channel
+    // 318a0954). `localPeers` is this instance's seats in the room, this one
+    // included; `roomPeers` is the room the joiner was just welcomed into,
+    // read from the rows when the registry is on, so it spans machines.
+    logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
+      peerId,
+      userId: user.id,
+      voiceChannelId: payload.voiceChannelId,
+      localPeers,
+      roomPeers: othersWelcomed + 1,
+      resumed: resume.kind === "reconstruct" || resume.kind === "adopt",
+    });
     return;
   }
 
   if (payload.type === "leave-voice-room") {
     if (existingPeerId) {
-      removePeer(existingPeerId);
+      hangUpPeer(existingPeerId);
       return;
     }
     for (const peer of peers.values()) {
       if (peer.socket === socket) {
-        removePeer(peer.id);
+        hangUpPeer(peer.id);
         return;
       }
     }
@@ -8536,8 +9093,31 @@ export const CALL_RING_TIMEOUT_MS = 45_000;
  * moment, and a flappy caller network can empty it for a few seconds; killing
  * the ring on the first empty read would turn every caller hiccup into a
  * "missed call" that nobody missed.
+ *
+ * Only for rooms that emptied by accident. A deliberate hangup
+ * (`leave-voice-room`, the tab-close beacon) is never a reconnect, and every
+ * client sends it only when the person meant to leave, so it gets the much
+ * shorter `CALL_HANGUP_CONFIRM_MS` instead: otherwise the callee keeps
+ * ringing for five seconds after the caller gave up, and answering in that
+ * window puts them alone in an empty call.
  */
 export const CALL_EMPTY_ROOM_GRACE_MS = 5_000;
+
+/**
+ * How long a ring outlives a deliberate hangup that left the call empty.
+ *
+ * Not a reconnect grace: a hangup is never followed by a rejoin of the same
+ * seat. It is the window for a join that is ALREADY IN FLIGHT when the
+ * hangup lands. A join does a run of awaited checks before it seats anybody,
+ * and on the other machine its row, or its `answered` frame, reaches the
+ * ring's owner later still. An empty read taken the instant the caller left
+ * would miss that join, cancel the ring under the callee who is picking up,
+ * and post a missed call for a call they answered. The seat lands in tens of
+ * milliseconds in practice; one second is that with a wide margin, and still
+ * a fifth of the reconnect grace. A join slower than this lands alone in the
+ * room, which is exactly what one landing after the grace did before.
+ */
+export const CALL_HANGUP_CONFIRM_MS = 1_000;
 
 /** What the missed-call record says. Stored as a normal message body. */
 export const MISSED_CALL_BODY = "📞 Missed call";
@@ -8936,13 +9516,65 @@ function declineRing(conversationId: string, userId: string): boolean {
  * The room emptied here. After the grace period, an unanswered ring dies
  * with it. With the registry on the expiry check reads the rows as well,
  * because the caller may have come back on the other machine: an empty
- * local room is not an empty call.
+ * local room is not an empty call. A deliberate hangup does not wait this
+ * long; `endRingOnHangup` swaps this timer for `CALL_HANGUP_CONFIRM_MS`.
  */
 function noteVoiceRoomEmptied(voiceChannelId: string) {
   const ring = conversationRings.get(voiceChannelId);
   if (!ring || ring.emptyRoomTimer) {
     return;
   }
+  armEmptyRoomTimer(ring, voiceChannelId, CALL_EMPTY_ROOM_GRACE_MS, "grace");
+}
+
+/**
+ * The room emptied because somebody hung up, so the ring ends after
+ * `CALL_HANGUP_CONFIRM_MS` rather than after the reconnect grace. The one
+ * timer does both jobs, which is what keeps the edges right: any join, a
+ * callee answering from either machine or the caller dialling again, clears
+ * it in `answerRing` exactly as it clears the grace.
+ *
+ * Nobody in the room means nobody at all, orphans included: a seat held for
+ * its resume window is still in the call, so the grace timer
+ * `noteVoiceRoomEmptied` already armed keeps deciding that case as before.
+ */
+function endRingOnHangup(voiceChannelId: string): void {
+  const ring = conversationRings.get(voiceChannelId);
+  if (!ring || getRoomPeers(voiceChannelId).length > 0) {
+    return;
+  }
+  if (ring.emptyRoomTimer) {
+    clearTimeout(ring.emptyRoomTimer);
+  }
+  armEmptyRoomTimer(ring, voiceChannelId, CALL_HANGUP_CONFIRM_MS, "hangup");
+}
+
+/**
+ * When the timer fires, the ring ends if the call is still empty: nobody in
+ * this process's map and, with the registry on, no row on any machine.
+ *
+ * The two kinds differ when the rows do not say "empty":
+ *
+ * | read      | `grace` (the full five seconds) | `hangup` (the short window) |
+ * |-----------|---------------------------------|-----------------------------|
+ * | no rows   | ends the ring                   | ends the ring               |
+ * | rows      | keeps it (somebody is there)    | falls back to the grace     |
+ * | failed    | ends the ring                   | falls back to the grace     |
+ *
+ * The grace column is what it has always been. A hangup's short window is
+ * only allowed to END a ring early, never to decide it lives on: a failed
+ * read, or a row that may be stale (a tab-close beacon on the other machine
+ * retires the seat there, and that machine's delete can still be in flight
+ * when this read runs), gets a second read at the grace. So the worst case
+ * after a hangup is the old five seconds of ringing, never a ring left up
+ * until it times out.
+ */
+function armEmptyRoomTimer(
+  ring: ConversationRing,
+  voiceChannelId: string,
+  delayMs: number,
+  kind: "grace" | "hangup",
+): void {
   ring.emptyRoomTimer = setTimeout(() => {
     ring.emptyRoomTimer = null;
     if (getRoomPeers(voiceChannelId).length > 0) {
@@ -8952,19 +9584,41 @@ function noteVoiceRoomEmptied(voiceChannelId: string) {
       void endConversationRing(voiceChannelId, "cancelled");
       return;
     }
-    void listVoicePeersInRoom(voiceChannelId)
-      .catch(() => [])
-      .then((rows) => {
-        if (
-          rows.length === 0 &&
-          getRoomPeers(voiceChannelId).length === 0 &&
-          conversationRings.get(voiceChannelId) === ring &&
-          ring.emptyRoomTimer === null
-        ) {
-          void endConversationRing(voiceChannelId, "cancelled");
-        }
-      });
-  }, CALL_EMPTY_ROOM_GRACE_MS);
+    const stillEmptyAndOurs = () =>
+      getRoomPeers(voiceChannelId).length === 0 &&
+      conversationRings.get(voiceChannelId) === ring &&
+      ring.emptyRoomTimer === null;
+    const end = () => {
+      if (stillEmptyAndOurs()) {
+        void endConversationRing(voiceChannelId, "cancelled");
+      }
+    };
+    const restOfGrace = () => {
+      if (stillEmptyAndOurs()) {
+        armEmptyRoomTimer(
+          ring,
+          voiceChannelId,
+          CALL_EMPTY_ROOM_GRACE_MS - CALL_HANGUP_CONFIRM_MS,
+          "grace",
+        );
+      }
+    };
+    // Every outcome, spelled out per kind (the table above). The only one
+    // that leaves the ring alone is a grace read that found somebody.
+    const onRows = kind === "hangup" ? restOfGrace : () => undefined;
+    const onFailure = kind === "hangup" ? restOfGrace : end;
+    // A hangup's own row delete may still be queued; read after it lands.
+    const read =
+      kind === "hangup"
+        ? settledRowWrites(voiceChannelId).then(() =>
+            listVoicePeersInRoom(voiceChannelId),
+          )
+        : listVoicePeersInRoom(voiceChannelId);
+    void read.then(
+      (found) => (found.length > 0 ? onRows() : end()),
+      onFailure,
+    );
+  }, delayMs);
 }
 
 /** Remove the ring without any missed-call record (it was answered). */
@@ -10046,11 +10700,18 @@ const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
     peer: voiceParticipantSchema,
   }),
   z.object({ channelId: z.string().uuid(), kind: z.literal("roster") }),
-  /** Another instance answers for this peer id now: forget it, say nothing. */
+  /**
+   * Another instance answers for this peer id now: forget it, say nothing.
+   * `hangup` when it went because its person hung up (the tab-close beacon
+   * landed on the other machine), so a ring this instance owns ends as it
+   * would for a hangup here. Optional: a machine on an older build sends
+   * none, and the ring then gets the grace, as it did before.
+   */
   z.object({
     channelId: z.string().uuid(),
     kind: z.literal("adopted"),
     peerId: z.string().min(1),
+    hangup: z.boolean().optional(),
   }),
 ]);
 type VoiceRoomFrame = z.infer<typeof voiceRoomFrameSchema>;
@@ -10512,6 +11173,9 @@ subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
       noteClusterFrameReceived();
     }
     dropVoicePeerSilently(frame.peerId);
+    if (frame.hangup) {
+      endRingOnHangup(frame.channelId);
+    }
     return;
   }
   if (getRoomPeers(frame.channelId).length > 0) {
@@ -10740,7 +11404,9 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
     send(peer.socket, {
       type: "voice-stream",
       channelId: frame.channelId,
-      stream: frame.stream ? stampViewerStream(frame.stream, peer.userId) : null,
+      stream: frame.stream
+        ? viewerStreamFor(frame.channelId, frame.stream, peer.userId)
+        : null,
     });
     sent += 1;
   }

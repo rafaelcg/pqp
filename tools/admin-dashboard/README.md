@@ -4,8 +4,9 @@ One static page (`site/index.html`) and one small Cloudflare Worker
 (`src/index.ts`) in front of it, deployed as the existing `pqp-admin` Worker at
 `https://pqp-admin.rafaelcg-a0a.workers.dev/`.
 
-A view of the hosted instance for the person running it, plus **two controls**
-that write. It is not part of the product and it is not linked from anywhere.
+A view of the hosted instance for the person running it, plus the **controles**
+section, the only part of the page that writes. It is not part of the product
+and it is not linked from anywhere.
 
 ## What it shows
 
@@ -131,24 +132,80 @@ read as nine equals.
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
-| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The rail carries a count badge when anything is open |
+| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
 ### controles: the only part of this page that writes
 
-Two levers, and deliberately only two. Both existed before and neither could
-be reached by the person running the event: one was a Fly environment
+A handful of levers. The first two existed before this dashboard and neither
+could be reached by the person running the event: one was a Fly environment
 variable, the other was a column you changed with hand-written SQL against
 production.
 
 | Control | What it writes | When it takes effect |
 |---|---|---|
 | **watch party por servidor** | `servers.live_hls_enabled` | the next join, the next share, the next config read. No deploy, no restart, no socket closed |
+| **baixa latência por servidor** | `servers.live_hls_ll_enabled` | same as above: the next config read. A separate switch, because low latency and watch party availability are two different questions and a server can follow the environment on one while the operator decided the other |
 | **caminho de mídia por canal** | `channels.voice_transport` | the next room that opens in that channel. A call already running is not moved |
 
 Above them, **o que está no ar**: how many transcodes this process is running
-(from `/metrics`, so it moves on the 30-second poll), and how many servers
-have been decided either way (from `/operator/servers`).
+(from `/metrics`, so it moves on the 30-second poll), how many servers have
+been decided either way (from `/operator/servers`), and the waitlist headline
+(see below).
+
+### lista de espera: turning "somebody asked" into "somebody can now stream"
+
+First section in the pane, because opening **controles** during a launch is,
+in practice, opening this table before anything else. It is `GET
+/api/admin/watch-party-waitlist` (proxied as `/operator/watch-party-waitlist`,
+same machine token, no query forwarded), one row per server that has at least
+one waitlist row, waiting servers first and then biggest.
+
+Each row carries: the server's name and member count, a **comunidade** tag
+when it is one, the newest twenty **pedidos** with a "+N mais antigos" line
+when there are more (who asked, the audience bucket they picked, an optional
+note, an optional stream channel shown as a link only when it is exactly one
+`twitch.tv/<name>` or `kick.com/<name>`, otherwise plain text), **interesse**
+(how many members said they would watch without asking to host), **público**
+(the audience-bucket histogram as one line, biggest group first), the
+server's **status** (`esperando` / `liberado` / `recusado`), and **desde**
+(when the first request landed). Above the table: totals for waiting,
+approved and declined, plus how many people expressed interest with no server
+at all (`serverless`).
+
+Two actions, both only on a waiting row:
+
+| Click | What it does | Confirmed |
+|---|---|---|
+| **Ativar** | `PUT /operator/server-live-hls` with `{ enabled: true, lowLatency: true }`, the exact same write **ligar** makes below, plus low latency. The API approves and notifies that server's waiting requests as a side effect of the write, not of this button | **yes**, names the server and says the list gets notified |
+| **Recusar** | `PUT /operator/watch-party-waitlist-decline` with `{ serverId }`. Marks that server's waiting rows `declined`. Nobody is notified | **yes**, names the server and says nobody is notified |
+
+**Approval follows what the server can actually do.** The API approves the
+waiting rows only when the write leaves the server effectively on
+(`resolveLiveHlsForServer`): with `LIVE_HLS_ENABLED` off nobody is told
+"liberada", and the next flip after the master comes on approves them. Both
+waitlist buttons take the same lock as the server table's buttons, so an
+**Ativar** in flight and a **desligar** on the same server cannot race.
+
+**Ativar is not a separate lever.** It exists so an operator working the
+waitlist never has to leave this table to find the server again in **watch
+party por servidor**; the write it makes and the write **ligar** makes are the
+same route with the same body shape, so the two tables cannot drift into
+disagreeing about a server's state.
+
+Loaded when the section opens, after **Ativar** or **Recusar**, and on its own
+**atualizar** button (or the page's own, in the header, once the section has
+been opened at all), same rules as **watch party por servidor** below it: no
+30-second poll, a write disables its own row, and the row is redrawn from the
+API's reply. Server side: `server/src/services/watch-party-waitlist.ts`,
+`OPERATOR_WAITLIST_PATH` / `OPERATOR_WAITLIST_DECLINE_PATH`.
+
+`GET /api/admin/metrics` also carries `watchPartyWaitlist`
+(`joinsTotal` / `joins7d` / `requestsTotal` / `interestTotal` /
+`serversWaiting` / `approvedTotal`), null when an API is older than the field.
+**o que está no ar** shows the headline from it: how many requests are
+waiting, across how many servers, and how many people joined the waitlist in
+the last 7 days.
 
 **The three states of watch party availability**, and the sentence the row
 shows for each, are in `docs/WATCH_PARTY.md` §"Widening it is a click now".
@@ -165,9 +222,12 @@ master switch and it is a deploy either way.
 | **desligar** a server with no party live | the create control goes away on the next page load | no |
 | **desligar** a server **that is streaming right now** | the egress stops at the next reconcile and **the audience loses the picture** | **yes**, a confirmation naming the server. This is the only genuinely disruptive click here |
 | **seguir a variável** | back to whatever the environment said | no |
+| **LL ligar** / **LL desligar** / **LL seguir variável** | same three states, for low latency alone. Nothing here can stop a stream that is already live, because low latency changes how a rung is transcoded, not whether one runs | no |
 | pin a channel to **ponto a ponto** | the next room there is peer-to-peer | no, except: |
 | pin a **watch party** channel to **ponto a ponto** | the next party in that room has no stream at all, and nothing on the host's screen says why | **yes**, a confirmation |
 | pin a channel to **servidor de mídia** | the next room there is on the SFU | no |
+| **Ativar** on a waitlist row | same cost as **ligar**, plus low latency, plus the waiting requests for that server are approved and their people notified | **yes**, names the server and says the list gets notified |
+| **Recusar** on a waitlist row | that server's waiting requests become `declined`. Reversible only by asking again | **yes**, names the server and says nobody is notified |
 
 Nothing on this page deletes anything, and there is no account, ban or
 moderation action on it. That is not an oversight: the machine token that
@@ -176,14 +236,20 @@ password, and `DELETE /api/admin/users/:id` is deliberately absent from
 `ADMIN_MACHINE_ROUTES` (`server/src/api/index.ts`) for exactly that reason.
 Terminating an account stays something a signed-in instance moderator does.
 
-**Every write is audited.** `audit_log` is server-scoped and both of these
-writes are about one server, so they land in that server's own log as
-`server.live_hls_update` and `channel.voice_transport_update`, with the old
-value and the new one in `changes`. The actor is **NULL** when the write came
-from this dashboard (the machine token has no account, and the schema already
-means NULL as "the system did it"); an instance moderator writing with their
-own Clerk session is recorded by id. The server's owner sees the entry, which
-is the point: it is a change to their server made from outside their staff.
+**Every write is audited, except one.** `audit_log` is server-scoped, and
+`server.live_hls_update` / `channel.voice_transport_update` land in a
+server's own log with the old value and the new one in `changes`. The low
+latency switch rides the same `server.live_hls_update` action as watch party
+availability, as its own `liveHlsLowLatency` entry in `changes`, so **Ativar**
+on a waitlist row produces one audit entry naming both fields even though it
+is one write. The actor is **NULL** when the write came from this dashboard
+(the machine token has no account, and the schema already means NULL as "the
+system did it"); an instance moderator writing with their own Clerk session is
+recorded by id. The server's owner sees the entry, which is the point: it is a
+change to their server made from outside their staff. **Recusar** is the
+exception: declining a waitlist request changes rows that belong to the
+people who asked, not to the server, so it is not server-scoped and does not
+write `audit_log`.
 
 **How the section behaves.** It does not ride the 30-second poll, because a list
 that reshuffles under the cursor is how a wrong row gets clicked. It reads
@@ -412,13 +478,25 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   payload: all human accounts that exist, not a window and not actives
 - **communities**: totals, per category, and the listed communities with member,
   channel and message counts. Gated on `COMMUNITIES_ENABLED`
-- **moderation**: report and feedback queues by status, bans, unexpired
-  timeouts, and the last eight feedback bodies (truncated by the API, never
-  attributed)
+- **moderation**: report and feedback queues by status, bans and unexpired
+  timeouts. The `recentFeedback` field is still sent for older copies of the
+  page; this page reads the feedback queue from its own route instead
 - the deployed API commit (`APP_VERSION`) and the excluded account kinds
 - **product**: accepted friendships and open friend requests, claimed
   attachments (total and last 24h), invites created in 24h plus cumulative
   invite uses, and push subscriptions by platform (`web` / `apns`)
+- **`product.invites.joinsByRef7d`**: every tagged invite join in the last 7
+  days, by the `?ref=` a link carried (`convite`, `discord`, ...). Untagged
+  invite joins are not listed
+- **`product.serverJoins.bySource7d`**: every server join in the last 7 days,
+  by DOOR (`server_members.join_source`): `invite`, `sso`, `community_address`
+  (the `pqp.gg/c/<slug>` page and its `?join=` intent through sign-up),
+  `community_directory` (the directory card), `qg_hint` (the QG corner-card
+  nudge), `default_placement` (first-run placement into the instance's
+  default community). Instance-wide, not per server — see "joins by source,
+  per server" below for that. A join whose door was not recorded is not
+  listed here; that is expected for anything joined before this column
+  existed and for a server's owner (creating a server is not a join)
 
 Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 `/occupancy`, same machine token, same 8 s timeout):
@@ -444,6 +522,68 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 - Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
   minute resolution and forever for the daily peaks
 
+Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
+`/activity`, same machine token, only `days` and `weeks` forwarded):
+
+- **quem usa e quem volta**, under **ao longo do tempo**. Daily, weekly and
+  monthly actives (DAU, WAU, MAU), DAU/MAU, a 90-day chart, and retention by
+  signup week (day 1, days 7 to 13, days 30 to 36 after the signup day).
+- "Active" means the app connected that São Paulo day (an authenticated
+  WebSocket on web, desktop, iOS or Android), the person did something in it
+  (opened a channel, sent, reacted, typed, joined a call or a watch party),
+  or sent a message.
+  Watch party viewers and voice-only users count. Automatic frames such as
+  WebRTC signalling do not. The API writes one row per person per day to
+  `user_activity_days`, batched once a minute per process.
+- Honest limit: an app left open counts again on any day it reconnects, and an
+  API deploy reconnects every open app. Read "ativos" as "had pqp open".
+  "Escreveram" is the strict measure.
+- `trackingSince` is the day after the first row, because the deploy that
+  started tracking landed partway through its day.
+- Two measures are shown side by side and never blended. "Escreveram" (sent a
+  message) goes back to the first message. "Ativos" only exists from the day
+  tracking started (`trackingSince`). A window that reaches back before that
+  day is null, not a low number, so the chart does not jump on deploy day.
+- A cohort bracket only counts once it is over. A recent week shows "ainda
+  não" or "de N" instead of a low rate.
+- Headline numbers are yesterday's, the last complete day.
+- **custo por ativo · mês** divides `MONTHLY_COST_USD` (a Worker secret, see
+  below) by MAU. Unset, the card asks for it. The Worker adds the figure to
+  the response as `operatingCost`, so it never reaches the API.
+- Read the first time the section is opened, then at most every five minutes
+  while it has been opened. The API caches the report for five minutes because
+  it scans months of messages.
+- Server side: `server/src/services/user-activity.ts`.
+
+### The feedback queue
+
+Live, from `GET /api/admin/feedback` (proxied as `/operator/feedback`, only
+`status`, `kind`, `before` and `limit` forwarded), and written back through
+`PUT /api/admin/feedback/resolve` (`/operator/feedback-resolve`):
+
+1. Every item shows the whole text, its kind, status, time and number.
+2. It shows who sent it: display name, tag, @handle linked to the public
+   profile, account age, and how many items that person has sent and had
+   confirmed. No account id and no email.
+3. It shows where they were, from `feedback.context`: platform, app version,
+   browser and OS (parsed from the user agent the API read from its own
+   request header), window size, language, the app route, whether they were
+   in a call and on which media path, whether a watch party was live, and the
+   Grafana Faro session id. Items sent before this change, or from a client
+   that sends none, say so.
+4. Filters: status (open, confirmed, closed, all) and kind. 25 at a time, with
+   "carregar mais".
+5. **confirmar** sets the status to confirmed. On a bug it also grants the
+   author the caça-bugs badge, in the same transaction. **fechar** is for
+   handled, duplicate or not actionable.
+
+The web and desktop feedback box says under the button what travels with it.
+The iOS and Android apps have no feedback box yet.
+
+This is the first route on the machine token that names a person. That is why
+it is its own read, fetched when **moderação** is opened, and not a field on
+`/metrics`.
+
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
 and written back through `PUT /operator/server-live-hls`,
@@ -451,8 +591,9 @@ and written back through `PUT /operator/server-live-hls`,
 
 - **servers**, searched by name (`?q=`, `ILIKE`, 25 at a time): member count,
   watch party channels, the `live_hls_enabled` row, the **effective** answer
-  and which of the three inputs produced it, and whether this process is
-  running an egress for that server right now
+  and which of the three inputs produced it, the same triple for low latency
+  (`live_hls_ll_enabled`, its own effective answer and source), and whether
+  this process is running an egress for that server right now
 - **a server's voice and watch party channels**: the `voice_transport`
   override, the transport this process has **pinned** for a room that is open,
   and what a room opening now **would** be pinned to plus the reason, computed
@@ -467,6 +608,43 @@ and written back through `PUT /operator/server-live-hls`,
   `docs/plans/SFU_REGIONS.md`
 - Server side: `server/src/services/operator.ts`, the route table in
   `server/src/api/index.ts`, tests in `server/src/api/operator.test.ts`
+
+Live, from `GET /api/admin/watch-party-waitlist` (proxied as
+`/operator/watch-party-waitlist`, no query forwarded), and written back
+through `PUT /operator/watch-party-waitlist-decline`:
+
+- **the waitlist**: every server with at least one request, waiting first and
+  then biggest, each with its individual requests (who asked, their audience
+  bucket, an optional note, an optional stream channel), how many members said
+  they would watch (`interest`), the bucket histogram, the server's status and
+  when its first request landed, plus totals across all servers and how many
+  people expressed interest with no server named at all
+- the one write here that is not the availability flip above: **decline**,
+  which marks a server's waiting rows `declined` and notifies nobody. The
+  other action the **lista de espera** table offers, **Ativar**, is not a new
+  write: it calls `PUT /operator/server-live-hls` with both `enabled` and
+  `lowLatency`, which is the same route "ligar" in **watch party por
+  servidor** uses, and the API approves and notifies the waiting requests as a
+  side effect of that write landing
+- Server side: `server/src/services/watch-party-waitlist.ts`, the same route
+  table as above
+
+Live, from `GET /api/admin/flags` (proxied as `/operator/flags`), and written
+back through `PUT /operator/flags` and `PUT /operator/flag-overrides`:
+
+- **interruptores** (runtime feature flags, `docs/FEATURE_FLAGS.md`): every
+  flag in the registry with its effective value and where it came from (a
+  decision here, the environment variable, or the code default), what the
+  environment alone would answer (the "sem decisão (env)" column, so an
+  operator can see what **seguir a variável** would return to), per-server
+  overrides where the flag allows them, and the last 50 changes with who made
+  them ("painel" for this Worker's token). **ligar** / **desligar** write the
+  global row, **seguir a variável** clears it, and per-server overrides are set
+  by searching a server by name inside the flag's row. A flip reaches both API
+  instances at once over the cluster bus. The one confirmation: switching a
+  `live_hls_*` / `hls_*` flag OFF while a transmission is on air.
+- Server side: `server/src/lib/flags.ts`, tests in `server/src/lib/flags*.test.ts`
+  and `server/src/api/operator.test.ts`
 
 Live, from this Worker (merged onto `/metrics`, never stored on the API):
 
@@ -527,15 +705,121 @@ Webhook pseudo-accounts and character (house cast) accounts are excluded from
 every user and message count, the same way the acquisition report excludes
 them; their message volume is reported separately as `messages.automated24h`.
 
+### Joins by source, per server (SQL)
+
+`product.serverJoins.bySource7d` on `/metrics` is instance-wide, which answers
+"which doors are people using this week" but not "who found *this* server".
+For a single server (an owner asking "where did my 100 new members on
+Saturday come from", the 2026-09-26 moonkisticos question this whole feature
+exists to answer), run this directly against the database (`docs/DB_RUNBOOK.md`
+has the connection string; use the read-only `pqp_ro` role):
+
+```sql
+SELECT
+  COALESCE(join_source, 'unknown') AS source,
+  COUNT(*) AS joins
+FROM server_members
+WHERE server_id = '<server-id>'
+  AND role <> 'owner'
+  AND joined_at >= now() - interval '7 days'
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+Widen or narrow `joined_at` for a different window (drop it entirely for the
+server's whole history), or add `AND join_source = 'community_address'` to
+isolate one door. `join_ref` rides alongside `join_source = 'invite'` and adds
+the finer `?ref=` tag a shared link carried:
+
+```sql
+SELECT
+  join_ref,
+  COUNT(*) AS joins
+FROM server_members
+WHERE server_id = '<server-id>'
+  AND join_source = 'invite'
+  AND joined_at >= now() - interval '7 days'
+GROUP BY 1
+ORDER BY 2 DESC NULLS LAST;
+```
+
+`join_source` is NULL for any membership made before this column existed
+(2026-09-27) and for a server's owner, never for a door the app forgot to
+name going forward. See the comment on `server_members.join_source` in
+`server/src/schema.sql` for the full list of doors and which service writes
+each one.
+
+## The redesigned view (`/novo`)
+
+A second page, `site/novo.html`, served at `/novo` behind the same password.
+The classic page at `/` is unchanged and stays while both exist.
+
+### Switching between them
+
+1. The classic header has a **visão nova** link. The new header has
+   **visão clássica**.
+2. Each browser remembers its last choice in `localStorage`
+   (`pqp-admin-view`). With "novo" saved, `/` redirects to `/novo` and keeps
+   the section (`#tempo` opens `#crescimento`).
+3. `/?classico=1` always opens the classic page and saves "classico".
+
+### Five screens
+
+| Screen | Leads with | Details layer (closed rows) |
+|---|---|---|
+| **Hoje** | a sentence with the conclusion, five numbers with trend lines, "precisa de você", "nas últimas leituras", call peaks for 30 days, busy hours by weekday | the three verdicts, open rooms, service health, voice today, SFU and regions, idle seats |
+| **Crescimento** | actives (DAU, WAU, MAU) with a 30/90/180-day chart, the activation funnel, cohort retention, sources with the share that stays | the base, the last 24 hours by hour, signups by day, campaigns, landing pages, 7-day returning |
+| **Produto** | call rating and its distribution, low-rating notes, profile completeness rings, top text channels | top servers, communities, game accounts, instance shape, apps and product, calls and rings, Discord imports |
+| **Fila** | the feedback inbox: list on the left, the whole item with author and context on the right, confirm and close | report counts, with a link to the full report queue in the app |
+| **Sistema** | services with 24-hour latency lines and uptime, capacity (pool, WebSockets, SFU), the feature switches | infra, who changed which switch, watch party transmission, and a link to the per-server controls |
+
+### What is real
+
+Every number comes from the same endpoints as the classic page. Nothing is
+illustrative.
+
+- **Trend lines** are drawn only from real series: `messages.byHour`,
+  `users.byHour`, the daily occupancy peaks, `userDetail.signupsByDay` and
+  the `/activity` series. A card with no series has no line.
+- **"Nas últimas leituras"** is the difference between two consecutive
+  `/metrics` reads: new accounts, servers, rooms that opened, feedback,
+  reports and call ratings. There is no event stream behind it.
+- **The busy-hours heatmap** averages the minute samples of the last 21 days
+  (`/occupancy?day=`, three requests at a time, once per session, only when
+  Hoje opens).
+- **Before actives are tracked**, the actives cards show who wrote, and say
+  when actives start.
+- **Writes**: confirm or close a feedback item, and turn a feature switch on
+  or off globally. Per-server watch party, low latency, the waitlist and
+  channel pins stay on the classic page for now, and the new page links there.
+
+### Motion
+
+The motion is CSS, SVG `stroke-dashoffset` and `requestAnimationFrame`, with
+no library. The entrance plays once per screen per session. After it, a 30 s
+poll updates text in place: a number that changed tweens and flashes once,
+and nothing replays. Charts draw at their container's real width and redraw
+on resize. `prefers-reduced-motion` turns all of it off.
+
+### Code
+
+- `site/novo-model.js`: payloads to view models, pure, tested in
+  `test/novo-model.test.js`.
+- `site/novo.js`: fetching, routing and drawing.
+- `site/novo.css`: tokens (the classic palette, dark and light) and motion.
+- The verdicts come from `site/insights.js`, shared with the classic page.
+
 ## Why it is behind a password
 
 The repo is open source and a `workers.dev` hostname is guessable. The page is
-aggregate counts and holds no id, handle or email, but it is not *only* counts:
-the "most active" tables carry the **names of private servers and channels**,
-and the call-rating notes and feedback entries are **free text people wrote**.
+mostly aggregate counts and holds no account id or email, but it is not *only*
+counts: the "most active" tables carry the **names of private servers and
+channels**, the call-rating notes and feedback entries are **free text people
+wrote**, and the feedback queue names **who wrote each item** (tag and handle)
+and the device they used.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
-the Worker gates the page, `/metrics`, `/occupancy`, `/health` and every
+the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every
 `/operator/*` route behind HTTP Basic Auth, compared in constant time, and
 refuses to serve anything at all (503) while the password is unset. The
 `/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
@@ -560,8 +844,9 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the four `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
+| Worker | `MONTHLY_COST_USD` | secret | What the hosted instance costs a month, in US dollars, for "custo por ativo". A secret only because the repo is public. Unset: the card asks for it. |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
 | API (Fly) | `ADMIN_METRICS_TOKEN` | secret | The same value. At least 16 characters or the API treats it as unset. |
@@ -643,6 +928,7 @@ Test the API side directly, with the token:
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/user-activity?days=90&weeks=12" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```

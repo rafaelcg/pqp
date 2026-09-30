@@ -170,6 +170,8 @@ let cameraTrackId: string | null = null;
 let voiceTrackId: string | null = null;
 /** The voice archive's publication, optional (`LIVE_HLS_MIC_ARCHIVE`). */
 let micArchiveTrackId: string | null = null;
+/** What LiveKit says each camera publishes (shorter side), optional. */
+let cameraTrackHeights: Record<string, number> | null = null;
 
 function install(lk: ReturnType<typeof fakeLiveKit>) {
   setLiveHlsTestHooks({
@@ -179,6 +181,7 @@ function install(lk: ReturnType<typeof fakeLiveKit>) {
       ...(cameraTrackId ? { cameraTrackId } : {}),
       ...(voiceTrackId ? { voiceTrackId } : {}),
       ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
+      ...(cameraTrackHeights ? { cameraTrackHeights } : {}),
     }),
   });
 }
@@ -219,6 +222,8 @@ beforeEach(() => {
   cameraTrackId = null;
   voiceTrackId = null;
   micArchiveTrackId = null;
+  cameraTrackHeights = null;
+  delete process.env.LIVE_HLS_CAMERA_480;
   liveSessionChannelIds.ids = null;
   logEvent.mockClear();
   query.mockClear();
@@ -947,8 +952,12 @@ describe("the camera and the machinery that stops things", () => {
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
     let reconciles = 0;
-    setLiveHlsChangeListener((channelId) => {
-      reconciles += 1;
+    setLiveHlsChangeListener((channelId, reason) => {
+      // Only the probe's own retries: the camera starting then asks for a
+      // push of its own (`camera-started`), which is not a retry.
+      if (reason === "camera-probe-retry") {
+        reconciles += 1;
+      }
       void reconcileLiveHls(channelId, "peer-1", SERVER);
     });
 
@@ -1638,5 +1647,145 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     const stream = liveHlsStreamFor(CHANNEL);
     expect(stream?.cameraHasVideo).toBe(false);
     expect(stream?.cameraHasVoiceAudio).toBe(true);
+  });
+});
+
+describe("the camera at 480p, when the presenter sends 480 lines (2026-09-25)", () => {
+  it("encodes the slot at 854x480 for a 480p publication, under the same name", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    cameraTrackHeights = { TR_CAM: 480 };
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({
+        videoTrackId: "TR_CAM",
+        encodingOptions: expect.objectContaining({
+          width: 854,
+          height: 480,
+          framerate: 30,
+          videoBitrate: 800,
+        }),
+      }),
+    );
+    // The slot keeps its name: old recordings, the retention sweep, the
+    // download plans and the playlist path all key on it.
+    expect(playlistNames(lk)[1]).toBe(`${stream!.startedAt}-${CAMERA_RUNG_NAME}.m3u8`);
+    expect(stream?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraStarted",
+      expect.objectContaining({ height: 480, publishedLines: 480 }),
+    );
+  });
+
+  it("never upscales: a 360p publication (an older client) stays at 360p", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    cameraTrackHeights = { TR_CAM: 360 };
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(startedWith(lk)[1]!.encodingOptions).toEqual(
+      expect.objectContaining({ width: 640, height: 360, videoBitrate: 400 }),
+    );
+  });
+
+  it("LIVE_HLS_CAMERA_480=false is the 360p camera whatever is published", async () => {
+    enableHls();
+    process.env.LIVE_HLS_CAMERA_480 = "false";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    cameraTrackHeights = { TR_CAM: 720 };
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(startedWith(lk)[1]!.encodingOptions).toEqual(
+      expect.objectContaining({ width: 640, height: 360, videoBitrate: 400 }),
+    );
+  });
+
+  it("prices a 480p camera as one against the box budget", async () => {
+    enableHls();
+    // Room for the ladder rung and a 360p camera, not for a 480p one.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(
+      Math.ceil(HLS_RUNG_MBPS + HLS_CAMERA_MBPS + 1),
+    );
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    cameraTrackHeights = { TR_CAM: 480 };
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(lk.start).toHaveBeenCalledTimes(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.objectContaining({ refusal: "box-budget", height: 480 }),
+    );
+  });
+});
+
+describe("telling the audience the camera slot moved", () => {
+  it("asks for a push when the camera starts and when it stops", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const reasons: string[] = [];
+    setLiveHlsChangeListener((_channelId, reason) => {
+      reasons.push(reason);
+    });
+
+    // The camera starts in the queue link AFTER the push that found it, so
+    // that push's own frame never carries it. The slot moving asks for one.
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(reasons).toEqual(["camera-started"]);
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHlsUrl).toBeTruthy();
+
+    // Nothing moved: no push asked for.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(reasons).toEqual(["camera-started"]);
+
+    cameraTrackId = null;
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(reasons).toEqual(["camera-started", "camera-stopped"]);
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHlsUrl).toBeUndefined();
+  });
+});
+
+describe("what LiveKit says a camera publishes", () => {
+  it("records each camera's shorter side, for the rung choice", () => {
+    const tracks = pickScreenTracks([
+      {
+        identity: "peer-1",
+        tracks: [
+          { source: TrackSource.SCREEN_SHARE, sid: "TR_SCREEN", width: 1920, height: 1080 },
+          { source: TrackSource.CAMERA, sid: "TR_CAM", width: 854, height: 480 },
+          // A phone held upright: 480 wide is 480 lines of face.
+          { source: TrackSource.CAMERA, sid: "TR_CAM_2", width: 480, height: 854 },
+          // LiveKit did not say: absent, which the rung reads as 360p.
+          { source: TrackSource.CAMERA, sid: "TR_CAM_3" },
+        ],
+      },
+    ]);
+    expect(tracks?.cameraTrackHeights).toEqual({ TR_CAM: 480, TR_CAM_2: 480 });
   });
 });

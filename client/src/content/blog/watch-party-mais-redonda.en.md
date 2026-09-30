@@ -1,0 +1,5 @@
+- The movie no longer goes black when you turn your phone (iPhone).
+- With the phone sideways, the extra back button and the channel name over the movie are gone (iPhone).
+- The host's camera no longer freezes in side by side (iPhone).
+- Viewers no longer hear the host's voice twice.
+- The mute button and the camera options now stay on screen, including in your phone's browser.

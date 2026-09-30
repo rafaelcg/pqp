@@ -28,6 +28,7 @@ import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
 import {
   rememberCreateIntentFromLocation,
+  rememberWaitlistIntentFromLocation,
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
@@ -39,6 +40,8 @@ import { I18nProvider, useTranslation } from "./lib/i18n";
 import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
+import { BuildWatcher } from "./components/layout/build-watcher";
+import { ForcedUpdateScreen } from "./components/layout/forced-update-screen";
 import { UpdatePrompt } from "./components/layout/update-prompt";
 import { StaleChunkBanner } from "./components/layout/stale-chunk-banner";
 import { recoverFromChunkLoadError } from "./lib/chunk-reload";
@@ -81,6 +84,11 @@ const TelaPage = lazy(() =>
 );
 const VemPage = lazy(() =>
   import("./pages/vem-page").then((m) => ({ default: m.VemPage })),
+);
+const WatchPartyPage = lazy(() =>
+  import("./pages/watch-party-page").then((m) => ({
+    default: m.WatchPartyPage,
+  })),
 );
 const ApoieRoute = lazy(() =>
   import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
@@ -196,7 +204,9 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   const { t } = useTranslation();
   return (
     <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
+      <BuildWatcher />
       <UpdatePrompt />
+      <ForcedUpdateScreen />
       <StaleChunkBanner />
       <Routes>
         <Route element={<DarkRoutes />}>
@@ -257,6 +267,14 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             URL people guess; Pages answers it with a 301 in `_redirects`, and
             this route covers every build served outside Pages. */}
         <Route path="/vem" element={<VemPage />} />
+        {/* `/watch-party`: the waitlist campaign's shareable page. Role
+            tokens only, so it follows the visitor's theme like `/vem`. Two
+            spellings, one page, canonical `/watch-party` (`Seo`), and both
+            words are in RESERVED_HANDLES so nobody can hold `@watchparty`.
+            "Watch party" is what the QG says in Portuguese too, so there is no
+            separate pt-BR path to guess. */}
+        <Route path="/watch-party" element={<WatchPartyPage />} />
+        <Route path="/watchparty" element={<WatchPartyPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}
@@ -418,11 +436,17 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // the first render is captured. Inert unless VITE_FARO_URL is set, which is
 // only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
 initFaro();
-rememberAcquisitionFromLocation(browserStorage(), window.location);
+rememberAcquisitionFromLocation(
+  browserStorage(),
+  window.location,
+  Date.now(),
+  { referrer: document.referrer, hostname: window.location.hostname },
+);
 // Same reasoning for the two intents a sign-in redirect would drop with the
 // query string: `?import=discord` and an invite link's `?ref=` tag
 // (lib/handle-intent.ts).
 rememberCreateIntentFromLocation(browserStorage(), window.location);
+rememberWaitlistIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();

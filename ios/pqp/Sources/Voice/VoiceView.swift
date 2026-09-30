@@ -13,7 +13,15 @@ struct VoiceView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallRatingModel.self) private var ratings
     @Environment(VoiceModel.self) private var model
+    @Environment(WatchPartyHostController.self) private var watchPartyHost
     let channel: Channel
+
+    /// `nil` while the once-per-host-per-server streaming ack has not been
+    /// resolved for this channel. Owned here, not by `WatchPartyHostControls`,
+    /// because `controls` below reads it too: see that type's doc for why
+    /// the real screen-share button is what the ack gates, rather than a
+    /// second control drawn beside it.
+    @State private var watchPartyShareCleared: Bool?
 
     var body: some View {
         ZStack {
@@ -63,32 +71,14 @@ struct VoiceView: View {
                 if model.isServerMuted {
                     ServerMuteNotice()
                 }
-                // Not red: a listen-only seat is a rule, not a failure, and
-                // painting it as one teaches people to ignore the colour that
-                // is supposed to mean something went wrong.
-                if let message = model.speakNotice {
-                    Text(message)
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.paperMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.bottom, 6)
-                        .accessibilityIdentifier("voice.speakNotice")
-                }
-                // Same treatment as the speak notice, and for the same reason:
-                // the room growing is news, not a fault, and the sentence is
-                // there to explain the second of quiet while the media moves.
-                if let message = model.transportNotice {
-                    Text(message)
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.paperMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.bottom, 6)
-                        .accessibilityIdentifier("voice.transportNotice")
-                }
+                notices
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
                 )
+                if channel.isWatchParty {
+                    WatchPartyHostControls(channel: channel, shareCleared: $watchPartyShareCleared)
+                }
                 controls
             }
             .animation(Motion.standard, value: model.remoteScreen != nil)
@@ -115,6 +105,40 @@ struct VoiceView: View {
         // A no-op when the stage was merely reopened: `join` returns early for
         // the room we are already in.
         .task { await model.join(channel: channel, session: session, ratings: ratings) }
+    }
+
+    /// The sentences under the stage that are news rather than faults. Split out
+    /// of `body` so the type checker has less to hold at once.
+    @ViewBuilder
+    private var notices: some View {
+        // Not red: a listen-only seat is a rule, not a failure, and painting
+        // it as one teaches people to ignore the colour that is supposed to
+        // mean something went wrong.
+        if let message = model.speakNotice {
+            noticeLine(message, identifier: "voice.speakNotice")
+        }
+        // Same treatment as the speak notice, and for the same reason: the
+        // room growing is news, not a fault, and the sentence is there to
+        // explain the second of quiet while the media moves.
+        if let message = model.transportNotice {
+            noticeLine(message, identifier: "voice.transportNotice")
+        }
+        // Warning rather than danger: the call is up and working, only this
+        // phone's voice is missing, and the unmute button is the way back.
+        if model.status == .connected, let message = model.microphoneNotice {
+            noticeLine(message, identifier: "voice.microphoneNotice", color: Palette.warning)
+        }
+    }
+
+    private func noticeLine(
+        _ message: String, identifier: String, color: Color = Palette.paperMuted
+    ) -> some View {
+        Text(message)
+            .font(Typography.caption)
+            .foregroundStyle(color)
+            .multilineTextAlignment(.center)
+            .padding(.bottom, 6)
+            .accessibilityIdentifier(identifier)
     }
 
     /// What the header becomes once a shared screen owns the space.
@@ -356,7 +380,15 @@ struct VoiceView: View {
             // leading nowhere would be a lie; and a channel that denies SPEAK
             // would answer the broadcast with `screen-share-denied`. Both
             // rooms read the one rule. See `VoiceSpeakRule`.
-            if model.offersScreenShare {
+            //
+            // ON A `watch_party` CHANNEL, ALSO the once-per-host-per-server
+            // streaming ack: this IS the only door to the capture there, and
+            // `WatchPartyHostControls` is what resolves `watchPartyShareCleared`
+            // -- `nil` (checking) and `false` (owed) both hide this button
+            // rather than let it open the system picker ahead of the
+            // disclosure. See that type's doc for why there is no second,
+            // parallel button instead.
+            if model.offersScreenShare, !channel.isWatchParty || watchPartyShareCleared == true {
                 // The size is passed *in* rather than imposed with an outer
                 // `.frame`: the painted circle, the system picker and Apple's
                 // own button all have to be the same square, or part of what

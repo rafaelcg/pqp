@@ -62,6 +62,7 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => (state.connected ? "online" : "reconnecting"),
     isConnected: () => state.connected,
+    setCallActive: () => {},
     retryNow: () => {},
     getLastClose: () => null,
     getUnauthorizedStreak: () => 0,
@@ -532,6 +533,36 @@ describe("optimistic sending", () => {
     ]);
   });
 
+  it("keeps somebody else's broadcast that arrived after the retry's snapshot but before its response", () => {
+    // The "Try again" path (and the reconnect refetch) read the newest page on
+    // the server, and while that request is in flight a live message can be
+    // broadcast: it is newer than the page, which cannot contain it, and the
+    // page replacing the window must not take it away. The page's own rows
+    // come first, in order; the live one follows.
+    const { chat } = setup();
+    const snapshot = [
+      serverMessage({ id: "00000000-0000-4000-8000-000000000001", body: "one" }),
+      serverMessage({ id: "00000000-0000-4000-8000-000000000002", body: "two" }),
+    ];
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-000000000003",
+        body: "arrived during the retry",
+        authorId: "00000000-0000-4000-8000-0000000000dd",
+        createdAt: "2099-01-01T00:00:00.000Z",
+      }),
+    } as never);
+
+    chat.setMessages(snapshot, false, false);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "one",
+      "two",
+      "arrived during the retry",
+    ]);
+  });
+
   it("does not append live traffic onto a jumped-to window of older history", () => {
     // A page that stops short of the newest message is a jump, not a re-sync;
     // hanging live messages off the end of it would show them an hour early.
@@ -920,6 +951,116 @@ describe("typing indicators", () => {
     } as never);
     expect(chat.getTypingUsers()).toEqual([]);
   });
+
+  // Regression for the busy-watch-party freeze: `getTypingUsers()` is read on
+  // every render of whatever displays it, which in a live channel can be
+  // dozens of times a second. Rebuilding the array every call hands the
+  // caller a new reference each time even when nobody's typing state moved,
+  // which defeats a `memo()` boundary downstream (see message-list.tsx's
+  // `MessageList`). It must return the SAME array when the active typers are
+  // unchanged, and a genuinely new array only when they differ.
+  it("returns the same array reference across calls when typers have not changed", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    const second = chat.getTypingUsers();
+    expect(second).toBe(first);
+
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u2",
+      displayName: "Beto",
+    } as never);
+    const third = chat.getTypingUsers();
+    expect(third).not.toBe(first);
+    expect(third).toEqual([
+      { userId: "u1", displayName: "Ana" },
+      { userId: "u2", displayName: "Beto" },
+    ]);
+
+    vi.advanceTimersByTime(6_000);
+    const fourth = chat.getTypingUsers();
+    expect(fourth).toEqual([]);
+    expect(fourth).not.toBe(third);
+    // Empty stays stable too, once settled.
+    expect(chat.getTypingUsers()).toBe(fourth);
+  });
+
+  // Farol caught this: the cache key used to be user ids alone, so a rename
+  // mid-typing (the same person, still actively typing) left the indicator
+  // showing the stale name until the active set changed for some other
+  // reason. The display name has to be part of what invalidates the cache.
+  it("picks up a display name change for a user who stays active", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    const first = chat.getTypingUsers();
+    expect(first).toEqual([{ userId: "u1", displayName: "Ana" }]);
+
+    // Same user, still active, renamed mid-typing (a fresh typing-broadcast
+    // carrying the new name, the only way this field can change).
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana Paula",
+    } as never);
+    const second = chat.getTypingUsers();
+    expect(second).not.toBe(first);
+    expect(second).toEqual([{ userId: "u1", displayName: "Ana Paula" }]);
+  });
+
+  // A second Farol pass on the same fix: the cache key used to join
+  // "userId:displayName" pairs with a plain comma, so a comma inside a
+  // display name could make two DIFFERENT active sets stringify to the same
+  // key. Concretely, under the old scheme, one user named "1,b:2" and two
+  // users named "1" / "2" both joined to the literal string "a:1,b:2" —
+  // proof by construction, not just a suspicion.
+  it("does not collide when a display name contains the old separator", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1,b:2",
+    } as never);
+    const oneUserCommaName = chat.getTypingUsers();
+    expect(oneUserCommaName).toEqual([{ userId: "a", displayName: "1,b:2" }]);
+
+    // Switch to the OTHER active set that collided under the old scheme:
+    // "a" typing "1" and "b" typing "2".
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "a",
+      displayName: "1",
+    } as never);
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "b",
+      displayName: "2",
+    } as never);
+    const twoUsersSplit = chat.getTypingUsers();
+    expect(twoUsersSplit).not.toBe(oneUserCommaName);
+    expect(twoUsersSplit).toEqual(
+      expect.arrayContaining([
+        { userId: "a", displayName: "1" },
+        { userId: "b", displayName: "2" },
+      ]),
+    );
+    expect(twoUsersSplit).toHaveLength(2);
+  });
 });
 
 describe("history pagination", () => {
@@ -1073,6 +1214,69 @@ describe("jumping into history", () => {
     expect(api.apiFetch).not.toHaveBeenCalled();
   });
 
+  /** A page held until the test releases it. */
+  function holdPage() {
+    let release: (page: HistoryPage) => void = () => {};
+    vi.mocked(api.apiFetch).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve as (page: HistoryPage) => void;
+      }),
+    );
+    return (page: HistoryPage) => release(page);
+  }
+
+  it("drops a page fetched for a jump that a jump to a loaded message overtook", async () => {
+    const { chat } = setup();
+    const tail = history(3, 50);
+    chat.setMessages(tail, true);
+
+    const release = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    // The reader then jumps to a message already on screen.
+    expect(await chat.jumpTo(tail[1]!.id)).toBe(true);
+    release({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m50", "m51", "m52"]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  it("drops a page fetched for a jump when the reader sends meanwhile", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(3, 50), true);
+
+    const release = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    chat.sendMessage("sent while fetching");
+    release({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m50",
+      "m51",
+      "m52",
+      "sent while fetching",
+    ]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  it("drops a page fetched for a jump when the reader returns to the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(3, 50), true);
+
+    const releaseJump = holdPage();
+    const older = chat.jumpTo("00000000-0000-4000-8000-000000000002");
+    mockPage({ messages: history(3, 60), hasMore: true, hasNewer: false });
+    expect(await chat.resetToTail()).toBe(true);
+    releaseJump({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await older).toBe(false);
+    const bodies = chat.getMessages().map((m) => m.body);
+    expect(bodies.slice(-3)).toEqual(["m60", "m61", "m62"]);
+    expect(bodies).not.toContain("m2");
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
   it("reports a message it cannot reach instead of emptying the channel", async () => {
     const { chat } = setup();
     chat.setMessages(history(2), true);
@@ -1149,6 +1353,163 @@ describe("jumping into history", () => {
 
     expect(requestedUrl()).not.toContain("around=");
     expect(requestedUrl()).not.toContain("after=");
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m8", "m9"]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  // Sending from a jump takes the reader back to the present, so the send and
+  // the tail page race. Either order has to end with the message on screen once.
+  it("keeps a send from history that was confirmed before the tail page landed", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // A page read just before the insert committed: it stops short of the send.
+    mockPage({ messages: history(2, 8), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "m9",
+      "from history",
+    ]);
+  });
+
+  it("drops a confirmed send from history that is older than the tail page", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // The present has moved on: the tail page starts after the send, so the
+    // send is outside it and must not ride along above it.
+    mockPage({ messages: history(2, 30), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m30", "m31"]);
+  });
+
+  it("keeps a confirmed send from history that the tail page's span covers but missed", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "from history",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never);
+    // Somebody else's message stamped after the send but committed before it:
+    // the page holds theirs and not the send, which still belongs between.
+    mockPage({
+      messages: [...history(1, 8), ...history(1, 30)],
+      hasMore: true,
+      hasNewer: false,
+    });
+    await chat.resetToTail();
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "from history",
+      "m30",
+    ]);
+  });
+
+  it("shows a send from history once when the tail page already holds it", async () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2), true, true);
+    chat.sendMessage("from history");
+    const { nonce } = sent.at(-1) as { nonce: string };
+
+    const stored = serverMessage({
+      id: "00000000-0000-4000-8000-0000000000ff",
+      body: "from history",
+      createdAt: new Date(20_000).toISOString(),
+    });
+    mockPage({
+      messages: [...history(2, 8), stored],
+      hasMore: true,
+      hasNewer: false,
+    });
+    await chat.resetToTail();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: stored,
+    } as never);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m8",
+      "m9",
+      "from history",
+    ]);
+  });
+
+  it("keeps a confirmed send when its broadcast arrives twice", () => {
+    const { chat, sent } = setup();
+    chat.setMessages(history(2));
+    chat.sendMessage("said once");
+    const { nonce } = sent.at(-1) as { nonce: string };
+    const broadcast = {
+      type: "message-broadcast",
+      nonce,
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000ff",
+        body: "said once",
+        createdAt: new Date(20_000).toISOString(),
+      }),
+    } as never;
+
+    chat.handleServerMessage(broadcast);
+    chat.handleServerMessage(broadcast);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "said once",
+    ]);
+  });
+
+  it("drops a page forward that lands after the window went back to the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true, true);
+
+    let answerForward!: (page: HistoryPage) => void;
+    vi.mocked(api.apiFetch).mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerForward = resolve;
+      }),
+    );
+    const forward = chat.loadNewer();
+    mockPage({ messages: history(2, 8), hasMore: true, hasNewer: false });
+    await chat.resetToTail();
+    answerForward({ messages: history(2, 2), hasMore: true, hasNewer: true });
+
+    expect(await forward).toBe(0);
     expect(chat.getMessages().map((m) => m.body)).toEqual(["m8", "m9"]);
     expect(chat.hasNewerHistory()).toBe(false);
   });

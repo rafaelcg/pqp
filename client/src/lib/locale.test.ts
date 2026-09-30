@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { detectLocale } from "./locale";
+import { detectLocale, setLocalePreference } from "./locale";
 
 /**
  * The regression these cover is not hypothetical: on 2026-08-27 pqp.gg served
@@ -96,5 +96,80 @@ describe("detectLocale", () => {
   it("ignores a stamp it cannot parse rather than failing to boot", () => {
     stub({ servedLocale: "klingon", navigatorLanguages: ["pt-BR"] });
     expect(detectLocale()).toBe("pt-BR");
+  });
+
+  /**
+   * The behaviour the public-page language picker relies on:
+   * `setLocalePreference` writes `localStorage`, and `detectLocale` already
+   * reads a saved choice ahead of every browser signal (`?lang=` aside) —
+   * see the resolution order in `detectLocale`'s own doc comment. A visitor
+   * who picks Portuguese from the header keeps getting it on the next visit
+   * even though their OS and browser stay in English.
+   */
+  it("lets a saved choice from the picker outrank the browser on a later visit", () => {
+    stub({ stored: "pt-BR", navigatorLanguages: ["en-US", "en"] });
+    expect(detectLocale()).toBe("pt-BR");
+
+    stub({ stored: "es", navigatorLanguages: ["pt-BR"] });
+    expect(detectLocale()).toBe("es");
+  });
+
+  it("ignores a stored value that is not one of the three locales", () => {
+    // A corrupted or hand-edited localStorage entry must not wedge the app in
+    // a locale that does not exist — it falls through exactly like an absent
+    // preference would.
+    stub({ stored: "fr-FR", navigatorLanguages: ["es-MX"] });
+    expect(detectLocale()).toBe("es");
+
+    stub({ stored: "", navigatorLanguages: ["pt-BR"] });
+    expect(detectLocale()).toBe("pt-BR");
+  });
+});
+
+describe("setLocalePreference", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("writes the choice localStorage will later be read back from, and says so", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => store.set(key, value),
+        removeItem: (key: string) => store.delete(key),
+      },
+    });
+
+    expect(setLocalePreference("es")).toBe(true);
+    expect(store.get("pqp:locale")).toBe("es");
+
+    expect(setLocalePreference(null)).toBe(true);
+    expect(store.has("pqp:locale")).toBe(false);
+  });
+
+  /**
+   * The Farol finding on PR #868: a picker that reloads right after this call
+   * needs to know the write didn't land, or it drops `?lang=` on the strength
+   * of a preference that was never actually saved and the choice reverts to
+   * the browser/served locale on that very reload. See `applyChoice` in
+   * `components/marketing/language-picker.tsx`.
+   */
+  it("reports false, without throwing, when storage is blocked", () => {
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        setItem: () => {
+          throw new Error("blocked");
+        },
+        removeItem: () => {
+          throw new Error("blocked");
+        },
+      },
+    });
+
+    expect(setLocalePreference("en")).toBe(false);
   });
 });

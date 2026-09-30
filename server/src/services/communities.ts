@@ -6,6 +6,7 @@ import {
   parseStoredCommunityLinks,
   type CommunityCategory,
   type CommunityFeaturedEmbed,
+  type CommunityJoinVia,
   type CommunityLanguage,
   type CommunityLink,
   type CommunitySettings,
@@ -311,6 +312,18 @@ export type JoinCommunityResult =
   | { ok: false; reason: "not_found" | "banned" };
 
 /**
+ * The door this join came through, for `server_members.join_source`.
+ *
+ * `CommunityJoinVia` is the three values a client can actually claim (the
+ * address page, the directory card, the QG corner-card hint);
+ * `"default_placement"` is a fourth, server-only value for the one caller
+ * that is not a person tapping anything: `placeInDefaultCommunity` in
+ * default-community.ts, first-run placement into the instance's default
+ * room.
+ */
+export type JoinCommunitySource = CommunityJoinVia | "default_placement";
+
+/**
  * Join a community. No invite, no approval, one tap.
  *
  * ADDRESSED IS ENOUGH, AND THAT IS THE JOIN DECISION THE SPLIT MADE. A room
@@ -342,10 +355,18 @@ export type JoinCommunityResult =
  * The member floor is NOT re-checked here. It is a browsing heuristic, not a
  * permission; refusing to admit the second member of a community would make the
  * floor unreachable and every new community permanently empty.
+ *
+ * `options.via` names the door onto the membership row (`join_source`), so a
+ * count of joins can tell the public address apart from the directory apart
+ * from a first-run placement. Absent (a caller that predates this, or a
+ * request whose body did not carry one) writes NULL, meaning "some door
+ * joined this person", same as `join_ref` has always done for the doors it
+ * does not name.
  */
 export async function joinCommunity(
   serverId: string,
   userId: string,
+  options: { via?: JoinCommunitySource | null } = {},
 ): Promise<JoinCommunityResult> {
   const client = await getPool().connect();
   try {
@@ -381,10 +402,10 @@ export async function joinCommunity(
     }
 
     const inserted = await client.query(
-      `INSERT INTO server_members (server_id, user_id, role)
-       VALUES ($1, $2, 'member')
+      `INSERT INTO server_members (server_id, user_id, role, join_source)
+       VALUES ($1, $2, 'member', $3)
        ON CONFLICT DO NOTHING`,
-      [serverId, userId],
+      [serverId, userId, options.via ?? null],
     );
 
     await client.query("COMMIT");
@@ -393,7 +414,7 @@ export async function joinCommunity(
       // Same reasoning as `joinServerBySso`: the cache is widening, so missing
       // it costs a few silent seconds rather than a leak — and "you joined and
       // the room went quiet" is a bad first minute.
-      invalidateServerAudience(serverId);
+      invalidateServerAudience(serverId, { joinedUserId: userId });
       // Funnel step `first_join`, after the commit and on the pool, not inside
       // the transaction. This is also the default-community landing path
       // (services/default-community.ts calls joinCommunity), so a first-run

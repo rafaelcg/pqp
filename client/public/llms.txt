@@ -1,6 +1,6 @@
 # pqp
 
-> pqp (pqp.gg) is an open-source voice and text chat for groups of friends, in the shape of Discord: servers with text and voice channels, DMs, friends, screen share and watch parties. It is written in Brazilian Portuguese first, runs in the browser, on desktop (Electron), on iOS (TestFlight beta) and on Android (APK beta), and the whole thing is AGPL on GitHub so anyone can run their own instance.
+> pqp (pqp.gg) is an open-source voice and text chat for groups of friends, in the shape of Discord: servers with text and voice channels, DMs, friends, screen share and watch parties. It is written in Brazilian Portuguese first, runs in the browser, on desktop (Electron), on iOS (TestFlight beta) and on Android (Google Play, with the APK also available), and the whole thing is AGPL on GitHub so anyone can run their own instance.
 
 pqp is a small, independently run product. There is no public or agent-facing API: every endpoint on api.pqp.gg needs a signed-in user session, and the only things on this host an agent can read without one are the pages listed below. Public profile pages (`/@handle`) and community pages (`/c/slug`) exist, but they are not enumerable from here: a person or a community is found because somebody shares the link.
 
@@ -8,11 +8,12 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 
 - [Home](https://pqp.gg/): what pqp is and how to start
 - [pqp vs Discord](https://pqp.gg/vs-discord): the comparison page
-- [Screen share](https://pqp.gg/tela): sharing a screen with sound from the browser
+- [Screen share](https://pqp.gg/tela): sharing a screen from the browser (sound comes with a Chrome or Edge tab)
 - [Claim your @](https://pqp.gg/garanta): how a public handle works
+- [Watch party](https://pqp.gg/watch-party): streaming to hundreds in the browser; early access waitlist
 - [Blog and release notes](https://pqp.gg/blog): what shipped, week by week
 - [iOS beta](https://pqp.gg/beta): TestFlight
-- [Android beta](https://pqp.gg/android): direct APK
+- [Android](https://pqp.gg/android): Google Play, and the direct APK still available
 - [Desktop download](https://pqp.gg/download): Electron builds
 - [Status](https://pqp.gg/status): live service status
 - [Support the project](https://pqp.gg/apoie): donations; nothing is unlocked by donating

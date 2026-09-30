@@ -224,6 +224,11 @@ type watchdogState struct {
 	// episode and buy itself another PART_STUCK_MS of forgiveness
 	// (Farol review, PR #629).
 	quiet bool
+	// rebindWaiting is true while the last tick saw a rebind waiting for
+	// its new source's first keyframe; rebindLogged keeps that to one log
+	// line per wait. See evaluateWatchdog's rebind rule.
+	rebindWaiting bool
+	rebindLogged  bool
 	// idleEndedAt is when the LAST quiet episode ended: the first tick
 	// on which a decoded frame arrived again after the source had been
 	// idle. Zero until a quiet episode has both begun and ended.
@@ -306,6 +311,36 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 	// NOT msDuration(cfg.PartStuckMs) directly: the threshold also has to
 	// clear the worst gap a HEALTHY pipeline can produce, which the
 	// reorder buffer's hold is part of. See partStuckThreshold.
+	// A REBIND WAITING FOR ITS NEW SOURCE'S FIRST KEYFRAME IS NOT A STALL.
+	// The presenter republished (or came back under a new identity) and
+	// internal/session drops the new source's frames until its first IDR,
+	// so no part is published and the last IDR recedes while packets and
+	// frames arrive: exactly the shape the part-stuck ladder restarts and
+	// the IDR-gap rule demotes (3x the segment target, 12 s at the
+	// default). A publisher slow to answer the keyframe request would cost
+	// the party the very session the rebind exists to keep. Forgiven for as
+	// long as a session may wait for its FIRST part (FirstPartTimeoutMs, the
+	// same "nothing to show yet" allowance), then demoted with its own
+	// reason. When the keyframe arrives both clocks restart from that
+	// moment, as they do when a quiet source comes back.
+	if !h.RebindWaitingSince.IsZero() {
+		if now.Sub(h.RebindWaitingSince) > msDuration(cfg.FirstPartTimeoutMs) {
+			return watchdogResult{actionDemote, "rebind-no-keyframe", stallDetail(h, now)}
+		}
+		st.rebindWaiting = true
+		if !st.rebindLogged {
+			st.rebindLogged = true
+			return watchdogResult{actionLog, "rebind-awaiting-keyframe", stallDetail(h, now)}
+		}
+		return watchdogResult{actionNone, "", ""}
+	}
+	if st.rebindWaiting {
+		st.rebindWaiting = false
+		st.rebindLogged = false
+		st.quiet = false
+		st.idleEndedAt = now
+	}
+
 	stuckThreshold := cfg.partStuckThreshold()
 
 	// PHASE 1.5, AND THE WHOLE POINT OF THIS BLOCK: a source that has

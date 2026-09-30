@@ -58,6 +58,23 @@ function LinkGlyph({ kind }: { kind: CommunityLinkKind }) {
   return <Globe aria-hidden className="h-4 w-4 shrink-0 text-text-tertiary" />;
 }
 
+/**
+ * What a "site" chip says. Two plain "Site" chips side by side tell nobody
+ * which is which, so a site link shows its own address: host without `www.`,
+ * plus the path when there is one, cut short past 28 characters.
+ */
+export function siteLinkLabel(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    const path = u.pathname.replace(/\/+$/, "");
+    const label = host + path;
+    return label.length > 28 ? `${label.slice(0, 27)}…` : label;
+  } catch {
+    return null;
+  }
+}
+
 export function CommunityOfficialLinks({
   links,
   className,
@@ -80,7 +97,7 @@ export function CommunityOfficialLinks({
             className="cta-lift inline-flex h-10 items-center gap-2 rounded-full border border-border bg-surface-1 px-3 text-sm text-text transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <LinkGlyph kind={link.kind} />
-            {t(LINK_LABEL[link.kind])}
+            {(link.kind === "site" && siteLinkLabel(link.url)) || t(LINK_LABEL[link.kind])}
           </a>
         </li>
       ))}

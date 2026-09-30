@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "24 de setembro de 2026",
+  updated: "27 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -404,26 +404,30 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "f1b5598f",
+      sourceRev: "6e4ce0a9",
       heading: "Voz e mídia",
       body: (
         <p>
-          A voz usa WebRTC. Em sala pequena, o áudio e o vídeo de tela
+          A voz usa WebRTC. No caminho direto, o áudio e o vídeo de tela
           compartilhada vão direto entre os participantes e não passam por
-          servidor nenhum nosso. Em sala grande, eles são repassados por um
-          servidor de mídia que a gente mesmo roda, o mais perto possível da
-          sala (São Paulo, Miami ou Londres), que repassa e não guarda nada:
-          nenhuma chamada é gravada nem armazenada pela gente, em nenhum dos
-          dois caminhos. Quais salas são quais, e o
-          que esse repasse significa para os seus dados, está na{" "}
-          <Link to="/privacy">Política de Privacidade</Link>. Uma watch party
-          sincroniza um vídeo do YouTube no aparelho de cada um; a gente não
-          hospeda esse stream. O caminho direto tem um teto prático: cada pessoa
-          no canal se conecta com todas as outras, então uma sala direta cheia
-          pesa na conexão de todo mundo. A qualidade depende da sua rede e, no
-          caminho direto, da rede das outras pessoas também, e a gente não
-          garante áudio sem interrupção. Você responde pelo que compartilha na
-          tela e pelo que toca numa watch party.
+          servidor nenhum nosso. No caminho repassado, eles passam por um
+          servidor de mídia que a gente mesmo roda, em São Paulo, Miami ou
+          Londres, que repassa e não guarda nada: nenhuma chamada comum é
+          gravada nem armazenada pela gente, em nenhum dos dois caminhos. Uma
+          chamada num servidor pode passar do caminho direto para o repassado
+          enquanto está acontecendo. Uma
+          watch party é diferente. É uma transmissão que a gente leva ao
+          público e grava, e a gravação fica guardada por 30 dias. Quais salas
+          são quais, e o que esse repasse e essa gravação significam para os
+          seus dados, está na{" "}
+          <Link to="/privacy">Política de Privacidade</Link>. A fila de música
+          numa chamada de voz toca um vídeo do YouTube no aparelho de cada um; a gente não hospeda esse stream. O caminho
+          direto tem um teto prático: cada pessoa no canal se conecta com todas
+          as outras, então uma sala direta cheia pesa na conexão de todo mundo.
+          A qualidade depende da sua rede e, no caminho direto, da rede das
+          outras pessoas também, e a gente não garante áudio sem interrupção.
+          Você responde pelo que compartilha na tela, pelo que toca na fila de
+          música e pelo que transmite numa watch party.
         </p>
       ),
     },

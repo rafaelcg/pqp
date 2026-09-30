@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
+  confirmedOldWindowsFromUa,
   ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   needsShareAudioPrompt,
@@ -16,6 +17,8 @@ import {
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
+  wantsNativeShareAudio,
+  systemAudioStrippedNoticeKey,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
 
@@ -574,6 +577,131 @@ describe("shareStreamHasAudio", () => {
   });
 });
 
+describe("systemAudioStrippedNoticeKey", () => {
+  it("keeps the plain notice off Windows entirely", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "mac",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "linux",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("keeps the plain notice on a Windows 11 browser: exclude actually worked, this is not the old-Windows case", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: true,
+        confirmedOldWindows: false,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("keeps the plain notice inside the desktop shell: the picker already explained it", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: true,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
+      }),
+    ).toBe("voice.notice.systemAudioStripped");
+  });
+
+  it("points a CONFIRMED old-Windows browser at a Chrome tab, naming the platform", () => {
+    // The live case this exists for: cap1tao, 27 Sep 2026, "está
+    // compartilhando (sem som)" with no way forward given.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedWin10Tab");
+  });
+
+  it("gives the SAME Chrome-tab answer with GENERIC wording when the version is not confirmed", () => {
+    // `osCanExcludeCallAudio: false` alone does not mean confirmed old
+    // Windows: it is also what a browser with no `userAgentData` (Safari,
+    // Firefox) or a UA-CH probe that merely threw reports. Farol caught the
+    // first pass of this notice asserting "Windows 10" over exactly this
+    // case, which the browser never actually told us.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedGenericTab");
+  });
+
+  it("points at the desktop app instead, once that native capture is available -- confirmed wording", () => {
+    // Unshipped today (`desktop_share_audio_native`); every caller passes
+    // `false` until the flag exists and is wired through, per the TODO at the
+    // call site in `use-voice.ts`.
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: true,
+        desktopAppAvailable: true,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedWin10App");
+  });
+
+  it("points at the desktop app instead -- generic wording when the version is not confirmed", () => {
+    expect(
+      systemAudioStrippedNoticeKey({
+        isDesktopShell: false,
+        platform: "windows",
+        osCanExcludeCallAudio: false,
+        confirmedOldWindows: false,
+        desktopAppAvailable: true,
+      }),
+    ).toBe("voice.notice.systemAudioStrippedGenericApp");
+  });
+});
+
+describe("confirmedOldWindowsFromUa", () => {
+  it("is false for anything that is not Windows", () => {
+    expect(confirmedOldWindowsFromUa("macOS", "13.0.0")).toBe(false);
+    expect(confirmedOldWindowsFromUa(undefined, "10.0.19045")).toBe(false);
+  });
+
+  it("is false with no platformVersion at all: a browser with no userAgentData, or a probe that threw", () => {
+    expect(confirmedOldWindowsFromUa("Windows", undefined)).toBe(false);
+    expect(confirmedOldWindowsFromUa("Windows", "")).toBe(false);
+  });
+
+  it("is false for a garbage platformVersion: unparsable is not confirmed", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "not-a-version")).toBe(false);
+  });
+
+  it("is false for a confirmed Windows 11: exclude actually worked", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "13.0.0")).toBe(false);
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.22000")).toBe(false);
+  });
+
+  it("is true only for a Windows build UA-CH confirmed is below 11", () => {
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.19045")).toBe(true);
+    expect(confirmedOldWindowsFromUa("Windows", "10.0.20348")).toBe(true);
+  });
+});
+
 describe("osCanExcludeCallFromUa", () => {
   it("treats UA-CH major 13+ as Windows 11", () => {
     expect(osCanExcludeCallFromUa("Windows", "13.0.0")).toBe(true);
@@ -1018,5 +1146,52 @@ describe("ensureOsCanExcludeCallAudio", () => {
         value: previous,
       });
     }
+  });
+});
+
+describe("native share audio on the Windows desktop app", () => {
+  /** Windows 10: Chromium cannot keep the call out of its loopback. */
+  const win10Shell: ScreenCaptureEnvironment = {
+    isDesktopShell: true,
+    shellPlatform: "win32",
+    supportsRestrictOwnAudio: true,
+    osCanExcludeCallAudio: false,
+    sharePickerOffersAudio: true,
+    shellSystemAudio: "none",
+    shellRestrictOwnAudio: false,
+  };
+  const win10Native: ScreenCaptureEnvironment = { ...win10Shell, shellNativeShareAudio: true };
+
+  it("offers sound on Windows 10 only once the native capture is ready", () => {
+    expect(offersShellSystemAudio(win10Shell)).toBe(false);
+    expect(offersShellSystemAudio(win10Native)).toBe(true);
+    expect(wantsNativeShareAudio(false, win10Shell)).toBe(false);
+    expect(wantsNativeShareAudio(false, win10Native)).toBe(true);
+  });
+
+  it("asks Chromium for no audio at all, so its mixer tap can never ride along", () => {
+    const options = screenCaptureOptions(true, win10Native);
+    expect(options.audio).toBe(false);
+    expect(options.systemAudio).toBe("exclude");
+    // Windows 11 too: with native on, Chromium's loopback is not asked for.
+    const win11Native = { ...capableShell, shellNativeShareAudio: true };
+    expect(screenCaptureOptions(true, win11Native).audio).toBe(false);
+    expect(screenCaptureOptions(true, capableShell).audio).not.toBe(false);
+  });
+
+  it("never applies in a browser, whatever the flag says", () => {
+    const flagged = { ...browser, shellNativeShareAudio: true };
+    expect(wantsNativeShareAudio(true, flagged)).toBe(false);
+    expect(screenCaptureOptions(false, flagged).systemAudio).toBe("include");
+  });
+
+  it("is still consent: a shell whose picker cannot ask needs the page's yes", () => {
+    const noPicker = { ...win10Native, sharePickerOffersAudio: false };
+    expect(wantsNativeShareAudio(false, noPicker)).toBe(false);
+    expect(wantsNativeShareAudio(true, noPicker)).toBe(true);
+  });
+
+  it("covers a desktop watch party, which has no tab to take sound from", () => {
+    expect(wantsNativeShareAudio(false, win10Native, { preferBrowserTab: true })).toBe(true);
   });
 });

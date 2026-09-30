@@ -243,6 +243,54 @@ screen (`AgeGateScreen`). The date travels as a plain `YYYY-MM-DD` with no time
 and no zone, because attaching an instant to a date of birth is the classic way
 to refuse somebody on their own birthday.
 
+## First run (onboarding V2)
+
+The native reading of the web's onboarding V2 (PR #786, `client/src/components/onboarding/*`,
+spec in `docs/ONBOARDING.md`). Same steps, same copy in pt-BR and en, same
+rules; the shell is the phone's rather than a dialog's.
+
+| Screen | Shown to | What it does |
+|---|---|---|
+| Idade | everyone with `ageGate: pending` | Three fields (day, month list, year) with the focus moving itself, the one-attempt warning before the button, no way out. Draws the rail when a wizard follows (`SessionStore.gateLeadsToOnboarding`). |
+| Você | everyone the wizard runs for | Name (with the "came from your account" hint), six photo presets, the @ as a chip that copies on tap with a haptic, "Trocar" to rename inline. On an invite link: the room's card (public preview first, then the members once the join lands) and "Entrar em {server}". |
+| Sala | cold start only | Three doors, one open at a time: create (name, then `POST /api/servers` + a 7-day invite), the Discord template import (how-to, paste, a preview drawn as the sidebar it becomes, then `/api/import/discord/apply`), and paste an invite. |
+| Pronto | after a room is made | The invite link (copy, with a check and a haptic), "Traz a galera" short and long texts with the system share sheet (`ACTION_SEND`), and three lines of what the room can do. Confetti once. |
+| Arrival | after the wizard | A banner in the room: invitees get "Você entrou em {server}", the first text and voice channels as one-tap chips, and confetti; organizers get "Sua sala tá pronta" with "Copiar convite". |
+
+**Who sees it.** `GET /api/me` carries `preferences`; the wizard runs when
+`preferences.onboardedAt` is absent, and never when `preferences` itself is
+absent (an API that cannot record it). Finishing or skipping patches
+`onboardedAt` (`PATCH /api/me/preferences`), so an account that onboarded on
+the web never sees it here, and the reverse. It is a session phase
+(`PhaseKey.Onboarding`), not a dialog over the app.
+
+**Invitees.** An App Link to `/app/invite/<code>` is parked on
+`PushController.pendingTarget` through sign-in and the gate. The signed-out
+screen names the room from `GET /api/public/invites/:code` (no auth header, on
+purpose, see pitfall 16); the wizard takes the code off the controller, joins
+behind the "você" step, and lands in the room with the banner. A dead link is
+explained by the existing `linkError` dialog once the wizard hands over.
+
+**Motion and access.** Steps slide on a spring and the system back gesture
+previews the step behind (`PredictiveBackHandler`, "sala" back to "você"
+only: the room made on "sala" exists, so back on "pronto" means go in).
+Compose scales its own animations by the animator duration scale; the
+confetti and staggered entrances read `ANIMATOR_DURATION_SCALE` themselves and
+are skipped at zero. Haptics: a tick for doors and toggles, confirm for a copy
+or a room made, a longer one for arriving. The rail reads "Passo 2 de 4" to
+TalkBack, doors announce open or closed, presets are labelled, and copy
+feedback is a polite live region.
+
+**Verified on an emulator** (Pixel 10 Pro image, 1280x2856, and the same image
+at 720x1280 and 1080x1920, dev bypass against a local API): the cold organizer
+flow end to end, the invitee flow from an `https://pqp.gg/app/invite/<code>`
+intent, the Discord door against the real `discord.new/hgM48av5Q69A`
+template, a rename that kept its number, pt-BR dark, en light at 1.3x font,
+"remove animations" (no confetti, flow intact), and the predictive back
+gesture. **Not verified:** the Clerk signed-out screen with an invite (no
+publishable key in this session; the dev sign-in screen carries the same
+header), and TalkBack by ear (labels were checked in the accessibility tree).
+
 ## The bug that made every real channel look empty
 
 Worth writing down in full, because the symptom pointed at the wrong layer and
@@ -1730,16 +1778,110 @@ into an immediate answer the day the server starts answering a cold join.
 
 ### Still not done
 
-- **Sending a screen on the SFU.** See the section above; the button is still
-  hidden on a LiveKit room, which is the transport every watch party runs on.
-  A host cannot present from Android yet.
-- **The watch party *event*, as a surface.** `watch-party-update` is read now,
-  but only for `viewerRole` and `options` (see below); `watch-party` is still
-  ignored. The phone draws the stream, not the party's name, host, co-hosts or
-  state machine, and has no create surface.
 - **Picture in picture**, and playing on with the screen off. Both want a media
   session and a service, which is a different piece of work with its own
   battery argument.
+- **Co-host promote/demote, Convidados, and scheduling a party ahead of time.**
+  The REST client (`WatchPartyApi.kt`) and the transition table both already
+  cover them server-side; only the Android UI does not exist yet. See
+  "Hosting from Android (2026-09-26)" below.
+- **The `mic-archive` recording track and a published camera.** Android has no
+  outgoing camera-capture pipeline at all today (it only *receives* remote
+  cameras), and does not publish the second, `LIVE_HLS_MIC_ARCHIVE`-gated mic
+  track the web does for presenters. Both are default-off server features;
+  neither blocks a phone hosting an ordinary watch party.
+
+### Hosting from Android (2026-09-26)
+
+A member holding START_WATCH_PARTY can now create a watch party, go live
+sharing the phone's screen, and end it, from this client —
+`WatchPartyHostController.kt`, `WatchPartyHostGate.kt`,
+`WatchPartyHostSequence.kt`, the REST client in `WatchPartyApi.kt`, and the
+Compose panel in `watch/ui/WatchPartyHostPanel.kt`. This closes the two
+"still not done" bullets that used to be here — sending a screen on the SFU
+was actually fixed by PR #420 already (finding 3 of
+`SCREEN_SHARE_AND_HOSTING_REVIEW.md`), and hosting the *party* itself is what
+this section replaces.
+
+**`canStartWatchParty` is read off `welcome.canStream`**, the same bit
+`VoiceState.screenShareSupported` already carries, which the server resolves
+to START_WATCH_PARTY for a `watch_party` channel type. That is only known
+once this phone has joined the channel's own voice room — open to anyone
+while no party is running, exactly like an ordinary voice channel — so the
+host-only controls (`WatchPartyHostGate.kt`) only appear once the actual host
+has joined that room, one tap earlier than the web's own "Criar watch party"
+button, which reads a client-side permission tree Android does not model at
+all yet (see `ChatViewModel.kt`'s own note on the same gap). Nobody else
+pays that cost.
+
+**Go-live order is state, then join, then capture** — `POST
+/api/watch-parties/:id/state {state:"live"}`, then `join-voice-room`, then
+the existing `MediaProjection` capture/publish path — pulled out as
+[`performWatchPartyGoLive`](../android/app/src/main/kotlin/gg/pqp/app/watch/WatchPartyHostSequence.kt)
+so the ordering is a JVM-tested fact. A failed state transition joins
+nothing; a failed capture after a successful one leaves the party genuinely
+live with no picture, which is the intended failure mode over a silent
+broadcast.
+
+**Out of scope, deliberately, in the first PR:** co-host promote/demote, the
+Convidados stage, scheduling a party ahead of time (always an immediate
+`draft`), the reactions/slow-mode options dialog, and the `mic-archive`
+track. All reuse the same REST client and transition table when built.
+
+### The stage, not a voice room (2026-09-25)
+
+The first line above ("What it looks like") used to end with "the pane draws
+nothing on a voice channel with no watch party," stated as the whole answer.
+It still is, for a plain `voice` channel — but a `watch_party` channel got the
+same nothing while no party was running, and that was the report: "watch
+party shows as a regular voice channel," the identical complaint iOS's build
+22 fixed (see "The player was not enough" above) with nothing on Android to
+match. `ChatRoute.isWatchParty` (`channel.type == "watch_party"`, carried
+alongside `isVoiceChannel` at all three places a chat is opened) is what a
+plain voice channel and a watch party finally answer differently:
+
+- **Idle draws a card**, not silence — `WatchPane`'s `isWatchPartyChannel`
+  parameter, `false` everywhere a plain voice channel opens it, so that
+  channel is untouched byte for byte. `true` only for `route.isWatchParty`
+  draws "Ainda ninguém está transmitindo" / "Quando o host entrar ao vivo,
+  começa aqui" in place of the early return.
+- **"Entrar na call" moved onto the stage itself**, as its own secondary
+  button under the badge row, independent of whether anything is live — a
+  call can run before, during or after a broadcast. The app bar icon
+  (`chat.joinVoice`) is now drawn only for a plain voice room, which has no
+  stage to put a second one on; a watch party's is `route.isWatchParty &&
+  !inThisRoom && mayTakeWatchPartySeat(...)`, the same rule as before, just
+  relocated.
+- **The presenter's camera**, `LiveHlsStream.cameraHlsUrl` (`docs/WATCH_PARTY.md`,
+  "The presenter's camera, floating over the film"), reaches Android for the
+  first time: a second `ExoPlayer`, muted unless `cameraHasVoiceAudio`, drawn
+  over the film per the viewer's own choice of four layouts (`WatchCameraLayout`
+  — a corner PiP, side by side, hide camera, hide stream), a port of
+  `client/src/lib/watch-camera-pip.ts`'s pure placement function
+  (`watchStagePlacement` in `WatchCameraLayout.kt`, unit-tested the same way).
+  The corner is draggable to any of the stage's four corners and snaps on
+  release; the choice (corner + layout) is remembered per phone in a
+  DataStore (`WatchCameraPipPrefsStore`), not per channel — a whole-device
+  preference, same as web's one `localStorage` key. **The same restamp rule
+  the film already had** applies a second time: `watchCameraSourceChanged` in
+  `WatchSource.kt` reattaches the camera player only when the playlist's PATH
+  changes (a camera run or the session restarting), never on the query-string
+  token the audience keyframe rewrites every 30 s — unit-tested the same way
+  `watchSourceChanged` is. A failure here is silent by design, matching web's
+  `WatchCameraPip`: no retry banner, nothing that competes with the film for
+  attention.
+- **The channel list** draws `PqpIcons.WatchParty` (the clapperboard-shaped
+  `tv` glyph) instead of the plain speaker for `channel.type == "watch_party"`,
+  same rule as iOS's `ChannelListView`.
+
+Not done in this pass: system Android Picture-in-Picture (the OS-level kind,
+distinct from the camera corner above) and a dedicated create/host surface —
+both already tracked above. Verified on a Pixel 10 Pro emulator (API 37)
+against a public test HLS stream fed through the pane directly (a temporary
+harness, not shipped): idle card, live picture with the camera corner PiP,
+all four layouts including the layout picker menu, and both `en` and
+`pt-rBR` strings. Not verified against a real production watch party's own
+camera rung, or on a physical device.
 
 ## Cameras, receiving
 

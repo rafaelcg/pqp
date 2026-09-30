@@ -73,6 +73,29 @@ interface VoiceTransport {
 
     fun start(localPeerId: String, ice: List<IceServer>)
 
+    /**
+     * Whether a microphone that will not come up during [start] should take
+     * the whole room connection down with it, or be logged and left
+     * unpublished.
+     *
+     * Scoped per call rather than a standing default, and asked for
+     * explicitly by whoever is about to [start]: an ordinary voice call
+     * needs a working microphone to be worth joining at all, and must keep
+     * failing (and retrying) the way it always has. A watch-party broadcast
+     * does not -- the picture is the point, and a microphone that would not
+     * open must never be the reason a stream fails to start. `false` before
+     * every [start] unless the caller says otherwise (`VoiceController.join`'s
+     * `tolerateMicrophonePublishFailure`), so nothing has to opt out.
+     *
+     * Meaningful on the SFU alone: [LiveKitEngine] is the transport whose
+     * `start` can fail specifically because the microphone would not
+     * publish while everything else about the room came up fine. Mesh's own
+     * audio setup is not scoped by this PR, so it ignores this call, exactly
+     * like [setCanPublishScreen] and the other members this interface
+     * documents as one-sided.
+     */
+    fun setTolerateMicrophonePublishFailure(tolerate: Boolean)
+
     fun setMuted(muted: Boolean)
 
     /**

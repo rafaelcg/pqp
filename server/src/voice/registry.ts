@@ -1048,12 +1048,24 @@ export async function listVoiceRoster(
 }
 
 /** Every occupied room in the cluster, for the rosters a fresh socket is sent. */
-export async function listVoiceRosters(): Promise<VoiceRoomRoster[]> {
-  const result = await countedQuery<RosterDbRow>(
-    getPool(),
-    "registry.listRosters",
-    `${ROSTER_SELECT} ORDER BY r.channel_id, p.joined_at`,
-  );
+export async function listVoiceRosters(
+  options: { channelIds?: readonly string[] } = {},
+): Promise<VoiceRoomRoster[]> {
+  // `channelIds` narrows it to one server's rooms, for a socket whose account
+  // just joined that server: the rest of the cluster is not read at all.
+  const result = options.channelIds
+    ? await countedQuery<RosterDbRow>(
+        getPool(),
+        "registry.listRostersIn",
+        `${ROSTER_SELECT} WHERE r.channel_id = ANY($1::uuid[])
+          ORDER BY r.channel_id, p.joined_at`,
+        [options.channelIds],
+      )
+    : await countedQuery<RosterDbRow>(
+        getPool(),
+        "registry.listRosters",
+        `${ROSTER_SELECT} ORDER BY r.channel_id, p.joined_at`,
+      );
   return groupRosters(result.rows).filter((room) => room.peers.length > 0);
 }
 

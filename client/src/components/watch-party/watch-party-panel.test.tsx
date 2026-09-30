@@ -925,13 +925,19 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(ackSheet).toContain("goLiveParty.channelId");
 
     // `finishWatchPartyGoLiveShare` itself: a fresh lookup through the pure,
-    // tested decision function, never a stale snapshot.
+    // tested decision function, never a stale snapshot. `byChannel` WAS the
+    // stale snapshot: this runs after the go-live's awaits, through a closure
+    // from the render before that go-live's own `put`, so it read the draft
+    // and skipped the handoff on every go-live (production rehearsal C,
+    // 2026-09-25). `current` reads the latest render's map
+    // (`use-watch-parties-current.test.tsx`).
     const helper = source.slice(
       source.indexOf("function finishWatchPartyGoLiveShare"),
       source.indexOf("async function handleWatchPartyGoLive"),
     );
     expect(helper).toContain("decideGoLiveMicPrompt(");
-    expect(helper).toContain("watchParties.byChannel[channelId]");
+    expect(helper).toContain("watchParties.current(channelId)");
+    expect(helper).not.toContain("watchParties.byChannel[channelId]");
   });
 });
 

@@ -50,6 +50,7 @@ import type {
   MemberRole,
   SanctionNotice,
   Server,
+  ServerRemoved,
   ThreadSummary,
   User,
   VoiceRoomTransport,
@@ -115,6 +116,7 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { createHistoryLoadTracker } from "@/lib/history-load-tracker";
 import {
   uniformJitterMs,
   bootstrapJitterMs,
@@ -144,6 +146,14 @@ import {
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
+import {
+  dismissPartyNewcomerStrip,
+  isNewcomerAccount,
+  isPartyNewcomerStripDismissed,
+  partyNewcomerStripVisible,
+  partyPhoneLayoutOn,
+  suppressAppInviteForNewcomer,
+} from "@/lib/party-newcomer";
 import {
   shouldOfferVoiceCleanNudge,
   voiceCleanNudgeDismissedPatch,
@@ -198,7 +208,10 @@ import {
 } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
-import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
+import {
+  watchPartyHistoryCandidates,
+  type WatchPartyHistoryChannel,
+} from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
@@ -303,6 +316,7 @@ import {
   fetchServerThreads,
   setThreadMembership,
   fetchCommunityHomeUnread,
+  fetchServerCommunityHomeConfig,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -338,6 +352,7 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import {
+  linkFollowedAt,
   parseAppRoute,
   pickOpenableServer,
   signedOutRedirectPath,
@@ -351,16 +366,35 @@ import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
+  INTENT_PARAM,
   peekCreateIntent,
   stashCreateIntent,
   stashInviteRef,
+  stashWaitlistIntent,
   takeAddIntent,
   takeCreateIntent,
   takeHandleClaim,
   takeInviteRef,
   takeJoinIntent,
+  peekJoinIntent,
+  takeWaitlistIntent,
+  waitlistIntentFromSearch,
   type CreateIntent,
 } from "@/lib/handle-intent";
+import {
+  ackWatchPartyApproval,
+  fetchWatchPartyApprovals,
+  loadWatchPartyWaitlist,
+  setWatchPartyWaitlistOwner,
+  shouldOfferWatchPartyTeaser,
+  useWatchPartyWaitlist,
+} from "@/lib/watch-party-waitlist";
+import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
+import { startConfigRefresh } from "@/lib/config-refresh";
+import {
+  WatchPartyApprovedToasts,
+  type WatchPartyApprovedCard,
+} from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
 import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
@@ -389,13 +423,21 @@ import {
   spendConfetti,
   type ArrivalSurface,
 } from "@/lib/arrival";
-import { takeAcquisition } from "@/lib/acquisition";
+import { acknowledgeAcquisition, peekAcquisition } from "@/lib/acquisition";
+import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
-import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
+  translateMessage,
+  useTranslation,
+  type MessageKey,
+} from "@/lib/i18n";
+import { voiceModerationNotice } from "@/lib/voice-moderation-notice";
+import {
+  applyConversationMessage,
   conversationChannel,
   conversationSubtitle,
   conversationTitle,
@@ -407,6 +449,10 @@ import {
 } from "@/lib/conversations";
 import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
+import {
+  createChannelWriteQueue,
+  createLiveReadAck,
+} from "@/lib/live-read-ack";
 import {
   HOME_SELECTION,
   selectionRoutePath,
@@ -422,10 +468,17 @@ import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
+  channelListRetryDelayMs,
+  createChannelListTickets,
+  vanishedChannelFallback,
+} from "@/lib/channel-list-refresh";
+import {
   onConnectionCheckRequest,
   onSettingsRequest,
 } from "@/lib/settings-request";
 import {
+  applyCommunityHomeRead,
+  applyCommunityHomeSwitch,
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
@@ -433,9 +486,11 @@ import {
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
   markCommunityHomeRowSeen,
+  mergeServerUpdate,
   pickServerLandingTarget,
   shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
+import { pickLivePartyChannel } from "@/lib/live-party-landing";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -452,6 +507,7 @@ import {
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
+  getNotificationState,
   notifyChannelActivity,
   rememberActivityChannel,
   rememberServers,
@@ -464,6 +520,7 @@ import {
   setSoundOutput,
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
+import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
@@ -480,9 +537,14 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
-import { setInCall } from "@/lib/in-call-state";
+import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
+import {
+  preloadHlsEngine,
+  setPartyFastStart,
+  shouldPreloadHlsEngine,
+} from "@/lib/party-fast-start";
 import {
   WatchChannelStage,
   watchAudienceCount,
@@ -503,6 +565,7 @@ import {
   steersAtBrowserTab,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { ensureNativeShareAudio, prefetchNativeShareAudio } from "@/lib/native-share-audio";
 import {
   hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
@@ -518,6 +581,7 @@ import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
 import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
+import { feedAudienceCount } from "@/lib/watch-party-activity";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
@@ -552,6 +616,19 @@ const HEADER_ACTION_TILE =
  * `scheduleReconnectMessagesRefetch` below.
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
+
+/** A stable empty array, so "no favorites" is the same reference every
+ * render instead of a fresh `[]` that defeats `ChannelList`'s `memo()`.
+ * `ChannelList` only ever reads this prop. */
+const EMPTY_FAVORITE_CHANNEL_IDS: string[] = [];
+
+/** What a `server-removed` frame says, by reason. A map, so every key the
+ * i18n check looks for is written out whole. */
+const SERVER_REMOVED_COPY: Record<ServerRemoved["reason"], MessageKey> = {
+  kicked: "chrome.serverRemoved.kicked",
+  banned: "chrome.serverRemoved.banned",
+  deleted: "chrome.serverRemoved.deleted",
+};
 
 interface AppProps {
   devBypass?: boolean;
@@ -1017,7 +1094,9 @@ function ClerkAppGate() {
                 ) : (
                   <>
                     <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-                      <Button>{t("signedOut.createAccount")}</Button>
+                      <Button onClick={() => noteSignupCta("gate", "")}>
+                        {t("signedOut.createAccount")}
+                      </Button>
                     </SignUpButton>
                     <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
                       <Button variant="secondary">
@@ -1108,6 +1187,9 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // For callbacks that must not change identity when the account loads.
+  const userIdRef = useRef<string | null>(null);
+  userIdRef.current = user?.id ?? null;
   // Composer drafts are kept per account; a sign-out reads as no drafts.
   useEffect(() => {
     setDraftsAccount(user?.id ?? null);
@@ -1225,6 +1307,11 @@ function MainAppContent({
     window.location.reload();
   }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // `party_newcomer_experience`: the one-line strip was closed on this
+  // device. Read once; the write is `dismissPartyNewcomerStrip`.
+  const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
+    isPartyNewcomerStripDismissed(),
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -1312,6 +1399,20 @@ function MainAppContent({
    * set whether or not this device has welcomed the account there before.
    */
   const [inviteJoin, setInviteJoin] = useState<
+    "pending" | "failed" | { serverId: string } | null
+  >(null);
+  /**
+   * The same two facts for a community's public link (`/c/<slug>`, which
+   * reaches the app as `?join=<slug>`). That person came for one room, so the
+   * first run takes the invite's shape: two screens, the room named on the
+   * first, and no "create your own server" door. On 2026-09-26, 7 of the 93
+   * accounts MoonKase's link created mid-show made a server of their own in
+   * that step and were moved into it, away from the party they came for.
+   * A failed join is not an invite that died, so it never borrows that copy:
+   * `communityJoin === "failed"` hands the wizard a plain first screen.
+   */
+  const [arrivedOnCommunityLink, setArrivedOnCommunityLink] = useState(false);
+  const [communityJoin, setCommunityJoin] = useState<
     "pending" | "failed" | { serverId: string } | null
   >(null);
   /**
@@ -1545,10 +1646,93 @@ function MainAppContent({
    * both the sidebar and the transcript pips update from the same map.
    */
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
+  /**
+   * A burst of presence frames — a busy watch party's audience joining and
+   * leaving the channel — used to bump `memberRosterNudge` once PER FRAME,
+   * and every bump is a `setState` that re-renders this entire component.
+   * `useMemberRosterRefresh` already debounces the read the nudge triggers,
+   * but that debounce runs downstream of the re-render, not in front of it:
+   * a hundred presence frames in a few seconds was a hundred full renders of
+   * the whole app — sidebar, member list, the open channel's transcript —
+   * before even one of them did anything. This coalesces same-window bumps
+   * into one, leading-edge immediately and then at most once per
+   * `PRESENCE_NUDGE_COALESCE_MS`, so a burst costs one render instead of
+   * one per frame while a lone frame still lands right away.
+   */
+  const presenceNudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const presenceNudgePendingRef = useRef(false);
+  const PRESENCE_NUDGE_COALESCE_MS = 250;
+  const bumpMemberRosterNudge = useCallback(() => {
+    if (presenceNudgeTimerRef.current !== null) {
+      presenceNudgePendingRef.current = true;
+      return;
+    }
+    setMemberRosterNudge((n) => n + 1);
+    presenceNudgeTimerRef.current = setTimeout(() => {
+      presenceNudgeTimerRef.current = null;
+      if (presenceNudgePendingRef.current) {
+        presenceNudgePendingRef.current = false;
+        setMemberRosterNudge((n) => n + 1);
+      }
+    }, PRESENCE_NUDGE_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (presenceNudgeTimerRef.current !== null) {
+        clearTimeout(presenceNudgeTimerRef.current);
+      }
+    },
+    [],
+  );
   // Bumped on `community-home-update` for the OPEN server only — Baú refetches
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // A ticket for every fetch of the open server's channel list that the
+  // `channels-update` refetch has to order itself against. Only the newest
+  // ticket may write the list, so two quick frames (a create and a rename a
+  // second apart) cannot land out of order, and a refetch from an earlier
+  // visit to this server cannot land on top of the list the visit loaded
+  // (`loadChannels` and `applyChannelRoute` take a ticket too).
+  const [channelListTickets] = useState(createChannelListTickets);
+  // The pending retry of a failed `channels-update` refetch, and the server
+  // whose list stayed stale after every retry failed. That one is refetched
+  // on the next socket reconnect rather than waiting for a navigation.
+  const channelListRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const channelListStaleRef = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (channelListRetryTimerRef.current !== null) {
+        clearTimeout(channelListRetryTimerRef.current);
+      }
+    },
+    [],
+  );
+  const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
+  /**
+   * Servers a navigation is loading the channel list for, with how many. While
+   * one is in flight `selectedChannelIdRef` may still name the channel of the
+   * server the reader just left, so a refetch must not read it as deleted.
+   */
+  const channelLoadsRef = useRef(new Map<string, number>());
+  const beginChannelLoad = (serverId: string) => {
+    channelLoadsRef.current.set(
+      serverId,
+      (channelLoadsRef.current.get(serverId) ?? 0) + 1,
+    );
+  };
+  const endChannelLoad = (serverId: string) => {
+    const left = (channelLoadsRef.current.get(serverId) ?? 1) - 1;
+    if (left <= 0) {
+      channelLoadsRef.current.delete(serverId);
+    } else {
+      channelLoadsRef.current.set(serverId, left);
+    }
+  };
   // The instance's Baú flags, resolved once before the first landing so the
   // bootstrap can choose between Home and the first text channel. Off until
   // the API answers; a ref mirrors it for the callbacks that pick a landing.
@@ -1582,6 +1766,18 @@ function MainAppContent({
   );
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  // Stable identity for `MessageList`'s `onReportMessage`: an inline arrow
+  // here was rebuilt on every render of this (huge) component, which read
+  // as "this row's props changed" to `MessageRow`'s `memo()` for every row
+  // on every unrelated re-render — see the row-callback cache in
+  // message-list.tsx for the other half of this fix.
+  const handleReportMessage = useCallback((message: ChatMessage) => {
+    setReportTarget({
+      kind: "message",
+      messageId: message.id,
+      subjectName: message.authorName,
+    });
+  }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
   // Watch party scheduling: the one upcoming/live session for the selected
   // voice channel and every voice channel's sidebar hint, both derived from
@@ -1686,6 +1882,16 @@ function MainAppContent({
     selection.kind === "server" ? selectionServerId(selection) : null,
   );
   const [createWatchPartyOpen, setCreateWatchPartyOpen] = useState(false);
+  /**
+   * The watch party waitlist (`docs/WATCH_PARTY.md` §"The waitlist"). The
+   * dialog, a `?intent=watch-party-waitlist` waiting for onboarding to finish,
+   * and the "liberada" cards for servers the operator has since turned on.
+   */
+  const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
+  const [pendingWaitlist, setPendingWaitlist] = useState(false);
+  const [waitlistApprovals, setWaitlistApprovals] = useState<
+    WatchPartyApprovedCard[]
+  >([]);
   /**
    * The draft THIS TAB opened and has not published yet, plus whether its
    * setup surface was ever actually on screen. See `watch-party-draft.ts`:
@@ -1801,9 +2007,19 @@ function MainAppContent({
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  /** The channel whose history request last failed; see `historyFailed`. */
+  const [historyFailedChannelId, setHistoryFailedChannelId] = useState<
+    string | null
+  >(null);
+  /** Orders overlapping history requests; see `createHistoryLoadTracker`. */
+  const [historyLoads] = useState(createHistoryLoadTracker);
+  const clearHistoryFailed = useCallback((channelId: string) => {
+    setHistoryFailedChannelId((failed) =>
+      failed === channelId ? null : failed,
+    );
+  }, []);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
-  const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
   const [mentionableRoles, setMentionableRoles] = useState<
     Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
@@ -1820,11 +2036,86 @@ function MainAppContent({
     null,
   );
   const unreadCursorByChannelRef = useRef<Record<string, string>>({});
+  // Messages that arrive in the open channel are read once they are on
+  // screen; see `live-read-ack.ts` for why this is not done on leave alone.
+  // Every write to a channel's read cursor goes through this queue, in order:
+  // the server keeps whichever write commits last, so an ack still in flight
+  // must not land after a Mark unread or after the next open's read.
+  const [readCursorQueue] = useState(createChannelWriteQueue);
+  /**
+   * The channel whose message list is at its live end (history loaded, pinned
+   * to the bottom of the newest page), as `MessageList` reports it. Null while
+   * no list is mounted, and reset the moment a channel starts loading: a
+   * report from the list that was on screen before is about another channel,
+   * and a message nobody has on screen has not been read.
+   */
+  const messageListLiveEndRef = useRef<string | null>(null);
+  /**
+   * The main transcript is mounted but not on screen: What's New hides the
+   * whole chat pane, and on a phone the thread panel covers it. The list still
+   * reports "at its live end" then (a hidden box reads as pinned), so this is
+   * what stops a message nobody can see from being acked. Set below, where
+   * `openThread` and the layout are known.
+   */
+  const transcriptObscuredRef = useRef(false);
+  const [liveReadAck] = useState(() =>
+    createLiveReadAck({
+      queue: readCursorQueue,
+      send: (channelId, lastReadAt) =>
+        markChannelRead(channelId, lastReadAt, { forwardOnly: true }),
+      isVisible: () => document.visibilityState === "visible",
+      isAtLiveEnd: () =>
+        !transcriptObscuredRef.current &&
+        messageListLiveEndRef.current !== null &&
+        messageListLiveEndRef.current === selectedChannelIdRef.current,
+      isSelected: (channelId) => selectedChannelIdRef.current === channelId,
+      isHeld: (channelId) => unreadHoldRef.current.has(channelId),
+    }),
+  );
+  useEffect(() => {
+    const onVisibility = () => liveReadAck.resume();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      liveReadAck.dispose();
+    };
+  }, [liveReadAck]);
+  const handleMessageListLiveEnd = useCallback(
+    (atLiveEnd: boolean, channelId: string | null) => {
+      if (atLiveEnd && channelId) {
+        messageListLiveEndRef.current = channelId;
+        // Scrolled back down: what arrived while they were up is read now.
+        liveReadAck.resume();
+      } else if (messageListLiveEndRef.current === channelId) {
+        // Only the list's own channel: a late unmount of the previous list
+        // must not clear the report of the one on screen now.
+        messageListLiveEndRef.current = null;
+      }
+    },
+    [liveReadAck],
+  );
+  // Every way of leaving a channel acks what was seen there and ends the
+  // visit. `openChannel` does it before it switches; this catches the rest
+  // (Home, a closed conversation route, a deleted channel, a lost server).
+  // A second flush of the same channel finds nothing left and sends nothing.
+  const liveReadAckChannelRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = liveReadAckChannelRef.current;
+    liveReadAckChannelRef.current = selectedChannelId;
+    if (previous && previous !== selectedChannelId) {
+      liveReadAck.flush(previous);
+    }
+  }, [selectedChannelId, liveReadAck]);
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
+  // Stable identity for `MessageList`'s `onEditMessageHandled`: an inline
+  // arrow here defeated `MessageList`'s own `memo()` on every render of this
+  // component, which is the single biggest thing that was left rebuilding
+  // JSX for all ~250 rows on ticks that touched nothing this list reads.
+  const clearEditMessageId = useCallback(() => setEditMessageId(null), []);
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
-   * as `mentionMembers`, so no surface pays a second request for it.
+   * as `serverMembers`, so no surface pays a second request for it.
    */
   const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
     () => new Map(),
@@ -1840,6 +2131,22 @@ function MainAppContent({
   const [timeoutsEpoch, setTimeoutsEpoch] = useState(0);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     null,
+  );
+  /**
+   * When this reader last sent a message, per channel, in this tab. A link to
+   * a message (a search result) opens its channel first and only then asks
+   * the list to jump, and that can take a while: the router applies the new
+   * address in a transition, then the channel list and the history are
+   * fetched. A send made after the link was followed is the newer request, so
+   * the jump is dropped rather than scrolling the reader away from what they
+   * just sent into a page that does not hold it.
+   */
+  const lastOwnSendAtRef = useRef(new Map<string, number>());
+  const sentSince = useCallback(
+    (channelId: string | null, since: number) =>
+      channelId !== null &&
+      (lastOwnSendAtRef.current.get(channelId) ?? 0) > since,
+    [],
   );
   const [, setTick] = useState(0);
 
@@ -1875,6 +2182,13 @@ function MainAppContent({
     };
   }, [voice]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  // In a call, the socket keeps a tighter watch on itself: a dead link under
+  // a voice seat is found in about ten seconds instead of half a minute. Only
+  // in a call, because the pings are paid for on the server by everybody.
+  const inVoiceCall = voiceState.status !== "idle";
+  useEffect(() => {
+    transport.setCallActive(inVoiceCall);
+  }, [transport, inVoiceCall]);
   // Leaving the room, or being moved out of it, ends the warning: the seat it
   // was about is gone.
   useEffect(() => {
@@ -2014,6 +2328,13 @@ function MainAppContent({
   });
 
   /**
+   * The status hook, through a ref: the socket handler is installed once per
+   * connection and must not be rebuilt each time the account changes it.
+   */
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  /**
    * O recado, the line under the name. A separate hook from `useUserStatus`
    * even though the two controls share a popover, because they share nothing
    * else: the manual status is a preference resolved out of an in-memory
@@ -2043,6 +2364,16 @@ function MainAppContent({
   const conversationsRef = useRef<DmSummary[]>(conversations);
   conversationsRef.current = conversations;
   /**
+   * The `lastMessageAt` a `channel-activity` frame gave a conversation row,
+   * by channel. That value is this device's clock, not the server's, and a
+   * row still holding it must not be ordered against a real message's time
+   * (see `applyConversationMessage`).
+   */
+  const localConversationStampsRef = useRef(new Map<string, string>());
+  /** Same reason: the handler files a message into its conversation's row. */
+  const blockedUsersRef = useRef<BlockedUser[]>(blockedUsers);
+  blockedUsersRef.current = blockedUsers;
+  /**
    * The friends store, through a ref, for the same reason every other live
    * value the socket handler touches goes through one: the handler is installed
    * once per connection, and putting a value that changes on every friends
@@ -2057,6 +2388,52 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
+
+  /**
+   * Servers whose Baú switch may have moved while this app was not listening:
+   * every server after a reconnect, and one whose re-read failed. Frames sent
+   * while the socket was down are gone, so the switch is re-read from the
+   * server the next time that server is opened (the selected one right after
+   * the reconnect). One request per server per reconnect at most, never a
+   * refetch of the whole server list.
+   */
+  const communityHomeUnverifiedRef = useRef(new Set<string>());
+  /** The newest re-read issued per server; an older answer that lands last is dropped. */
+  const communityHomeReadSeqRef = useRef(new Map<string, number>());
+  const reconcileCommunityHomeSwitch = useCallback(
+    (serverId: string) => {
+      communityHomeUnverifiedRef.current.delete(serverId);
+      if (!communityHomeOn()) {
+        return;
+      }
+      const seqs = communityHomeReadSeqRef.current;
+      const seq = (seqs.get(serverId) ?? 0) + 1;
+      seqs.set(serverId, seq);
+      const issuedAtVersion =
+        serversRef.current.find((row) => row.id === serverId)
+          ?.communityHomeVersion ?? 0;
+      fetchServerCommunityHomeConfig(serverId).then(
+        (config) => {
+          if (seqs.get(serverId) !== seq) {
+            return;
+          }
+          setServers((rows) =>
+            applyCommunityHomeRead(rows, serverId, config, issuedAtVersion),
+          );
+        },
+        () => {
+          if (seqs.get(serverId) === seq) {
+            communityHomeUnverifiedRef.current.add(serverId);
+          }
+        },
+      );
+    },
+    [communityHomeOn],
+  );
+  const reconcileCommunityHomeSwitchRef = useRef(reconcileCommunityHomeSwitch);
+  reconcileCommunityHomeSwitchRef.current = reconcileCommunityHomeSwitch;
 
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
@@ -2076,6 +2453,48 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  // `party_fast_start` (runtime flag, per server): the selected server's
+  // answer is what the watch player reads, and the player chunk is fetched
+  // as soon as it is on, not when the first playlist URL arrives.
+  const partyFastStartOn = liveHlsConfig?.fastStart === true;
+  useEffect(() => {
+    setPartyFastStart(partyFastStartOn);
+  }, [partyFastStartOn]);
+  // The player chunk is fetched only for somebody on, or entering, a watch
+  // party channel (never for the rest of an enabled server's chat).
+  const openChannelType =
+    selection.kind === "server"
+      ? channels.find((c) => c.id === selectedChannelId)?.type
+      : undefined;
+  const onPartyChannel =
+    openChannelType !== undefined && isWatchPartyChannelType(openChannelType);
+  useEffect(() => {
+    if (shouldPreloadHlsEngine(partyFastStartOn, onPartyChannel)) {
+      preloadHlsEngine();
+    }
+  }, [partyFastStartOn, onPartyChannel]);
+  /**
+   * Asked ONLY where the server has already said no. A server whose config
+   * answered `enabled: true` (it runs watch parties) or has not answered yet
+   * makes no waitlist request at all, so nothing here can reach a server
+   * where a party can run.
+   */
+  // A different account gets an empty waitlist store (its rows are private).
+  const waitlistOwnerId = user?.id ?? null;
+  useEffect(() => {
+    setWatchPartyWaitlistOwner(waitlistOwnerId);
+  }, [waitlistOwnerId]);
+  // Runtime flags reach an open tab: the live-hls config and the waitlist
+  // answers are re-asked on focus and on a slow timer, so an operator's flip
+  // (the teaser, the camera size, a server switched on) shows without a
+  // reload. See `lib/config-refresh.ts`.
+  useEffect(() => startConfigRefresh(), []);
+  const watchPartyWaitlist = useWatchPartyWaitlist(
+    selectedServerId,
+    isWatchPartyChannelsEnabled() &&
+      selectedServerId !== null &&
+      liveHlsConfig?.enabled === false,
+  );
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
   const screenFrameRateRef = useRef(localSettings.screenFrameRate);
@@ -2147,24 +2566,34 @@ function MainAppContent({
       }
       void (async () => {
         try {
-          await ensureOsCanExcludeCallAudio();
+          // The call's server, not the one on screen: the per-server switch
+          // for native Windows share audio follows where the share goes. A DM
+          // call has none and gets the global answer.
+          const [, nativeShareAudio] = await Promise.all([
+            ensureOsCanExcludeCallAudio(),
+            ensureNativeShareAudio(voiceServerIdRef.current),
+          ]);
           if (!shareRequestGuardRef.current.isCurrent(token)) {
             return;
           }
-          const env = liveScreenCaptureEnvironment();
+          // Carried on the intent, so the answer for THIS share's server is
+          // the one its capture is built with, however long a prompt or the
+          // HLS disclosure holds it.
+          const shareIntent: ScreenCaptureIntent = { ...intent, nativeShareAudio };
+          const env = liveScreenCaptureEnvironment(shareIntent);
           // "Wants a tab" is only true where tabs exist. In the desktop shell a
           // watch party is a window or a screen, and the machine's sound (minus
           // this app's own output) is the only sound it can carry, so the audio
           // question has to be asked there as it is for any other share.
-          const tabSteer = steersAtBrowserTab(env, intent ?? {});
+          const tabSteer = steersAtBrowserTab(env, shareIntent);
           if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
-            setShareAudioPrompt({ intent });
+            setShareAudioPrompt({ intent: shareIntent });
             return;
           }
           const audio = tabSteer
             ? false
             : env.sharePickerOffersAudio && offersShellSystemAudio(env);
-          startScreenShareGated(audio, intent);
+          startScreenShareGated(audio, shareIntent);
         } finally {
           shareRequestGuardRef.current.end(token);
         }
@@ -2189,11 +2618,48 @@ function MainAppContent({
       perms.can(Permission.START_WATCH_PARTY, channelId) ||
       perms.can(Permission.MANAGE_CHANNELS, channelId),
   );
-  const watchPartyHistoryChannels = useWatchPartyHistoryAvailability(
+  const watchPartyHistoryChannelsRaw = useWatchPartyHistoryAvailability(
     watchPartyHistoryCandidateChannels,
   );
+  // The hook deliberately filters fresh every render (see its own comment) —
+  // correct for it, but a brand-new array on every render regardless of
+  // content is exactly what defeats a memoized child's prop comparison.
+  // Stabilized here, one layer up, by content rather than reference: this
+  // list changes rarely (a broadcast confirming, a channel losing access),
+  // so almost every render can hand the sidebar back the SAME array.
+  const watchPartyHistoryChannelsKeyRef = useRef("");
+  const watchPartyHistoryChannelsRef = useRef<
+    readonly WatchPartyHistoryChannel[]
+  >(watchPartyHistoryChannelsRaw);
+  // JSON.stringify of the tuple list, not a joined string: `channel.name` is
+  // user-controlled text and can itself contain the separator, so two
+  // different channel lists could otherwise stringify to the same key (the
+  // same class of bug Farol found in the typing-users cache — see
+  // use-chat.ts).
+  const watchPartyHistoryChannelsKey = JSON.stringify(
+    watchPartyHistoryChannelsRaw.map((channel) => [channel.id, channel.name]),
+  );
+  if (watchPartyHistoryChannelsKey !== watchPartyHistoryChannelsKeyRef.current) {
+    watchPartyHistoryChannelsKeyRef.current = watchPartyHistoryChannelsKey;
+    watchPartyHistoryChannelsRef.current = watchPartyHistoryChannelsRaw;
+  }
+  const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // Windows desktop share sound: look up the call's per-server flag (and the
+  // shell's self-test, when the flag is on) as soon as they are in the call,
+  // so "share screen" never waits on the API. The ref is set before the join
+  // resolves, and a DM call leaves it null (the global answer). A no-op in a
+  // browser, which never has the shell's bridge.
+  // Keyed on the seat's channel, not on having one: moving straight from a
+  // call in one server to a call in another keeps a seat the whole way and
+  // changes the server whose flag the next share reads.
+  const voiceSeatChannelId = voiceState.voiceChannelId ?? null;
+  useEffect(() => {
+    if (voiceSeatChannelId) {
+      prefetchNativeShareAudio(voiceServerIdRef.current);
+    }
+  }, [voiceSeatChannelId]);
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an
@@ -2242,7 +2708,261 @@ function MainAppContent({
     void voice.setCameraDevice(localSettings.cameraDeviceId);
   }, [localSettings.cameraDeviceId, voice]);
 
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  /**
+   * `chat.onChange` / `threadChat.onChange` call this on EVERY frame either
+   * controller applies — a message, a reaction, an edit, a typing broadcast —
+   * and it used to bump `tick` unconditionally, which re-renders this whole
+   * component. A busy watch party fires `typing-broadcast` and
+   * `message-broadcast` several times a second, and profiling one (the same
+   * harness as the presence-nudge fix above) found this was the single
+   * biggest remaining source of full-app re-renders: worse than presence,
+   * because nothing downstream of it was throttled at all. Coalesced the
+   * same way — leading edge fires immediately, so a deliberate one-off call
+   * (selecting a channel, sending your own message) still reads as instant;
+   * a burst inside `REFRESH_COALESCE_MS` collapses to one trailing render
+   * instead of one per frame.
+   *
+   * 30ms, not the 250ms `bumpMemberRosterNudge` uses: this path also carries
+   * the swap of YOUR OWN message from its optimistic `pending:<nonce>` row to
+   * the server-confirmed one (`use-chat.ts`'s message-broadcast handler),
+   * which changes that row's React key and forces a real remount — losing
+   * any transient DOM state tied to the old node, an open context menu among
+   * it. A 100ms window widened the gap between "server confirmed" and "the
+   * DOM actually reflects it" enough to land inside a keyboard/mouse
+   * interaction with that same row on a loaded CI runner (`element was
+   * detached from the DOM, retrying` on `message-keyboard-accessibility` /
+   * `message-quick-reactions`). 30ms still collapses a genuine same-tick
+   * burst (several WS frames arriving together) without meaningfully
+   * widening that pre-existing race.
+   */
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshPendingRef = useRef(false);
+  const REFRESH_COALESCE_MS = 30;
+  const refresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    setTick((t) => t + 1);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        setTick((t) => t + 1);
+      }
+    }, REFRESH_COALESCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  /**
+   * `ChannelList` (the whole left sidebar: channels, voice occupancy, watch
+   * party affordances) is wrapped in `memo()`, but nearly every one of these
+   * was an inline arrow rebuilt on every render of `MainAppContent` — or a
+   * plain `function handleX()` that was never itself a `useCallback` — so
+   * the memo comparison failed on essentially every prop, every render,
+   * which is the same "memoized child, unmemoized props" shape the message
+   * list had (see message-list.tsx). `useStableCallback` gives each one a
+   * permanent identity without re-auditing every handler's own dependency
+   * list; see that hook's own comment for why that trade is safe here.
+   *
+   * Deliberately placed here, ahead of the `bootstrapError` /
+   * `ageGate` / `!bootstrapReady` / `needsOnboarding` early returns further
+   * down: a hook has to run on every render regardless of what this
+   * component goes on to display, and closures over names declared later in
+   * this function body (`handleThreadMembership`, `toggleChannelSidebar`,
+   * etc.) are still safe here — they resolve those bindings when the
+   * returned callback is actually CALLED, by which point the whole
+   * function body has long since finished running, not when this line
+   * itself executes.
+   */
+  const stableOnOpenThread = useStableCallback((thread: ThreadSummary) =>
+    void openThreadFromSidebar(thread),
+  );
+  const stableOnLeaveThread = useStableCallback((thread: ThreadSummary) =>
+    void handleThreadMembership(thread, false),
+  );
+  const stableOnMarkThreadRead = useStableCallback((thread: ThreadSummary) =>
+    void clearUnread(thread.channelId),
+  );
+  const stableOnMobileClose = useStableCallback(() => setMobileNavOpen(false));
+  const stableOnSelectChannel = useStableCallback((id: string) =>
+    void selectChannel(id),
+  );
+  const stableOnJoinVoice = useStableCallback((channelId: string) =>
+    handleJoinVoiceFromList(channelId),
+  );
+  const stableOnWatchLiveParty = useStableCallback((channelId: string) =>
+    void handleWatchLiveParty(channelId),
+  );
+  const stableOnCreateWatchParty = useStableCallback(() =>
+    setCreateWatchPartyOpen(true),
+  );
+  const stableOnOpenWatchPartyHistory = useStableCallback(
+    (channelId: string) => setWatchPartyHistoryChannelId(channelId),
+  );
+  const stableCanMoveIn = useStableCallback((channelId: string) =>
+    perms.can(moveMembersBit(), channelId),
+  );
+  const stableCanConnectIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.CONNECT, channelId),
+  );
+  const stableCanMuteIn = useStableCallback((channelId: string) =>
+    perms.can(Permission.MUTE_MEMBERS, channelId),
+  );
+  const stableCanKickUser = useStableCallback((userId: string) =>
+    canKickOccupant(userId),
+  );
+  const stableOnMoveVoiceOccupant = useStableCallback(
+    (userId: string, channelId: string) =>
+      void handleMoveVoiceOccupant(userId, channelId),
+  );
+  const stableOnDisconnectVoiceOccupant = useStableCallback((userId: string) =>
+    void handleDisconnectVoiceOccupant(userId),
+  );
+  const stableOnServerMuteOccupant = useStableCallback(
+    (userId: string, muted: boolean) =>
+      void handleServerMuteOccupant(userId, muted),
+  );
+  const stableOnLowerOccupantHand = useStableCallback((userId: string) =>
+    void handleLowerOccupantHand(userId),
+  );
+  const stableOnKickOccupant = useStableCallback(
+    (userId: string, name: string) => void handleKickOccupant(userId, name),
+  );
+  const stableOnSetPeerVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setPeerVolume(userId, volume),
+  );
+  const stableOnSetScreenVolume = useStableCallback(
+    (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
+  );
+  const stableOnCreateChannel = useStableCallback(
+    (type: ChannelType, isPrivate: boolean) =>
+      setChannelPrompt({ mode: "create", type, isPrivate }),
+  );
+  const stableOnRenameChannel = useStableCallback((channel: Channel) =>
+    setChannelPrompt({ mode: "rename", channel }),
+  );
+  const stableOnOpenChannelSettings = useStableCallback(
+    (
+      channel: Channel,
+      section: ChannelSettingsSectionId,
+      options?: { forceAdvanced?: boolean },
+    ) =>
+      setChannelSettings({
+        channelId: channel.id,
+        section,
+        forceAdvanced: options?.forceAdvanced ?? false,
+      }),
+  );
+  const stableOnDeleteChannel = useStableCallback((id: string) =>
+    void handleDeleteChannel(id),
+  );
+  const stableOnPurgeChannel = useStableCallback(
+    (channel: Pick<Channel, "id" | "name">) =>
+      setPurgeChannel({ id: channel.id, name: channel.name }),
+  );
+  const stableOnMoveChannel = useStableCallback(
+    (id: string, parentId: string | null, index: number) =>
+      void handleMoveChannel(id, parentId, index),
+  );
+  const stableOnFavoriteChannelIdsChange = useStableCallback(
+    (ids: string[]) => handleFavoriteChannelIdsChange(ids),
+  );
+  const stableOnInvite = useStableCallback(() => setInviteMode("create"));
+  const stableOnOpenMembers = useStableCallback(() => setMembersOpen(true));
+  const stableOnOpenServerSettings = useStableCallback(() =>
+    setServerSettingsOpen(true),
+  );
+  const stableOnExpand = useStableCallback(() => toggleChannelSidebar());
+  const stableOnSelectCommunityHome = useStableCallback(() => {
+    if (selectedServerId) {
+      setWhatsNewOpen(false);
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+    }
+  });
+  // `favoriteChannelIds` is memoized by hand rather than with `useMemo`: it
+  // depends on `selectedServer`, declared further down this function (after
+  // the `bootstrapError` / `ageGate` / `!bootstrapReady` / `needsOnboarding`
+  // early returns), so a `useMemo` call here would read it before its
+  // declaration. Declaring the REF here (which needs no dependency, so no
+  // ordering problem) and doing the actual comparison down where that value
+  // exists keeps this hook call unconditional while the memoization itself
+  // still runs after everything it needs is in scope. Its key is the joined
+  // list of ids themselves, which is exactly what the output is derived
+  // from, so there is nothing it can miss.
+  //
+  // `channelListFooter` (`sidebarFooter()`'s output) was given the same
+  // treatment once and it was wrong: that function also reads `voiceState`,
+  // `musicInComposer`, `liveAttachedHint` and more, none of which were in
+  // its cache key (`sidebarIconsOnly` alone), so the voice status bar, the
+  // music mini player and the download hint banner all went stale the
+  // moment any of THAT changed without `sidebarIconsOnly` also changing —
+  // a call ending, a track changing, a hint appearing, none of it repainted
+  // this footer. It showed up as a layout shift landing mid-interaction
+  // elsewhere on the page (a stale "Get the app" banner appearing or
+  // disappearing under a click it had no business being under), which is
+  // what `e2e/user-status-menu.spec.ts` caught. `sidebarFooter()`'s two
+  // other call sites were never touched and call it fresh every render —
+  // this one now matches them instead of trying to cache a value with this
+  // many true inputs by a key that named only one of them.
+  const favoriteChannelIdsKeyRef = useRef("");
+  const favoriteChannelIdsRef = useRef<string[]>(EMPTY_FAVORITE_CHANNEL_IDS);
+
+  /**
+   * `MemberSidebar` (the right-hand roster) is also wrapped in `memo()`, and
+   * had the exact same shape of problem: every callback prop was an inline
+   * arrow rebuilt on every render of this component, which — with a
+   * hundred-member server — meant re-rendering the whole roster on every
+   * unrelated tick. Same fix, same reasoning about closures resolving their
+   * captured bindings at call time as the `ChannelList` block above.
+   */
+  const stableOnMemberNickname = useStableCallback(
+    (userId: string, nickname: string | null) => {
+      setServerMembers((prev) =>
+        prev.map((row) => (row.id === userId ? { ...row, nickname } : row)),
+      );
+    },
+  );
+  const stableOnMention = useStableCallback((username: string) =>
+    setComposerInsert(`@${username}`),
+  );
+  const stableOnBlockUser = useStableCallback((userId: string) =>
+    void handleBlockUser(userId),
+  );
+  const stableOnUnblockUser = useStableCallback((userId: string) =>
+    void handleUnblockUser(userId),
+  );
+  const stableOnReportUser = useStableCallback((member: ServerMember) =>
+    setReportTarget({
+      kind: "user",
+      userId: member.id,
+      subjectName: member.displayName,
+      serverId: selectedServerId,
+    }),
+  );
+  const stableOnOpenMembersPanel = useStableCallback(() =>
+    setMembersOpen(true),
+  );
+  // A real `useMemo`, not the hand-rolled ref pattern above: `channels` is
+  // declared well before this point (line ~1153), so there is no ordering
+  // problem to work around.
+  const memberSidebarVoiceChannels = useMemo(
+    () =>
+      channels
+        .filter((c) => isVoiceRoomChannelType(c.type))
+        .map((c) => ({ id: c.id, name: c.name })),
+    [channels],
+  );
+
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
@@ -2412,13 +3132,17 @@ function MainAppContent({
       return next;
     });
     try {
-      const result = await markChannelRead(channelId);
+      // Queued behind any ack from the last visit, so that ack cannot land
+      // after this and make its cursor the "previous" one we get back.
+      const result = await readCursorQueue.run(channelId, () =>
+        markChannelRead(channelId),
+      );
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, []);
+  }, [readCursorQueue]);
 
   const loadUnread = useCallback(async (serverId: string) => {
     try {
@@ -2527,21 +3251,18 @@ function MainAppContent({
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
     if (conversationParticipants) {
-      setMentionMembers([...conversationParticipants]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     if (!selectedServerId) {
-      setMentionMembers([]);
       setMentionableRoles([]);
       setServerMembers([]);
       setServerRoles([]);
       return;
     }
     setServerMembers([]);
-    setMentionMembers([]);
     let cancelled = false;
     void Promise.all([
       fetchMembers(selectedServerId),
@@ -2549,7 +3270,6 @@ function MainAppContent({
     ])
       .then(([{ members }, { roles }]) => {
         if (!cancelled) {
-          setMentionMembers(members);
           setServerMembers(members);
           setServerRoles(roles);
           setMemberRoles(
@@ -2580,11 +3300,18 @@ function MainAppContent({
     conversationParticipants ? null : selectedServerId,
     memberRosterNudge,
     applyRosterPayload,
+    serverMembers.length,
   );
 
-  const mentionCandidates = useMemo(() => {
+  /**
+   * Read straight off the live roster rather than a copy of the first fetch.
+   * A copy is what the member panel outgrew: somebody who joined after the page
+   * loaded showed up there within seconds and could still not be completed
+   * after `@` until a reload.
+   */
+  const mentionCandidates = useMemo((): MentionCandidate[] => {
     if (conversationParticipants) {
-      return mentionMembers;
+      return conversationParticipants;
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
@@ -2619,7 +3346,7 @@ function MainAppContent({
       }
     }
     return [
-      ...mentionMembers.map((member) => ({
+      ...serverMembers.map((member) => ({
         ...member,
         mentionKind: "member" as const,
       })),
@@ -2627,7 +3354,7 @@ function MainAppContent({
     ];
   }, [
     conversationParticipants,
-    mentionMembers,
+    serverMembers,
     mentionableRoles,
     perms,
     t,
@@ -2888,14 +3615,22 @@ function MainAppContent({
    */
   const openChannel = useCallback(
     async (channelId: string) => {
+      const leaving = selectedChannelIdRef.current;
+      if (leaving && leaving !== channelId) {
+        liveReadAck.flush(leaving);
+      }
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
+      // Not at the live end until this channel's list says so, after its
+      // history has loaded.
+      messageListLiveEndRef.current = null;
       // The reply belongs to the conversation you were in, not the next one.
       setReplyTarget(null);
       // --- threads --- the panel belongs to the channel it was opened from.
       closeThreadPanelRef.current();
       setUnreadSince(null);
       setEditMessageId(null);
+      setHistoryFailedChannelId(null);
 
       // Community Home is a client-only surface, not a channel the API knows.
       if (isCommunityHomeChannelId(channelId)) {
@@ -2906,6 +3641,7 @@ function MainAppContent({
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
+      const load = historyLoads.begin(channelId);
 
       try {
         const [page, previousLastReadAt] = await Promise.all([
@@ -2919,26 +3655,89 @@ function MainAppContent({
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
+        // An older request can land after a newer one failed: what it loaded
+        // is on screen, so the error no longer applies.
+        clearHistoryFailed(channelId);
+        if (!load.succeeded()) {
+          // Leaving and coming back, or a retry beside a reconnect: a newer
+          // page is already on screen, with whatever arrived since, and this
+          // one would take those messages away again.
+          return;
+        }
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
-            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            findFirstUnreadMessageId(
+              page.messages,
+              previousLastReadAt,
+              userIdRef.current,
+            )
             ? previousLastReadAt
             : null,
         );
         refresh();
-      } catch (error) {
-        setAppError(
-          error instanceof Error ? error.message : "Failed to load messages",
-        );
+      } catch {
+        // Not the app banner: the raw server string ("database_unavailable")
+        // is not copy, and the list below would still say the channel is
+        // empty. The list shows the failure in place, with a retry.
+        if (
+          selectedChannelIdRef.current === channelId &&
+          load.failureStands()
+        ) {
+          setHistoryFailedChannelId(channelId);
+        }
       } finally {
         if (selectedChannelIdRef.current === channelId) {
           setMessagesLoading(false);
         }
       }
     },
-    [chat, clearUnread, refresh],
+    [chat, clearHistoryFailed, clearUnread, historyLoads, liveReadAck, refresh],
   );
+
+  /**
+   * Fetch the open channel's newest page again after a failed load.
+   *
+   * History only, not `openChannel`: that would also close the thread panel,
+   * drop the reply target and re-mark the channel read, none of which failed.
+   */
+  const retryChannelHistory = useCallback(async () => {
+    const channelId = selectedChannelIdRef.current;
+    if (!channelId) {
+      return;
+    }
+    setHistoryFailedChannelId(null);
+    setMessagesLoading(true);
+    // Loading again: the list reports the live end once the page is in.
+    messageListLiveEndRef.current = null;
+    const load = historyLoads.begin(channelId);
+    try {
+      const page = await fetchMessages(channelId);
+      if (selectedChannelIdRef.current !== channelId) {
+        return;
+      }
+      clearHistoryFailed(channelId);
+      if (!load.succeeded()) {
+        return;
+      }
+      chat.setMessages(page.messages, page.hasMore);
+      refresh();
+    } catch {
+      if (
+        selectedChannelIdRef.current === channelId &&
+        load.failureStands()
+      ) {
+        setHistoryFailedChannelId(channelId);
+      }
+    } finally {
+      if (selectedChannelIdRef.current === channelId) {
+        setMessagesLoading(false);
+      }
+    }
+  }, [chat, clearHistoryFailed, historyLoads, refresh]);
+  const handleRetryHistory = useCallback(() => {
+    void retryChannelHistory();
+  }, [retryChannelHistory]);
 
   // ---------------------------------------------------------------- threads
   //
@@ -3062,6 +3861,20 @@ function MainAppContent({
   openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
   const openThreadRef = useRef<typeof openThread>(null);
   openThreadRef.current = openThread;
+  // Anything that covers the chat pane while it stays mounted: What's New,
+  // the Communities directory (an opaque full-screen overlay), and the thread
+  // panel where it sits on top of the transcript instead of beside it.
+  const transcriptObscured =
+    whatsNewOpen ||
+    (directoryOpen && communitiesEnabled) ||
+    (openThread !== null && !columnLayout);
+  transcriptObscuredRef.current = transcriptObscured;
+  useEffect(() => {
+    if (!transcriptObscured) {
+      // Uncovered: what arrived meanwhile is on screen now.
+      liveReadAck.resume();
+    }
+  }, [transcriptObscured, liveReadAck]);
   const memberSidebarOpenRef = useRef(false);
   memberSidebarOpenRef.current = memberSidebar.open;
 
@@ -3128,7 +3941,11 @@ function MainAppContent({
         threadChat.setMessages(page.messages, page.hasMore);
         setThreadUnreadSince(
           previousLastReadAt &&
-            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            findFirstUnreadMessageId(
+              page.messages,
+              previousLastReadAt,
+              userIdRef.current,
+            )
             ? previousLastReadAt
             : null,
         );
@@ -3318,7 +4135,9 @@ function MainAppContent({
       if (openThreadChannelIdRef.current === channelId) {
         setThreadUnreadSince(lastReadAt);
       }
-      void markChannelRead(channelId, lastReadAt)
+      // Queued, so a live ack already on the wire lands before the rewind.
+      void readCursorQueue
+        .run(channelId, () => markChannelRead(channelId, lastReadAt))
         .then(() => {
           if (selectedServerId) {
             void loadUnread(selectedServerId);
@@ -3328,7 +4147,7 @@ function MainAppContent({
           // Badge is best-effort.
         });
     },
-    [loadUnread, selectedServerId],
+    [loadUnread, readCursorQueue, selectedServerId],
   );
 
   const handleMarkRead = useCallback(() => {
@@ -3381,6 +4200,11 @@ function MainAppContent({
         again: boolean;
       }
     >();
+
+    // The reconnect re-read of the Baú switch (onReady below). One slot: a
+    // second reconnect replaces the pending re-read instead of stacking one.
+    let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
+      null;
 
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
@@ -3450,11 +4274,19 @@ function MainAppContent({
         return;
       }
       state.inFlight = true;
+      const load = historyLoads.quiet(channelId);
       void fetchMessages(channelId)
         .then((page) => {
           if (selectedChannelIdRef.current === channelId) {
-            chat.setMessages(page.messages, page.hasMore);
-            refresh();
+            // Counted, so an open or retry that fails after this landed
+            // cannot put the error back over the page it loaded.
+            const current = load.succeeded();
+            // A reconnect is also how a failed first load heals itself.
+            clearHistoryFailed(channelId);
+            if (current) {
+              chat.setMessages(page.messages, page.hasMore);
+              refresh();
+            }
           }
         })
         .catch(() => {
@@ -3641,6 +4473,17 @@ function MainAppContent({
         setBootstrapReady(true);
 
         transport.onMessage((message) => {
+          if (message.type === "watch-party-waitlist-approved") {
+            setWaitlistApprovals((current) =>
+              current.some((card) => card.serverId === message.serverId)
+                ? current
+                : [
+                    ...current,
+                    { serverId: message.serverId, serverName: message.serverName },
+                  ],
+            );
+            return;
+          }
           if (message.type === "channel-session-reminder") {
             emitChannelSessionReminderToast({
               sessionId: message.sessionId,
@@ -3678,12 +4521,15 @@ function MainAppContent({
               activity.kind ?? "server",
             );
             if (activity.kind && activity.kind !== "server") {
+              // This device's clock: the frame carries no message time. Kept
+              // so the next broadcast is not ordered against it.
               const now = new Date().toISOString();
               if (
                 conversationsRef.current.some(
                   (one) => one.channelId === activity.channelId,
                 )
               ) {
+                localConversationStampsRef.current.set(activity.channelId, now);
                 setConversations((prev) =>
                   touchConversation(
                     prev,
@@ -3778,7 +4624,7 @@ function MainAppContent({
             message.type === "presence-update" ||
             message.type === "presence-delta"
           ) {
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
           }
 
           if (
@@ -3794,6 +4640,46 @@ function MainAppContent({
             message.type === "poll-update" ||
             message.type === "message-rejected"
           ) {
+            // Somebody else's message landed in the channel on screen. It is
+            // read once the reader can see it (tab visible, list at its live
+            // end), so the next visit's NEW rule does not sit above it; the
+            // ack decides that, not this. The server sends no
+            // `channel-activity` for the open channel, which is why this keys
+            // on the broadcast.
+            if (
+              message.type === "message-broadcast" &&
+              message.message.channelId === selectedChannelIdRef.current &&
+              message.message.authorId !== userIdRef.current
+            ) {
+              liveReadAck.note(
+                message.message.channelId,
+                message.message.createdAt,
+              );
+            }
+            // A message this account sent, or one in the conversation it has
+            // open, arrives here in full and never as `channel-activity`, so
+            // the row is moved from the broadcast itself. The list leaves out
+            // what a blocked author said; so does this.
+            if (
+              message.type === "message-broadcast" &&
+              conversationsRef.current.some(
+                (one) => one.channelId === message.message.channelId,
+              ) &&
+              !blockedUsersRef.current.some(
+                (blocked) => blocked.id === message.message.authorId,
+              )
+            ) {
+              const broadcast = message.message;
+              const localStampedAt =
+                localConversationStampsRef.current.get(broadcast.channelId) ??
+                null;
+              setConversations((prev) =>
+                applyConversationMessage(prev, broadcast, {
+                  previewsOn: getNotificationState().previewInApp,
+                  localStampedAt,
+                }),
+              );
+            }
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
             // keeps only its own channel's, so one frame can never render in
@@ -3812,12 +4698,60 @@ function MainAppContent({
             return;
           }
 
+          // A kick, a ban or a delete took this server away while the tab was
+          // open. The server already refuses every read and send that
+          // follows; without this the rail, the channels and a member list
+          // with us still in it stayed up until a reload. Dropped the same
+          // way leaving does, then said once, in the error slot: the drop
+          // clears that slot, so the sentence goes in after it.
+          if (message.type === "server-removed") {
+            const gone = serversRef.current.find(
+              (row) => row.id === message.serverId,
+            );
+            if (!gone) {
+              return;
+            }
+            // The owner's own delete: the settings dialog drops it too, and
+            // telling them what they just did is noise.
+            const quiet = message.reason === "deleted" && gone.role === "owner";
+            if (message.serverId === selectedServerIdRef.current) {
+              setServerSettingsOpen(false);
+              setServerSettingsSection(undefined);
+            }
+            void dropServerRef.current(message.serverId).then(() => {
+              if (quiet) {
+                return;
+              }
+              // An older good-news line (a "you joined" one, say) must not
+              // sit beside the news that the server is gone.
+              setAppNotice(null);
+              setAppError(
+                translateMessage(SERVER_REMOVED_COPY[message.reason], {
+                  server: gone.name,
+                }),
+              );
+            });
+            return;
+          }
+
+          // Another tab or device of this account changed its status. Without
+          // this the user panel here read the old choice until a reload.
+          if (message.type === "own-status") {
+            statusRef.current.adoptRemote(message.status);
+            return;
+          }
+
           if (message.type === "permissions-update") {
             if (message.serverId !== selectedServerIdRef.current) {
               return;
             }
             permsRef.current.refresh(message.version);
-            setMemberRosterNudge((n) => n + 1);
+            bumpMemberRosterNudge();
+            // A real ticket: this batch reads the list later than any fetch
+            // already out, so it may write over them, and a `channels-update`
+            // refetch that starts after it (and lands first) is not
+            // overwritten by it when it lands second.
+            const listTicket = channelListTickets.take();
             void Promise.all([
               fetchChannels(message.serverId),
               fetchRoles(message.serverId).then(
@@ -3829,11 +4763,20 @@ function MainAppContent({
                 () => null,
               ),
             ])
-              .then(([{ channels: list }, rolesRes, membersRes]) => {
+              .then(([{ channels: fetched }, rolesRes, membersRes]) => {
                 if (selectedServerIdRef.current !== message.serverId) {
                   return;
                 }
-                setChannels(list);
+                const listIsCurrent = channelListTickets.isLatest(listTicket);
+                const list = channelListTickets.withCreated(
+                  message.serverId,
+                  fetched,
+                  listTicket,
+                );
+                if (listIsCurrent) {
+                  channelListTickets.wrote(listTicket);
+                  setChannels(list);
+                }
                 if (rolesRes) {
                   setServerRoles(rolesRes.roles);
                   setMentionableRoles(
@@ -3847,7 +4790,6 @@ function MainAppContent({
                 }
                 if (membersRes) {
                   setServerMembers(membersRes.members);
-                  setMentionMembers(membersRes.members);
                   setMemberRoles(
                     new Map(
                       membersRes.members.map((member) => [member.id, member.role]),
@@ -3855,7 +4797,12 @@ function MainAppContent({
                   );
                 }
                 const current = selectedChannelIdRef.current;
-                if (current && !list.some((channel) => channel.id === current)) {
+                if (
+                  listIsCurrent &&
+                  !channelLoadsRef.current.has(message.serverId) &&
+                  current &&
+                  !list.some((channel) => channel.id === current)
+                ) {
                   const next =
                     list.find((channel) => channel.type === "text") ?? list[0];
                   if (next) {
@@ -3865,8 +4812,29 @@ function MainAppContent({
                 }
               })
               .catch(() => {
-                // Next navigation will refetch.
+                // A `channels-update` refetch this batch overtook was silenced
+                // by its ticket: start it again, or the change stays missing
+                // until the next navigation.
+                if (
+                  channelListTickets.owesUpdate(message.serverId, listTicket) &&
+                  selectedServerIdRef.current === message.serverId
+                ) {
+                  refreshChannelListRef.current(message.serverId);
+                }
               });
+            return;
+          }
+
+          // A channel this person can see on the open server was created,
+          // renamed, edited, moved or deleted. `refreshChannelList` refetches
+          // and orders the refetch against every other list fetch. A member
+          // in DMs or on another server loads the list fresh when they get
+          // here.
+          if (message.type === "channels-update") {
+            if (message.serverId !== selectedServerIdRef.current) {
+              return;
+            }
+            refreshChannelListRef.current(message.serverId);
             return;
           }
 
@@ -3874,7 +4842,27 @@ function MainAppContent({
           // delete. Likes and new comments do not fan out. The frame carries
           // only the serverId, so the client refetches; a member sitting in
           // DMs or another server is not "in" this one and is left alone.
+          //
+          // When the owner flips the server's Baú switch the frame also
+          // carries the new value and its version. It is written onto that
+          // server wherever the member is looking, so the row, the landing
+          // and the feed agree with the owner without a reload. Only a higher
+          // version than the row holds is applied, so a late or duplicated
+          // frame cannot undo a newer flip.
           if (message.type === "community-home-update") {
+            const { enabled, version } = message;
+            if (typeof enabled === "boolean" && typeof version === "number") {
+              setServers((rows) =>
+                applyCommunityHomeSwitch(rows, message.serverId, {
+                  enabled,
+                  version,
+                }),
+              );
+            } else if (typeof enabled === "boolean") {
+              // A flip from an API instance without versions (mid rolling
+              // deploy): its order is unknown, so ask for the persisted value.
+              reconcileCommunityHomeSwitchRef.current(message.serverId);
+            }
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
             }
@@ -4032,28 +5020,23 @@ function MainAppContent({
           // A moderator acted on THIS client's voice session. Handled here,
           // not in the voice controller: what follows is app behaviour
           // (leave, or rejoin somewhere else), and the frame carries the
-          // whole sentence to show. Guarded to the room we are actually in —
+          // whole English sentence, kept as the fallback. Guarded to the room we are actually in —
           // a stale or forged frame about some other channel does nothing.
           if (message.type === "voice-moderation") {
             const current = voice.getState();
             if (current.voiceChannelId !== message.voiceChannelId) {
               return;
             }
-            // The mute notices are the one case with local copy: the frame's
-            // sentence is English, and this is a state the person will sit
-            // in for a while, so it is worth saying in their language. The
-            // other actions keep the server's sentence verbatim (the
-            // sanction-notice principle: it already carries the whole story).
+            // The notice is written here in the person's language; the
+            // frame's English `message` is only the fallback.
             setAppError(
-              message.action === "muted"
-                ? translateMessage("voice.serverMuted.self")
-                : message.action === "unmuted"
-                  ? translateMessage("voice.serverMuted.cleared")
-                  : message.reason === "idle"
-                    ? translateMessage("voice.idle.disconnected", {
-                        count: message.aloneMinutes ?? 10,
-                      })
-                    : message.message,
+              voiceModerationNotice(
+                message,
+                channelsRef.current.find(
+                  (one) => one.id === message.movedToChannelId,
+                )?.name,
+                translateMessage,
+              ),
             );
             if (message.action === "disconnected") {
               setIdleWarning(null);
@@ -4181,6 +5164,36 @@ function MainAppContent({
           if (selectedServerIdRef.current) {
             void reloadServerThreadsRef.current(selectedServerIdRef.current);
           }
+          // A `channels-update` refetch that failed through every retry left
+          // this server's list stale. Only then: an unconditional refetch on
+          // every reconnect would add a read per tab to a reconnect storm.
+          const staleServerId = channelListStaleRef.current;
+          if (staleServerId && staleServerId === selectedServerIdRef.current) {
+            refreshChannelListRef.current(staleServerId);
+          }
+          // A Baú switch flipped while the socket was down never arrives as
+          // a frame. Every server is re-read when next opened; the one on
+          // screen now, after the same jitter as the message refetch.
+          for (const row of serversRef.current) {
+            communityHomeUnverifiedRef.current.add(row.id);
+          }
+          const reconnectServerId = selectedServerIdRef.current;
+          if (communityHomeReconnectTimer !== null) {
+            clearTimeout(communityHomeReconnectTimer);
+            communityHomeReconnectTimer = null;
+          }
+          if (reconnectServerId) {
+            communityHomeReconnectTimer = setTimeout(() => {
+              communityHomeReconnectTimer = null;
+              if (
+                !cancelled &&
+                selectedServerIdRef.current === reconnectServerId &&
+                communityHomeUnverifiedRef.current.has(reconnectServerId)
+              ) {
+                reconcileCommunityHomeSwitchRef.current(reconnectServerId);
+              }
+            }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
+          }
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
@@ -4255,6 +5268,9 @@ function MainAppContent({
         if (state.timer !== null) {
           clearTimeout(state.timer);
         }
+      }
+      if (communityHomeReconnectTimer !== null) {
+        clearTimeout(communityHomeReconnectTimer);
       }
       voice.leave();
       transport.disconnect();
@@ -4381,6 +5397,86 @@ function MainAppContent({
     [openChannel, selection, syncRoute],
   );
   selectChannelRef.current = selectChannel;
+
+  /**
+   * Refetch the open server's channel list after a `channels-update` frame.
+   * The frame names no channel, so the whole list is refetched; the server
+   * filters it per viewer, and only the people who can see the change get
+   * the frame at all. A member in DMs or on another server loads the list
+   * fresh when they get here.
+   *
+   * A failure retries on a backoff (`channelListRetryDelayMs`) while this is
+   * still the newest ticket and the server is still open. When the schedule
+   * is spent the server is marked stale and refetched on the next reconnect.
+   *
+   * Only ever for the open server. A late caller asking for a server the
+   * person has already left must not take a ticket or cancel a pending
+   * retry: either would stop the open server's own refresh, and nothing
+   * would start it again.
+   */
+  function refreshChannelList(serverId: string, failedTries = 0) {
+    if (selectedServerIdRef.current !== serverId) {
+      return;
+    }
+    if (channelListRetryTimerRef.current !== null) {
+      clearTimeout(channelListRetryTimerRef.current);
+      channelListRetryTimerRef.current = null;
+    }
+    const ticket = channelListTickets.take();
+    channelListTickets.updateStarted(serverId, ticket);
+    const current = () =>
+      channelListTickets.isLatest(ticket) &&
+      selectedServerIdRef.current === serverId;
+    void fetchChannels(serverId).then(
+      ({ channels: fetched }) => {
+        if (!current()) {
+          return;
+        }
+        channelListTickets.wrote(ticket);
+        // Started before a channel this reader just created: keep it, or
+        // the fallback below would take them off the channel they made.
+        const list = channelListTickets.withCreated(serverId, fetched, ticket);
+        if (channelListStaleRef.current === serverId) {
+          channelListStaleRef.current = null;
+        }
+        setChannels(list);
+        // Deleted under the person reading it: open another channel the same
+        // way a click would, so the transcript and the composer follow, not
+        // just the highlighted row.
+        // Not while a navigation is loading this server: the selection is
+        // then still the previous server's channel (or a DM), which this
+        // list never had. That load picks the landing itself.
+        const fallback = channelLoadsRef.current.has(serverId)
+          ? { vanished: false as const }
+          : vanishedChannelFallback(list, selectedChannelIdRef.current);
+        if (fallback.vanished) {
+          if (fallback.nextId) {
+            void selectChannelRef.current(fallback.nextId, serverId);
+          } else {
+            setSelectedChannelId(null);
+            selectedChannelIdRef.current = null;
+          }
+        }
+      },
+      () => {
+        if (!current()) {
+          return;
+        }
+        const delay = channelListRetryDelayMs(failedTries + 1);
+        if (delay === null) {
+          channelListStaleRef.current = serverId;
+          return;
+        }
+        channelListRetryTimerRef.current = setTimeout(() => {
+          channelListRetryTimerRef.current = null;
+          if (current()) {
+            refreshChannelList(serverId, failedTries + 1);
+          }
+        }, delay);
+      },
+    );
+  }
+  refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
   const selectConversation = useCallback(
@@ -4553,19 +5649,48 @@ function MainAppContent({
   }, [loadConversations, syncRoute]);
 
   const loadChannels = useCallback(
-    async (serverId: string) => {
+    async (
+      serverId: string,
+      /**
+       * Pick the landing from what this server has on right now rather than
+       * from its layout: `refreshAfterJoin` passes the watch parties it
+       * fetched, so a join during a show opens the show.
+       */
+      liveParties?: readonly WatchParty[],
+    ) => {
       setChannelsLoading(true);
+      beginChannelLoad(serverId);
+      if (communityHomeUnverifiedRef.current.has(serverId)) {
+        reconcileCommunityHomeSwitchRef.current(serverId);
+      }
+      const ticket = channelListTickets.take();
       try {
         const { channels: list } = await fetchChannels(serverId);
         setAppError(null);
         setChannels(list);
+        channelListTickets.wrote(ticket);
+        // A `channels-update` arrived while this was in flight, and its
+        // refetch may have landed first: this list could be the older one.
+        // Refetched only while this server is still the open one (see
+        // `refreshChannelList`).
+        if (
+          !channelListTickets.isLatest(ticket) &&
+          selectedServerIdRef.current === serverId
+        ) {
+          refreshChannelListRef.current(serverId);
+        }
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
-        const land = pickServerLandingTarget(
-          list,
-          communityHomeOn() && server?.communityHomeEnabled === true,
-          server?.isCommunity === true,
-        );
+        const liveParty = liveParties
+          ? pickLivePartyChannel(liveParties, list)
+          : null;
+        const land = liveParty
+          ? { id: liveParty }
+          : pickServerLandingTarget(
+              list,
+              communityHomeOn() && server?.communityHomeEnabled === true,
+              server?.isCommunity === true,
+            );
         if (land) {
           await selectChannel(land.id, serverId);
         } else {
@@ -4574,20 +5699,34 @@ function MainAppContent({
           syncRoute({ kind: "server", serverId }, null);
         }
       } catch (error) {
+        const gone = error instanceof ApiError && error.status === 404;
+        // This load's ticket silenced a `channels-update` refetch that was in
+        // flight or waiting to retry, and now it failed too: start that
+        // refetch again, or the change stays missing until a navigation.
+        if (!gone && channelListTickets.owesUpdate(serverId, ticket)) {
+          refreshChannelListRef.current(serverId);
+        }
         setAppError(
-          error instanceof ApiError && error.status === 404
+          gone
             ? translateMessage("chrome.serverUnavailable")
             : error instanceof Error
               ? error.message
               : "Failed to load channels",
         );
       } finally {
+        endChannelLoad(serverId);
         setChannelsLoading(false);
       }
     },
-    [communityHomeOn, loadUnread, selectChannel, syncRoute],
+    [channelListTickets, communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
+  /**
+   * A refusal from the API is thrown back to the dialog, which shows it under
+   * the field and stays open. The page banner would sit behind the modal
+   * overlay, where nobody reads it. Only what fails after the dialog closed
+   * still goes to the banner.
+   */
   async function handleChannelPromptConfirm(
     name: string,
     isPrivate?: boolean,
@@ -4597,55 +5736,56 @@ function MainAppContent({
       return;
     }
 
-    try {
-      if (channelPrompt.mode === "create") {
-        if (!selectedServerId || !channelPrompt.type) {
-          setAppError("Select a server before creating a channel");
+    if (channelPrompt.mode === "create") {
+      if (!selectedServerId || !channelPrompt.type) {
+        throw new Error("Select a server before creating a channel");
+      }
+      const { channel } = await createChannel(
+        selectedServerId,
+        name,
+        channelPrompt.type,
+        isPrivate ?? channelPrompt.isPrivate ?? false,
+        topic || undefined,
+      );
+      const next = [...channels, channel].sort(
+        (a, b) => a.position - b.position,
+      );
+      channelListTickets.created(channel);
+      setChannels(next);
+      setAppError(null);
+      setChannelPrompt(null);
+      // A category is a grouping header, not a place to be — selecting it
+      // would try to open a message pane for something that can never have
+      // one.
+      if (channel.type !== "category") {
+        try {
+          await selectChannel(channel.id);
+        } catch (error) {
+          setAppError(
+            error instanceof Error ? error.message : "Channel action failed",
+          );
           return;
         }
-        const { channel } = await createChannel(
-          selectedServerId,
-          name,
-          channelPrompt.type,
-          isPrivate ?? channelPrompt.isPrivate ?? false,
-          topic || undefined,
-        );
-        const next = [...channels, channel].sort(
-          (a, b) => a.position - b.position,
-        );
-        setChannels(next);
-        setAppError(null);
-        setChannelPrompt(null);
-        // A category is a grouping header, not a place to be — selecting it
-        // would try to open a message pane for something that can never have
-        // one.
-        if (channel.type !== "category") {
-          await selectChannel(channel.id);
-          if (channel.isPrivate) {
-            setChannelSettings({
-              channelId: channel.id,
-              section: "permissions",
-              forceAdvanced: false,
-            });
-          }
+        if (channel.isPrivate) {
+          setChannelSettings({
+            channelId: channel.id,
+            section: "permissions",
+            forceAdvanced: false,
+          });
         }
-        return;
       }
+      return;
+    }
 
-      if (channelPrompt.channel) {
-        const { channel } = await updateChannel(channelPrompt.channel.id, {
-          name,
-        });
-        setChannels((prev) =>
-          prev.map((c) => (c.id === channel.id ? channel : c)),
-        );
-        setChannelPrompt(null);
-        setAppError(null);
-      }
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Channel action failed",
+    if (channelPrompt.channel) {
+      const { channel } = await updateChannel(channelPrompt.channel.id, {
+        name,
+      });
+      setChannels((prev) =>
+        prev.map((c) => (c.id === channel.id ? channel : c)),
       );
+      setChannelPrompt(null);
+      setAppError(null);
     }
   }
 
@@ -4694,6 +5834,7 @@ function MainAppContent({
     setPendingDeleteChannelId(null);
     try {
       await deleteChannel(channelId);
+      channelListTickets.forget(channelId);
       // The server SETs NULL any channel's parent_id that pointed at what was
       // just deleted (a category going away uncategorizes its children rather
       // than taking them with it) — mirrored here, or those children keep a
@@ -4847,6 +5988,9 @@ function MainAppContent({
       voiceState.voiceChannelId,
     ],
   );
+
+  const dropServerRef = useRef(dropServer);
+  dropServerRef.current = dropServer;
 
   async function handleLeaveServer(serverId: string) {
     setPendingLeaveServerId(serverId);
@@ -5300,7 +6444,12 @@ function MainAppContent({
     const decision = decideGoLiveMicPrompt({
       wentOut,
       requestedPartyId: partyId,
-      party: watchParties.byChannel[channelId],
+      // `current`, NOT `byChannel`: this runs after the go-live's awaits, and
+      // the closure it was called from holds the render from BEFORE that
+      // go-live's own `put`, where the party is still a draft. Read that way
+      // every immediate go-live was "party-gone" and the mic prompt never
+      // armed (production rehearsal C, 2026-09-25).
+      party: watchParties.current(channelId),
       isMuted: voice.getState().isMuted,
     });
     if (!decision.arm) {
@@ -6063,12 +7212,40 @@ function MainAppContent({
     void voice.applyScreenFrameRate(shareMaxFrameRate());
   }
 
+  /**
+   * Open a server this account just joined (or made).
+   *
+   * A JOIN DURING A SHOW OPENS THE SHOW. Every join path ends here: the
+   * community link's `?join=`, an invite link, the directory card, the
+   * wizard's typed invite. When a watch party is live in the server, the
+   * person lands on it instead of the Overview or `#general`. On 2026-09-26
+   * every newcomer who reached MoonKase's party went through the Overview
+   * first and spent a median 45 s finding it; see `lib/live-party-landing.ts`.
+   * The party list is asked for beside the server list and a failure reads
+   * as "nothing live", so this can only ever fall back to the old landing,
+   * never cost the join.
+   */
   const refreshAfterJoin = useCallback(
     async (serverId: string) => {
-      const { servers: serverList } = await fetchServers();
+      const [{ servers: serverList }, liveParties] = await Promise.all([
+        fetchServers(),
+        // Capped: the party only picks the landing, so a slow answer must
+        // never hold up a join that already succeeded.
+        isWatchPartyChannelsEnabled()
+          ? Promise.race([
+              apiFetchServerWatchParties(serverId).then(
+                (answer) => answer.parties,
+                () => [] as WatchParty[],
+              ),
+              new Promise<WatchParty[]>((resolve) =>
+                window.setTimeout(() => resolve([]), 3_000),
+              ),
+            ])
+          : Promise.resolve([] as WatchParty[]),
+      ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId);
+      await loadChannels(serverId, liveParties);
     },
     [loadChannels],
   );
@@ -6083,6 +7260,7 @@ function MainAppContent({
       serverId: string,
       channelId: string | null,
       messageId: string | null = null,
+      linkedAt: number = Date.now(),
     ) => {
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
@@ -6092,11 +7270,18 @@ function MainAppContent({
       const targetMessageId = usedFallback ? null : messageId;
 
       setChannelsLoading(true);
+      beginChannelLoad(targetServerId);
+      const ticket = channelListTickets.take();
       try {
         const { channels: list } = await fetchChannels(targetServerId);
         setSelection({ kind: "server", serverId: targetServerId });
         setAppError(null);
         setChannels(list);
+        channelListTickets.wrote(ticket);
+        // Same as in `loadChannels`: a nudge landed mid-flight.
+        if (!channelListTickets.isLatest(ticket)) {
+          refreshChannelListRef.current(targetServerId);
+        }
         void loadUnread(targetServerId);
         const requested = targetChannelId
           ? list.find((c) => c.id === targetChannelId)
@@ -6106,7 +7291,7 @@ function MainAppContent({
         }
         if (requested) {
           await selectChannel(requested.id, targetServerId);
-          if (targetMessageId) {
+          if (targetMessageId && !sentSince(requested.id, linkedAt)) {
             setHighlightMessageId(targetMessageId);
           }
         } else {
@@ -6126,18 +7311,31 @@ function MainAppContent({
           }
         }
       } catch (error) {
+        const gone = error instanceof ApiError && error.status === 404;
+        // Same as in `loadChannels`: a failed load must not strand a nudge
+        // refetch its ticket silenced.
+        if (!gone && channelListTickets.owesUpdate(targetServerId, ticket)) {
+          refreshChannelListRef.current(targetServerId);
+        }
         setAppError(
-          error instanceof ApiError && error.status === 404
+          gone
             ? translateMessage("chrome.serverUnavailable")
             : error instanceof Error
               ? error.message
               : translateMessage("chrome.serverUnavailable"),
         );
       } finally {
+        endChannelLoad(targetServerId);
         setChannelsLoading(false);
       }
     },
-    [communityHomeOn, loadUnread, selectChannel],
+    [
+      channelListTickets,
+      communityHomeOn,
+      loadUnread,
+      selectChannel,
+      sentSince,
+    ],
   );
 
   /**
@@ -6149,7 +7347,11 @@ function MainAppContent({
    * account is not part of — which is a dead link, not a channel to try opening.
    */
   const applyConversationRoute = useCallback(
-    async (channelId: string | null, messageId: string | null = null) => {
+    async (
+      channelId: string | null,
+      messageId: string | null = null,
+      linkedAt: number = Date.now(),
+    ) => {
       setSelection(HOME_SELECTION);
       const list = await loadConversations();
       if (!channelId) {
@@ -6164,11 +7366,11 @@ function MainAppContent({
         return;
       }
       await selectConversation(channelId);
-      if (messageId) {
+      if (messageId && !sentSince(channelId, linkedAt)) {
         setHighlightMessageId(messageId);
       }
     },
-    [loadConversations, selectConversation],
+    [loadConversations, selectConversation, sentSince],
   );
 
   /**
@@ -6503,14 +7705,20 @@ function MainAppContent({
     if (target.kind === "connection-callback") {
       return;
     }
+    const linkedAt = linkFollowedAt(location.state);
     if (target.kind === "conversation") {
-      void applyConversationRoute(target.channelId, target.messageId);
+      void applyConversationRoute(
+        target.channelId,
+        target.messageId,
+        linkedAt,
+      );
       return;
     }
     void applyChannelRoute(
       target.serverId,
       target.channelId,
       target.messageId,
+      linkedAt,
     );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
@@ -6576,6 +7784,67 @@ function MainAppContent({
   }, [bootstrapReady, needsOnboarding, pendingCreate]);
 
   /**
+   * `?intent=watch-party-waitlist` (the public `/watch-party` page's button):
+   * the waitlist dialog, once the account exists and onboarding is done, on
+   * whatever server is open. Only while the deployment runs the campaign: a
+   * build that cannot turn a server on must not collect a request for one.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || needsOnboarding || !pendingWaitlist) {
+      return;
+    }
+    setPendingWaitlist(false);
+    // No cleanup cancelling this: clearing `pendingWaitlist` above re-runs
+    // the effect, and a cancel there threw away the very answer it waited on.
+    // The stash is spent only once the answer is in, so a failed read leaves
+    // it for the next load instead of losing what the person came for.
+    void loadWatchPartyWaitlist(selectedServerId)
+      .then((answer) => {
+        takeWaitlistIntent(browserStorage());
+        if (answer.campaign) {
+          setWaitlistDialogOpen(true);
+        }
+      })
+      .catch(() => {
+        // Still stashed: a reload within the hour tries again.
+      });
+  }, [bootstrapReady, needsOnboarding, pendingWaitlist, selectedServerId]);
+
+  /**
+   * "Watch party liberada!" for anybody who was offline when the operator
+   * pressed Ativar. Read once per load; the live frame covers the rest.
+   */
+  useEffect(() => {
+    if (!bootstrapReady) {
+      return;
+    }
+    let cancelled = false;
+    void fetchWatchPartyApprovals()
+      .then(({ approvals }) => {
+        if (!cancelled && approvals.length > 0) {
+          setWaitlistApprovals((current) => {
+            const known = new Set(current.map((card) => card.serverId));
+            return [
+              ...current,
+              ...approvals
+                .filter((approval) => !known.has(approval.serverId))
+                .map((approval) => ({
+                  serverId: approval.serverId,
+                  serverName: approval.serverName,
+                })),
+            ];
+          });
+        }
+      })
+      .catch(() => {
+        // A missed card is shown on the next load; not worth a banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapReady]);
+
+  /**
    * The three intentions somebody arrived with, acted on exactly once.
    *
    * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
@@ -6614,13 +7883,36 @@ function MainAppContent({
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
     const stashedCreate = takeCreateIntent(storage);
+    const stashedWaitlist = takeWaitlistIntent(storage);
     // Consumed in the same breath as the intents and for the same reason: a
     // stash that outlives the request it causes is a request that repeats.
-    const acquisition = takeAcquisition(storage);
+    // Read, not consumed: cleared only once the server has answered (below),
+    // so a failed request is sent again on the next load.
+    const stashedAcquisition = peekAcquisition(storage);
+    // How long the round trip through Clerk took, when this browser started it.
+    // ONE record does both jobs: PR 909's `pqp:signup-cta` tap stamp feeds the
+    // `signup_return` event AND the duration sent with the acquisition, so
+    // there is a single key, a single account-created-after-the-tap check and a
+    // single cross-tab lock. `null` unless this tap caused this sign-up.
+    const signupSeconds = noteSignupReturn(storage);
+    const acquisition =
+      stashedAcquisition || signupSeconds !== null
+        ? {
+            ...(stashedAcquisition ?? {}),
+            ...(signupSeconds !== null ? { signupSeconds } : {}),
+          }
+        : null;
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
     const create = createIntentFromSearch(location.search) ?? stashedCreate;
+    const waitlistIntent =
+      waitlistIntentFromSearch(location.search) || stashedWaitlist;
+    if (waitlistIntent) {
+      setPendingWaitlist(true);
+      // Kept until the dialog opens, like the create intent above.
+      stashWaitlistIntent(storage);
+    }
     /**
      * Create community, for somebody who came to make one (a `/vem` CTA, a
      * `?import=discord` link). The import also tells the onboarding to skip
@@ -6639,11 +7931,15 @@ function MainAppContent({
       params.has("claim") ||
       params.has("add") ||
       params.has("join") ||
+      waitlistIntentFromSearch(location.search) ||
       CREATE_INTENT_PARAMS.some((name) => params.has(name))
     ) {
       params.delete("claim");
       params.delete("add");
       params.delete("join");
+      if (waitlistIntentFromSearch(location.search)) {
+        params.delete(INTENT_PARAM);
+      }
       for (const name of CREATE_INTENT_PARAMS) {
         params.delete(name);
       }
@@ -6663,9 +7959,19 @@ function MainAppContent({
      * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
      */
     if (acquisition) {
-      void updateMe({ acquisition }).catch(() => {
-        // A lost attribution. Not worth a banner.
-      });
+      void updateMe({ acquisition })
+        .then(() => acknowledgeAcquisition(storage, true))
+        .catch((error: unknown) => {
+          // A refusal for good (a 4xx) is cleared so it cannot loop; a
+          // transient failure keeps the stash for the next load. Not worth a
+          // banner either way.
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429) {
+            acknowledgeAcquisition(storage, false);
+          }
+        });
+    } else {
+      // Nothing to send: only tidy an expired entry away.
+      acknowledgeAcquisition(storage, false);
     }
 
     void (async () => {
@@ -6739,9 +8045,12 @@ function MainAppContent({
        * already in is not an arrival.
        */
       if (join) {
+        setArrivedOnCommunityLink(true);
+        setCommunityJoin("pending");
         try {
           const { community } = await lookupCommunityBySlug(join);
-          const result = await joinCommunityApi(community.id);
+          const result = await joinCommunityApi(community.id, "community_address");
+          setCommunityJoin({ serverId: community.id });
           if (result.joinedNow) {
             const storage = browserStorage();
             if (!hasArrived(storage, community.id)) {
@@ -6761,6 +8070,7 @@ function MainAppContent({
           // purpose — see rule 3 in services/communities.ts — so this says one
           // thing for all of them.
           setAppError(t("handle.join.failed"));
+          setCommunityJoin("failed");
         }
       }
     })();
@@ -6996,6 +8306,12 @@ function MainAppContent({
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
   }, [voiceState.status]);
+  // The same for a viewer looking at a live party: no seat, but not somebody an
+  // automatic update may reload (`lib/update-policy.ts`).
+  useEffect(() => {
+    setWatchingParty(watchingAParty);
+    return () => setWatchingParty(false);
+  }, [watchingAParty]);
 
   const handleQgHintWantedChange = useCallback((wanted: boolean) => {
     setQgHintReady(true);
@@ -7111,9 +8427,17 @@ function MainAppContent({
    * gate have to agree with the dots on the wizard.
    */
   const firstRunPath = onboardingPath({
+    // A community's link is an invite in every way the first run cares
+    // about: the person already has a room. Three places again (the state
+    // after the arrival effect spent the intent, the URL, the stash). A join
+    // that FAILED gave them no room, so it gets the ordinary first run.
     invite:
       arrivedOnInviteLink ||
-      parseAppRoute(location.pathname)?.kind === "invite",
+      parseAppRoute(location.pathname)?.kind === "invite" ||
+      (communityJoin !== "failed" &&
+        (arrivedOnCommunityLink ||
+          joinIntentFromSearch(location.search) !== null ||
+          peekJoinIntent(browserStorage()) !== null)),
     // Three places, because each is the only one that knows at some moment:
     // the URL (a `/vem` CTA is a client-side navigation, so the boot-time
     // stash never saw it), the stash (a sign-in redirect dropped the query),
@@ -7163,9 +8487,11 @@ function MainAppContent({
    * join path in the app needs.
    */
   if (needsOnboarding && user) {
+    const roomJoin =
+      inviteJoin ?? (communityJoin === "failed" ? null : communityJoin);
     const joinedServer =
-      inviteJoin && typeof inviteJoin === "object"
-        ? servers.find((server) => server.id === inviteJoin.serverId)
+      roomJoin && typeof roomJoin === "object"
+        ? servers.find((server) => server.id === roomJoin.serverId)
         : undefined;
     return (
       <OnboardingFlow
@@ -7183,7 +8509,9 @@ function MainAppContent({
                     name: joinedServer.name,
                     iconUrl: joinedServer.iconUrl ?? null,
                   }
-                : "pending"
+                : inviteJoin === null && communityJoin === "failed"
+                  ? null
+                  : "pending"
         }
         // Keep an intent that is already waiting: a `?import=<code>` link
         // carries the template to pre-fill, and the door must not wipe it.
@@ -7240,6 +8568,10 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  /** The open channel is a watch party that is on air right now. */
+  const selectedPartyLive =
+    selectedChannel?.kind === "server" &&
+    watchParties.byChannel[selectedChannel.id]?.state === "live";
 
   /** True while the open server is one this account made and is alone in. */
   const ownerAloneHere =
@@ -7329,6 +8661,28 @@ function MainAppContent({
    * all", not which of its two surfaces is currently up. */
   const isWatchPartySplit =
     splitKind === "watch" || splitKind === "watch-audience";
+  /**
+   * `party_newcomer_experience` (`lib/party-newcomer.ts`), the runtime flag
+   * answered per server on `GET /api/live-hls/config?serverId=`. Off, and on
+   * any server the operator has not switched on, every value below is false
+   * and nothing on screen differs from before.
+   */
+  const partyNewcomerFacts = {
+    flagOn: liveHlsConfig?.newcomerExperience,
+    partyLive: Boolean(selectedPartyLive),
+    audience: splitKind === "watch-audience",
+    // `justOnboarded` because the wizard does not patch the local `user`
+    // (`finish()` in `onboarding-flow.tsx`): in the very session a sign-up
+    // finishes, `onboardedAt` is on the server and not yet in this state, and
+    // that session is exactly the one this is for. A reload reads it back.
+    newcomer:
+      justOnboarded || isNewcomerAccount(user?.preferences?.onboardedAt),
+    dismissed: partyNewcomerStripClosed,
+  };
+  const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
+  const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
+  const hideDownloadHintForNewcomer =
+    suppressAppInviteForNewcomer(partyNewcomerFacts);
   /**
    * THE PARTY BAR IS THE CHANNEL HEADER WHILE A PARTY IS LIVE (2026-09-18,
    * `docs/plans/WATCH_PARTY_UI.md` pass 1). Eight regions were counted on
@@ -7531,17 +8885,26 @@ function MainAppContent({
       communityHomePostToast &&
         communityHomePostToast.serverId === selectedServerId,
     ),
-    qg: qgHintWanted,
+    // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
+    // cargos and shortcuts all wait until the person is not watching a film.
+    // The phone-app card is the sharp one, being a way out of the page: 8 of
+    // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
+    // went to /android instead of the party. Holding only that one would hand
+    // the corner to the next card in line, so the whole tail yields. The
+    // update notice, a Baú post and the voice nudge are not campaigns.
+    qg: qgHintWanted && !selectedPartyLive,
     voiceClean: wantsVoiceCleanHint,
-    mobileBeta: wantsMobileBeta,
-    whatsNew: wantsWhatsNew,
+    mobileBeta: wantsMobileBeta && !selectedPartyLive,
+    whatsNew: wantsWhatsNew && !selectedPartyLive,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
+      !selectedPartyLive &&
       Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
+      !selectedPartyLive &&
       attachedFeatureHint === null,
   });
   // A DM arrival card and the bottom-right onboarding queue would collide on
@@ -7732,6 +9095,7 @@ function MainAppContent({
       )}
       <UserPanel
         compact={compact}
+        hideDownloadHint={hideDownloadHintForNewcomer}
         displayName={user?.displayName ?? "User"}
         tag={user?.tag ?? null}
         handle={user?.handle ?? null}
@@ -7760,6 +9124,10 @@ function MainAppContent({
         }}
         onOpenFeedback={() => {
           setSettingsSection("feedback");
+          setSettingsOpen(true);
+        }}
+        onOpenHelp={() => {
+          setSettingsSection("help");
           setSettingsOpen(true);
         }}
         onOpenProfile={() => {
@@ -8072,11 +9440,15 @@ function MainAppContent({
           />
         )}
       {renderArrivalBanner(
-        selectedChannel.kind === "server" && selectedChannel.type === "text"
-          ? "text"
-          : selectedChannel.kind === "server" && selectedChannel.type === "voice"
-            ? "voice"
-            : "other",
+        // A live party first, whatever kind of room it is running in.
+        selectedPartyLive
+          ? "party"
+          : selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? "text"
+            : selectedChannel.kind === "server" &&
+                selectedChannel.type === "voice"
+              ? "voice"
+              : "other",
         selectedChannel.kind === "server" && selectedChannel.type === "text"
           ? selectedChannel.name
           : null,
@@ -8132,7 +9504,9 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              seen: false,
+              // The newcomer strip already says what this is; two
+              // explanations at once cost the picture its height.
+              seen: partyNewcomerStrip,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -8187,7 +9561,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8329,6 +9705,25 @@ function MainAppContent({
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
+      {/* WHAT IS THIS, for an account that arrived a moment ago
+          (`party_newcomer_experience`). Under the party bar and above the
+          split, so it costs one line of height and sits where the eye is
+          already looking; nothing when the flag is off. */}
+      {partyNewcomerStrip && (
+        <PartyNewcomerStrip
+          hostName={
+            watchParties.byChannel[selectedChannel.id]?.hostDisplayName ?? ""
+          }
+          chatBeside={
+            splitState.canSideBySide &&
+            effectiveOrientation(callSplit, splitKind) === "side-by-side"
+          }
+          onDismiss={() => {
+            dismissPartyNewcomerStrip();
+            setPartyNewcomerStripClosed(true);
+          }}
+        />
+      )}
       <CallDockProvider
         viewingChannelId={selectedChannel.id}
         onOccupiedChange={setCallDockOnScreen}
@@ -8336,6 +9731,7 @@ function MainAppContent({
       <CallSplit
         shape={stageShape}
         kind={splitKind}
+        phoneChatFloor={partyPhoneLayout}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
@@ -8449,7 +9845,9 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              seen: false,
+              // The newcomer strip already says what this is; two
+              // explanations at once cost the picture its height.
+              seen: partyNewcomerStrip,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -8504,7 +9902,9 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
-            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
+            lowLatencyAvailable={
+              liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
+            }
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -8747,6 +10147,8 @@ function MainAppContent({
         variant={isWatchPartySplit ? "stream" : "default"}
         streamBadges={isWatchPartySplit ? streamBadges : null}
         isLoading={messagesLoading}
+        historyFailed={historyFailedChannelId === selectedChannel.id}
+        onRetryHistory={handleRetryHistory}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
         isLoadingOlder={chat.isLoadingOlder()}
@@ -8757,17 +10159,15 @@ function MainAppContent({
         highlightMessageId={highlightMessageId}
         onHighlightHandled={clearHighlight}
         onReplyTo={setReplyTarget}
-        onToggleReaction={(messageId, emoji) =>
-          chat.toggleReaction(messageId, emoji)
-        }
-        onVotePoll={(messageId, optionId) => chat.votePoll(messageId, optionId)}
-        onClosePoll={(messageId) => chat.closePoll(messageId)}
-        onLoadOlder={() => chat.loadOlder()}
+        onToggleReaction={chat.toggleReaction}
+        onVotePoll={chat.votePoll}
+        onClosePoll={chat.closePoll}
+        onLoadOlder={chat.loadOlder}
         onLoadNewer={loadNewerHistory}
         onJumpToMessage={jumpToMessage}
         onJumpToPresent={jumpToPresent}
-        onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
-        onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        onEditMessage={chat.editMessage}
+        onDeleteMessage={chat.deleteMessage}
         // Server channels only: a conversation has no moderators, and the
         // endpoint refuses one. Offering the mode there would be a menu entry
         // whose confirm ends in a 404.
@@ -8776,29 +10176,26 @@ function MainAppContent({
             ? handleBulkDeleteSelected
             : undefined
         }
-        onPinMessage={(messageId) => chat.pinMessage(messageId)}
-        onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
-        onReportMessage={(message) =>
-          setReportTarget({
-            kind: "message",
-            messageId: message.id,
-            subjectName: message.authorName,
-          })
-        }
-        onRetryMessage={(nonce) => chat.retryMessage(nonce)}
-        onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
+        onPinMessage={chat.pinMessage}
+        onUnpinMessage={chat.unpinMessage}
+        onReportMessage={handleReportMessage}
+        onRetryMessage={chat.retryMessage}
+        onDiscardMessage={chat.discardMessage}
         showLinkEmbeds={localSettings.showLinkEmbeds}
         // --- threads --- offered only inside a server: a conversation already
-        // is the scoped side-conversation a thread would create.
+        // is the scoped side-conversation a thread would create. Both
+        // handlers are already stable `useCallback`s (see their own
+        // definitions); the ternary below only ever resolves to one of two
+        // stable values — the handler or `undefined` — so it does not
+        // reintroduce the fresh-closure-per-render problem a wrapper arrow
+        // function here would.
         onStartThread={
           selectedChannel.kind === "server" && selectedChannel.type === "text"
-            ? (message) => void handleStartThread(message)
+            ? handleStartThread
             : undefined
         }
         onOpenThread={
-          selectedChannel.kind === "server"
-            ? (thread, message) => void openThreadPanel(thread, message)
-            : undefined
+          selectedChannel.kind === "server" ? openThreadPanel : undefined
         }
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
@@ -8807,10 +10204,11 @@ function MainAppContent({
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
         editMessageId={editMessageId}
-        onEditMessageHandled={() => setEditMessageId(null)}
+        onEditMessageHandled={clearEditMessageId}
         onForward={setForwardMessage}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
+        onLiveEndChange={handleMessageListLiveEnd}
       />
       )}
       {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
@@ -8825,7 +10223,7 @@ function MainAppContent({
             collapsible
             className="shrink-0"
             channelId={selectedChannel.id}
-            audienceCount={watchAudienceCount(
+            audienceCount={feedAudienceCount(
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
@@ -8852,6 +10250,7 @@ function MainAppContent({
           if (unreadHoldRef.current.has(selectedChannel.id)) {
             clearUnread(selectedChannel.id);
           }
+          lastOwnSendAtRef.current.set(selectedChannel.id, Date.now());
           chat.sendMessage(body, replyTarget, attachments);
           trackFirstAction("arrival_first_message");
           setReplyTarget(null);
@@ -8925,6 +10324,22 @@ function MainAppContent({
       </CallDockProvider>
     </div>
   ) : null;
+
+  // The second half of the hand-rolled memoization declared near the top of
+  // this function (see the comment there): plain code, not a hook, so it is
+  // fine for it to run down here — after the early returns, where
+  // `selectedServer` actually exists.
+  {
+    const favoriteChannelIdsRaw = selectedServer
+      ? favoritesForServer(user?.preferences?.favoriteChannels, selectedServer.id)
+      : EMPTY_FAVORITE_CHANNEL_IDS;
+    const favoriteChannelIdsKey = favoriteChannelIdsRaw.join(",");
+    if (favoriteChannelIdsKey !== favoriteChannelIdsKeyRef.current) {
+      favoriteChannelIdsKeyRef.current = favoriteChannelIdsKey;
+      favoriteChannelIdsRef.current = favoriteChannelIdsRaw;
+    }
+  }
+  const favoriteChannelIds = favoriteChannelIdsRef.current;
 
   return (
     // The friends snapshot, published to everything that draws a relationship:
@@ -9082,6 +10497,36 @@ function MainAppContent({
         />
       )}
 
+      {/* The waitlist: at the root, because the public page's intent opens it
+          wherever the person lands, including with no server open. */}
+      <WatchPartyWaitlistDialog
+        open={waitlistDialogOpen}
+        onClose={() => setWaitlistDialogOpen(false)}
+        servers={servers.map((server) => ({ id: server.id, name: server.name }))}
+        initialServerId={selectedServerId}
+      />
+      <WatchPartyApprovedToasts
+        cards={waitlistApprovals}
+        onOpen={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          // A full load, not a selection: the server's live-hls answer is
+          // cached for the page's lifetime and still says no.
+          void ackWatchPartyApproval(serverId)
+            .catch(() => {})
+            .finally(() => {
+              window.location.assign(`/app/server/${serverId}`);
+            });
+        }}
+        onDismiss={(serverId) => {
+          setWaitlistApprovals((current) =>
+            current.filter((card) => card.serverId !== serverId),
+          );
+          void ackWatchPartyApproval(serverId).catch(() => {});
+        }}
+      />
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -9107,6 +10552,8 @@ function MainAppContent({
 
       <ServerRail
         liveServerIds={watchParties.liveServerIds}
+        phoneHidden={partyPhoneLayout}
+        mobileNavOpen={mobileNavOpen}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
@@ -9222,9 +10669,9 @@ function MainAppContent({
           server={selectedServer ?? null}
           threadsByChannel={threadsByChannel}
           unreadThreadIds={unreadThreadIds}
-          onOpenThread={(thread) => void openThreadFromSidebar(thread)}
-          onLeaveThread={(thread) => void handleThreadMembership(thread, false)}
-          onMarkThreadRead={(thread) => void clearUnread(thread.channelId)}
+          onOpenThread={stableOnOpenThread}
+          onLeaveThread={stableOnLeaveThread}
+          onMarkThreadRead={stableOnMarkThreadRead}
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}
@@ -9247,9 +10694,9 @@ function MainAppContent({
               : undefined
           }
           mobileOpen={mobileNavOpen}
-          onMobileClose={() => setMobileNavOpen(false)}
-          onSelectChannel={(id) => void selectChannel(id)}
-          onJoinVoice={handleJoinVoiceFromList}
+          onMobileClose={stableOnMobileClose}
+          onSelectChannel={stableOnSelectChannel}
+          onJoinVoice={stableOnJoinVoice}
           liveParties={watchParties.live}
           recoveringChannelId={
             voiceState.sharePublishRecovering
@@ -9264,7 +10711,7 @@ function MainAppContent({
                 (party.viewerRole === "host" || party.viewerRole === "cohost"),
             ) ?? null
           }
-          onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
+          onWatchLiveParty={stableOnWatchLiveParty}
           canStartWatchParty={canOfferWatchPartyCreate({
             // The rollout gate, not a capability check. See
             // `canOfferWatchPartyCreate`: the bit alone is on thousands of
@@ -9275,93 +10722,56 @@ function MainAppContent({
             hlsEnabled: liveHlsConfig?.enabled ?? null,
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
-          onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
-          watchPartyHistoryChannels={watchPartyHistoryChannels}
-          onOpenWatchPartyHistory={(channelId) =>
-            setWatchPartyHistoryChannelId(channelId)
+          onCreateWatchParty={stableOnCreateWatchParty}
+          watchPartyTeaser={
+            shouldOfferWatchPartyTeaser({
+              hlsEnabled: liveHlsConfig?.enabled ?? null,
+              state: watchPartyWaitlist,
+            })
+              ? {
+                  onList: watchPartyWaitlist?.entry?.status === "waiting",
+                  onOpen: () => setWaitlistDialogOpen(true),
+                }
+              : null
           }
+          watchPartyHistoryChannels={watchPartyHistoryChannels}
+          onOpenWatchPartyHistory={stableOnOpenWatchPartyHistory}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
           screenVolumes={voiceState.screenVolumes}
           screenAudioUserIds={screenAudioUserIds}
-          canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
-          canConnectIn={(channelId) =>
-            perms.can(Permission.CONNECT, channelId)
-          }
-          canMuteIn={(channelId) =>
-            perms.can(Permission.MUTE_MEMBERS, channelId)
-          }
-          canKickUser={canKickOccupant}
-          onMoveVoiceOccupant={(userId, channelId) =>
-            void handleMoveVoiceOccupant(userId, channelId)
-          }
-          onDisconnectVoiceOccupant={(userId) =>
-            void handleDisconnectVoiceOccupant(userId)
-          }
-          onServerMuteOccupant={(userId, muted) =>
-            void handleServerMuteOccupant(userId, muted)
-          }
-          onLowerOccupantHand={(userId) =>
-            void handleLowerOccupantHand(userId)
-          }
-          onKickOccupant={(userId, name) =>
-            void handleKickOccupant(userId, name)
-          }
-          onSetPeerVolume={(userId, volume) =>
-            voice.setPeerVolume(userId, volume)
-          }
-          onSetScreenVolume={(userId, volume) =>
-            voice.setScreenVolume(userId, volume)
-          }
-          onCreateChannel={(type, isPrivate) =>
-            setChannelPrompt({ mode: "create", type, isPrivate })
-          }
-          onRenameChannel={(channel) =>
-            setChannelPrompt({ mode: "rename", channel })
-          }
-          onOpenChannelSettings={(channel, section, options) =>
-            setChannelSettings({
-              channelId: channel.id,
-              section,
-              forceAdvanced: options?.forceAdvanced ?? false,
-            })
-          }
-          onDeleteChannel={(id) => void handleDeleteChannel(id)}
-          onPurgeChannel={(channel) =>
-            setPurgeChannel({ id: channel.id, name: channel.name })
-          }
-          onMoveChannel={(id, parentId, index) =>
-            void handleMoveChannel(id, parentId, index)
-          }
-          favoriteChannelIds={
-            selectedServer
-              ? favoritesForServer(
-                  user?.preferences?.favoriteChannels,
-                  selectedServer.id,
-                )
-              : []
-          }
-          onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
-          onInvite={() => setInviteMode("create")}
-          onOpenMembers={() => setMembersOpen(true)}
-          onOpenServerSettings={() => setServerSettingsOpen(true)}
+          canMoveIn={stableCanMoveIn}
+          canConnectIn={stableCanConnectIn}
+          canMuteIn={stableCanMuteIn}
+          canKickUser={stableCanKickUser}
+          onMoveVoiceOccupant={stableOnMoveVoiceOccupant}
+          onDisconnectVoiceOccupant={stableOnDisconnectVoiceOccupant}
+          onServerMuteOccupant={stableOnServerMuteOccupant}
+          onLowerOccupantHand={stableOnLowerOccupantHand}
+          onKickOccupant={stableOnKickOccupant}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
+          onCreateChannel={stableOnCreateChannel}
+          onRenameChannel={stableOnRenameChannel}
+          onOpenChannelSettings={stableOnOpenChannelSettings}
+          onDeleteChannel={stableOnDeleteChannel}
+          onPurgeChannel={stableOnPurgeChannel}
+          onMoveChannel={stableOnMoveChannel}
+          favoriteChannelIds={favoriteChannelIds}
+          onFavoriteChannelIdsChange={stableOnFavoriteChannelIdsChange}
+          onInvite={stableOnInvite}
+          onOpenMembers={stableOnOpenMembers}
+          onOpenServerSettings={stableOnOpenServerSettings}
           iconsOnly={sidebarIconsOnly}
-          onExpand={toggleChannelSidebar}
+          onExpand={stableOnExpand}
           footer={sidebarFooter(sidebarIconsOnly)}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
           members={serverMembers}
-          onSelectCommunityHome={() => {
-            if (selectedServerId) {
-              setWhatsNewOpen(false);
-              markCommunityHomeRowSeen(selectedServerId);
-              setCommunityHomeRowNew(false);
-              void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
-            }
-          }}
+          onSelectCommunityHome={stableOnSelectCommunityHome}
         />
       )}
 
@@ -9567,12 +10977,7 @@ function MainAppContent({
               setServers((prev) =>
                 prev.map((current) =>
                   current.id === server.id
-                    ? {
-                        ...current,
-                        ...server,
-                        role: current.role,
-                        showOnProfile: current.showOnProfile,
-                      }
+                    ? mergeServerUpdate(current, server)
                     : current,
                 ),
               );
@@ -9729,32 +11134,17 @@ function MainAppContent({
           showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
           members={serverMembers}
-          onMemberNickname={(userId, nickname) => {
-            setServerMembers((prev) =>
-              prev.map((row) =>
-                row.id === userId ? { ...row, nickname } : row,
-              ),
-            );
-          }}
-          onMention={(username) => setComposerInsert(`@${username}`)}
-          onBlockUser={(userId) => void handleBlockUser(userId)}
-          onUnblockUser={(userId) => void handleUnblockUser(userId)}
-          onReportUser={(member) =>
-            setReportTarget({
-              kind: "user",
-              userId: member.id,
-              subjectName: member.displayName,
-              serverId: selectedServerId,
-            })
-          }
-          onOpenMembersPanel={() => setMembersOpen(true)}
+          onMemberNickname={stableOnMemberNickname}
+          onMention={stableOnMention}
+          onBlockUser={stableOnBlockUser}
+          onUnblockUser={stableOnUnblockUser}
+          onReportUser={stableOnReportUser}
+          onOpenMembersPanel={stableOnOpenMembersPanel}
           // The same context the profile card gets, so the row's menu and the
           // card cannot disagree about what this account may do to somebody.
           moderation={cardModeration}
           voiceOccupancy={voiceState.occupancy}
-          voiceChannels={channels
-            .filter((c) => isVoiceRoomChannelType(c.type))
-            .map((c) => ({ id: c.id, name: c.name }))}
+          voiceChannels={memberSidebarVoiceChannels}
           roles={serverRoles}
           friendIds={memberSidebarFriendIds}
         />
@@ -9787,6 +11177,13 @@ function MainAppContent({
         }}
         onUnblockUser={(userId) => void handleUnblockUser(userId)}
         onAudioSettingsLive={handleAudioSettingsLive}
+        feedbackVoice={{
+          inCall: voiceState.status === "connected",
+          transport: voiceState.roomTransport,
+          watchParty:
+            voiceState.voiceChannelId != null &&
+            voiceState.channelLive[voiceState.voiceChannelId]?.stream != null,
+        }}
       />
 
       <ServerSettingsDialog
@@ -9812,14 +11209,10 @@ function MainAppContent({
           setServers((prev) =>
             prev.map((current) =>
               current.id === server.id
-                ? {
-                    ...current,
-                    ...server,
-                    // Settings writes update the server row, not this viewer's
-                    // membership row. Keep its role and profile opt-out.
-                    role: current.role,
-                    showOnProfile: current.showOnProfile,
-                  }
+                ? // Settings writes update the server row, not this viewer's
+                  // membership row. Keep its role and profile opt-out, and
+                  // the newer copy of the Baú switch.
+                  mergeServerUpdate(current, server)
                 : current,
             ),
           );

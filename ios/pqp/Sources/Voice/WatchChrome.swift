@@ -75,7 +75,7 @@ struct WatchAirPlayButton: UIViewRepresentable {
 /// builds of a presented theater failed to do. `isTheater` is that state: the
 /// stage is filling the screen, so the chrome clears the island and sits
 /// further in.
-struct WatchOverlay<Quality: View>: View {
+struct WatchOverlay<Quality: View, CameraMenu: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let chromeVisible: Bool
@@ -98,6 +98,11 @@ struct WatchOverlay<Quality: View>: View {
     let onStartPip: () -> Void
     let onCollapse: (() -> Void)?
     @ViewBuilder var qualityMenu: () -> Quality
+    /// The camera's own layout picker (`WatchStageView.cameraLayoutMenu`),
+    /// empty when nothing is running a camera worth laying out. Same slot in
+    /// the bottom bar as the quality menu, so a broadcast with no webcam
+    /// looks exactly like it did before this existed.
+    @ViewBuilder var cameraMenu: () -> CameraMenu
 
     private var showTransport: Bool { chromeVisible || !isPlaying }
 
@@ -253,6 +258,7 @@ struct WatchOverlay<Quality: View>: View {
         if showTransport {
             HStack(spacing: 6) {
                 qualityMenu()
+                cameraMenu()
                 Spacer(minLength: 8)
                 airPlayWell
                 if pipAvailable {
@@ -435,7 +441,13 @@ enum WatchOrientation {
             .compactMap({ $0 as? UIWindowScene })
             .first
         else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: allowed)) { _ in }
+        // No error handler, on purpose. UIKit calls it on a background
+        // queue, and a closure written inside this @MainActor enum is
+        // main-actor isolated, so Swift 6's runtime isolation check trapped
+        // (EXC_BREAKPOINT in `closure #2 in WatchOrientation.apply()`,
+        // TestFlight 1.0 (101001), 2026-09-26: leaving a call for the
+        // channel list crashed the app). The handler did nothing anyway.
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: allowed))
         scene.windows.first { $0.isKeyWindow }?
             .rootViewController?
             .setNeedsUpdateOfSupportedInterfaceOrientations()

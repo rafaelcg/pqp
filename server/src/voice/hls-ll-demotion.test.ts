@@ -1461,4 +1461,98 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       expect.objectContaining({ reason: "no-live-session" }),
     );
   });
+
+  /**
+   * THE DASHBOARD'S PER-SERVER LOW LATENCY SWITCH (`servers.live_hls_ll_enabled`),
+   * on the registry production runs. NULL has to be the environment exactly as
+   * it was before the column existed, because production has servers on
+   * `LIVE_HLS_LL_ALLOWLIST` (tomorrow's party among them) and every row is NULL
+   * the moment this deploys.
+   */
+  describe("the per-server low latency switch", () => {
+    async function setLl(value: boolean | null) {
+      await getPool().query(
+        `UPDATE servers SET live_hls_ll_enabled = $2 WHERE id = $1`,
+        [serverId, value],
+      );
+    }
+
+    beforeEach(() => {
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+      process.env.CLUSTER_BUS = "postgres";
+    });
+
+    afterEach(() => {
+      delete process.env.CLUSTER_BUS;
+      delete process.env.LIVE_HLS_LL_ALLOWLIST;
+    });
+
+    it("NULL follows LIVE_HLS_LL_ALLOWLIST exactly: on the list is ll, off it is conventional", async () => {
+      await setLl(null);
+      process.env.LIVE_HLS_LL_ALLOWLIST = serverId;
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "ll",
+        llAvailable: true,
+      });
+      process.env.LIVE_HLS_LL_ALLOWLIST = randomUUID();
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "conventional",
+        llAvailable: false,
+      });
+      delete process.env.LIVE_HLS_LL_ALLOWLIST;
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "ll",
+        llAvailable: true,
+      });
+    });
+
+    it("TRUE turns a server on that the variable does not name, with no restart", async () => {
+      process.env.LIVE_HLS_LL_ALLOWLIST = randomUUID();
+      await setLl(true);
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "ll",
+        llAvailable: true,
+      });
+    });
+
+    it("FALSE turns a server off even when the variable names it", async () => {
+      process.env.LIVE_HLS_LL_ALLOWLIST = serverId;
+      await setLl(false);
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "conventional",
+        llAvailable: false,
+      });
+    });
+
+    it("is not a master switch: with LIVE_HLS_LL off a TRUE row is still conventional", async () => {
+      await setLl(true);
+      delete process.env.LIVE_HLS_LL;
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "conventional",
+      });
+      process.env.LIVE_HLS_LL = "true";
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+      expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+        mode: "conventional",
+      });
+    });
+
+    it("never reads the row for a party that did not ask", async () => {
+      await getPool().query(
+        `UPDATE channel_sessions SET low_latency_requested = FALSE WHERE id = $1`,
+        [partyId],
+      );
+      await setLl(true);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+          mode: "conventional",
+        });
+        const statements = spy.mock.calls.map((call) => String(call[0]));
+        expect(statements.some((sql) => sql.includes("live_hls_ll_enabled"))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

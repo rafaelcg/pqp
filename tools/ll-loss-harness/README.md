@@ -271,6 +271,39 @@ overridable (`LL_HARNESS_LIVEKIT_PORT`, `LL_HARNESS_REMUXD_PORT`,
 containers. Without both, a second run's opening `down` removes the first
 run's containers and its playlist server fails with `EADDRINUSE`.
 
+## A mid-show republish (`SCENARIO=republish` / `SCENARIO=reconnect`)
+
+The presenter's screen track replaced in the middle of the show, which the
+web client does on every resume after an API deploy and whenever the presenter
+picks something else to share. `rampub` publishes the ramp, and
+`REPUBLISH_AFTER` (default 25) seconds in replaces the track with a new one
+playing the file from the start, so the new source's parameter sets differ
+(360p again after the 720p ramp): an init change inside the session.
+
+```bash
+SCENARIO=republish ./run.sh      # same participant, a new track
+SCENARIO=reconnect ./run.sh      # a new identity (ramp-presenter-2): a
+                                 # reconnect that could not resume; run.sh
+                                 # plays pqp-api and calls
+                                 # POST /sessions/:id/rebind
+SCENARIO=republish ./run.sh 15   # the same, through 15% uplink loss
+```
+
+Green means the viewer PASSED **and** the box kept the one session: it logged
+`video source rebound: first keyframe`, never logged `restarting (` or
+`demoting (`, and `GET /sessions` still lists the same session, not demoted,
+with `videoRebinds >= 1`. Before the rebind (`tools/pqp-remux/README.md`, "A
+republished screen is the same session") the replacement was simply never
+read: the session went quiet until the watchdog restarted it.
+
+A run on a Docker host something else is using needs its own
+`COMPOSE_PROJECT_NAME` and ports (`LL_HARNESS_LIVEKIT_PORT`,
+`LL_HARNESS_REMUXD_PORT`, `LL_HARNESS_PORT`, `PORT`). Two runs from the SAME
+checkout still cannot overlap: each one regenerates `.data/harness.env`, so the
+second's keys replace the first's mid-run and the first's control calls come
+back 401 `invalid signature`. Run them one after another, or from two
+checkouts.
+
 ## Loss injection: exactly what it models
 
 `publisher/entrypoint.sh` runs inside the `publisher` container (granted

@@ -73,9 +73,9 @@ the loopback handler. On the gaming PC, from this worktree:
 PQP_APP_URL=https://staging.pqp-3yr.pages.dev pnpm electron:dev
 ```
 
-Use the in-app picker and tick **Share this computer's audio**. Auto-pick
-(one surface) never attaches loopback. Chromium `--use-fake-ui-for-media-stream`
-does not click that checkbox.
+Use the in-app picker; its **Share this computer's audio** switch starts on
+(leave it on). Auto-pick (one surface) never attaches loopback. Chromium
+`--use-fake-ui-for-media-stream` does not press Share for you.
 
 ## Dual process
 

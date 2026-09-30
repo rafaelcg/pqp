@@ -12,6 +12,10 @@
  */
 
 const bridge = window.pqpPicker;
+/** What the sound row shows for each state: `audio-state.js`, loaded first. */
+const audio = window.pqpPickerAudio;
+/** The strings the last `render()` was handed, for redrawing the sound row. */
+let currentStrings = {};
 
 /** @type {Array<{id: string, kind: string, label: string, thumbnail: string|null, appIcon: string|null}>} */
 let sources = [];
@@ -19,6 +23,14 @@ let sources = [];
 let selectedId = null;
 /** Guards against a second answer after the window starts closing. */
 let answered = false;
+/**
+ * `"hidden"` (mac/Linux, no sound to talk about), `"checkbox"` (Windows: a
+ * real choice, a switch that starts ON) or `"explain"` (Windows 10 without
+ * the native capture, where the switch would be a lie). Set once per
+ * `render()`, from `pickerAudioState` in main.
+ * @type {"hidden"|"checkbox"|"explain"}
+ */
+let audioState = "hidden";
 
 const el = {
   title: document.getElementById("title"),
@@ -34,6 +46,7 @@ const el = {
   shareAudio: document.getElementById("share-audio"),
   audioLabel: document.getElementById("audio-label"),
   audioHint: document.getElementById("audio-hint"),
+  audioNote: document.getElementById("audio-note"),
   cancel: document.getElementById("cancel"),
   confirm: document.getElementById("confirm"),
 };
@@ -131,9 +144,43 @@ function moveSelection(step) {
   }
 }
 
+/**
+ * Draws the sound row from `audio-state.js`'s answer for the current state.
+ *
+ * Three shapes, not a hidden/shown toggle: see the `audioState` doc comment
+ * up top for why a hidden row on Windows 10 was the bug, not a simplification.
+ */
+function applyAudioView(view) {
+  el.audioRow.hidden = !view.visible;
+  el.audioRow.classList.toggle("is-off", view.icon === "off");
+  el.audioRow.classList.toggle("no-switch", !view.hasSwitch);
+  el.shareAudio.hidden = !view.hasSwitch;
+  el.shareAudio.disabled = !view.hasSwitch;
+  el.shareAudio.checked = view.checked;
+  el.audioLabel.textContent = view.label;
+  el.audioHint.textContent = view.hint;
+  el.audioNote.textContent = view.note;
+  el.audioNote.hidden = view.note === "";
+}
+
+function renderAudioRow(strings) {
+  currentStrings = strings;
+  // "checkbox" starts ON, every time the picker opens (`defaultAudioChecked`):
+  // what the person did with it last time is not remembered on purpose, so a
+  // share never starts silent because of an earlier one. Nothing starts from
+  // here: the value rides on `choose()` when they press Share, and not before.
+  applyAudioView(
+    audio.audioRowView(audioState, audio.defaultAudioChecked(audioState), strings),
+  );
+}
+
 function render(payload) {
   const strings = payload.strings;
   sources = payload.sources;
+  audioState =
+    payload.audioState === "checkbox" || payload.audioState === "explain"
+      ? payload.audioState
+      : "hidden";
 
   document.documentElement.setAttribute("data-theme", payload.dark ? "dark" : "light");
   document.title = strings.title;
@@ -144,10 +191,7 @@ function render(payload) {
   el.cancel.textContent = strings.cancel;
   el.confirm.textContent = strings.confirm;
   el.empty.textContent = strings.empty;
-  el.audioLabel.textContent = strings.shareAudio;
-  el.audioHint.textContent = strings.shareAudioHint;
-  el.audioRow.hidden = payload.offersAudio !== true;
-  el.shareAudio.checked = false;
+  renderAudioRow(strings);
 
   const screens = sources.filter((s) => s.kind === "screen");
   const windows = sources.filter((s) => s.kind === "window");
@@ -192,6 +236,11 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     moveSelection(-1);
   }
+});
+
+// Turning the sound off says what that means right away, in the row itself.
+el.shareAudio.addEventListener("change", () => {
+  applyAudioView(audio.audioRowView(audioState, el.shareAudio.checked, currentStrings));
 });
 
 el.cancel.addEventListener("click", cancel);

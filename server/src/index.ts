@@ -76,7 +76,9 @@ import {
   stopLiveHlsMonitor,
 } from "./voice/hls-egress.js";
 import { hlsViewerCounter } from "./voice/hls-viewer-counts.js";
+import { userActivity } from "./services/user-activity.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
+import { startFeatureFlags } from "./lib/flags.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -684,6 +686,7 @@ function startVoiceRegistry(): (() => Promise<void>) | null {
 
 let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
 let stopHlsViewerCounter: (() => Promise<void>) | null = null;
+let stopUserActivity: (() => Promise<void>) | null = null;
 
 async function main() {
   // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
@@ -715,6 +718,13 @@ async function main() {
   // Same ordering reason: the heartbeat writes a `voice_instances` row that
   // initDb just created.
   stopVoiceHeartbeat = startVoiceRegistry();
+
+  // Runtime feature flags (`lib/flags.ts`): one load now, so the first
+  // request is answered from the operator's rows rather than from the
+  // environment. After initDb (the tables) and after the bus (a flip that
+  // lands during boot is already a reload). A failed load is not fatal: the
+  // environment answers until a later read gets through.
+  await startFeatureFlags();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a
@@ -766,6 +776,9 @@ async function main() {
   // once a minute per broadcast. Wherever the HTTP routes run, since that is
   // where the heartbeats land.
   stopHlsViewerCounter = hlsViewerCounter.start();
+  // Who opened the app today: noted at WS auth, flushed once a minute as one
+  // statement. Wherever the sockets are.
+  stopUserActivity = userActivity.start();
 
   if (runsColdJobs(role)) {
     coldJobs = startColdJobs();
@@ -862,6 +875,7 @@ async function shutdown(signal: string) {
   closeApnsSessions();
   // The last minute of viewer sightings, before the pool goes.
   await stopHlsViewerCounter?.();
+  await stopUserActivity?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.
