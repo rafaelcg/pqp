@@ -47,14 +47,14 @@ describe("googleAdsTags", () => {
   it("loads the tag and configures the account when the id is set", () => {
     const tags = googleAdsTags({ VITE_GOOGLE_ADS_ID: "AW-123456789" });
     expect(tags).toHaveLength(2);
-    expect(tags[0]).toMatchObject({
-      tag: "script",
-      injectTo: "head",
-      attrs: {
-        async: true,
-        src: "https://www.googletagmanager.com/gtag/js?id=AW-123456789",
-      },
-    });
+    // The library is requested after the page has loaded and gone idle, not
+    // with the head, so the tag is an inline loader that names the URL.
+    expect(tags[0]).toMatchObject({ tag: "script", injectTo: "head" });
+    expect(tags[0].attrs).toBeUndefined();
+    expect(String(tags[0].children)).toContain(
+      "https://www.googletagmanager.com/gtag/js?id=AW-123456789",
+    );
+    expect(String(tags[0].children)).toContain("requestIdleCallback");
     const inline = String(tags[1].children);
     expect(inline).toContain('window.gtag("config", "AW-123456789")');
     // An arrow function here would forward no `arguments` and gtag would push

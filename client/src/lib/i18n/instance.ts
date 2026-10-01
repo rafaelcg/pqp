@@ -78,6 +78,11 @@ const LOADERS: Partial<Record<Locale, () => Promise<unknown>>> = {
 
 const loaded = new Set<Locale>(["en"]);
 
+/** Whether `loadLocale(locale)` has already delivered this catalogue. */
+export function isLocaleLoaded(locale: Locale): boolean {
+  return loaded.has(locale);
+}
+
 export async function loadLocale(locale: Locale): Promise<void> {
   const loader = LOADERS[locale];
   if (loader && !loaded.has(locale)) {

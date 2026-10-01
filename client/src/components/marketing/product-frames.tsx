@@ -2,6 +2,7 @@ import { Maximize2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { HERO_SHOT_SIZES, HERO_SHOT_SRCSET } from "@/lib/prerender-hero";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,6 +28,8 @@ function ProductShot({
   priority = false,
   expand = false,
   object = "left",
+  srcSet,
+  sizes,
 }: {
   src: string;
   altKey: MessageKey;
@@ -36,6 +39,9 @@ function ProductShot({
   priority?: boolean;
   expand?: boolean;
   object?: "left" | "top";
+  /** Responsive candidates for the inline picture; the lightbox uses `src`. */
+  srcSet?: string;
+  sizes?: string;
 }) {
   const { t } = useTranslation();
   const alt = t(altKey);
@@ -81,6 +87,8 @@ function ProductShot({
   const img = (
     <img
       src={src}
+      srcSet={srcSet}
+      sizes={sizes}
       alt={expand ? "" : alt}
       width={width}
       height={height}
@@ -173,6 +181,8 @@ export function HeroFrame({ className }: { className?: string }) {
       width={1920}
       height={1080}
       className={cn("mx-auto w-full max-w-5xl", className)}
+      srcSet={HERO_SHOT_SRCSET}
+      sizes={HERO_SHOT_SIZES}
       priority
       expand
     />

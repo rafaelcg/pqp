@@ -243,11 +243,11 @@ describe("injectProfileHead against the real index.html", () => {
 
   it("keeps everything that is not SEO", () => {
     // The pre-paint theme script, the viewport, the icons and the font
-    // preconnects all have to survive — a rewrite that drops them ships a page
+    // preloads all have to survive — a rewrite that drops them ships a page
     // that flashes white and renders in Times New Roman.
     expect(output).toContain('name="viewport"');
     expect(output).toContain('rel="apple-touch-icon"');
-    expect(output).toContain("fonts.googleapis.com");
+    expect(output).toContain("gabarito-latin.woff2");
     expect(output).toContain('localStorage.getItem("pqp-theme")');
     expect(output).toContain('name="theme-color"');
     expect(output).toContain('<script type="module"');
@@ -261,7 +261,7 @@ describe("injectProfileHead against the real index.html", () => {
 
   it("still parses as one document with a head and a root div", () => {
     expect(output.indexOf("<head>")).toBeLessThan(output.indexOf("</head>"));
-    expect(output).toContain('<div id="root"></div>');
+    expect(output).toContain('<div id="root">');
   });
 
   it("returns a document with no head untouched", () => {

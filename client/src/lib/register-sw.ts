@@ -17,6 +17,65 @@ type RegisterSW = (options: {
   onRegisterError?: (error: unknown) => void;
 }) => (reloadPage?: boolean) => Promise<void>;
 
+/** Longest a first-time visitor to the marketing home page goes unregistered. */
+export const HOME_REGISTER_DELAY_MS = 20_000;
+
+const HOME_INTERACTIONS = ["pointerdown", "keydown", "touchstart"] as const;
+
+/**
+ * Resolves when it is worth installing the worker.
+ *
+ * On every route but the marketing home page that is at once, exactly as it
+ * always was. On the home page, for somebody with no worker installed yet, it
+ * is deferred: installing this worker precaches the whole shell (about 6 MB of
+ * script, including the chat client and the media libraries), and a visitor who
+ * only reads the landing page and leaves would download all of it for nothing,
+ * on a phone, in the background, in front of the page they came to see. So the
+ * worker waits for a sign the visit is going somewhere (a touch, a click, a key
+ * press) or for `HOME_REGISTER_DELAY_MS` of somebody staying. Whoever already
+ * has a worker keeps registering immediately, because that is what checks for a
+ * new build.
+ *
+ * Returns a function that abandons the wait.
+ */
+function whenWorthRegistering(go: () => void): () => void {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (path !== "/") {
+    go();
+    return () => {};
+  }
+  let settled = false;
+  const cleanups: Array<() => void> = [];
+  const fire = () => {
+    if (settled) return;
+    settled = true;
+    for (const fn of cleanups.splice(0)) fn();
+    go();
+  };
+  void navigator.serviceWorker
+    .getRegistration()
+    .then((existing) => {
+      if (settled) return;
+      if (existing) {
+        fire();
+        return;
+      }
+      for (const type of HOME_INTERACTIONS) {
+        window.addEventListener(type, fire, { once: true, passive: true, capture: true });
+        cleanups.push(() =>
+          window.removeEventListener(type, fire, { capture: true } as EventListenerOptions),
+        );
+      }
+      const timer = window.setTimeout(fire, HOME_REGISTER_DELAY_MS);
+      cleanups.push(() => window.clearTimeout(timer));
+    })
+    .catch(fire);
+  return () => {
+    settled = true;
+    for (const fn of cleanups.splice(0)) fn();
+  };
+}
+
 /**
  * Registers the worker and calls `onNeedRefresh` when a new build is waiting.
  *
@@ -29,30 +88,34 @@ export function registerServiceWorker(
 ): ServiceWorkerControls {
   let updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
   let disposed = false;
+  let abandonWait: (() => void) | null = null;
 
-  void (async () => {
-    // Nothing to register when the browser has no support, and nothing is
-    // emitted in dev unless devOptions.enabled is flipped on.
-    if (!("serviceWorker" in navigator)) {
-      return;
-    }
-    try {
-      const module = (await import("virtual:pwa-register")) as {
-        registerSW: RegisterSW;
-      };
-      if (disposed) {
-        return;
+  const register = () => {
+    void (async () => {
+      try {
+        const module = (await import("virtual:pwa-register")) as {
+          registerSW: RegisterSW;
+        };
+        if (disposed) {
+          return;
+        }
+        updateSW = module.registerSW({
+          onNeedRefresh,
+          onRegisterError: (error) => {
+            console.warn("[pwa] service worker registration failed", error);
+          },
+        });
+      } catch {
+        // The virtual module is absent in dev builds — expected, not an error.
       }
-      updateSW = module.registerSW({
-        onNeedRefresh,
-        onRegisterError: (error) => {
-          console.warn("[pwa] service worker registration failed", error);
-        },
-      });
-    } catch {
-      // The virtual module is absent in dev builds — expected, not an error.
-    }
-  })();
+    })();
+  };
+
+  // Nothing to register when the browser has no support, and nothing is
+  // emitted in dev unless devOptions.enabled is flipped on.
+  if ("serviceWorker" in navigator) {
+    abandonWait = whenWorthRegistering(register);
+  }
 
   return {
     async update() {
@@ -60,6 +123,7 @@ export function registerServiceWorker(
     },
     dispose() {
       disposed = true;
+      abandonWait?.();
     },
   };
 }
