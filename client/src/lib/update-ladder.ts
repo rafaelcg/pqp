@@ -59,6 +59,12 @@ export interface LadderDeps {
   online: () => boolean;
   /** True once the page has started to unload (`pagehide`). */
   leaving: () => boolean;
+  /**
+   * Forget an earlier departure. A page restored from the back/forward cache
+   * keeps its JavaScript state, `pagehide`'s flag included, and only a
+   * navigation begun by THIS rung may count as the page leaving.
+   */
+  resetLeaving: () => void;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   storage: StorageLike | null;
@@ -157,6 +163,7 @@ export async function runUpdateLadder(
     // Remembered BEFORE the rung runs: a rung that takes the page away never
     // gets to write anything after it.
     writeLevel(deps, target, Math.min(rung + 1, LAST_RUNG));
+    deps.resetLeaving();
     try {
       await runRung(() =>
         rung === 0
@@ -208,6 +215,10 @@ function watchLeaving(): void {
   window.addEventListener("beforeunload", () => {
     leaving = true;
   });
+  // Restored from the back/forward cache: the page is here, not leaving.
+  window.addEventListener("pageshow", () => {
+    leaving = false;
+  });
 }
 
 async function deleteEveryCache(): Promise<void> {
@@ -239,6 +250,9 @@ export function browserLadderDeps(): LadderDeps {
     },
     online: () => typeof navigator === "undefined" || navigator.onLine !== false,
     leaving: () => leaving,
+    resetLeaving: () => {
+      leaving = false;
+    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     storage: browserStorage(),

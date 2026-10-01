@@ -29,9 +29,10 @@ function memoryStorage() {
 function setup(
   behaviour: Partial<Record<Rung, "leaves" | "resolves" | "rejects" | "throws" | "hangs">> = {},
   over: { online?: boolean | (() => boolean); storage?: ReturnType<typeof memoryStorage> | null } = {},
+  initiallyLeaving = false,
 ) {
   let now = 1_000_000;
-  let leaving = false;
+  let leaving = initiallyLeaving;
   const log: string[] = [];
   const storage = over.storage === undefined ? memoryStorage() : over.storage;
   const run = (rung: Rung) => {
@@ -59,6 +60,9 @@ function setup(
     online: () =>
       typeof over.online === "function" ? over.online() : (over.online ?? true),
     leaving: () => leaving,
+    resetLeaving: () => {
+      leaving = false;
+    },
     sleep: async (ms) => {
       now += ms;
     },
@@ -79,6 +83,14 @@ describe("runUpdateLadder", () => {
     const t = setup({ apply: "resolves", purge: "leaves" });
     expect(await runUpdateLadder("b2", t.deps)).toEqual({ ok: true });
     expect(t.log).toEqual(["apply", "purge"]);
+  });
+
+  it("does not mistake an EARLIER departure for this one (a page restored from the back/forward cache)", async () => {
+    // `pagehide` set the flag when the page went into the cache; coming back,
+    // the flag is still true. Only a navigation begun by a rung may count.
+    const t = setup({ apply: "resolves", purge: "resolves", unregister: "resolves" }, {}, true);
+    expect(await runUpdateLadder("b2", t.deps)).toEqual({ ok: false, reason: "failed" });
+    expect(t.log).toEqual(["apply", "purge", "unregister"]);
   });
 
   it("goes on after a rung that rejects", async () => {
