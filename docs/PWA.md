@@ -146,7 +146,7 @@ answers `{ forceUpdate, minBuiltAt }`, read per request, both off by default:
   built before it are forced. Self-limiting (a later deploy is built after it), but
   an environment variable, so it needs a recreate.
 
-A client asks only when it already knows it is stale, so an up-to-date client never
+A force that was already known for a build is kept when a later lookup FAILS (offline, signed out, timeout); only an answer from the server, the operator turning it off included, changes it. A client asks only when it already knows it is stale, so an up-to-date client never
 makes this request. The screen waits while the person is in a call and appears when
 they hang up. It applies to a build that differs from `/version.json`, so a minimum
 set past the newest build traps nobody in a reload loop.
