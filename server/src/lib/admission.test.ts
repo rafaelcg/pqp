@@ -108,6 +108,27 @@ describe("createAdmissionGate", () => {
     expect(gate.stats().overflowed).toBe(0);
   });
 
+  it("drops a waiter that asked to be dropped, without running it or going over the limit", async () => {
+    const gate = createAdmissionGate({ concurrency: 1, maxWaitMs: 0 });
+    const hog = deferred();
+    const first = gate.run(() => hog.promise);
+    let ran = false;
+    const optional = gate.run(
+      async () => {
+        ran = true;
+        return "ran";
+      },
+      { maxWaitMs: 1_000, onTimeout: "drop" },
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(optional).resolves.toBeUndefined();
+    expect(ran).toBe(false);
+    expect(gate.stats()).toMatchObject({ dropped: 1, overflowed: 0, inFlight: 1, queued: 0 });
+    hog.resolve();
+    await first;
+    expect(gate.stats().inFlight).toBe(0);
+  });
+
   it("calls straight through when disabled (the runtime flag's off position)", async () => {
     let enabled = false;
     const gate = createAdmissionGate({

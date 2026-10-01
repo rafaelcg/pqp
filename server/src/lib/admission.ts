@@ -37,6 +37,8 @@ export interface AdmissionStats {
   admittedImmediately: number;
   /** Let through over the limit because they waited `maxWaitMs`. */
   overflowed: number;
+  /** Given up on (never run) after `maxWaitMs`, for calls that asked to drop. */
+  dropped: number;
   /** Longest wait any one holder had, since boot. */
   maxWaitMs: number;
   /** p50 / p95 of the last {@link WAIT_SAMPLE_SIZE} waits that were not zero. */
@@ -45,14 +47,29 @@ export interface AdmissionStats {
   concurrency: number;
 }
 
+export interface AdmissionRunOptions {
+  /** Overrides the gate's `maxWaitMs` for this call. `0` waits for a slot however long. */
+  maxWaitMs?: number;
+  /**
+   * What a waiter that reached `maxWaitMs` does: `overflow` (the default)
+   * runs over the limit; `drop` never runs and `run` resolves `undefined`.
+   * Dropping is for optional work, where the backlog itself is the burst.
+   */
+  onTimeout?: "overflow" | "drop";
+}
+
 export interface AdmissionGate {
   /**
    * Run `work` once a slot is free (or `maxWaitMs` has passed). The slot is
-   * given back however `work` ends.
+   * given back however `work` ends. Resolves `undefined` only for a call
+   * that asked to `drop` and was dropped.
    */
-  run<T>(work: () => Promise<T>): Promise<T>;
+  run<T>(work: () => Promise<T>, options?: AdmissionRunOptions): Promise<T>;
   stats(): AdmissionStats;
 }
+
+/** Thrown inside `acquire` for a dropped waiter; never escapes `run`. */
+class AdmissionDropped extends Error {}
 
 export interface AdmissionOptions {
   concurrency: number;
@@ -92,6 +109,7 @@ export function createAdmissionGate(options: AdmissionOptions): AdmissionGate {
   let admitted = 0;
   let admittedImmediately = 0;
   let overflowed = 0;
+  let dropped = 0;
   let maxWait = 0;
   const waits: number[] = [];
 
@@ -124,37 +142,48 @@ export function createAdmissionGate(options: AdmissionOptions): AdmissionGate {
     }
   };
 
-  const acquire = (): Promise<void> => {
-    admitted += 1;
+  const acquire = (runOptions: AdmissionRunOptions = {}): Promise<void> => {
     if (inFlight < concurrency && queue.length === 0) {
+      admitted += 1;
       inFlight += 1;
       admittedImmediately += 1;
       noteWait(0);
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
+    const waitBudget = Math.max(0, runOptions.maxWaitMs ?? maxWaitMs);
+    const drop = runOptions.onTimeout === "drop";
+    return new Promise<void>((resolve, reject) => {
       const waiter: Waiter = {
         enqueuedAt: now(),
-        release: resolve,
+        release: () => {
+          admitted += 1;
+          resolve();
+        },
         timer: null,
         done: false,
       };
-      if (maxWaitMs > 0) {
+      if (waitBudget > 0) {
         waiter.timer = setTimeout(() => {
           if (waiter.done) {
             return;
           }
-          // Over the limit, on purpose: see the header on failing open.
           waiter.done = true;
           const index = queue.indexOf(waiter);
           if (index >= 0) {
             queue.splice(index, 1);
           }
+          if (drop) {
+            dropped += 1;
+            reject(new AdmissionDropped());
+            return;
+          }
+          // Over the limit, on purpose: see the header on failing open.
+          admitted += 1;
           inFlight += 1;
           overflowed += 1;
           noteWait(now() - waiter.enqueuedAt);
           resolve();
-        }, maxWaitMs);
+        }, waitBudget);
         waiter.timer.unref?.();
       }
       queue.push(waiter);
@@ -170,11 +199,18 @@ export function createAdmissionGate(options: AdmissionOptions): AdmissionGate {
   };
 
   return {
-    async run<T>(work: () => Promise<T>): Promise<T> {
+    async run<T>(work: () => Promise<T>, runOptions?: AdmissionRunOptions): Promise<T> {
       if (!enabled()) {
         return work();
       }
-      await acquire();
+      try {
+        await acquire(runOptions);
+      } catch (error) {
+        if (error instanceof AdmissionDropped) {
+          return undefined as T;
+        }
+        throw error;
+      }
       try {
         return await work();
       } finally {
@@ -190,6 +226,7 @@ export function createAdmissionGate(options: AdmissionOptions): AdmissionGate {
         admitted,
         admittedImmediately,
         overflowed,
+        dropped,
         maxWaitMs: maxWait,
         waitP50Ms: percentile(sorted, 50),
         waitP95Ms: percentile(sorted, 95),

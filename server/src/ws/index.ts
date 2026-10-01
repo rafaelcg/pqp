@@ -201,13 +201,13 @@ const wsAuthGate = createAdmissionGate({
 });
 
 /**
- * The watch-party catch-ups an arrival starts and does not wait for (a query
- * per server the account is in). Same width as the arrival gate, same flag.
- * Never fails open (`maxWaitMs: 0`): what it delays is a sidebar block, and
- * letting a backlog through over the limit would be the burst it exists to
- * prevent. A waiter whose socket closed meanwhile does nothing when its turn
- * comes.
+ * The watch-party work an arrival starts and does not wait for: the host's
+ * "I am back" write and the party catch-up (a query per server the account is
+ * in). Same width as the arrival gate, same flag. Never over the limit: each
+ * call says how long it may wait and whether it is dropped after that (see
+ * the call site). A waiter whose socket closed meanwhile does nothing.
  */
+export const WS_CATCH_UP_MAX_WAIT_MS = 10_000;
 const wsBackgroundGate = createAdmissionGate({
   concurrency: resolveWsAuthConcurrency(),
   maxWaitMs: 0,
@@ -571,23 +571,40 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // with the next state change. Bounded by their own gate rather than this
     // socket's arrival slot: the party catch-up is a query per server, and a
     // new arrival must never wait for an earlier one's background reads.
-    // The host half runs NOW, as it always did: it stops the host-gone clock,
-    // and a delayed one could land after this socket had already closed and
-    // the close path had started that clock, cancelling a grace the host
-    // really is gone for. One UPDATE. Only the party catch-up (a read per
-    // server, idempotent frames) waits its turn, strictly (no fail-open: it
-    // is sidebar data, and a burst of it is exactly what the gate is for),
-    // and is skipped if the socket is gone by then.
-    void onHostSocketOpened(resolved.user.id).catch((error) => {
-      console.error("[watch-party] host reconnect failed:", error);
-    });
+    //
+    // Both wait their turn in the background gate, never over its limit, and
+    // both do nothing if this socket closed while they waited. That check is
+    // what makes queueing the host half safe: run late after the socket had
+    // closed, it would stop a host-gone clock the close path had just started
+    // for a host who really is gone. Run while the socket is open, it is the
+    // same write it always was, and a close after it starts the clock as
+    // before. The host half waits as long as it takes (it is one UPDATE, and
+    // a host left on a running clock would lose the party in five minutes);
+    // the party catch-up, a read per server for a sidebar block, is dropped
+    // after 10 s, because a backlog of it released at once is the burst this
+    // gate is for.
+    const stillOpen = () => !closed && socket.readyState === 1;
     void wsBackgroundGate
-      .run(async () => {
-        if (closed || socket.readyState !== 1) {
-          return;
-        }
-        await catchUpWatchParties(socket, resolved.user.id);
-      })
+      .run(
+        async () => {
+          if (stillOpen()) {
+            await onHostSocketOpened(resolved.user.id);
+          }
+        },
+        { maxWaitMs: 0 },
+      )
+      .catch((error: unknown) => {
+        console.error("[watch-party] host reconnect failed:", error);
+      });
+    void wsBackgroundGate
+      .run(
+        async () => {
+          if (stillOpen()) {
+            await catchUpWatchParties(socket, resolved.user.id);
+          }
+        },
+        { maxWaitMs: WS_CATCH_UP_MAX_WAIT_MS, onTimeout: "drop" },
+      )
       .catch((error: unknown) => {
         console.error("[watch-party] catch-up failed:", error);
       });
