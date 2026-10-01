@@ -91,6 +91,23 @@ describe("createAdmissionGate", () => {
     expect(gate.stats().inFlight).toBe(0);
   });
 
+  it("never lets anyone over the limit when maxWaitMs is 0", async () => {
+    const gate = createAdmissionGate({ concurrency: 1, maxWaitMs: 0 });
+    const hog = deferred();
+    const first = gate.run(() => hog.promise);
+    let secondStarted = false;
+    const second = gate.run(async () => {
+      secondStarted = true;
+    });
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(secondStarted).toBe(false);
+    hog.resolve();
+    await first;
+    await second;
+    expect(secondStarted).toBe(true);
+    expect(gate.stats().overflowed).toBe(0);
+  });
+
   it("calls straight through when disabled (the runtime flag's off position)", async () => {
     let enabled = false;
     const gate = createAdmissionGate({

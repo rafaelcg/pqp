@@ -202,12 +202,15 @@ const wsAuthGate = createAdmissionGate({
 
 /**
  * The watch-party catch-ups an arrival starts and does not wait for (a query
- * per server the account is in). Same width as the arrival gate, same flag;
- * fail-open after 2 s, because what it delays is a sidebar block.
+ * per server the account is in). Same width as the arrival gate, same flag.
+ * Never fails open (`maxWaitMs: 0`): what it delays is a sidebar block, and
+ * letting a backlog through over the limit would be the burst it exists to
+ * prevent. A waiter whose socket closed meanwhile does nothing when its turn
+ * comes.
  */
 const wsBackgroundGate = createAdmissionGate({
   concurrency: resolveWsAuthConcurrency(),
-  maxWaitMs: 2_000,
+  maxWaitMs: 0,
   enabled: () => {
     try {
       return isEnabled("ws_auth_admission");
@@ -568,18 +571,26 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // with the next state change. Bounded by their own gate rather than this
     // socket's arrival slot: the party catch-up is a query per server, and a
     // new arrival must never wait for an earlier one's background reads.
+    // The host half runs NOW, as it always did: it stops the host-gone clock,
+    // and a delayed one could land after this socket had already closed and
+    // the close path had started that clock, cancelling a grace the host
+    // really is gone for. One UPDATE. Only the party catch-up (a read per
+    // server, idempotent frames) waits its turn, strictly (no fail-open: it
+    // is sidebar data, and a burst of it is exactly what the gate is for),
+    // and is skipped if the socket is gone by then.
+    void onHostSocketOpened(resolved.user.id).catch((error) => {
+      console.error("[watch-party] host reconnect failed:", error);
+    });
     void wsBackgroundGate
-      .run(() =>
-        Promise.allSettled([
-          onHostSocketOpened(resolved.user.id).catch((error) => {
-            console.error("[watch-party] host reconnect failed:", error);
-          }),
-          catchUpWatchParties(socket, resolved.user.id).catch((error) => {
-            console.error("[watch-party] catch-up failed:", error);
-          }),
-        ]),
-      )
-      .catch(() => {});
+      .run(async () => {
+        if (closed || socket.readyState !== 1) {
+          return;
+        }
+        await catchUpWatchParties(socket, resolved.user.id);
+      })
+      .catch((error: unknown) => {
+        console.error("[watch-party] catch-up failed:", error);
+      });
     socket.send(JSON.stringify({ type: "ready" }));
     try {
       await sendAllVoiceRosters(socket, resolved.user);
