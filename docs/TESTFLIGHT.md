@@ -261,20 +261,149 @@ reviewers can open the app. It is **not**:
 2. Suggested email: something like `appstore-review@<inbox you control>`.
 3. Sign in once on **production** (web or TestFlight), complete the **18+ age
    gate** with an adult date of birth.
-4. Join or create a small private community with a few messages and a second
-   dummy user (so Report / Block are exercisable).
+4. Give it a small private server with a few messages and a second dummy user
+   (so Report / Block are exercisable) and take it out of every real community:
+   run the seed script, see **Seeding the review community** below.
 5. Paste email + password into ASC → TestFlight → **Test Information** → Sign-in
    information.
 6. Notes template (paste and edit):
 
 ```
 18+ age gate already completed on this account.
-After sign-in you land in the seeded community.
-UGC: long-press / message menu → Report; profile → Block.
+After sign-in you land in "pqp review", a small private space with sample
+messages (English and Portuguese), a second member ("Demo Friend") and a voice
+channel (Lobby). This account is not a member of any public community.
+UGC: long-press / message menu → Report; tap a member's name → profile → Block.
 Privacy: https://pqp.gg/privacy
 Terms: https://pqp.gg/terms
 Contact: <your abuse email>
 ```
+
+### Seeding the review community
+
+Apple rejected a build under Guideline 2.1(a) for a demo account with no
+pre-populated content. The account must not be sitting in the real communities
+(QG do pqp has about 4,000 members, and a reviewer could post in front of them),
+so `server/src/scripts/seed-review-community.ts` gives it a private space of its
+own. It is operator tooling: run by hand, once, on the API box. Nothing in the
+API imports it.
+
+**What it makes**, through the same service functions the API uses (cargos,
+audiences, caches and cluster invalidations are the real ones):
+
+- a server named **pqp review**, owned by the demo account. Not a community
+  (`is_community` false, no `/c/<slug>`), not in the directory, so it does not
+  touch the instance's legal category (`docs/CONTENT_SAFETY.md`, Communities).
+  Reachable only by an invite code;
+- channels `#geral` and `#ajuda` (text) and `Lobby` (voice);
+- one second account, **Demo Friend**: a revoked character row (`is_character`,
+  `character_accounts.label = 'review-demo-friend'`). `users.clerk_id` is NOT
+  NULL, so a person-shaped row would need a fake Clerk id and then count as a
+  human in every metric and in the Turma dos 1000. A character is excluded from
+  all of that, its token is minted and revoked in the same call (nobody can sign
+  in as it), and Report and Block both work on it. The web client draws a small
+  "bot" mark beside the name; iOS and Android do not;
+- eight messages in `#geral` (welcome, a how-to-try list, replies, "this is a
+  test message to report") and one in `#ajuda`, English and pt-BR, written by the
+  demo account and Demo Friend, plus four reactions. No real person's data, no
+  attachments;
+- an invite code (10 uses, no expiry). It is for you to join and look. Do not
+  post it anywhere.
+
+It is **idempotent** (it looks before it writes: the server by name and owner,
+the friend by label, each message by a nonce no client ever sends) and **dry run
+by default**. It does not run in one transaction: the service layer owns its own
+transactions and cache fan-out, and going around it with raw SQL is how a
+seeded room ends up without cargos or with stale audiences on the other API
+machine. Instead every step is safe to repeat, so a run that dies half way is
+finished by running it again.
+
+**Where it runs.** The production image carries `server/dist` and nothing else,
+so the script is compiled to `server/dist/scripts/seed-review-community.js` and
+exists on the box once an image built after this change is deployed. It reads
+`DATABASE_URL` and `CLUSTER_BUS` from the container's own environment (the
+production `.env`), and when `CLUSTER_BUS=postgres` it opens the same
+publish-only bus `pqp-worker` does, so `api-a` and `api-b` hear about the
+changed audiences. It does not run `initDb` (the schema is the API's job) and it
+prints the database as `host/name`, never the credentials.
+
+On the box, as `pqp` (the demo account's Clerk id is not a secret):
+
+```bash
+ssh pqp@<ip>
+cd /opt/pqp
+
+# 1. Dry run: prints what it would create, writes nothing.
+docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --leave-others
+
+# 2. Same command plus --apply: makes the space, then removes the demo account
+#    from every other server it is in (QG do pqp and the two others).
+docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --apply --leave-others
+```
+
+Omit `--leave-others` to only build the space. The account is looked up by
+`--clerk-id` or `--user-id <uuid>`; an email address will not do, because
+`users` stores verified email domains only, never the address. It fails clearly
+when the row is not there (the account has to have signed in once).
+
+`--leave-others` prints every other membership first, with its role and member
+count. It only ever removes the demo account's membership: it never deletes a
+server or a message, and it refuses (line marked `!`, exit code 2) a server the
+demo account owns. It also prints, without touching them, how many friendships
+and DM or group conversations the account has, so you know what a reviewer could
+still see. Leaving QG expires its cached member list and audience on both API
+machines for a moment; do it while nobody has the demo account open.
+
+Exit codes: 0 done, 1 refused (account missing, a public server already named
+`pqp review`, lock held), 2 something was blocked, 64 bad arguments, 70 an
+unexpected error (for example the database is unreachable).
+
+**Verify in the app.** Sign the demo account out and back in on TestFlight (an
+already-open session does not re-list its servers), then:
+
+1. the server rail shows only **pqp review**; the directory and `pqp.gg/c/...`
+   do not list it;
+2. `#geral` has the welcome, how-to and the rest, `#ajuda` has one message, and
+   Lobby is a voice channel;
+3. tap Demo Friend's name, then profile → Block works, and long-pressing "This is
+   a test message to report" → Report files a report (a report about a server
+   channel goes to that server's own moderators, and the demo account is its
+   owner, so you will not see it and nothing needs dismissing. Only a report
+   filed against a person with no server context goes to the instance queue);
+4. send a message and add a reaction.
+
+**Undo.** `--cleanup` removes only what the script made: the `pqp review` server
+(with its channels, messages, reactions and invite) and the Demo Friend account.
+It leaves the demo account and every other server alone, shows what it would do
+without `--apply`, and refuses if somebody besides the two seeded accounts has
+joined, unless `--force`:
+
+```bash
+docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --cleanup           # dry run
+docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --cleanup --apply
+```
+
+The same by hand, in `psql`, if the script is not to hand:
+
+```sql
+BEGIN;
+DELETE FROM servers
+ WHERE name = 'pqp review'
+   AND NOT is_community AND NOT is_community_listed
+   AND owner_id = (SELECT id FROM users WHERE clerk_id = 'user_3IBapFe9KRlyoVEafdJwHoNsprH')
+RETURNING id, name;
+DELETE FROM users
+ WHERE is_character
+   AND id = (SELECT user_id FROM character_accounts WHERE label = 'review-demo-friend');
+COMMIT;
+```
+
+`--cleanup` does not put the demo account back in the servers `--leave-others`
+took it out of; re-join them from an invite if you ever want that.
 
 ## External TestFlight (public / invite link)
 
