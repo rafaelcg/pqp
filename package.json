@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "soak:voice": "node scripts/voice-soak.mjs",
+    "share:repro": "node tools/share-diagnostic/repro.mjs",
     "start": "pnpm --filter @pqp/server start",
     "electron:dev": "pnpm --filter @pqp/electron dev",
     "electron:dist": "pnpm --filter @pqp/client build && pnpm --filter @pqp/electron dist",

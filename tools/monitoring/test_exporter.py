@@ -882,5 +882,60 @@ class MergeAdminMetricsTests(unittest.TestCase):
         self.assertIn("pqp_api_metrics_replicas_scraped 2", body)
 
 
+def _with_pool_wait(window: dict, ws_auth: dict | None = None) -> dict:
+    payload = _base_payload()
+    payload["runtime"] = {
+        **payload["runtime"],
+        "poolWait": {"last5Minutes": window},
+        **({"wsAuth": ws_auth} if ws_auth is not None else {}),
+    }
+    return payload
+
+
+class PoolWaitTests(unittest.TestCase):
+    def test_omitted_for_an_api_without_the_field(self):
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_pool_wait_p95_ms_5m", body)
+
+    def test_single_payload_renders_its_own_window(self):
+        body = exporter.render(
+            _with_pool_wait(
+                {"p95Ms": 2, "maxMs": 9, "maxBusy": 22, "maxWaiting": 161, "waitedOver1s": 0},
+                {"peakQueued": 40, "overflowed": 0},
+            )
+        )
+        self.assertIn("pqp_api_pool_wait_p95_ms_5m 2", body)
+        self.assertIn("pqp_api_pool_wait_max_ms_5m 9", body)
+        self.assertIn("pqp_api_pool_waited_over_1s_5m 0", body)
+        self.assertIn("pqp_api_pool_peak_busy_5m 22", body)
+        self.assertIn("pqp_api_pool_peak_waiting_5m 161", body)
+        self.assertIn("pqp_api_ws_auth_peak_queued 40", body)
+
+    def test_across_replicas_takes_the_worst_and_sums_felt_waits(self):
+        calm = _with_pool_wait(
+            {"p95Ms": 1, "maxMs": 3, "maxBusy": 2, "maxWaiting": 0, "waitedOver1s": 0},
+            {"peakQueued": 0, "overflowed": 0},
+        )
+        herd = _with_pool_wait(
+            {"p95Ms": 250, "maxMs": 3200, "maxBusy": 22, "maxWaiting": 161, "waitedOver1s": 4},
+            {"peakQueued": 90, "overflowed": 2},
+        )
+        across = exporter.pool_wait_across([calm, herd])
+        self.assertEqual(across["p95Ms"], 250)
+        self.assertEqual(across["maxMs"], 3200)
+        self.assertEqual(across["maxBusy"], 22)
+        self.assertEqual(across["waitedOver1s"], 4)
+        self.assertEqual(across["authPeakQueued"], 90)
+        self.assertEqual(across["authOverflowed"], 2)
+        # The merged payload carries the calm replica's runtime (take-first),
+        # and the cross-replica figures still win.
+        merged = exporter.merge_admin_metrics([calm, herd])
+        body = exporter.render(merged, pool_wait=across)
+        self.assertIn("pqp_api_pool_wait_max_ms_5m 3200", body)
+
+    def test_none_when_no_replica_reports_it(self):
+        self.assertIsNone(exporter.pool_wait_across([_base_payload(), _base_payload()]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 import pg from "pg";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,7 @@ import {
 import { HttpError } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
 import { noteDbQuery } from "./lib/db-tx-metrics.js";
+import { notePoolWait } from "./lib/pool-wait.js";
 import { currentRoute } from "./lib/route-context.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -976,6 +978,40 @@ function observeClientQueries(client: object): void {
   };
 }
 
+/**
+ * Time every `connect()` from the ask to the client, in both of pg-pool's
+ * shapes: the promise one this codebase calls, and the callback one
+ * `pool.query` uses internally. The measurement can never change the result:
+ * the same client, the same error, the same callback.
+ */
+function measurePoolWaits(target: pg.Pool): void {
+  const rawConnect = target.connect.bind(target) as (...args: unknown[]) => unknown;
+  (target as unknown as { connect: unknown }).connect = (...args: unknown[]) => {
+    const askedAt = performance.now();
+    const callback = args[0];
+    if (typeof callback === "function") {
+      return rawConnect((error: unknown, client: unknown, done: unknown) => {
+        notePoolWait(performance.now() - askedAt);
+        (callback as (...cbArgs: unknown[]) => void)(error, client, done);
+      });
+    }
+    const result = rawConnect(...args);
+    if (isThenable(result)) {
+      return result.then(
+        (client) => {
+          notePoolWait(performance.now() - askedAt);
+          return client;
+        },
+        (error: unknown) => {
+          notePoolWait(performance.now() - askedAt);
+          throw error;
+        },
+      );
+    }
+    return result;
+  };
+}
+
 export function getPool(): pg.Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
@@ -1027,6 +1063,11 @@ export function getPool(): pg.Pool {
       noteDbQuery(currentRoute());
       return rawQuery(...args);
     }) as typeof created.query;
+    // How long each caller waited for a connection (`lib/pool-wait.ts`).
+    // `pool.query` goes through `this.connect(callback)` too, so wrapping
+    // `connect` sees every checkout in both shapes. INSIDE the breaker guard
+    // below on purpose: a call the breaker refuses never waited.
+    measurePoolWaits(created);
     // A3.1: fail fast on every query while the breaker is open, rather than
     // let each caller discover a dead database by queueing on this pool.
     // Wrapping AFTER the metrics assignment above so this becomes the
@@ -1144,11 +1185,214 @@ async function withBootDdlClient<T>(
   }
 }
 
-export async function initDb(): Promise<void> {
+/**
+ * WHY BOOT DDL IS SKIPPED WHEN THE SCHEMA HAS NOT CHANGED.
+ *
+ * `schema.sql` is sent as ONE simple-protocol query, so Postgres runs every
+ * statement in it as a single implicit transaction, and every lock it takes is
+ * held until the whole blob commits. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+ * takes ACCESS EXCLUSIVE before it looks at whether the column exists, so a
+ * re-run that changes nothing still held ACCESS EXCLUSIVE on 27 tables
+ * (`users`, `servers`, `server_members`, `channels`, `messages`,
+ * `voice_peers`, `voice_rooms`, `voice_instances`, `hls_sessions`, ...) and
+ * SHARE on 54 more, measured against this file on a scratch database.
+ *
+ * On the Vultr box that ran on EVERY rolling deploy, at the worst moment: the
+ * container being recycled boots while its sibling is absorbing the herd of
+ * sockets the drain just sent it. While the DDL waited for one of those
+ * readers it held the tables it had already altered, every query of the herd
+ * queued behind it holding a pooled connection, and the sibling's pool sat at
+ * 22 of 22 with 161 waiting. Production logs, 2026-09-27 to 2026-09-30:
+ * `deadlock detected` between the DDL and roster reads on four deploys, the
+ * breaker opening on one, and `Failed to start server: error: deadlock
+ * detected` twice on 2026-09-30 20:02Z, with a 24 s boot beside it.
+ *
+ * So the DDL runs only when the text differs from the last text applied (one
+ * row in `schema_boot_state`), serialised across processes by an advisory
+ * lock, with a short `lock_timeout` so a run that does have to happen gives
+ * its locks back instead of holding the sibling's tables while it waits, and
+ * retried rather than crashing the boot on a deadlock or a lock timeout.
+ *
+ * `BOOT_SCHEMA_MODE=always` is the rollback: today's behaviour, the whole file
+ * on every boot. `BOOT_SCHEMA_LOCK_TIMEOUT_MS=0` removes the lock bound.
+ */
+export type BootSchemaMode = "changed" | "always";
+
+export function resolveBootSchemaMode(
+  raw: string | undefined = process.env.BOOT_SCHEMA_MODE,
+): BootSchemaMode {
+  return raw?.trim().toLowerCase() === "always" ? "always" : "changed";
+}
+
+/** Default bound on any ONE lock wait inside a boot schema run. */
+export const DEFAULT_BOOT_SCHEMA_LOCK_TIMEOUT_MS = 2_000;
+
+export function resolveBootSchemaLockTimeoutMs(
+  raw: string | undefined = process.env.BOOT_SCHEMA_LOCK_TIMEOUT_MS,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_BOOT_SCHEMA_LOCK_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : DEFAULT_BOOT_SCHEMA_LOCK_TIMEOUT_MS;
+}
+
+/**
+ * Attempts under the lock bound before the last, unbounded one. A schema
+ * change must land eventually: after these the run waits as long as it has
+ * to, which is the old behaviour and still better than a boot that never
+ * finishes.
+ */
+export const BOOT_SCHEMA_BOUNDED_ATTEMPTS = 6;
+
+/** Arbitrary, fixed: the advisory lock every booting API takes around DDL. */
+const BOOT_SCHEMA_ADVISORY_KEY = 7_405_123_901;
+
+/**
+ * Statements in `schema.sql` that are not schema: idempotent sweeps that keep
+ * an invariant every boot, not backfills that only need to run once. A boot
+ * that skips the DDL still runs these, so skipping changes nothing they
+ * enforce. All three take row locks only. `db.test.ts` fails if a top-level
+ * DML statement appears in `schema.sql` without being listed here or in
+ * `BOOT_ONE_SHOT_DML`, so the decision is made on purpose.
+ */
+export const BOOT_EVERY_TIME_SWEEPS: readonly string[] = [
+  // Role grants are membership; orphans lost their member row.
+  `DELETE FROM member_roles mr
+ WHERE NOT EXISTS (
+   SELECT 1 FROM server_members sm
+    WHERE sm.server_id = mr.server_id AND sm.user_id = mr.user_id
+ );`,
+  // @everyone must not carry kick/ban/timeout/Administrator (bits 1, 2, 3, 18).
+  `UPDATE roles
+   SET permissions = permissions & ~262158
+ WHERE is_everyone
+   AND (permissions & 262158) <> 0;`,
+  `UPDATE channel_sessions SET host_user_id = created_by WHERE host_user_id IS NULL;`,
+];
+
+/** Top-level DML that is a one-time backfill, so running it once is enough. */
+export const BOOT_ONE_SHOT_DML: readonly string[] = [];
+
+/**
+ * `DO $$` blocks that write rows with no `data_migrations` (or catalog) guard,
+ * so they used to run on every boot too. Each is named here by a phrase from
+ * its own text, with why running it only when the file changes is enough.
+ * `db-boot-schema.test.ts` finds every such block and fails on one that is
+ * neither guarded nor listed here.
+ */
+export const BOOT_UNGUARDED_DO_BLOCKS: readonly { marker: string; why: string }[] = [
+  {
+    // The community slug backfill. Its own comment calls it a one-shot that
+    // is a no-op after the first run; the live path writes `community_slug`
+    // in the same UPDATE that turns `is_community` on.
+    marker: "s.is_community AND s.community_slug IS NULL",
+    why: "one-shot backfill; the live path sets the slug itself",
+  },
+];
+
+export function schemaHash(schema: string): string {
+  return createHash("sha256").update(schema).digest("hex");
+}
+
+const LOCK_NOT_AVAILABLE = "55P03";
+const DEADLOCK_DETECTED = "40P01";
+
+function isRetryableBootDdlError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === LOCK_NOT_AVAILABLE || code === DEADLOCK_DETECTED;
+}
+
+export interface InitDbOptions {
+  /** Overrides `BOOT_SCHEMA_MODE` (tests that re-arm a backfill use it). */
+  mode?: BootSchemaMode;
+  /** Overrides `BOOT_SCHEMA_LOCK_TIMEOUT_MS`. */
+  lockTimeoutMs?: number;
+  /** Injectable pause between attempts, for tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface InitDbResult {
+  /** `applied` ran `schema.sql`; `skipped` found the same text already applied. */
+  outcome: "applied" | "skipped";
+  /** Attempts it took, 0 when skipped. */
+  attempts: number;
+  ms: number;
+}
+
+export async function initDb(options: InitDbOptions = {}): Promise<InitDbResult> {
+  const startedAt = Date.now();
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
-  await withBootDdlClient(async (query) => {
-    await query(schema);
+  const hash = schemaHash(schema);
+  const mode = options.mode ?? resolveBootSchemaMode();
+  const lockTimeoutMs = options.lockTimeoutMs ?? resolveBootSchemaLockTimeoutMs();
+  const pause =
+    options.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  return withBootDdlClient(async (query) => {
+    // Two processes booting together used to run the file twice at once and
+    // could deadlock each other; the second now waits, then finds the hash.
+    // Session-level on a connection that is destroyed afterwards, so it can
+    // never be left held.
+    await query("SELECT pg_advisory_lock($1)", [BOOT_SCHEMA_ADVISORY_KEY]);
+    await query(
+      `CREATE TABLE IF NOT EXISTS schema_boot_state (
+         id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+         schema_hash TEXT NOT NULL,
+         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`,
+    );
+    if (mode === "changed") {
+      const current = await query(
+        "SELECT schema_hash FROM schema_boot_state WHERE id = 1",
+      );
+      if ((current.rows[0] as { schema_hash?: string } | undefined)?.schema_hash === hash) {
+        for (const sweep of BOOT_EVERY_TIME_SWEEPS) {
+          await query(sweep);
+        }
+        await ensureConcurrentIndexes(query);
+        const ms = Date.now() - startedAt;
+        logEvent("db.schemaSkipped", { ms, hash: hash.slice(0, 12) });
+        return { outcome: "skipped", attempts: 0, ms };
+      }
+    }
+    // The schema and the hash that says it was applied commit together: the
+    // UPSERT is appended to the same multi-statement query, so it is in the
+    // same implicit transaction and cannot be recorded for a run that rolled
+    // back.
+    const recordHash = `;
+INSERT INTO schema_boot_state (id, schema_hash, applied_at) VALUES (1, '${hash}', now())
+ON CONFLICT (id) DO UPDATE SET schema_hash = EXCLUDED.schema_hash, applied_at = now();`;
+    let attempts = 0;
+    for (;;) {
+      attempts += 1;
+      const bounded = lockTimeoutMs > 0 && attempts <= BOOT_SCHEMA_BOUNDED_ATTEMPTS;
+      await query(`SET lock_timeout = ${bounded ? lockTimeoutMs : 0}`);
+      try {
+        await query(schema + recordHash);
+        break;
+      } catch (error) {
+        if (!isRetryableBootDdlError(error) || attempts > BOOT_SCHEMA_BOUNDED_ATTEMPTS) {
+          throw error;
+        }
+        // The failed run rolled back and gave every lock back. Wait a little,
+        // jittered so two booting processes do not retry in step.
+        const waitMs = 500 * attempts + Math.floor(Math.random() * 1_000);
+        logEvent("db.schemaRetry", {
+          attempt: attempts,
+          code: (error as { code?: string }).code,
+          waitMs,
+        });
+        await pause(waitMs);
+      }
+    }
+    await query("SET lock_timeout = 0");
     await ensureConcurrentIndexes(query);
+    const ms = Date.now() - startedAt;
+    logEvent("db.schemaApplied", { ms, attempts, mode, hash: hash.slice(0, 12) });
+    return { outcome: "applied", attempts, ms };
   });
 }
 

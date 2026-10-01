@@ -1027,6 +1027,15 @@ const publicInviteLimiter = createRateLimiter({
   refillPerSecond: 0.5,
 });
 /**
+ * `GET /api/public/communities/config` (`servePublicCommunitiesConfig`). Its own
+ * bucket for the reason its siblings have theirs. Generous: a landing page
+ * fetches it once per load, and it sits UNDER `anonLimiter`.
+ */
+const publicCommunitiesConfigLimiter = createRateLimiter({
+  capacity: 30,
+  refillPerSecond: 1,
+});
+/**
  * Tab-close leave beacon. Unauthenticated on purpose: `pagehide` cannot wait
  * for Clerk, and the resume HMAC is the credential. Own bucket so a flood
  * here cannot spend the public-profile or webhook budgets.
@@ -1070,6 +1079,7 @@ export function resetApiRateLimits(): void {
   apiLimiter.reset();
   writeLimiter.reset();
   anonLimiter.reset();
+  publicCommunitiesConfigLimiter.reset();
   gifLimiter.reset();
   connectionLimiter.reset();
   desktopHandoffLimiter.reset();
@@ -10275,6 +10285,45 @@ async function servePublicInvitePreview(
   res.end(JSON.stringify({ invite }));
 }
 
+const PUBLIC_COMMUNITIES_CONFIG_PATH = "/api/public/communities/config";
+
+/**
+ * The signed-out twin of `GET /api/communities/config`, so the landing page can
+ * decide whether to show its communities band. Same source of truth
+ * (`isCommunitiesEnabled`, read per request), and the body is `{ enabled }` and
+ * nothing else. Off answers 200 `{ enabled: false }`, not 404: a 404 is what a
+ * missing route looks like. Identical for every caller, so it is publicly
+ * cacheable for a minute (the edge may hold it; a flip shows within a minute).
+ * Must be matched BEFORE `PUBLIC_COMMUNITY_PATH`, whose slug segment would
+ * otherwise read "config" as a community slug.
+ */
+function servePublicCommunitiesConfig(
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET, OPTIONS");
+    sendError(res, 405, "Method not allowed", req);
+    return;
+  }
+  const address = clientAddress(req as never);
+  if (!publicCommunitiesConfigLimiter.take(`communities-config:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicCommunitiesConfigLimiter.retryAfter(`communities-config:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(JSON.stringify({ enabled: isCommunitiesEnabled() }));
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -10438,6 +10487,11 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
   if (profileMatch) {
     await servePublicProfile(req, res, profileMatch[1]!);
+    return;
+  }
+
+  if (pathname === PUBLIC_COMMUNITIES_CONFIG_PATH) {
+    servePublicCommunitiesConfig(req, res);
     return;
   }
 

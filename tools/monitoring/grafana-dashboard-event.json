@@ -108,6 +108,44 @@
       "description": "checks.pool from GET /ready. A queue above zero is the earliest honest warning -- see docs/MONITORING.md 'GET /ready'."
     },
     {
+      "id": 40,
+      "title": "Pool wait (5 min, worst replica)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [
+        { "matcher": { "id": "byName", "options": "waited > 1 s" }, "properties": [{ "id": "unit", "value": "short" }, { "id": "custom.axisPlacement", "value": "right" }] },
+        { "matcher": { "id": "byName", "options": "peak busy" }, "properties": [{ "id": "unit", "value": "short" }, { "id": "custom.axisPlacement", "value": "right" }] }
+      ] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_pool_wait_p95_ms_5m",
+          "legendFormat": "wait p95"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_pool_wait_max_ms_5m",
+          "legendFormat": "wait max"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_pool_waited_over_1s_5m",
+          "legendFormat": "waited > 1 s"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_pool_peak_busy_5m",
+          "legendFormat": "peak busy"
+        }
+      ],
+      "description": "runtime.poolWait from GET /api/admin/metrics (server/src/lib/pool-wait.ts), worst replica over the last 5 minutes. Unlike the once-a-minute /ready sample this catches a deploy burst. Peak busy touching PG_POOL_MAX with wait max in the tens of ms is a burst absorbed; waited > 1 s above zero is somebody who felt it."
+    },
+    {
       "id": 5,
       "title": "DB latency (postgres ms)",
       "type": "timeseries",

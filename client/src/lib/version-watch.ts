@@ -1,5 +1,4 @@
 import {
-  NO_FORCE,
   isForcedBuild,
   isStaleBuild,
   parseVersionManifest,
@@ -42,7 +41,11 @@ export const FIRST_CHECK_DELAY_MS = 4_000;
 export interface VersionWatchDeps {
   running: BuildIdentity;
   fetchLatest: () => Promise<LatestBuild | null>;
-  fetchForceConfig: () => Promise<ForceConfig>;
+  /**
+   * The operator's answer, or null when it could not be had (offline, signed
+   * out, an older API, a timeout). Null is NOT "no force": see `run`.
+   */
+  fetchForceConfig: () => Promise<ForceConfig | null>;
   /** Ask the browser to look for a new worker now. Never throws. */
   updateWorker: () => Promise<void>;
   publish: (next: BuildStaleness) => void;
@@ -61,6 +64,13 @@ export function createVersionWatch(deps: VersionWatchDeps): VersionWatch {
   // When this page first saw a newer build, for a build id that carries no
   // `builtAt`. Kept per target so a second deploy starts its own clock.
   let firstSeen: { build: string; at: number } | null = null;
+  /** What this watch last published, so a failed lookup does not undo it. */
+  let lastPublished: BuildStaleness | null = null;
+
+  function publish(next: BuildStaleness): void {
+    lastPublished = next;
+    deps.publish(next);
+  }
 
   async function run(): Promise<void> {
     void deps.updateWorker();
@@ -70,17 +80,25 @@ export function createVersionWatch(deps: VersionWatchDeps): VersionWatch {
       // was published: "I could not ask" is not "the build is current".
       if (latest) {
         firstSeen = null;
-        deps.publish(FRESH_BUILD);
+        publish(FRESH_BUILD);
       }
       return;
     }
     if (firstSeen?.build !== latest.build) {
       firstSeen = { build: latest.build, at: now() };
     }
-    const config = await deps.fetchForceConfig().catch(() => NO_FORCE);
-    deps.publish({
+    const config = await deps.fetchForceConfig().catch(() => null);
+    // A lookup that FAILED must not undo a force that was already known for this
+    // very build. Found in the e2e: the version read succeeded, the network went
+    // away before the force lookup, the failure read as "no force", and the
+    // blocking screen turned into an automatic reload. Only an answer changes
+    // the answer; the operator turning it off is an answer.
+    const forced = config
+      ? isForcedBuild(deps.running, config)
+      : lastPublished?.latestBuild === latest.build && lastPublished.forced;
+    publish({
       stale: true,
-      forced: isForcedBuild(deps.running, config),
+      forced,
       latestBuild: latest.build,
       // The deployed build's age is how long this page has been behind, even
       // if it only just learned of it (a laptop that slept for two days).
@@ -157,7 +175,7 @@ async function updateRegisteredWorker(): Promise<void> {
  */
 export function startVersionWatch(options: {
   running: BuildIdentity;
-  fetchForceConfig: () => Promise<ForceConfig>;
+  fetchForceConfig: () => Promise<ForceConfig | null>;
   publish: (next: BuildStaleness) => void;
 }): () => void {
   if (typeof window === "undefined" || typeof document === "undefined") {

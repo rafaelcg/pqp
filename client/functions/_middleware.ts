@@ -1,3 +1,4 @@
+import { stripPrerenderHero } from "../src/lib/prerender-hero";
 import { isNoIndexAppPath } from "../src/lib/app-robots";
 import { isUnknownSpaPath } from "../src/lib/spa-routes";
 import {
@@ -276,7 +277,7 @@ function notFoundIfShell(response: Response): Response {
   });
 }
 
-export async function onRequest(context: PagesContext): Promise<Response> {
+async function handleRequest(context: PagesContext): Promise<Response> {
   const url = new URL(context.request.url);
 
   // A hashed asset that falls through to the SPA fallback must die as an
@@ -482,4 +483,35 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       locale: cardLocale,
     }),
   );
+}
+
+/**
+ * `index.html` carries the landing page's first screen for the home route
+ * (`src/lib/prerender-hero.ts`). The file is the same for every path, so every
+ * HTML answer for a path that is NOT `/` has it taken out here: a browser
+ * would hide it, but a crawler or a reader that does not run JavaScript would
+ * read the home hero as the body of `/vs-discord` or `/@handle`. Covers every
+ * branch of the middleware, including the pass-through and the error
+ * fall-throughs, because it wraps all of them.
+ */
+export async function onRequest(context: PagesContext): Promise<Response> {
+  const response = await handleRequest(context);
+  if (context.request.method !== "GET") {
+    return response;
+  }
+  if (new URL(context.request.url).pathname === "/") {
+    return response;
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/html")) {
+    return response;
+  }
+  const html = await response.text();
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(stripPrerenderHero(html), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

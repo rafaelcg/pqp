@@ -11,7 +11,7 @@ const running = { build: "abc123", builtAt: 1_000 };
 
 function setup(over: {
   latest?: LatestBuild | null | (() => LatestBuild | null);
-  force?: ForceConfig | (() => Promise<ForceConfig>);
+  force?: ForceConfig | null | (() => Promise<ForceConfig | null>);
   running?: { build: string; builtAt: number };
 } = {}) {
   let clock = 1_000_000;
@@ -26,7 +26,7 @@ function setup(over: {
     },
     fetchForceConfig: async () => {
       calls.force += 1;
-      const value = over.force ?? NO_FORCE;
+      const value = over.force === undefined ? NO_FORCE : over.force;
       return typeof value === "function" ? value() : value;
     },
     updateWorker: async () => {
@@ -106,6 +106,51 @@ describe("createVersionWatch", () => {
     expect(s.published).toEqual([
       { stale: true, forced: false, latestBuild: "def456", since: 500_000 },
     ]);
+  });
+
+  it("keeps a force it already knew when the lookup then fails (offline, signed out, timeout)", async () => {
+    let answer: ForceConfig | null = { forceUpdate: true, minBuiltAt: null };
+    const s = setup({
+      latest: { build: "def456", builtAt: 500_000 },
+      force: async () => answer,
+    });
+    await s.watch.check();
+    expect(s.published.at(-1)?.forced).toBe(true);
+
+    answer = null;
+    s.advance(MIN_GAP_MS);
+    await s.watch.check();
+    expect(s.published.at(-1)).toEqual({
+      stale: true,
+      forced: true,
+      latestBuild: "def456",
+      since: 500_000,
+    });
+  });
+
+  it("lets the operator turn it off: an ANSWER of no force does change it", async () => {
+    let answer: ForceConfig | null = { forceUpdate: true, minBuiltAt: null };
+    const s = setup({
+      latest: { build: "def456", builtAt: 500_000 },
+      force: async () => answer,
+    });
+    await s.watch.check();
+    answer = { forceUpdate: false, minBuiltAt: null };
+    s.advance(MIN_GAP_MS);
+    await s.watch.check();
+    expect(s.published.at(-1)?.forced).toBe(false);
+  });
+
+  it("does not carry a force over to a DIFFERENT build when the lookup fails", async () => {
+    let deployed: LatestBuild = { build: "def456", builtAt: 500_000 };
+    let answer: ForceConfig | null = { forceUpdate: true, minBuiltAt: null };
+    const s = setup({ latest: () => deployed, force: async () => answer });
+    await s.watch.check();
+    deployed = { build: "ghi789", builtAt: 600_000 };
+    answer = null;
+    s.advance(MIN_GAP_MS);
+    await s.watch.check();
+    expect(s.published.at(-1)?.forced).toBe(false);
   });
 
   it("publishes nothing when it could not read the manifest: not knowing is not 'current'", async () => {

@@ -533,8 +533,9 @@ describe("injectMarketingHead", () => {
     expect(html).toContain("pqp-theme");
     expect(html).toContain('rel="apple-touch-icon"');
     expect(html).toContain('name="viewport"');
-    expect(html).toContain("fonts.googleapis.com");
-    expect(html).toContain('<div id="root"></div>');
+    expect(html).toContain('rel="preload"');
+    expect(html).toContain("gabarito-latin.woff2");
+    expect(html).toContain('<div id="root">');
   });
 
   it("declares the document Portuguese when the head is Portuguese", () => {

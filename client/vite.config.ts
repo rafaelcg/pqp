@@ -2,10 +2,19 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
+import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import faroUploader from "@grafana/faro-rollup-plugin";
+import { deferEntryScript } from "./src/lib/defer-entry";
+import { deferredScriptTag } from "./src/lib/deferred-tag";
 import { googleAds } from "./src/lib/google-ads-tag";
+import {
+  injectPrerenderHero,
+  PRERENDER_LOCALES,
+  renderPrerenderHero,
+} from "./src/lib/prerender-hero";
+import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -128,6 +137,14 @@ const BUILD_TIME = Date.now();
  * up to date" without this. The name carries the build so the URL changes with
  * it and no cache can hand back another build's stamp.
  */
+/**
+ * TEST ONLY: `PQP_TEST_LEGACY_WORKER=1` builds the worker the way it was before
+ * this existed (waits instead of taking over, no network-first navigation), so
+ * the stale-bundle e2e can stand up "a person on the old worker, then the fix is
+ * deployed". Never set in CI deploys.
+ */
+const LEGACY_WORKER = process.env.PQP_TEST_LEGACY_WORKER === "1";
+
 const SW_BUILD_FILE = `sw-build-${BUILD_ID.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16) || "dev"}.js`;
 
 function versionManifest(): Plugin {
@@ -143,15 +160,7 @@ function versionManifest(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: SW_BUILD_FILE,
-        source: [
-          `self.__PQP_BUILD__ = ${JSON.stringify(BUILD_ID)};`,
-          `self.addEventListener("message", function (event) {`,
-          `  if (event.data && event.data.type === "PQP_BUILD" && event.ports && event.ports[0]) {`,
-          `    event.ports[0].postMessage({ build: self.__PQP_BUILD__ });`,
-          `  }`,
-          `});`,
-          ``,
-        ].join("\n"),
+        source: swBuildScript(BUILD_ID, { navigation: !LEGACY_WORKER }),
       });
     },
   };
@@ -185,13 +194,56 @@ function umami(): Plugin {
       if (!websiteId) {
         return [];
       }
-      return [
-        {
-          tag: "script",
-          injectTo: "head",
-          attrs: { defer: true, src, "data-website-id": websiteId },
-        },
-      ];
+      return [deferredScriptTag(src, { attrs: { "data-website-id": websiteId } })];
+    },
+  };
+}
+
+/**
+ * Writes the landing page's first screen into `index.html`.
+ *
+ * The block is built from the locale catalogues at build time, so the words
+ * are the same ones the React page prints and a copy edit needs no second
+ * change. Build only: the dev server keeps the empty `#root` (and so keeps its
+ * instant, unprerendered boot). See `src/lib/prerender-hero.ts` for the reasoning
+ * and for the contract with `main.tsx`.
+ */
+function prerenderHero(): Plugin {
+  return {
+    name: "pqp-prerender-hero",
+    apply: "build",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html) {
+        const catalogues = Object.fromEntries(
+          PRERENDER_LOCALES.map((locale) => [
+            locale,
+            JSON.parse(
+              fs.readFileSync(
+                path.resolve(__dirname, `src/locales/${locale}/translation.json`),
+                "utf8",
+              ),
+            ) as Record<string, string>,
+          ]),
+        ) as Parameters<typeof renderPrerenderHero>[0];
+        return injectPrerenderHero(html, renderPrerenderHero(catalogues));
+      },
+    },
+  };
+}
+
+/**
+ * Starts the app bundle after the first paint on the home page (and at once
+ * everywhere else). Runs last, when Vite has already written the entry tag.
+ * See `src/lib/defer-entry.ts`.
+ */
+function deferEntry(): Plugin {
+  return {
+    name: "pqp-defer-entry",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler: (html) => deferEntryScript(html),
     },
   };
 }
@@ -200,6 +252,8 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     edgeConfig(),
+    prerenderHero(),
+    deferEntry(),
     versionManifest(),
     umami(),
     // Same gate as Umami above, same reason. See `src/lib/google-ads-tag.ts`;
@@ -269,11 +323,29 @@ export default defineConfig(({ command }) => ({
         // the wasm beside it is not a `.js` and is never precached, so the
         // advanced suppressor could not start offline either way. It is
         // fetched on demand, like the wasm.
-        globIgnores: ["**/workletProcessor-*.js", "**/sw-build-*.js"],
+        //
+        // The fonts are self-hosted now (`src/fonts.css`), one file per
+        // unicode-range subset. Only the Latin ones are the shell's: Vietnamese,
+        // Cyrillic and Greek are fetched on demand like the RNNoise wasm, so the
+        // install does not download files nobody on this site reads.
+        globIgnores: [
+          "**/workletProcessor-*.js",
+          "**/sw-build-*.js",
+          "**/*-vietnamese-*.woff2",
+          "**/*-cyrillic-*.woff2",
+          "**/*-greek-*.woff2",
+        ],
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        navigateFallback: "/index.html",
+        // Workbox's own navigation route (precached shell for every navigation)
+        // is OFF, and the network-first handler in the imported `sw-build-*.js`
+        // (`src/lib/sw-build-script.ts`) does that job with the shell as its
+        // fallback. Two fetch listeners that both call `respondWith` on the same
+        // navigation make the second throw `InvalidStateError`, so exactly one
+        // may handle it. Only the legacy e2e fixture, which stands in for a
+        // worker from before the handler existed, keeps Workbox's route.
+        navigateFallback: LEGACY_WORKER ? "/index.html" : undefined,
         // Anything the server answers must never be served from the shell
         // fallback — a navigation to /status.json or an API path is not a route.
         //
@@ -292,24 +364,16 @@ export default defineConfig(({ command }) => ({
         // would otherwise be handed the SPA shell. Nothing that grades this
         // site runs a service worker, so this is for the human who clicks one
         // of these links.
-        navigateFallbackDenylist: [
-          /^\/api\//,
-          /^\/status\.json$/,
-          /^\/ws/,
-          /^\/r\//,
-          /^\/\.well-known\//,
-          /^\/llms(-full)?\.txt$/,
-          /^\/index\.md$/,
-          /^\/robots\.txt$/,
-          /^\/sitemap\.xml$/,
-        ],
+        // The same list, `NAVIGATE_DENYLIST`, is what the network-first handler
+        // leaves alone (`src/lib/sw-build-script.ts`).
+        ...(LEGACY_WORKER ? { navigateFallbackDenylist: NAVIGATE_DENYLIST } : {}),
         cleanupOutdatedCaches: true,
         // See `registerType` above. Safe for the open tabs this swaps under
         // because the page keeps running the code it already loaded; the price
         // is that a lazy chunk an old tab has not fetched yet may be gone, and
         // `src/lib/chunk-reload.ts` already recovers from exactly that.
-        skipWaiting: true,
-        clientsClaim: true,
+        skipWaiting: !LEGACY_WORKER,
+        clientsClaim: !LEGACY_WORKER,
         // Adds the notificationclick handler. Android Chrome only permits
         // notifications raised from a worker, and their clicks arrive here
         // rather than in the page — without it, tapping one does nothing.

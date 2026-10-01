@@ -10,6 +10,14 @@ import {
 import {
   beginDrain,
   closeSocketsInBatches,
+  DEFAULT_DRAIN_RATE_PER_SECOND,
+  DRAIN_BATCH_INTERVAL_MS,
+  DRAIN_BATCH_JITTER_MS,
+  DRAIN_BATCH_SIZE,
+  DRAIN_DEADLINE_MS,
+  DRAIN_SPREAD_CEILING_FRACTION,
+  drainPlan,
+  resolveDrainRatePerSecond,
   GOING_AWAY,
   healthVerdict,
   isDraining,
@@ -181,5 +189,51 @@ describe("healthVerdict", () => {
       status: 503,
       body: { ok: false, error: "draining" },
     });
+  });
+});
+
+describe("drainPlan", () => {
+  const spreadOf = (total: number, batchSize: number) =>
+    (Math.ceil(total / batchSize) - 1) *
+    (DRAIN_BATCH_INTERVAL_MS + DRAIN_BATCH_JITTER_MS / 2);
+
+  it("is the old fixed drain at rate 0 (the rollback)", () => {
+    expect(drainPlan(143, 0)).toMatchObject({
+      batchSize: DRAIN_BATCH_SIZE,
+      intervalMs: DRAIN_BATCH_INTERVAL_MS,
+    });
+  });
+
+  it("paces an ordinary container at about the rate asked for", () => {
+    // 143 sockets, the 2026-09-30 23:33Z drain: 13 per ~125 ms, ~1.4 s,
+    // where the fixed drain emptied it in about a third of a second.
+    const plan = drainPlan(143, 100);
+    expect(plan.batchSize).toBe(13);
+    expect(plan.intervalMs).toBe(DRAIN_BATCH_INTERVAL_MS);
+    expect(spreadOf(143, plan.batchSize)).toBeGreaterThan(1_000);
+    expect(spreadOf(143, plan.batchSize)).toBeLessThan(2_000);
+    expect(spreadOf(143, DRAIN_BATCH_SIZE)).toBeLessThan(400);
+  });
+
+  it("goes faster for a container too big to drain inside the budget at that rate", () => {
+    const plan = drainPlan(2_000, 100);
+    expect(spreadOf(2_000, plan.batchSize)).toBeLessThanOrEqual(
+      DRAIN_DEADLINE_MS * DRAIN_SPREAD_CEILING_FRACTION,
+    );
+  });
+
+  it("keeps a low rate low by spacing single closes further apart", () => {
+    const plan = drainPlan(10, 2);
+    expect(plan.batchSize).toBe(1);
+    // ~2 a second once the jitter is added back on average.
+    expect(plan.intervalMs + DRAIN_BATCH_JITTER_MS / 2).toBe(500);
+  });
+
+  it("reads DRAIN_RATE_PER_SECOND, defaulting to 100", () => {
+    expect(resolveDrainRatePerSecond(undefined)).toBe(DEFAULT_DRAIN_RATE_PER_SECOND);
+    expect(resolveDrainRatePerSecond("")).toBe(DEFAULT_DRAIN_RATE_PER_SECOND);
+    expect(resolveDrainRatePerSecond("0")).toBe(0);
+    expect(resolveDrainRatePerSecond("250")).toBe(250);
+    expect(resolveDrainRatePerSecond("-3")).toBe(DEFAULT_DRAIN_RATE_PER_SECOND);
   });
 });

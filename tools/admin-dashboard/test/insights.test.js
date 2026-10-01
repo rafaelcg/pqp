@@ -301,6 +301,51 @@ test("a ceiling touched earlier today is still reported while calm", () => {
   assert.match(i.head, /encostou no teto hoje/);
 });
 
+function poolWait(over) {
+  return {
+    feltWaitMs: 1000,
+    lastMinute: { checkouts: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, waitedOver1s: 0, maxBusy: 0, maxWaiting: 0 },
+    last5Minutes: { checkouts: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, waitedOver1s: 0, maxBusy: 0, maxWaiting: 0 },
+    lastHour: { checkouts: 4000, p50Ms: 1, p95Ms: 2, maxMs: 9, waitedOver1s: 0, maxBusy: 22, maxWaiting: 161 },
+    perMinute: [{ at: "2026-09-30T23:33:00.000Z", checkouts: 3000, maxBusy: 22, maxWaiting: 161, maxWaitMs: 9, p95Ms: 2, waitedOver1s: 0 }],
+    ...(over || {})
+  };
+}
+
+test("a deploy burst that touched the ceiling but kept every wait short is informational", () => {
+  const i = poolInsight(runtime({
+    pool: { max: 22, total: 3, idle: 3, busy: 0, waiting: 0 },
+    peakPoolBusy: 22, peakPoolWaiting: 161,
+    poolWait: poolWait()
+  }));
+  assert.equal(i.state, "ok");
+  assert.match(i.head, /encheu por um instante e esvaziou sem ninguém esperar/);
+  assert.match(i.body, /22 de 22/);
+  assert.match(i.body, /máxima 9 ms/);
+});
+
+test("somebody waiting a second or more for a connection is yellow, with the minute", () => {
+  const i = poolInsight(runtime({
+    pool: { max: 22, total: 3, idle: 3, busy: 0, waiting: 0 },
+    peakPoolBusy: 22, peakPoolWaiting: 161,
+    poolWait: poolWait({
+      lastHour: { checkouts: 4000, p50Ms: 1, p95Ms: 250, maxMs: 3200, waitedOver1s: 12, maxBusy: 22, maxWaiting: 161 },
+      perMinute: [{ at: "2026-09-30T20:03:00.000Z", checkouts: 3000, maxBusy: 22, maxWaiting: 161, maxWaitMs: 3200, p95Ms: 250, waitedOver1s: 12 }]
+    })
+  }));
+  assert.equal(i.state, "warn");
+  assert.match(i.head, /12 pedidos esperaram mais de 1 s/);
+  assert.match(i.body, /3200 ms, às 20:03 UTC/);
+});
+
+test("a queue right now still outranks the hour's verdict", () => {
+  const i = poolInsight(runtime({
+    pool: { max: 22, total: 22, idle: 0, busy: 22, waiting: 5 },
+    poolWait: poolWait()
+  }));
+  assert.equal(i.state, "bad");
+});
+
 test("a queue peak with the ceiling never touched is green and explains itself", () => {
   const i = poolInsight(runtime({ peakPoolWaiting: 14, peakPoolBusy: 9 }));
   assert.equal(i.state, "ok");

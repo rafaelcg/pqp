@@ -216,6 +216,24 @@ describe("the update notice", () => {
     expect(applied).toBe(1);
   });
 
+  it("gives the button back with the reason when taking the update fails", async () => {
+    const worker = fakeWorker();
+    await mount(
+      <UpdatePrompt
+        register={worker.register}
+        apply={async () => ({ ok: false, reason: "offline" })}
+      />,
+    );
+    await worker.arrive();
+
+    clickText("Update now");
+    await act(async () => {});
+
+    expect(updateCard()?.textContent).toContain("offline");
+    // Retry is offered, and the card is still up.
+    clickText("Try again");
+  });
+
   describe("when the page finds out by itself (no worker involved)", () => {
     // The window that never navigates: the service worker says nothing, the
     // version poll does (`lib/version-watch.ts`).

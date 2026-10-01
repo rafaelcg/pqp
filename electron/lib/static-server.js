@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const nodeCrypto = require("node:crypto");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -35,6 +36,43 @@ const LOCAL_CSP = [
   "form-action 'self'",
 ].join("; ");
 
+/**
+ * `sha256-...` CSP sources for every inline classic script in an html document.
+ *
+ * `index.html` carries a few small inline scripts on purpose (the pre-paint
+ * theme, the route and language for the landing page, and the loader that
+ * starts the app bundle), and `script-src 'self'` alone would block all of
+ * them, the loader included, which would leave the app unable to boot. Hashing
+ * them keeps the policy strict: only these exact bytes run, nothing injected
+ * later. Data blocks such as `application/ld+json` are not executed and are
+ * skipped.
+ */
+function inlineScriptHashes(html) {
+  const hashes = [];
+  const pattern = /<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi;
+  for (const match of html.matchAll(pattern)) {
+    const type = /\btype="([^"]*)"/i.exec(match[1]);
+    if (type && !/^(module|text\/javascript)$/i.test(type[1])) {
+      continue;
+    }
+    const digest = nodeCrypto.createHash("sha256").update(match[2].replace(/\r\n?/g, "\n")).digest("base64");
+    hashes.push(`'sha256-${digest}'`);
+  }
+  return hashes;
+}
+
+/** The local CSP with the inline scripts of `html` allowed by hash. */
+function cspForHtml(html) {
+  const hashes = inlineScriptHashes(html);
+  if (hashes.length === 0) {
+    return LOCAL_CSP;
+  }
+  return LOCAL_CSP.replace(
+    "script-src 'self'",
+    `script-src 'self' ${hashes.join(" ")}`,
+  );
+}
+
 function contentType(filePath) {
   return MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
@@ -55,6 +93,12 @@ function safeJoin(root, urlPath) {
  */
 function startStaticServer(rootDir) {
   const root = path.resolve(rootDir);
+  let csp = LOCAL_CSP;
+  try {
+    csp = cspForHtml(fs.readFileSync(path.join(root, "index.html"), "utf8"));
+  } catch {
+    // No index.html to read: the strict base policy stands.
+  }
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -83,7 +127,7 @@ function startStaticServer(rootDir) {
 
       res.writeHead(200, {
         "Content-Type": contentType(filePath),
-        "Content-Security-Policy": LOCAL_CSP,
+        "Content-Security-Policy": csp,
         "X-Content-Type-Options": "nosniff",
       });
       fs.createReadStream(filePath).pipe(res);
@@ -105,5 +149,7 @@ function startStaticServer(rootDir) {
 
 module.exports = {
   LOCAL_CSP,
+  cspForHtml,
+  inlineScriptHashes,
   startStaticServer,
 };

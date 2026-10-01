@@ -401,6 +401,9 @@ export const RESERVED_COMMUNITY_SLUGS: ReadonlySet<string> = new Set([
   "www",
   "null",
   "undefined",
+  // `/api/public/communities/config` is a fixed path beside the `:slug` route;
+  // a community holding this slug would be answered with `{enabled}`.
+  "config",
 ]);
 
 /**

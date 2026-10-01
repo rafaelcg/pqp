@@ -44,6 +44,7 @@ import {
   beginDrain,
   closeSocketsInBatches,
   DRAIN_SETTLE_MS,
+  drainPlan,
   healthVerdict,
 } from "./lib/drain.js";
 import { logEvent } from "./lib/log.js";
@@ -52,6 +53,7 @@ import {
   noteRuntimeSample,
   registerCompressedSocketCount,
   registerSocketCount,
+  registerWsAuthStats,
   runtimeSnapshot,
 } from "./lib/runtime.js";
 import { claimSingletonTickOrRun } from "./lib/singleton-lease.js";
@@ -97,6 +99,7 @@ import {
   startClusterPresenceRefresh,
   startClusterStatusRefresh,
   startHeartbeat,
+  wsAuthAdmissionStats,
 } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -353,6 +356,7 @@ const wss = new WebSocketServer({
 // socket open for its whole session, so this is the closest thing the process
 // has to "people connected". A Set's `size`, read only when the dashboard asks.
 registerSocketCount(() => wss.clients.size);
+registerWsAuthStats(wsAuthAdmissionStats);
 
 // How many of those sockets actually negotiated compression.
 //
@@ -792,7 +796,11 @@ async function main() {
   // interval never reaches its first tick.
   void sweepCommunityHomeSchedule();
 
-  httpServer.listen(PORT, () => {
+  // `LISTEN_HOST` unset is every interface, exactly as before. Harnesses
+  // that run with the dev auth bypass set it to 127.0.0.1 so nothing on the
+  // network can reach an API that signs anybody in.
+  const listenHost = process.env.LISTEN_HOST?.trim() || undefined;
+  httpServer.listen({ port: Number(PORT), host: listenHost }, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
     void seedDevHall({ port: PORT }).catch((error) => {
@@ -862,7 +870,19 @@ async function shutdown(signal: string) {
   // Then the sockets, in batches with a little jitter (`lib/drain.ts`), so
   // the machine staying up sees a ramp of reconnects, not a stampede.
   const total = wss.clients.size;
+  // Paced by the socket count (`drainPlan`): about DRAIN_RATE_PER_SECOND a
+  // second, never past 60% of the deadline. `DRAIN_RATE_PER_SECOND=0` is the
+  // old fixed 50 per batch.
+  const plan = drainPlan(total);
+  logEvent("ws.drainPlan", {
+    total,
+    batchSize: plan.batchSize,
+    intervalMs: plan.intervalMs,
+    perSecond: Math.round(plan.ratePerSecond),
+  });
   const closed = await closeSocketsInBatches(wss.clients, {
+    batchSize: plan.batchSize,
+    intervalMs: plan.intervalMs,
     onBatch: (batch, remaining) => {
       logEvent("ws.drainBatch", { batch, remaining, total });
     },
