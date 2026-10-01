@@ -2,6 +2,7 @@ import type { PublicUser } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CommunityHomePost } from "@/lib/community-home";
+import { writeShowOriginal } from "@/lib/community-home";
 import { PostCard, scheduledLabel } from "./community-home-feed";
 
 /**
@@ -59,6 +60,7 @@ function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
     publishedAt: now,
     createdAt: now,
     updatedAt: now,
+    translation: null,
     ...overrides,
   };
 }
@@ -561,6 +563,83 @@ describe("PostCard", () => {
     expect(html).toContain("parent=localhost");
     expect(html).toContain("autoplay=false");
     expect(html).toContain('loading="lazy"');
+  });
+});
+
+describe("PostCard, automatic translation", () => {
+  const translated = (overrides: Partial<CommunityHomePost> = {}) =>
+    post({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb9",
+      title: "Session 11",
+      body: "the basement map",
+      translation: {
+        lang: "en",
+        auto: true,
+        sourceLang: "pt",
+        original: { title: "Sessão 11", body: "o mapa do porão", teaser: null },
+      },
+      ...overrides,
+    });
+
+  it("shows the translation with one quiet line that says so and offers the original", () => {
+    const html = render(
+      <PostCard post={translated()} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(html).toContain("Session 11");
+    expect(html).toContain("the basement map");
+    expect(html).not.toContain("o mapa do porão");
+    expect(html).toContain('data-home-translation-state="translated"');
+    expect(html).toContain("Automatically translated");
+    expect(html).toContain("See original");
+  });
+
+  it("a post that was not translated has no line at all", () => {
+    const html = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(html).not.toContain("data-home-translation-note");
+  });
+
+  it("remembers, for the session, that this post was flipped to the original", () => {
+    const flipped = translated({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb10" });
+    writeShowOriginal(flipped.id, true);
+    const html = render(
+      <PostCard post={flipped} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(html).toContain("o mapa do porão");
+    expect(html).not.toContain("the basement map");
+    expect(html).toContain('data-home-translation-state="original"');
+    expect(html).toContain("See translation");
+    writeShowOriginal(flipped.id, false);
+  });
+
+  it("a locked post with a translation leaks no body, in either version", () => {
+    const locked = translated({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb11",
+      visibility: "members",
+      body: null,
+      teaser: "only the inner circle sees the clip",
+      locked: true,
+      translation: {
+        lang: "en",
+        auto: true,
+        sourceLang: "pt",
+        original: { title: "Sessão 11", body: null, teaser: "só o inner vê o clip" },
+      },
+    });
+    for (const flipped of [false, true]) {
+      writeShowOriginal(locked.id, flipped);
+      const html = render(
+        <PostCard post={locked} me={me} locked canManageServer={false} vipEnabled />,
+      );
+      expect(html).toContain("data-home-locked-blur");
+      expect(html).not.toContain("the basement map");
+      expect(html).not.toContain("o mapa do porão");
+      expect(html).toContain(
+        flipped ? "só o inner vê o clip" : "only the inner circle sees the clip",
+      );
+    }
+    writeShowOriginal(locked.id, false);
   });
 });
 

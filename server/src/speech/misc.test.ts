@@ -72,6 +72,12 @@ describe("openrouter chat translator", () => {
     expect(p).toContain("pqp, Baú");
   });
 
+  it("`auto` as the source tells the model to work the language out itself", () => {
+    expect(buildSystemPrompt("auto", "pt", ["pqp"])).toContain(
+      "whatever language the input is written in into Brazilian Portuguese",
+    );
+  });
+
   it("sends the texts as a JSON array in the user turn at temperature 0", () => {
     const b = buildChatBody("anthropic/claude-haiku-4.5", ["oi", "tchau"], "pt", "es", ["pqp"]);
     expect(b.temperature).toBe(0);

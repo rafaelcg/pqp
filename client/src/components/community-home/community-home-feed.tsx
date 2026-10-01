@@ -76,6 +76,7 @@ import {
   communityHomeEmbedUrl,
   composeSubmitEmbedUrl,
   createPickSequence,
+  displayFields,
   formatHomeBytes,
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
@@ -84,9 +85,11 @@ import {
   loadCommunityHomeViewerMode,
   lockedPostSummary,
   parseCommunityHomeEmbed,
+  readShowOriginal,
   resolveComposeEmbedUrl,
   saveCommunityHomeViewerMode,
   uploadHomeMedia,
+  writeShowOriginal,
   youtubePosterUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
@@ -101,6 +104,10 @@ import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
 import { UnlockedMedia } from "./community-home-media";
+import {
+  ComposeTranslationNote,
+  TranslationNote,
+} from "./community-home-translation";
 import {
   CommunityHomeIntroCard,
   CommunityHomeStaffGuide,
@@ -709,7 +716,14 @@ export function PostCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [liking, setLiking] = useState(false);
-  const summary = lockedPostSummary(post);
+  // An automatic translation can be flipped back to the author's words, per
+  // post, and the choice lasts the session. The lock is not involved: the API
+  // already stripped what this viewer may not read from BOTH versions.
+  const [showOriginal, setShowOriginal] = useState(() =>
+    post.translation ? readShowOriginal(post.id) : false,
+  );
+  const view = displayFields(post, showOriginal);
+  const summary = lockedPostSummary(view);
   const isPreview = mode === "preview";
   const interactive = mode === "feed" && post.status === "published";
   const showLockPlate = locked && post.hasMedia;
@@ -915,9 +929,9 @@ export function PostCard({
       )}
 
       <div className={cn("p-5", showStaffMenu && "pr-12")}>
-        {post.title && (
+        {view.title && (
           <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
-            {post.title}
+            {view.title}
           </h2>
         )}
         <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
@@ -961,7 +975,7 @@ export function PostCard({
 
         {locked ? (
           <>
-            {summary && summary !== post.title?.trim() && (
+            {summary && summary !== view.title?.trim() && (
               <p className="mt-3 break-words text-sm leading-relaxed text-text">
                 {summary}
               </p>
@@ -982,17 +996,28 @@ export function PostCard({
           </>
         ) : (
           <>
-            {post.body &&
-              (gifMessageMedia(post.body) ? (
+            {view.body &&
+              (gifMessageMedia(view.body) ? (
                 <div className="mt-3">
-                  <GifAttachment media={gifMessageMedia(post.body)!} />
+                  <GifAttachment media={gifMessageMedia(view.body)!} />
                 </div>
               ) : (
                 <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-text">
-                  {post.body}
+                  {view.body}
                 </p>
               ))}
           </>
+        )}
+
+        {post.translation && !isPreview && (
+          <TranslationNote
+            showingOriginal={showOriginal}
+            onToggle={() => {
+              const next = !showOriginal;
+              writeShowOriginal(post.id, next);
+              setShowOriginal(next);
+            }}
+          />
         )}
 
         {(interactive || isPreview) && (
@@ -1078,13 +1103,16 @@ const emptyCompose = (): ComposeState => ({
 });
 
 function composeFromPost(post: CommunityHomePost): ComposeState {
+  // A reader in another language is served a translation in `title` / `body`
+  // / `teaser`; staff edit the author's own words, which ride along.
+  const own = displayFields(post, true);
   return {
     ...emptyCompose(),
     editingId: post.id,
     editingStatus: post.status,
-    title: post.title ?? "",
-    body: post.body ?? "",
-    teaser: post.teaser ?? "",
+    title: own.title ?? "",
+    body: own.body ?? "",
+    teaser: own.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
     youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
@@ -1159,6 +1187,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     publishedAt: now,
     createdAt: now,
     updatedAt: now,
+    translation: null,
   };
 }
 
@@ -1172,6 +1201,7 @@ function ComposeCard({
   isOwner,
   vipEnabled,
   mediaEnabled,
+  translationEnabled,
   onDone,
   onCancelEdit,
 }: {
@@ -1182,6 +1212,8 @@ function ComposeCard({
   isOwner: boolean;
   vipEnabled: boolean;
   mediaEnabled: boolean;
+  /** Readers in other languages are served an automatic translation here. */
+  translationEnabled: boolean;
   onDone: (post: CommunityHomePost, action: ComposeAction) => void;
   onCancelEdit: () => void;
 }) {
@@ -1629,6 +1661,12 @@ function ComposeCard({
           />
         )}
 
+        <ComposeTranslationNote
+          enabled={translationEnabled}
+          serverId={serverId}
+          postId={editingPublished ? state.editingId : null}
+        />
+
         {error && (
           <p className="mb-2 text-xs text-danger" data-home-compose-error>
             {error}
@@ -1915,6 +1953,7 @@ export function CommunityHomeFeed({
   const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
+  const [translationEnabled, setTranslationEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [staffTab, setStaffTab] = useState<StaffTab>("feed");
@@ -1947,13 +1986,14 @@ export function CommunityHomeFeed({
       }
       try {
         const [feed, staff] = await Promise.all([
-          fetchCommunityHomePosts(serverId),
+          fetchCommunityHomePosts(serverId, locale),
           canManageServer
             ? fetchCommunityHomeDrafts(serverId)
             : Promise.resolve({ posts: [] }),
         ]);
         setPosts(feed.posts);
         setDrafts(staff.posts);
+        setTranslationEnabled(feed.translationEnabled === true);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setPosts([]);
@@ -1966,7 +2006,7 @@ export function CommunityHomeFeed({
         }
       }
     },
-    [serverId, canManageServer, feedAvailable, t],
+    [serverId, canManageServer, feedAvailable, locale, t],
   );
 
   useEffect(() => {
@@ -2465,6 +2505,7 @@ export function CommunityHomeFeed({
                 isOwner={isOwner}
                 vipEnabled={vipEnabled}
                 mediaEnabled={mediaEnabled}
+                translationEnabled={translationEnabled}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());

@@ -247,6 +247,17 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/community-home/config (vipEnabled)",
   },
+  community_home_translation: {
+    description:
+      "Tradução automática dos posts do Baú para quem lê em outro idioma.",
+    env: "COMMUNITY_HOME_TRANSLATION",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the feed read, the single-post read and
+    // the background job all work from a post, and a post has a server.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (translationEnabled)",
+  },
   desktop_share_audio_native: {
     description:
       "Som do compartilhamento de tela no app desktop do Windows por processo (Windows 10 incluso, sem a chamada).",
@@ -601,6 +612,18 @@ export function isEnabled(
   options: { serverId?: string | null } = {},
 ): boolean {
   return resolveFlag(key, options).value;
+}
+
+/**
+ * The servers that carry a per-server decision for `key`, from the snapshot
+ * (empty before it loads). For a background job that has to find the work for
+ * a per-server flag without asking `isEnabled` once per candidate: with the
+ * global answer off it only needs the servers overridden ON, and with it on, all
+ * but the servers overridden OFF.
+ */
+export function flagServerOverrides(key: FlagKey): Map<string, boolean> {
+  maybeRefresh();
+  return new Map(snapshot?.servers.get(key) ?? []);
 }
 
 // ------------------------------------------------------------------- writes

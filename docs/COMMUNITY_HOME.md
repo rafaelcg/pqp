@@ -16,6 +16,9 @@ Staging is the proving ground. Production has the flags unset.
 | `COMMUNITY_HOME_ENABLED` | off | The feed exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row on a private hall. A community still lands on Overview (identity poster, empty feed). |
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
+A third switch, `community_home_translation`, is a **runtime flag** (per
+server, default off) and is described in "Translation" below.
+
 **Plus one per-server switch.** With the instance flag on, each server still
 starts with Baú off. An owner turns it on in Server settings (the Baú section,
 `PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
@@ -270,6 +273,108 @@ it, refreshed, it was gone, members never saw it"). The read-time flip is a
 with both. It never fans out (the reader is already reading); the sweep stays
 the only thing that nudges everyone else.
 
+## Translation
+
+Posts written in one language are read in another: a Portuguese post about
+pqp shows up in English for an English reader, in Spanish for a Spanish one,
+with one quiet line that says it was translated and a way back to the
+original. The site stays readable in the language of whoever is reading.
+
+**Off by default, two switches, both needed.**
+
+| Switch | What | Unset or off means |
+|---|---|---|
+| `community_home_translation` | Runtime flag, **per server** (`FEATURE_FLAGS.md`). Flip it from the operator dashboard (controles, interruptores, search the server inside the row) with no deploy and no restart. Env default: `COMMUNITY_HOME_TRANSLATION`. Needs the Baú itself on. | Nothing is produced for that server and readers get the original, even for translations that already exist (they are kept, not deleted). |
+| `OPENROUTER_API_KEY` | A secret on the API box. Never in git. | The feature is cleanly off: no calls, no errors, one log line per publish saying why (`communityHome.translation.skipped reason=no_key`), the staff note hidden. |
+
+Tuning, all optional: `COMMUNITY_HOME_TRANSLATION_MODEL` (default
+`google/gemini-3.1-flash-lite`, the one the STT/translation bench picked;
+`openai/gpt-4o-mini` is the cheaper fallback),
+`COMMUNITY_HOME_TRANSLATION_DAILY_CHARS` (default 200000),
+`COMMUNITY_HOME_TRANSLATION_MAX_CHARS` (default 6000 per post and language) and
+`COMMUNITY_HOME_TRANSLATION_BASE_URL` (another OpenAI-compatible endpoint; env
+only because the key is sent to it).
+
+**How it decides.**
+
+- *Languages*: the three UI locales, `en`, `pt` (pt-BR) and `es`. The reader
+  asks with `?lang=` on `GET .../home/posts` and `.../home/posts/:id` (the
+  client sends its UI locale); anything else gets the original.
+- *Source language* is guessed offline from the post's words
+  (`server/src/services/lang-detect.ts`, a stopword count over English,
+  Portuguese and Spanish; French and German turn into "unknown"). A post
+  already in the target language is not translated: a `same_language` row is
+  stored so the sweep does not ask again. Unknown is sent as "whatever language
+  this is", and the model works it out.
+- *When*: after a post is published (now or by the schedule), after an edit of
+  a published post, and by a sweep every minute (`jobs.ts`, so it runs in the
+  worker when there is one) for any published post with no current translation:
+  a crash, a missed call, the key or the flag arriving after the post. All of
+  it is background and best effort. **Nothing between BEGIN and COMMIT touches
+  the network, a publish never waits for it and never fails because of it.**
+- *Which text*: title, teaser and body in one call to the shared
+  `Translator` (`server/src/speech/translators/openrouter-chat.ts`, the same
+  system prompt that keeps pqp, Baú, QG, MoonKase, LiveKit and watch party
+  untouched). A field with no words (a GIF URL, only links or emoji) is carried
+  over as is.
+- *Edits*: a translation row holds the md5 of the title, teaser and body it was
+  made from. The read compares it with the post as it is now and serves the
+  original on a mismatch, so a stale translation is never shown for new text;
+  the edit starts a new one. Nothing is deleted on edit.
+- *Two API machines*: the claim is a row (`community_home_translation_jobs`,
+  one atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE` with a 4 minute lease
+  and a backoff), not an in-process map. A crashed machine's claim expires.
+- *Bounds*: at most `COMMUNITY_HOME_TRANSLATION_MAX_CHARS` source characters per
+  post and language (the cut gets a ` […]`), a daily character budget reserved
+  atomically in `community_home_translation_usage` so it means the deployment
+  and not one process, quick retries on 429 and 5xx with the provider's
+  `Retry-After`, then a job-level backoff (2, 6, 18 minutes) and a quiet give
+  up after four tries for that version of the post. A failed attempt gives its
+  budget back.
+
+**What is never translated.** Comments (a follow-up), the author's name,
+the cover, media, anything in a draft or scheduled post (it is translated when
+it goes live). A members-only post is translated like any other, but the lock
+is applied to the translated fields by the same expression as to the original
+(`toPost`): a reader who cannot open the post gets the translated title and
+teaser (public by design) and never a body, in either version, and a
+translation row never changes what `locked` means.
+
+**What the reader sees.** The card carries a line, "Automatically translated ·
+See original", that flips that one post to the author's words and back; the
+choice is remembered for the session (`sessionStorage`). `post.translation`
+is `{ lang, auto, sourceLang, original: { title, body, teaser } }` and the
+`title` / `body` / `teaser` beside it are the translated ones. Staff who edit a
+post always edit the original.
+
+**What staff see.** A quiet note in the composer, only when the flag is on for
+the server and a key is set ("Readers in other languages will see an automatic
+translation of this post"), and, when editing a published post, "See
+translations": each language's text, read only, with "Out of date" when the post
+changed since (`GET .../home/posts/:id/translations`, `MANAGE_SERVER`). There is
+no editing of a translation; saving the post makes new ones.
+
+**Cost.** About 0.003 USD per 1,000 words per language with flash-lite, so a
+600-word post into two languages is about a cent.
+
+**Counters and logs.** `communityHomeTranslation` on `GET /api/admin/metrics`:
+`done`, `sameLanguage`, `failed`, `gaveUp`, `skippedOverBudget`,
+`skippedClaimed`, `skippedFlagOff`, `skippedNoKey`, `skippedNotPublished`,
+`discardedStale`, `truncated`, `providerRetries`, `charsSent`, `costUsd`,
+`lastError` (per machine, since boot) and `today` (`chars`, `requests`,
+`capChars`, from the database, the whole deployment). Every path that does not
+translate logs why: `communityHome.translation.skipped` (`reason=flag_off |
+no_key | claimed | over_budget | not_published | post_gone | source_changed`),
+`.failed` (with the attempt and whether it gave up), `.overBudget`, `.discarded`,
+`.sameLanguage`, `.done`, `.retry`, and `.sweep` (only when its state changes).
+
+**Turning it on.** Set `OPENROUTER_API_KEY` on the API box and restart it, then
+flip `community_home_translation` for the server in the dashboard. (With a
+separate `pqp-worker`, the key belongs on the worker too: the API translates
+right after a publish, the worker runs the minute sweep.) The sweep
+translates what is already published within a minute (newest first, bounded by
+the daily budget). Turning the flag off is instant and keeps the stored rows.
+
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
@@ -300,11 +405,22 @@ the expected shape of a self-host without storage, not a bug.
   visibility helpers, media helpers, live-post toast gating.
 - `client/src/components/layout/channel-list-community-home.test.tsx`: the
   row, the unread number, the New chip yielding to it.
+- `server/src/services/community-home-translation.test.ts` and `lang-detect.test.ts`:
+  off means off (flag off, key unset), a Portuguese post gets English and
+  Spanish and a same-language marker, a members-only post's translated body
+  never reaches a reader who cannot open it, two machines racing for one
+  claim, edit invalidation, the daily budget, per-post truncation, backoff and
+  give up, the sweep and the per-server flag, the staff list.
+- `client/e2e/community-home-translation.spec.ts`: the real pipeline against a
+  stub chat endpoint, the reader's toggle (and that it sticks), a phone, the
+  staff note and per-language list.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →
   preview → publish → like, member intro + lock + comments, unread badge +
   live corner card, private-hall landing.
 
 ## Not here yet (see the strategy doc)
+
+**Translating comments**, and a reader-chosen language other than the UI one.
 
 **Reporting a Baú post or comment.** `createReportSchema` covers `message`,
 `user` and `server` only, so the in-product path for bad content in a Baú is

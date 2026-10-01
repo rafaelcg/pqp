@@ -367,6 +367,11 @@ import {
   updateCommunityHomePost,
 } from "../services/community-home.js";
 import {
+  isCommunityHomeTranslationConfigured,
+  isCommunityHomeTranslationOn,
+  listPostTranslations,
+} from "../services/community-home-translation.js";
+import {
   cancelChannelSession,
   ChannelSessionError,
   createChannelSession,
@@ -4071,6 +4076,18 @@ function requireCommunityHome(): void {
 }
 
 /**
+ * Readers in other languages will be served an automatic translation of this
+ * server's posts: the flag is on for it AND a key is configured to make them.
+ * What the staff composer says to the person writing.
+ */
+function translationActiveFor(serverId: string): boolean {
+  return (
+    isCommunityHomeTranslationOn(serverId) &&
+    isCommunityHomeTranslationConfigured()
+  );
+}
+
+/**
  * Still behind auth like every other `/api` route. Answers 200 with the
  * flags rather than 404ing, so the client can tell "off" from "unreachable".
  * `mediaEnabled` is the storage probe, folded in so the client needs one
@@ -4132,17 +4149,26 @@ router.patch(
   },
 );
 
-router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
-  requireCommunityHome();
-  requireCommunityHome();
-  await requireServerMember(serverId!, user.id);
-  try {
-    const posts = await listCommunityHomePosts(serverId!, user.id);
-    return { posts };
-  } catch (error) {
-    mapCommunityHomeError(error);
-  }
-});
+router.get(
+  "/api/servers/:serverId/home/posts",
+  async ({ url, user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      // `?lang=` is the reader's UI locale. It only ever picks WHICH stored
+      // translation to look for (anything outside en / pt / es is ignored);
+      // what a viewer may read is decided by the lock, not by the language.
+      const posts = await listCommunityHomePosts(
+        serverId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
+      return { posts, translationEnabled: translationActiveFor(serverId!) };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
 
 router.get(
   "/api/servers/:serverId/home/drafts",
@@ -4151,7 +4177,7 @@ router.get(
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
-      return { posts };
+      return { posts, translationEnabled: translationActiveFor(serverId!) };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4160,12 +4186,41 @@ router.get(
 
 router.get(
   "/api/servers/:serverId/home/posts/:postId",
-  async ({ user }, { serverId, postId }) => {
+  async ({ url, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      const post = await getCommunityHomePost(serverId!, postId!, user.id);
+      const post = await getCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+        url.searchParams.get("lang"),
+      );
       return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * Staff, read only: what each language's reader is shown for this post, and
+ * whether it is still current. Behind MANAGE_SERVER, and the post is looked up
+ * through the same read as the feed first, so an id from another server (or a
+ * draft nobody may see) is a 404 here too. There is no write: a translation
+ * is made again by editing the post.
+ */
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/translations",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      await getCommunityHomePost(serverId!, postId!, user.id);
+      return {
+        enabled: translationActiveFor(serverId!),
+        translations: await listPostTranslations(postId!),
+      };
     } catch (error) {
       mapCommunityHomeError(error);
     }
