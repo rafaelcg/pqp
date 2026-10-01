@@ -209,8 +209,9 @@ export async function transcribeChunked(o: ChunkedOptions): Promise<ChunkedResul
       const prompt = [o.glossary, carried].filter(Boolean).join(" ").trim() || undefined;
       const t0 = now();
       const r = await o.provider.transcribe(audio, {
-        durationMs: w.endMs - w.startMs,
         ...o.sttOpts,
+        // The window's own length always wins: a caller-level hint would describe some other audio.
+        durationMs: w.endMs - w.startMs,
         ...(prompt ? { prompt } : {}),
         signal: o.signal,
       });

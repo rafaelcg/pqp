@@ -118,6 +118,21 @@ describe("transcribeChunked failure and cost", () => {
   });
 });
 
+describe("transcribeChunked duration hint", () => {
+  it("is the window's own length even when sttOpts carries a different durationMs", async () => {
+    const seen: Array<number | undefined> = [];
+    const provider: SttProvider = {
+      id: "p",
+      async transcribe(_a, opts) {
+        seen.push(opts.durationMs);
+        return { text: "", segments: [], durationMs: 0 };
+      },
+    };
+    await transcribeChunked({ provider, windows: planWindows(8000), readWindow: async () => "x", sttOpts: { durationMs: 999_999 } });
+    expect(seen).toEqual([8000]);
+  });
+});
+
 describe("openrouter stt without a known duration", () => {
   it("returns the text with no segment instead of a zero-length one", () => {
     const r = parseOpenRouterStt({ text: "Acho que não fica não." }, 0);

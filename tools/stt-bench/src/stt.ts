@@ -255,7 +255,12 @@ async function runJob(
     };
   } catch (e) {
     // A chunked run that failed part-way already paid for its completed windows: keep that spend on the record.
-    const spent = e instanceof ChunkedTranscribeError ? e.partial.knownCostUsd : 0;
+    // Requests that completed without a reported cost are priced from the table, so none vanish from spend.
+    const first = e instanceof ChunkedTranscribeError ? e.partial.windows[0]?.window : undefined;
+    const spent =
+      e instanceof ChunkedTranscribeError
+        ? chunkedCost(e.partial, spec, first ? first.endMs - first.startMs : DEFAULT_WINDOW.windowMs).costUsd
+        : 0;
     return { ...base, costUsd: spent, requests: e instanceof ChunkedTranscribeError ? e.partial.requests : 0, error: scrub((e as Error).message) };
   }
 }
