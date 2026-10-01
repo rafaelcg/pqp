@@ -750,7 +750,7 @@
       // The verdict. Deliberately about THIS machine only: this page has no
       // network in it, so anything it cannot see is by construction after the
       // presenter's computer (the uplink, the media server, the viewer).
-      function judge(s, fps, capturedUnsupported) {
+      function judge(s, fps, capturedUnsupported, encoder) {
         if (!s || s.seconds < 5) {
           return ["warn", "Not enough data", "Run it for at least 30 seconds with the game in front."];
         }
@@ -776,7 +776,8 @@
             `Frames were captured (${fmt(capturedFps)} fps) but only ${fmt(s.sentFps)} fps were encoded` +
               `${encodeSlow ? `, at ${fmt(s.encMs, 1)} ms each (the budget at ${fps} fps is ${fmt(1000 / fps, 1)} ms)` : ""}` +
               `${cpuLimited ? `, and the encoder reported it was limited by "cpu" ${Math.round((s.limitedShare.cpu || 0) * 100)}% of the time` : ""}. ` +
-              "WebRTC says \"cpu\" whenever encoding falls behind, including when a hardware encoder waits on a busy graphics card.",
+              "WebRTC says \"cpu\" whenever encoding falls behind, including when a hardware encoder waits on a busy graphics card." +
+              (encoder ? ` The encoder here was ${encoder}${/openh264|libvpx|libaom/i.test(encoder) ? ", which runs on the processor" : ""}.` : ""),
           ];
         }
         if (s.gapMax === null && !capturePoor) {
@@ -830,7 +831,7 @@
         const last = rows[rows.length - 1];
         $("k-size").textContent = last && last.width ? `${last.width}x${last.height}` : "-";
         if (final) {
-          const [level, title, text] = judge(s, run.fps, !!run.counter.unsupported);
+          const [level, title, text] = judge(s, run.fps, !!run.counter.unsupported, rows.length ? rows[rows.length - 1].encoder : null);
           const scope = awayRows.length >= 5 ? "" : " (few seconds away from this page, so this uses every second)";
           setVerdict(level, title + scope, text);
           run.verdict = { level, title, text };
