@@ -202,6 +202,11 @@ function browserStorage(): StorageLike | null {
 let leaving = false;
 let leavingWatched = false;
 
+/**
+ * `leaving` is set by `pagehide` and `beforeunload`, and cleared by `pageshow`
+ * (a back/forward-cache restore keeps this module's state) and at the start of
+ * every rung, so it only ever means "a navigation began after this rung did".
+ */
 function watchLeaving(): void {
   if (leavingWatched || typeof window === "undefined") {
     return;
