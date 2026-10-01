@@ -1430,16 +1430,12 @@ h2,
  * nothing flashes when React replaces the first). AVIF where the browser has
  * it, WebP where it does not, sized by the viewport: a phone gets about 20 kB
  * and a wide screen about 70 kB, where the old single JPEG was 520 kB for
- * everyone. The plain `url()` line is the fallback for a browser without
- * `image-set()` type hints. Sources: public/images/hero/.
+ * everyone. The plain `url()` rules are the fallback for a browser without
+ * `image-set()` type hints (see the `@supports` block below). Sources: public/images/hero/.
  */
 .hero-bg-art {
   background-color: var(--color-ink);
   background-image: url("/images/hero/hero-800.webp");
-  background-image: image-set(
-    url("/images/hero/hero-800.avif") type("image/avif"),
-    url("/images/hero/hero-800.webp") type("image/webp")
-  );
   background-size: cover;
   background-position: center;
 }
@@ -1447,20 +1443,47 @@ h2,
 @media (min-width: 641px) {
   .hero-bg-art {
     background-image: url("/images/hero/hero-1200.webp");
-    background-image: image-set(
-      url("/images/hero/hero-1200.avif") type("image/avif"),
-      url("/images/hero/hero-1200.webp") type("image/webp")
-    );
   }
 }
 
 @media (min-width: 1101px) {
   .hero-bg-art {
     background-image: url("/images/hero/hero-1536.webp");
+  }
+}
+
+/* AVIF where the browser can tell us it has it. Safari before 17 and Chrome
+   before 113 do not understand `type()` inside `image-set()`, and a declaration
+   they do not understand is dropped whole, so the `@supports` guard keeps these
+   rules away from them and the WebP above stands. The WebP rules must come FIRST
+   and stay separate: the CSS minifier deletes a plain `url()` written right
+   before an `image-set()` in the same rule as an overridden duplicate, which is
+   how the picture went missing on those browsers. `prerender-hero.test.ts`
+   pins that the built CSS keeps them. */
+@supports (background-image: image-set(url("/x.avif") type("image/avif"))) {
+  .hero-bg-art {
     background-image: image-set(
-      url("/images/hero/hero-1536.avif") type("image/avif"),
-      url("/images/hero/hero-1536.webp") type("image/webp")
+      url("/images/hero/hero-800.avif") type("image/avif"),
+      url("/images/hero/hero-800.webp") type("image/webp")
     );
+  }
+
+  @media (min-width: 641px) {
+    .hero-bg-art {
+      background-image: image-set(
+        url("/images/hero/hero-1200.avif") type("image/avif"),
+        url("/images/hero/hero-1200.webp") type("image/webp")
+      );
+    }
+  }
+
+  @media (min-width: 1101px) {
+    .hero-bg-art {
+      background-image: image-set(
+        url("/images/hero/hero-1536.avif") type("image/avif"),
+        url("/images/hero/hero-1536.webp") type("image/webp")
+      );
+    }
   }
 }
 
@@ -1529,8 +1552,10 @@ html[data-plat] .pre-download {
 
 /* The prerendered block is already on screen and does not animate, so the
    React copy that replaces it starts in its final state instead of fading in
-   a second time. `data-pre` is set by main.tsx only when the block exists. */
-html[data-pre] .animate-rise {
+   a second time. `data-pre` is set by main.tsx only when the block exists, and
+   stays for the session, so the rule is scoped to the hero (the first section
+   of `<main>`) and leaves every later entrance animation alone. */
+html[data-pre] #main > section:first-of-type .animate-rise {
   animation: none;
 }
 

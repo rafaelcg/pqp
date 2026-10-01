@@ -33,14 +33,14 @@
  * `landing-page.tsx` changes shape, mirror it here. `prerender-hero.test.ts`
  * fails when a key this block reads disappears from a catalogue.
  *
- * THE SCREENSHOT SITS FOUR PIXELS HIGHER than the live page's (`mt-[3.25rem]`
+ * THE SCREENSHOT SITS HIGHER than the live page's (`mt-[3.25rem]`
  * against `mt-14`), on purpose. It is the largest contentful paint on a phone,
  * and the browser reports a new candidate whenever a later element is strictly
  * larger than the current one. The live page's copy of the picture is a new
  * element, so if it came out a pixel taller in the viewport it would replace
  * the static one as the LCP, and the LCP would then depend on the bundle. A
  * static picture that shows four more pixels can never be beaten by its own
- * replacement, at the price of the picture settling four pixels lower when
+ * replacement, at the price of the picture settling a few pixels lower (more on a phone, where the download badge is taller than the gap reserved for it) when
  * React takes over.
  *
  * ONE BLOCK PER LANGUAGE, chosen by CSS on `<html lang>` (`index.css`). The edge
@@ -85,6 +85,30 @@ export const PRERENDER_KEYS = [
 
 export type PrerenderKey = (typeof PRERENDER_KEYS)[number];
 export type PrerenderCatalogue = Record<PrerenderKey, string>;
+
+/**
+ * The block is fenced by these two comments so the edge can take it out again.
+ * `index.html` is one file for every route, and a visitor or crawler that does
+ * not run JavaScript would otherwise read the home page hero as the body of
+ * `/vs-discord`, `/privacy`, `/@handle` and every other page. The head
+ * script hides it for browsers; `client/functions/_middleware.ts` removes it
+ * for everybody on every path but `/` (`stripPrerenderHero`).
+ */
+export const PRERENDER_START = "<!--pqp:pre-hero:start-->";
+export const PRERENDER_END = "<!--pqp:pre-hero:end-->";
+
+/** `html` without the prerendered block. Unchanged when the block is absent. */
+export function stripPrerenderHero(html: string): string {
+  const start = html.indexOf(PRERENDER_START);
+  if (start === -1) {
+    return html;
+  }
+  const end = html.indexOf(PRERENDER_END, start);
+  if (end === -1) {
+    return html;
+  }
+  return html.slice(0, start) + html.slice(end + PRERENDER_END.length);
+}
 
 /** The comment in `index.html` this block replaces. */
 export const PRERENDER_PLACEHOLDER = "<!--pqp:prerender-hero-->";
@@ -163,9 +187,9 @@ function block(locale: PrerenderLocale, c: PrerenderCatalogue): string {
   // `marketing-nav.tsx` does it.
   const selfHostLang = locale === "en" ? "" : ' lang="en"';
   return `<div data-l="${locale}" lang="${locale}" class="min-h-full bg-ink text-paper">
-<a href="#main" class="${SKIP_LINK}">${esc(c["nav.skipToContent"])}</a>
+<a href="#main-${locale}" class="${SKIP_LINK}">${esc(c["nav.skipToContent"])}</a>
 <div class="sticky top-0 z-30"><header class="relative z-20 flex h-16 items-center justify-between border-b px-5 sm:px-8 border-transparent bg-transparent"><a href="/" class="flex items-center gap-2 font-brand text-xl tracking-tight text-white">pqp<span class="inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-[0.14em] border-white/35 bg-white/10 text-white/85">beta</span></a><nav class="hidden min-w-0 shrink items-center gap-5 md:flex lg:gap-8"><a href="/#features" class="${NAV_LINK}">${esc(c["nav.features"])}</a><a href="/vs-discord" class="${NAV_LINK}">${esc(c["footer.vsDiscord"])}</a><a href="/download" class="${NAV_LINK}">${esc(c["nav.download"])}</a><a href="/#hosting" class="${NAV_LINK} hidden lg:inline"${selfHostLang}>${esc(c["nav.selfHost"])}</a></nav><div class="flex shrink-0 items-center gap-3"><span aria-hidden="true" class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium tracking-wide border-white/25 bg-white/5 text-white/80"><span class="inline-flex h-3.5 w-5 shrink-0 overflow-hidden rounded-[3px] border border-ink-4/70" style="${FLAG_STYLE[locale]}"></span><span>${LOCALE_CODE[locale]}</span><span class="h-3 w-3"></span></span><div class="flex flex-wrap items-center justify-center gap-2"><a href="/app" class="${JOIN_BUTTON}">${esc(c["nav.join"])}</a><a href="/app" class="${NAV_SIGN_IN}">${esc(c["nav.signIn"])}</a></div></div></header></div>
-<main id="main" tabindex="-1" class="outline-none"><section class="relative -mt-16 overflow-hidden"><div class="hero-parallax-still pointer-events-none absolute inset-0" aria-hidden="true"><div class="hero-bg-art absolute inset-0"></div></div><div class="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/45 to-ink" aria-hidden="true"></div><div class="hero-grain pointer-events-none absolute inset-0" aria-hidden="true"></div><div class="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-5 pb-10 pt-28 text-center sm:px-8 sm:pt-36"><p class="${EYEBROW}">${esc(c["landing.hero.eyebrow"])}</p><h1 class="mt-5 max-w-4xl font-display text-4xl font-bold leading-[1.02] tracking-tight text-white sm:text-6xl md:text-7xl">${esc(c["landing.hero.title"])}</h1><p class="mt-6 max-w-2xl text-lg text-white/85 sm:text-xl">${esc(c["landing.hero.body"])}</p><div class="mt-9"><div class="flex flex-wrap items-center justify-center gap-2"><a href="/app" class="${HERO_PRIMARY}">${esc(c["landing.hero.action"])}</a><a href="/app" class="${HERO_SECONDARY}">${esc(c["nav.signIn"])}</a></div></div><p class="mt-4 max-w-md text-sm text-white/65">${esc(c["landing.hero.hint"])} ${esc(c["landing.hero.providers"])}</p><div class="pre-download mt-4"></div><div class="mt-[3.25rem] w-full"><figure class="overflow-hidden rounded-2xl border border-white/10 bg-ink-2 shadow-[var(--shadow-profile-card)] mx-auto w-full max-w-5xl"><img src="/images/product/hero.webp" srcset="${HERO_SHOT_SRCSET}" sizes="${HERO_SHOT_SIZES}" alt="${esc(c["landing.shot.hero"])}" width="1920" height="1080" class="block w-full object-cover h-auto object-left" fetchpriority="high" decoding="async"></figure></div></div><ul class="relative z-10 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-5 pb-10 sm:px-8"><li><a href="${PRERENDER_SOURCE_REPO_URL}" target="_blank" rel="noopener" class="${PROOF_LINK}">${esc(c["landing.proof.openSource"])}</a></li><li><a href="/watch-party" class="${PROOF_LINK}">${esc(c["landing.proof.watchParty"])}</a></li><li><a href="/#where" class="${PROOF_LINK}">${esc(c["landing.proof.region"])}</a></li><li><a href="/download" class="${PROOF_LINK}">${esc(c["landing.proof.platforms"])}</a></li><li><span class="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70">${esc(c["landing.proof.languages"])}</span></li></ul></section></main>
+<main id="main-${locale}" tabindex="-1" class="outline-none"><section class="relative -mt-16 overflow-hidden"><div class="hero-parallax-still pointer-events-none absolute inset-0" aria-hidden="true"><div class="hero-bg-art absolute inset-0"></div></div><div class="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/45 to-ink" aria-hidden="true"></div><div class="hero-grain pointer-events-none absolute inset-0" aria-hidden="true"></div><div class="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-5 pb-10 pt-28 text-center sm:px-8 sm:pt-36"><p class="${EYEBROW}">${esc(c["landing.hero.eyebrow"])}</p><h1 class="mt-5 max-w-4xl font-display text-4xl font-bold leading-[1.02] tracking-tight text-white sm:text-6xl md:text-7xl">${esc(c["landing.hero.title"])}</h1><p class="mt-6 max-w-2xl text-lg text-white/85 sm:text-xl">${esc(c["landing.hero.body"])}</p><div class="mt-9"><div class="flex flex-wrap items-center justify-center gap-2"><a href="/app" class="${HERO_PRIMARY}">${esc(c["landing.hero.action"])}</a><a href="/app" class="${HERO_SECONDARY}">${esc(c["nav.signIn"])}</a></div></div><p class="mt-4 max-w-md text-sm text-white/65">${esc(c["landing.hero.hint"])} ${esc(c["landing.hero.providers"])}</p><div class="pre-download mt-4"></div><div class="mt-[3.25rem] w-full"><figure class="overflow-hidden rounded-2xl border border-white/10 bg-ink-2 shadow-[var(--shadow-profile-card)] mx-auto w-full max-w-5xl"><img src="/images/product/hero.webp" srcset="${HERO_SHOT_SRCSET}" sizes="${HERO_SHOT_SIZES}" alt="${esc(c["landing.shot.hero"])}" width="1920" height="1080" class="block w-full object-cover h-auto object-left" fetchpriority="high" decoding="async"></figure></div></div><ul class="relative z-10 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-5 pb-10 sm:px-8"><li><a href="${PRERENDER_SOURCE_REPO_URL}" target="_blank" rel="noopener" class="${PROOF_LINK}">${esc(c["landing.proof.openSource"])}</a></li><li><a href="/watch-party" class="${PROOF_LINK}">${esc(c["landing.proof.watchParty"])}</a></li><li><a href="/#where" class="${PROOF_LINK}">${esc(c["landing.proof.region"])}</a></li><li><a href="/download" class="${PROOF_LINK}">${esc(c["landing.proof.platforms"])}</a></li><li><span class="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70">${esc(c["landing.proof.languages"])}</span></li></ul></section></main>
 </div>`;
 }
 
@@ -191,7 +215,7 @@ export function renderPrerenderHero(
     }
     return block(locale, picked);
   });
-  return `<div id="pre-hero">\n${blocks.join("\n")}\n</div>`;
+  return `${PRERENDER_START}<div id="pre-hero">\n${blocks.join("\n")}\n</div>${PRERENDER_END}`;
 }
 
 /**

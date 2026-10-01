@@ -8,7 +8,10 @@ import {
   PRERENDER_SOURCE_REPO_URL,
   PRERENDER_KEYS,
   PRERENDER_LOCALES,
+  PRERENDER_END,
   PRERENDER_PLACEHOLDER,
+  PRERENDER_START,
+  stripPrerenderHero,
   renderPrerenderHero,
   type PrerenderLocale,
 } from "./prerender-hero";
@@ -35,7 +38,8 @@ describe("renderPrerenderHero", () => {
     for (const locale of PRERENDER_LOCALES) {
       expect(html).toContain(`data-l="${locale}" lang="${locale}"`);
     }
-    expect(html.startsWith('<div id="pre-hero">')).toBe(true);
+    expect(html.startsWith(PRERENDER_START + '<div id="pre-hero">')).toBe(true);
+    expect(html.endsWith(PRERENDER_END)).toBe(true);
   });
 
   it("prints the catalogue's own words, so a copy edit is one change", () => {
@@ -172,6 +176,49 @@ describe("the shipped index.html", () => {
     expect(preloads).toHaveLength(2);
     for (const tag of preloads) {
       expect(tag).toContain("crossorigin");
+    }
+  });
+});
+
+describe("stripPrerenderHero", () => {
+  const block = renderPrerenderHero(CATALOGUES);
+
+  it("takes the whole block out and leaves an empty root", () => {
+    const out = stripPrerenderHero(`<div id="root">${block}</div>`);
+    expect(out).toBe('<div id="root"></div>');
+    expect(out).not.toContain("pre-hero");
+    expect(out).not.toContain("<h1");
+  });
+
+  it("leaves a document without the block alone", () => {
+    expect(stripPrerenderHero('<div id="root"></div>')).toBe('<div id="root"></div>');
+  });
+
+  it("gives every language its own main, so a skip link finds its own", () => {
+    for (const locale of PRERENDER_LOCALES) {
+      expect(block).toContain(`href="#main-${locale}"`);
+      expect(block).toContain(`<main id="main-${locale}"`);
+    }
+    expect(block).not.toContain('id="main"');
+  });
+});
+
+describe("the hero picture rules in index.css", () => {
+  const css = readFileSync(path.resolve(here, "../index.css"), "utf8");
+
+  it("keeps a plain url() fallback ahead of, and apart from, the image-set rules", () => {
+    const plain = css.indexOf('background-image: url("/images/hero/hero-800.webp")');
+    const supports = css.indexOf("@supports (background-image: image-set(");
+    expect(plain).toBeGreaterThan(-1);
+    expect(supports).toBeGreaterThan(plain);
+    // A url() written right before an image-set() in one rule is deleted by
+    // the minifier as an overridden duplicate, which left Safari before 17
+    // with no picture at all.
+    const heroRules = css.slice(css.indexOf(".hero-bg-art {"), css.indexOf("/* AVIF where"));
+    expect(heroRules).not.toContain("image-set(");
+    for (const size of ["800", "1200", "1536"]) {
+      expect(css).toContain(`url("/images/hero/hero-${size}.webp")`);
+      expect(css).toContain(`url("/images/hero/hero-${size}.avif") type("image/avif")`);
     }
   });
 });

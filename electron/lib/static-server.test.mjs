@@ -27,6 +27,12 @@ describe("inlineScriptHashes", () => {
     assert.deepEqual(inlineScriptHashes(html), []);
   });
 
+  it("hashes the text the parser sees, so a CRLF file still matches", () => {
+    assert.deepEqual(inlineScriptHashes("<script>a();\r\nb();</script>"), [
+      hash("a();\nb();"),
+    ]);
+  });
+
   it("changes when a single byte of a script changes", () => {
     assert.notDeepEqual(
       inlineScriptHashes("<script>a()</script>"),

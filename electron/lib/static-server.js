@@ -55,7 +55,7 @@ function inlineScriptHashes(html) {
     if (type && !/^(module|text\/javascript)$/i.test(type[1])) {
       continue;
     }
-    const digest = nodeCrypto.createHash("sha256").update(match[2]).digest("base64");
+    const digest = nodeCrypto.createHash("sha256").update(match[2].replace(/\r\n?/g, "\n")).digest("base64");
     hashes.push(`'sha256-${digest}'`);
   }
   return hashes;

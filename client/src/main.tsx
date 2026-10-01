@@ -499,6 +499,35 @@ window.addEventListener("vite:preloadError", (event) => {
   }
 });
 
+/**
+ * A keyboard visitor's first key press is what starts the app, and React then
+ * replaces the static element that had focus, which drops focus to the body.
+ * Remember which control it was (its tag and its words) so the live copy of it
+ * can be focused again after the swap.
+ */
+function rememberFocusInPrerender(): { tag: string; text: string } | null {
+  const active = document.activeElement;
+  if (!active || !active.closest("#pre-hero")) {
+    return null;
+  }
+  const text = (active.textContent ?? "").trim();
+  return text ? { tag: active.tagName, text } : null;
+}
+
+function restoreFocus(target: { tag: string; text: string } | null): void {
+  if (!target) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>("a, button"),
+    );
+    candidates
+      .find((el) => (el.textContent ?? "").trim() === target.text)
+      ?.focus({ preventScroll: true });
+  });
+}
+
 function renderApp() {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
@@ -556,12 +585,20 @@ if (prerendered) {
     //  - the prerendered block's pictures painted, so the live page never
     //    replaces a picture that has not been drawn yet.
     const locale = detectLocale();
+    const focused = rememberFocusInPrerender();
     void Promise.all([
       (locale === "en" ? Promise.resolve() : loadLocale(locale)).catch(() => {}),
       primeDownloadPlan(),
       whenPrerenderPainted(),
-    ]).then(renderApp);
+    ]).then(() => {
+      renderApp();
+      restoreFocus(focused);
+    });
   });
+} else if (document.readyState === "loading") {
+  // The entry script is injected, and an injected module script is async: it
+  // can run before the parser has reached #root.
+  document.addEventListener("DOMContentLoaded", renderApp, { once: true });
 } else {
   renderApp();
 }
