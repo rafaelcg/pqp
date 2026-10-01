@@ -39,6 +39,8 @@ export const NAVIGATE_DENYLIST: RegExp[] = [
   /^\/index\.md$/,
   /^\/robots\.txt$/,
   /^\/sitemap\.xml$/,
+  // Standalone diagnostic pages in client/public (share-diagnostic*.html).
+  /^\/share-diagnostic/,
 ];
 
 export interface SwBuildScriptOptions {
