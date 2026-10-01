@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>pqp share diagnostic</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <!--
+      Measures where a screen share loses frames on THIS machine, with no
+      network, no account and no server: the capture, the encoder, or neither.
+
+      It opens the same capture pqp opens (getDisplayMedia, 60 fps ceiling,
+      1080p ceiling, contentHint "motion"), and sends it through a loopback
+      RTCPeerConnection pair inside this page with the same codec and sender
+      settings a pqp share uses (H.264 first, maintain-framerate). Nothing
+      leaves the page: no fetch, no analytics, no storage. The report is only
+      ever copied to the clipboard when the person asks.
+
+      Built for 2026-09-30: a CS2 share on a 360 Hz monitor lagged and froze
+      while the game ran uncapped and was clean once it was capped at 60 or
+      when the presenter alt-tabbed out. Read the per-second table while the
+      game is in front: "captured" is what the browser's capturer handed the
+      page, "sent" is what the encoder produced.
+
+      URL parameters, all optional:
+        codec=h264|vp8|vp9   default h264 (what pqp publishes)
+        fps=30|60            default 60 (pqp's capture ceiling)
+        seconds=N            stop by itself after N seconds (default: manual)
+        auto=1               start at once on the current tab (automation only;
+                             needs a Chromium started with
+                             --auto-accept-this-tab-capture)
+        animate=1            draw a moving test pattern on this page, so a
+                             capture of this tab has motion in it
+    -->
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --line: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --good: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+        --accent: #58a6ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      p {
+        margin: 6px 0;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin: 12px 0;
+      }
+      ol {
+        margin: 6px 0;
+        padding-left: 20px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      button,
+      select {
+        font: inherit;
+        color: var(--text);
+        background: #21262d;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #238636;
+        border-color: #2ea043;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #verdict {
+        font-size: 16px;
+      }
+      #verdict .tag {
+        display: inline-block;
+        font-weight: 600;
+        padding: 1px 8px;
+        border-radius: 4px;
+        margin-right: 6px;
+      }
+      .tag.good {
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--good);
+      }
+      .tag.warn {
+        background: rgba(210, 153, 34, 0.15);
+        color: var(--warn);
+      }
+      .tag.bad {
+        background: rgba(248, 81, 73, 0.15);
+        color: var(--bad);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+      }
+      .stat {
+        background: #0d1117;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      .stat b {
+        display: block;
+        font-size: 20px;
+        font-variant-numeric: tabular-nums;
+      }
+      .stat span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .tablewrap {
+        overflow-x: auto;
+        max-height: 420px;
+        overflow-y: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      th,
+      td {
+        text-align: right;
+        padding: 3px 8px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+        color: var(--muted);
+        font-weight: 500;
+      }
+      td.l,
+      th.l {
+        text-align: left;
+      }
+      tr.away td {
+        background: rgba(88, 166, 255, 0.06);
+      }
+      .bad {
+        color: var(--bad);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      canvas#pattern {
+        display: none;
+        width: 100%;
+        height: 240px;
+        border-radius: 6px;
+        margin-top: 8px;
+      }
+      code {
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>pqp share diagnostic</h1>
+      <p class="muted">
+        Finds where a screen share loses frames on this computer. Nothing is
+        sent anywhere: the video goes from this page to itself.
+      </p>
+
+      <div class="panel">
+        <ol>
+          <li>Open the game (or whatever you share) the way you normally play it.</li>
+          <li>Press <b>Start</b> and pick the same screen or window you would share in pqp.</li>
+          <li>Go back to the game and play normally for at least 30 seconds.</li>
+          <li>Come back here and press <b>Stop</b>. Read the verdict, then press <b>Copy report</b>.</li>
+        </ol>
+        <p class="muted">
+          Rows shaded blue are seconds when this page was not in front (you were
+          in the game). Those are the ones that matter. A still picture sends
+          few frames on purpose, so keep the game moving while it measures.
+        </p>
+        <p class="muted">
+          No game on this computer? <a href="share-diagnostic-game.html" target="_blank" rel="noopener" style="color: var(--accent)">Open the stand-in game</a>:
+          a window that keeps the graphics card as busy as an uncapped game. Share that window.
+        </p>
+        <p class="muted">
+          On a Mac the browser needs permission to record the screen: System Settings, Privacy and
+          Security, Screen and System Audio Recording, turn on your browser, then quit and reopen it.
+        </p>
+        <div class="row" style="margin-top: 10px">
+          <button id="start" class="primary">Start</button>
+          <button id="stop" disabled>Stop</button>
+          <button id="copy" disabled>Copy report</button>
+          <label class="muted"
+            >Codec
+            <select id="codec">
+              <option value="h264">H.264 (what pqp sends)</option>
+              <option value="vp8">VP8</option>
+              <option value="vp9">VP9</option>
+            </select></label
+          >
+          <label class="muted"
+            >Capture ceiling
+            <select id="fps">
+              <option value="60">60 fps (pqp default)</option>
+              <option value="30">30 fps</option>
+              <option value="120">120 fps</option>
+              <option value="none">no ceiling</option>
+            </select></label
+          >
+        </div>
+        <canvas id="pattern" width="960" height="240"></canvas>
+      </div>
+
+      <div class="panel" id="verdict">
+        <span class="tag warn">Not run yet</span>
+        <span class="muted">Press Start.</span>
+      </div>
+
+      <div class="panel">
+        <div class="grid">
+          <div class="stat"><b id="k-cap">-</b><span>captured fps (in game)</span></div>
+          <div class="stat"><b id="k-gap">-</b><span>longest capture gap, ms</span></div>
+          <div class="stat"><b id="k-sent">-</b><span>encoded fps (in game)</span></div>
+          <div class="stat"><b id="k-enc">-</b><span>encode ms per frame</span></div>
+          <div class="stat"><b id="k-lim">-</b><span>limited by (share of time)</span></div>
+          <div class="stat"><b id="k-size">-</b><span>sent size</span></div>
+        </div>
+        <p class="muted" id="env" style="margin-top: 8px"></p>
+      </div>
+
+      <div class="panel">
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="l">t</th>
+                <th class="l">where</th>
+                <th>captured</th>
+                <th>gap max</th>
+                <th>gaps &gt;100ms</th>
+                <th>src fps</th>
+                <th>sent fps</th>
+                <th>enc ms</th>
+                <th class="l">limited by</th>
+                <th>size</th>
+                <th>kbps</th>
+                <th>recv fps</th>
+                <th>freezes</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      "use strict";
+
+      const params = new URLSearchParams(location.search);
+      const $ = (id) => document.getElementById(id);
+      const codecSelect = $("codec");
+      const fpsSelect = $("fps");
+      if (["h264", "vp8", "vp9"].includes(params.get("codec"))) codecSelect.value = params.get("codec");
+      if (["30", "60", "120", "none"].includes(params.get("fps"))) fpsSelect.value = params.get("fps");
+
+      let run = null;
+      const rows = [];
+
+      // ------------------------------------------------------------ pattern
+      // Only with ?animate=1: gives a capture of THIS tab something moving,
+      // drawn every animation frame (so as fast as the browser will paint).
+      if (params.get("animate") === "1") {
+        const canvas = $("pattern");
+        canvas.style.display = "block";
+        const g = canvas.getContext("2d");
+        let n = 0;
+        const draw = () => {
+          n += 1;
+          const w = canvas.width;
+          const h = canvas.height;
+          g.fillStyle = "#0d1117";
+          g.fillRect(0, 0, w, h);
+          for (let i = 0; i < 12; i += 1) {
+            const x = (n * (3 + i) + i * 80) % (w + 80) - 80;
+            g.fillStyle = `hsl(${(n + i * 30) % 360} 70% 55%)`;
+            g.fillRect(x, i * 20, 80, 18);
+          }
+          g.fillStyle = "#e6edf3";
+          g.font = "48px system-ui";
+          g.fillText(String(n), 20, h - 20);
+          requestAnimationFrame(draw);
+        };
+        requestAnimationFrame(draw);
+      }
+
+      // ------------------------------------------------------------- helpers
+      const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const fmt = (v, d = 0) => (v === null || v === undefined ? "-" : Number(v).toFixed(d));
+      const away = () => document.visibilityState !== "visible" || !document.hasFocus();
+
+      function pickStats(report) {
+        let out = null;
+        let src = null;
+        let codec = null;
+        let inb = null;
+        const all = [];
+        report.forEach((s) => all.push(s));
+        for (const s of all) {
+          if (s.type === "outbound-rtp" && (s.kind || s.mediaType) === "video") {
+            if (!out || (s.frameWidth || 0) > (out.frameWidth || 0)) out = s;
+          }
+        }
+        if (out) {
+          src = all.find((s) => s.type === "media-source" && s.id === out.mediaSourceId) || null;
+          codec = all.find((s) => s.type === "codec" && s.id === out.codecId) || null;
+        }
+        return { out, src, codec, inb };
+      }
+
+      function pickInbound(report) {
+        // The top layer: with the emulated lower layers there are three.
+        let inb = null;
+        report.forEach((s) => {
+          if (s.type === "inbound-rtp" && (s.kind || s.mediaType) === "video") {
+            if (!inb || (s.frameWidth || 0) > (inb.frameWidth || 0)) inb = s;
+          }
+        });
+        return inb;
+      }
+
+      // Counts frames the capturer hands over, independent of the encoder.
+      // MediaStreamTrackProcessor reads every frame the source delivers; the
+      // gaps between their timestamps are the freezes as the capturer made
+      // them, before WebRTC could add or hide anything.
+      function startFrameCounter(track) {
+        const state = { frames: 0, lastTs: null, maxGap: 0, bigGaps: 0, stop: () => {} };
+        if (typeof MediaStreamTrackProcessor !== "function") {
+          state.unsupported = true;
+          return state;
+        }
+        const clone = track.clone();
+        const reader = new MediaStreamTrackProcessor({ track: clone }).readable.getReader();
+        let stopped = false;
+        state.stop = () => {
+          stopped = true;
+          try {
+            reader.cancel();
+          } catch {}
+          clone.stop();
+        };
+        (async () => {
+          while (!stopped) {
+            let result;
+            try {
+              result = await reader.read();
+            } catch {
+              break;
+            }
+            if (result.done) break;
+            const frame = result.value;
+            // Capture timestamp in microseconds on Chromium; fall back to now.
+            const ts = typeof frame.timestamp === "number" ? frame.timestamp / 1000 : performance.now();
+            frame.close();
+            state.frames += 1;
+            if (state.lastTs !== null) {
+              const gap = ts - state.lastTs;
+              if (gap > state.maxGap) state.maxGap = gap;
+              if (gap > 100) state.bigGaps += 1;
+            }
+            state.lastTs = ts;
+          }
+        })();
+        return state;
+      }
+
+      function preferCodec(transceiver, want) {
+        const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities("video");
+        if (!caps || typeof transceiver.setCodecPreferences !== "function") return;
+        const mime = { h264: "video/H264", vp8: "video/VP8", vp9: "video/VP9" }[want];
+        const first = caps.codecs.filter((c) => c.mimeType === mime);
+        // H.264: put the constrained-baseline packetization-mode=1 profile
+        // first, like LiveKit's publish does, so hardware encoders take it.
+        const profile = params.get("profile") || "42e0";
+        first.sort((a, b) => {
+          const score = (c) =>
+            /packetization-mode=1/.test(c.sdpFmtpLine || "") && c.sdpFmtpLine.includes(`profile-level-id=${profile}`) ? 0 : 1;
+          return score(a) - score(b);
+        });
+        const rest = caps.codecs.filter((c) => c.mimeType !== mime);
+        if (first.length) transceiver.setCodecPreferences([...first, ...rest]);
+      }
+
+      // --------------------------------------------------------------- run
+      async function start() {
+        $("start").disabled = true;
+        rows.length = 0;
+        $("rows").textContent = "";
+        // "none" asks for no frame rate at all (what pqp did before it pinned
+        // one), so the capturer runs at its own default; the budget the
+        // verdict judges against is then the display's own 60.
+        const fpsChoice = fpsSelect.value;
+        const fps = fpsChoice === "none" ? 60 : Number(fpsChoice);
+        const codecWanted = codecSelect.value;
+        const maxHeight = Number(params.get("height")) || 1080;
+        const constraints = {
+          video: {
+            width: { max: Math.round((maxHeight * 16) / 9) },
+            height: { max: maxHeight },
+          },
+          audio: false,
+        };
+        if (fpsChoice !== "none") constraints.video.frameRate = { ideal: fps, max: fps };
+        // Automation only: capture this tab, or (surface=screen / window)
+        // let a Chromium started with --auto-select-desktop-capture-source
+        // answer the picker.
+        if (params.get("auto") === "1" && (params.get("surface") || "tab") === "tab") {
+          constraints.preferCurrentTab = true;
+          constraints.selfBrowserSurface = "include";
+        }
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        } catch (err) {
+          setVerdict("warn", "No capture", `The picker was closed or refused (${err && err.name}).`);
+          $("start").disabled = false;
+          return;
+        }
+        // Everything after the picker can still fail (a codec the browser
+        // refuses, a description it will not set). Give the capture back and
+        // the Start button with it instead of leaving a half-built run.
+        const pending = { pcs: [], clones: [] };
+        try {
+          const track = stream.getVideoTracks()[0];
+          try {
+            track.contentHint = "motion";
+          } catch {}
+          const settings = track.getSettings ? track.getSettings() : {};
+
+          const a = new RTCPeerConnection();
+          const b = new RTCPeerConnection();
+          pending.pcs.push(a, b);
+          a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate).catch(() => {});
+          b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate).catch(() => {});
+          const transceiver = a.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+          preferCodec(transceiver, codecWanted);
+          // A pqp share on the media server is not one encode but three: the
+          // top layer plus 720p and 360p copies, every one at the capture's
+          // frame rate (livekit-session.ts, publishScreenVideo). A loopback
+          // cannot negotiate simulcast, so the two lower layers are two more
+          // senders fed from clones of the same capture, which costs the
+          // machine the same encodes. ?layers=1 sends the top one only.
+          const extraLayers = [];
+          if (params.get("layers") !== "1") {
+            for (const h of [720, 360]) {
+              if ((settings.height || 1080) - h < 100) continue;
+              const clone = track.clone();
+              pending.clones.push(clone);
+              const t = a.addTransceiver(clone, { direction: "sendonly" });
+              preferCodec(t, codecWanted);
+              extraLayers.push({ height: h, transceiver: t, clone, maxBitrate: h === 720 ? 1_400_000 : 450_000 });
+            }
+          }
+          b.ontrack = (e) => {
+            // Keep the received track alive without painting it: a preview
+            // would add GPU work the real share does not have.
+            run && (run.remote = e.track);
+          };
+          await a.setLocalDescription();
+          await b.setRemoteDescription(a.localDescription);
+          await b.setLocalDescription();
+          // A loopback has no real bottleneck, but WebRTC's bandwidth estimate
+          // still starts at a few hundred kbit/s and would spend the first
+          // seconds encoding a tiny picture. Start it where a pqp share on a
+          // good link sits, so the encoder does full-size work from the start.
+          const answer = b.localDescription.sdp.replace(
+            /^(a=fmtp:\d+ .*)$/gm,
+            "$1;x-google-start-bitrate=4000;x-google-min-bitrate=2000",
+          );
+          await a.setRemoteDescription({ type: "answer", sdp: answer });
+          const sender = transceiver.sender;
+          // pqp's "auto" screen ceiling is 3 Mbit/s for the top layer.
+          const tune = async (s, maxBitrate, scale) => {
+            try {
+              const p = s.getParameters();
+              p.degradationPreference = "maintain-framerate";
+              if (p.encodings && p.encodings[0]) {
+                p.encodings[0].maxBitrate = maxBitrate;
+                p.encodings[0].maxFramerate = fps;
+                if (scale) p.encodings[0].scaleResolutionDownBy = scale;
+              }
+              await s.setParameters(p);
+            } catch {}
+          };
+          await tune(sender, 3_000_000, null);
+          for (const layer of extraLayers) {
+            await tune(layer.transceiver.sender, layer.maxBitrate, (settings.height || 1080) / layer.height);
+          }
+
+          run = {
+            startedAt: performance.now(),
+            // With no ceiling asked for, judge against what the browser chose.
+            fps: fpsChoice === "none" && num(settings.frameRate) ? Math.round(settings.frameRate) : fps,
+            extraLayers,
+            codecWanted,
+            stream,
+            track,
+            a,
+            b,
+            sender,
+            counter: startFrameCounter(track),
+            prev: null,
+            prevCounter: { frames: 0, bigGaps: 0 },
+            settings,
+            env: {
+              userAgent: navigator.userAgent,
+              platform: navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform,
+              hardwareConcurrency: navigator.hardwareConcurrency || null,
+              surface: settings.displaySurface || null,
+              captureWidth: settings.width || null,
+              captureHeight: settings.height || null,
+              captureFrameRateSetting: settings.frameRate || null,
+              devicePixelRatio: window.devicePixelRatio,
+              screen: `${screen.width}x${screen.height}`,
+            },
+          };
+          // ?preview=1: paint the capture in a small <video> and count the
+          // frames the page actually presented (requestVideoFrameCallback).
+          // Off by default because painting is GPU work a real share does not
+          // do, and it stops while this page is hidden anyway.
+          if (params.get("preview") === "1" && "requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+            const video = document.createElement("video");
+            video.muted = true;
+            video.playsInline = true;
+            video.style.cssText = "width:320px;border-radius:6px;margin-top:8px";
+            video.srcObject = new MediaStream([track]);
+            $("pattern").after(video);
+            run.preview = { frames: 0, video };
+            const tick = () => {
+              if (!run || run.stopped) return;
+              run.preview.frames += 1;
+              video.requestVideoFrameCallback(tick);
+            };
+            video.requestVideoFrameCallback(tick);
+            video.play().catch(() => {});
+          }
+          track.addEventListener("ended", () => stop());
+          // A timeout that re-arms after each sample, not an interval: a slow
+          // getStats delays the next reading instead of overlapping it.
+          const tick = async () => {
+            const owner = run;
+            if (!owner || owner.stopped) return;
+            try {
+              await sample();
+            } catch (err) {
+              // One bad reading must not end the measurement.
+              console.warn("[share-diagnostic] sample failed", err);
+            }
+            if (run === owner && !owner.stopped) owner.timer = setTimeout(tick, 1000);
+          };
+          run.timer = setTimeout(tick, 1000);
+          $("stop").disabled = false;
+          $("copy").disabled = true;
+          setVerdict("warn", "Measuring", "Go to the game now and play for 30 seconds or more, then come back and press Stop.");
+          $("env").textContent =
+            `Capture: ${settings.displaySurface || "?"} ${settings.width || "?"}x${settings.height || "?"}, ` +
+            `asked for at most ${fps} fps, browser says ${fmt(num(settings.frameRate))} fps. Codec asked: ${codecWanted}.`;
+          const seconds = Number(params.get("seconds"));
+          // Owned by this run, so a restart cannot be ended by the last one's timer.
+          if (seconds > 0) run.autoStop = setTimeout(stop, seconds * 1000);
+        } catch (err) {
+          if (run) {
+            clearTimeout(run.timer);
+            clearTimeout(run.autoStop);
+            if (run.counter) run.counter.stop();
+            if (run.preview) run.preview.video.remove();
+          }
+          run = null;
+          for (const t of pending.clones) t.stop();
+          for (const t of stream.getTracks()) t.stop();
+          for (const pc of pending.pcs) pc.close();
+          $("stop").disabled = true;
+          $("start").disabled = false;
+          setVerdict("bad", "Could not start", `The capture opened but the test connection failed (${(err && (err.name || err.message)) || err}).`);
+        }
+      }
+
+      // One sample at a time: a slow getStats must not let two overlap and
+      // write their deltas out of order.
+      function sample() {
+        if (!run || run.sampling) return run ? run.sampling : undefined;
+        const current = run;
+        current.sampling = takeSample().finally(() => {
+          current.sampling = null;
+        });
+        return current.sampling;
+      }
+
+      async function takeSample(final = false) {
+        if (!run || (run.stopped && !final)) return;
+        const now = performance.now();
+        const t = (now - run.startedAt) / 1000;
+        let report;
+        let inReport;
+        try {
+          report = await run.sender.getStats();
+          inReport = await run.b.getStats();
+        } catch {
+          return;
+        }
+        const { out, src, codec } = pickStats(report);
+        const inb = pickInbound(inReport);
+        const c = run.counter;
+        const cur = {
+          at: now,
+          framesEncoded: out ? num(out.framesEncoded) : null,
+          totalEncodeTime: out ? num(out.totalEncodeTime) : null,
+          bytesSent: out ? num(out.bytesSent) : null,
+          limDur: out && out.qualityLimitationDurations ? { ...out.qualityLimitationDurations } : null,
+          freezeCount: inb ? num(inb.freezeCount) : null,
+          freezeSec: inb ? num(inb.totalFreezesDuration) : null,
+          framesDropped: inb ? num(inb.framesDropped) : null,
+          jbDelay: inb ? num(inb.jitterBufferDelay) : null,
+          jbEmitted: inb ? num(inb.jitterBufferEmittedCount) : null,
+          previewFrames: run.preview ? run.preview.frames : null,
+        };
+        const prev = run.prev;
+        const dt = prev ? (now - prev.at) / 1000 : null;
+        const row = {
+          t: Math.round(t),
+          away: away(),
+          captured: null,
+          gapMax: c.unsupported ? null : c.maxGap,
+          bigGaps: c.unsupported ? null : c.bigGaps - run.prevCounter.bigGaps,
+          srcFps: src ? num(src.framesPerSecond) : null,
+          sentFps: null,
+          encMs: null,
+          limitedBy: out ? out.qualityLimitationReason || null : null,
+          width: out ? num(out.frameWidth) : null,
+          height: out ? num(out.frameHeight) : null,
+          kbps: null,
+          recvFps: inb ? num(inb.framesPerSecond) : null,
+          freezes: null,
+          encoder: out ? out.encoderImplementation || null : null,
+          powerEfficient: out && typeof out.powerEfficientEncoder === "boolean" ? out.powerEfficientEncoder : null,
+          codec: codec ? codec.mimeType : null,
+          targetKbps: out && num(out.targetBitrate) !== null ? out.targetBitrate / 1000 : null,
+        };
+        if (prev && dt > 0) {
+          if (!c.unsupported) row.captured = (c.frames - run.prevCounter.frames) / dt;
+          if (cur.framesEncoded !== null && prev.framesEncoded !== null) {
+            const frames = cur.framesEncoded - prev.framesEncoded;
+            row.sentFps = frames / dt;
+            if (frames > 0 && cur.totalEncodeTime !== null && prev.totalEncodeTime !== null) {
+              row.encMs = ((cur.totalEncodeTime - prev.totalEncodeTime) * 1000) / frames;
+            }
+          }
+          if (cur.bytesSent !== null && prev.bytesSent !== null) row.kbps = ((cur.bytesSent - prev.bytesSent) * 8) / dt / 1000;
+          if (cur.freezeCount !== null && prev.freezeCount !== null) row.freezes = cur.freezeCount - prev.freezeCount;
+          if (cur.freezeSec !== null && prev.freezeSec !== null) row.freezeMs = (cur.freezeSec - prev.freezeSec) * 1000;
+          if (cur.framesDropped !== null && prev.framesDropped !== null) row.dropped = cur.framesDropped - prev.framesDropped;
+          if (cur.jbDelay !== null && prev.jbDelay !== null && cur.jbEmitted > prev.jbEmitted) {
+            row.jbMs = ((cur.jbDelay - prev.jbDelay) * 1000) / (cur.jbEmitted - prev.jbEmitted);
+          }
+          if (cur.previewFrames !== null && prev.previewFrames !== null) row.previewFps = (cur.previewFrames - prev.previewFrames) / dt;
+          rows.push(row);
+          addRow(row);
+          updateSummary(false);
+        }
+        run.prev = cur;
+        run.prevCounter = { frames: c.frames, bigGaps: c.bigGaps };
+        c.maxGap = 0;
+        run.lastOut = out;
+      }
+
+      function addRow(r) {
+        const tr = document.createElement("tr");
+        if (r.away) tr.className = "away";
+        const fpsClass = (v) => (v === null ? "" : v < run.fps * 0.5 ? "bad" : v < run.fps * 0.8 ? "warn" : "");
+        const cells = [
+          [`${r.t}s`, "l"],
+          [r.away ? "game" : "page", "l"],
+          [fmt(r.captured), fpsClass(r.captured)],
+          [fmt(r.gapMax), r.gapMax > 100 ? "bad" : r.gapMax > 40 ? "warn" : ""],
+          [fmt(r.bigGaps), r.bigGaps > 0 ? "bad" : ""],
+          [fmt(r.srcFps), fpsClass(r.srcFps)],
+          [fmt(r.sentFps), fpsClass(r.sentFps)],
+          [fmt(r.encMs, 1), r.encMs > 1000 / run.fps ? "bad" : ""],
+          [r.limitedBy || "-", r.limitedBy === "cpu" ? "bad" : r.limitedBy === "bandwidth" ? "warn" : "l"],
+          [r.width ? `${r.width}x${r.height}` : "-", ""],
+          [fmt(r.kbps), ""],
+          [fmt(r.recvFps), ""],
+          [fmt(r.freezes), r.freezes > 0 ? "bad" : ""],
+        ];
+        for (const [text, cls] of cells) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          if (cls) td.className = cls;
+          tr.appendChild(td);
+        }
+        $("rows").appendChild(tr);
+      }
+
+      const mean = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+      const valuesOf = (list, key) => list.map((r) => r[key]).filter((v) => typeof v === "number" && Number.isFinite(v));
+
+      function summarize(list) {
+        if (!list.length) return null;
+        const lim = {};
+        for (const r of list) lim[r.limitedBy || "none"] = (lim[r.limitedBy || "none"] || 0) + 1;
+        return {
+          seconds: list.length,
+          captured: mean(valuesOf(list, "captured")),
+          // null when the capturer's frames could not be counted: unknown is
+          // not the same as "no gaps".
+          gapMax: valuesOf(list, "gapMax").length ? Math.max(0, ...valuesOf(list, "gapMax")) : null,
+          bigGaps: valuesOf(list, "bigGaps").reduce((s, x) => s + x, 0),
+          srcFps: mean(valuesOf(list, "srcFps")),
+          sentFps: mean(valuesOf(list, "sentFps")),
+          encMs: mean(valuesOf(list, "encMs")),
+          kbps: mean(valuesOf(list, "kbps")),
+          freezes: valuesOf(list, "freezes").reduce((s, x) => s + x, 0),
+          freezeMs: valuesOf(list, "freezeMs").reduce((s, x) => s + x, 0),
+          dropped: valuesOf(list, "dropped").reduce((s, x) => s + x, 0),
+          recvFps: mean(valuesOf(list, "recvFps")),
+          jbMs: mean(valuesOf(list, "jbMs")),
+          previewFps: mean(valuesOf(list, "previewFps")),
+          limitedShare: Object.fromEntries(Object.entries(lim).map(([k, v]) => [k, v / list.length])),
+          minHeight: Math.min(...valuesOf(list, "height")),
+        };
+      }
+
+      // The verdict. Deliberately about THIS machine only: this page has no
+      // network in it, so anything it cannot see is by construction after the
+      // presenter's computer (the uplink, the media server, the viewer).
+      function judge(s, fps, capturedUnsupported, encoder) {
+        if (!s || s.seconds < 5) {
+          return ["warn", "Not enough data", "Run it for at least 30 seconds with the game in front."];
+        }
+        const capturedFps = capturedUnsupported ? s.srcFps : s.captured;
+        const captureOk = capturedFps !== null && capturedFps >= fps * 0.8 && s.gapMax !== null && s.gapMax <= 100;
+        const capturePoor = capturedFps !== null && (capturedFps < fps * 0.6 || s.bigGaps >= Math.max(3, s.seconds / 5));
+        const cpuLimited = (s.limitedShare.cpu || 0) >= 0.2;
+        const encodeSlow = s.encMs !== null && s.encMs > (1000 / fps) * 0.9;
+        const encoderBehind = s.sentFps !== null && capturedFps !== null && s.sentFps < capturedFps * 0.75;
+        if (capturePoor) {
+          return [
+            "bad",
+            "The capture is starved",
+            `The browser's capturer handed over only ${fmt(capturedFps)} of ${fps} frames per second, with gaps up to ${fmt(s.gapMax)} ms, ` +
+              "before any encoding happened. With a game running uncapped this is the GPU: the capture has to copy each frame on the " +
+              "same graphics card the game keeps busy, and it waits behind the game. Nothing downstream (encoder, network, viewer) can fix frames that were never captured.",
+          ];
+        }
+        if (cpuLimited || encodeSlow || encoderBehind) {
+          return [
+            "bad",
+            "The encoder is starved",
+            `Frames were captured (${fmt(capturedFps)} fps) but only ${fmt(s.sentFps)} fps were encoded` +
+              `${encodeSlow ? `, at ${fmt(s.encMs, 1)} ms each (the budget at ${fps} fps is ${fmt(1000 / fps, 1)} ms)` : ""}` +
+              `${cpuLimited ? `, and the encoder reported it was limited by "cpu" ${Math.round((s.limitedShare.cpu || 0) * 100)}% of the time` : ""}. ` +
+              "WebRTC says \"cpu\" whenever encoding falls behind, including when a hardware encoder waits on a busy graphics card." +
+              (encoder ? ` The encoder here was ${encoder}${/openh264|libvpx|libaom/i.test(encoder) ? ", which runs on the processor" : ""}.` : ""),
+          ];
+        }
+        if (s.gapMax === null && !capturePoor) {
+          return [
+            "warn",
+            "Capture gaps not measured",
+            `This browser cannot count the capturer's frames one by one, so long pauses in the capture are unknown. ` +
+              `It reported ${fmt(capturedFps)} fps and encoded ${fmt(s.sentFps)} fps. Use a recent Chrome or Edge for the full picture.`,
+          ];
+        }
+        if (captureOk) {
+          return [
+            "good",
+            "This computer keeps up",
+            `Captured ${fmt(capturedFps)} fps and encoded ${fmt(s.sentFps)} fps with no long gaps. If viewers still see lag, it happens after this computer: ` +
+              "the upload, the media server or the viewer's side.",
+          ];
+        }
+        return [
+          "warn",
+          "Borderline",
+          `Captured ${fmt(capturedFps)} fps, encoded ${fmt(s.sentFps)} fps, longest gap ${fmt(s.gapMax)} ms. Run it again for longer with the game in front.`,
+        ];
+      }
+
+      function setVerdict(level, title, text) {
+        const el = $("verdict");
+        el.textContent = "";
+        const tag = document.createElement("span");
+        tag.className = `tag ${level}`;
+        tag.textContent = title;
+        const body = document.createElement("span");
+        body.textContent = text;
+        el.append(tag, body);
+      }
+
+      function updateSummary(final) {
+        const awayRows = rows.filter((r) => r.away);
+        const focus = awayRows.length >= 5 ? awayRows : rows;
+        const s = summarize(focus);
+        if (!s) return;
+        $("k-cap").textContent = fmt(run.counter.unsupported ? s.srcFps : s.captured);
+        $("k-gap").textContent = fmt(s.gapMax);
+        $("k-sent").textContent = fmt(s.sentFps);
+        $("k-enc").textContent = fmt(s.encMs, 1);
+        const lim = Object.entries(s.limitedShare)
+          .sort((x, y) => y[1] - x[1])
+          .map(([k, v]) => `${k} ${Math.round(v * 100)}%`)
+          .join(", ");
+        $("k-lim").textContent = lim || "-";
+        const last = rows[rows.length - 1];
+        $("k-size").textContent = last && last.width ? `${last.width}x${last.height}` : "-";
+        if (final) {
+          const [level, title, text] = judge(s, run.fps, !!run.counter.unsupported, rows.length ? rows[rows.length - 1].encoder : null);
+          const scope = awayRows.length >= 5 ? "" : " (few seconds away from this page, so this uses every second)";
+          setVerdict(level, title + scope, text);
+          run.verdict = { level, title, text };
+          run.summary = { away: summarize(awayRows), page: summarize(rows.filter((r) => !r.away)), all: summarize(rows) };
+        }
+      }
+
+      async function stop() {
+        if (!run || run.stopped) return;
+        run.stopped = true;
+        clearTimeout(run.timer);
+        clearTimeout(run.autoStop);
+        if (run.sampling) await run.sampling;
+        await takeSample(true);
+        updateSummary(true);
+        run.counter.stop();
+        if (run.preview) run.preview.video.remove();
+        for (const layer of run.extraLayers) layer.clone.stop();
+        const last = rows[rows.length - 1];
+        run.env.encoder = last ? last.encoder : null;
+        run.env.powerEfficientEncoder = last ? last.powerEfficient : null;
+        run.env.codec = last ? last.codec : null;
+        run.track.stop();
+        run.a.close();
+        run.b.close();
+        $("stop").disabled = true;
+        $("start").disabled = false;
+        $("copy").disabled = false;
+        const e = run.env;
+        $("env").textContent +=
+          ` Encoder: ${e.encoder || "?"}${e.powerEfficientEncoder === true ? " (hardware)" : e.powerEfficientEncoder === false ? " (software)" : ""}, ${e.codec || "?"}.`;
+        window.__shareDiagnostic = report();
+      }
+
+      function report() {
+        return {
+          tool: "pqp share diagnostic v1",
+          at: new Date().toISOString(),
+          fpsCeiling: run.fps,
+          codecWanted: run.codecWanted,
+          env: run.env,
+          verdict: run.verdict || null,
+          summary: run.summary || null,
+          rows,
+        };
+      }
+
+      $("start").addEventListener("click", start);
+      $("stop").addEventListener("click", stop);
+      $("copy").addEventListener("click", async () => {
+        const text = JSON.stringify(report(), null, 1);
+        try {
+          await navigator.clipboard.writeText(text);
+          $("copy").textContent = "Copied";
+        } catch {
+          const w = window.open("", "_blank");
+          if (w) w.document.body.textContent = text;
+        }
+        setTimeout(() => ($("copy").textContent = "Copy report"), 2000);
+      });
+
+      if (params.get("auto") === "1") start();
+      window.__shareDiagnosticStop = stop;
+    </script>
+  </body>
+</html>

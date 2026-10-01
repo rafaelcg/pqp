@@ -338,7 +338,14 @@ export default defineConfig(({ command }) => ({
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        navigateFallback: "/index.html",
+        // Workbox's own navigation route (precached shell for every navigation)
+        // is OFF, and the network-first handler in the imported `sw-build-*.js`
+        // (`src/lib/sw-build-script.ts`) does that job with the shell as its
+        // fallback. Two fetch listeners that both call `respondWith` on the same
+        // navigation make the second throw `InvalidStateError`, so exactly one
+        // may handle it. Only the legacy e2e fixture, which stands in for a
+        // worker from before the handler existed, keeps Workbox's route.
+        navigateFallback: LEGACY_WORKER ? "/index.html" : undefined,
         // Anything the server answers must never be served from the shell
         // fallback — a navigation to /status.json or an API path is not a route.
         //
@@ -357,10 +364,9 @@ export default defineConfig(({ command }) => ({
         // would otherwise be handed the SPA shell. Nothing that grades this
         // site runs a service worker, so this is for the human who clicks one
         // of these links.
-        // Shared with the navigation handler in the imported `sw-build-*.js`
-        // (`src/lib/sw-build-script.ts`), which answers navigations
-        // network-first and must leave exactly these alone.
-        navigateFallbackDenylist: NAVIGATE_DENYLIST,
+        // The same list, `NAVIGATE_DENYLIST`, is what the network-first handler
+        // leaves alone (`src/lib/sw-build-script.ts`).
+        ...(LEGACY_WORKER ? { navigateFallbackDenylist: NAVIGATE_DENYLIST } : {}),
         cleanupOutdatedCaches: true,
         // See `registerType` above. Safe for the open tabs this swaps under
         // because the page keeps running the code it already loaded; the price
