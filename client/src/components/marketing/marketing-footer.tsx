@@ -2,7 +2,11 @@ import { Link } from "react-router-dom";
 import { LanguagePicker } from "@/components/marketing/language-picker";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { useCommunitiesEnabled } from "@/hooks/use-communities-enabled";
-import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
+import {
+  CODE_SIGNING_PATH,
+  DOWNLOAD_PAGE_PATH,
+  SOURCE_REPO_URL,
+} from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { playStoreUrl } from "@/lib/play-store";
 import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
@@ -122,6 +126,12 @@ export function MarketingFooter() {
             </Link>
             <Link to="/cookies" className={FOOTER_LINK}>
               {t("footer.cookies")}
+            </Link>
+            {/* A condition of the SignPath Foundation's free signing program:
+                the policy must be reachable from the site. It lives on the
+                download page, where the installers are. */}
+            <Link to={CODE_SIGNING_PATH} className={FOOTER_LINK}>
+              {t("footer.codeSigning")}
             </Link>
             {/* The one address every legal page and security.txt already
                 give. A question about the service should not need the terms

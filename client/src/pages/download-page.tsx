@@ -1,8 +1,11 @@
-import { type CSSProperties } from "react";
+import { useEffect, type CSSProperties } from "react";
+import { useLocation } from "react-router-dom";
+import { CodeSigningPolicy } from "@/components/downloads/code-signing-policy";
 import { DownloadCatalog } from "@/components/downloads/download-catalog";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
+import { CODE_SIGNING_ANCHOR } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
 function stagger(i: number): CSSProperties {
@@ -24,6 +27,16 @@ function stagger(i: number): CSSProperties {
  */
 export function DownloadPage() {
   const { t } = useTranslation();
+  const { hash } = useLocation();
+
+  // The page is lazy and its content arrives after the browser has already
+  // looked for the fragment, so `/download#code-signing` would land at the top.
+  // Scroll to it once this page has rendered, and again when the footer link is
+  // followed from this same page (a hash change does not remount it).
+  useEffect(() => {
+    if (hash !== `#${CODE_SIGNING_ANCHOR}`) return;
+    document.getElementById(CODE_SIGNING_ANCHOR)?.scrollIntoView({ block: "start" });
+  }, [hash]);
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-paper">
@@ -72,6 +85,10 @@ export function DownloadPage() {
             <div className="animate-rise hidden lg:block" style={stagger(4)}>
               <AppWindow />
             </div>
+          </div>
+
+          <div className="mt-24 sm:mt-32">
+            <CodeSigningPolicy />
           </div>
         </div>
       </main>
