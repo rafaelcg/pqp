@@ -1548,6 +1548,30 @@ describeDb("communities", () => {
       expect(res.status).toBe(400);
     });
 
+    it("refuses `config` as an address and never derives it from a name", async () => {
+      // `/api/public/communities/config` is a fixed route beside the `:slug`
+      // one; a community holding this slug would be served `{enabled}`.
+      const { deriveCommunitySlug } = await import("@pqp/shared");
+      expect(deriveCommunitySlug("Config")).toBeNull();
+      const typed = await createChatServer("Some room", owner.id);
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${typed.server.id}/community`,
+        { isCommunity: true, slug: "config" },
+      );
+      expect(res.status).toBe(400);
+      const derived = await createChatServer("Config", owner.id);
+      const res2 = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${derived.server.id}/community`,
+        { isCommunity: true },
+      );
+      // Underivable answers 422, the same as a name that folds to nothing.
+      expect(res2.status).toBe(422);
+    });
+
     it("frees the address when a community is unlisted", async () => {
       // The unique index is partial on `is_community` precisely so an unlisted
       // holder cannot squat an address against a live claimant — while still

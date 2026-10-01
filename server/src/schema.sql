@@ -2832,7 +2832,7 @@ BEGIN
                         'search', 'busca', 'explore', 'explorar', 'admin',
                         'staff', 'equipe', 'moderacao', 'suporte', 'support',
                         'oficial', 'official', 'pqp', 'api', 'app', 'www',
-                        'null', 'undefined')
+                        'null', 'undefined', 'config')
      -- The unique index is the real arbiter; this only keeps the statement from
      -- colliding with a slug some other boot (or a live claim) already wrote.
      AND NOT EXISTS (

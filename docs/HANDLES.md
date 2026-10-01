@@ -47,6 +47,7 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 | Path | Auth | What |
 |---|---|---|
 | `GET /api/public/profiles/:handle` | **none** | the profile; 404 = free |
+| `GET /api/public/communities/config` | **none** | `{ "enabled": boolean }` only, the `COMMUNITIES_ENABLED` switch for the signed-out landing; 200 even when off; `public, max-age=60` |
 | `GET /api/public/invites/:code` | **none** | invite preview: server name, icon, member count; 404 = unusable |
 | `GET /api/users/:userId/banner` | **none** | the banner bytes, as a redirect |
 | `GET /api/users/by-handle/:handle` | session | handle → `publicUserSchema`, for "add me" |
