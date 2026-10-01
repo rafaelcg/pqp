@@ -1,8 +1,7 @@
-import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { applyUpdate } from "@/lib/apply-update";
+import { useApplyUpdate } from "@/hooks/use-apply-update";
 import { useInCall } from "@/lib/in-call-state";
 import { useTranslation } from "@/lib/i18n";
 import { isBlockingUpdate } from "@/lib/update-policy";
@@ -25,15 +24,15 @@ import { useBuildStaleness } from "@/lib/update-prompt-state";
  * person hangs up, it appears. The update is late, never lost.
  */
 export function ForcedUpdateScreen({
-  apply = applyUpdate,
+  apply,
 }: {
-  /** Test seam: a real apply reloads the page. */
-  apply?: (target?: string | null) => Promise<unknown>;
+  /** Test seam: the real ladder navigates away. A failure is `{ ok: false }` or a rejection. */
+  apply?: (target: string | null) => Promise<unknown>;
 } = {}) {
   const { t } = useTranslation();
   const build = useBuildStaleness();
   const inCall = useInCall();
-  const [updating, setUpdating] = useState(false);
+  const { state, start } = useApplyUpdate(apply);
 
   const open = isBlockingUpdate(build, inCall);
 
@@ -54,20 +53,34 @@ export function ForcedUpdateScreen({
       footer={
         <Button
           className="w-full sm:w-auto"
-          disabled={updating}
+          disabled={state.status === "updating"}
           data-testid="forced-update-button"
-          onClick={() => {
-            setUpdating(true);
-            void apply(build.latestBuild);
-          }}
+          onClick={() => start(build.latestBuild)}
         >
-          {updating ? t("update.updating") : t("update.reload")}
+          {state.status === "updating"
+            ? t("update.updating")
+            : state.status === "error"
+              ? t("update.retry")
+              : t("update.reload")}
         </Button>
       }
     >
       <p className="px-5 py-4 text-sm text-text-secondary">
         {t("update.forced.detail")}
       </p>
+      {/* The button is the person's again after a failure, and this says why.
+          A blocking screen that fails silently is a lock-out. */}
+      {state.status === "error" && (
+        <p
+          role="alert"
+          data-testid="forced-update-error"
+          className="border-t border-border px-5 py-3 text-sm text-danger"
+        >
+          {state.reason === "offline"
+            ? t("update.error.offline")
+            : t("update.error.failed")}
+        </p>
+      )}
     </Dialog>
   );
 }

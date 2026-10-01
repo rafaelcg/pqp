@@ -110,7 +110,9 @@ export function BuildWatcher({
     if (!recordAutoReload(target, now)) {
       return;
     }
-    void apply(build.latestBuild);
+    // A rejection here is not the person's problem: the card is still up, and
+    // the loop guard above means this will not be tried again for a while.
+    void Promise.resolve(apply(build.latestBuild)).catch(() => {});
   }, [build, inCall, watching, tick, apply]);
 
   return null;

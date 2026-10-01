@@ -55,6 +55,26 @@ async function openOn(page: Page, build: string) {
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
 }
 
+
+/**
+ * Age the page's clock until `target` shows, in small steps.
+ *
+ * One big `fastForward` would also fire the API client's own 12-second request
+ * timeout (a page timer) in the same jump, aborting the force-config request the
+ * check has just made and reading as "no force": the page then reloads itself
+ * instead of blocking. Real time does not do that, so neither may the test.
+ */
+async function ageUntilVisible(page: Page, target: ReturnType<Page["locator"]>) {
+  await page.clock.fastForward("11:50");
+  for (let i = 0; i < 100; i += 1) {
+    if (await target.isVisible()) {
+      return;
+    }
+    await page.clock.fastForward(5_000);
+    await page.waitForTimeout(100);
+  }
+}
+
 /** What a composer with a half-written message looks like to the update code. */
 async function startTyping(page: Page) {
   await page.evaluate(() => {
@@ -144,7 +164,7 @@ test("an operator-forced update blocks with one button, and the button lands on 
   await startTyping(page);
 
   server.serve(newDir);
-  await page.clock.fastForward("16:00");
+  await ageUntilVisible(page, page.getByRole("dialog"));
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -329,4 +349,49 @@ test("exactly one handler answers a navigation: Workbox's own navigation route i
   // fixture (a worker from before it) is the only build that has Workbox's.
   expect(readFileSync(path.join(newDir, "sw.js"), "utf8")).not.toContain("NavigationRoute");
   expect(readFileSync(path.join(legacyDir, "sw.js"), "utf8")).toContain("NavigationRoute");
+});
+
+// ------------------------------------------------- a forced update that FAILS
+
+test("a forced update with no network says so, gives the button back, and lands once the network is back", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ locale: "pt-BR" });
+  const page = await context.newPage();
+  await page.route("**/api/client-update/config", (route) =>
+    route.fulfill({ json: { forceUpdate: true, minBuiltAt: null } }),
+  );
+  await page.clock.install();
+  server.serve(oldDir);
+  await openOn(page, OLD);
+  server.serve(newDir);
+  await ageUntilVisible(page, page.getByRole("dialog"));
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  await context.setOffline(true);
+  await dialog.getByRole("button", { name: "Atualizar agora" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("sem internet");
+  // The blocking screen is still blocking, and the button is the person's again.
+  const retry = dialog.getByRole("button", { name: "Tentar de novo" });
+  await expect(retry).toBeEnabled();
+  expect(await buildOf(page)).toBe(OLD);
+
+  await context.setOffline(false);
+  await retry.click();
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  await context.close();
+});
+
+test("the cache-busting query an update navigates with is taken off the address", async ({
+  page,
+}) => {
+  server.serve(newDir);
+  await page.goto(`${server.origin}/?x=1&_pqp=123456#frag`);
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
+  const url = new URL(page.url());
+  expect(url.searchParams.has("_pqp")).toBe(false);
+  expect(url.searchParams.get("x")).toBe("1");
+  expect(url.hash).toBe("#frag");
 });

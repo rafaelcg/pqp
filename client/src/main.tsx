@@ -36,6 +36,7 @@ import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { initFaro } from "./lib/faro";
+import { withoutCacheBuster } from "./lib/update-ladder";
 import { I18nProvider, useTranslation } from "./lib/i18n";
 import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
@@ -435,6 +436,18 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // Faro (frontend errors + RUM) as early as possible, so an error thrown during
 // the first render is captured. Inert unless VITE_FARO_URL is set, which is
 // only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
+// An update that had to go round a stale cache navigated to this page with a
+// `?_pqp=` query (`lib/update-ladder.ts`). It has done its job; take it off the
+// address before the router reads the location, so it is never bookmarked.
+try {
+  const clean = withoutCacheBuster(window.location.href);
+  if (clean) {
+    window.history.replaceState(window.history.state, "", clean);
+  }
+} catch {
+  // A location that cannot be parsed or rewritten is left as it is.
+}
+
 initFaro();
 rememberAcquisitionFromLocation(
   browserStorage(),

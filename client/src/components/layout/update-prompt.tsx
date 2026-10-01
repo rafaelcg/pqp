@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
-import { applyUpdate } from "@/lib/apply-update";
+import { useApplyUpdate } from "@/hooks/use-apply-update";
 import { registerServiceWorker } from "@/lib/register-sw";
 import { snoozeRemainingMs } from "@/lib/update-snooze";
 import {
@@ -46,11 +46,11 @@ export function UpdatePrompt({
    * every rule above it would be unpinned.
    */
   register = registerServiceWorker,
-  apply = applyUpdate,
+  apply,
 }: {
   register?: typeof registerServiceWorker;
-  /** Test seam: a real apply reloads the page. */
-  apply?: (target?: string | null) => Promise<unknown>;
+  /** Test seam: the real ladder navigates away. A failure is `{ ok: false }` or a rejection. */
+  apply?: (target: string | null) => Promise<unknown>;
 } = {}) {
   const { t } = useTranslation();
   // Two independent ways to learn a build is waiting, and either is enough: the
@@ -61,7 +61,7 @@ export function UpdatePrompt({
   const build = useBuildStaleness();
   const needsRefresh = workerNeedsRefresh || build.stale;
   const [snoozedAt, setSnoozedAt] = useState<number | null>(null);
-  const [updating, setUpdating] = useState(false);
+  const { state: applying, start } = useApplyUpdate(apply);
 
   useEffect(() => {
     const controls = register(() => setWorkerNeedsRefresh(true));
@@ -123,21 +123,32 @@ export function UpdatePrompt({
           {t("update.ready")}
         </span>
       }
-      body={inCall ? t("update.inCall") : undefined}
+      body={
+        applying.status === "error" ? (
+          <span role="alert">
+            {applying.reason === "offline"
+              ? t("update.error.offline")
+              : t("update.error.failed")}
+          </span>
+        ) : inCall ? (
+          t("update.inCall")
+        ) : undefined
+      }
       footer={
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             className="cta-lift rounded-full px-4"
-            disabled={updating}
-            onClick={() => {
-              setUpdating(true);
-              // Makes the new worker the active one, then reloads; `apply-update.ts`
-              // says why a plain reload is not enough.
-              void apply(build.latestBuild);
-            }}
+            disabled={applying.status === "updating"}
+            // Makes the new worker the active one, then reloads, and walks
+            // heavier fallbacks if that fails (`lib/update-ladder.ts`).
+            onClick={() => start(build.latestBuild)}
           >
-            {updating ? t("update.updating") : t("update.reload")}
+            {applying.status === "updating"
+              ? t("update.updating")
+              : applying.status === "error"
+                ? t("update.retry")
+                : t("update.reload")}
           </Button>
           <Button
             size="sm"
