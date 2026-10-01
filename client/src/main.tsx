@@ -36,6 +36,7 @@ import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { initFaro } from "./lib/faro";
+import { withoutCacheBuster } from "./lib/update-ladder";
 import { primeDownloadPlan } from "./components/downloads/use-download-assets";
 import {
   hasPrerenderedHero,
@@ -444,6 +445,18 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // to finish loading and go idle instead of competing with it. Everywhere else
 // there is nothing on screen to protect and the render is immediate, as ever.
 const prerendered = hasPrerenderedHero();
+
+// An update that had to go round a stale cache navigated to this page with a
+// `?_pqp=` query (`lib/update-ladder.ts`). It has done its job; take it off the
+// address before the router reads the location, so it is never bookmarked.
+try {
+  const clean = withoutCacheBuster(window.location.href);
+  if (clean) {
+    window.history.replaceState(window.history.state, "", clean);
+  }
+} catch {
+  // A location that cannot be parsed or rewritten is left as it is.
+}
 
 // Faro (frontend errors + RUM) as early as possible, so an error thrown during
 // the first render is captured. Inert unless VITE_FARO_URL is set, which is

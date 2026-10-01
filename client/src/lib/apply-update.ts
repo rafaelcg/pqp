@@ -30,6 +30,8 @@
  */
 
 export const STEP_TIMEOUT_MS = 15_000;
+/** `getRegistration()` normally answers at once; a hang here must not hold the whole update. */
+export const REGISTRATION_TIMEOUT_MS = 5_000;
 /** How long a worker that is active may take to start answering for THIS page. */
 export const CONTROL_TIMEOUT_MS = 3_000;
 const POLL_MS = 200;
@@ -213,7 +215,12 @@ export async function applyUpdate(
 ): Promise<ApplyUpdateResult> {
   let activated = false;
   try {
-    const registration = await deps.getRegistration();
+    const registration = await Promise.race([
+      deps.getRegistration(),
+      deps.timeout(REGISTRATION_TIMEOUT_MS).then(() => {
+        throw new Error("the service worker registration did not answer");
+      }),
+    ]);
     if (!registration) {
       // No worker at all: the reload is already served by the network.
       activated = true;
