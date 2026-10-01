@@ -2,10 +2,18 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
+import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import faroUploader from "@grafana/faro-rollup-plugin";
+import { deferEntryScript } from "./src/lib/defer-entry";
+import { deferredScriptTag } from "./src/lib/deferred-tag";
 import { googleAds } from "./src/lib/google-ads-tag";
+import {
+  injectPrerenderHero,
+  PRERENDER_LOCALES,
+  renderPrerenderHero,
+} from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 
 /**
@@ -186,13 +194,56 @@ function umami(): Plugin {
       if (!websiteId) {
         return [];
       }
-      return [
-        {
-          tag: "script",
-          injectTo: "head",
-          attrs: { defer: true, src, "data-website-id": websiteId },
-        },
-      ];
+      return [deferredScriptTag(src, { attrs: { "data-website-id": websiteId } })];
+    },
+  };
+}
+
+/**
+ * Writes the landing page's first screen into `index.html`.
+ *
+ * The block is built from the locale catalogues at build time, so the words
+ * are the same ones the React page prints and a copy edit needs no second
+ * change. Build only: the dev server keeps the empty `#root` (and so keeps its
+ * instant, unprerendered boot). See `src/lib/prerender-hero.ts` for the reasoning
+ * and for the contract with `main.tsx`.
+ */
+function prerenderHero(): Plugin {
+  return {
+    name: "pqp-prerender-hero",
+    apply: "build",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html) {
+        const catalogues = Object.fromEntries(
+          PRERENDER_LOCALES.map((locale) => [
+            locale,
+            JSON.parse(
+              fs.readFileSync(
+                path.resolve(__dirname, `src/locales/${locale}/translation.json`),
+                "utf8",
+              ),
+            ) as Record<string, string>,
+          ]),
+        ) as Parameters<typeof renderPrerenderHero>[0];
+        return injectPrerenderHero(html, renderPrerenderHero(catalogues));
+      },
+    },
+  };
+}
+
+/**
+ * Starts the app bundle after the first paint on the home page (and at once
+ * everywhere else). Runs last, when Vite has already written the entry tag.
+ * See `src/lib/defer-entry.ts`.
+ */
+function deferEntry(): Plugin {
+  return {
+    name: "pqp-defer-entry",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler: (html) => deferEntryScript(html),
     },
   };
 }
@@ -201,6 +252,8 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     edgeConfig(),
+    prerenderHero(),
+    deferEntry(),
     versionManifest(),
     umami(),
     // Same gate as Umami above, same reason. See `src/lib/google-ads-tag.ts`;
@@ -270,7 +323,18 @@ export default defineConfig(({ command }) => ({
         // the wasm beside it is not a `.js` and is never precached, so the
         // advanced suppressor could not start offline either way. It is
         // fetched on demand, like the wasm.
-        globIgnores: ["**/workletProcessor-*.js", "**/sw-build-*.js"],
+        //
+        // The fonts are self-hosted now (`src/fonts.css`), one file per
+        // unicode-range subset. Only the Latin ones are the shell's: Vietnamese,
+        // Cyrillic and Greek are fetched on demand like the RNNoise wasm, so the
+        // install does not download files nobody on this site reads.
+        globIgnores: [
+          "**/workletProcessor-*.js",
+          "**/sw-build-*.js",
+          "**/*-vietnamese-*.woff2",
+          "**/*-cyrillic-*.woff2",
+          "**/*-greek-*.woff2",
+        ],
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,

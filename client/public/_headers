@@ -53,6 +53,22 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Static media that is not content-hashed (the landing hero at /images/hero/,
+# the product screenshots, the icons, the loop videos). Pages' default for a
+# plain file is four hours, which meant a returning visitor re-validated a
+# megabyte of pictures several times a day. A day is fresh, and a week of
+# stale-while-revalidate serves the cached copy instantly while a newer one is
+# fetched behind it, so replacing a file in place still reaches everybody
+# within a day of the next visit. Files that must change under the same name
+# right now (a recaptured screenshot) should get a new name, the way the hero
+# sizes do.
+/images/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/media/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/icons/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 # RFC 9116 security contact must be text/plain, and RFC 9727 wants its media
 # type stated — Pages would otherwise guess from the extension-less filename.
 /.well-known/security.txt

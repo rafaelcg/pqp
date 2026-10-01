@@ -36,8 +36,14 @@ import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { initFaro } from "./lib/faro";
-import { I18nProvider, useTranslation } from "./lib/i18n";
-import type { Locale } from "./lib/locale";
+import { primeDownloadPlan } from "./components/downloads/use-download-assets";
+import {
+  hasPrerenderedHero,
+  whenPrerenderPainted,
+  whenReadyToRender,
+} from "./lib/boot-gate";
+import { I18nProvider, loadLocale, useTranslation } from "./lib/i18n";
+import { detectLocale, type Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { BuildWatcher } from "./components/layout/build-watcher";
@@ -49,6 +55,7 @@ import { isInCall } from "./lib/in-call-state";
 import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
 import { installShareAudioProbe } from "./lib/share-audio-probe";
 import { setStaleChunkBannerVisible } from "./lib/stale-chunk-state";
+import "./fonts.css";
 import "./index.css";
 
 // The chat client, the emoji picker's data, and the legal pages are all dead
@@ -432,10 +439,20 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // the URL this page loaded with are remembered now, and sent once after the
 // account exists (see `lib/acquisition.ts` and the arrival effect in App.tsx).
 // Nothing is stripped from the address bar here; the URL is the page's to own.
+// The home page ships its first screen as plain HTML (index.html, see
+// lib/prerender-hero.ts), so there the first React render can wait for the page
+// to finish loading and go idle instead of competing with it. Everywhere else
+// there is nothing on screen to protect and the render is immediate, as ever.
+const prerendered = hasPrerenderedHero();
+
 // Faro (frontend errors + RUM) as early as possible, so an error thrown during
 // the first render is captured. Inert unless VITE_FARO_URL is set, which is
 // only on the hosted pqp.gg build — a self-host runs nothing. See lib/faro.ts.
-initFaro();
+// On the prerendered home page it starts just before the first render instead
+// (see `renderApp` below): same guarantee for the render, off the load path.
+if (!prerendered) {
+  initFaro();
+}
 rememberAcquisitionFromLocation(
   browserStorage(),
   window.location,
@@ -482,40 +499,106 @@ window.addEventListener("vite:preloadError", (event) => {
   }
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <ErrorBoundary>
-        {/* Above the auth branches on purpose: the dev-bypass path renders no
-            ClerkProvider, and it used to be the one route where nothing ever
-            called detectLocale() and `<html lang>` stayed wrong. */}
-        <I18nProvider>
-          <DesktopShell>
-            <DesktopDeepLinkBridge />
-            {isDevAuthBypassEnabled() ? (
-              <AppRoutes devBypass />
-            ) : publishableKey ? (
-              <ThemedClerkProvider publishableKey={publishableKey}>
-                <AppRoutes />
-              </ThemedClerkProvider>
-            ) : (
-              <div className="flex h-full items-center justify-center p-8 text-center text-muted">
-                <div>
-                  <h1 className="mb-2 text-xl font-bold text-foreground">
-                    pqp
-                  </h1>
-                  {/* Untranslated on purpose: this only renders on a broken
-                      local build, and the reader is whoever is editing .env. */}
-                  <p>
-                    Set VITE_CLERK_PUBLISHABLE_KEY or VITE_DEV_AUTH_BYPASS=true
-                    in client/.env
-                  </p>
+/**
+ * A keyboard visitor's first key press is what starts the app, and React then
+ * replaces the static element that had focus, which drops focus to the body.
+ * Remember which control it was (its tag and its words) so the live copy of it
+ * can be focused again after the swap.
+ */
+function rememberFocusInPrerender(): { tag: string; text: string } | null {
+  const active = document.activeElement;
+  if (!active || !active.closest("#pre-hero")) {
+    return null;
+  }
+  const text = (active.textContent ?? "").trim();
+  return text ? { tag: active.tagName, text } : null;
+}
+
+function restoreFocus(target: { tag: string; text: string } | null): void {
+  if (!target) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>("a, button"),
+    );
+    candidates
+      .find((el) => (el.textContent ?? "").trim() === target.text)
+      ?.focus({ preventScroll: true });
+  });
+}
+
+function renderApp() {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <ErrorBoundary>
+          {/* Above the auth branches on purpose: the dev-bypass path renders no
+              ClerkProvider, and it used to be the one route where nothing ever
+              called detectLocale() and `<html lang>` stayed wrong. */}
+          <I18nProvider>
+            <DesktopShell>
+              <DesktopDeepLinkBridge />
+              {isDevAuthBypassEnabled() ? (
+                <AppRoutes devBypass />
+              ) : publishableKey ? (
+                <ThemedClerkProvider publishableKey={publishableKey}>
+                  <AppRoutes />
+                </ThemedClerkProvider>
+              ) : (
+                <div className="flex h-full items-center justify-center p-8 text-center text-muted">
+                  <div>
+                    <h1 className="mb-2 text-xl font-bold text-foreground">
+                      pqp
+                    </h1>
+                    {/* Untranslated on purpose: this only renders on a broken
+                        local build, and the reader is whoever is editing .env. */}
+                    <p>
+                      Set VITE_CLERK_PUBLISHABLE_KEY or VITE_DEV_AUTH_BYPASS=true
+                      in client/.env
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
-          </DesktopShell>
-        </I18nProvider>
-      </ErrorBoundary>
-    </BrowserRouter>
-  </StrictMode>,
-);
+              )}
+            </DesktopShell>
+          </I18nProvider>
+        </ErrorBoundary>
+      </BrowserRouter>
+    </StrictMode>,
+  );
+}
+
+if (prerendered) {
+  // Tell the stylesheet the first screen is already painted, so the live copy
+  // that replaces it starts in its final state (index.css, `data-pre`).
+  document.documentElement.setAttribute("data-pre", "");
+  whenReadyToRender(() => {
+    initFaro();
+    // Three things before the first render, in parallel, none of them able to
+    // hold it for long or to fail it:
+    //  - the catalogue. A Portuguese or Spanish reader has the right words on
+    //    screen already (the prerendered block), and rendering in English until
+    //    the catalogue arrives would swap them for English and back. A failed
+    //    fetch leaves English, as it always did.
+    //  - the download plan, so the hero's download line is one line from its
+    //    first frame and does not push the screenshot down when it settles.
+    //  - the prerendered block's pictures painted, so the live page never
+    //    replaces a picture that has not been drawn yet.
+    const locale = detectLocale();
+    const focused = rememberFocusInPrerender();
+    void Promise.all([
+      (locale === "en" ? Promise.resolve() : loadLocale(locale)).catch(() => {}),
+      primeDownloadPlan(),
+      whenPrerenderPainted(),
+    ]).then(() => {
+      renderApp();
+      restoreFocus(focused);
+    });
+  });
+} else if (document.readyState === "loading") {
+  // The entry script is injected, and an injected module script is async: it
+  // can run before the parser has reached #root.
+  document.addEventListener("DOMContentLoaded", renderApp, { once: true });
+} else {
+  renderApp();
+}

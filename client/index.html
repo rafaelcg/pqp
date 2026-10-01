@@ -135,12 +135,76 @@
         // Storage or matchMedia blocked, the stylesheet defaults to dark.
       }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Dela+Gothic+One&family=Gabarito:wght@600;700;800;900&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      Fonts are self-hosted (src/fonts.css), so there is no remote stylesheet
+      to block on and no font host to preconnect to. These two files are what
+      the first screen is set in: Gabarito (headline, eyebrow) and Instrument
+      Sans (everything else). They are the Latin subsets Portuguese, Spanish
+      and English all draw from. `crossorigin` is required for a font preload
+      even from the same origin, or the browser fetches the file twice.
+    -->
+    <link rel="preload" href="/src/assets/fonts/gabarito-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <!--
+      Which first screen to show, before the stylesheet paints anything.
+      `data-route` lets the CSS hide the prerendered landing block on every
+      route but the home page, and on the home page `lang` is settled here with
+      the same precedence as detectLocale() in src/lib/locale.ts (?lang=, saved
+      preference, the language the edge wrote into the pqp:locale meta tag, the
+      browser's list, then English) so the block in the right language is the
+      one that shows. Keep this dependency-free, and keep it in step with
+      src/lib/prerender-hero.ts.
+    -->
+    <script>
+      (function () {
+      try {
+        var d = document.documentElement;
+        var path = location.pathname.replace(/\/+$/, "") || "/";
+        if (path !== "/") {
+          d.setAttribute("data-route", "other");
+        } else {
+          d.setAttribute("data-route", "home");
+          var norm = function (v) {
+            if (!v) return null;
+            v = String(v).toLowerCase();
+            if (v === "pt" || v.indexOf("pt-") === 0) return "pt-BR";
+            if (v === "en" || v.indexOf("en-") === 0) return "en";
+            if (v === "es" || v.indexOf("es-") === 0) return "es";
+            return null;
+          };
+          var loc = null;
+          try {
+            loc = norm(new URLSearchParams(location.search).get("lang"));
+          } catch (e) {}
+          if (!loc) {
+            try {
+              loc = norm(localStorage.getItem("pqp:locale"));
+            } catch (e) {}
+          }
+          if (!loc) {
+            var m = document.querySelector("meta[name='pqp:locale']");
+            loc = norm(m && m.getAttribute("content"));
+          }
+          if (!loc) {
+            var langs = navigator.languages || [navigator.language];
+            for (var i = 0; i < langs.length && !loc; i++) loc = norm(langs[i]);
+          }
+          d.lang = loc || "en";
+          // Which download line the hero will show under its buttons, so the
+          // static block leaves the right amount of room for it (a store badge
+          // on a phone, one line of text elsewhere). Mirrors isAndroidDevice()
+          // and isIOSDevice() in src/lib/downloads.ts.
+          var ua = navigator.userAgent || "";
+          if (
+            /Android|iPhone|iPad|iPod/i.test(ua) ||
+            (/Macintosh/.test(ua) && "ontouchend" in document)
+          ) {
+            d.setAttribute("data-plat", "phone");
+          }
+        }
+      } catch (e) {}
+      })();
+    </script>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -169,7 +233,7 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><!--pqp:prerender-hero--></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

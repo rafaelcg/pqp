@@ -9,6 +9,7 @@ import {
 import { applyDocumentLocale, detectLocale, type Locale } from "@/lib/locale";
 import { getDesktop } from "@/lib/desktop";
 import {
+  isLocaleLoaded,
   loadLocale,
   translateMessage,
   type MessageKey,
@@ -19,6 +20,7 @@ export type { MessageKey, MessageVars } from "./instance";
 export {
   enMessages as en,
   i18n,
+  isLocaleLoaded,
   loadLocale,
   setActiveCatalogue,
   translateMessage,
@@ -51,7 +53,12 @@ const I18nContext = createContext<Translator | null>(null);
  */
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale] = useState(detectLocale);
-  const [readyLocale, setReadyLocale] = useState<Locale>("en");
+  // A catalogue the entry point already fetched before rendering (main.tsx does
+  // that on the prerendered landing page, so it never flips from English to
+  // Portuguese in front of the reader) is ready on the very first render.
+  const [readyLocale, setReadyLocale] = useState<Locale>(() =>
+    isLocaleLoaded(locale) ? locale : "en",
+  );
 
   useEffect(() => {
     applyDocumentLocale(locale);
