@@ -30,8 +30,15 @@ import {
 import {
   desktopContext,
   desktopPredatesScreenShare,
+  getDesktop,
   isDesktopApp,
 } from "@/lib/desktop";
+import {
+  enforceCaptureFrameRate,
+  startShareGuard,
+  type ShareGuardHandle,
+} from "@/lib/share-guard-runtime";
+import { setShareHealthSource } from "@/lib/share-health";
 import {
   capturesSystemAudio,
   ensureConfirmedOldWindowsFromUa,
@@ -3119,6 +3126,95 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenCaptureSource: MediaStream | null = null;
   /** The running share was started for a watch party (`intent.watchParty`). */
   let screenCaptureIsWatchParty = false;
+  /** `share_high_motion_guard`'s running loop for this share, null when the flag is off. */
+  let shareGuard: ShareGuardHandle | null = null;
+  /** The capture rate check the guard ran when this share started, for `pqpShareHealth`. */
+  let shareCaptureCheck: Awaited<ReturnType<typeof enforceCaptureFrameRate>> | null =
+    null;
+  /** The desktop shell was told a share is live (priority boost), and owes the matching false. */
+  let shareShellNotified = false;
+
+  /**
+   * Put a running share under `share_high_motion_guard` (when the flag is on
+   * for it) and make it readable from `pqpShareHealth()` (always).
+   *
+   * Never for a watch party: the guard is off for `intent.watchParty`, for a
+   * stream the caller opened for one (`intent.stream`), and it gives the
+   * share back the moment a party starts transcoding from it
+   * (`transport.blocked`). A watch party's ingest has its own pin and its own
+   * measured failure modes (`screen-resolution-recovery.ts`), and this
+   * guard must not move it.
+   */
+  function beginShareObservation(
+    track: MediaStreamTrack,
+    baseFps: 30 | 60,
+    guardOn: boolean,
+  ) {
+    endShareObservation();
+    const readReports = async (): Promise<Array<Iterable<unknown>>> => {
+      if (sfu && sfu.getScreenSenderReports) {
+        return sfu.getScreenSenderReports();
+      }
+      if (manager && manager.getScreenSenderReports) {
+        return manager.getScreenSenderReports();
+      }
+      return [];
+    };
+    if (guardOn) {
+      shareGuard = startShareGuard({
+        track,
+        baseFps,
+        transport: {
+          readReports,
+          async applyCeiling(level) {
+            if (sfu) {
+              await sfu.setScreenGuardCeiling?.(level);
+            } else {
+              manager?.setScreenGuardCeiling?.(level);
+            }
+          },
+          blocked: () =>
+            hlsSourceFor({
+              streamTopHeight: state.liveStream?.topHeight,
+              streamMode: state.liveStream?.mode,
+              isSharingScreen: state.isSharingScreen,
+              usingSfu: state.usingSfu,
+              uplinkBps: null,
+            }) !== null,
+        },
+      });
+      // The desktop shell raises its processes' priority while this is true.
+      // Fire and forget: a shell that cannot (older build, not Windows) just
+      // answers, and a share never waits on it.
+      const desktop = getDesktop();
+      if (desktop?.setShareLive) {
+        shareShellNotified = true;
+        void desktop.setShareLive(true).catch(() => {});
+      }
+    }
+    setShareHealthSource({
+      transport: sfu ? "sfu" : "mesh",
+      guardEnabled: guardOn,
+      track: () => screenCaptureStream?.getVideoTracks()[0] ?? null,
+      readReports,
+      guard: () => shareGuard,
+      captureCheck: () => shareCaptureCheck,
+    });
+  }
+
+  function endShareObservation() {
+    const guard = shareGuard;
+    shareGuard = null;
+    shareCaptureCheck = null;
+    setShareHealthSource(null);
+    if (guard) {
+      void guard.stop();
+    }
+    if (shareShellNotified) {
+      shareShellNotified = false;
+      void getDesktop()?.setShareLive?.(false).catch(() => {});
+    }
+  }
   /**
    * Whether THIS deployment can actually carry a "separada" voice
    * (`GET /api/live-hls/config` → `voiceTrack`), cached from the last check.
@@ -3427,6 +3523,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenMix?.close();
     screenMix = null;
     screenCaptureIsWatchParty = false;
+    endShareObservation();
     screenCaptureStream = null;
     state.isSharingScreen = false;
     state.isSharingMic = false;
@@ -6031,6 +6128,18 @@ export function createVoiceController(transport: RealtimeTransport) {
       } catch {
         // Encoder defaults, working share.
       }
+      // `share_high_motion_guard`. Never for a watch party or for a stream the
+      // caller opened for one; see `beginShareObservation`. The capture's
+      // reported frame rate is read back and, when it is over what was asked
+      // for, asked again in place, BEFORE the publish reads it.
+      const shareGuardOn =
+        intent.shareHighMotionGuard === true &&
+        intent.watchParty !== true &&
+        !intent.stream;
+      const shareBaseFps: 30 | 60 = intent.maxFrameRate === 60 ? 60 : 30;
+      const captureCheck = shareGuardOn
+        ? await enforceCaptureFrameRate(track, shareBaseFps)
+        : null;
       // Empty on Safari and Firefox, on a macOS screen or window share, and
       // whenever the "share audio" box was left unticked. It is the common
       // case, not a failure: the share goes ahead silent, exactly as every
@@ -6152,6 +6261,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         announceSharing();
         // The share is on the wire; watch that it stays there.
         ensureScreenPublishWatchdog();
+        // Readable from `pqpShareHealth()` for every share, and under
+        // `share_high_motion_guard` for the ones the flag covers.
+        beginShareObservation(track, shareBaseFps, shareGuardOn);
+        shareCaptureCheck = captureCheck;
+        if (captureCheck?.enforced) {
+          console.warn("[pqp] share capture rate re-applied", captureCheck);
+        }
         // Not awaited, on purpose: the party must not wait on a side
         // recording, and the server polls for this track for a minute after
         // the session starts precisely because it lands a beat late.
@@ -6211,6 +6327,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     async applyScreenFrameRate(fps: 30 | 60) {
       const track = screenCaptureStream?.getVideoTracks()[0];
       if (!track || typeof track.applyConstraints !== "function") {
+        return;
+      }
+      // Under the guard the capture's constraints are the guard's to write
+      // (a bare `{ frameRate }` here would replace the whole set and drop the
+      // size ceiling it keeps), so the new rate becomes the top of its ladder.
+      if (shareGuard) {
+        await shareGuard.rebase(fps);
         return;
       }
       try {

@@ -39,6 +39,7 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
+import type { ShareGuardCeiling } from "./share-high-motion-guard";
 import {
   decideScreenResolutionRecovery,
   initialScreenResolutionRecovery,
@@ -294,6 +295,20 @@ export interface LiveKitSession {
    * the same.
    */
   setScreenMaxBitrate(maxBitrate: number): Promise<void>;
+  /**
+   * `share_high_motion_guard`: hold the published screen under the guard's
+   * current step (a frame-rate ceiling on every encoding and a scale on the
+   * top layer's bitrate), and remember it so a later plan change does not undo
+   * it. Null lifts it. In place: no republish, no new sid, and a no-op for a
+   * watch party's ingest, which the guard never touches. Optional so a test
+   * double need not know about it.
+   */
+  setScreenGuardCeiling?(ceiling: ShareGuardCeiling | null): Promise<void>;
+  /**
+   * The published screen's sender stats, for the guard and `pqpShareHealth`.
+   * Empty when nothing is published.
+   */
+  getScreenSenderReports?(): Promise<RTCStatsReport[]>;
   /**
    * The presenter's chosen quality, as a ladder rather than a number.
    *
@@ -625,6 +640,12 @@ export async function connectLiveKit({
    * rate or width the capture was asked for.
    */
   let screenCaptureConstraints: MediaTrackConstraints | null = null;
+  /**
+   * `share_high_motion_guard`'s step for the published share, or null when it
+   * is off or at the top. Laid over the capture constraints (so a plan change
+   * does not put the frame rate back) and over the top layer's bitrate.
+   */
+  let screenGuardCeiling: ShareGuardCeiling | null = null;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
@@ -1418,7 +1439,13 @@ export async function connectLiveKit({
         }
         const encodings = params.encodings;
         const top = encodings[encodings.length - 1]!;
-        top.maxBitrate = maxBitrate;
+        // `share_high_motion_guard`: the screen's ceiling is scaled by the
+        // guard's current step. 1 (and no guard) is the ceiling exactly as
+        // given, which is every share with the flag off.
+        top.maxBitrate =
+          source === Track.Source.ScreenShare && screenGuardCeiling
+            ? Math.round(maxBitrate * screenGuardCeiling.bitrateScale)
+            : maxBitrate;
         // HLS always takes the top layer. Every sub-layer eats BWE
         // bottom-up; "keep only 360" still left 360+1080+Chrome-scaled-240
         // on the wire. Deactivate ALL but the last encoding. When the
@@ -1709,12 +1736,19 @@ export async function connectLiveKit({
           : {};
     }
     const previousHeight = screenCaptureConstraints.height;
+    const guard = screenGuardCeiling;
     try {
       await track.applyConstraints({
         ...screenCaptureConstraints,
+        // The guard's step wins over the snapshot taken before it: without
+        // this the next plan change would hand the frame rate back.
+        ...(guard
+          ? { frameRate: { ideal: guard.maxFps, max: guard.maxFps } }
+          : {}),
         height: {
           ...(typeof previousHeight === "object" ? previousHeight : {}),
-          max: height,
+          max:
+            guard?.maxHeight != null ? Math.min(height, guard.maxHeight) : height,
         },
       });
       return true;
@@ -2555,6 +2589,7 @@ export async function connectLiveKit({
         publishedScreenTrack = null;
         publishedScreenPlan = null;
         screenCaptureConstraints = null;
+        screenGuardCeiling = null;
         // A new share is a new decision. The pin is per broadcast, not per
         // session: somebody who stops and shares a different window gets the
         // plan that window and that room call for.
@@ -2618,6 +2653,68 @@ export async function connectLiveKit({
           };
         }
       });
+    },
+
+    async setScreenGuardCeiling(ceiling: ShareGuardCeiling | null) {
+      await enqueueScreenOp(async () => {
+        const feedingHls =
+          screenPlanPinned ||
+          (hlsSource !== null && hlsSource.ladderTopHeight !== null);
+        if (feedingHls) {
+          // A watch party's ingest is pinned to its own rules; the guard is
+          // never allowed to move it.
+          screenGuardCeiling = null;
+          return;
+        }
+        screenGuardCeiling = ceiling;
+        const epoch = screenShareEpoch;
+        const track = publishedScreenTrack;
+        const sender = room.localParticipant.getTrackPublication(
+          Track.Source.ScreenShare,
+        )?.track?.sender;
+        if (!track || !sender) {
+          return;
+        }
+        try {
+          const params = sender.getParameters();
+          // Lifting the guard hands back whatever the capture delivers, which
+          // is what publish used to set.
+          const fps = ceiling
+            ? Math.min(ceiling.maxFps, publishMaxFrameRateFromTrack(track))
+            : publishMaxFrameRateFromTrack(track);
+          for (const encoding of params.encodings ?? []) {
+            encoding.maxFramerate = fps;
+          }
+          await sender.setParameters(params);
+        } catch (err) {
+          console.warn(
+            "[pqp] SFU screen frame-rate ceiling rejected; keeping the published one",
+            err,
+          );
+        }
+        if (screenShareEpoch !== epoch) {
+          return;
+        }
+        await setSourceMaxBitrate(
+          Track.Source.ScreenShare,
+          currentScreenPlan().topBitrate,
+          "screen",
+        );
+      });
+    },
+
+    async getScreenSenderReports() {
+      const sender = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShare,
+      )?.track?.sender;
+      if (!sender || typeof sender.getStats !== "function") {
+        return [];
+      }
+      try {
+        return [await sender.getStats()];
+      } catch {
+        return [];
+      }
     },
 
     async setScreenQuality(quality: VideoQuality) {
@@ -2702,6 +2799,7 @@ export async function connectLiveKit({
       publishedScreenTrack = null;
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
+      screenGuardCeiling = null;
       screenHlsPublishHeight = null;
       appliedScreenCaptureHeight = null;
       nativeScreenCaptureHeight = null;

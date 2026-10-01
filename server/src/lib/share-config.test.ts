@@ -5,11 +5,15 @@ import { shareConfigForServer } from "./share-config.js";
 describe("shareConfigForServer", () => {
   afterEach(() => {
     delete process.env.DESKTOP_SHARE_AUDIO_NATIVE;
+    delete process.env.SHARE_HIGH_MOTION_GUARD;
     resetFeatureFlagsForTests();
   });
 
-  it("keeps native desktop share audio off by default", () => {
-    expect(shareConfigForServer(null)).toEqual({ desktopShareAudioNative: false });
+  it("keeps native desktop share audio and the high-motion guard off by default", () => {
+    expect(shareConfigForServer(null)).toEqual({
+      desktopShareAudioNative: false,
+      shareHighMotionGuard: false,
+    });
   });
 
   it("follows the environment default, exact word only", () => {
@@ -17,6 +21,15 @@ describe("shareConfigForServer", () => {
     expect(shareConfigForServer(null).desktopShareAudioNative).toBe(true);
     process.env.DESKTOP_SHARE_AUDIO_NATIVE = "TRUE";
     expect(shareConfigForServer(null).desktopShareAudioNative).toBe(false);
+  });
+
+  it("reads the high-motion guard from its own variable, exact word only", () => {
+    process.env.SHARE_HIGH_MOTION_GUARD = "true";
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(true);
+    // The two switches are independent.
+    expect(shareConfigForServer(null).desktopShareAudioNative).toBe(false);
+    process.env.SHARE_HIGH_MOTION_GUARD = "yes";
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
   });
 
   it("reads a malformed server id as no server rather than failing", () => {

@@ -192,6 +192,27 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   capabilities: SHARE_CAPABILITIES,
 
   /**
+   * `share_high_motion_guard`: a screen share is live (true) or over (false).
+   * While live, on Windows, the shell raises the priority of the processes
+   * that capture, encode and carry it by one notch and puts them back when
+   * this says false, the page reloads or the window's renderer dies. The page
+   * only calls it with the runtime flag on. Resolves
+   * `{ live, boost, processes }`; `boost` is `unsupported` off Windows.
+   */
+  setShareLive(live) {
+    return ipcRenderer.invoke("pqp:share-live", live === true);
+  },
+
+  /**
+   * What the shell knows about this machine's share pipeline, for
+   * `pqpShareHealth()` in the console: Chromium's GPU feature status (is video
+   * encode hardware), the priority boost and the versions.
+   */
+  shareHealth() {
+    return ipcRenderer.invoke("pqp:share-health");
+  },
+
+  /**
    * Native share audio (Windows, `capabilities.nativeShareAudio`). Can this
    * machine do it: add-on loaded, and this Windows build opened a process
    * loopback stream when asked. `{ available, reason, stage, hr, build }`.

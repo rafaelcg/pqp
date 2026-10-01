@@ -51,6 +51,20 @@ export interface PqpDesktop {
   onNativeShareAudioEnded?(
     callback: (event: { sessionId: string; reason: string }) => void,
   ): () => void;
+  /**
+   * `share_high_motion_guard`: a screen share is live (true) or over (false).
+   * While it is, the shell raises the priority of its renderer and GPU
+   * processes on Windows, and puts them back afterwards; everywhere else it
+   * does nothing. Resolves with what the shell did. Absent in shells built
+   * before it, and the page only calls it with the flag on.
+   */
+  setShareLive?(live: boolean): Promise<DesktopShareLiveResult>;
+  /**
+   * What the shell knows about this machine's share pipeline: the GPU feature
+   * status (is video encode hardware or software), the priority boost and the
+   * versions. For `pqpShareHealth()`.
+   */
+  shareHealth?(): Promise<DesktopShareHealth>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -207,6 +221,35 @@ export interface DesktopShareCapabilities {
   nativeShareAudio?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
+}
+
+/** `setShareLive()`: what the shell did with its process priorities. */
+export interface DesktopShareLiveResult {
+  live: boolean;
+  /** Windows only; every other platform answers `unsupported`. */
+  boost: "raised" | "restored" | "unsupported" | "failed" | "idle";
+  /** How many of the shell's processes now sit above normal priority. */
+  processes: number;
+}
+
+/** `shareHealth()`: the shell's half of `pqpShareHealth()`. */
+export interface DesktopShareHealth {
+  platform: string;
+  versions: { electron: string | null; chrome: string | null };
+  /** Chromium's own GPU feature status; `video_encode` is the one that matters. */
+  gpu: {
+    videoEncode: string | null;
+    videoDecode: string | null;
+    gpuCompositing: string | null;
+    /** True when `video_encode` is enabled, false when it is a software fallback, null when unknown. */
+    hardwareVideoEncode: boolean | null;
+    status: Record<string, string> | null;
+  };
+  priority: {
+    live: boolean;
+    boost: DesktopShareLiveResult["boost"];
+    processes: number;
+  };
 }
 
 /** `nativeShareAudioStatus()`: whether this machine can, and if not why. */

@@ -258,6 +258,17 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (desktopShareAudioNative)",
   },
+  share_high_motion_guard: {
+    description:
+      "Compartilhamento de tela que aguenta jogo em taxa de quadros alta: o cliente mede o encoder e, se travar, baixa um degrau de resolução, depois a taxa de quadros; o app desktop sobe a prioridade dos processos enquanto compartilha.",
+    env: "SHARE_HIGH_MOTION_GUARD",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Read by `GET /api/share/config`, which the client asks with the server
+    // the call is in (a DM call asks with none and gets the global answer).
+    perServer: true,
+    clientVia: "GET /api/share/config (shareHighMotionGuard)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",

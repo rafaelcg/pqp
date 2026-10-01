@@ -184,6 +184,122 @@ and the watch party lowers the capture's height with `applyConstraints` while it
 runs. A capture that refuses a constraint keeps running unchanged; nothing in
 that path stops a track.
 
+### A share next to a game at a very high frame rate (`share_high_motion_guard`)
+
+Field report, 2026-09-30, two people in the UK on the London SFU: sharing a CS2
+window (or the whole screen, in the desktop app or in Chrome) from a 360 Hz
+monitor with the game uncapped gave the viewer heavy lag and freezes; alt-tabbing
+out made the share fine, and capping the game at 60 fps fixed it. The machine did
+not look overloaded. We do not answer that by asking anybody to cap their game,
+so the pipeline has to cope. The flag is runtime (`docs/FEATURE_FLAGS.md`),
+default off, per server, read from `GET /api/share/config`.
+
+**What the code says about where the work is.** Read from Chromium's and
+WebRTC's sources, not measured on a 360 Hz PC (that is the test below):
+
+- The capture is **paced by the frame rate we ask for, not by the display's.**
+  `DesktopCaptureDevice` schedules its next capture at
+  `max(2 x the last capture's duration, 1 / requestedFrameRate)` (the 2x is
+  `kDefaultMaximumCpuConsumptionPercentage = 50`). `screenCaptureOptions` asks
+  for `frameRate: { ideal: 60, max: 60 }`, so a 360 Hz source is read at most 60
+  times a second. Where Chromium uses the Windows Graphics Capture capturer, it
+  only signals an event when DWM delivers a frame; the readback (`CopyResource`,
+  `Map`, a copy into a CPU frame) runs inside the capture call. The constraint limits that work. It
+  is a request, so the guard reads `getSettings().frameRate` back and asks
+  again in place when it is over (`enforceCaptureFrameRate`).
+- What does not shrink with the constraint is what each capture call costs.
+  A readback waits for the GPU, a game at 100 % GPU makes that wait long, and the
+  rule above turns a long call into a lower rate by itself (a 25 ms call gives at
+  most 20 fps whatever was asked). Encode and colour conversion need the same GPU
+  (hardware encode) or the same cores (software encode) as the game.
+- **Resolution barely helps the capture.** The readback is the native size and
+  the wait for the GPU is fixed; `height.max` only scales afterwards. Measured by
+  a separate investigation (real capture, real SFU, a GPU load): 60 fps under
+  load was cut to 807 lines twice by WebRTC and reported `cpu`, while 30 fps under
+  the same load held full height with no limitation, and 1080 to 540 saved about
+  a fifth. So the guard spends ONE resolution rung, then the frame rate, and
+  only then more pixels.
+- **The encode is software, three times.** LiveKit negotiates H.264 profile
+  `42e01f` (constrained baseline), which Chromium on Windows does not
+  hardware-encode by default (`kPlatformH264CbpEncoding` is off; this is the
+  investigation's finding, not something verified on a Windows box here). So a
+  pqp share is OpenH264 on the CPU, and an SFU share is a simulcast of three of
+  them (1080p, 720p, 360p) competing with the game for cores. The Media
+  Foundation hardware encoder is on upstream, and it is simply not the one
+  that gets used for this profile. `pqpShareHealth()` reports the negotiated
+  profile, how many encodes are running and whether the encoder is hardware or
+  software from the stats (`encoderImplementation`, `powerEfficientEncoder`),
+  never from an assumption. The shell passes no switch that disables
+  acceleration, and logs the GPU feature status once at startup
+  (`[pqp] gpu (win32): video_encode=...`); note that `video_encode=enabled` says
+  what the GPU can do, not what this profile gets. Fewer simulcast layers would be
+  a real lever (two fewer encodes), but `dynacast` re-enables a layer the moment a
+  subscriber asks for it and turning layers off for good means a republish (a new
+  sid), so it is a follow-up and not in this change.
+- `maintain-framerate` plus `contentHint = "motion"` is the right trade for a
+  game, and it means libwebrtc answers CPU overuse by lowering resolution, never
+  frame rate. Nothing reacted to a CAPTURE that could not keep up.
+
+**What the flag turns on.**
+
+1. **Capture rate is verified** at the start of the share (`getSettings()`
+   against the request, re-applied in place if over).
+2. **A silent monitor** reads the share's sender stats every 2 s
+   (`share-guard-runtime.ts`), on the SFU and on the mesh (worst sender decides).
+   Verdicts (`share-high-motion-guard.ts`): *encoder starved* (`qualityLimitationReason
+   = cpu`, or encode time per frame over 90 % of its slot, or frames captured but
+   not sent), *capture starved* (few frames, each one large), *network*
+   (bandwidth limited, not its business), *healthy* (a still picture with few
+   frames is healthy).
+3. **A ladder**: 1080p60, one resolution rung (720p, bitrate scaled), then 30 fps,
+   and only then 540p. An encoder reporting `cpu` (WebRTC has already cut
+   resolution itself) and a starved capture both skip straight to the 30 fps
+   step, and a starved capture that was already at 30 does nothing. Down needs
+   about 5 s of sustained starvation, then 8 s are not trusted while the encoder
+   reconfigures. Up needs 45 s healthy with headroom measured against what the
+   same machine showed while it was failing (an asynchronous hardware or
+   pipelined encoder legitimately shows a long encode time, so there is no
+   absolute number), pixels come back before frames do, each step up that is
+   undone within 90 s doubles the wait, and three of those keep the share where
+   it is. Steps are `applyConstraints` on the capture (over the snapshot of the
+   original constraints: `applyConstraints` replaces the set) plus a frame-rate
+   ceiling and a bitrate scale on the senders. In place: no republish, no new
+   sid, no picker.
+4. **Shell priority boost** (`electron/lib/share-priority.js`, Windows only):
+   while a share is live the browser, renderer, GPU, audio, video-capture and
+   network-service (where WebRTC's sockets live)
+   processes go to `ABOVE_NORMAL` and back to exactly what each had. It never
+   goes higher, never lowers a process that is already above, and is undone when
+   the page reloads, its renderer dies, or the app quits. It does **not** change
+   GPU scheduling priority (Windows has a per-process GPU class, Node cannot set
+   it; that needs a native call, probably elevation, and is the lever that
+   works in OBS and Sunshine). **This boost is CPU only and does not solve GPU
+   starvation.** It helps the capture thread, the WebRTC encodes and the packet
+   path win cores against the game; it does nothing for the GPU readback wait.
+5. **No user-facing copy.** Nothing tells the presenter anything, and nothing
+   asks them to touch a game setting.
+
+**Never for a watch party.** The guard is off for `intent.watchParty`, for a
+stream the watch party opened, and it gives the share back and stops when a party
+starts transcoding from it (`blocked`). The party's ingest has its own pin
+(`screenPlanPinned`, `screen-resolution-recovery.ts`).
+
+**Reading a machine: `pqpShareHealth()`** in the console (works with the flag
+off, reads two stats samples a second apart): codec, encoder and whether it is
+hardware, fps sent / captured / asked, encode ms per frame, limitation reason,
+size, bitrate, the capture-rate check, the guard's level, and the shell's GPU
+status and priority boost. `pqpShareHealth.force(n)` holds the guard on step `n`
+(0 is full quality) to A/B a step by hand. Capture fps far under asked fps with
+limited by `none` is a capture that is behind; `cpu`, or encode time near its
+slot, is the encoder; a software encoder is what this H.264 profile gets on Windows today, so a
+share is three OpenH264 encodes on the CPU and the health line says so.
+
+**Test on a 360 Hz PC**, in `docs/plans/` terms: turn the flag on for one server
+from the dashboard (controles, interruptores, `share_high_motion_guard`), open the
+desktop app, share the game window with CS2 uncapped, run `pqpShareHealth()`
+during the stutter and read it with the paragraph above; then
+`pqpShareHealth.force(1)`, `force(2)`, `force(3)` and watch the viewer at each.
+
 ---
 
 ## 2. Build locally

@@ -83,6 +83,8 @@ const published: PublishedTrack[] = [];
 const unpublished: { track: unknown; stop: boolean | undefined }[] = [];
 /** Every `applyConstraints` the screen capture received, height max only. */
 const constrained: number[] = [];
+/** Every whole `applyConstraints` set the capture received (frame rate included). */
+const constrainedAll: MediaTrackConstraints[] = [];
 /** `Room` options the session constructed the room with. */
 let roomOptions: Record<string, unknown> = {};
 
@@ -341,6 +343,7 @@ function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate 
       height: { max: 1080 },
     }),
     applyConstraints: async (constraints: MediaTrackConstraints) => {
+      constrainedAll.push(constraints);
       const asked = constraints.height;
       if (typeof asked === "object" && typeof asked.max === "number") {
         constrained.push(asked.max);
@@ -408,6 +411,7 @@ beforeEach(() => {
   unpublished.length = 0;
   senderWrites.length = 0;
   constrained.length = 0;
+  constrainedAll.length = 0;
   publications.clear();
   rooms.length = 0;
   publishHold = null;
@@ -1815,5 +1819,104 @@ describe("video nobody is drawing", () => {
     room().unsubscribe(rafa, Track.Source.ScreenShare);
     vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 2);
     expect(publication.enabled).toEqual([]);
+  });
+});
+
+describe("share_high_motion_guard on the SFU", () => {
+  const STEP = { maxFps: 30 as const, maxHeight: 540, bitrateScale: 0.5 };
+
+  it("changes nothing for a share that never set a ceiling", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    expect(senderWrites).toHaveLength(0);
+    expect(unpublished).toHaveLength(0);
+  });
+
+  it("lowers the frame rate on every layer and scales the top bitrate, in place", async () => {
+    const sfu = await session();
+    await sfu.setScreenMaxBitrate(4_000_000);
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    const publishesBefore = published.length;
+    senderWrites.length = 0;
+
+    await sfu.setScreenGuardCeiling?.(STEP);
+
+    const last = senderWrites.at(-1)!;
+    expect(last.source).toBe(Track.Source.ScreenShare);
+    expect(last.encodings.every((e) => e.maxFramerate === 30)).toBe(true);
+    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(2_000_000);
+    // No republish and no new sid: the viewers never see a blink.
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
+  });
+
+  it("hands the senders back when the ceiling is lifted", async () => {
+    const sfu = await session();
+    await sfu.setScreenMaxBitrate(4_000_000);
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    await sfu.setScreenGuardCeiling?.(STEP);
+    senderWrites.length = 0;
+
+    await sfu.setScreenGuardCeiling?.(null);
+
+    const last = senderWrites.at(-1)!;
+    expect(last.encodings.every((e) => e.maxFramerate === 60)).toBe(true);
+    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(4_000_000);
+  });
+
+  it("keeps the guard's frame rate and height when the room's plan changes the capture", async () => {
+    // The capture constraints are a snapshot taken before the guard: without
+    // the overlay, the next plan change would put the 60 back.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    await sfu.setScreenGuardCeiling?.(STEP);
+    constrainedAll.length = 0;
+
+    fillRoom(50);
+    await settle();
+
+    const laid = constrainedAll.at(-1);
+    expect(laid).toBeDefined();
+    expect(laid?.frameRate).toEqual({ ideal: 30, max: 30 });
+    // 720 is what a 50 person room asks for; the guard's 540 is under it.
+    expect((laid?.height as { max: number }).max).toBe(540);
+  });
+
+  it("forgets the ceiling when the share ends", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    await sfu.setScreenGuardCeiling?.(STEP);
+    await sfu.unpublishScreen();
+    await sfu.publishScreen(fakeStream("video", "screen-2", 1080, 60));
+    senderWrites.length = 0;
+    await sfu.setScreenMaxBitrate(3_000_000);
+    const last = senderWrites.at(-1)!;
+    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(3_000_000);
+  });
+
+  it("never moves a watch party's ingest", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    senderWrites.length = 0;
+    constrainedAll.length = 0;
+
+    await sfu.setScreenGuardCeiling?.(STEP);
+
+    expect(senderWrites).toHaveLength(0);
+    expect(constrainedAll).toHaveLength(0);
+  });
+
+  it("reads the published screen's sender stats, and an empty list without one", async () => {
+    const sfu = await session();
+    expect(await sfu.getScreenSenderReports?.()).toEqual([]);
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    // The double has no getStats, like a browser that has lost the sender.
+    expect(await sfu.getScreenSenderReports?.()).toEqual([]);
+    const report = new Map([["a", { type: "outbound-rtp" }]]);
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    (publication.track.sender as { getStats?: () => Promise<unknown> }).getStats =
+      async () => report;
+    expect(await sfu.getScreenSenderReports?.()).toEqual([report]);
   });
 });

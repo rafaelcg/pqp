@@ -5,6 +5,7 @@ import type { PqpDesktop } from "./lib/desktop";
 import type { Gtag } from "./lib/google-ads";
 import type { VoiceStatsConsole } from "./lib/voice-stats-probe";
 import type { ShareAudioProbeConsole } from "./lib/share-audio-probe";
+import type { ShareHealthConsole } from "./lib/share-health";
 
 interface ImportMetaEnv {
   readonly VITE_CLERK_PUBLISHABLE_KEY: string;
@@ -106,6 +107,12 @@ declare global {
      * `lib/share-audio-probe.ts` and `e2e/share-audio-echo/README.md`.
      */
     pqpShareAudioProbe?: ShareAudioProbeConsole;
+    /**
+     * Console-only: what the live screen share is doing (codec, hardware or
+     * software encode, sent and captured fps, limitation, size, bitrate).
+     * See `lib/share-health.ts`.
+     */
+    pqpShareHealth?: ShareHealthConsole;
     /**
      * Defined only by the Google tag, which is only injected on the pqp.gg
      * build. Optional here because on a self-hosted build it genuinely is not
