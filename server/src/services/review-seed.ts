@@ -45,6 +45,7 @@ import { getPool } from "../db.js";
 import {
   closeBus,
   isBusConnected,
+  publishToCluster,
   setBusTransport,
 } from "../lib/bus.js";
 import { createPostgresBusTransport } from "../lib/bus-postgres.js";
@@ -327,9 +328,9 @@ async function findReviewServers(
   return result.rows;
 }
 
-async function findFriend(): Promise<SeedUser | null> {
-  const result = await getPool().query<SeedUser>(
-    `SELECT ${USER_COLUMNS.split(", ").map((c) => `u.${c}`).join(", ")}
+async function findFriend(): Promise<(SeedUser & { revoked_at: Date | null }) | null> {
+  const result = await getPool().query<SeedUser & { revoked_at: Date | null }>(
+    `SELECT ${USER_COLUMNS.split(", ").map((c) => `u.${c}`).join(", ")}, ca.revoked_at
        FROM character_accounts ca
        JOIN users u ON u.id = ca.user_id
       WHERE ca.label = $1`,
@@ -410,6 +411,9 @@ export async function runReviewSeed(
   const apply = options.apply === true;
   if (options.cleanup && options.leaveOthers) {
     throw new ReviewSeedError("--cleanup and --leave-others are separate runs.");
+  }
+  if (options.force && !options.cleanup) {
+    throw new ReviewSeedError("--force only means something with --cleanup.");
   }
   const rec = new Recorder(options.log ?? (() => {}));
   const demo = await findDemoUser(options);
@@ -545,7 +549,20 @@ async function seed(
 
   // ---- the friend
   let friend = await findFriend();
-  if (friend) {
+  if (friend && friend.revoked_at === null) {
+    // A run that died between minting the account and revoking its token left
+    // a live credential nobody holds. Finish the job rather than call it "exists".
+    if (apply) {
+      const revoked = await revokeCharacterAccount(REVIEW_FRIEND_LABEL);
+      if (!revoked?.revoked_at) {
+        throw new ReviewSeedError("Could not revoke the friend's token. Stop and look.");
+      }
+      friend = (await findFriend())!;
+      rec.note("change", `account "${REVIEW_FRIEND_NAME}": token was not revoked, revoked now (id ${friend.id})`);
+    } else {
+      rec.note("change", `account "${REVIEW_FRIEND_NAME}": token is not revoked, would revoke it (id ${friend.id})`);
+    }
+  } else if (friend) {
     rec.note("exists", `account "${REVIEW_FRIEND_NAME}" (flagged demo/character, id ${friend.id})`);
   } else if (apply) {
     const minted = await createCharacterAccount({
@@ -796,6 +813,18 @@ async function leaveOthers(
     }
     if (apply) {
       await leaveServer(row.id, demo.id);
+      // The HTTP leave route also evicts the user's open channel views, locally
+      // and over the bus (`evictUserFromChannels`, topic `chat.evict`). Without
+      // this a socket already watching that server keeps receiving its messages.
+      const channels = await getPool().query<{ id: string }>(
+        `SELECT id FROM channels WHERE server_id = $1`,
+        [row.id],
+      );
+      publishToCluster("chat.evict", {
+        kind: "user",
+        userId: demo.id,
+        channelIds: channels.rows.map((channel) => channel.id),
+      });
       rec.note("leave", `left ${label}`);
     } else {
       rec.note("leave", `would leave ${label}`);

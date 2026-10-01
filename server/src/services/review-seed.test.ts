@@ -312,6 +312,52 @@ function suite(label: string): void {
       expect(await snapshot()).toEqual(complete);
     });
 
+    it("revokes a friend whose token was left live by a run that died", async () => {
+      await run({ apply: true });
+      await getPool().query(`UPDATE character_accounts SET revoked_at = NULL WHERE label = $1`, [
+        REVIEW_FRIEND_LABEL,
+      ]);
+      const dry = await run();
+      expect(dry.actions.some((a) => a.kind === "change" && /not revoked/.test(a.what))).toBe(true);
+      const stillLive = await getPool().query(
+        `SELECT revoked_at FROM character_accounts WHERE label = $1`,
+        [REVIEW_FRIEND_LABEL],
+      );
+      expect(stillLive.rows[0]!.revoked_at).toBeNull();
+
+      await run({ apply: true });
+      const revoked = await getPool().query(
+        `SELECT revoked_at FROM character_accounts WHERE label = $1`,
+        [REVIEW_FRIEND_LABEL],
+      );
+      expect(revoked.rows[0]!.revoked_at).not.toBeNull();
+    });
+
+    it("ignores another account's private server of the same name", async () => {
+      const other = await upsertUser({
+        clerkId: "user_test_namesake",
+        displayName: "Namesake",
+        avatarUrl: null,
+      });
+      const theirs = await createServer(REVIEW_SERVER_NAME, other.id);
+      await getPool().query(
+        `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+        [theirs.server.id, demoId],
+      );
+
+      const seeded = await run({ apply: true });
+      expect(seeded.serverId).not.toBe(theirs.server.id);
+      expect(await getServer(seeded.serverId!)).not.toBeNull();
+
+      await run({ cleanup: true, apply: true, force: true });
+      expect(await getServer(seeded.serverId!)).toBeNull();
+      expect(await getServer(theirs.server.id)).not.toBeNull();
+    });
+
+    it("refuses --force without --cleanup", async () => {
+      await expect(run({ force: true })).rejects.toThrow(/--force only means something/);
+    });
+
     it("recreates #geral when the server exists without it", async () => {
       const first = await run({ apply: true });
       await getPool().query(`DELETE FROM channels WHERE id = $1`, [first.channels.geral]);
@@ -546,6 +592,7 @@ describe("review community seed, with the flags production sets", () => {
     registry: process.env.VOICE_REGISTRY,
   };
   const frames: BusFrame[] = [];
+  const evicts: BusFrame[] = [];
   let listener: ReturnType<typeof createPostgresBusTransport> | null = null;
 
   beforeAll(async () => {
@@ -558,6 +605,9 @@ describe("review community seed, with the flags production sets", () => {
       listener.onFrame((frame) => {
         if (frame.topic === "audience.invalidate") {
           frames.push(frame);
+        }
+        if (frame.topic === "chat.evict") {
+          evicts.push(frame);
         }
       });
       await listener.whenConnected();
@@ -612,6 +662,20 @@ describe("review community seed, with the flags production sets", () => {
     const heard = frames.map((f) => (f.data as { serverId?: string }).serverId);
     expect(heard).toContain(first.serverId);
     expect(heard).toContain(big.server.id);
+
+    // And that the demo account's open views of the room it left were evicted,
+    // as the HTTP leave route does, so a socket on the OTHER instance stops
+    // receiving that room's messages.
+    const bigChannelIds = (
+      await getPool().query<{ id: string }>(`SELECT id FROM channels WHERE server_id = $1`, [
+        big.server.id,
+      ])
+    ).rows.map((r) => r.id);
+    const evict = evicts
+      .map((f) => f.data as { kind?: string; userId?: string; channelIds?: string[] })
+      .find((d) => d.kind === "user" && d.userId === demo.id);
+    expect(evict).toBeDefined();
+    expect([...evict!.channelIds!].sort()).toEqual([...bigChannelIds].sort());
 
     const afterFirst = await snapshot();
     const second = await runReviewSeed({

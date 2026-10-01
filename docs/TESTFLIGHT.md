@@ -357,7 +357,8 @@ still see. Leaving QG expires its cached member list and audience on both API
 machines for a moment; do it while nobody has the demo account open.
 
 Exit codes: 0 done, 1 refused (account missing, a public server already named
-`pqp review`, lock held), 2 something was blocked, 64 bad arguments.
+`pqp review`, lock held), 2 something was blocked, 64 bad arguments, 70 an
+unexpected error (for example the database is unreachable).
 
 **Verify in the app.** Sign the demo account out and back in on TestFlight (an
 already-open session does not re-list its servers), then:
@@ -369,7 +370,8 @@ already-open session does not re-list its servers), then:
 3. tap Demo Friend's name, then profile → Block works, and long-pressing "This is
    a test message to report" → Report files a report (a report about a server
    channel goes to that server's own moderators, and the demo account is its
-   owner, so it never reaches the instance queue and nothing needs dismissing);
+   owner, so you will not see it and nothing needs dismissing. Only a report
+   filed against a person with no server context goes to the instance queue);
 4. send a message and add a reaction.
 
 **Undo.** `--cleanup` removes only what the script made: the `pqp review` server
@@ -391,7 +393,9 @@ The same by hand, in `psql`, if the script is not to hand:
 BEGIN;
 DELETE FROM servers
  WHERE name = 'pqp review'
-   AND owner_id = (SELECT id FROM users WHERE clerk_id = 'user_3IBapFe9KRlyoVEafdJwHoNsprH');
+   AND NOT is_community AND NOT is_community_listed
+   AND owner_id = (SELECT id FROM users WHERE clerk_id = 'user_3IBapFe9KRlyoVEafdJwHoNsprH')
+RETURNING id, name;
 DELETE FROM users
  WHERE is_character
    AND id = (SELECT user_id FROM character_accounts WHERE label = 'review-demo-friend');
