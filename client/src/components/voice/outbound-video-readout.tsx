@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   describeLimitationAgainst,
-  sampleVoiceStats,
   senderIsEncoding,
+  subscribeVoiceStats,
   type Limitation,
   type VideoSenderSample,
   type VideoSenderRole,
@@ -31,8 +31,12 @@ import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
  * and the LiveKit session registers a sampler over its own publications, with
  * the ceiling it applied, so "held back by your quality setting" means the
  * same thing on the SFU as on the mesh.
+ *
+ * `subscribeVoiceStats` rather than its own timer: this readout, the inbound
+ * one, and the call-rating accumulator used to each poll `sampleVoiceStats()`
+ * independently at the same two-second cadence, tripling the actual
+ * `getStats()` scan every tick. One shared poll now feeds all three.
  */
-const SAMPLE_INTERVAL_MS = 2000;
 
 /** Which limitation reasons get a plain-language name of their own. */
 function limitKey(reason: Limitation) {
@@ -149,44 +153,33 @@ export function OutboundVideoReadout({
   const [alsoSending, setAlsoSending] = useState({ camera: false, screen: false });
 
   useEffect(() => {
-    let live = true;
-    // Polling rather than pushing because there is nothing to push: getStats()
-    // has no change event, and a two-second cadence is well under the rate at
-    // which a person can read a line of text.
-    const tick = () => {
-      void sampleVoiceStats().then((snapshot) => {
-        if (!live) {
-          return;
-        }
-        // The first camera sender on any peer. In a mesh the same camera goes
-        // to everybody, so one row answers the question for all of them, and
-        // listing one line per peer would say the same thing several times.
-        //
-        // FALLS BACK TO THE SCREEN, because the setting this sits under now
-        // governs the screen sender too. Somebody presenting with their camera
-        // off used to be told there was nothing to measure, which is the same
-        // dead end that made the whole readout worthless in Settings, and it
-        // landed on exactly the person the sharpness complaint came from.
-        // Camera first when both exist: it is the smaller of the two numbers
-        // and the one people misread as "the call is broken".
-        const senders = snapshot.senders;
-        setAlsoSending({
-          camera: senders.some((sender) => sender.role === "camera"),
-          screen: senders.some((sender) => sender.role === "screen"),
-        });
-        setCamera(
-          senders.find((sender) => sender.role === "camera") ??
-            senders.find((sender) => sender.role === "screen") ??
-            null,
-        );
+    // Pushed by the shared poll rather than polling directly: `getStats()`
+    // has no change event of its own, so something has to poll it, but that
+    // something is now `subscribeVoiceStats`'s one shared timer rather than
+    // one started here.
+    return subscribeVoiceStats((snapshot) => {
+      // The first camera sender on any peer. In a mesh the same camera goes
+      // to everybody, so one row answers the question for all of them, and
+      // listing one line per peer would say the same thing several times.
+      //
+      // FALLS BACK TO THE SCREEN, because the setting this sits under now
+      // governs the screen sender too. Somebody presenting with their camera
+      // off used to be told there was nothing to measure, which is the same
+      // dead end that made the whole readout worthless in Settings, and it
+      // landed on exactly the person the sharpness complaint came from.
+      // Camera first when both exist: it is the smaller of the two numbers
+      // and the one people misread as "the call is broken".
+      const senders = snapshot.senders;
+      setAlsoSending({
+        camera: senders.some((sender) => sender.role === "camera"),
+        screen: senders.some((sender) => sender.role === "screen"),
       });
-    };
-    tick();
-    const id = setInterval(tick, SAMPLE_INTERVAL_MS);
-    return () => {
-      live = false;
-      clearInterval(id);
-    };
+      setCamera(
+        senders.find((sender) => sender.role === "camera") ??
+          senders.find((sender) => sender.role === "screen") ??
+          null,
+      );
+    });
   }, []);
 
   if (!camera) {

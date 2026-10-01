@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   describeLimitation,
   pickActiveVideoSenderLayer,
+  registerVoiceStatsSource,
   statRows,
+  subscribeVoiceStats,
   summariseStats,
   type RtcStatLike,
   type VideoSenderSample,
+  type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
 
 /**
@@ -524,5 +527,58 @@ describe("pickActiveVideoSenderLayer", () => {
 
   it("returns null for an empty list", () => {
     expect(pickActiveVideoSenderLayer([])).toBeNull();
+  });
+});
+
+describe("subscribeVoiceStats", () => {
+  /** An empty snapshot is enough here: only WHO gets called is under test. */
+  const EMPTY: VoiceStatsSnapshot = { senders: [], receivers: [], paths: [] };
+
+  it("does not deliver a sample to a listener that subscribed after the sample was taken", async () => {
+    // The fast hang-up-and-rejoin: a tick starts (this source's promise is
+    // still pending), and a NEW subscriber shows up before it resolves --
+    // exactly what a call-rating accumulator does when a call ends and
+    // another starts inside one poll interval.
+    let resolveSample: ((snapshot: VoiceStatsSnapshot) => void) | null = null;
+    const unregisterSource = registerVoiceStatsSource(
+      () =>
+        new Promise<VoiceStatsSnapshot>((resolve) => {
+          resolveSample = resolve;
+        }),
+    );
+
+    const earlyCalls: VoiceStatsSnapshot[] = [];
+    const lateCalls: VoiceStatsSnapshot[] = [];
+    let unsubscribeEarly: (() => void) | null = null;
+    let unsubscribeLate: (() => void) | null = null;
+
+    try {
+      // Subscribing starts the shared poll's first tick immediately, which
+      // calls the source above and leaves its promise pending.
+      unsubscribeEarly = subscribeVoiceStats((snap) => earlyCalls.push(snap));
+
+      // A second listener arrives while that tick is still in flight -- the
+      // poll is already running, so this does NOT start a new tick of its
+      // own; it only joins the shared listener set.
+      unsubscribeLate = subscribeVoiceStats((snap) => lateCalls.push(snap));
+
+      // Now the in-flight tick resolves.
+      expect(resolveSample).not.toBeNull();
+      resolveSample!(EMPTY);
+      // Let the microtask queue (the `.then()` inside `subscribeVoiceStats`)
+      // drain before asserting.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(earlyCalls).toHaveLength(1);
+      // The whole point: this sample was scheduled before "late" subscribed,
+      // so "late" must not receive a reading that was never taken on its
+      // behalf.
+      expect(lateCalls).toHaveLength(0);
+    } finally {
+      unsubscribeEarly?.();
+      unsubscribeLate?.();
+      unregisterSource();
+    }
   });
 });

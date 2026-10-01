@@ -911,6 +911,7 @@
   .note-item .ni-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
   .note-item .ni-text { margin: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
   .note-item .ni-when { font-size: 11px; color: var(--faint); }
+  .note-item .ni-mq { font-size: 11px; color: var(--faint); font-family: var(--mono, monospace); overflow-wrap: anywhere; }
   .empty {
     padding: 16px 14px; border-radius: var(--r-md);
     background: var(--surface-2); border: 1px dashed var(--border);
@@ -3609,6 +3610,64 @@
     return score >= 4 ? "good" : score === 3 ? "mid" : "bad";
   }
 
+  /* What actually happened to the media on a low-rated call, in one line.
+     Only ever rendered beside a note (which only exists on a 3 or less), so
+     this is the trace an operator reaches for right after reading "screen
+     share was bad": which side (theirs or the presenter's), and whether it
+     was the link, the encoder, or the picture just never arriving. */
+  function fmtStreamHalf(label, s) {
+    if (!s) return null;
+    var bits = [];
+    if (typeof s.frameRateMedian === "number") {
+      var fps = fmtDec(s.frameRateMedian) +
+        (typeof s.frameRateP10 === "number" ? " (p10 " + fmtDec(s.frameRateP10) + ")" : "") + "fps";
+      bits.push(fps);
+    }
+    if (typeof s.frameHeightMedian === "number") {
+      var h = Math.round(s.frameHeightMedian) + "p" +
+        (typeof s.frameHeightP10 === "number" ? " (p10 " + Math.round(s.frameHeightP10) + "p)" : "");
+      bits.push(h);
+    }
+    if (typeof s.bandwidthLimitedSeconds === "number" && s.bandwidthLimitedSeconds > 0) {
+      bits.push(Math.round(s.bandwidthLimitedSeconds) + "s bw-limited");
+    }
+    if (typeof s.cpuLimitedSeconds === "number" && s.cpuLimitedSeconds > 0) {
+      bits.push(Math.round(s.cpuLimitedSeconds) + "s cpu-limited");
+    }
+    if (typeof s.freezeCount === "number" && s.freezeCount > 0) {
+      bits.push(s.freezeCount + " freezes" +
+        (typeof s.freezeSeconds === "number" ? " (" + fmtDec(s.freezeSeconds) + "s)" : ""));
+    }
+    if (typeof s.framesDropped === "number" && s.framesDropped > 0) {
+      bits.push(s.framesDropped + " dropped");
+    }
+    if (!bits.length) return null;
+    return label + ": " + bits.join(", ");
+  }
+
+  function fmtMediaQuality(mq) {
+    if (!mq || typeof mq !== "object") return null;
+    var lines = [];
+    var out = fmtStreamHalf("sua tela", mq.outboundScreenShare);
+    if (out) lines.push(out);
+    var inn = fmtStreamHalf("tela recebida", mq.inboundScreenShare);
+    if (inn) lines.push(inn);
+    var tail = [];
+    if (typeof mq.packetLossPercent === "number") {
+      tail.push(fmtDec(mq.packetLossPercent) + "% perda");
+    }
+    if (typeof mq.rttMsMedian === "number") {
+      tail.push(Math.round(mq.rttMsMedian) + "ms rtt");
+    }
+    if (mq.relayed === true) tail.push("via TURN");
+    else if (mq.relayed === false) tail.push("direto");
+    if (typeof mq.reconnectCount === "number" && mq.reconnectCount > 0) {
+      tail.push(mq.reconnectCount + " reconexões");
+    }
+    if (tail.length) lines.push(tail.join(" · "));
+    return lines.length ? lines.join(" · ") : null;
+  }
+
   function renderCallRatings(cr) {
     cr = cr || {};
     var dist = (cr && typeof cr.distribution === "object" && cr.distribution) || {};
@@ -3743,11 +3802,13 @@
           var when = item.createdAt ? fmtRelative(item.createdAt) : "";
           var day = item.createdAt ? fmtDay(item.createdAt) : "";
           var badgeCls = cls === "bad" ? "badge bad" : cls === "mid" ? "badge warn" : "badge";
+          var mq = fmtMediaQuality(item.mediaQuality);
           var row = el("div", "note-item " + cls);
           row.innerHTML =
             '<span class="' + badgeCls + '">' + (isFinite(score) ? score : "?") + ' ★</span>' +
             '<div class="ni-body">' +
               '<p class="ni-text">' + esc(item.note.trim()) + '</p>' +
+              (mq ? '<span class="ni-mq">' + esc(mq) + '</span>' : '') +
               (when || day ? '<span class="ni-when">' + esc([when, day].filter(Boolean).join(" · ")) + '</span>' : '') +
             '</div>';
           list.appendChild(row);

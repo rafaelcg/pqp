@@ -2,6 +2,7 @@ import type {
   CallRatingSummary,
   CallTransport,
   CreateCallRatingRequest,
+  MediaQualitySummary,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 
@@ -22,8 +23,8 @@ export async function recordCallRating(
   await getPool().query(
     `INSERT INTO call_ratings
        (user_id, channel_id, rating, note, duration_seconds,
-        peer_count, transport, had_screen_share)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        peer_count, transport, had_screen_share, media_quality)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       userId,
       input.channelId ?? null,
@@ -37,6 +38,15 @@ export async function recordCallRating(
       input.peerCount,
       input.transport,
       input.hadScreenShare,
+      // Same rule, same reason, same enforcement point as the note above: a
+      // media quality reading on a good call is not diagnostic, it is a
+      // measurement nobody will ever read, and the dashboard only ever shows
+      // this next to a note -- which only exists on a rating of 3 or less.
+      // Keeping a good call's sample around anyway would be the note rule
+      // with a loophole in it.
+      input.rating <= 3 && input.mediaQuality
+        ? JSON.stringify(input.mediaQuality)
+        : null,
     ],
   );
 }
@@ -56,6 +66,9 @@ interface NoteRow {
   rating: number;
   note: string;
   created_at: Date;
+  // Already validated by `mediaQualitySchema` on the way in, so this is read
+  // back as the type it was written as rather than re-parsed.
+  media_quality: MediaQualitySummary | null;
 }
 
 /**
@@ -90,7 +103,7 @@ export async function callRatingSummary(
       [days],
     ),
     pool.query<NoteRow>(
-      `SELECT rating, note, created_at
+      `SELECT rating, note, created_at, media_quality
          FROM call_ratings
         WHERE created_at >= ${since}
           AND note IS NOT NULL
@@ -123,6 +136,7 @@ export async function callRatingSummary(
       rating: row.rating,
       note: row.note,
       createdAt: row.created_at.toISOString(),
+      mediaQuality: row.media_quality,
     })),
   };
 }

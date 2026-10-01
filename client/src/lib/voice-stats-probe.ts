@@ -112,6 +112,14 @@ export interface VideoReceiverSample {
   decoder: string | null;
   /** Times the picture froze, which is the receiver's own quality complaint. */
   freezeCount: number | null;
+  /** Total seconds spent frozen, lifetime. Names follow the spec field so a
+   *  call-rating summary reading this alongside a raw `getStats()` dump never
+   *  has to translate between the two. */
+  totalFreezesDuration: number | null;
+  /** Frames the jitter buffer had but never rendered. Distinct from a freeze:
+   *  a dropped frame can pass unnoticed, a freeze is the picture visibly
+   *  stopping. Both are worth keeping because they answer different reports. */
+  framesDropped: number | null;
   packetsLost: number | null;
   /**
    * True when the transport itself vouches that this track is flowing.
@@ -364,6 +372,8 @@ export function summariseStats(
       framesDecoded: num(stat.framesDecoded),
       decoder: str(stat.decoderImplementation),
       freezeCount: num(stat.freezeCount),
+      totalFreezesDuration: num(stat.totalFreezesDuration),
+      framesDropped: num(stat.framesDropped),
       packetsLost: num(stat.packetsLost),
     });
   }
@@ -639,6 +649,87 @@ export interface VoiceStatsConsole {
  */
 export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
   return sampleAll();
+}
+
+/** How often the shared poll below samples, matching what every consumer
+ *  (the two quality readouts, the call-rating accumulator) already polled at
+ *  independently before this existed. */
+const SHARED_POLL_INTERVAL_MS = 2000;
+
+type VoiceStatsListener = (snapshot: VoiceStatsSnapshot) => void;
+const sharedListeners = new Set<VoiceStatsListener>();
+let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Subscribe to ONE shared `sampleVoiceStats()` poll rather than starting a
+ * new one.
+ *
+ * WHY THIS EXISTS. The outbound readout, the inbound readout and the
+ * call-rating accumulator each used to run their own two-second
+ * `setInterval` calling `sampleVoiceStats()`, which is a real scan --
+ * `getStats()` per `RTCPeerConnection` plus, for the SFU, `getStats()` per
+ * publication -- so three consumers meant three passes over the same
+ * connections every tick. This runs the scan once per tick regardless of
+ * subscriber count and hands every listener the same snapshot.
+ *
+ * The interval starts on the first subscriber and stops on the last, so an
+ * app with no readout mounted and no call being rated never polls at all.
+ *
+ * A pending sample cannot reach a listener that has already unsubscribed BY
+ * DELIVERY TIME: this tick's target set is snapshotted from `sharedListeners`
+ * when the tick STARTS and intersected against the live set again once
+ * `sampleAll()` resolves, so a caller that unsubscribes (a component
+ * unmounting, a call ending) anywhere in that window is simply not called.
+ *
+ * THE SAME SNAPSHOT ALSO KEEPS A SAMPLE FROM REACHING A SUBSCRIBER IT WAS
+ * NEVER FOR. `getStats()` is genuinely async -- on a room with several peers
+ * `sampleAll()` awaits one `pc.getStats()` after another -- so a fast
+ * hang-up-and-rejoin can subscribe a NEW listener (the next call's
+ * `useCallRating`, with a freshly reset accumulator) while an OLD tick,
+ * scheduled for the call that just ended, is still in flight. Delivering to
+ * "whoever is currently subscribed" at resolution time would hand that new
+ * listener a sample that was never sampled on its behalf -- readings from
+ * before its call existed, folded into media-quality numbers for a call that
+ * has barely started. Snapshotting the target set at tick start is what
+ * keeps a sample scoped to the subscribers who were there to ask for it.
+ */
+export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
+  sharedListeners.add(listener);
+  if (!sharedPollTimer) {
+    const tick = () => {
+      // Who this SPECIFIC tick is for, fixed before the first `await` inside
+      // `sampleAll()` runs. A `Set` copy, not a reference to `sharedListeners`
+      // itself, which keeps mutating (new subscribers, unsubscribes) for as
+      // long as this tick's `getStats()` calls are still out.
+      const targets = new Set(sharedListeners);
+      sampleAll()
+        .then((snapshot) => {
+          for (const l of sharedListeners) {
+            // Delivered only if this listener was both subscribed when the
+            // sample was taken AND is still subscribed now -- the
+            // intersection is what "this sample is for you" means.
+            if (targets.has(l)) {
+              l(snapshot);
+            }
+          }
+        })
+        .catch(() => {
+          // A sample failing (a transport torn down mid-scan, an unexpected
+          // getStats() rejection `sampleAll`'s own per-registration try/catch
+          // did not already absorb) must not stop the shared poll or become
+          // an unhandled rejection -- the next tick tries again.
+        });
+    };
+    tick();
+    sharedPollTimer = setInterval(tick, SHARED_POLL_INTERVAL_MS);
+  }
+  return () => {
+    sharedListeners.delete(listener);
+    if (sharedListeners.size === 0 && sharedPollTimer) {
+      clearInterval(sharedPollTimer);
+      sharedPollTimer = null;
+    }
+  };
 }
 
 /**
