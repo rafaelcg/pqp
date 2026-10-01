@@ -21,6 +21,12 @@ export interface SttOptions {
   prompt?: string;
   /** Container of an in-memory buffer ("wav", "flac", "ogg", ...). Sniffed when omitted. */
   format?: string;
+  /**
+   * Length of the audio when the caller knows it (a window it cut). Used for
+   * timing when the provider does not report a duration and the container
+   * cannot be read here.
+   */
+  durationMs?: number;
   signal?: AbortSignal;
 }
 

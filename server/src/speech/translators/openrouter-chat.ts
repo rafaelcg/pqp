@@ -76,6 +76,28 @@ interface ChatResponse {
   usage?: { cost?: number };
 }
 
+/**
+ * Thrown when a translation fails after one or more calls already succeeded
+ * and were billed. `costUsd` is what those calls reported, so a caller that
+ * tracks spend (a budget, a report) records it instead of a zero.
+ */
+export class TranslateError extends Error {
+  constructor(
+    message: string,
+    /** Cost reported by the calls that completed before the failure (0 when none did). */
+    readonly costUsd: number,
+    /** True when at least one completed call did not say what it cost. */
+    readonly costIncomplete: boolean,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "TranslateError";
+  }
+}
+
+/** One request per string in the fallback, this many at a time. */
+export const FALLBACK_CONCURRENCY = 4;
+
 export function createOpenRouterChatTranslator(o: OpenRouterChatTranslatorOptions): Translator {
   const url = `${o.baseUrl ?? "https://openrouter.ai/api/v1"}/chat/completions`;
   const keep = o.keepNames ?? DEFAULT_KEEP_NAMES;
@@ -93,7 +115,7 @@ export function createOpenRouterChatTranslator(o: OpenRouterChatTranslatorOption
       o.fetchImpl,
     );
     const json = (await res.json()) as ChatResponse;
-    return { content: json.choices?.[0]?.message?.content ?? "", cost: json.usage?.cost ?? 0 };
+    return { content: json.choices?.[0]?.message?.content ?? "", cost: json.usage?.cost };
   }
 
   return {
@@ -101,21 +123,49 @@ export function createOpenRouterChatTranslator(o: OpenRouterChatTranslatorOption
     async translate(texts, from, to, signal): Promise<TranslateResult> {
       if (texts.length === 0) return { texts: [], costUsd: 0 };
       let cost = 0;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const r = await call(texts, from, to, signal);
-        cost += r.cost;
-        const parsed = parseStringArray(r.content);
-        if (parsed && parsed.length === texts.length) return { texts: parsed, costUsd: cost };
+      let unknown = false;
+      const bill = (c: number | undefined) => {
+        if (c === undefined) unknown = true;
+        else cost += c;
+      };
+      // The total is undefined, not 0, when a successful call did not report what it cost.
+      const total = () => (unknown ? undefined : cost);
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const r = await call(texts, from, to, signal);
+          bill(r.cost);
+          const parsed = parseStringArray(r.content);
+          if (parsed && parsed.length === texts.length) return { texts: parsed, costUsd: total() };
+        }
+        // The model keeps merging or splitting entries: one request per string cannot misalign.
+        // Bounded concurrency keeps the fallback from costing N serial round trips, and every
+        // call that completes is billed even if a sibling fails.
+        const out: string[] = new Array<string>(texts.length);
+        let next = 0;
+        let failure: unknown;
+        const worker = async () => {
+          while (failure === undefined) {
+            const i = next++;
+            if (i >= texts.length) return;
+            try {
+              const r = await call([texts[i] as string], from, to, signal);
+              bill(r.cost);
+              const parsed = parseStringArray(r.content);
+              out[i] = parsed?.length === 1 ? (parsed[0] as string) : r.content.trim();
+            } catch (e) {
+              failure ??= e;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(FALLBACK_CONCURRENCY, texts.length) }, worker));
+        if (failure !== undefined) throw failure;
+        return { texts: out, costUsd: total() };
+      } catch (e) {
+        // Nothing was billed yet: keep the original error (an abort, an HTTP error) untouched.
+        if (e instanceof TranslateError || (cost === 0 && !unknown)) throw e;
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new TranslateError(msg, cost, unknown, { cause: e });
       }
-      // The model keeps merging or splitting entries: fall back to one request per string, which cannot misalign.
-      const out: string[] = [];
-      for (const t of texts) {
-        const r = await call([t], from, to, signal);
-        cost += r.cost;
-        const parsed = parseStringArray(r.content);
-        out.push(parsed?.length === 1 ? (parsed[0] as string) : r.content.trim());
-      }
-      return { texts: out, costUsd: cost };
     },
   };
 }

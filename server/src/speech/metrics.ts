@@ -108,32 +108,41 @@ export function collapseLoops(text: string, minRepeats = 4): { text: string; loo
  * preceding reference token (to the first one when they lead). The bench uses it
  * to cut every provider's output into the same reference segments.
  */
+/** Largest alignment table `alignTokens` will build (4 bytes a cell, so about 144 MB). */
+export const MAX_ALIGN_CELLS = 36_000_000;
+
 export function alignTokens(ref: readonly string[], hyp: readonly string[]): string[][] {
   const n = ref.length;
   const m = hyp.length;
-  const d: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = 0; i <= n; i++) (d[i] as number[])[0] = i;
-  for (let j = 0; j <= m; j++) (d[0] as number[])[j] = j;
+  if (n === 0) return [];
+  // The bench aligns clips of a few minutes (hundreds of words). A flat Int32Array keeps the
+  // table compact, and past this size the caller should align bounded chunks instead.
+  if ((n + 1) * (m + 1) > MAX_ALIGN_CELLS) {
+    throw new RangeError(`alignTokens: ${n} x ${m} tokens is too long to align in one table, align it in chunks`);
+  }
+  const w = m + 1;
+  const d = new Int32Array((n + 1) * w);
+  for (let i = 0; i <= n; i++) d[i * w] = i;
+  for (let j = 0; j <= m; j++) d[j] = j;
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= m; j++) {
-      (d[i] as number[])[j] = Math.min(
-        ((d[i - 1] as number[])[j] as number) + 1,
-        ((d[i] as number[])[j - 1] as number) + 1,
-        ((d[i - 1] as number[])[j - 1] as number) + (ref[i - 1] === hyp[j - 1] ? 0 : 1),
+      d[i * w + j] = Math.min(
+        (d[(i - 1) * w + j] as number) + 1,
+        (d[i * w + j - 1] as number) + 1,
+        (d[(i - 1) * w + j - 1] as number) + (ref[i - 1] === hyp[j - 1] ? 0 : 1),
       );
     }
   }
-  if (n === 0) return [];
   const out: string[][] = Array.from({ length: n }, () => []);
   let i = n;
   let j = m;
   while (i > 0 || j > 0) {
-    const here = (d[i] as number[])[j] as number;
-    if (i > 0 && j > 0 && here === ((d[i - 1] as number[])[j - 1] as number) + (ref[i - 1] === hyp[j - 1] ? 0 : 1)) {
+    const here = d[i * w + j] as number;
+    if (i > 0 && j > 0 && here === (d[(i - 1) * w + j - 1] as number) + (ref[i - 1] === hyp[j - 1] ? 0 : 1)) {
       (out[i - 1] as string[]).unshift(hyp[j - 1] as string);
       i--;
       j--;
-    } else if (i > 0 && here === ((d[i - 1] as number[])[j] as number) + 1) {
+    } else if (i > 0 && here === (d[(i - 1) * w + j] as number) + 1) {
       i--;
     } else {
       // insertion: attach to the previous reference token, or the first one
@@ -178,15 +187,29 @@ export function roverVote(
  * Used to seed a consensus reference when there is no human transcript.
  */
 export function medoid(hypotheses: Array<{ id: string; text: string }>): { id: string; text: string } | undefined {
-  let best: { id: string; text: string } | undefined;
-  let bestScore = Infinity;
-  for (const a of hypotheses) {
-    let score = 0;
-    for (const b of hypotheses) if (a !== b) score += wer(b.text, a.text).rate;
-    if (score < bestScore) {
-      bestScore = score;
-      best = a;
+  // Tokenise once and compute each unordered pair's edit distance once: edits are symmetric,
+  // only the normalising length differs, so the two directions' rates come from one table.
+  const toks = hypotheses.map((h) => normalizeForScoring(h.text).split(" ").filter(Boolean));
+  const score = new Array<number>(hypotheses.length).fill(0);
+  const rate = (edits: number, refLen: number, hypLen: number) =>
+    refLen ? edits / refLen : hypLen ? 1 : 0;
+  for (let a = 0; a < hypotheses.length; a++) {
+    for (let b = a + 1; b < hypotheses.length; b++) {
+      const ta = toks[a] as string[];
+      const tb = toks[b] as string[];
+      const edits = levenshtein(ta, tb);
+      // wer(b, a) scores a against reference b, and wer(a, b) the reverse.
+      score[a] = (score[a] as number) + rate(edits, tb.length, ta.length);
+      score[b] = (score[b] as number) + rate(edits, ta.length, tb.length);
     }
   }
-  return best;
+  let best = -1;
+  let bestScore = Infinity;
+  score.forEach((sc, i) => {
+    if (sc < bestScore) {
+      bestScore = sc;
+      best = i;
+    }
+  });
+  return best >= 0 ? hypotheses[best] : undefined;
 }

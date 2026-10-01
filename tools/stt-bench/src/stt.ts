@@ -1,5 +1,12 @@
 import { join } from "node:path";
-import { DEFAULT_WINDOW, planWindows, transcribeChunked, type AudioWindow } from "../../../server/src/speech/chunker.js";
+import {
+  ChunkedTranscribeError,
+  DEFAULT_WINDOW,
+  planWindows,
+  transcribeChunked,
+  type AudioWindow,
+  type ChunkedResult,
+} from "../../../server/src/speech/chunker.js";
 import { energyGate } from "../../../server/src/speech/gate.js";
 import type { SttProvider, SttResult } from "../../../server/src/speech/types.js";
 import type { BenchKeys } from "./env.js";
@@ -74,8 +81,21 @@ export async function runStt(o: SttRunOptions): Promise<void> {
     lanes.set(s.lane, [...(lanes.get(s.lane) ?? []), s]);
   }
 
+  // One stop flag and one reservation total shared by every lane: a lane that reaches the cap
+  // stops all of them from starting new work, and requests already in flight are counted before
+  // they finish, so parallel paid lanes cannot each see "below the cap" and overshoot it together.
+  let stopped = false;
+  let reservedUsd = 0;
+  const estimateUsd = (spec: ProviderSpec, job: Job) => {
+    const clipMs = (CLIPS.find((c) => c.id === job.clip)?.seconds ?? 0) * 1000;
+    // Chunked runs bill overlap and per-request minimums, so reserve with headroom.
+    const factor = job.mode === "whole" ? 1 : 1.5;
+    return (clipMs / 3_600_000) * spec.usdPerHour * factor;
+  };
+
   async function runLane(specs: ProviderSpec[]) {
     for (const spec of specs) {
+      if (stopped) return;
       let retries = 0;
       let provider: SttProvider;
       try {
@@ -92,14 +112,24 @@ export async function runStt(o: SttRunOptions): Promise<void> {
         if (o.only?.modes && !o.only.modes.includes(job.mode)) continue;
         const key = runKey(spec.id, job.clip, job.mode, job.config);
         if (o.store.has(key)) continue;
-        if (spec.paid && o.spentSoFar() >= o.spendCapUsd) {
+        if (stopped) return;
+        const reserve = spec.paid ? estimateUsd(spec, job) : 0;
+        if (spec.paid && o.spentSoFar() + reservedUsd + reserve > o.spendCapUsd) {
           o.log(`STOP ${spec.id}: spend cap ${o.spendCapUsd} USD reached`);
+          stopped = true;
           throw new SpendCapReached();
         }
         const before = retries;
-        const rec = await runJob(spec, provider, job, key, pcmOf, o.clipsDir);
-        rec.retries429 = retries - before;
-        o.store.put(rec);
+        reservedUsd += reserve;
+        let rec: RunRecord;
+        try {
+          rec = await runJob(spec, provider, job, key, pcmOf, o.clipsDir);
+          rec.retries429 = retries - before;
+          o.store.put(rec);
+        } finally {
+          // The record (with its real cost) is stored first, so spentSoFar never dips in between.
+          reservedUsd -= reserve;
+        }
         o.log(
           `${rec.error ? "FAIL" : "ok  "} ${spec.id} ${job.clip} ${job.mode} ${job.config} ` +
             (rec.error ? rec.error.slice(0, 120) : `${(rec.latencyMs / 1000).toFixed(1)}s $${rec.costUsd.toFixed(4)} ${rec.text.length} chars`),
@@ -113,11 +143,18 @@ export async function runStt(o: SttRunOptions): Promise<void> {
     }
   }
 
-  try {
-    await Promise.all([...lanes.values()].map(runLane));
-  } catch (e) {
-    if (!(e instanceof SpendCapReached)) throw e;
-  }
+  // Wait for every lane to settle before returning, so the caller never builds a report
+  // while a lane is still writing results. A spend-cap stop is not an error.
+  const settled = await Promise.allSettled([...lanes.values()].map(runLane));
+  const failure = settled.find((r): r is PromiseRejectedResult => r.status === "rejected" && !(r.reason instanceof SpendCapReached));
+  if (failure) throw failure.reason;
+}
+
+/** Cost of a chunked run: what providers reported, topped up from the price table for requests that did not say. */
+function chunkedCost(res: ChunkedResult, spec: ProviderSpec, windowMs: number): { costUsd: number; computed: boolean } {
+  if (res.costUsd !== undefined) return { costUsd: res.costUsd, computed: false };
+  const perRequest = (windowMs / 3_600_000) * spec.usdPerHour;
+  return { costUsd: res.knownCostUsd + res.unknownCostRequests * perRequest, computed: true };
 }
 
 async function runJob(
@@ -166,8 +203,8 @@ async function runJob(
         segments: res.segments,
         latencyMs: res.windows.reduce((a, w) => a + w.latencyMs, 0),
         requests: res.requests,
-        costUsd: res.costUsd || (clipMs / 3_600_000) * spec.usdPerHour,
-        costKind: res.costUsd === 0 ? "computed" : base.costKind,
+        costUsd: chunkedCost(res, spec, spec.maxRequestSeconds * 1000).costUsd,
+        costKind: chunkedCost(res, spec, spec.maxRequestSeconds * 1000).computed ? "computed" : base.costKind,
       };
     }
     if (job.mode === "whole") {
@@ -203,6 +240,7 @@ async function runJob(
           : undefined,
     });
     const sent = res.windows.filter((w) => !w.skipped);
+    const cost = chunkedCost(res, spec, DEFAULT_WINDOW.windowMs);
     return {
       ...base,
       text: res.text,
@@ -212,11 +250,13 @@ async function runJob(
       skipped: res.windows.length - res.requests,
       windowLatenciesMs: pace?.latencies ?? sent.map((w) => w.latencyMs),
       windows: res.windows.map((w) => ({ startMs: w.window.startMs, endMs: w.window.endMs, skipped: w.skipped, text: w.text, latencyMs: pace ? 0 : w.latencyMs })),
-      costUsd: res.costUsd || (res.requests * DEFAULT_WINDOW.windowMs * spec.usdPerHour) / 3_600_000,
-      costKind: res.costUsd === 0 && spec.lane === "openrouter" ? "computed" : base.costKind,
+      costUsd: cost.costUsd,
+      costKind: cost.computed && spec.lane !== "local" ? "computed" : base.costKind,
     };
   } catch (e) {
-    return { ...base, error: scrub((e as Error).message) };
+    // A chunked run that failed part-way already paid for its completed windows: keep that spend on the record.
+    const spent = e instanceof ChunkedTranscribeError ? e.partial.knownCostUsd : 0;
+    return { ...base, costUsd: spent, requests: e instanceof ChunkedTranscribeError ? e.partial.requests : 0, error: scrub((e as Error).message) };
   }
 }
 

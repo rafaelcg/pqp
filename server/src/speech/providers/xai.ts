@@ -45,7 +45,7 @@ export function parseXaiResponse(body: XaiResponse): SttResult {
   const durationMs = Math.round((body.duration ?? segments.at(-1)?.end ?? 0) * 1000);
   return {
     text,
-    segments: segments.length ? segments : text ? [{ start: 0, end: durationMs / 1000, text }] : [],
+    segments: segments.length ? segments : text && durationMs > 0 ? [{ start: 0, end: durationMs / 1000, text }] : [],
     language: normalizeLanguage(body.language),
     durationMs,
     costUsd: xaiCostUsd(durationMs / 1000),

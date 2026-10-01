@@ -78,11 +78,13 @@ export function dedupeOverlap(prev: string, next: string, maxWords = 12): string
 /**
  * Merge per-window answers into one absolute timeline. Each window owns the
  * segments whose midpoint lies on its side of the cut (the middle of each
- * overlap), then the text that still repeats across a cut is trimmed.
+ * overlap), then the text that still repeats across a cut is trimmed. Only
+ * segments that came from different windows are de-duplicated against each
+ * other: two close segments inside one window are the speaker's own words.
  */
 export function stitchWindows(results: WindowResult[]): SttSegment[] {
   const ordered = [...results].sort((x, y) => x.window.startMs - y.window.startMs);
-  const kept: SttSegment[] = [];
+  const kept: Array<{ seg: SttSegment; window: number }> = [];
   for (let k = 0; k < ordered.length; k++) {
     const cur = ordered[k] as WindowResult;
     const prev = ordered[k - 1];
@@ -94,28 +96,29 @@ export function stitchWindows(results: WindowResult[]): SttSegment[] {
       const end = s.end + cur.window.startMs / 1000;
       const mid = (start + end) / 2;
       if (mid < lo || mid >= hi) continue;
-      kept.push({ ...s, start, end });
+      kept.push({ seg: { ...s, start, end }, window: cur.window.index });
     }
   }
-  const out: SttSegment[] = [];
-  for (const seg of kept) {
+  const out: Array<{ seg: SttSegment; window: number }> = [];
+  for (const item of kept) {
     const last = out.at(-1);
-    if (last && seg.start < last.end + 0.25) {
-      const text = dedupeOverlap(last.text, seg.text);
+    if (last && last.window !== item.window && item.seg.start < last.seg.end + 0.25) {
+      const text = dedupeOverlap(last.seg.text, item.seg.text);
       if (!text) continue;
-      out.push({ ...seg, text });
+      out.push({ seg: { ...item.seg, text }, window: item.window });
     } else {
-      out.push(seg);
+      out.push(item);
     }
   }
-  return out;
+  return out.map((o) => o.seg);
 }
 
 export interface ChunkedWindowInfo {
   window: AudioWindow;
   skipped: boolean;
   latencyMs: number;
-  costUsd: number;
+  /** Undefined when the provider did not say what the request cost. */
+  costUsd?: number;
   text: string;
 }
 
@@ -124,7 +127,28 @@ export interface ChunkedResult {
   segments: SttSegment[];
   windows: ChunkedWindowInfo[];
   requests: number;
-  costUsd: number;
+  /**
+   * Total of the costs providers reported, or undefined when any request did not
+   * report one (the total is then unknown, not zero). `knownCostUsd` is the sum
+   * of what was reported either way.
+   */
+  costUsd?: number;
+  knownCostUsd: number;
+  /** Requests that succeeded without a reported cost. */
+  unknownCostRequests: number;
+}
+
+/** A window failed. Everything that completed before it is on `partial`, already billed. */
+export class ChunkedTranscribeError extends Error {
+  constructor(
+    message: string,
+    readonly partial: ChunkedResult,
+    readonly failedWindow: AudioWindow,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ChunkedTranscribeError";
+  }
 }
 
 export interface ChunkedOptions {
@@ -146,32 +170,66 @@ export interface ChunkedOptions {
   now?: () => number;
 }
 
-/** Sequential on purpose: it is what the live path does, and what rate limits see. */
+function summarise(results: WindowResult[], infos: ChunkedWindowInfo[], requests: number): ChunkedResult {
+  const segments = stitchWindows(results);
+  const sent = infos.filter((i) => !i.skipped);
+  const unknownCostRequests = sent.filter((i) => i.costUsd === undefined).length;
+  const knownCostUsd = sent.reduce((a, i) => a + (i.costUsd ?? 0), 0);
+  return {
+    text: segments.map((s) => s.text).join(" ").trim(),
+    segments,
+    windows: infos,
+    requests,
+    costUsd: unknownCostRequests === 0 ? knownCostUsd : undefined,
+    knownCostUsd,
+    unknownCostRequests,
+  };
+}
+
+/**
+ * Sequential on purpose: it is what the live path does, and what rate limits see.
+ * If a window fails (read, gate or provider), throws a `ChunkedTranscribeError`
+ * whose `partial` holds every window that completed, so nothing already paid for is lost.
+ */
 export async function transcribeChunked(o: ChunkedOptions): Promise<ChunkedResult> {
   const now = o.now ?? Date.now;
   const results: WindowResult[] = [];
   const infos: ChunkedWindowInfo[] = [];
   let heard = "";
-  let cost = 0;
   let requests = 0;
   for (const w of o.windows) {
-    o.signal?.throwIfAborted();
-    const audio = await o.readWindow(w);
-    if (o.gate && !(await o.gate(w, audio))) {
-      infos.push({ window: w, skipped: true, latencyMs: 0, costUsd: 0, text: "" });
-      continue;
+    try {
+      o.signal?.throwIfAborted();
+      const audio = await o.readWindow(w);
+      if (o.gate && !(await o.gate(w, audio))) {
+        infos.push({ window: w, skipped: true, latencyMs: 0, costUsd: 0, text: "" });
+        continue;
+      }
+      const carried = o.carryPromptChars && heard ? heard.slice(-o.carryPromptChars) : "";
+      const prompt = [o.glossary, carried].filter(Boolean).join(" ").trim() || undefined;
+      const t0 = now();
+      const r = await o.provider.transcribe(audio, {
+        durationMs: w.endMs - w.startMs,
+        ...o.sttOpts,
+        ...(prompt ? { prompt } : {}),
+        signal: o.signal,
+      });
+      const latencyMs = now() - t0;
+      requests += 1;
+      // A provider that returns text with no timing still has to be heard: span the window.
+      const segments =
+        r.segments.length === 0 && r.text.trim()
+          ? [{ start: 0, end: (w.endMs - w.startMs) / 1000, text: r.text.trim() }]
+          : r.segments;
+      results.push({ window: w, segments });
+      infos.push({ window: w, skipped: false, latencyMs, costUsd: r.costUsd, text: r.text });
+      heard = `${heard} ${r.text}`.trim();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new ChunkedTranscribeError(`window ${w.index} failed: ${msg}`, summarise(results, infos, requests), w, {
+        cause: e,
+      });
     }
-    const carried = o.carryPromptChars && heard ? heard.slice(-o.carryPromptChars) : "";
-    const prompt = [o.glossary, carried].filter(Boolean).join(" ").trim() || undefined;
-    const t0 = now();
-    const r = await o.provider.transcribe(audio, { ...o.sttOpts, ...(prompt ? { prompt } : {}), signal: o.signal });
-    const latencyMs = now() - t0;
-    requests += 1;
-    cost += r.costUsd ?? 0;
-    results.push({ window: w, segments: r.segments });
-    infos.push({ window: w, skipped: false, latencyMs, costUsd: r.costUsd ?? 0, text: r.text });
-    heard = `${heard} ${r.text}`.trim();
   }
-  const segments = stitchWindows(results);
-  return { text: segments.map((s) => s.text).join(" ").trim(), segments, windows: infos, requests, costUsd: cost };
+  return summarise(results, infos, requests);
 }

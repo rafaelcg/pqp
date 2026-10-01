@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createOpenRouterChatTranslator, DEFAULT_KEEP_NAMES } from "../../../server/src/speech/translators/openrouter-chat.js";
+import { createOpenRouterChatTranslator, DEFAULT_KEEP_NAMES, TranslateError } from "../../../server/src/speech/translators/openrouter-chat.js";
 import type { BenchKeys } from "./env.js";
 import { REFERENCE_CLIPS, loadReference, refText, type Reference } from "./scoring.js";
 import type { RunRecord, Store } from "./store.js";
@@ -101,7 +101,7 @@ export async function runTranslate(o: TranslateRunOptions & { runs?: RunRecord[]
           o.store.put({ ...base, outputs: r.texts, costUsd: r.costUsd ?? 0, latencyMs: Date.now() - t0 });
           o.log(`ok   ${model} ${s.set} pt->${to} $${(r.costUsd ?? 0).toFixed(5)} ${Date.now() - t0}ms`);
         } catch (e) {
-          o.store.put({ ...base, outputs: [], costUsd: 0, latencyMs: Date.now() - t0, error: (e as Error).message.slice(0, 300) });
+          o.store.put({ ...base, outputs: [], costUsd: e instanceof TranslateError ? e.costUsd : 0, latencyMs: Date.now() - t0, error: (e as Error).message.slice(0, 300) });
           o.log(`FAIL ${model} ${s.set} pt->${to} ${(e as Error).message.slice(0, 120)}`);
         }
       }

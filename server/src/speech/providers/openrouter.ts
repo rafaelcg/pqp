@@ -165,12 +165,13 @@ export function parseOpenRouterStt(body: OpenRouterSttResponse, fallbackDuration
   const durationMs = Math.round(((seconds ?? 0) || fallbackDurationMs / 1000) * 1000);
   const text = parsed.text;
   const fromWords = body.words?.length && parsed.segments.length <= 1 ? segmentsFromWords(body.words) : [];
-  // json (non-verbose) models return text only: surface it as one segment so callers never see an empty list.
+  // json (non-verbose) models return text only: surface it as one segment spanning the clip, but only
+  // when the clip length is known. A zero-length segment would be timing the provider never gave us.
   const segments = fromWords.length
     ? fromWords
     : parsed.segments.length
       ? parsed.segments
-      : text
+      : text && durationMs > 0
         ? [{ start: 0, end: durationMs / 1000, text }]
         : [];
   return {
@@ -199,7 +200,7 @@ export function createOpenRouterSttProvider(o: OpenRouterSttOptions): SttProvide
         { provider: "openrouter", signal: opts.signal, ...o.retry },
         o.fetchImpl,
       );
-      return parseOpenRouterStt((await res.json()) as OpenRouterSttResponse, wavDurationMs(a.bytes) ?? 0);
+      return parseOpenRouterStt((await res.json()) as OpenRouterSttResponse, opts.durationMs ?? wavDurationMs(a.bytes) ?? 0);
     },
   };
 }

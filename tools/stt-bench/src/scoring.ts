@@ -107,6 +107,9 @@ export interface Score {
   cer: number;
   edits: number;
   refWords: number;
+  /** Character edits and reference characters, so CER pools over characters, not words. */
+  cerEdits: number;
+  refChars: number;
   /** Same, after collapsing runaway repetition in the hypothesis. */
   werNoLoops: number;
   editsNoLoops: number;
@@ -123,6 +126,8 @@ export function score(ref: string, hyp: string): Score {
     cer: c.rate,
     edits: w.edits,
     refWords: w.refLength,
+    cerEdits: c.edits,
+    refChars: c.refLength,
     werNoLoops: w2.rate,
     editsNoLoops: w2.edits,
     loops: collapsed.loops,
@@ -134,11 +139,12 @@ export function pooled(scores: Score[]): { wer: number; werNoLoops: number; cer:
   const words = scores.reduce((a, s) => a + s.refWords, 0);
   const edits = scores.reduce((a, s) => a + s.edits, 0);
   const edits2 = scores.reduce((a, s) => a + s.editsNoLoops, 0);
-  const cerNum = scores.reduce((a, s) => a + s.cer * s.refWords, 0);
+  const chars = scores.reduce((a, s) => a + s.refChars, 0);
+  const cerEdits = scores.reduce((a, s) => a + s.cerEdits, 0);
   return {
     wer: words ? edits / words : 0,
     werNoLoops: words ? edits2 / words : 0,
-    cer: words ? cerNum / words : 0,
+    cer: chars ? cerEdits / chars : 0,
     loops: scores.reduce((a, s) => a + s.loops, 0),
   };
 }
