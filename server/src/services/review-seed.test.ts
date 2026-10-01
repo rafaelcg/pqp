@@ -24,7 +24,26 @@ import type { BusFrame } from "../lib/bus.js";
  * TEST_DATABASE_URL wins, and the suite skips without a database.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const CANDIDATE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+
+/**
+ * This suite TRUNCATEs `users` with CASCADE. It runs only against a database on
+ * this machine (a dev copy, or CI's throwaway service container); a URL that
+ * points anywhere else, such as a production DATABASE_URL left in the
+ * environment, skips it instead of emptying it.
+ */
+function isLocalDatabase(url: string | undefined): url is string {
+  if (!url) {
+    return false;
+  }
+  try {
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+const DATABASE_URL = isLocalDatabase(CANDIDATE_URL) ? CANDIDATE_URL : undefined;
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -277,6 +296,19 @@ function suite(label: string): void {
       expect(await snapshot()).toEqual(complete);
     });
 
+    it("recreates #geral when the server exists without it", async () => {
+      const first = await run({ apply: true });
+      await getPool().query(`DELETE FROM channels WHERE id = $1`, [first.channels.geral]);
+      const again = await run({ apply: true });
+      expect(again.channels.geral).toBeTruthy();
+      expect(again.channels.geral).not.toBe(first.channels.geral);
+      const n = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM messages WHERE channel_id = $1`,
+        [again.channels.geral],
+      );
+      expect(n.rows[0]!.n).toBe(REVIEW_MESSAGES.filter((m) => m.channel === "geral").length);
+    });
+
     it("lets the demo account block and report the friend", async () => {
       const report = await run({ apply: true });
       const friendId = report.friendUserId!;
@@ -461,11 +493,26 @@ function suite(label: string): void {
         expect(refused.actions.some((a) => a.kind === "blocked")).toBe(true);
         expect(await getServer(seeded.serverId!)).not.toBeNull();
 
+        // A refusal changes nothing at all: the friend is still there too.
+        expect(
+          (await getPool().query(`SELECT 1 FROM users WHERE id = $1`, [seeded.friendUserId])).rowCount,
+        ).toBe(1);
+
         await run({ cleanup: true, apply: true, force: true });
         expect(await getServer(seeded.serverId!)).toBeNull();
         expect(
           (await getPool().query(`SELECT 1 FROM users WHERE id = $1`, [guest.id])).rowCount,
         ).toBe(1);
+      });
+
+      it("never deletes a public server that merely shares the name", async () => {
+        const made = await createServer(REVIEW_SERVER_NAME, demoId);
+        await getPool().query(
+          `UPDATE servers SET is_community = TRUE, community_slug = 'review-test' WHERE id = $1`,
+          [made.server.id],
+        );
+        await expect(run({ cleanup: true, apply: true })).rejects.toThrow(/not one this script made/);
+        expect(await getServer(made.server.id)).not.toBeNull();
       });
 
       it("does not combine with --leave-others", async () => {

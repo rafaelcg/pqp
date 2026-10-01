@@ -501,6 +501,7 @@ async function seed(
   const text = (name: string) =>
     channels.find((c) => c.name === name && c.type === "text") ?? null;
   const geral = text("geral") ?? text("general");
+  let geralId: string | null = geral?.id ?? null;
   if (geral?.name === "geral") {
     rec.note("exists", "channel #geral (text)");
   } else if (geral && apply) {
@@ -508,10 +509,13 @@ async function seed(
     rec.note("change", 'channel #general renamed to #geral (the server\'s default text channel)');
   } else if (geral) {
     rec.note("change", "channel #general would be renamed to #geral");
+  } else if (apply && serverId) {
+    // The server exists but has neither channel (one was deleted by hand).
+    geralId = (await createChannel(serverId, "geral", "text", false, GERAL_TOPIC)).id;
+    rec.note("create", "channel #geral (text)");
   } else {
     rec.note("create", "channel #geral (text)");
   }
-  let geralId = geral?.id ?? null;
   const ajuda = text("ajuda");
   let ajudaId = ajuda?.id ?? null;
   if (ajuda) {
@@ -822,7 +826,17 @@ async function cleanup(
     rec.note("exists", "nothing to clean up");
     return report;
   }
+  // Preflight every target BEFORE deleting anything, so a refusal leaves the
+  // whole thing exactly as it was (no friend deleted out of a server that stays).
+  const plans: Array<{ id: string; messages: number; members: number }> = [];
+  let refused = false;
   for (const server of found) {
+    if (server.is_community || server.is_community_listed) {
+      throw new ReviewSeedError(
+        `Server ${server.id} is named "${REVIEW_SERVER_NAME}" but is a community or listed, ` +
+          "so it is not one this script made. Refusing to delete it.",
+      );
+    }
     const members = await getPool().query<{ user_id: string }>(
       `SELECT user_id FROM server_members WHERE server_id = $1`,
       [server.id],
@@ -836,20 +850,31 @@ async function cleanup(
       [server.id],
     );
     if (strangers.length > 0 && !options.force) {
+      refused = true;
       rec.note(
         "blocked",
         `server ${server.id} has ${strangers.length} member(s) besides the two seeded accounts. ` +
-          "Re-run with --force to delete it anyway.",
+          "Nothing was changed. Re-run with --force to delete it anyway.",
       );
       continue;
     }
+    plans.push({
+      id: server.id,
+      messages: messages.rows[0]!.n,
+      members: members.rowCount ?? 0,
+    });
+  }
+  if (refused) {
+    return report;
+  }
+  for (const plan of plans) {
     if (apply) {
-      await deleteServer(server.id);
+      await deleteServer(plan.id);
     }
     rec.note(
       "leave",
-      `${apply ? "deleted" : "would delete"} server "${REVIEW_SERVER_NAME}" (${server.id}) ` +
-        `with ${messages.rows[0]!.n} message(s) and ${members.rowCount} member(s)`,
+      `${apply ? "deleted" : "would delete"} server "${REVIEW_SERVER_NAME}" (${plan.id}) ` +
+        `with ${plan.messages} message(s) and ${plan.members} member(s)`,
     );
   }
   if (friend) {
