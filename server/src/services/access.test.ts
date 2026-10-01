@@ -21,7 +21,7 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { canAccessChannel, upsertUser } = await import("./users.js");
+const { accessibleChannelIds, canAccessChannel, upsertUser } = await import("./users.js");
 const {
   addChannelMember,
   createChannel,
@@ -137,5 +137,21 @@ describeDb("channel visibility", () => {
 
     expect(await canAccessChannel(privateChannelId, outsider.id)).toBe(false);
     expect(await audience(privateChannelId)).not.toContain(outsider.id);
+  });
+
+  it("answers the bulk catch-up check exactly as the single one, for every viewer", async () => {
+    // `accessibleChannelIds` replaced one `canAccessChannel` per occupied room
+    // on every reconnecting socket; it must never disagree with it.
+    const missing = "00000000-0000-4000-8000-00000000dead";
+    const ids = [publicChannelId, privateChannelId, missing];
+    for (const viewer of [owner, admin, member, outsider]) {
+      const bulk = await accessibleChannelIds(ids, viewer.id);
+      for (const id of ids) {
+        expect(bulk.has(id), `${id} for ${viewer.id}`).toBe(
+          await canAccessChannel(id, viewer.id),
+        );
+      }
+    }
+    expect(await accessibleChannelIds([], member.id)).toEqual(new Set());
   });
 });

@@ -796,7 +796,11 @@ async function main() {
   // interval never reaches its first tick.
   void sweepCommunityHomeSchedule();
 
-  httpServer.listen(PORT, () => {
+  // `LISTEN_HOST` unset is every interface, exactly as before. Harnesses
+  // that run with the dev auth bypass set it to 127.0.0.1 so nothing on the
+  // network can reach an API that signs anybody in.
+  const listenHost = process.env.LISTEN_HOST?.trim() || undefined;
+  httpServer.listen({ port: Number(PORT), host: listenHost }, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
     void seedDevHall({ port: PORT }).catch((error) => {

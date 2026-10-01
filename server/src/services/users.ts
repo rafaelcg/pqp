@@ -1086,6 +1086,35 @@ export async function canAccessChannel(
 }
 
 /**
+ * `canAccessChannel` for many channels in ONE statement: the subset of
+ * `channelIds` this user may see, by the same predicate.
+ *
+ * For the reconnect catch-up (`sendAllVoiceRosters`), which asks it once per
+ * occupied room in the cluster on every arriving socket. One query per room
+ * was R pooled checkouts per socket on a fresh process, and a reconnect herd
+ * multiplied that by every socket; this is one. Not cached here: the caller
+ * primes its own per-pair cache with the answers.
+ */
+export async function accessibleChannelIds(
+  channelIds: readonly string[],
+  userId: string,
+): Promise<Set<string>> {
+  if (channelIds.length === 0) {
+    return new Set();
+  }
+  const result = await countedQuery<{ id: string }>(
+    getPool(),
+    "users.accessibleChannelIds",
+    `SELECT c.id FROM channels c
+     LEFT JOIN server_members sm
+       ON sm.server_id = c.server_id AND sm.user_id = $2
+     WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
+    [[...channelIds], userId],
+  );
+  return new Set(result.rows.map((row) => row.id));
+}
+
+/**
  * The older name, kept because callers outside this file still use it (and one,
  * `attachments.ts`, was not part of the consolidation). `canAccessChannel` is
  * canonical; nothing should acquire a new dependency on this name.

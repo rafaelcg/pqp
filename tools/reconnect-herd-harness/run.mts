@@ -162,6 +162,8 @@ function startApi(
       HOME: process.env.HOME,
       NODE_ENV: "development",
       PORT: String(port),
+      // The bypass signs anybody in: never on an interface the LAN can reach.
+      LISTEN_HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
       DEV_AUTH_BYPASS: "true",
       DEV_SEED: "false",
@@ -191,8 +193,14 @@ function startApi(
     exitCode: null,
     lines: [],
   };
-  const onData = (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
+  // A chunk can end mid-line: keep the tail until its newline arrives, per
+  // stream, so a log line is never counted (or missed) in two halves.
+  const pending = { out: "", err: "" };
+  const onData = (which: "out" | "err") => (chunk: Buffer) => {
+    const text = pending[which] + chunk.toString();
+    const parts = text.split("\n");
+    pending[which] = parts.pop() ?? "";
+    for (const line of parts) {
       if (!line.trim()) continue;
       api.lines.push(`${Date.now()} ${line}`);
       if (line.includes("server listening")) api.listeningAt = Date.now();
@@ -201,8 +209,8 @@ function startApi(
       }
     }
   };
-  child.stdout!.on("data", onData);
-  child.stderr!.on("data", onData);
+  child.stdout!.on("data", onData("out"));
+  child.stderr!.on("data", onData("err"));
   child.on("exit", (code) => {
     api.exitedAt = Date.now();
     api.exitCode = code;
@@ -280,9 +288,12 @@ function connect(client: Client, port: number, onReady?: () => void): Promise<vo
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     client.ws = ws;
     let settled = false;
+    // Bounded: a join refused without a `welcome` must not stall the run.
+    const timer = setTimeout(() => finish(new Error("no ready/welcome within 20 s")), 20_000);
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       if (error) reject(error);
       else resolve();
     };
@@ -317,7 +328,9 @@ function connect(client: Client, port: number, onReady?: () => void): Promise<vo
         }
         finish();
       } else if (message.type === "error" || message.type === "voice-error") {
-        client.errors.push(String(message.message ?? message.code ?? message.reason ?? "error"));
+        const reason = String(message.message ?? message.code ?? message.reason ?? "error");
+        client.errors.push(reason);
+        finish(new Error(`refused: ${reason}`));
       }
     };
     ws.onclose = (event) => {
@@ -379,16 +392,20 @@ async function runOnce(mode: "before" | "after"): Promise<RunResult> {
   await adminClient.end();
   const dbUrl = new URL(ADMIN_URL!);
   dbUrl.pathname = `/${dbName}`;
-  const proxy = PG_LATENCY_MS > 0 ? await startLatencyProxy(dbUrl, PG_LATENCY_MS) : null;
-  if (proxy) {
-    dbUrl.hostname = "127.0.0.1";
-    dbUrl.port = String(proxy.port);
-  }
-  const databaseUrl = dbUrl.toString();
   const apis: Api[] = [];
   const clients: Client[] = [];
+  // Set before cleanup kills B, so B's exit handler does not start a B2
+  // nobody will stop.
+  let stopping = false;
+  let proxy: { port: number; close: () => void } | null = null;
 
   try {
+    proxy = PG_LATENCY_MS > 0 ? await startLatencyProxy(dbUrl, PG_LATENCY_MS) : null;
+    if (proxy) {
+      dbUrl.hostname = "127.0.0.1";
+      dbUrl.port = String(proxy.port);
+    }
+    const databaseUrl = dbUrl.toString();
     log(`== ${mode}: ${SOCKETS} sockets, ${SERVERS} servers x ${VOICE_PER_SERVER} voice rooms`);
     let apiA = startApi("A", PORT_A, databaseUrl, extraEnv);
     apis.push(apiA);
@@ -473,7 +490,11 @@ async function runOnce(mode: "before" | "after"): Promise<RunResult> {
     log(`seeded: ${SOCKETS} members of ${SERVERS} servers, ${seatedCount} to be seated in ${voiceChannels.length} rooms`);
 
     // ---- everybody on B
-    await pool(clients, 20, (client) => connect(client, PORT_B));
+    await pool(clients, 20, (client) =>
+      connect(client, PORT_B).catch((error: Error) => {
+        client.errors.push(`setup: ${error.message}`);
+      }),
+    );
     const seatedOk = clients.filter((c) => c.voiceChannelId && c.peerId).length;
     log(`connected to B: ${clients.length} sockets, ${seatedOk} seated`);
     await sleep(3_000);
@@ -517,6 +538,7 @@ async function runOnce(mode: "before" | "after"): Promise<RunResult> {
     log("SIGTERM B: drain begins");
     let apiB2: Api | null = null;
     apiB.child.once("exit", () => {
+      if (stopping) return;
       // compose recreate: the replacement starts once the old one is gone.
       apiB2 = startApi("B2", PORT_B2, databaseUrl, extraEnv);
       apis.push(apiB2);
@@ -584,6 +606,7 @@ async function runOnce(mode: "before" | "after"): Promise<RunResult> {
       clientErrors: clients.reduce((sum, c) => sum + c.errors.length, 0),
     };
   } finally {
+    stopping = true;
     for (const client of clients) {
       try {
         client.ws?.close();

@@ -200,6 +200,23 @@ const wsAuthGate = createAdmissionGate({
   },
 });
 
+/**
+ * The watch-party catch-ups an arrival starts and does not wait for (a query
+ * per server the account is in). Same width as the arrival gate, same flag;
+ * fail-open after 2 s, because what it delays is a sidebar block.
+ */
+const wsBackgroundGate = createAdmissionGate({
+  concurrency: resolveWsAuthConcurrency(),
+  maxWaitMs: 2_000,
+  enabled: () => {
+    try {
+      return isEnabled("ws_auth_admission");
+    } catch {
+      return true;
+    }
+  },
+});
+
 /** For `GET /api/admin/metrics` (`runtime.wsAuth`). */
 export function wsAuthAdmissionStats(): AdmissionStats & { enabled: boolean } {
   let enabled = true;
@@ -433,14 +450,12 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
           ? `Bearer ${DEV_AUTH_TOKEN}`
           : `Bearer ${token}`;
 
-      // ADMISSION (`lib/admission.ts`): the whole of a socket's arrival work,
-      // from verifying the token to the last catch-up query, runs inside one
-      // slot of a small gate, so a reconnect herd queues HERE, in arrival
-      // order, instead of on the pg pool where it would compete with every
+      // ADMISSION (`lib/admission.ts`): a socket's arrival work, from
+      // verifying the token to the voice rosters, runs inside one slot of a
+      // small gate, so a reconnect herd queues HERE, in arrival order,
+      // instead of on the pg pool where it would compete with every
       // established socket and HTTP request. The frame chain of THIS socket
-      // waits only for what it waited for before (the voice rosters); the
-      // fire-and-forget catch-ups keep the slot until they settle without
-      // holding up the socket's next frame.
+      // waits for exactly what it waited for before (the rosters).
       let rostersSent: () => void = () => {};
       const ready = new Promise<void>((resolve) => {
         rostersSent = resolve;
@@ -490,11 +505,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   }
 
   /**
-   * Everything `auth` does once the frame is parsed. `onRostersSent` fires
-   * when the voice rosters are out, which is the point the socket's next
-   * frame may run (unchanged from before the gate); the promise itself
-   * settles when the catch-ups that never held up `ready` have too, and that
-   * is how long the admission slot is held.
+   * Everything `auth` does on the critical path once the frame is parsed:
+   * verify, register, `ready`, the voice rosters. `onRostersSent` fires when
+   * the rosters are out, which is the point the socket's next frame may run
+   * (unchanged from before the gate), and is also where the admission slot
+   * is given back.
    */
   async function arriveAuthenticated(
     authHeader: string,
@@ -537,7 +552,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // socket is absent from the status registry, which reads as offline: the
     // safe direction, and the reason `registerStatusSocket` resolves the
     // manual status *before* it makes the connection visible rather than after.
-    const status = registerStatusSocket(socket, resolved.user.id).catch((error) => {
+    void registerStatusSocket(socket, resolved.user.id).catch((error) => {
       console.error("[ws] status registration failed:", error);
     });
     // Where this account was just seen, for picking the SFU region of its
@@ -550,21 +565,27 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // A host reconnecting stops the grace clock on their live party, and a
     // client connecting mid-show is told about every party it may see. Neither
     // holds up `ready`, and the worst case is a sidebar block that arrives
-    // with the next state change.
-    const hostBack = onHostSocketOpened(resolved.user.id).catch((error) => {
-      console.error("[watch-party] host reconnect failed:", error);
-    });
-    const parties = catchUpWatchParties(socket, resolved.user.id).catch((error) => {
-      console.error("[watch-party] catch-up failed:", error);
-    });
+    // with the next state change. Bounded by their own gate rather than this
+    // socket's arrival slot: the party catch-up is a query per server, and a
+    // new arrival must never wait for an earlier one's background reads.
+    void wsBackgroundGate
+      .run(() =>
+        Promise.allSettled([
+          onHostSocketOpened(resolved.user.id).catch((error) => {
+            console.error("[watch-party] host reconnect failed:", error);
+          }),
+          catchUpWatchParties(socket, resolved.user.id).catch((error) => {
+            console.error("[watch-party] catch-up failed:", error);
+          }),
+        ]),
+      )
+      .catch(() => {});
     socket.send(JSON.stringify({ type: "ready" }));
     try {
       await sendAllVoiceRosters(socket, resolved.user);
     } finally {
       onRostersSent();
     }
-    // Still inside the admission slot, no longer holding up this socket.
-    await Promise.allSettled([status, hostBack, parties]);
   }
 
   socket.on("message", (data) => {

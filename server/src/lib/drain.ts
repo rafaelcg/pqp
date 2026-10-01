@@ -89,8 +89,24 @@ export function drainPlan(
   const ceilingMs = deadlineMs * DRAIN_SPREAD_CEILING_FRACTION;
   const neededRate = (total * 1000) / Math.max(1, ceilingMs);
   const rate = Math.max(ratePerSecond, neededRate);
-  const batchSize = Math.max(1, Math.round((rate * effectiveIntervalMs) / 1000));
-  return { batchSize, intervalMs: DRAIN_BATCH_INTERVAL_MS, ratePerSecond: rate };
+  const perInterval = (rate * effectiveIntervalMs) / 1000;
+  if (perInterval >= 1) {
+    return {
+      batchSize: Math.round(perInterval),
+      intervalMs: DRAIN_BATCH_INTERVAL_MS,
+      ratePerSecond: rate,
+    };
+  }
+  // Below one socket per interval: one at a time, further apart, so a low
+  // rate is the rate asked for rather than about eight a second.
+  return {
+    batchSize: 1,
+    intervalMs: Math.max(
+      DRAIN_BATCH_INTERVAL_MS,
+      Math.round(1000 / rate - DRAIN_BATCH_JITTER_MS / 2),
+    ),
+    ratePerSecond: rate,
+  };
 }
 
 let draining = false;

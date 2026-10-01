@@ -1276,6 +1276,23 @@ export const BOOT_EVERY_TIME_SWEEPS: readonly string[] = [
 /** Top-level DML that is a one-time backfill, so running it once is enough. */
 export const BOOT_ONE_SHOT_DML: readonly string[] = [];
 
+/**
+ * `DO $$` blocks that write rows with no `data_migrations` (or catalog) guard,
+ * so they used to run on every boot too. Each is named here by a phrase from
+ * its own text, with why running it only when the file changes is enough.
+ * `db-boot-schema.test.ts` finds every such block and fails on one that is
+ * neither guarded nor listed here.
+ */
+export const BOOT_UNGUARDED_DO_BLOCKS: readonly { marker: string; why: string }[] = [
+  {
+    // The community slug backfill. Its own comment calls it a one-shot that
+    // is a no-op after the first run; the live path writes `community_slug`
+    // in the same UPDATE that turns `is_community` on.
+    marker: "s.is_community AND s.community_slug IS NULL",
+    why: "one-shot backfill; the live path sets the slug itself",
+  },
+];
+
 export function schemaHash(schema: string): string {
   return createHash("sha256").update(schema).digest("hex");
 }

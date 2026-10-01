@@ -19,7 +19,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
  *  3. `BOOT_SCHEMA_MODE=always` is the old behaviour, the rollback.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// A scratch database only. This suite re-applies the schema and rewrites
+// `schema_boot_state`, so unlike the older suites it never falls back to a
+// developer's DATABASE_URL; CI (CI=true, a throwaway Postgres service) is the
+// one place DATABASE_URL is known to be disposable.
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL ??
+  (process.env.CI === "true" ? process.env.DATABASE_URL : undefined);
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -35,8 +41,11 @@ const {
   resolveBootSchemaLockTimeoutMs,
   BOOT_EVERY_TIME_SWEEPS,
   BOOT_ONE_SHOT_DML,
+  BOOT_UNGUARDED_DO_BLOCKS,
   BOOT_SCHEMA_BOUNDED_ATTEMPTS,
 } = await import("./db.js");
+
+const { poolWaitSnapshot, resetPoolWaitForTests } = await import("./lib/pool-wait.js");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(join(HERE, "schema.sql"), "utf8");
@@ -87,6 +96,24 @@ describe("boot schema settings", () => {
     // And nothing listed that the file no longer has.
     for (const listed of known) {
       expect(statements).toContain(listed);
+    }
+  });
+
+  it("finds no unguarded row-writing DO block it was not told about", () => {
+    // A `DO $$` block that writes rows without a `data_migrations` (or
+    // catalog) check also ran on every boot. The column-0 scan above cannot
+    // see inside one, so this does.
+    const blocks = SCHEMA.match(/^DO \$\$[\s\S]*?^END \$\$;/gm) ?? [];
+    expect(blocks.length).toBeGreaterThan(10);
+    const guarded = /data_migrations|col_description|obj_description|information_schema|pg_constraint|pg_class|pg_attribute|pg_index|pg_type|pg_trigger|pg_proc/;
+    const writes = /\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b/i;
+    const unguarded = blocks.filter((block) => writes.test(block) && !guarded.test(block));
+    for (const block of unguarded) {
+      const listed = BOOT_UNGUARDED_DO_BLOCKS.some(({ marker }) => block.includes(marker));
+      expect(listed, `unclassified row-writing DO block:\n${block.slice(0, 400)}`).toBe(true);
+    }
+    for (const { marker } of BOOT_UNGUARDED_DO_BLOCKS) {
+      expect(unguarded.some((block) => block.includes(marker))).toBe(true);
     }
   });
 });
@@ -225,6 +252,17 @@ describeDb("initDb on a real Postgres", () => {
       await other.query("ROLLBACK").catch(() => {});
       await third.end().catch(() => {});
     }
+  });
+
+  it("times every real checkout into runtime.poolWait (the production wiring, not the helper)", async () => {
+    resetPoolWaitForTests();
+    await getPool().query("SELECT 1");
+    const client = await getPool().connect();
+    client.release();
+    const snapshot = poolWaitSnapshot();
+    // One through `pool.query` (pg-pool's callback `connect`), one through
+    // the promise `connect()` every transaction uses.
+    expect(snapshot.lastMinute.checkouts).toBeGreaterThanOrEqual(2);
   });
 
   it("`always` re-runs the file on every boot (the rollback)", async () => {

@@ -222,6 +222,13 @@ describe("drainPlan", () => {
     );
   });
 
+  it("keeps a low rate low by spacing single closes further apart", () => {
+    const plan = drainPlan(10, 2);
+    expect(plan.batchSize).toBe(1);
+    // ~2 a second once the jitter is added back on average.
+    expect(plan.intervalMs + DRAIN_BATCH_JITTER_MS / 2).toBe(500);
+  });
+
   it("reads DRAIN_RATE_PER_SECOND, defaulting to 100", () => {
     expect(resolveDrainRatePerSecond(undefined)).toBe(DEFAULT_DRAIN_RATE_PER_SECOND);
     expect(resolveDrainRatePerSecond("")).toBe(DEFAULT_DRAIN_RATE_PER_SECOND);

@@ -147,4 +147,38 @@ describe("mapWithConcurrency", () => {
   it("handles an empty list", async () => {
     await expect(mapWithConcurrency([], 4, async () => 1)).resolves.toEqual([]);
   });
+
+  it("reads 0 (and Infinity) as unbounded, never as one at a time", async () => {
+    for (const limit of [0, Number.POSITIVE_INFINITY]) {
+      let live = 0;
+      let peak = 0;
+      await mapWithConcurrency([1, 2, 3, 4, 5], limit, async () => {
+        live += 1;
+        peak = Math.max(peak, live);
+        await new Promise((done) => setTimeout(done, 5));
+        live -= 1;
+      });
+      expect(peak).toBe(5);
+    }
+  });
+
+  it("starts nothing new after a failure, and waits for what was running", async () => {
+    const started: number[] = [];
+    let finished = 0;
+    await expect(
+      mapWithConcurrency([0, 1, 2, 3, 4, 5], 2, async (value) => {
+        started.push(value);
+        if (value === 0) {
+          throw new Error("first");
+        }
+        await new Promise((done) => setTimeout(done, 10));
+        finished += 1;
+        return value;
+      }),
+    ).rejects.toThrow("first");
+    // Item 1 was already running when item 0 failed; it finished before the
+    // rejection, and nothing after it was started.
+    expect(started).toEqual([0, 1]);
+    expect(finished).toBe(1);
+  });
 });

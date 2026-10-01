@@ -400,21 +400,22 @@ No other platform-level reservation showed up in `pg_stat_activity` beyond the o
 **Keep 22, and do not answer pool pressure by raising it or by adding replicas.** Measured 2026-10-01 (`tools/reconnect-herd-harness/`, and the production logs of four deploys): the pool hitting 22 of 22 with 161 waiting was not a capacity problem. The API box sat at 3% CPU and Postgres at a few percent. Two things filled it, both of them fixed in code rather than in this number:
 
 1. **Boot DDL.** Every container ran the whole of `schema.sql` at boot as one implicit transaction, and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes ACCESS EXCLUSIVE even when the column is there: 27 of the busiest tables (`users`, `servers`, `server_members`, `channels`, `messages`, `voice_peers`, `voice_rooms`, ...) locked until the file committed, while the sibling served the reconnect herd. Every query behind those locks held a pooled connection. The production logs show it: `deadlock detected` between the DDL and roster reads on 2026-09-27 21:09Z, 2026-09-29 16:48Z, 2026-09-30 20:02Z and 23:33Z, the breaker opening on the first, and `Failed to start server: error: deadlock detected` twice at 20:02Z with a 24 s boot. Now a boot skips the file when its hash matches the last one applied (`schema_boot_state`), so a deploy that does not change the schema takes no table lock at all; a deploy that does runs it under `lock_timeout` (2 s per wait) and retries, so it never holds the sibling's tables while it waits. `BOOT_SCHEMA_MODE=always` is the rollback; `db.schemaSkipped` / `db.schemaApplied` / `db.schemaRetry` are the log lines.
-2. **The herd's fan-out.** Each reconnecting socket ran one access check per occupied room in the cluster, all at once (`sendAllVoiceRosters`), so a few sockets arriving together could take the whole pool for a tick. That fan-out is now 4 wide per socket (`VOICE_CATCHUP_CONCURRENCY`, `0` is the old unbounded behaviour), socket arrivals queue at the WebSocket (`ws_auth_admission` runtime flag, `WS_AUTH_CONCURRENCY`, default a quarter of the pool, fail-open after 4 s), and the drain is paced at 100 sockets a second (`DRAIN_RATE_PER_SECOND`, `0` is the old 50-per-batch).
+2. **The herd's fan-out.** Each reconnecting socket ran one access check per occupied room in the cluster, all at once (`sendAllVoiceRosters`), so a few sockets arriving together could take the whole pool for a tick. Now the cache misses are answered in ONE query per socket (`accessibleChannelIds`, counted as `voice.roster.catchUpQueries` / `catchUpChecks`) and whatever is left is at most 4 wide (`VOICE_CATCHUP_CONCURRENCY`, `0` is the old one-query-per-room behaviour), socket arrivals queue at the WebSocket (`ws_auth_admission` runtime flag, `WS_AUTH_CONCURRENCY`, default a quarter of the pool, fail-open after 4 s), and the drain is paced at 100 sockets a second (`DRAIN_RATE_PER_SECOND`, `0` is the old 50-per-batch).
 
 Measured with `tools/reconnect-herd-harness/run.mts` (two real APIs, the production flags, 400 sockets with 240 voice seats, 1 ms of database latency), the deploy moment as `pqp-deploy.sh` produces it:
 
 | | before (every switch at its rollback) | DDL fix only | herd shaping only | all of it (defaults) |
 |---|---|---|---|---|
-| pool peak queue | 8,996 | 753 | 64 | 21 |
-| checkouts waiting > 1 s | 7,573 | 0 | 11 | 0 |
-| longest wait for a connection | 2.4 s | 104 ms | 1.1 s | 10 ms |
-| deadlocks / breaker flips | 14 / 3 | 0 / 0 | 0 / 0 | 0 / 0 |
-| socket open to `ready`, p95 | 2,014 ms | 131 ms | 1,235 ms | 103 ms |
-| open to voice `welcome`, p95 | 6,384 ms | 1,260 ms | 1,541 ms | 394 ms |
-| voice seats resumed | 24 / 240 | 240 / 240 | 240 / 240 | 240 / 240 |
+| pool peak queue | 14,706 | 707 | 45 | 6 |
+| checkouts waiting > 1 s | 9,743 | 0 | 0 | 0 |
+| longest wait for a connection | 3.2 s | 99 ms | 993 ms | 13 ms |
+| deadlocks / breaker flips | 1 / 3 | 0 / 0 | 0 / 0 | 0 / 0 |
+| socket open to `ready`, p95 | 3,304 ms | 131 ms | 1,083 ms | 8 ms |
+| open to voice `welcome`, p95 | 7,013 ms | 1,217 ms | 1,271 ms | 307 ms |
+| voice seats resumed | 22 / 240 | 240 / 240 | 240 / 240 | 240 / 240 |
+| sockets back / client errors | 398 of 400 / 595 | 400 / 0 | 400 / 0 | 400 / 0 |
 
-("herd shaping only" still has the DDL's `lock_timeout`, which is why it has no deadlock.) At 150 sockets, closer to an ordinary evening, the before run touched 22 of 22 with a queue of 45 and no deadlock, and the after run 22 of 22 with a queue of 6 and a longest wait of 9 ms: the ceiling is still touched for an instant, which is why the card now reads the wait.
+("herd shaping only" still has the DDL's `lock_timeout`, which is why it has no deadlock. Two earlier "before" runs of the same build logged 14 and 0 deadlocks; the queue and the lost seats are the constant.) At 150 sockets, closer to an ordinary evening, the before run touched 22 of 22 with a queue of 45 and a longest wait of 17 ms, and the after run peaked at 19 of 22 with a queue of 6 and 8 ms: a burst that touches the ceiling for an instant is normal, which is why the card now reads the wait.
 
 Why not more, smaller replicas: every replica brings its own pool (25 backends each with the extras), its own per-process sweeps and heartbeats, and one more boot per deploy; the DDL locks were on the shared database, so they stalled every replica at once however many there were; and with the box at 3% CPU there was nothing to spread. Why not a bigger pool: more connections would have queued on the same locks, and a 2 vCPU database does not run 44 queries at once any faster than 22.
 

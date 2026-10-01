@@ -203,6 +203,12 @@ export function createAdmissionGate(options: AdmissionOptions): AdmissionGate {
  * `Promise.all(items.map(fn))`, at most `limit` at a time, results in input
  * order. For a fan-out whose width is a property of the data (one query per
  * occupied room), where `Promise.all` lets one caller take most of the pool.
+ *
+ * A `limit` that is not a positive finite number means unbounded (one worker
+ * per item), so `0` as a rollback switch reads as "the old `Promise.all`" and
+ * never as "one at a time". On the first rejection no further item is
+ * started, the ones already running are waited for, and then the first error
+ * is thrown: a caller that retries never overlaps the call it is retrying.
  */
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -211,16 +217,30 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  let failed = false;
+  let firstError: unknown = null;
   const worker = async () => {
-    for (;;) {
+    while (!failed) {
       const index = next++;
       if (index >= items.length) {
         return;
       }
-      results[index] = await fn(items[index]!, index);
+      try {
+        results[index] = await fn(items[index]!, index);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+        }
+        return;
+      }
     }
   };
-  const workers = Math.max(1, Math.min(Math.floor(limit), items.length));
+  const bounded = Number.isFinite(limit) && limit >= 1;
+  const workers = Math.max(1, bounded ? Math.min(Math.floor(limit), items.length) : items.length);
   await Promise.all(Array.from({ length: workers }, () => worker()));
+  if (failed) {
+    throw firstError;
+  }
   return results;
 }
