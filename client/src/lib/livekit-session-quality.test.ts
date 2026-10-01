@@ -1850,6 +1850,24 @@ describe("share_high_motion_guard on the SFU", () => {
     expect(unpublished).toHaveLength(0);
   });
 
+  it("drops only the smaller copies to 30 on a step that keeps 60, and gives them back", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    senderWrites.length = 0;
+
+    await sfu.setScreenGuardCeiling?.({ maxFps: 60, maxHeight: 720, bitrateScale: 0.65 });
+
+    const stepped = senderWrites.at(-1)!;
+    expect(stepped.encodings.length).toBeGreaterThan(1);
+    // The double's encodings carry no scale, so the last one is the full picture.
+    expect(stepped.encodings.at(-1)?.maxFramerate).toBe(60);
+    expect(stepped.encodings.slice(0, -1).every((e) => e.maxFramerate === 30)).toBe(true);
+
+    await sfu.setScreenGuardCeiling?.(null);
+    const lifted = senderWrites.at(-1)!;
+    expect(lifted.encodings.every((e) => e.maxFramerate === 60)).toBe(true);
+  });
+
   it("hands the senders back when the ceiling is lifted", async () => {
     const sfu = await session();
     await sfu.setScreenMaxBitrate(4_000_000);
