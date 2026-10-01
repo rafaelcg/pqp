@@ -38,3 +38,9 @@ The module under test lives in `server/src/speech/` (provider interface,
 Groq / OpenRouter / xAI / whisper.cpp / replay providers, the chunker and
 stitcher, an energy gate, and an OpenRouter chat translator). Its unit tests run
 offline with `pnpm --filter @pqp/server exec vitest run src/speech`.
+
+Failure and cost contracts callers can rely on: a failing window makes
+`transcribeChunked` throw `ChunkedTranscribeError` with the completed windows on
+`.partial`; a translation that fails after a billed call throws `TranslateError`
+with `.costUsd`; a cost a provider did not report is `undefined`, never 0 (chunked
+results add `knownCostUsd` and `unknownCostRequests`).
