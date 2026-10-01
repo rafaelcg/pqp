@@ -259,6 +259,15 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/live-hls/config (fastStart)",
   },
+  client_force_update: {
+    description:
+      "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
+    env: "CLIENT_FORCE_UPDATE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/client-update/config (forceUpdate)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

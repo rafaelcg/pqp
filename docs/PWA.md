@@ -21,10 +21,12 @@ than guess at it.
 
 ## Decisions worth knowing
 
-**Updates are prompted, never automatic.** The client holds a live WebSocket,
-unsent composer drafts, and possibly an active call. Swapping the bundle out
-from under any of those is worse than running the previous build for another
-minute, so the user gets a toast and picks the moment.
+**The page is never reloaded at a bad moment, and never left behind.** The client
+holds a live WebSocket, unsent composer drafts, and possibly an active call.
+Swapping the bundle out from under any of those is worse than running the
+previous build for another minute, so the reload happens at a safe moment or when
+the person asks. What stands behind that, and why a window can no longer stay on
+an old bundle, is the next section.
 
 **Only the shell is cached.** Messages, avatars, and uploads are never
 precached — a chat app serving yesterday's messages out of a cache is worse than
@@ -72,6 +74,81 @@ falling back to `inset-0` where the API is missing, and the stylesheet holds
 fields inside a dialog at 16px so the magnification has no reason to fire.
 Geometry is asserted in `client/e2e/dialog-mobile-layout.spec.ts` at 320px and
 390px — "the dialog opened" was true throughout the bug that motivated it.
+
+## Nobody stays on an old bundle
+
+Written after a field test on 2026-09-30: the desktop app (the Electron shell
+loading `https://pqp.gg`) on one Windows 11 PC kept running an older copy of the
+site after a deploy, with the new shell around it, so a share went out with no
+sound. Reproduced with real builds and a real service worker (`client/e2e/stale-bundle/`).
+
+**What kept a window on an old bundle, all of it true before this change:**
+
+1. **A waiting worker never took over.** The build used `registerType: "prompt"`
+   with no `skipWaiting`, so a new service worker installed and then WAITED for
+   every window of the origin to close. Until it took over, the OLD worker's
+   precache answered every navigation: in the repro, three reloads in a row came
+   back on the previous bundle. An always-open desktop window never closes, and
+   View > Reload does not help.
+2. **Nothing looked for a new build.** The browser re-checks `sw.js` when the page
+   navigates (and about once a day if the worker is asked to do something). A
+   window that never navigates is told nothing for as long as it lives.
+3. **The prompt was the only way out, and it gives way easily.** "Later" snoozed
+   it, a call hid it, and it only appeared once something had noticed (point 2).
+4. **No page knew which build it was.** There was nothing to compare with.
+5. **Electron kept the old site across a shell update.** The service worker and the
+   HTTP cache live in the profile, which a shell update leaves alone.
+6. **The Cloudflare zone rewrites `sw.js`.** Checked on 2026-09-30: the Pages
+   origin (`pqp-3yr.pages.dev/sw.js`) answers `no-cache`, as `_headers` says, and
+   `pqp.gg/sw.js` answers `max-age=14400` with `cf-cache-status: EXPIRED`. The
+   zone's Browser Cache TTL (4 hours) applies to cacheable extensions and beats
+   the file. Browsers fetch the MAIN worker script past their cache, so this is
+   latent for `sw.js` itself, but it is live for the script the worker imports.
+   Files that are not on the zone's list (`.json`, `.webmanifest`, HTML) keep
+   their headers, which is why the version file is JSON.
+
+**What stands behind it now**, each piece a fallback for the one before:
+
+| Piece | Where | What it does |
+|---|---|---|
+| Build id | `client/vite.config.ts`, `src/lib/build-info.ts` | The deployed commit (`VITE_FARO_APP_VERSION`, else `VITE_PQP_BUILD_ID`, else the local `HEAD`, else `dev`) is baked into the bundle and written to `/version.json` with the build time. A `dev` build never compares itself. `<html data-pqp-build>` shows it. |
+| Worker takes over | `workbox.skipWaiting` + `clientsClaim` | A new worker activates as soon as it installs, so a reload reaches the new precache. The running page keeps the code it loaded; it is not reloaded by this. |
+| Navigations are network-first | `src/lib/sw-build-script.ts` (imported by the worker as `sw-build-*.js`) | The worker answers a navigation from the network, and only falls back to the precached shell when offline or after 4 s. Before, every navigation was answered from the precache, which is the OLD build's until a newer worker has installed. A hard reload (Ctrl+Shift+R) bypasses the worker for ONE load, and the next navigation, the language picker's `location.replace` included, is the worker's again: reported on 2026-09-30 as "the old site came back after I changed the language". Reproduced with a second tab open (it keeps the old worker in control). The locale catalogues are hashed chunks of the same build, in the same precache, so they follow the build id like everything else, and an update reloads them with the page. |
+| The page asks | `src/lib/version-watch.ts` | `/version.json` (no-store, cache-busted) on start, on focus and visibility, and about every 12 minutes (jittered), at most once a minute. Also asks the browser to look for a new worker. A worker taking control triggers a look at once. |
+| The card | `update-prompt.tsx` | Visible whenever the page is stale or a worker is waiting. "Later" snoozes for 20 minutes and it returns; the rail keeps a way back. |
+| Safe moment | `src/lib/update-policy.ts`, `build-watcher.tsx` | Reload with no question when nobody has touched the page for 3 minutes, or when it has been out of date past 12 hours (`VITE_UPDATE_MAX_STALE_HOURS`, `0` turns it off). Never in a call, never while typing (text in the focused field, or a key in the last 20 s), never while watching a live party, and never twice in a row for the same build (`sessionStorage` guard, 15 minutes). |
+| Applying it | `src/lib/apply-update.ts` | Updates the worker, waits for it, asks the active worker which build it is (`sw-build-*.js`), and reloads. A worker that is not the target build, or does not answer, or does not take over in 15 s, gets its caches deleted before the reload, so the page loads from the network. The worker is never unregistered: a push subscription dies with the registration and can only be re-created from a click. |
+| Forced update | `forced-update-screen.tsx`, `server/src/lib/client-update-config.ts` | See below. |
+| Electron | `electron/lib/web-cache.js` | Clears the HTTP cache and the worker once per shell version, and View > "Reload and clear cache" (Ctrl/Cmd+Shift+Alt+R) does it on demand. Sign-in and drafts are kept. |
+
+**Forcing an update.** For the day a bundle is bad. `GET /api/client-update/config`
+answers `{ forceUpdate, minBuiltAt }`, read per request, both off by default:
+
+- `forceUpdate`: the runtime flag `client_force_update` (dashboard, "interruptores",
+  no deploy and no restart; `CLIENT_FORCE_UPDATE=true` is its environment default).
+  Every client that is not on the latest build puts up "Atualização necessária" (one
+  button, no Escape, no backdrop dismissal). Turn it off again once the rollout is
+  done, or the next ordinary deploy will put the blocking screen up as well.
+- `minBuiltAt`: `CLIENT_MIN_BUILT_AT`, an ISO date or epoch milliseconds. Bundles
+  built before it are forced. Self-limiting (a later deploy is built after it), but
+  an environment variable, so it needs a recreate.
+
+A client asks only when it already knows it is stale, so an up-to-date client never
+makes this request. The screen waits while the person is in a call and appears when
+they hang up. It applies to a build that differs from `/version.json`, so a minimum
+set past the newest build traps nobody in a reload loop.
+
+**What a web deploy reaches.** The new logic ships in the bundle. A window that is
+still on a bundle from before this change has none of it: it gets the new worker
+(which activates on its own) on its next navigation or daily check, and the new
+bundle on its next reload or relaunch, or when the old card is pressed. From that
+load on, everything above applies.
+
+**One thing to set by hand.** In the Cloudflare dashboard for `pqp.gg`, Caching >
+Configuration > Browser Cache TTL: "Respect Existing Headers" (or a Cache Rule that
+bypasses `/sw.js` and `/sw-notification-click.js`). Nothing in this repository can
+set it. The client does not depend on it: the version file is read past every
+cache, and an update whose worker turns out stale is delivered by purging.
 
 ## Icons
 

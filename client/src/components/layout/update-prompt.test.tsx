@@ -7,6 +7,7 @@ import {
   isUpdateWaiting,
   requestUpdatePrompt,
   resetUpdateState,
+  setBuildStaleness,
 } from "@/lib/update-prompt-state";
 import type { ServiceWorkerControls } from "@/lib/register-sw";
 import { CornerCard } from "./corner-card";
@@ -197,13 +198,74 @@ describe("the update notice", () => {
     expect(updateCard()).not.toBeNull();
   });
 
-  it("takes the update when Reload is pressed", async () => {
+  it("takes the update when Update now is pressed", async () => {
     const worker = fakeWorker();
-    await mount(<UpdatePrompt register={worker.register} />);
+    let applied = 0;
+    await mount(
+      <UpdatePrompt
+        register={worker.register}
+        apply={async () => {
+          applied += 1;
+        }}
+      />,
+    );
     await worker.arrive();
 
-    clickText("Reload");
+    clickText("Update now");
 
-    expect(worker.updates()).toBe(1);
+    expect(applied).toBe(1);
+  });
+
+  describe("when the page finds out by itself (no worker involved)", () => {
+    // The window that never navigates: the service worker says nothing, the
+    // version poll does (`lib/version-watch.ts`).
+    const STALE = {
+      stale: true,
+      forced: false,
+      latestBuild: "def456",
+      since: 1,
+    };
+
+    it("shows the card, in the same place and with the same Later", async () => {
+      const worker = fakeWorker();
+      await mount(<UpdatePrompt register={worker.register} />);
+      expect(updateCard()).toBeNull();
+
+      act(() => setBuildStaleness(STALE));
+      expect(updateCard()).not.toBeNull();
+      expect(isUpdateWaiting()).toBe(true);
+
+      clickText("Later");
+      await settle();
+      expect(updateCard()).toBeNull();
+      expect(isUpdateWaiting()).toBe(true);
+    });
+
+    it("hushes during a call, like any other waiting build", async () => {
+      const worker = fakeWorker();
+      await mount(<UpdatePrompt register={worker.register} />);
+      act(() => setInCall(true));
+      act(() => setBuildStaleness(STALE));
+      await settle();
+      expect(updateCard()).toBeNull();
+      expect(isUpdateWaiting()).toBe(true);
+    });
+
+    it("goes away when the page is current again", async () => {
+      const worker = fakeWorker();
+      await mount(<UpdatePrompt register={worker.register} />);
+      act(() => setBuildStaleness(STALE));
+      expect(updateCard()).not.toBeNull();
+      act(() =>
+        setBuildStaleness({
+          stale: false,
+          forced: false,
+          latestBuild: null,
+          since: null,
+        }),
+      );
+      await settle();
+      expect(updateCard()).toBeNull();
+    });
   });
 });

@@ -41,3 +41,30 @@ function subscribe(listener: () => void): () => void {
 export function useInCall(): boolean {
   return useSyncExternalStore(subscribe, isInCall, () => false);
 }
+
+/**
+ * Whether this tab is WATCHING a live party without a seat: looking at a film,
+ * not in a call. A reload would not hang anyone up, so it is not `inCall`, but
+ * it is a rebuffer and a gap in front of the person watching, so the automatic
+ * update paths (`lib/update-policy.ts`) leave it alone. Written by `App` from
+ * the same `watchingAParty` it already computes for the layout.
+ */
+let watching = false;
+
+export function setWatchingParty(next: boolean): void {
+  if (watching === next) {
+    return;
+  }
+  watching = next;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+export function isWatchingParty(): boolean {
+  return watching;
+}
+
+export function useWatchingParty(): boolean {
+  return useSyncExternalStore(subscribe, isWatchingParty, () => false);
+}

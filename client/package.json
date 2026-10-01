@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
+    "e2e:stale-bundle": "playwright test -c playwright.stale-bundle.config.ts",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",

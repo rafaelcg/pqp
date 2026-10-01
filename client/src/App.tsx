@@ -537,7 +537,7 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
-import { setInCall } from "@/lib/in-call-state";
+import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import {
@@ -8306,6 +8306,12 @@ function MainAppContent({
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
   }, [voiceState.status]);
+  // The same for a viewer looking at a live party: no seat, but not somebody an
+  // automatic update may reload (`lib/update-policy.ts`).
+  useEffect(() => {
+    setWatchingParty(watchingAParty);
+    return () => setWatchingParty(false);
+  }, [watchingAParty]);
 
   const handleQgHintWantedChange = useCallback((wanted: boolean) => {
     setQgHintReady(true);

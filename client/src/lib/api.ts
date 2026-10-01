@@ -706,6 +706,19 @@ export const fetchShareConfig = (serverId?: string | null) =>
       : "/api/share/config",
   );
 
+/**
+ * Whether the operator has made updating mandatory. Only asked by a page that
+ * already knows it is out of date (`lib/version-watch.ts`); every field is
+ * optional because an older API answers 404 and the answer is then "no".
+ */
+export interface ClientUpdateConfigResponse {
+  forceUpdate?: boolean;
+  minBuiltAt?: number | null;
+}
+
+export const fetchClientUpdateConfig = () =>
+  apiFetch<ClientUpdateConfigResponse>("/api/client-update/config");
+
 /** Whether this deployment transcodes screen shares to HLS. */
 /**
  * Whether the egress is on, and for this server in particular when one is
