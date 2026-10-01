@@ -68,6 +68,7 @@ async function sendMessages(
   suffix: string,
   channelId: string,
   bodies: string[],
+  replyToId?: string,
 ): Promise<void> {
   const socket = new WebSocket(WS_URL);
   try {
@@ -89,7 +90,9 @@ async function sendMessages(
     );
     await ready;
     for (const body of bodies) {
-      socket.send(JSON.stringify({ type: "message-create", channelId, body }));
+      socket.send(
+        JSON.stringify({ type: "message-create", channelId, body, replyToId }),
+      );
     }
     // Closing straight away can drop frames still queued behind the socket.
     await expect
@@ -100,6 +103,25 @@ async function sendMessages(
   }
 }
 
+/** Does not contain any `history N ` a search could match. */
+const REPLY_BODY = "answering the thirtieth";
+
+async function messageIdStartingWith(
+  suffix: string,
+  channelId: string,
+  prefix: string,
+): Promise<string> {
+  const res = await fetch(`${API}/api/channels/${channelId}/messages`, {
+    headers: headersFor(suffix),
+  });
+  const { messages } = (await res.json()) as {
+    messages: { id: string; body: string }[];
+  };
+  const found = messages.find((message) => message.body.startsWith(prefix));
+  expect(found, `a message starting "${prefix}"`).toBeDefined();
+  return found!.id;
+}
+
 interface Seeded {
   serverId: string;
   channelId: string;
@@ -107,8 +129,16 @@ interface Seeded {
   guest: string;
 }
 
-/** A channel long enough to scroll, all of it already read by the owner. */
-async function seed(count: number): Promise<Seeded> {
+/**
+ * A channel long enough to scroll, all of it already read by the owner.
+ *
+ * `replyAfter` puts one reply to message number N straight after it, so a test
+ * can have a way to jump to a row that is on screen without leaving the list.
+ */
+async function seed(
+  count: number,
+  options: { replyAfter?: number } = {},
+): Promise<Seeded> {
   const stamp = Date.now().toString(36);
   const owner = `sendjump-owner-${stamp}`;
   const guest = `sendjump-guest-${stamp}`;
@@ -147,8 +177,23 @@ async function seed(count: number): Promise<Seeded> {
     { length: count },
     (_, i) => `history ${i} ${"lorem ipsum dolor sit amet ".repeat(12).trim()}`,
   );
-  for (let start = 0; start < bodies.length; start += 40) {
-    await sendMessages(guest, channel.id, bodies.slice(start, start + 40));
+  const { replyAfter } = options;
+  const head =
+    replyAfter === undefined ? bodies : bodies.slice(0, replyAfter + 1);
+  for (let start = 0; start < head.length; start += 40) {
+    await sendMessages(guest, channel.id, head.slice(start, start + 40));
+  }
+  if (replyAfter !== undefined) {
+    const parent = await messageIdStartingWith(
+      guest,
+      channel.id,
+      `history ${replyAfter} `,
+    );
+    await sendMessages(guest, channel.id, [REPLY_BODY], parent);
+    const rest = bodies.slice(replyAfter + 1);
+    for (let start = 0; start < rest.length; start += 40) {
+      await sendMessages(guest, channel.id, rest.slice(start, start + 40));
+    }
   }
   await fetch(`${API}/api/channels/${channel.id}/read`, {
     method: "POST",
@@ -621,11 +666,19 @@ test("jump to present during a jump stays at the present", async ({ page }) => {
  * Jumping to a row that is already centred moves nothing, so no `scrollend`
  * ends the jump and the one-second timer is what settles it. A wheel inside
  * that second used to be followed by the settle putting the row back.
+ *
+ * The second jump is the quote on a reply sitting right under the row: it is a
+ * jump within the list that is already on screen. A search result is not that:
+ * it re-opens the channel, so the list is mounted again and scrolls from the
+ * top, and where a wheel landed in that animation (and how far the settle then
+ * moves the row, which depends on the font) decided the outcome of an earlier
+ * version of this test. Here nothing animates, so the wheel always lands in the
+ * settle window and the only thing that can undo it is the settle.
  */
 test("wheeling during a jump is not pulled back to the target", async ({
   page,
 }) => {
-  const seeded = await seed(60);
+  const seeded = await seed(60, { replyAfter: 30 });
   await page.addInitScript((suffix) => {
     localStorage.setItem("pqp:dev-user-suffix", suffix);
   }, seeded.owner);
@@ -634,38 +687,42 @@ test("wheeling during a jump is not pulled back to the target", async ({
   );
   await expect(page.getByText("history 59 ")).toBeVisible({ timeout: 20_000 });
 
-  const jumpToSearchResult = async () => {
-    await page.getByRole("button", { name: /Search messages/ }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog
-      .getByRole("combobox", { name: "Search messages" })
-      .fill("history 30 ");
-    await dialog
-      .getByRole("option")
-      .filter({ hasText: "history 30 " })
-      .first()
-      .click();
-    await expect(dialog).toBeHidden();
-  };
   const scrollTop = () =>
     page.getByRole("log").evaluate((log) => log.scrollTop);
 
   // The row that has just been jumped to wears a ring while the jump runs.
   const flashing = page.locator('[class*="ring-accent/50"]');
-  await jumpToSearchResult();
+
+  // Centre history 30 with a search result, and let that jump end completely.
+  await page.getByRole("button", { name: /Search messages/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
+    .getByRole("combobox", { name: "Search messages" })
+    .fill("history 30 ");
+  await dialog
+    .getByRole("option")
+    .filter({ hasText: "history 30 " })
+    .first()
+    .click();
+  await expect(dialog).toBeHidden();
   await expect(flashing).toHaveCount(1);
   await expect(flashing).toHaveCount(0, { timeout: 10_000 });
+
+  // Already centred, and the reply to it is on screen right below.
+  const quote = page.getByRole("button", {
+    name: /Jump to .* message: history 30 /,
+  });
+  await expect(quote).toBeInViewport();
   const centred = await scrollTop();
 
-  // Already centred: nothing scrolls, so nothing ends this jump but the timer.
-  await jumpToSearchResult();
-  await expect(flashing).toHaveCount(1);
-  const box = await page.getByRole("log").evaluate((log) => {
-    const rect = log.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // The click starts the jump synchronously (its wheel listener is attached
+  // before `click` returns), so the wheel that follows is always inside it.
+  await quote.click();
   await page.mouse.wheel(0, -500);
-  await page.waitForTimeout(2_000);
+  await expect(flashing).toHaveCount(1);
+
+  // The flash outlasts the one-second settle, so once it is gone the settle has
+  // had its say.
+  await expect(flashing).toHaveCount(0, { timeout: 10_000 });
   expect(centred - (await scrollTop())).toBeGreaterThan(300);
 });
