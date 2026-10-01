@@ -215,9 +215,9 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, voz rápida nas Américas e na Europa.",
-      en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, fast voice across the Americas and Europe.",
-      es: "Pega el link de la plantilla de tu Discord y tu servidor aparece igualito en pqp: categorías, canales, roles. Voz, pantalla compartida con sonido y chat en el navegador. Gratis, de código abierto, voz rápida en América y Europa.",
+        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, servidores de voz em São Paulo, Miami e Londres.",
+      en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, voice servers in São Paulo, Miami and London.",
+      es: "Pega el link de la plantilla de tu Discord y tu servidor aparece igualito en pqp: categorías, canales, roles. Voz, pantalla compartida con sonido y chat en el navegador. Gratis, de código abierto, con servidores de voz en São Paulo, Miami y Londres.",
     },
     image: {
       "pt-BR": "/images/og-vem.png",
@@ -360,7 +360,7 @@ export const LANDING_FAQ: Record<
     {
       question: "É seguro criar conta?",
       answer:
-        "É um site. Não precisa instalar nada. Chamada pequena é direta entre as pessoas; chamada maior passa pelo servidor mais perto, São Paulo, Miami ou Londres. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
+        "É um site. Não precisa instalar nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
     },
     {
       question: "O pqp é de graça mesmo?",
@@ -390,14 +390,14 @@ export const LANDING_FAQ: Record<
     {
       question: "O que acontece com os meus dados?",
       answer:
-        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo, com backups noturnos na América do Norte. Quando a chamada de voz é repassada, ela passa pelo servidor mais perto, São Paulo, Miami ou Londres; chamada menor é direta entre as pessoas e não passa por servidor nenhum. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
+        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo, com backups noturnos na América do Norte. Quando a chamada de voz é repassada, ela passa pelo servidor de mídia mais perto de onde está a maioria do pessoal daquele servidor (São Paulo, Miami ou Londres). Chamada em DM e em servidor pequeno é direta entre as pessoas, sem servidor de mídia no meio. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
     },
   ],
   en: [
     {
       question: "Is it safe to create an account?",
       answer:
-        "It's a website. You don't have to install anything. Small calls are direct between people; bigger ones relay through whichever server is nearest, São Paulo, Miami or London. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
+        "It's a website. You don't have to install anything. Calls in DMs and small servers go direct between people; bigger servers relay through a voice server we run, in São Paulo, Miami or London, whichever is closest to where most of that server's people are. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
     },
     {
       question: "Is pqp really free?",
@@ -427,14 +427,14 @@ export const LANDING_FAQ: Record<
     {
       question: "What happens to my data?",
       answer:
-        "Your account and community live on our server in São Paulo, with nightly backups in North America. When a voice call is relayed, it touches whichever media server is nearest, São Paulo, Miami or London; smaller calls go direct between people and touch no server at all. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
+        "Your account and community live on our server in São Paulo, with nightly backups in North America. When a voice call is relayed, it goes through the media server closest to where most of that server's people are (São Paulo, Miami or London). DM calls and calls in small servers go direct between people, with no media server in between. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
     },
   ],
   es: [
     {
       question: "¿Es seguro crear una cuenta?",
       answer:
-        "Es un sitio web. No tienes que instalar nada. Las llamadas chicas son directas entre las personas; las más grandes pasan por el servidor más cercano, São Paulo, Miami o Londres. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
+        "Es un sitio web. No tienes que instalar nada. Las llamadas de mensajes directos y de servidores chicos son directas entre las personas; en los servidores más grandes pasan por un servidor de voz nuestro, en São Paulo, Miami o Londres, el más cercano a donde está la mayoría de la gente de ese servidor. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
     },
     {
       question: "¿pqp de verdad es gratis?",
@@ -464,7 +464,7 @@ export const LANDING_FAQ: Record<
     {
       question: "¿Qué pasa con mis datos?",
       answer:
-        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo, con respaldos nocturnos en Norteamérica. Cuando una llamada de voz se retransmite, pasa por el servidor más cercano: São Paulo, Miami o Londres; las llamadas chicas son directas entre las personas y no pasan por ningún servidor. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
+        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo, con respaldos nocturnos en Norteamérica. Cuando una llamada de voz se retransmite, pasa por el servidor de medios más cercano a donde está la mayoría de la gente de ese servidor (São Paulo, Miami o Londres). Las llamadas de mensajes directos y de servidores chicos son directas entre las personas, sin servidor de medios en el medio. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
     },
   ],
 };
@@ -692,7 +692,7 @@ export const VEM_FAQ: Record<
     {
       question: "Isso é seguro?",
       answer:
-        "É um site: não instala nada. Quando a chamada é repassada, ela conecta no servidor mais perto, São Paulo, Miami ou Londres; chamada menor é direta e não passa por servidor nenhum. A sua conta mora no nosso servidor em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
+        "É um site: não instala nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. A sua conta mora no nosso servidor em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
     },
     {
       question: "É de graça mesmo? Qual é a pegadinha?",
@@ -734,7 +734,7 @@ export const VEM_FAQ: Record<
     {
       question: "Is it safe?",
       answer:
-        "It is a website: nothing to install. When a call is relayed it connects to whichever server is nearest, São Paulo, Miami or London; smaller calls go direct and touch no server. Your account lives on our server in São Paulo. You delete your account from inside the app and export your data whenever you want. Blocking, reports and automod exist. The code is public if you want to look, and you don't need to read it to use it. pqp is for adults, 18 and over.",
+        "It is a website: nothing to install. Calls in DMs and small servers go direct between people; bigger servers relay through a voice server we run, in São Paulo, Miami or London, whichever is closest to where most of that server's people are. Your account lives on our server in São Paulo. You delete your account from inside the app and export your data whenever you want. Blocking, reports and automod exist. The code is public if you want to look, and you don't need to read it to use it. pqp is for adults, 18 and over.",
     },
     {
       question: "Is it really free? What's the catch?",
@@ -776,7 +776,7 @@ export const VEM_FAQ: Record<
     {
       question: "¿Es seguro?",
       answer:
-        "Es un sitio web: no instalas nada. Cuando la llamada se retransmite, se conecta al servidor más cercano, São Paulo, Miami o Londres; las llamadas chicas son directas y no pasan por ningún servidor. Tu cuenta vive en nuestro servidor en São Paulo. Borras tu cuenta desde la app y exportas tus datos cuando quieras. Hay bloqueo, reportes y automod. El código es público si quieres echarle un ojo, y no necesitas leerlo para usarlo. pqp es para mayores de 18.",
+        "Es un sitio web: no instalas nada. Las llamadas de mensajes directos y de servidores chicos son directas entre las personas; en los servidores más grandes pasan por un servidor de voz nuestro, en São Paulo, Miami o Londres, el más cercano a donde está la mayoría de la gente de ese servidor. Tu cuenta vive en nuestro servidor en São Paulo. Borras tu cuenta desde la app y exportas tus datos cuando quieras. Hay bloqueo, reportes y automod. El código es público si quieres echarle un ojo, y no necesitas leerlo para usarlo. pqp es para mayores de 18.",
     },
     {
       question: "¿De verdad es gratis? ¿Cuál es el truco?",
