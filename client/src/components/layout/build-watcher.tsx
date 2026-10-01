@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { applyUpdate } from "@/lib/apply-update";
 import { fetchClientUpdateConfig } from "@/lib/api";
 import { RUNNING_BUILD } from "@/lib/build-info";
-import { NO_FORCE, parseForceConfig, type ForceConfig } from "@/lib/client-version";
+import { parseForceConfig, type ForceConfig } from "@/lib/client-version";
 import { useInCall, useWatchingParty } from "@/lib/in-call-state";
 import {
   autoReloadAllowed,
@@ -21,12 +21,13 @@ import { startVersionWatch } from "@/lib/version-watch";
 /** How often an out-of-date page re-reads "is anyone there", once it knows. */
 const RECHECK_MS = 15_000;
 
-async function askServerForForce(): Promise<ForceConfig> {
+async function askServerForForce(): Promise<ForceConfig | null> {
   try {
     return parseForceConfig(await fetchClientUpdateConfig());
   } catch {
-    // Signed out, an older API, offline: the ordinary path, not a failure.
-    return NO_FORCE;
+    // Signed out, an older API, offline, a timeout: no answer. The watch keeps
+    // whatever it already knew about this build (`lib/version-watch.ts`).
+    return null;
   }
 }
 

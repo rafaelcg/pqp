@@ -95,7 +95,7 @@ test("a deploy under an open page becomes the card, and one click lands on the n
   server.serve(newDir);
   // Past the twelve-minute timer and its jitter. Nothing navigated, nothing
   // reloaded: the page finds out by itself.
-  await page.clock.fastForward("16:00");
+  await ageUntilVisible(page, page.locator(CARD));
 
   const card = page.locator(CARD);
   await expect(card).toBeVisible();
@@ -113,7 +113,7 @@ test("Later hides the card and it comes back", async ({ page }) => {
   await openOn(page, OLD);
   await startTyping(page);
   server.serve(newDir);
-  await page.clock.fastForward("16:00");
+  await ageUntilVisible(page, page.locator(CARD));
 
   const card = page.locator(CARD);
   await expect(card).toBeVisible();
@@ -190,7 +190,7 @@ test("a forced update shows nothing while the server says no", async ({ page }) 
   await openOn(page, OLD);
   await startTyping(page);
   server.serve(newDir);
-  await page.clock.fastForward("16:00");
+  await ageUntilVisible(page, page.locator(CARD));
 
   await expect(page.locator(CARD)).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -209,7 +209,7 @@ test("when the CDN keeps serving the OLD worker, the update still lands (caches 
 
   server.pin("/sw.js", path.join(oldDir, "sw.js"));
   server.serve(newDir);
-  await page.clock.fastForward("16:00");
+  await ageUntilVisible(page, page.locator(CARD));
 
   const card = page.locator(CARD);
   await expect(card).toBeVisible();
@@ -371,6 +371,8 @@ test("a forced update with no network says so, gives the button back, and lands 
   await expect(dialog).toBeVisible();
 
   await context.setOffline(true);
+  // `navigator.onLine` follows a moment after the emulation does.
+  await page.waitForFunction(() => navigator.onLine === false);
   await dialog.getByRole("button", { name: "Atualizar agora" }).click();
   await expect(dialog.getByRole("alert")).toContainText("sem internet");
   // The blocking screen is still blocking, and the button is the person's again.
@@ -379,6 +381,7 @@ test("a forced update with no network says so, gives the button back, and lands 
   expect(await buildOf(page)).toBe(OLD);
 
   await context.setOffline(false);
+  await page.waitForFunction(() => navigator.onLine === true);
   await retry.click();
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
   await context.close();
