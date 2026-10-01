@@ -4,6 +4,11 @@ import {
   VOICE_CLIENT_MESSAGE_TYPES,
 } from "@pqp/shared";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
+import {
+  createAdmissionGate,
+  type AdmissionStats,
+} from "../lib/admission.js";
+import { isEnabled } from "../lib/flags.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
@@ -150,6 +155,61 @@ const socketLimiter = createRateLimiter({
   capacity: limitFromEnv("RATE_LIMIT_SOCKET_CAPACITY", 600),
   refillPerSecond: limitFromEnv("RATE_LIMIT_SOCKET_REFILL", 200),
 });
+
+/**
+ * How many sockets may be doing their arrival work (`auth` to the last
+ * catch-up query) at once. A quarter of the pool by default: each arrival
+ * runs its queries mostly one after another, the voice catch-up at most
+ * `ROSTER_ACCESS_CONCURRENCY` wide, so this many arrivals leave most of the
+ * pool to everything else the process does. `WS_AUTH_CONCURRENCY` overrides.
+ */
+export function resolveWsAuthConcurrency(
+  raw: string | undefined = process.env.WS_AUTH_CONCURRENCY,
+  poolMax: number = Number(process.env.PG_POOL_MAX ?? 10),
+): number {
+  const explicit = Number(raw);
+  if (raw !== undefined && raw.trim() !== "" && Number.isFinite(explicit) && explicit >= 1) {
+    return Math.floor(explicit);
+  }
+  const max = Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 10;
+  return Math.max(2, Math.floor(max / 4));
+}
+
+/**
+ * The longest a socket waits for a slot before it is let through anyway.
+ * Well under the 10 s auth timeout, so the gate can never be the reason a
+ * socket is closed with 4401 (see `lib/admission.ts` on failing open).
+ */
+export const WS_AUTH_MAX_WAIT_MS = 4_000;
+
+/**
+ * The admission gate for socket arrivals. `ws_auth_admission` (env
+ * `WS_AUTH_ADMISSION`, on by default) is a runtime flag: turning it off from
+ * the dashboard makes `run` call straight through on the next arrival, no
+ * deploy and no restart.
+ */
+const wsAuthGate = createAdmissionGate({
+  concurrency: resolveWsAuthConcurrency(),
+  maxWaitMs: WS_AUTH_MAX_WAIT_MS,
+  enabled: () => {
+    try {
+      return isEnabled("ws_auth_admission");
+    } catch {
+      return true;
+    }
+  },
+});
+
+/** For `GET /api/admin/metrics` (`runtime.wsAuth`). */
+export function wsAuthAdmissionStats(): AdmissionStats & { enabled: boolean } {
+  let enabled = true;
+  try {
+    enabled = isEnabled("ws_auth_admission");
+  } catch {
+    // Flags not loaded (a test): the code default.
+  }
+  return { ...wsAuthGate.stats(), enabled };
+}
 
 /** Sockets that have not answered our last ping. */
 const alive = new WeakMap<WebSocket, boolean>();
@@ -373,60 +433,27 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
           ? `Bearer ${DEV_AUTH_TOKEN}`
           : `Bearer ${token}`;
 
-      const resolved = await resolveAuthUser(authHeader);
-      if (!resolved) {
-        logEvent("ws.authFail", { connId });
-        socket.close(4401, "Unauthorized");
-        return;
-      }
-
-      // Verification is async; the socket may have closed meanwhile. Registering
-      // it now would leave a dead entry in the map forever, because the close
-      // handler already ran.
-      if (closed || socket.readyState !== 1) {
-        return;
-      }
-
-      authenticated = true;
-      clearTimeout(authTimeout);
-      setAuthenticatedSocket(socket, resolved.user, caps);
-      // `caps` on the auth line is how an operator can tell, from the logs of
-      // a real deploy, whether clients are actually negotiating a new wire
-      // feature or whether the server is quietly serving everybody the old
-      // frames. Empty for every build that predates the field.
-      logEvent("ws.auth", {
-        connId,
-        userId: resolved.user.id,
-        caps: caps.length > 0 ? caps.join(",") : undefined,
+      // ADMISSION (`lib/admission.ts`): the whole of a socket's arrival work,
+      // from verifying the token to the last catch-up query, runs inside one
+      // slot of a small gate, so a reconnect herd queues HERE, in arrival
+      // order, instead of on the pg pool where it would compete with every
+      // established socket and HTTP request. The frame chain of THIS socket
+      // waits only for what it waited for before (the voice rosters); the
+      // fire-and-forget catch-ups keep the slot until they settle without
+      // holding up the socket's next frame.
+      let rostersSent: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        rostersSent = resolve;
       });
-      // Deliberately not awaited: it reads one row to find out whether this
-      // account asked to be invisible or do-not-disturb, and `ready` must not
-      // wait on a preference lookup. Until it resolves the socket is absent from
-      // the status registry, which reads as offline — the safe direction, and
-      // the reason `registerStatusSocket` resolves the manual status *before* it
-      // makes the connection visible rather than after.
-      void registerStatusSocket(socket, resolved.user.id).catch((error) => {
-        console.error("[ws] status registration failed:", error);
-      });
-      // A host reconnecting stops the grace clock on their live party, and a
-      // client connecting mid-show is told about every party it may see. Both
-      // are fire and forget: `ready` must not wait on either, and the worst
-      // case is a sidebar block that arrives with the next state change.
-      // Where this account was just seen, for picking the SFU region of its
-      // servers' voice rooms (`voice/region-audience.ts`). Country only,
-      // throttled, never throws, and a no-op without `LIVEKIT_REGIONS`.
-      void recordUserCountry(resolved.user.id, socketCountry(socket));
-      // Opened the app today, for the dashboard's actives and retention
-      // (`services/user-activity.ts`). A Map.set; flushed once a minute.
-      userActivity.note(resolved.user.id);
-      void onHostSocketOpened(resolved.user.id).catch((error) => {
-        console.error("[watch-party] host reconnect failed:", error);
-      });
-      void catchUpWatchParties(socket, resolved.user.id).catch((error) => {
-        console.error("[watch-party] catch-up failed:", error);
-      });
-      socket.send(JSON.stringify({ type: "ready" }));
-      await sendAllVoiceRosters(socket, resolved.user);
+      void wsAuthGate
+        .run(() => arriveAuthenticated(authHeader, caps, rostersSent))
+        .catch((error: unknown) => {
+          console.error("[ws] auth arrival failed:", error);
+        })
+        // Whatever happened (refused, closed while queued, threw), the
+        // socket's next frame must not wait forever on a roster never sent.
+        .finally(() => rostersSent());
+      await ready;
       return;
     }
 
@@ -460,6 +487,84 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     if (VOICE_MESSAGE_TYPES.has(type)) {
       await handleVoiceMessage(session, parsed);
     }
+  }
+
+  /**
+   * Everything `auth` does once the frame is parsed. `onRostersSent` fires
+   * when the voice rosters are out, which is the point the socket's next
+   * frame may run (unchanged from before the gate); the promise itself
+   * settles when the catch-ups that never held up `ready` have too, and that
+   * is how long the admission slot is held.
+   */
+  async function arriveAuthenticated(
+    authHeader: string,
+    caps: string[],
+    onRostersSent: () => void,
+  ): Promise<void> {
+    // Queued behind a herd and gone before its turn: nothing to do for it.
+    if (closed || socket.readyState !== 1) {
+      return;
+    }
+    const resolved = await resolveAuthUser(authHeader);
+    if (!resolved) {
+      logEvent("ws.authFail", { connId });
+      socket.close(4401, "Unauthorized");
+      return;
+    }
+
+    // Verification is async; the socket may have closed meanwhile. Registering
+    // it now would leave a dead entry in the map forever, because the close
+    // handler already ran.
+    if (closed || socket.readyState !== 1) {
+      return;
+    }
+
+    authenticated = true;
+    clearTimeout(authTimeout);
+    setAuthenticatedSocket(socket, resolved.user, caps);
+    // `caps` on the auth line is how an operator can tell, from the logs of
+    // a real deploy, whether clients are actually negotiating a new wire
+    // feature or whether the server is quietly serving everybody the old
+    // frames. Empty for every build that predates the field.
+    logEvent("ws.auth", {
+      connId,
+      userId: resolved.user.id,
+      caps: caps.length > 0 ? caps.join(",") : undefined,
+    });
+    // Deliberately not awaited before `ready`: it reads one row to find out
+    // whether this account asked to be invisible or do-not-disturb, and
+    // `ready` must not wait on a preference lookup. Until it resolves the
+    // socket is absent from the status registry, which reads as offline: the
+    // safe direction, and the reason `registerStatusSocket` resolves the
+    // manual status *before* it makes the connection visible rather than after.
+    const status = registerStatusSocket(socket, resolved.user.id).catch((error) => {
+      console.error("[ws] status registration failed:", error);
+    });
+    // Where this account was just seen, for picking the SFU region of its
+    // servers' voice rooms (`voice/region-audience.ts`). Country only,
+    // throttled, never throws, and a no-op without `LIVEKIT_REGIONS`.
+    void recordUserCountry(resolved.user.id, socketCountry(socket));
+    // Opened the app today, for the dashboard's actives and retention
+    // (`services/user-activity.ts`). A Map.set; flushed once a minute.
+    userActivity.note(resolved.user.id);
+    // A host reconnecting stops the grace clock on their live party, and a
+    // client connecting mid-show is told about every party it may see. Neither
+    // holds up `ready`, and the worst case is a sidebar block that arrives
+    // with the next state change.
+    const hostBack = onHostSocketOpened(resolved.user.id).catch((error) => {
+      console.error("[watch-party] host reconnect failed:", error);
+    });
+    const parties = catchUpWatchParties(socket, resolved.user.id).catch((error) => {
+      console.error("[watch-party] catch-up failed:", error);
+    });
+    socket.send(JSON.stringify({ type: "ready" }));
+    try {
+      await sendAllVoiceRosters(socket, resolved.user);
+    } finally {
+      onRostersSent();
+    }
+    // Still inside the admission slot, no longer holding up this socket.
+    await Promise.allSettled([status, hostBack, parties]);
   }
 
   socket.on("message", (data) => {

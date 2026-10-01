@@ -214,6 +214,14 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  ws_auth_admission: {
+    description:
+      "Fila na chegada dos sockets: uma rajada de reconexão (deploy) espera na porta do WebSocket, não no pool do Postgres (desligado: todos de uma vez).",
+    env: "WS_AUTH_ADMISSION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   community_home: {
     description: "Baú (Community Home).",
     env: "COMMUNITY_HOME_ENABLED",

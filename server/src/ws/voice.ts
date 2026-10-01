@@ -46,6 +46,7 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
+import { mapWithConcurrency } from "../lib/admission.js";
 import {
   noteJoinAttempt,
   noteJoinConnected,
@@ -6435,6 +6436,24 @@ export function isSocketInVoice(socket: WebSocket): boolean {
 const ROSTER_ACCESS_TTL_MS = 30_000;
 const ROSTER_ACCESS_JITTER_MS = 5_000;
 /**
+ * How many of one socket's catch-up access checks may be in flight at once
+ * (`sendAllVoiceRosters`). See the comment there for why it is not unbounded.
+ * `VOICE_CATCHUP_CONCURRENCY` overrides; `0` is the rollback to unbounded.
+ */
+export function resolveRosterAccessConcurrency(
+  raw: string | undefined = process.env.VOICE_CATCHUP_CONCURRENCY,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return 4;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    return 4;
+  }
+  return value === 0 ? Number.POSITIVE_INFINITY : Math.floor(Math.max(1, value));
+}
+const ROSTER_ACCESS_CONCURRENCY = resolveRosterAccessConcurrency();
+/**
  * Global cap on distinct (channel, user) pairs. Without one, a sustained
  * multi-room reconnect/auth workload grows this map without bound — every
  * miss (including a denied one) adds an entry, and the TTL only bounds how
@@ -6822,8 +6841,17 @@ export async function sendAllVoiceRosters(
     room.orphaned.set(peer.id, peer.orphanedAt !== undefined);
   }
 
-  await Promise.all(
-    [...rooms].map(async ([voiceChannelId, room]) => {
+  // AT MOST `ROSTER_ACCESS_CONCURRENCY` AT A TIME, NOT `Promise.all`. The
+  // width of this fan-out is the number of occupied rooms in the whole
+  // cluster, not anything about this user, and on a fresh process after a
+  // deploy every check misses the cache: one socket's catch-up could check
+  // out most of the pool in a single tick, and a few of them arriving
+  // together did (22 of 22, 161 waiting). Narrower costs a few milliseconds
+  // per socket and leaves the rest of the pool to everybody else.
+  await mapWithConcurrency(
+    [...rooms],
+    ROSTER_ACCESS_CONCURRENCY,
+    async ([voiceChannelId, room]) => {
       try {
         // CACHED, NOT `canAccessChannel` DIRECTLY: this runs once per room this
         // instance or the registry knows about, on EVERY socket that
@@ -6861,7 +6889,7 @@ export async function sendAllVoiceRosters(
         // statement about one peer.
         seq: currentRosterSeq(voiceChannelId),
       });
-    }),
+    },
   );
 
   // Every live stream this user may view, so the sidebar pill and a viewer
@@ -6895,8 +6923,10 @@ export async function sendAllVoiceRosters(
     stream: hlsAudience.stream(channelId),
     generation: streamGeneration.get(channelId) ?? 0,
   }));
-  await Promise.all(
-    live.map(async (entry) => {
+  await mapWithConcurrency(
+    live,
+    ROSTER_ACCESS_CONCURRENCY,
+    async (entry) => {
       try {
         if (!(await canAccessChannelForRoster(entry.channelId, user.id))) {
           return;
@@ -6919,7 +6949,7 @@ export async function sendAllVoiceRosters(
           stream !== null || moved,
         ),
       );
-    }),
+    },
   );
   // And every room with music this user may view, for the sidebar row.
   // Off the audience cache (`getChannelAudience`, one query per channel per

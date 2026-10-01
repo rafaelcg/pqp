@@ -202,6 +202,12 @@ Things that are **deliberately still 200**:
   drain-shaped close (1001/1006/1012) waits a random 0.5-4s instead of
   reconnecting at once, then backs off exponentially with full jitter on any
   further attempt (`client/src/lib/realtime.ts`, `reconnect-jitter.ts`).
+  Since 2026-10-01 the rolling deploy no longer runs `schema.sql` on a boot
+  whose schema did not change (it held ACCESS EXCLUSIVE on the busiest tables
+  while the sibling took the herd), arrivals queue at the WebSocket instead
+  of the pool, and the dashboard reads the per-checkout wait
+  (`runtime.poolWait`, `pqp_api_pool_*_5m`) rather than the peak since
+  start, which every deploy pushes to 22 of 22. See `docs/DB_RUNBOOK.md` §3.
 - **A draining machine (SIGTERM).** Failing readiness while draining is the
   usual practice so a load balancer sheds traffic, but there is exactly one
   machine and nowhere to shed to. All it would produce is an alert on every

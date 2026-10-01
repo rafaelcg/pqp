@@ -90,8 +90,10 @@ describeDb("stream/move bits migration", () => {
     expect(Number(before.rows[0]!.allow)).toBe(SPEAK);
     expect(Number(before.rows[0]!.deny)).toBe(STREAM);
 
-    await initDb();
-    await initDb();
+    // `always`: an unchanged file is skipped at boot (`initDb` in db.ts), and
+    // this is the file's own migration being run twice on purpose.
+    await initDb({ mode: "always" });
+    await initDb({ mode: "always" });
 
     const after = await getPool().query<{
       permissions: string;

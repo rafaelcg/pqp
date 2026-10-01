@@ -37,6 +37,62 @@ export const DRAIN_BATCH_JITTER_MS = 50;
 /** The whole socket drain must be over by this; the rest is closed at once. */
 export const DRAIN_DEADLINE_MS = 10_000;
 
+/**
+ * Sockets closed per second during a drain, by default. Each close is a
+ * reconnect on the sibling a moment later (the client spreads its first
+ * attempt over 0.5 to 4 s, `client/src/lib/reconnect-jitter.ts`), and each
+ * reconnect is an `auth` with its catch-up queries. The fixed 50 per 100 ms
+ * above meant 400 a second: a 143-socket container emptied in a third of a
+ * second, so the sibling's whole herd arrived inside the client's jitter
+ * window alone. 100 a second spreads the same container over 1.4 s on top of
+ * that window. A container big enough to need more than
+ * {@link DRAIN_SPREAD_CEILING_FRACTION} of the deadline at this rate goes
+ * faster instead, so the deadline still bounds the drain.
+ */
+export const DEFAULT_DRAIN_RATE_PER_SECOND = 100;
+/** Never plan a drain longer than this share of `DRAIN_DEADLINE_MS`. */
+export const DRAIN_SPREAD_CEILING_FRACTION = 0.6;
+
+/**
+ * `DRAIN_RATE_PER_SECOND`, read at drain time. `0` is the rollback to the
+ * fixed 50-per-batch drain this file always had.
+ */
+export function resolveDrainRatePerSecond(
+  raw: string | undefined = process.env.DRAIN_RATE_PER_SECOND,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_DRAIN_RATE_PER_SECOND;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_DRAIN_RATE_PER_SECOND;
+}
+
+/**
+ * Batch size and spacing for draining `total` sockets at `ratePerSecond`.
+ * Pure, so the arithmetic is what is tested. A rate of 0 answers the fixed
+ * constants above, unchanged.
+ */
+export function drainPlan(
+  total: number,
+  ratePerSecond: number = resolveDrainRatePerSecond(),
+  deadlineMs: number = DRAIN_DEADLINE_MS,
+): { batchSize: number; intervalMs: number; ratePerSecond: number } {
+  if (ratePerSecond <= 0) {
+    return {
+      batchSize: DRAIN_BATCH_SIZE,
+      intervalMs: DRAIN_BATCH_INTERVAL_MS,
+      ratePerSecond: (DRAIN_BATCH_SIZE * 1000) / DRAIN_BATCH_INTERVAL_MS,
+    };
+  }
+  // The jitter adds a quarter of an interval on average, so plan against it.
+  const effectiveIntervalMs = DRAIN_BATCH_INTERVAL_MS + DRAIN_BATCH_JITTER_MS / 2;
+  const ceilingMs = deadlineMs * DRAIN_SPREAD_CEILING_FRACTION;
+  const neededRate = (total * 1000) / Math.max(1, ceilingMs);
+  const rate = Math.max(ratePerSecond, neededRate);
+  const batchSize = Math.max(1, Math.round((rate * effectiveIntervalMs) / 1000));
+  return { batchSize, intervalMs: DRAIN_BATCH_INTERVAL_MS, ratePerSecond: rate };
+}
+
 let draining = false;
 
 /** Flip the flag; `/health` answers 503 from the next request on. */

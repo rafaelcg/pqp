@@ -1322,6 +1322,7 @@
    */
   var FLAG_RISK = {
     read_cache: "Desligado, toda leitura repetida vai direto ao banco. Com muita gente on (watch party, deploy), o banco pode chegar ao limite de conexões.",
+    ws_auth_admission: "Desligado, uma rajada de reconexão (todo deploy) entra de uma vez e espera no pool do banco em vez de na porta do WebSocket. Volta ao comportamento de antes.",
     turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
     voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
     livekit_region_require_cap: "Ligado, apps que não declararam sfu-region só abrem salas em São Paulo.",

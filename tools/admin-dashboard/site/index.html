@@ -5181,6 +5181,14 @@
 
     var peakBusy = Number(rt.peakPoolBusy) || 0;
     var hitCeiling = max > 0 && peakBusy >= max;
+    // Com o histograma de espera (runtime.poolWait, lib/pool-wait.ts) o teto
+    // tocado só pinta amarelo quando custou: alguém esperou 1 s ou mais por
+    // uma conexão na última hora. A rajada de todo deploy encosta no teto por
+    // milissegundos e esvazia; isso é informação, não alerta. Sem o campo
+    // (API mais velha), fica a regra antiga.
+    var pwHour = rt.poolWait && rt.poolWait.lastHour;
+    var feltWaits = pwHour && typeof pwHour.waitedOver1s === "number" ? pwHour.waitedOver1s : null;
+    var ceilingHurt = feltWaits === null ? hitCeiling : feltWaits > 0;
 
     // "busy" sozinho não separa carga de vazamento: 22 conexões ocupadas são
     // iguais quer sejam 22 consultas de 3 ms, quer sejam as mesmas 22 paradas
@@ -5211,7 +5219,7 @@
     // é a única leitura que aparece ANTES de o pool encher.
     tone("rtBusyTile", (pressure === "saturated" || stuck) ? "bad" : pressure === "tight" ? "attn" : "good");
     tone("rtWaitingTile", pressure === "saturated" ? "bad" : waiting ? "attn" : "good");
-    tone("rtPeakWaitingTile", peakWaiting && hitCeiling ? "bad" : peakWaiting ? "attn" : "good");
+    tone("rtPeakWaitingTile", peakWaiting && ceilingHurt ? "bad" : peakWaiting && feltWaits === null ? "attn" : "good");
 
     var slots = $("rtSlots");
     if (slots) {
@@ -5233,7 +5241,7 @@
 
     sigState.capacity = {
       state: (pressure === "saturated" || stuck) ? "bad"
-        : (pressure === "tight" || hitCeiling) ? "warn" : "ok",
+        : (pressure === "tight" || ceilingHurt) ? "warn" : "ok",
       label: "capacidade",
       value: fmt(sockets) + (sockets === 1 ? " conexão" : " conexões"),
       note: stuck
@@ -5242,6 +5250,10 @@
         ? "pool cheio com " + fmt(waiting) + " na fila"
         : waiting
           ? fmt(waiting) + (waiting === 1 ? " pedido na fila" : " pedidos na fila") + ", pool com folga"
+          : feltWaits
+            ? fmt(feltWaits) + (feltWaits === 1 ? " pedido esperou" : " pedidos esperaram") + " mais de 1 s por conexão na última hora (máx " + fmt(pwHour.maxMs) + " ms)"
+          : hitCeiling && feltWaits === 0
+            ? "pool encheu por um instante e esvaziou, ninguém esperou 1 s (máx " + fmt(pwHour.maxMs) + " ms)"
           : hitCeiling
             ? "pool encostou no teto (" + fmt(max) + ")" + (since ? " desde " + since : "")
             : fmt(busy) + " de " + fmt(max || 0) + " conexões do pool em uso"
