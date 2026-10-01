@@ -291,6 +291,46 @@
         figs: figs
       };
     }
+    // With the wait histogram (`runtime.poolWait`, lib/pool-wait.ts) the card
+    // judges by what a peak COST, in the last hour: did anybody wait for a
+    // connection long enough to feel it. A deploy burst that touches the
+    // ceiling for a few milliseconds and drains is the normal shape of every
+    // rolling deploy (the sibling takes the drained sockets), and is
+    // informational. Yellow is somebody having waited a second or more.
+    var pw = runtime.poolWait;
+    if (pw && pw.lastHour && typeof pw.lastHour.waitedOver1s === "number") {
+      var hour = pw.lastHour;
+      var felt = pw.feltWaitMs || 1000;
+      var minutesList = pw.perMinute || [];
+      var worst = null;
+      for (var wi = 0; wi < minutesList.length; wi++) {
+        var mm = minutesList[wi];
+        if (!worst || mm.maxWaitMs > worst.maxWaitMs) worst = mm;
+      }
+      var when = worst && worst.at ? new Date(worst.at).toISOString().slice(11, 16) + " UTC" : "";
+      var waitFigs = [
+        ["espera p95 (1 h)", hour.p95Ms + " ms"],
+        ["espera máxima (1 h)", hour.maxMs + " ms"],
+        ["pico em uso (1 h)", hour.maxBusy + " / " + max],
+        ["pico da fila (1 h)", String(hour.maxWaiting)]
+      ];
+      if (hour.waitedOver1s > 0) {
+        return {
+          key: "pool", state: "warn", source: "runtime",
+          head: hour.waitedOver1s + " pedido" + (hour.waitedOver1s === 1 ? "" : "s") + " esper" + (hour.waitedOver1s === 1 ? "ou" : "aram") + " mais de " + (felt / 1000) + " s por uma conexão na última hora",
+          body: "a espera máxima foi " + hour.maxMs + " ms" + (when ? ", às " + when : "") + ". isso alguém sentiu: uma página que demorou, um frame atrasado. agora está em " + busy + " de " + max + " e sem fila. se coincidir com um deploy, olhe `db.schema*` e `deadlock` nos logs daquele minuto.",
+          figs: waitFigs
+        };
+      }
+      if (hour.maxBusy >= max || peakBusy >= max) {
+        return {
+          key: "pool", state: "ok", source: "runtime",
+          head: "o pool encheu por um instante e esvaziou sem ninguém esperar",
+          body: "o pico em uso chegou a " + Math.max(hour.maxBusy, peakBusy) + " de " + max + (when ? " (pior minuto: " + when + ")" : "") + ", mas a espera por conexão ficou em p95 " + hour.p95Ms + " ms e máxima " + hour.maxMs + " ms, e nenhum pedido esperou " + (felt / 1000) + " s. é a rajada de reconexão de um deploy sendo absorvida, não o teto. vira amarelo só quando alguém espera de verdade.",
+          figs: waitFigs
+        };
+      }
+    }
     if (peakBusy >= max) {
       return {
         key: "pool", state: "warn", source: "runtime",

@@ -32,7 +32,7 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
-| `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 5 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
+| `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 6 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, pool waits over 1 s (see "Pool waits" below), HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
 | `grafana-dashboard-event.json` | Event-scoped "pqp Event" dashboard: sockets, seated, watching (see below), pool in-use/queued, DB latency, egress box CPU, HLS rungs/sessions, restarts, rung deaths. |
 | `grafana-dashboard-live.json` | Standing "pqp Live" dashboard: online users, voice calls (mesh vs livekit), voice rooms by backend, largest/peak room size, watch party sessions/rungs (+ the same "no viewer count" note as the event dashboard), SFU box CPU, egress box CPU, DB pool + breaker, and the exporter's own scrape health. See "Live dashboard" below. |
 | `test_exporter.py` | `unittest` coverage for the exporter's `render()` (payload dict in, Prometheus text out) -- the by-backend zero-default behaviour, the breaker gauge, that no viewer gauge is invented, and the activation funnel series (both cohort windows, the conversion gauges, and the zero-default when a step has no data) -- plus `collect_admin_metrics_snapshots()`'s `instanceId` dedup (alternating replicas, the `PQP_API_METRICS_MAX_SCRAPES` cap, a single-instance deployment, an older payload with no `instanceId`, partial scrape failures), the `PQP_API_METRICS_ENDPOINTS` override, and `merge_admin_metrics()`'s additive-vs-shared classification (`calls`/`pushDelivery` sum, `messages`/`activation`/`cluster` never double, `voice`/`liveHls`'s mixed fields land on the right side). Run with `python3 -m unittest tools/monitoring/test_exporter.py`. |
@@ -251,6 +251,32 @@ see the comment above the `liveHls` gauges in `pqp-api-metrics-exporter.py`.
 `pqp_api_hls_sessions` (already exported) is the only session count there is,
 so a distinct "active sessions" gauge would just be a second name for the
 same number.
+
+## Pool waits (added 2026-10-01)
+
+`runtime.poolWait` on `GET /api/admin/metrics` (`server/src/lib/pool-wait.ts`)
+is how long each Postgres checkout waited for a connection, as a per-minute
+histogram over the last hour, and `runtime.wsAuth` is the WebSocket arrival
+gate. `runtime` is per process and the merge takes it from the first replica,
+which is wrong for this: a reconnect herd lands on the ONE replica that stayed
+up. So `pool_wait_across()` combines every scraped snapshot (max of each wait
+and peak, sum of the waits over a second) and `render()` emits:
+
+| Series | Meaning |
+|---|---|
+| `pqp_api_pool_wait_p95_ms_5m` / `pqp_api_pool_wait_max_ms_5m` | p95 and longest wait for a connection, last 5 min, worst replica |
+| `pqp_api_pool_waited_over_1s_5m` | checkouts that waited more than 1 s, last 5 min, summed: the one a person felt |
+| `pqp_api_pool_peak_busy_5m` / `pqp_api_pool_peak_waiting_5m` | the pool's busy and queue peaks, last 5 min, worst replica |
+| `pqp_api_ws_auth_peak_queued` / `pqp_api_ws_auth_overflowed` | the arrival gate's deepest queue and its fail-open count, since process start |
+
+All of them are omitted (not zero) against an API older than the field. New in
+the JSON here, **not imported anywhere yet**: the "Pool wait (5 min, worst
+replica)" panel on `grafana-dashboard-event.json` and the
+`pqp-event-pool-felt-wait` rule in `grafana-alert-rules-event.json` (more than
+5 waits over 1 s in 5 minutes, NoData OK, window 3m per the rule about 1/min
+series in `docs/MONITORING.md`). The three manual steps below apply: redeploy
+the exporter on the SFU box after the API change is live, then import the
+panel and the rule.
 
 ## What still needs a human, every time
 

@@ -155,6 +155,46 @@
           "notification_settings": { "receiver": "rafael-email" }
         },
         {
+          "uid": "pqp-event-pool-felt-wait",
+          "title": "Pool waits over 1 s (somebody felt the pool)",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 600, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "max_over_time(pqp_api_pool_waited_over_1s_5m[3m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [5] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "for": "0s",
+          "labels": { "severity": "warning", "area": "event" },
+          "annotations": {
+            "summary": "More than 5 Postgres checkouts waited over 1 s for a connection in the last 5 minutes.",
+            "description": "Unlike the peak-since-start numbers, this counts only waits a person could feel (runtime.poolWait, server/src/lib/pool-wait.ts): a deploy burst that touches 22 of 22 and drains in milliseconds reads 0. If it fires right after a rolling deploy, check the logs of that minute for db.schemaApplied / db.schemaRetry (boot DDL holding table locks) and deadlock detected; see docs/DB_RUNBOOK.md section on the reconnect herd. Window is 3m because the series lands every ~20 s and NoData is OK (an API older than the field emits none).",
+            "runbook": "docs/DB_RUNBOOK.md"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
           "uid": "pqp-event-hls-rung-deaths",
           "title": "HLS rung deaths > 3 in 5m",
           "condition": "C",

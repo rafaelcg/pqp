@@ -64,6 +64,13 @@ export interface PoolStats {
  */
 export type { PoolCheckoutStats } from "./pool-checkouts.js";
 import type { PoolCheckoutStats } from "./pool-checkouts.js";
+import type { AdmissionStats } from "./admission.js";
+import {
+  notePoolOccupancy,
+  poolWaitSnapshot,
+  resetPoolWaitForTests,
+  type PoolWaitSnapshot,
+} from "./pool-wait.js";
 
 /**
  * Three states, not a percentage, because the interesting distinction is not
@@ -164,6 +171,23 @@ export interface RuntimeMetrics {
   /** ISO. Process start or the last São Paulo midnight, whichever is later. */
   peakTrackedSince: string;
   /**
+   * How long callers waited for a connection, as a histogram per minute over
+   * the last hour, with each minute's `busy` / `waiting` high-water marks.
+   * This, not `peakPoolBusy`, is what says whether anybody felt a peak: a
+   * deploy burst that touches the ceiling for a few milliseconds shows here
+   * as a max wait in the tens of milliseconds and `waitedOver1s: 0`.
+   * See `lib/pool-wait.ts`.
+   */
+  poolWait: PoolWaitSnapshot;
+  /**
+   * The admission gate in front of WebSocket arrivals (`ws/index.ts`,
+   * `lib/admission.ts`), or null in a process with no WebSocket server.
+   * `peakQueued` and the wait percentiles say how much of a reconnect herd
+   * queued at the socket instead of on the pool; `overflowed` above zero
+   * means somebody waited the gate's whole budget and was let through anyway.
+   */
+  wsAuth: (AdmissionStats & { enabled: boolean }) | null;
+  /**
    * The A3.1 circuit breaker over the pool (`lib/db-breaker.ts`, wired up in
    * `db.ts`). `state` is what a DB-dependent route is answering with right
    * now: `closed` normal, `open` every query fast-rejects with 503, `half-open`
@@ -189,6 +213,15 @@ let readPoolCheckoutStats: (() => PoolCheckoutStats) | null = null;
 let readDbBreakerStats:
   | (() => { state: "closed" | "open" | "half-open"; opened: number; rejected: number })
   | null = null;
+
+let readWsAuthStats: (() => AdmissionStats & { enabled: boolean }) | null = null;
+
+/** Called once by `index.ts` with `wsAuthAdmissionStats`. */
+export function registerWsAuthStats(
+  read: () => AdmissionStats & { enabled: boolean },
+): void {
+  readWsAuthStats = read;
+}
 
 /** Called once by `index.ts` with `() => wss.clients.size`. */
 export function registerSocketCount(read: () => number): void {
@@ -354,6 +387,9 @@ export function noteRuntimeSample(): void {
   if (busy > peakPoolBusy) {
     peakPoolBusy = busy;
   }
+  // The same two numbers again, per minute, so a peak carries the time it
+  // happened and ages out of the hour (`lib/pool-wait.ts`).
+  notePoolOccupancy(busy, stats.waiting);
 }
 
 /** The live block. Reads properties; never queries anything. */
@@ -374,8 +410,44 @@ export function runtimeSnapshot(): RuntimeMetrics {
     peakPoolWaiting,
     peakPoolBusy,
     peakTrackedSince,
+    poolWait: safePoolWait(),
+    wsAuth: safeWsAuthStats(),
     db: { breaker: safeDbBreakerStats() },
   };
+}
+
+function safeWsAuthStats(): (AdmissionStats & { enabled: boolean }) | null {
+  try {
+    return readWsAuthStats?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safePoolWait(): PoolWaitSnapshot {
+  try {
+    return poolWaitSnapshot();
+  } catch {
+    const empty = {
+      minutes: 0,
+      checkouts: 0,
+      p50Ms: 0,
+      p95Ms: 0,
+      p99Ms: 0,
+      maxMs: 0,
+      meanMs: 0,
+      waitedOver1s: 0,
+      maxBusy: 0,
+      maxWaiting: 0,
+    };
+    return {
+      feltWaitMs: 1_000,
+      lastMinute: empty,
+      last5Minutes: empty,
+      lastHour: empty,
+      perMinute: [],
+    };
+  }
 }
 
 /** Test hook: forget every registration and every peak. */
@@ -385,9 +457,11 @@ export function resetRuntimeMetrics(): void {
   readPoolStats = null;
   readPoolCheckoutStats = null;
   readDbBreakerStats = null;
+  readWsAuthStats = null;
   peakSockets = 0;
   peakPoolWaiting = 0;
   peakPoolBusy = 0;
   peakDay = "";
   peakTrackedSince = new Date().toISOString();
+  resetPoolWaitForTests();
 }

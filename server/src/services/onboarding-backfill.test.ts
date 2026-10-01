@@ -45,9 +45,13 @@ async function onboardedAt(userId: string): Promise<string | undefined> {
   return result.rows[0]?.settings.onboardedAt;
 }
 
+// `mode: "always"` throughout: each test re-arms the backfill by deleting its
+// `data_migrations` row and expects the next boot to run `schema.sql` again.
+// A production boot skips an unchanged file (`initDb` in db.ts), so re-arming
+// a migration there takes a schema change or BOOT_SCHEMA_MODE=always.
 describeDb("onboarding grandfather backfill", () => {
   beforeAll(async () => {
-    await initDb();
+    await initDb({ mode: "always" });
   });
 
   afterAll(async () => {
@@ -65,7 +69,7 @@ describeDb("onboarding grandfather backfill", () => {
 
   it("marks every account that already existed", async () => {
     const existing = await insertUser("clerk_backfill_existing");
-    await initDb();
+    await initDb({ mode: "always" });
     expect(await onboardedAt(existing)).toBeTruthy();
   });
 
@@ -76,7 +80,7 @@ describeDb("onboarding grandfather backfill", () => {
       [existing, JSON.stringify({ theme: "light" })],
     );
 
-    await initDb();
+    await initDb({ mode: "always" });
 
     const result = await getPool().query<{
       settings: { theme?: string; onboardedAt?: string };
@@ -87,11 +91,11 @@ describeDb("onboarding grandfather backfill", () => {
 
   it("does not run again, so a later signup still gets onboarding", async () => {
     await insertUser("clerk_backfill_before");
-    await initDb();
+    await initDb({ mode: "always" });
 
     // Signs up after the migration ran, then the server restarts.
     const newcomer = await insertUser("clerk_backfill_after");
-    await initDb();
+    await initDb({ mode: "always" });
 
     expect(await onboardedAt(newcomer)).toBeUndefined();
   });
@@ -104,7 +108,7 @@ describeDb("onboarding grandfather backfill", () => {
     const nameless = await insertUser("clerk_backfill_nameless", "User 3f9a");
     const named = await insertUser("clerk_backfill_named", "Rafael");
 
-    await initDb();
+    await initDb({ mode: "always" });
 
     expect(await onboardedAt(nameless)).toBeUndefined();
     expect(await onboardedAt(named)).toBeTruthy();
@@ -112,12 +116,12 @@ describeDb("onboarding grandfather backfill", () => {
 
   it("does not mistake a real name that merely starts with User", async () => {
     const real = await insertUser("clerk_backfill_userish", "User Experience");
-    await initDb();
+    await initDb({ mode: "always" });
     expect(await onboardedAt(real)).toBeTruthy();
   });
 
   it("records itself even when there is nobody to mark", async () => {
-    await initDb();
+    await initDb({ mode: "always" });
     const marks = await getPool().query(
       `SELECT 1 FROM data_migrations WHERE name = $1`,
       [MIGRATION],

@@ -667,11 +667,51 @@ def merge_admin_metrics(payloads: list[dict]) -> dict:
     return merged
 
 
+def pool_wait_across(payloads: list[dict]) -> dict | None:
+    """The worst replica's pool-wait picture over the last five minutes.
+
+    `runtime` is per-process and the merge above takes it from whichever
+    replica answered first, which is right for a level (sockets on this
+    process) and wrong for this question: a reconnect herd lands on ONE
+    replica, the one that stayed up, and a scrape that happened to read the
+    other would report a calm pool through the whole burst. So these are
+    combined across every scraped snapshot: the max of each wait figure and
+    occupancy peak, and the sum of the waits a person could feel (each
+    replica counted its own checkouts). None when no replica reports
+    `runtime.poolWait` (an API older than the field)."""
+    windows = []
+    auth = []
+    for payload in payloads:
+        runtime = (payload or {}).get("runtime") or {}
+        window = (runtime.get("poolWait") or {}).get("last5Minutes")
+        if isinstance(window, dict):
+            windows.append(window)
+        gate = runtime.get("wsAuth")
+        if isinstance(gate, dict):
+            auth.append(gate)
+    if not windows:
+        return None
+
+    def worst(key: str) -> float:
+        return max((w.get(key) or 0) for w in windows)
+
+    return {
+        "p95Ms": worst("p95Ms"),
+        "maxMs": worst("maxMs"),
+        "maxBusy": worst("maxBusy"),
+        "maxWaiting": worst("maxWaiting"),
+        "waitedOver1s": sum((w.get("waitedOver1s") or 0) for w in windows),
+        "authPeakQueued": max(((g.get("peakQueued") or 0) for g in auth), default=0),
+        "authOverflowed": sum((g.get("overflowed") or 0) for g in auth),
+    }
+
+
 def render(
     payload: dict,
     ready_payload: dict | None = None,
     replicas_scraped: int = 1,
     instances_expected: int = 1,
+    pool_wait: dict | None = None,
 ) -> str:
     ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
@@ -793,6 +833,61 @@ def render(
         "(same falsy-default convention as pqp_api_ready_ok).",
         0 if breaker.get("state", "closed") == "closed" else 1,
     )
+    # Pool waits (runtime.poolWait, server/src/lib/pool-wait.ts): what a peak
+    # COST rather than how high it went. Worst replica, last five minutes, so
+    # a 20 s exporter tick never misses a deploy burst that the once-a-minute
+    # /ready sample above cannot see. Omitted entirely on an API older than
+    # the field, so a panel reads "no data" rather than a confident zero.
+    waits = pool_wait if pool_wait is not None else pool_wait_across([payload])
+    if waits is not None:
+        gauge(
+            lines,
+            "pqp_api_pool_wait_p95_ms_5m",
+            "p95 of the time callers waited for a pooled Postgres connection over the last 5 minutes, "
+            "worst replica (runtime.poolWait.last5Minutes.p95Ms; histogram bucket upper bound).",
+            waits["p95Ms"],
+        )
+        gauge(
+            lines,
+            "pqp_api_pool_wait_max_ms_5m",
+            "Longest single wait for a pooled Postgres connection over the last 5 minutes, worst replica.",
+            waits["maxMs"],
+        )
+        gauge(
+            lines,
+            "pqp_api_pool_waited_over_1s_5m",
+            "Checkouts that waited more than 1 s for a connection in the last 5 minutes, summed across "
+            "replicas. The one that means somebody felt it; a deploy burst that touches the ceiling and "
+            "drains reads 0 here.",
+            waits["waitedOver1s"],
+        )
+        gauge(
+            lines,
+            "pqp_api_pool_peak_busy_5m",
+            "Highest pool connections checked out at once in the last 5 minutes, worst replica "
+            "(dated per minute in runtime.poolWait.perMinute).",
+            waits["maxBusy"],
+        )
+        gauge(
+            lines,
+            "pqp_api_pool_peak_waiting_5m",
+            "Deepest pool queue seen at a checkout in the last 5 minutes, worst replica.",
+            waits["maxWaiting"],
+        )
+        gauge(
+            lines,
+            "pqp_api_ws_auth_peak_queued",
+            "Deepest WebSocket arrival queue (runtime.wsAuth.peakQueued) since process start, worst replica: "
+            "how much of a reconnect herd waited at the socket instead of on the pool.",
+            waits["authPeakQueued"],
+        )
+        gauge(
+            lines,
+            "pqp_api_ws_auth_overflowed",
+            "Socket arrivals let through over the admission limit after waiting the gate's whole budget "
+            "(runtime.wsAuth.overflowed), summed across replicas since their start. Belongs near zero.",
+            waits["authOverflowed"],
+        )
     # No pqp_api_hls_viewers gauge, and no pqp_api_hls_active_sessions distinct
     # from pqp_api_hls_sessions below: pqp has no server-side count of
     # concurrent watch-party viewers anywhere in the codebase today -- the
@@ -1211,7 +1306,13 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"pqp-api-metrics-exporter: /ready fetch failed, using admin block: {exc}", file=sys.stderr)
             ready_payload = None
-        body = render(payload, ready_payload, replicas_scraped=scraped, instances_expected=expected)
+        body = render(
+            payload,
+            ready_payload,
+            replicas_scraped=scraped,
+            instances_expected=expected,
+            pool_wait=pool_wait_across(payloads),
+        )
     except (
         urllib.error.URLError,
         RuntimeError,

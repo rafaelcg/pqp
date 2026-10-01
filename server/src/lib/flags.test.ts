@@ -62,6 +62,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   voice_mesh_resume_requires_cap: (raw) => raw === "true",
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  ws_auth_admission: offWords,
   community_home: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

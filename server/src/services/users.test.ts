@@ -369,10 +369,14 @@ describeDb("account creation", () => {
  * it does nothing for the ones already rendered as somebody's name.
  */
 describeDb("the email scrub migration", () => {
-  /** Re-arm the migration by dropping the fingerprint, then run schema.sql. */
+  /**
+   * Re-arm the migration by dropping the fingerprint, then run schema.sql.
+   * `mode: "always"`: a boot with an unchanged file skips it (`initDb` in
+   * db.ts), and what is under test here is the file's own guard.
+   */
   async function runMigration(): Promise<void> {
     await getPool().query(`COMMENT ON COLUMN users.display_name IS NULL`);
-    await initDb();
+    await initDb({ mode: "always" });
   }
 
   async function seed(row: {
@@ -514,12 +518,13 @@ describeDb("the email scrub migration", () => {
     );
 
     // Put an address back by hand — as a user editing their own profile would —
-    // and boot again without re-arming.
+    // and boot again without re-arming. `always`, so it is the fingerprint
+    // and not the unchanged-file skip that keeps the migration from running.
     await getPool().query(
       `UPDATE users SET display_name = $2 WHERE clerk_id = $1`,
       ["user_again", "chosen@example.com"],
     );
-    await initDb();
+    await initDb({ mode: "always" });
 
     expect((await read("user_again")).display_name).toBe("chosen@example.com");
   });
