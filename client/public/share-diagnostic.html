@@ -466,134 +466,149 @@
         // Everything after the picker can still fail (a codec the browser
         // refuses, a description it will not set). Give the capture back and
         // the Start button with it instead of leaving a half-built run.
-        const pending = { pcs: [] };
+        const pending = { pcs: [], clones: [] };
         try {
-        const track = stream.getVideoTracks()[0];
-        try {
-          track.contentHint = "motion";
-        } catch {}
-        const settings = track.getSettings ? track.getSettings() : {};
-
-        const a = new RTCPeerConnection();
-        const b = new RTCPeerConnection();
-        pending.pcs.push(a, b);
-        a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate).catch(() => {});
-        b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate).catch(() => {});
-        const transceiver = a.addTransceiver(track, { direction: "sendonly", streams: [stream] });
-        preferCodec(transceiver, codecWanted);
-        // A pqp share on the media server is not one encode but three: the
-        // top layer plus 720p and 360p copies, every one at the capture's
-        // frame rate (livekit-session.ts, publishScreenVideo). A loopback
-        // cannot negotiate simulcast, so the two lower layers are two more
-        // senders fed from clones of the same capture, which costs the
-        // machine the same encodes. ?layers=1 sends the top one only.
-        const extraLayers = [];
-        if (params.get("layers") !== "1") {
-          for (const h of [720, 360]) {
-            if ((settings.height || 1080) - h < 100) continue;
-            const clone = track.clone();
-            const t = a.addTransceiver(clone, { direction: "sendonly" });
-            preferCodec(t, codecWanted);
-            extraLayers.push({ height: h, transceiver: t, clone, maxBitrate: h === 720 ? 1_400_000 : 450_000 });
-          }
-        }
-        b.ontrack = (e) => {
-          // Keep the received track alive without painting it: a preview
-          // would add GPU work the real share does not have.
-          run && (run.remote = e.track);
-        };
-        await a.setLocalDescription();
-        await b.setRemoteDescription(a.localDescription);
-        await b.setLocalDescription();
-        // A loopback has no real bottleneck, but WebRTC's bandwidth estimate
-        // still starts at a few hundred kbit/s and would spend the first
-        // seconds encoding a tiny picture. Start it where a pqp share on a
-        // good link sits, so the encoder does full-size work from the start.
-        const answer = b.localDescription.sdp.replace(
-          /^(a=fmtp:\d+ .*)$/gm,
-          "$1;x-google-start-bitrate=4000;x-google-min-bitrate=2000",
-        );
-        await a.setRemoteDescription({ type: "answer", sdp: answer });
-        const sender = transceiver.sender;
-        // pqp's "auto" screen ceiling is 3 Mbit/s for the top layer.
-        const tune = async (s, maxBitrate, scale) => {
+          const track = stream.getVideoTracks()[0];
           try {
-            const p = s.getParameters();
-            p.degradationPreference = "maintain-framerate";
-            if (p.encodings && p.encodings[0]) {
-              p.encodings[0].maxBitrate = maxBitrate;
-              p.encodings[0].maxFramerate = fps;
-              if (scale) p.encodings[0].scaleResolutionDownBy = scale;
-            }
-            await s.setParameters(p);
+            track.contentHint = "motion";
           } catch {}
-        };
-        await tune(sender, 3_000_000, null);
-        for (const layer of extraLayers) {
-          await tune(layer.transceiver.sender, layer.maxBitrate, (settings.height || 1080) / layer.height);
-        }
+          const settings = track.getSettings ? track.getSettings() : {};
 
-        run = {
-          startedAt: performance.now(),
-          // With no ceiling asked for, judge against what the browser chose.
-          fps: fpsChoice === "none" && num(settings.frameRate) ? Math.round(settings.frameRate) : fps,
-          extraLayers,
-          codecWanted,
-          stream,
-          track,
-          a,
-          b,
-          sender,
-          counter: startFrameCounter(track),
-          prev: null,
-          prevCounter: { frames: 0, bigGaps: 0 },
-          settings,
-          env: {
-            userAgent: navigator.userAgent,
-            platform: navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform,
-            hardwareConcurrency: navigator.hardwareConcurrency || null,
-            surface: settings.displaySurface || null,
-            captureWidth: settings.width || null,
-            captureHeight: settings.height || null,
-            captureFrameRateSetting: settings.frameRate || null,
-            devicePixelRatio: window.devicePixelRatio,
-            screen: `${screen.width}x${screen.height}`,
-          },
-        };
-        // ?preview=1: paint the capture in a small <video> and count the
-        // frames the page actually presented (requestVideoFrameCallback).
-        // Off by default because painting is GPU work a real share does not
-        // do, and it stops while this page is hidden anyway.
-        if (params.get("preview") === "1" && "requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-          const video = document.createElement("video");
-          video.muted = true;
-          video.playsInline = true;
-          video.style.cssText = "width:320px;border-radius:6px;margin-top:8px";
-          video.srcObject = new MediaStream([track]);
-          $("pattern").after(video);
-          run.preview = { frames: 0, video };
-          const tick = () => {
-            if (!run || run.stopped) return;
-            run.preview.frames += 1;
-            video.requestVideoFrameCallback(tick);
+          const a = new RTCPeerConnection();
+          const b = new RTCPeerConnection();
+          pending.pcs.push(a, b);
+          a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate).catch(() => {});
+          b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate).catch(() => {});
+          const transceiver = a.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+          preferCodec(transceiver, codecWanted);
+          // A pqp share on the media server is not one encode but three: the
+          // top layer plus 720p and 360p copies, every one at the capture's
+          // frame rate (livekit-session.ts, publishScreenVideo). A loopback
+          // cannot negotiate simulcast, so the two lower layers are two more
+          // senders fed from clones of the same capture, which costs the
+          // machine the same encodes. ?layers=1 sends the top one only.
+          const extraLayers = [];
+          if (params.get("layers") !== "1") {
+            for (const h of [720, 360]) {
+              if ((settings.height || 1080) - h < 100) continue;
+              const clone = track.clone();
+              pending.clones.push(clone);
+              const t = a.addTransceiver(clone, { direction: "sendonly" });
+              preferCodec(t, codecWanted);
+              extraLayers.push({ height: h, transceiver: t, clone, maxBitrate: h === 720 ? 1_400_000 : 450_000 });
+            }
+          }
+          b.ontrack = (e) => {
+            // Keep the received track alive without painting it: a preview
+            // would add GPU work the real share does not have.
+            run && (run.remote = e.track);
           };
-          video.requestVideoFrameCallback(tick);
-          video.play().catch(() => {});
-        }
-        track.addEventListener("ended", () => stop());
-        run.timer = setInterval(sample, 1000);
-        $("stop").disabled = false;
-        $("copy").disabled = true;
-        setVerdict("warn", "Measuring", "Go to the game now and play for 30 seconds or more, then come back and press Stop.");
-        $("env").textContent =
-          `Capture: ${settings.displaySurface || "?"} ${settings.width || "?"}x${settings.height || "?"}, ` +
-          `asked for at most ${fps} fps, browser says ${fmt(num(settings.frameRate))} fps. Codec asked: ${codecWanted}.`;
-        const seconds = Number(params.get("seconds"));
-        // Owned by this run, so a restart cannot be ended by the last one's timer.
-        if (seconds > 0) run.autoStop = setTimeout(stop, seconds * 1000);
+          await a.setLocalDescription();
+          await b.setRemoteDescription(a.localDescription);
+          await b.setLocalDescription();
+          // A loopback has no real bottleneck, but WebRTC's bandwidth estimate
+          // still starts at a few hundred kbit/s and would spend the first
+          // seconds encoding a tiny picture. Start it where a pqp share on a
+          // good link sits, so the encoder does full-size work from the start.
+          const answer = b.localDescription.sdp.replace(
+            /^(a=fmtp:\d+ .*)$/gm,
+            "$1;x-google-start-bitrate=4000;x-google-min-bitrate=2000",
+          );
+          await a.setRemoteDescription({ type: "answer", sdp: answer });
+          const sender = transceiver.sender;
+          // pqp's "auto" screen ceiling is 3 Mbit/s for the top layer.
+          const tune = async (s, maxBitrate, scale) => {
+            try {
+              const p = s.getParameters();
+              p.degradationPreference = "maintain-framerate";
+              if (p.encodings && p.encodings[0]) {
+                p.encodings[0].maxBitrate = maxBitrate;
+                p.encodings[0].maxFramerate = fps;
+                if (scale) p.encodings[0].scaleResolutionDownBy = scale;
+              }
+              await s.setParameters(p);
+            } catch {}
+          };
+          await tune(sender, 3_000_000, null);
+          for (const layer of extraLayers) {
+            await tune(layer.transceiver.sender, layer.maxBitrate, (settings.height || 1080) / layer.height);
+          }
+
+          run = {
+            startedAt: performance.now(),
+            // With no ceiling asked for, judge against what the browser chose.
+            fps: fpsChoice === "none" && num(settings.frameRate) ? Math.round(settings.frameRate) : fps,
+            extraLayers,
+            codecWanted,
+            stream,
+            track,
+            a,
+            b,
+            sender,
+            counter: startFrameCounter(track),
+            prev: null,
+            prevCounter: { frames: 0, bigGaps: 0 },
+            settings,
+            env: {
+              userAgent: navigator.userAgent,
+              platform: navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform,
+              hardwareConcurrency: navigator.hardwareConcurrency || null,
+              surface: settings.displaySurface || null,
+              captureWidth: settings.width || null,
+              captureHeight: settings.height || null,
+              captureFrameRateSetting: settings.frameRate || null,
+              devicePixelRatio: window.devicePixelRatio,
+              screen: `${screen.width}x${screen.height}`,
+            },
+          };
+          // ?preview=1: paint the capture in a small <video> and count the
+          // frames the page actually presented (requestVideoFrameCallback).
+          // Off by default because painting is GPU work a real share does not
+          // do, and it stops while this page is hidden anyway.
+          if (params.get("preview") === "1" && "requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+            const video = document.createElement("video");
+            video.muted = true;
+            video.playsInline = true;
+            video.style.cssText = "width:320px;border-radius:6px;margin-top:8px";
+            video.srcObject = new MediaStream([track]);
+            $("pattern").after(video);
+            run.preview = { frames: 0, video };
+            const tick = () => {
+              if (!run || run.stopped) return;
+              run.preview.frames += 1;
+              video.requestVideoFrameCallback(tick);
+            };
+            video.requestVideoFrameCallback(tick);
+            video.play().catch(() => {});
+          }
+          track.addEventListener("ended", () => stop());
+          // A timeout that re-arms after each sample, not an interval: a slow
+          // getStats delays the next reading instead of overlapping it.
+          const tick = async () => {
+            const owner = run;
+            if (!owner || owner.stopped) return;
+            await sample();
+            if (run === owner && !owner.stopped) owner.timer = setTimeout(tick, 1000);
+          };
+          run.timer = setTimeout(tick, 1000);
+          $("stop").disabled = false;
+          $("copy").disabled = true;
+          setVerdict("warn", "Measuring", "Go to the game now and play for 30 seconds or more, then come back and press Stop.");
+          $("env").textContent =
+            `Capture: ${settings.displaySurface || "?"} ${settings.width || "?"}x${settings.height || "?"}, ` +
+            `asked for at most ${fps} fps, browser says ${fmt(num(settings.frameRate))} fps. Codec asked: ${codecWanted}.`;
+          const seconds = Number(params.get("seconds"));
+          // Owned by this run, so a restart cannot be ended by the last one's timer.
+          if (seconds > 0) run.autoStop = setTimeout(stop, seconds * 1000);
         } catch (err) {
-          if (run && run.timer) clearInterval(run.timer);
+          if (run) {
+            clearTimeout(run.timer);
+            clearTimeout(run.autoStop);
+            if (run.counter) run.counter.stop();
+            if (run.preview) run.preview.video.remove();
+          }
           run = null;
+          for (const t of pending.clones) t.stop();
           for (const t of stream.getTracks()) t.stop();
           for (const pc of pending.pcs) pc.close();
           $("stop").disabled = true;
@@ -842,7 +857,7 @@
       async function stop() {
         if (!run || run.stopped) return;
         run.stopped = true;
-        clearInterval(run.timer);
+        clearTimeout(run.timer);
         clearTimeout(run.autoStop);
         if (run.sampling) await run.sampling;
         await takeSample(true);
