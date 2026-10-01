@@ -14,7 +14,7 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 - [Blog and release notes](https://pqp.gg/blog): what shipped, week by week
 - [iOS beta](https://pqp.gg/beta): TestFlight
 - [Android](https://pqp.gg/android): Google Play, and the direct APK still available
-- [Desktop download](https://pqp.gg/download): Electron builds
+- [Desktop download](https://pqp.gg/download): Electron builds, and the code signing policy (https://pqp.gg/download#code-signing)
 - [Status](https://pqp.gg/status): live service status
 - [Support the project](https://pqp.gg/apoie): donations; nothing is unlocked by donating
 

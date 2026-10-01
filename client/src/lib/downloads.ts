@@ -41,6 +41,22 @@ export const SOURCE_REPO_URL = `https://github.com/${REPO}`;
 export const RELEASES_PAGE_URL = `https://github.com/${REPO}/releases/latest`;
 
 /**
+ * The sentence the SignPath Foundation requires a project's website to carry
+ * once its releases are signed through the program
+ * (https://signpath.org/terms). English in every language on purpose: it is a
+ * required literal, so it is not a locale key and must never be translated.
+ */
+export const SIGNPATH_CREDIT =
+  "Free code signing provided by SignPath.io, certificate by SignPath Foundation";
+export const SIGNPATH_URL = "https://signpath.org";
+export const SIGNPATH_TERMS_URL = "https://signpath.org/terms";
+
+/** The `id` of the code signing policy section on `/download`. */
+export const CODE_SIGNING_ANCHOR = "code-signing";
+/** Where the footer (and anything else) links to the policy. */
+export const CODE_SIGNING_PATH = `/download#${CODE_SIGNING_ANCHOR}`;
+
+/**
  * The page a person can paste into a chat. Filenames on GitHub carry the
  * version, so a "latest .exe" URL goes 404 on the next tag; this path does not.
  */
