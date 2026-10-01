@@ -36,8 +36,24 @@ function isLocalDatabase(url: string | undefined): url is string {
   if (!url) {
     return false;
   }
+  const local = ["localhost", "127.0.0.1", "::1", "[::1]"];
   try {
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(url).hostname);
+    const parsed = new URL(url);
+    if (!local.includes(parsed.hostname)) {
+      return false;
+    }
+    // The driver lets `?host=` (and `?hostaddr=`) override the authority, so
+    // the URL's hostname alone does not say where the connection goes. Any
+    // such parameter must itself be local, and a URL that carries more than
+    // one is refused outright.
+    const overrides = [
+      ...parsed.searchParams.getAll("host"),
+      ...parsed.searchParams.getAll("hostaddr"),
+    ];
+    if (overrides.length > 1) {
+      return false;
+    }
+    return overrides.every((value) => local.includes(value));
   } catch {
     return false;
   }
