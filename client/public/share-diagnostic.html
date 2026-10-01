@@ -587,7 +587,12 @@
           const tick = async () => {
             const owner = run;
             if (!owner || owner.stopped) return;
-            await sample();
+            try {
+              await sample();
+            } catch (err) {
+              // One bad reading must not end the measurement.
+              console.warn("[share-diagnostic] sample failed", err);
+            }
             if (run === owner && !owner.stopped) owner.timer = setTimeout(tick, 1000);
           };
           run.timer = setTimeout(tick, 1000);
