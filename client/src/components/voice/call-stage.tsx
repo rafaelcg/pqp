@@ -28,6 +28,7 @@ import {
   Music,
   Video,
   VideoOff,
+  X,
 } from "lucide-react";
 import {
   useCallback,
@@ -625,6 +626,8 @@ export interface CallStageProps {
    * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
+  /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
+  onDismissError?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -730,6 +733,7 @@ export function CallStage({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -795,6 +799,7 @@ export function CallStage({
       onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
+      onDismissError={onDismissError}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -843,6 +848,7 @@ function ActiveCall({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -893,6 +899,8 @@ function ActiveCall({
    * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
+  /** The close (x) on the red error strip (`use-voice.ts` `dismissError`). */
+  onDismissError?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -2121,6 +2129,18 @@ function ActiveCall({
               onClick={() => requestSettingsSection("voice")}
             >
               {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+          {onDismissError && (
+            <button
+              type="button"
+              data-voice-error-dismiss
+              aria-label={t("common.close")}
+              title={t("common.close")}
+              className="rounded-md p-0.5 text-danger hover:bg-danger/20"
+              onClick={onDismissError}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
         </div>

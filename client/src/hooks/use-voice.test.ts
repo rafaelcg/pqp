@@ -1064,6 +1064,66 @@ describe("screen share audio", () => {
     expect(voice.getState().screenShareAudioFailed).toBe(false);
   });
 
+  it("clears the blocked banner once a later share succeeds", async () => {
+    // Cancel the picker, then share for real: "bloqueado ou cancelado" used to
+    // stay over the share that was running for the rest of the call.
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+    expect(voice.getState().error).not.toBeNull();
+    expect(voice.getState().errorKind).toBe("share");
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+  });
+
+  it("keeps an unrelated error when a share succeeds", async () => {
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+    voice.handleSignaling({ type: "camera-denied", voiceChannelId: CHANNEL });
+    await settle();
+    const cameraError = voice.getState().error;
+    expect(cameraError).not.toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBe(cameraError);
+  });
+
+  it("closes the error strip on request", async () => {
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+    expect(voice.getState().screenShareAudioFailed).toBe(true);
+
+    voice.dismissError();
+
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+    // The retry offer lives inside the strip; it goes with it.
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
+  });
+
   it("explains a failed audio capture instead of quoting the browser", async () => {
     // A real report from the QG, 24 Aug 2026: "Could not start audio source",
     // in English, with no clue attached, and the share dropped even though the
