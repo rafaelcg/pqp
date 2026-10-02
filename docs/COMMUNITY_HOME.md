@@ -358,7 +358,7 @@ translations": each language's text, read only, with "Out of date" when the post
 changed since (`GET .../home/posts/:id/translations`, `MANAGE_SERVER`). There is
 no editing of a translation; saving the post makes new ones.
 
-**Cost.** About 0.003 USD per 1,000 words per language with flash-lite, so a
+**Cost.** (A rejected answer from the provider still counts: it was billed.) About 0.003 USD per 1,000 words per language with flash-lite, so a
 600-word post into two languages is about a cent.
 
 **Counters and logs.** `communityHomeTranslation` on `GET /api/admin/metrics`:
