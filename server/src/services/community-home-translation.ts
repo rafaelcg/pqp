@@ -259,6 +259,7 @@ export function resetCommunityHomeTranslationForTests(): void {
   idleUntil = 0;
   idleSignature = "";
   queued.clear();
+  maxQueued = MAX_QUEUED;
 }
 
 // ---------------------------------------------------------------- hash + text
@@ -756,7 +757,13 @@ const waiting: Array<() => void> = [];
 
 /** What may wait for a slot. Past it the work is dropped and the sweep finds it again. */
 const MAX_QUEUED = 50;
+let maxQueued = MAX_QUEUED;
 const queued = new Set<string>();
+
+/** Tests only: a smaller queue, to see the overflow path. */
+export function setCommunityHomeTranslationQueueLimitForTests(limit: number | null): void {
+  maxQueued = limit ?? MAX_QUEUED;
+}
 
 /**
  * Run one (post, language) through the slots, once: a pair already waiting or
@@ -769,7 +776,13 @@ function runQueued(
   lang: CommunityHomeTranslationLang,
 ): Promise<unknown> {
   const key = `${postId}:${lang}`;
-  if (queued.has(key) || waiting.length >= MAX_QUEUED) {
+  if (queued.has(key)) {
+    return Promise.resolve();
+  }
+  if (waiting.length >= maxQueued) {
+    // Dropped for room, not for being done: the sweep has to be able to find
+    // it, so the idle shortcut must not hide it.
+    idleUntil = 0;
     return Promise.resolve();
   }
   queued.add(key);

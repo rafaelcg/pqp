@@ -841,6 +841,29 @@ describeDb("Baú translation", () => {
       expect((await tr.sweepCommunityHomeTranslations()).attempted).toBe(3);
     });
 
+    it("work dropped because the queue was full is not hidden from the next sweep by the idle shortcut", async () => {
+      await bareInstanceWithPost();
+      process.env.COMMUNITY_HOME_TRANSLATION = "true";
+      // Nothing is missing yet: wait, nothing to find... so publish after an empty scan.
+      await getPool().query(`DELETE FROM community_home_posts`);
+      expect(await tr.sweepCommunityHomeTranslations()).toEqual({ attempted: 0 });
+      tr.setCommunityHomeTranslatorForTests(null);
+      const post = await publish();
+      tr.setCommunityHomeTranslatorForTests(fake.translator);
+      // A queue that holds nothing: the publish's own job is dropped for room.
+      let release!: () => void;
+      fake.state.gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      tr.setCommunityHomeTranslationQueueLimitForTests(-1);
+      await tr.scheduleCommunityHomeTranslation(post.id, serverId);
+      tr.setCommunityHomeTranslationQueueLimitForTests(null);
+      release();
+      expect(fake.calls).toHaveLength(0);
+      // Inside the idle window, yet the sweep still looks.
+      expect((await tr.sweepCommunityHomeTranslations()).attempted).toBe(3);
+    });
+
     it("a post edited with nothing translating it (a crash, a missed call) is caught by the sweep", async () => {
       const post = await publish();
       await untilTranslated(post.id);
