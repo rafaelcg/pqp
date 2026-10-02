@@ -1404,10 +1404,13 @@ function ActiveCall({
       watchFullscreen.exit();
     }
   }, [showCinema, watchFullscreen]);
-  // Phone held sideways with a share on: the shell's columns step aside.
-  // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
+  // Phone held sideways with a picture on: the shell's columns step aside.
+  // Any picture, not only a share: with the call's controls in the composer,
+  // a camera left the full desktop layout on a 390px tall screen and pushed
+  // the composer below it. Everything but the flag lives in the hook
+  // (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
-    shareFocused: screenStream !== null && chromeExpanded,
+    shareFocused: (screenStream !== null || anyVideo) && chromeExpanded,
     fullscreen: fullscreen.isFullscreen,
   });
   // Whatever names this call (the channel, the person in a DM) is the page
@@ -1478,7 +1481,10 @@ function ActiveCall({
     isCameraOn: voiceState.isCameraOn,
     isSharingScreen: voiceState.isSharingScreen,
     hasIncomingVideo: receivingVideo(voiceState),
-    collapsed: collapsed || dockComposer,
+    // The composer's strip carries the quality button whenever a picture is
+    // on the stage, so it is not "collapsed" for this menu then: treating it
+    // as collapsed closed the menu the moment it was asked to open.
+    collapsed: (collapsed || dockComposer) && !(dockComposer && chromeExpanded),
   });
   // Cleared rather than merely ignored: a menu that was open when the camera
   // went off must not spring back open by itself when the camera returns.
@@ -1654,7 +1660,10 @@ function ActiveCall({
       const peopleLine = collapsedPeopleLine({
         connected: voiceState.status === "connected",
         callingOut,
-        statusLine,
+        // While the ring view fills the stage it says Calling in large type;
+        // the strip under it names the people instead of saying it again.
+        statusLine:
+          dockComposer && ringing && stage.tiles.length === 0 ? null : statusLine,
         peopleLabel: collapsedPeopleLabel(
           people.map((person) => person.displayName),
           (count) => t("call.panel.inCall", { count }),
@@ -1663,20 +1672,24 @@ function ActiveCall({
       return (
         <div className="flex h-9 min-w-0 items-center gap-2">
           <OccupantFaces faces={people} />
+          {/* The names give way, the clock does not: on a phone the clock
+              was the part cut to "0:...". */}
           <p
-            className="min-w-0 flex-1 truncate text-sm leading-none text-text"
+            className="flex min-w-0 flex-1 items-center text-sm leading-none text-text"
             role="status"
           >
-            {peopleLine}
-            {declinedNames.map((name) => (
-              <span key={name} className="ml-2 text-warning">
-                {t("call.panel.declined", { name })}
-              </span>
-            ))}
+            <span className="min-w-0 truncate">
+              {peopleLine}
+              {declinedNames.map((name) => (
+                <span key={name} className="ml-2 text-warning">
+                  {t("call.panel.declined", { name })}
+                </span>
+              ))}
+            </span>
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
-              className="ml-2 tabular-nums text-text-tertiary"
+              className="ml-2 shrink-0 tabular-nums text-text-tertiary"
             />
           </p>
           <RaisedHandQueue
@@ -2041,9 +2054,7 @@ function ActiveCall({
               tile={soloTile}
               videoRef={primaryVideoRef}
               isFullscreen
-              /* The header overlay already names a lone presenter; a second
-                 label on the picture is the same sentence twice. */
-              showName={screenTiles.length > 1}
+              showName
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
               audio={shareAudioControl(soloTile)}
               dismissed={shareDismissControl(soloTile)}
@@ -2138,7 +2149,7 @@ function ActiveCall({
                         tile={screenTile}
                         videoRef={videoRef}
                         isFullscreen={false}
-                        showName={staged.tiles.length > 1}
+                        showName
                         clickToFullscreen={clickFullscreens}
                         onToggleFullscreen={() => {
                           // Keep the header's "X is presenting" line pointing
@@ -2474,7 +2485,9 @@ function ActiveCall({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!roomInSidebar && (
+          {/* The composer's strip already shows the clock when it carries
+              the call's controls. */}
+          {!roomInSidebar && !dockComposer && (
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
@@ -2874,7 +2887,12 @@ export function CallControls({
   );
   const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
-  const size = collapsed ? "h-9 w-9" : "h-10 w-10";
+  // The strip's tiles shrink a step on a narrow strip (a phone), so the
+  // whole set holds one row there instead of leaving hang-up on a line of
+  // its own.
+  const size = collapsed
+    ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
+    : "h-10 w-10";
   const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
   // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
   // wrapping row one by one. The bell's group keeps its own rule (hidden
@@ -3168,7 +3186,7 @@ export function CallControls({
       className={cn(
         "flex items-center gap-1",
         collapsed
-          ? "w-full flex-wrap justify-end @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
+          ? "w-full flex-wrap justify-end @max-[24rem]:gap-px @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
           : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
       )}
     >
@@ -3591,7 +3609,9 @@ function TileOverlay({
       // The fit control lives in "⋯"; the state it reports stays readable.
       data-tile-fit={fit?.fit}
       className={cn(
-        "pointer-events-none absolute flex items-end justify-between gap-2",
+        // `@container/picture`: the volume slider steps aside on a narrow
+        // picture so the name keeps its room (`PictureVolume`).
+        "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
         STAGE_LAYER.tileControls,
       )}
       style={{
@@ -4145,7 +4165,7 @@ function TileBadge({
       className={cn(
         "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
         inline
-          ? "min-w-0 rounded-md"
+          ? "min-w-[4.5rem] rounded-md"
           : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
@@ -4420,7 +4440,7 @@ export function ScreenTileFrame({
       </Tooltip>
     ) : null;
   const nameChip = showName ? (
-    <span className="truncate rounded-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
+    <span className="min-w-[4.5rem] truncate rounded-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
       {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
     </span>
   ) : null;
@@ -4496,7 +4516,7 @@ export function ScreenTileFrame({
         <div
           data-share-row=""
           className={cn(
-            "pointer-events-none absolute flex items-end justify-between gap-2",
+            "@container/picture pointer-events-none absolute flex items-end justify-between gap-2",
             STAGE_LAYER.tileControls,
           )}
           style={{

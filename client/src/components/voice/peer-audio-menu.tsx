@@ -543,7 +543,7 @@ export function PictureVolume({
       data-testid="picture-volume"
       data-picture-volume={kind}
       className={cn(
-        "flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink/70 pl-0.5 pr-2.5 text-paper",
+        "flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink/70 pl-0.5 pr-0.5 text-paper @min-[20rem]/picture:pr-2.5",
         className,
       )}
       onClick={(event) => event.stopPropagation()}
@@ -582,7 +582,10 @@ export function PictureVolume({
           percent: Math.round(track.volume * 100),
         })}
         onChange={(event) => track.onSetVolume(Number(event.target.value))}
-        className="h-1 w-20 cursor-pointer accent-signal"
+        // Hidden on a narrow picture (its row under 20rem), where it squeezed
+        // the name to three letters. The mute button stays, and the sidebar
+        // still has the full panel.
+        className="hidden h-1 w-20 cursor-pointer accent-signal @min-[20rem]/picture:block"
       />
     </div>
   );

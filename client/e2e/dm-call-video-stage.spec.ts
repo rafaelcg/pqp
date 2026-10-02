@@ -284,10 +284,13 @@ test("desktop: a voice-only DM stays a slim bar until a camera turns on", async 
     await expect(page.getByTestId("call-stage")).toBeVisible({
       timeout: 20_000,
     });
-    // Said once, in the composer's strip under the stage.
+    // Said once, by the ring view on the stage; the strip names the people.
+    await expect(
+      page.getByTestId("call-stage").getByText("Calling…"),
+    ).toBeVisible({ timeout: 20_000 });
     await expect(
       page.getByTestId("call-stage-collapsed").getByText("Calling…"),
-    ).toBeVisible({ timeout: 20_000 });
+    ).toHaveCount(0);
 
     await callee.page
       .getByRole("button", { name: "Accept" })
