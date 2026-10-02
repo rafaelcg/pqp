@@ -243,7 +243,7 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
  * The overflow half of the rule needs a room too big for a DM, and lives in
  * `call-stage-strip.spec.ts`.
  */
-test("a share and a camera are tiles, the listener is a chip, and the row hides", async ({
+test("a share and a camera are tiles, and a 1:1 call draws no row of only yourself", async ({
   page,
   browser,
 }) => {
@@ -272,12 +272,6 @@ test("a share and a camera are tiles, the listener is a chip, and the row hides"
       callee.page.getByText(`${pair.callerName} is presenting`),
     ).toBeVisible({ timeout: 20_000 });
 
-    // The callee answered a video call without turning their own camera on,
-    // which is the ordinary case and the one this test is about: they are
-    // publishing nothing, so they belong in the row, not on the stage.
-    const strip = callee.page.getByTestId("listener-strip");
-    await expect(strip).toBeVisible({ timeout: 20_000 });
-
     // The caller is publishing two things, and both are on the stage, playing
     // — not merely present. A tile that renders no frames is the bug that
     // `remote-video-delivery.ts` causes when nothing binds a <video>.
@@ -293,63 +287,19 @@ test("a share and a camera are tiles, the listener is a chip, and the row hides"
       )
       .toBe(true);
 
-    // The person publishing nothing is the only chip, and a chip is not a
-    // video tile: no <video> in the row at all.
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
+    // The callee answered without turning their own camera on, so they are
+    // the only person publishing nothing. A row holding nobody but yourself
+    // says nothing the bar does not, so a 1:1 call draws none. (The row, its
+    // overflow and hiding it from the keyboard are pinned with real
+    // listeners in `call-stage-strip.spec.ts`.)
+    await expect(callee.page.getByTestId("listener-strip")).toHaveCount(0);
     await expect(
-      strip.locator(`[data-call-listener="${pair.calleeName}"]`),
-    ).toBeVisible();
-    await expect(
-      strip.locator(`[data-call-listener="${pair.callerName}"]`),
+      callee.page.locator(`[data-call-listener="${pair.calleeName}"]`),
     ).toHaveCount(0);
-    await expect(strip.locator("video")).toHaveCount(0);
-
-    // The row sits above the control bar rather than under it: the hang-up
-    // button and the chips are both pressable, which is exactly what a
-    // full-width bar with pointer events would otherwise take away.
-    const chipBox = await strip
-      .locator(`[data-call-listener="${pair.calleeName}"]`)
-      .boundingBox();
-    const leaveBox = await callee.page
-      .getByRole("button", { name: "Leave", exact: true })
-      .boundingBox();
-    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(leaveBox!.y + 1);
 
     await callee.page.screenshot({
-      path: "test-results/listener-strip-open.png",
+      path: "test-results/listener-strip-solo.png",
     });
-
-    // Hide, from the keyboard: no chips, the share still on the stage, and
-    // focus kept on the (now "show") button.
-    await callee.page
-      .getByRole("button", { name: "Hide participants" })
-      .focus();
-    await callee.page.keyboard.press("Enter");
-    await expect(strip).toHaveAttribute("data-open", "false");
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(0);
-    await expect(screenVideo(callee.page)).toBeVisible();
-    await expect(
-      callee.page.getByRole("button", { name: "Show participants" }),
-    ).toBeFocused();
-    expect(
-      await callee.page.evaluate(() =>
-        localStorage.getItem("pqp:participant-rail"),
-      ),
-    ).toBe("false");
-    await callee.page.screenshot({
-      path: "test-results/listener-strip-hidden.png",
-    });
-
-    // (That the choice survives a NEW share is pinned in
-    // `call-stage-strip.spec.ts`, which can restart a share without a second
-    // browser and without a second media handshake.)
-
-    // Show again.
-    await callee.page
-      .getByRole("button", { name: "Show participants" })
-      .click();
-    await expect(strip).toHaveAttribute("data-open", "true");
-    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
   } finally {
     await callee.context.close();
   }

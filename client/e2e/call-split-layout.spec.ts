@@ -594,15 +594,17 @@ test("the whole-picture toggle sticks, and never remounts the picture", async ({
   await openApp(page);
   await joinLobbyWithCamera(page);
 
-  const fit = page.getByTestId("tile-fit").first();
+  // The fit switch lives in the tile's "⋯"; its state stays on the tile.
+  const fit = page.locator("[data-tile-fit]").first();
   // A face is cropped out of the box; that is the default this keeps.
   await expect(fit).toHaveAttribute("data-tile-fit", "cover");
   await expect.poll(() => stageVideoFit(page)).toBe("cover");
 
   await markStageVideo(page);
-  await fit.click();
+  await page.getByTestId("tile-more").first().click();
+  await page.getByRole("menuitem", { name: "Show the whole picture" }).click();
 
-  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+  await expect(page.locator("[data-tile-fit]").first()).toHaveAttribute(
     "data-tile-fit",
     "contain",
   );
@@ -622,7 +624,7 @@ test("the whole-picture toggle sticks, and never remounts the picture", async ({
   await markStageVideo(page);
   await page.locator("[data-call-split-toggle]").click();
   expect((await paneGeometry(page)).orientation).toBe("side-by-side");
-  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+  await expect(page.locator("[data-tile-fit]").first()).toHaveAttribute(
     "data-tile-fit",
     "contain",
   );
@@ -637,7 +639,7 @@ test("the whole-picture toggle sticks, and never remounts the picture", async ({
   await leaveVoiceIfConnected(page);
   await page.reload();
   await joinLobbyWithCamera(page);
-  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+  await expect(page.locator("[data-tile-fit]").first()).toHaveAttribute(
     "data-tile-fit",
     "contain",
   );

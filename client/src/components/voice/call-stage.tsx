@@ -1319,6 +1319,9 @@ function ActiveCall({
   // such button, so a failure brings the strip back until it is fixed.
   const stripInSidebar =
     roomInSidebar && !listeners.some((person) => person.failed);
+  // A strip holding nobody but ourselves (a 1:1 call where the other person
+  // is the picture) names one person, us, who is already in the bar.
+  const stripOnlySelf = listeners.every((person) => person.isSelf);
   useEffect(() => {
     // Leaving the call takes the stage with it, and a pane still holding a
     // height for a stage that is gone is a gap where the transcript should be.
@@ -2020,7 +2023,7 @@ function ActiveCall({
             is already showing these same faces, larger. */}
         {showStrip && !soloPerson && !soloTile && !soloMusic && (
           <>
-          {!stripInSidebar && (
+          {!stripInSidebar && !stripOnlySelf && (
           <ListenerStrip
             people={listeners.map((person) => ({
               key: person.key,
@@ -3535,47 +3538,6 @@ function cameraLabel(
  * the alternative is a grid where seven faces are cropped and one is not. The
  * two kinds keep separate answers; see `lib/video-fit.ts` for why.
  */
-function TileFitButton({
-  fit,
-  kind,
-}: {
-  fit: VideoFitControls;
-  kind: "camera" | "screen";
-}) {
-  const { t } = useTranslation();
-  const whole = fit.fit === "contain";
-  return (
-    <Tooltip
-      label={whole ? t("call.fit.fill") : t("call.fit.whole")}
-      detail={
-        kind === "screen" ? t("call.fit.hintScreen") : t("call.fit.hintCamera")
-      }
-      side="bottom"
-      align="start"
-    >
-      <button
-        type="button"
-        data-testid="tile-fit"
-        data-tile-fit={fit.fit}
-        aria-pressed={whole}
-        // No `aria-label` here: `Tooltip` puts the accessible name on the
-        // trigger, and a second one on the child is how the two drift apart.
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-          whole && "text-signal",
-        )}
-        onClick={fit.toggle}
-      >
-        {whole ? (
-          <Crop className="h-3.5 w-3.5" aria-hidden="true" />
-        ) : (
-          <Scan className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-      </button>
-    </Tooltip>
-  );
-}
-
 function TileOverlay({
   isFullscreen = false,
   onToggleFullscreen,
@@ -3606,23 +3568,83 @@ function TileOverlay({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  const [moreOpen, setMoreOpen] = useState(false);
   const hasAudio = Boolean(audio?.voice || audio?.share);
-  if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
+  const moreItems: ContextMenuItemDef[] = [];
+  if (fit) {
+    const whole = fit.fit === "contain";
+    moreItems.push({
+      id: "fit",
+      label: whole ? t("call.fit.fill") : t("call.fit.whole"),
+      icon: whole ? Crop : Scan,
+      onSelect: fit.toggle,
+    });
+  }
+  if (onPin) {
+    moreItems.push({
+      id: "pin",
+      label: pinned ? t("call.stage.unpin") : t("call.stage.pin", { name }),
+      icon: Pin,
+      onSelect: onPin,
+    });
+  }
+  if (!onToggleFullscreen && !hasAudio && moreItems.length === 0) {
     return null;
   }
+  // The same cluster, corner and order as a share's (`ScreenTileFrame`):
+  // sound, then "⋯" for what is rarely wanted, then fullscreen last, so a
+  // person learns one row for every picture in a call.
   return (
     <div
       ref={menu.rootRef}
+      data-tile-controls=""
+      // The fit control lives in "⋯"; the state it reports stays readable.
+      data-tile-fit={fit?.fit}
       className={cn(
-        "absolute left-2 top-2 flex items-center gap-1",
+        "absolute right-2 top-10 flex items-center gap-1",
         STAGE_LAYER.tileControls,
         // An open panel keeps its own chrome visible; otherwise the row
         // follows the tile's hover, and stays put on a touch screen.
-        menu.open
+        menu.open || moreOpen
           ? "opacity-100"
           : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
       )}
     >
+      {hasAudio && (
+        <div className="relative">
+          <PeerAudioMenuButton
+            name={name}
+            open={menu.open}
+            onToggle={menu.toggle}
+            muted={audio?.voice?.volume === 0}
+          />
+          <PeerAudioMenu
+            name={name}
+            open={menu.open}
+            voice={audio?.voice}
+            share={audio?.share}
+            side="bottom"
+            align="end"
+          />
+        </div>
+      )}
+      {moreItems.length > 0 && (
+        <Menu
+          items={moreItems}
+          side="bottom"
+          align="end"
+          onOpenChange={setMoreOpen}
+        >
+          <button
+            type="button"
+            data-testid="tile-more"
+            aria-label={t("call.tile.more", { name })}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Menu>
+      )}
       {onToggleFullscreen && (
         <Tooltip
           label={
@@ -3631,7 +3653,7 @@ function TileOverlay({
               : t("call.stage.fullscreenTile", { name })
           }
           side="bottom"
-          align="start"
+          align="end"
         >
           <button
             type="button"
@@ -3647,44 +3669,6 @@ function TileOverlay({
             )}
           </button>
         </Tooltip>
-      )}
-      {fit && <TileFitButton fit={fit} kind="camera" />}
-      {onPin && (
-        <Tooltip
-          label={pinned ? t("call.stage.unpin") : t("call.stage.pin", { name })}
-          side="bottom"
-          align="start"
-        >
-          <button
-            type="button"
-            aria-pressed={pinned}
-            className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-              pinned && "text-signal",
-            )}
-            onClick={onPin}
-          >
-            <Pin className="h-3.5 w-3.5" />
-          </button>
-        </Tooltip>
-      )}
-      {hasAudio && (
-        <div className="relative">
-          <PeerAudioMenuButton
-            name={name}
-            open={menu.open}
-            onToggle={menu.toggle}
-            muted={audio?.voice?.volume === 0}
-          />
-          <PeerAudioMenu
-            name={name}
-            open={menu.open}
-            voice={audio?.voice}
-            share={audio?.share}
-            side="bottom"
-            align="start"
-          />
-        </div>
       )}
     </div>
   );
@@ -4434,7 +4418,9 @@ export function ScreenTileFrame({
       />
       {/* TOP RIGHT, under the overlay's first row, out of the way until
           wanted. The stage's title overlay owns the top left and its clock
-          the very top right; the name owns the bottom left. NOT the bottom
+          the very top right; the name owns the bottom left. Sound, then "⋯",
+          then fullscreen last, the same row a camera tile and the watch
+          party's player use. NOT the bottom
           right: the control bar's box keeps the pointer across its whole
           band (`use-idle-chrome.ts`), so anything on a share's bottom edge is
           drawn and cannot be pressed whenever no row of people holds the
@@ -4475,25 +4461,6 @@ export function ScreenTileFrame({
             />
           </div>
         )}
-        {!hideSelfPreview && onToggleFullscreen && (
-          <Tooltip label={label} side={controlsSide} align={controlsAlign}>
-            <button
-              type="button"
-              // The camera tiles carry a fullscreen button too, so the label
-              // alone cannot tell a test which one it pressed.
-              data-testid="share-fullscreen"
-              aria-pressed={isFullscreen}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-              onClick={onToggleFullscreen}
-            >
-              {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5" />
-              ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </Tooltip>
-        )}
         <Menu
           items={moreItems}
           side={controlsSide}
@@ -4513,6 +4480,25 @@ export function ScreenTileFrame({
             <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </Menu>
+        {!hideSelfPreview && onToggleFullscreen && (
+          <Tooltip label={label} side={controlsSide} align={controlsAlign}>
+            <button
+              type="button"
+              // The camera tiles carry a fullscreen button too, so the label
+              // alone cannot tell a test which one it pressed.
+              data-testid="share-fullscreen"
+              aria-pressed={isFullscreen}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              onClick={onToggleFullscreen}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
+        )}
       </div>
       {/* The name goes where every other tile keeps its name: the bottom left,
           always visible, out of the title overlay's corner. It names the

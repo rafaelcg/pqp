@@ -101,7 +101,9 @@ describe("CameraTile", () => {
         pinned
       />,
     );
-    expect(html).toContain('aria-label="Unpin"');
+    // Pin lives in the tile's "⋯" (its rows only render once it opens), so
+    // what has to be on the tile is the way into it.
+    expect(html).toContain('data-testid="tile-more"');
   });
 
   /**
@@ -344,11 +346,11 @@ describe("fill or fit", () => {
       render(
         <CameraTile person={person({ stream: fakeStream })} youLabel="(you)" />,
       ),
-    ).toContain('data-testid="tile-fit"');
+    ).toContain("data-tile-fit=");
     // Nothing to crop, so no control that would appear to do nothing.
     expect(
       render(<CameraTile person={person()} youLabel="(you)" />),
-    ).not.toContain('data-testid="tile-fit"');
+    ).not.toContain("data-tile-fit=");
   });
 
   it("says which way it is set, for a test and for a screen reader", () => {

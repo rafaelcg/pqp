@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Minimize2,
   Monitor,
+  MoreHorizontal,
   Move,
   Pause,
   PictureInPicture,
@@ -118,6 +119,7 @@ import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Menu } from "@/components/ui/menu";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
@@ -3023,6 +3025,26 @@ export function HlsWatchPlayer({
   };
   const iconBtn =
     "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
+  // The bar's "⋯": fill and picture-in-picture, the two things a viewer sets
+  // once per film rather than reaches for during it.
+  const playerMoreItems: ContextMenuItemDef[] = [];
+  if (hasFrame) {
+    playerMoreItems.push({
+      id: "fit",
+      label: whole ? t("call.fit.fill") : t("call.fit.whole"),
+      icon: whole ? Crop : Scan,
+      onSelect: fit.toggle,
+    });
+  }
+  if (pipAvailable && hasFrame) {
+    playerMoreItems.push({
+      id: "pip",
+      label: t("voice.hls.pip"),
+      icon: PictureInPicture2,
+      checked: isPip,
+      onSelect: () => void togglePip(),
+    });
+  }
 
   const cinema = layout === "cinema";
   const mini = layout === "mini";
@@ -3612,40 +3634,6 @@ export function HlsWatchPlayer({
                 </button>
               </Menu>
             ) : null}
-            {hasFrame ? (
-              <Tooltip
-                label={whole ? t("call.fit.fill") : t("call.fit.whole")}
-                detail={t("voice.hls.fitHint")}
-                side="top"
-                align="end"
-              >
-                <button
-                  type="button"
-                  data-testid="hls-fit"
-                  data-hls-fit={fit.fit}
-                  aria-pressed={whole}
-                  className={cn(iconBtn, whole && "text-signal")}
-                  onClick={fit.toggle}
-                >
-                  {whole ? (
-                    <Crop className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <Scan className="h-4 w-4" aria-hidden="true" />
-                  )}
-                </button>
-              </Tooltip>
-            ) : null}
-            {pipAvailable && hasFrame ? (
-              <button
-                type="button"
-                aria-label={t("voice.hls.pip")}
-                aria-pressed={isPip}
-                className={iconBtn}
-                onClick={() => void togglePip()}
-              >
-                <PictureInPicture2 className="h-4 w-4" />
-              </button>
-            ) : null}
             {offered.length > 1 ? (
               <div className="relative">
                 <button
@@ -3743,6 +3731,24 @@ export function HlsWatchPlayer({
                 <MessageSquare className="h-4 w-4" aria-hidden="true" />
               </button>
             ) : null}
+            {/* THE SAME ROW AS A CALL (`ScreenTileFrame`, `TileOverlay`):
+                what the viewer does with the party, then "⋯" for what is
+                rarely wanted (fill, picture-in-picture), then fullscreen
+                last. */}
+            {bottomActions}
+            {playerMoreItems.length > 0 ? (
+              <Menu align="end" side="top" items={playerMoreItems}>
+                <button
+                  type="button"
+                  data-testid="hls-more"
+                  data-hls-fit={hasFrame ? fit.fit : undefined}
+                  aria-label={t("voice.hls.more")}
+                  className={iconBtn}
+                >
+                  <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Menu>
+            ) : null}
             {fullscreen ? (
               <button
                 type="button"
@@ -3768,7 +3774,6 @@ export function HlsWatchPlayer({
                 )}
               </button>
             ) : null}
-            {bottomActions}
           </div>
         </div>
       </div>

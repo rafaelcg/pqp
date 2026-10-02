@@ -343,8 +343,13 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     await expect(strip(page)).toBeVisible();
 
     // Hiding the strip leaves the share the whole stage, and is remembered.
-    await page.getByRole("button", { name: "Hide participants" }).click();
+    // From the keyboard, with focus kept on the (now "show") button.
+    await page.getByRole("button", { name: "Hide participants" }).focus();
+    await page.keyboard.press("Enter");
     await expect(strip(page)).toHaveAttribute("data-open", "false");
+    await expect(
+      page.getByRole("button", { name: "Show participants" }),
+    ).toBeFocused();
     await expect(strip(page).locator("[data-call-listener]")).toHaveCount(0);
     expect(
       await page.evaluate(() => localStorage.getItem("pqp:participant-rail")),
