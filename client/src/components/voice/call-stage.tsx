@@ -1344,6 +1344,23 @@ function ActiveCall({
   // again there.
   const roomInSidebar = roomListOnScreen && shape !== "fullscreen";
   const notice = useVoiceNotice(voiceState.notice);
+  const [bannerColumn, setBannerColumn] = useState<HTMLDivElement | null>(null);
+  const [bannersPx, setBannersPx] = useState(0);
+  useEffect(() => {
+    if (!bannerColumn) {
+      setBannersPx(0);
+      return;
+    }
+    const read = () =>
+      setBannersPx(Math.round(bannerColumn.getBoundingClientRect().height));
+    read();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(bannerColumn);
+    return () => observer.disconnect();
+  }, [bannerColumn]);
   // The strip is also where a failed peer's retry lives, and the list has no
   // such button, so a failure brings the strip back until it is fixed.
   const stripInSidebar =
@@ -1818,7 +1835,12 @@ function ActiveCall({
       onKeyDownCapture={chrome.wake}
       onFocusCapture={chrome.wake}
       // Read by the strip's reserve and the self-preview's bottom corners.
-      style={{ "--call-row-extra": `${controlRowExtraPx}px` } as CSSProperties}
+      style={
+        {
+          "--call-row-extra": `${controlRowExtraPx}px`,
+          "--stage-banners": `${bannersPx}px`,
+        } as CSSProperties
+      }
     >
       {/* --- the stage's content -------------------------------------------
           One rule, whatever the transport carried it: a picture is a tile and
@@ -1827,11 +1849,90 @@ function ActiveCall({
           `<video>` elements is exactly the number of pictures on screen, which
           is what the SFU's delivery rule reads (`remote-video-delivery.ts`).
       */}
-      {showMeshWarning && (
-        <p className={cn("absolute inset-x-0 top-0 bg-warning/10 px-3 py-1 text-center text-xs text-warning", STAGE_LAYER.badges)}>
-          {t("voice.meshWarning")}
-        </p>
+      {/* THE BANNERS ARE ONE COLUMN. The room-nearly-full warning, the red
+          error strip and the notice each used to pin itself to the top on its
+          own, so two at once drew on top of each other and the warning, on
+          the higher layer, took the strip's close button. Stacked here they
+          cannot overlap, and the column's measured height (`--stage-banners`
+          on the stage) is what the title overlay and every tile's control row
+          step down by, however many lines the strip wraps to. */}
+      <div
+        ref={setBannerColumn}
+        data-stage-banners=""
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 flex flex-col",
+          STAGE_LAYER.badges,
+        )}
+      >
+        {showMeshWarning && (
+          <p className="bg-warning-soft px-3 py-1 text-center text-xs text-on-warning-soft">
+            {t("voice.meshWarning")}
+          </p>
+        )}
+      {voiceState.error && (
+        <div
+          role="alert"
+          data-voice-error
+          // Solid, not a wash: it sits over video, and red text on 15% red
+          // over a bright picture could not be read.
+          className="pointer-events-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger-soft px-3 py-1 text-center text-xs text-on-danger-soft"
+        >
+          <span>{voiceState.error}</span>
+          {/* Every microphone error is fixed by picking another microphone,
+              so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "connection" && (
+            <button
+              type="button"
+              data-voice-error-check
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={() => requestConnectionCheck()}
+            >
+              {t("connection.check")}
+            </button>
+          )}
+          {/* Sound is the only part of a capture that can fail on its own and
+              take the picture with it. One click puts the share back, minus
+              the thing that broke it, and it has to be a click: the picker
+              already spent this attempt's user activation. */}
+          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
+            <button
+              type="button"
+              data-voice-error-share-silent
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={onShareWithoutSound}
+            >
+              {t("voice.control.shareWithoutSound")}
+            </button>
+          )}
+          {voiceState.errorKind === "mic" && (
+            <button
+              type="button"
+              data-voice-error-settings
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-on-danger-soft hover:bg-danger/30"
+              onClick={() => requestSettingsSection("voice")}
+            >
+              {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+          {onDismissError && (
+            <button
+              type="button"
+              data-voice-error-dismiss
+              aria-label={t("common.close")}
+              title={t("common.close")}
+              // 32px: a target a thumb can hit.
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-on-danger-soft hover:bg-danger/20"
+              onClick={onDismissError}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        </div>
       )}
+      {!voiceState.error && (
+        <VoiceNoticeBar notice={notice.shown} onClose={notice.hide} stacked />
+      )}
+      </div>
       <div className="flex h-full w-full flex-col">
         <div className="relative min-h-0 flex-1">
           {soloPerson ? (
@@ -2156,66 +2257,6 @@ function ActiveCall({
       )}
 
       {/* --- overlays -------------------------------------------------------- */}
-      {voiceState.error && (
-        <div
-          role="alert"
-          data-voice-error
-          className={cn("absolute inset-x-0 top-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger", STAGE_LAYER.state)}
-        >
-          <span>{voiceState.error}</span>
-          {/* Every microphone error is fixed by picking another microphone,
-              so the banner carries the door to where that happens. */}
-          {voiceState.errorKind === "connection" && (
-            <button
-              type="button"
-              data-voice-error-check
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={() => requestConnectionCheck()}
-            >
-              {t("connection.check")}
-            </button>
-          )}
-          {/* Sound is the only part of a capture that can fail on its own and
-              take the picture with it. One click puts the share back, minus
-              the thing that broke it, and it has to be a click: the picker
-              already spent this attempt's user activation. */}
-          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
-            <button
-              type="button"
-              data-voice-error-share-silent
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={onShareWithoutSound}
-            >
-              {t("voice.control.shareWithoutSound")}
-            </button>
-          )}
-          {voiceState.errorKind === "mic" && (
-            <button
-              type="button"
-              data-voice-error-settings
-              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
-              onClick={() => requestSettingsSection("voice")}
-            >
-              {t("voice.error.openVoiceSettings")}
-            </button>
-          )}
-          {onDismissError && (
-            <button
-              type="button"
-              data-voice-error-dismiss
-              aria-label={t("common.close")}
-              title={t("common.close")}
-              className="rounded-md p-0.5 text-danger hover:bg-danger/20"
-              onClick={onDismissError}
-            >
-              <X className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          )}
-        </div>
-      )}
-      {!voiceState.error && (
-        <VoiceNoticeBar notice={notice.shown} onClose={notice.hide} />
-      )}
 
       {dockComposer ? (
         composerDock
@@ -2228,7 +2269,7 @@ function ActiveCall({
           STAGE_LAYER.chrome,
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
-          (voiceState.error || notice.shown) && "mt-7",
+          "mt-[var(--stage-banners,0px)]",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,
           // the count and the uptime, and "watch-party · 1 na chamada" over
@@ -3612,7 +3653,7 @@ function TileOverlay({
       // The fit control lives in "⋯"; the state it reports stays readable.
       data-tile-fit={fit?.fit}
       className={cn(
-        "absolute right-2 top-10 flex items-center gap-1",
+        "absolute right-2 top-[calc(2.5rem+var(--stage-banners,0px))] flex items-center gap-1",
         STAGE_LAYER.tileControls,
         // An open panel keeps its own chrome visible; otherwise the row
         // follows the tile's hover, and stays put on a touch screen.
@@ -4363,7 +4404,7 @@ export function ScreenTileFrame({
 
   const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
   const controlsSide = "bottom";
-  const controlsAlign = useHls ? "start" : "end";
+  const controlsAlign = "end";
   const moreItems = shareTileMoreItems(t, {
     name: tile.presenterName,
     isSelf: tile.isSelf,
@@ -4428,9 +4469,10 @@ export function ScreenTileFrame({
           drawn and cannot be pressed whenever no row of people holds the
           share above it. What a viewer reaches for on somebody's share (their
           sound and fullscreen) stays one click away; the rest (fit, pin, not
-          watching this one) folds into "⋯". A watch party's player keeps the
-          top left it always had. A touch device, which has no hover to reveal
-          anything, keeps it all the time. */}
+          watching this one) folds into "⋯". A share that arrives as HLS (a
+          large SFU room) uses the same corner: its player's own buttons sit
+          at the very top and the bottom, clear of this row. A touch device,
+          which has no hover to reveal anything, keeps it all the time. */}
       <div
         ref={menu.rootRef}
         data-share-controls=""
@@ -4438,7 +4480,7 @@ export function ScreenTileFrame({
         data-tile-fit={fit.fit}
         className={cn(
           "absolute flex max-w-[80%] items-center gap-1.5",
-          useHls ? "left-2 top-2" : "right-2 top-10",
+          "right-2 top-[calc(2.5rem+var(--stage-banners,0px))]",
           STAGE_LAYER.tileControls,
           menu.open || moreOpen || hideSelfPreview
             ? "opacity-100"

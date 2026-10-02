@@ -49,10 +49,16 @@ export function VoiceNoticeBar({
   notice,
   autoHideMs = VOICE_NOTICE_AUTO_HIDE_MS,
   onClose,
+  stacked = false,
 }: {
   notice: string | null;
   autoHideMs?: number;
   onClose?: () => void;
+  /**
+   * Drawn as one row of the stage's banner column (`call-stage.tsx`) rather
+   * than pinned to the top on its own, so it can never sit on another banner.
+   */
+  stacked?: boolean;
 }) {
   const { t } = useTranslation();
   const own = useVoiceNotice(onClose ? null : notice, autoHideMs);
@@ -69,7 +75,11 @@ export function VoiceNoticeBar({
     <p
       role="status"
       data-voice-notice
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+      className={
+        stacked
+          ? "pointer-events-none flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+          : "pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-center gap-2 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+      }
     >
       <span>{shown}</span>
       <button

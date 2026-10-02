@@ -353,6 +353,19 @@ describe("fill or fit", () => {
     ).not.toContain("data-tile-fit=");
   });
 
+  it("puts an HLS share's controls in the same corner as every other picture", () => {
+    const html = render(
+      <ScreenTileFrame
+        tile={{ ...screenTile, hlsUrl: "/api/voice/hls-playlist/c/1" }}
+        isFullscreen={false}
+        onToggleFullscreen={() => {}}
+      />,
+    );
+    const cluster = /<div[^>]*data-share-controls[^>]*>/.exec(html)?.[0] ?? "";
+    expect(cluster).toContain("right-2");
+    expect(cluster).not.toContain("left-2");
+  });
+
   it("says which way it is set, for a test and for a screen reader", () => {
     expect(
       render(<ScreenTileFrame tile={screenTile} isFullscreen={false} />),
