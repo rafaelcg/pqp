@@ -98,7 +98,12 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     .getByRole("button", { name: "Turn camera on", exact: true })
     .click();
   await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("call-stage-collapsed")).toHaveCount(0);
+  // The controls stay in the composer's strip and grow the stage's set
+  // there, rather than moving onto the picture.
+  const dock = page.getByTestId("call-stage-collapsed");
+  await expect(dock).toBeVisible();
+  await expect(dock.getByRole("button", { name: "More" })).toBeVisible();
+  await expect(page.getByTestId("call-controls-bar")).toHaveCount(0);
 
   // Scoped to the stage grid, not `page.getByLabel` at large: our own
   // camera also matches inside the floating self-preview pip
@@ -146,7 +151,8 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();
   await expect(page.getByTestId("call-stage")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Expand call" }).click();
+  await page.getByTestId("call-more").first().click();
+  await page.getByRole("menuitem", { name: "Expand call" }).click();
   await expect(page.getByTestId("call-stage")).toBeVisible();
   await expect(video).toBeVisible();
 
@@ -182,60 +188,17 @@ test("a phone-width stage keeps every call control on screen", async ({
     .click();
   await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
 
-  // The stage's pill was one unbreakable row of ~33rem, centred in a stage
-  // of ~20rem on a 390 phone: mute and raise hand sat under the server rail,
-  // hang-up past the right edge. 320 is the narrowest phone still sold.
-  const bar = page.getByTestId("call-controls-bar");
-  // What the stage hands the strip and the self-preview for the pill's extra
-  // lines, beside what those lines actually measure: the pill's height past
-  // its one-line height on this same stage. The stage measures the row the
-  // pill sits in, so this is what catches a row that counts one line as
-  // anything but the pill's own padded line.
-  const rowExtra = () =>
-    page.evaluate(() => {
-      const stage = document.querySelector<HTMLElement>(
-        '[style*="--call-row-extra"]',
-      )!;
-      const pill = document
-        .querySelector(
-          '[data-testid="call-controls-bar"] button[aria-label="Leave"]',
-        )!
-        .closest<HTMLElement>('[class*="rounded-[1.625rem]"]')!;
-      return {
-        handed: Number.parseFloat(
-          stage.style.getPropertyValue("--call-row-extra"),
-        ),
-        pill: pill.offsetHeight,
-      };
-    });
-  await expect.poll(async () => (await rowExtra()).handed).toBe(0);
-  const oneLine = (await rowExtra()).pill;
-  for (const width of [390, 320]) {
-    await page.setViewportSize({ width, height: 844 });
+  // The call's controls are in the composer's strip now, whatever the
+  // stage shows. The stage's own pill used to be one unbreakable row of
+  // ~33rem in a stage of ~20rem on a 390 phone: mute and raise hand under the
+  // server rail, hang-up past the right edge. 320 is the narrowest phone
+  // still sold; every control has to stay pressable there, wherever it is.
+  const bar = page.getByTestId("call-stage-collapsed");
+  for (const width of [390, 320, 1440]) {
+    await page.setViewportSize({ width, height: width < 768 ? 844 : 900 });
     await expect(bar.getByRole("button", { name: "Leave" })).toBeAttached();
     await expect
       .poll(() => unreachableStageControls(page), { timeout: 5_000 })
       .toEqual([]);
-    await expect
-      .poll(async () => {
-        const { handed, pill } = await rowExtra();
-        return pill > oneLine && handed === pill - oneLine;
-      })
-      .toBe(true);
   }
-  // And the wide stage still draws them on one line.
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await expect
-    .poll(async () => {
-      const tops = await bar
-        .getByRole("button")
-        .evaluateAll((buttons) =>
-          buttons
-            .map((b) => b.getBoundingClientRect())
-            .filter((r) => r.width > 0)
-            .map((r) => Math.round(r.top)),
-        );
-      return new Set(tops).size;
-    })
-    .toBe(1);
 });

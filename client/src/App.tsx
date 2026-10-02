@@ -9231,7 +9231,6 @@ function MainAppContent({
       voiceState.voiceChannelId === selectedChannel.id &&
       voiceState.status !== "idle" &&
       voiceRoomRowVisible &&
-      !callDockOnScreen &&
       stageShape === "expanded" &&
       !splitState.chatHidden,
   );
@@ -9840,10 +9839,11 @@ function MainAppContent({
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
-        // No header while the call is docked in the composer: the header
-        // exists to sit between a stage and the transcript, and there is
-        // no stage above the transcript then.
-        chatHeader={callDockOnScreen ? undefined : {
+        // No header while the stage is folded into the composer's strip:
+        // the header exists to sit between a stage and the transcript, and
+        // there is no stage above the transcript then. A stage showing
+        // pictures keeps it even though its controls are docked.
+        chatHeader={stageShape === "compact" ? undefined : {
           title: t("chat.paneTitle"),
           actions: voiceStageOwnsHeader ? channelHeaderTools : undefined,
           tabs: partyOwnsHeader
@@ -10124,6 +10124,9 @@ function MainAppContent({
             onDismissError={() => voice.dismissError()}
             // The expanded channel list already lists this room's people.
             roomListOnScreen={voiceRoomRowVisible}
+            // The chat pane is put away, and the composer the controls dock into
+            // with it.
+            composerHidden={splitState.chatHidden}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -10182,6 +10185,7 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          composerHidden={splitState.chatHidden}
           onDismissError={() => voice.dismissError()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}

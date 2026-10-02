@@ -29,6 +29,7 @@ export function VoiceChannelStage({
   onStartScreenShare,
   onShareWithoutSound,
   onDismissError,
+  composerHidden,
   roomListOnScreen,
   onStopScreenShare,
   onFocusScreenShare,
@@ -76,6 +77,8 @@ export function VoiceChannelStage({
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
   onDismissError?: () => void;
+  /** See `CallStage`\'s prop of the same name. */
+  composerHidden?: boolean;
   /** See `CallStage`'s prop of the same name. */
   roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
@@ -132,6 +135,7 @@ export function VoiceChannelStage({
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onDismissError={onDismissError}
+      composerHidden={composerHidden}
       roomListOnScreen={roomListOnScreen}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}

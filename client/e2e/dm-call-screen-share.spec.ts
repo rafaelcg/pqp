@@ -306,11 +306,13 @@ test("a share and a camera are tiles, and a 1:1 call draws no row of only yourse
 });
 
 /**
- * Video-player chrome. With a share on stage the controls bar and the title
- * overlay leave after a few idle seconds and come back on a pointer move;
- * resting on the bar or focusing a control inside it holds them. The rules
- * are unit-tested with fake timers in `use-idle-chrome.test.ts`; this pins
- * that the stage actually wires them to real pointer and focus events.
+ * Video-player chrome. With a share on stage the call's controls stay in the
+ * composer's strip; in fullscreen, where the composer is out of sight, they
+ * float over the picture with the title overlay, leave after a few idle
+ * seconds and come back on a pointer move; resting on the bar or focusing a
+ * control inside it holds them. The rules are unit-tested with fake timers in
+ * `use-idle-chrome.test.ts`; this pins that the stage actually wires them to
+ * real pointer and focus events.
  */
 test("the call chrome hides over an idle share and returns on movement, hover or focus", async ({
   page,
@@ -342,6 +344,24 @@ test("the call chrome hides over an idle share and returns on movement, hover or
     const stage = callee.page.getByTestId("call-stage");
     const bar = callee.page.getByTestId("call-controls-bar");
     const overlay = callee.page.locator('[data-call-chrome="overlay"]');
+
+    // Outside fullscreen nothing floats over the share: hang-up is in the
+    // composer's strip, where it was before anybody shared.
+    await expect(bar).toHaveCount(0);
+    await expect(
+      callee.page
+        .getByTestId("call-stage-collapsed")
+        .getByRole("button", { name: "Leave", exact: true }),
+    ).toBeVisible();
+
+    // Fullscreen takes the composer away, so the controls float.
+    const firstBox = (await stage.boundingBox())!;
+    await callee.page.mouse.move(
+      firstBox.x + firstBox.width / 2,
+      firstBox.y + firstBox.height / 2,
+    );
+    await callee.page.getByTestId("share-fullscreen").first().click();
+    await expect(bar).toBeVisible({ timeout: 10_000 });
     const stageBox = (await stage.boundingBox())!;
     const centre = {
       x: stageBox.x + stageBox.width / 2,
@@ -379,11 +399,10 @@ test("the call chrome hides over an idle share and returns on movement, hover or
     await callee.page.waitForTimeout(4_500);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
 
-    // Pointer parked off the stage: it hides again. Keyboard focus landing on
-    // the hang-up button reveals it, so a keyboard user is never hanging up
-    // blind.
+    // Pointer resting on the picture: it hides again. Keyboard focus landing
+    // on the hang-up button reveals it, so a keyboard user is never hanging
+    // up blind.
     await callee.page.mouse.move(centre.x, centre.y);
-    await callee.page.mouse.move(2, 2);
     await expect(bar).toHaveAttribute("data-chrome-hidden", "true", {
       timeout: 6_000,
     });

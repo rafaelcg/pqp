@@ -137,17 +137,16 @@ describe("CallControls in a watch party room", () => {
     }
   });
 
-  it("shows the Watch party button to the presenter (canStream true)", () => {
-    // The docked bar carries it as a tile.
-    const docked = render({ ...idle, canStream: true }, true);
-    expect(docked).toContain("lucide-monitor-play");
-    expect(docked).toContain("lucide-screen-share");
-    // The stage bar keeps share and folds Watch party into "Mais", whose
-    // rows only render once the menu opens.
-    const stage = render({ ...idle, canStream: true });
-    expect(stage).toContain("lucide-screen-share");
-    expect(stage).toContain('data-testid="call-more"');
-    expect(stage).not.toContain("lucide-monitor-play");
+  it("offers the presenter Watch party from Mais, on both bars (canStream true)", () => {
+    // The docked strip and the stage bar carry one set: share on the bar,
+    // Watch party in "Mais", whose rows only render once the menu opens
+    // (what it offers is pinned in call-menu-items.test.ts).
+    for (const collapsed of [false, true]) {
+      const html = render({ ...idle, canStream: true }, collapsed);
+      expect(html).toContain("lucide-screen-share");
+      expect(html).toContain('data-testid="call-more"');
+      expect(html).not.toContain("lucide-monitor-play");
+    }
   });
 });
 

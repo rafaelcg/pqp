@@ -186,7 +186,10 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     await expect(page.getByTestId("call-stage")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("Calling…")).toBeVisible({ timeout: 20_000 });
+    // Said once, in the composer's strip under the stage.
+    await expect(
+      page.getByTestId("call-stage-collapsed").getByText("Calling…"),
+    ).toBeVisible({ timeout: 20_000 });
 
     // The callee is rung for real and answers from the overlay.
     await callee.page
@@ -233,7 +236,8 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     expect(collapsedBox!.height).toBeLessThanOrEqual(80);
     await expect(page.getByTestId("call-stage")).not.toBeVisible();
 
-    await page.getByRole("button", { name: "Expand call" }).click();
+    await page.getByTestId("call-more").first().click();
+    await page.getByRole("menuitem", { name: "Expand call" }).click();
     await expect(page.getByTestId("call-stage")).toBeVisible();
     await expectVideoPlaying(page, pair.calleeName);
 
@@ -262,7 +266,10 @@ test("desktop: a voice-only DM stays a slim bar until a camera turns on", async 
     await expect(page.getByTestId("call-stage")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("Calling…")).toBeVisible({ timeout: 20_000 });
+    // Said once, in the composer's strip under the stage.
+    await expect(
+      page.getByTestId("call-stage-collapsed").getByText("Calling…"),
+    ).toBeVisible({ timeout: 20_000 });
 
     await callee.page
       .getByRole("button", { name: "Accept" })

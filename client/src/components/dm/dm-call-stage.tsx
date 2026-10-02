@@ -36,6 +36,7 @@ export function DmCallStage({
   onStartScreenShare,
   onShareWithoutSound,
   onDismissError,
+  composerHidden,
   onStopScreenShare,
   onFocusScreenShare,
   onToggleRaisedHand,
@@ -64,6 +65,8 @@ export function DmCallStage({
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
   onDismissError?: () => void;
+  /** See `CallStage`\'s prop of the same name. */
+  composerHidden?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   /**
@@ -143,6 +146,7 @@ export function DmCallStage({
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onDismissError={onDismissError}
+      composerHidden={composerHidden}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       onToggleRaisedHand={onToggleRaisedHand}
