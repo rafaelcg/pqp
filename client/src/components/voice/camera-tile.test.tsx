@@ -353,17 +353,23 @@ describe("fill or fit", () => {
     ).not.toContain("data-tile-fit=");
   });
 
-  it("puts an HLS share's controls in the same corner as every other picture", () => {
-    const html = render(
+  it("gives a share one control row along its bottom, and an HLS share none of its own", () => {
+    // A share over WebRTC draws the row itself.
+    const direct = render(
+      <ScreenTileFrame tile={screenTile} isFullscreen={false} onToggleFullscreen={() => {}} />,
+    );
+    expect(direct).toContain("data-share-row");
+    expect(direct).toContain('data-testid="share-fullscreen"');
+    // A share that arrives as HLS hands "⋯" and fullscreen to its player's
+    // own bottom row, so the tile must not draw a second one on top of it.
+    const hls = render(
       <ScreenTileFrame
         tile={{ ...screenTile, hlsUrl: "/api/voice/hls-playlist/c/1" }}
         isFullscreen={false}
         onToggleFullscreen={() => {}}
       />,
     );
-    const cluster = /<div[^>]*data-share-controls[^>]*>/.exec(html)?.[0] ?? "";
-    expect(cluster).toContain("right-2");
-    expect(cluster).not.toContain("left-2");
+    expect(hls).not.toContain("data-share-row");
   });
 
   it("says which way it is set, for a test and for a screen reader", () => {

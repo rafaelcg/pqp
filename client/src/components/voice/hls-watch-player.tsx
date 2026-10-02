@@ -3976,6 +3976,10 @@ export function HlsWatchPlayer({
                 }}
                 className="h-1 w-20 cursor-pointer accent-signal"
               />
+              {/* A call tile hands its "⋯" and fullscreen in here, so a share
+                  that arrives as HLS has one row like every other picture,
+                  not this cluster plus the tile's own on top of it. */}
+              {bottomActions}
             </div>
           ) : null}
         </>
