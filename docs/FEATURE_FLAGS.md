@@ -101,7 +101,12 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 `LIVE_HLS_MIC_ARCHIVE`, `LIVE_HLS_REAP_ORPHANS`, `HLS_SHARER_RESUME_HOLD`,
 `LIVEKIT_REGION_REQUIRE_CAP`, `VOICE_MESH_RESUME_REQUIRES_CAP`,
 `TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
-`PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below).
+`PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
+`COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
+default off; automatic translation of Baú posts, which also needs
+`OPENROUTER_API_KEY` on the API: no key, no translation, no error; served to
+the client as `translationEnabled` on `GET /api/servers/:id/home/posts`; see
+`docs/COMMUNITY_HOME.md` §Translation).
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 
 Born as a flag (no old reader): `DESKTOP_SHARE_AUDIO_NATIVE`

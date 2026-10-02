@@ -8,6 +8,7 @@ import {
   communityHomeMediaKindFromContentType,
   hasPermission,
   isCommunityHomeEmbedKind,
+  normalizeCommunityHomeLang,
   parseCommunityHomeEmbed,
   Permission,
   sniffCommunityHomeImageType,
@@ -18,6 +19,7 @@ import {
   type CommunityHomeMedia,
   type CommunityHomePost,
   type CommunityHomePostStatus,
+  type CommunityHomeTranslationLang,
   type CommunityHomeVisibility,
   type PublicUser,
 } from "@pqp/shared";
@@ -37,6 +39,13 @@ import {
   listServerMemberIds,
   memberHasPermission,
 } from "./permissions.js";
+import {
+  isCommunityHomeTranslationOn,
+  loadTranslationRows,
+  scheduleCommunityHomeTranslation,
+  translationSourceHash,
+  type TranslationReadRow,
+} from "./community-home-translation.js";
 import { toPublicUserSummary } from "./users.js";
 
 /** The allowlisted content types a Baú image may be stored under. */
@@ -407,17 +416,35 @@ function toPost(
   caps: HomeViewerCaps,
   teaser: CommunityHomeComment[],
   authorCaps: { canManage: boolean; isOwner: boolean } | null,
+  translationRow: TranslationReadRow | null = null,
+  translationLang: CommunityHomeTranslationLang | null = null,
 ): CommunityHomePost {
+  // `locked` is decided from the post and the viewer ALONE, before any
+  // translation is looked at, and every field below that a lock strips is
+  // stripped from the translated text by the same expression as from the
+  // original. A translation row can add words to a card; it can never change
+  // who is allowed to read them.
   const locked =
     row.visibility === "members" && !canUnlockMembers(caps);
+  // Fresh means made from the text as it is NOW: an edit changes the hash and
+  // the original is served until the sweep makes a new one. A same-language
+  // row is the answer "nothing to translate", not a translation.
+  const fresh =
+    translationRow &&
+    translationLang &&
+    row.status === "published" &&
+    !translationRow.same_language &&
+    translationRow.source_hash === translationSourceHash(row)
+      ? translationRow
+      : null;
   return {
     id: row.id,
     serverId: row.server_id,
     author: authorFromRow(row),
     authorBadge: authorBadgeFor(row, authorCaps),
-    title: row.title,
-    body: locked ? null : row.body,
-    teaser: row.teaser,
+    title: fresh ? fresh.title : row.title,
+    body: locked ? null : fresh ? fresh.body : row.body,
+    teaser: fresh ? fresh.teaser : row.teaser,
     visibility: row.visibility,
     status: row.status,
     commentsEnabled: row.comments_enabled,
@@ -440,18 +467,36 @@ function toPost(
     publishedAt: row.published_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    translation: fresh
+      ? {
+          lang: translationLang!,
+          auto: true,
+          sourceLang: fresh.source_lang,
+          original: {
+            title: row.title,
+            // Same lock as `body` above.
+            body: locked ? null : row.body,
+            teaser: row.teaser,
+          },
+        }
+      : null,
   };
 }
 
 async function hydratePosts(
   rows: PostRow[],
   caps: HomeViewerCaps,
+  lang: CommunityHomeTranslationLang | null = null,
 ): Promise<CommunityHomePost[]> {
   if (rows.length === 0) {
     return [];
   }
   const serverId = rows[0]!.server_id;
-  const [teasers, badges] = await Promise.all([
+  // The reader's language, only where the feature is on for this server. A
+  // failed read costs the translation, never the feed.
+  const wantLang =
+    lang !== null && isCommunityHomeTranslationOn(serverId) ? lang : null;
+  const [teasers, badges, translations] = await Promise.all([
     loadCommentTeasers(
       rows.map((r) => r.id),
       caps.viewerId,
@@ -460,6 +505,18 @@ async function hydratePosts(
       serverId,
       rows.map((r) => r.author_id),
     ),
+    wantLang
+      ? loadTranslationRows(
+          rows.map((r) => r.id),
+          wantLang,
+        ).catch((error: unknown) => {
+          console.error(
+            "[community-home] translation read failed:",
+            error instanceof Error ? error.message : error,
+          );
+          return new Map<string, TranslationReadRow>();
+        })
+      : Promise.resolve(new Map<string, TranslationReadRow>()),
   ]);
   return rows.map((row) =>
     toPost(
@@ -467,6 +524,8 @@ async function hydratePosts(
       caps,
       teasers.get(row.id) ?? [],
       badges.get(row.author_id) ?? null,
+      translations.get(row.id) ?? null,
+      wantLang,
     ),
   );
 }
@@ -474,6 +533,8 @@ async function hydratePosts(
 export async function listCommunityHomePosts(
   serverId: string,
   viewerId: string,
+  /** The reader's language (`?lang=`): a UI locale or a bare tag. Omitted, the original. */
+  lang?: string | null,
 ): Promise<CommunityHomePost[]> {
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
   // A scheduled post whose time has passed is published as far as the clock is
@@ -499,7 +560,7 @@ export async function listCommunityHomePosts(
       LIMIT $3`,
     [viewerId, serverId, COMMUNITY_HOME_FEED_LIMIT],
   );
-  return hydratePosts(result.rows, caps);
+  return hydratePosts(result.rows, caps, normalizeCommunityHomeLang(lang));
 }
 
 /**
@@ -635,6 +696,7 @@ export async function getCommunityHomePost(
   serverId: string,
   postId: string,
   viewerId: string,
+  lang?: string | null,
 ): Promise<CommunityHomePost> {
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
   const result = await getPool().query<PostRow>(
@@ -652,7 +714,11 @@ export async function getCommunityHomePost(
   ) {
     throw new CommunityHomeError("not_found", "Post not found");
   }
-  const [post] = await hydratePosts([row], caps);
+  const [post] = await hydratePosts(
+    [row],
+    caps,
+    normalizeCommunityHomeLang(lang),
+  );
   return post!;
 }
 
@@ -928,6 +994,11 @@ export async function createCommunityHomePost(
       ],
     );
     await client.query("COMMIT");
+    if (status === "published") {
+      // After COMMIT, and not awaited: the translation is a network call and
+      // a publish never waits for it or fails because of it.
+      void scheduleCommunityHomeTranslation(postId, serverId);
+    }
     return getCommunityHomePost(serverId, postId, authorId);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1096,6 +1167,11 @@ export async function updateCommunityHomePost(
         );
       }
     }
+    if (row.status === "published") {
+      // An edit of a live post: the old translations are now stale by hash
+      // (readers get the original in the meantime); make new ones.
+      void scheduleCommunityHomeTranslation(postId, serverId);
+    }
     return getCommunityHomePost(serverId, postId, actorId);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1150,6 +1226,7 @@ export async function publishCommunityHomePost(
      WHERE id = $1 AND server_id = $2`,
     [postId, serverId],
   );
+  void scheduleCommunityHomeTranslation(postId, serverId);
   return getCommunityHomePost(serverId, postId, actorId);
 }
 
@@ -1635,7 +1712,7 @@ export async function claimCommunityHomeMediaUpload(input: {
 export async function publishDueCommunityHomePosts(
   serverId?: string,
 ): Promise<string[]> {
-  const result = await getPool().query<{ server_id: string }>(
+  const result = await getPool().query<{ id: string; server_id: string }>(
     `UPDATE community_home_posts
         SET status = 'published',
             published_at = NOW(),
@@ -1644,9 +1721,13 @@ export async function publishDueCommunityHomePosts(
         AND scheduled_at IS NOT NULL
         AND scheduled_at <= NOW()
         ${serverId ? "AND server_id = $1" : ""}
-      RETURNING server_id`,
+      RETURNING id, server_id`,
     serverId ? [serverId] : [],
   );
+  for (const row of result.rows) {
+    // A scheduled post going live is a publish like any other. Not awaited.
+    void scheduleCommunityHomeTranslation(row.id, row.server_id);
+  }
   return [...new Set(result.rows.map((r) => r.server_id))];
 }
 

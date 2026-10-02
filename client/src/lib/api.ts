@@ -24,6 +24,7 @@ import type {
   CommunityHomeLikeResponse,
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
+  CommunityHomePostTranslationsResponse,
   CreateCommunityHomeCommentRequest,
   CreateCommunityHomeMediaUploadRequest,
   CreateCommunityHomeMediaUploadResponse,
@@ -1858,8 +1859,26 @@ export const updateServerCommunityHomeConfig = (
     body,
   );
 
-export const fetchCommunityHomePosts = (serverId: string) =>
-  apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/posts`);
+/**
+ * `lang` is the reader's UI locale. The API serves an automatic translation
+ * into it where the server has that on and one exists, and the original
+ * otherwise; it never decides what the viewer may read.
+ */
+export const fetchCommunityHomePosts = (serverId: string, lang?: string) =>
+  apiFetch<CommunityHomePostsResponse>(
+    `/api/servers/${serverId}/home/posts${
+      lang ? `?lang=${encodeURIComponent(lang)}` : ""
+    }`,
+  );
+
+/** Staff-only, read only: what each language's reader sees for this post. */
+export const fetchCommunityHomeTranslations = (
+  serverId: string,
+  postId: string,
+) =>
+  apiFetch<CommunityHomePostTranslationsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/translations`,
+  );
 
 /** Staff-only: drafts + scheduled, never mixed into the published feed. */
 export const fetchCommunityHomeDrafts = (serverId: string) =>

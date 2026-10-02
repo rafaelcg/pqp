@@ -652,6 +652,92 @@ export const communityHomeCommentSchema = z.object({
 
 export type CommunityHomeComment = z.infer<typeof communityHomeCommentSchema>;
 
+/**
+ * The languages a Baú post is translated into: one per UI locale (`en`,
+ * `pt-BR`, `es`), as ISO-639-1 codes. `pt-BR` and `pt` are one language here,
+ * and every `es-*` is the one Spanish the UI catalogue is written in.
+ */
+export const COMMUNITY_HOME_TRANSLATION_LANGS = ["en", "pt", "es"] as const;
+
+export type CommunityHomeTranslationLang =
+  (typeof COMMUNITY_HOME_TRANSLATION_LANGS)[number];
+
+export const communityHomeTranslationLangSchema = z.enum(
+  COMMUNITY_HOME_TRANSLATION_LANGS,
+);
+
+/**
+ * A UI locale or a bare language tag (`pt-BR`, `pt`, `en-US`, `es-MX`) to the
+ * language a translation is stored under, or null for one we do not translate
+ * into. The reader's `?lang=` goes through this, so nothing outside the list
+ * can name a translation row.
+ */
+export function normalizeCommunityHomeLang(
+  raw: string | null | undefined,
+): CommunityHomeTranslationLang | null {
+  if (!raw) {
+    return null;
+  }
+  const base = raw.trim().toLowerCase().split(/[-_]/)[0];
+  return (COMMUNITY_HOME_TRANSLATION_LANGS as readonly string[]).includes(
+    base ?? "",
+  )
+    ? (base as CommunityHomeTranslationLang)
+    : null;
+}
+
+/**
+ * What the reader sees is the translation; `original` is the author's own
+ * words, so the card can flip back without a second request. `original` goes
+ * through the same lock as the top-level fields: for a members-only post the
+ * viewer cannot open, its `body` is null here too.
+ */
+export const communityHomePostTranslationSchema = z.object({
+  lang: communityHomeTranslationLangSchema,
+  /** Always true today; a field so a reviewed human translation can say false. */
+  auto: z.boolean(),
+  /** The language the post was written in, when it could be told. */
+  sourceLang: z.string().nullable(),
+  original: z.object({
+    title: z.string().nullable(),
+    body: z.string().nullable(),
+    teaser: z.string().nullable(),
+  }),
+});
+
+export type CommunityHomePostTranslation = z.infer<
+  typeof communityHomePostTranslationSchema
+>;
+
+/** Staff read-only view: one stored translation, with whether it is current. */
+export const communityHomePostTranslationRowSchema = z.object({
+  lang: communityHomeTranslationLangSchema,
+  title: z.string().nullable(),
+  body: z.string(),
+  teaser: z.string().nullable(),
+  sourceLang: z.string().nullable(),
+  /** The post's own language already is `lang`: there is nothing to show. */
+  sameLanguage: z.boolean(),
+  /** The post was edited after this was made; readers get the original. */
+  stale: z.boolean(),
+  model: z.string(),
+  createdAt: z.string(),
+});
+
+export type CommunityHomePostTranslationRow = z.infer<
+  typeof communityHomePostTranslationRowSchema
+>;
+
+export const communityHomePostTranslationsResponseSchema = z.object({
+  /** The flag is on for this server and a key is configured on the API. */
+  enabled: z.boolean(),
+  translations: z.array(communityHomePostTranslationRowSchema),
+});
+
+export type CommunityHomePostTranslationsResponse = z.infer<
+  typeof communityHomePostTranslationsResponseSchema
+>;
+
 export const communityHomePostSchema = z.object({
   id: z.string().uuid(),
   serverId: z.string().uuid(),
@@ -698,6 +784,12 @@ export const communityHomePostSchema = z.object({
   publishedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * Set when `title` / `body` / `teaser` above are an automatic translation
+   * into the reader's language. Null (and defaulted, so an older API still
+   * parses) when the reader sees the author's own words.
+   */
+  translation: communityHomePostTranslationSchema.nullable().default(null),
 });
 
 export type CommunityHomePost = z.infer<typeof communityHomePostSchema>;
@@ -855,6 +947,12 @@ export type ClaimCommunityHomeMediaResponse = z.infer<
 
 export const communityHomePostsResponseSchema = z.object({
   posts: z.array(communityHomePostSchema),
+  /**
+   * `community_home_translation` is on for this server, so readers in other
+   * languages are served an automatic translation. The staff composer says so.
+   * Defaulted: an older API never sends it.
+   */
+  translationEnabled: z.boolean().default(false),
 });
 
 export type CommunityHomePostsResponse = z.infer<

@@ -19,6 +19,8 @@ const LANGUAGE_LABEL: Record<string, string> = {
   fr: "French",
   de: "German",
   it: "Italian",
+  /** "I could not tell": the model works the source language out itself. */
+  auto: "whatever language the input is written in",
 };
 
 export function languageLabel(code: string): string {

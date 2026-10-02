@@ -1335,6 +1335,7 @@
     hls_sharer_resume_hold: "Muda o que acontece quando o apresentador cai: segurar a transmissão ou encerrar em 5 s.",
     community_home: "Mostra ou esconde o Baú para todo mundo.",
     community_home_vip: "Mostra ou esconde os posts VIP do Baú (só vale com o Baú ligado).",
+    community_home_translation: "Liga ou desliga a tradução automática dos posts do Baú (só vale com o Baú ligado e a chave OPENROUTER_API_KEY na API). Desligado, todo mundo lê o original; as traduções já feitas ficam guardadas.",
     desktop_share_audio_native: "Vale no próximo compartilhamento, só no app desktop do Windows que já tem o suporte: o som vem por processo, sem a chamada, Windows 10 incluso.",
     share_high_motion_guard: "Vale no próximo compartilhamento: se o encoder não dá conta (jogo em taxa alta), baixa um degrau de resolução e depois a taxa de quadros; no app desktop do Windows sobe a prioridade dos processos enquanto compartilha. Nunca mexe em watch party."
   };

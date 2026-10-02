@@ -8,6 +8,10 @@ import {
 } from "../voice/hls-viewer-counts.js";
 import { featureFlagMetrics, type FeatureFlagMetrics } from "../lib/flags.js";
 import {
+  communityHomeTranslationMetrics,
+  type CommunityHomeTranslationMetrics,
+} from "./community-home-translation.js";
+import {
   communityColumns,
   communityTag,
   type CommunityColumns,
@@ -293,6 +297,15 @@ export interface AdminMetrics {
    * the one question this block answers is "did my click take".
    */
   flags: FeatureFlagMetrics;
+  /**
+   * Baú automatic translation (`services/community-home-translation.ts`):
+   * translations done, failed, given up on, skipped (over budget, claimed by
+   * the sibling, flag off, no key), characters sent and the cost the provider
+   * reported, since this process started, plus today's deployment-wide spend
+   * against the daily cap from the database. Live like `flags`: the question it
+   * answers is "is it translating, and why not".
+   */
+  communityHomeTranslation: CommunityHomeTranslationMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1107,6 +1120,7 @@ type CachedMetrics = Omit<
   | "instanceCount"
   | "cluster"
   | "flags"
+  | "communityHomeTranslation"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1867,13 +1881,15 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready, sfu, sfuRegions, flags] = await Promise.all([
-    getCachedMetrics(),
-    checkReady(),
-    readSfuStats(),
-    sfuRegionsReport(),
-    featureFlagMetrics(),
-  ]);
+  const [payload, ready, sfu, sfuRegions, flags, communityHomeTranslation] =
+    await Promise.all([
+      getCachedMetrics(),
+      checkReady(),
+      readSfuStats(),
+      sfuRegionsReport(),
+      featureFlagMetrics(),
+      communityHomeTranslationMetrics(),
+    ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
   return {
@@ -1886,6 +1902,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     sfu,
     sfuRegions,
     flags,
+    communityHomeTranslation,
   };
 }
 

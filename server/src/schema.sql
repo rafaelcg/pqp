@@ -3900,6 +3900,55 @@ ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT 
 -- newer flip. Same idea as permissions_version.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_version INTEGER NOT NULL DEFAULT 0;
 
+-- Automatic translation of a published Baú post, one row per (post, language).
+-- Written by the background job in services/community-home-translation.ts,
+-- behind the runtime flag `community_home_translation`; empty on every
+-- deployment that never turns it on. `source_hash` is md5 of the title,
+-- teaser and body the translation was made from (see translationSourceHash),
+-- so an edit makes a row stale without anything having to delete it: the read
+-- compares and serves the original instead, and the sweep makes a fresh one.
+-- `same_language` rows are the answer "the post is already in `lang`": no
+-- text, but the sweep must not ask again. New tables only: nothing here
+-- alters or rewrites an existing one.
+CREATE TABLE IF NOT EXISTS community_home_post_translations (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  title TEXT,
+  body TEXT NOT NULL DEFAULT '',
+  teaser TEXT,
+  source_lang TEXT,
+  same_language BOOLEAN NOT NULL DEFAULT FALSE,
+  source_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, lang)
+);
+
+-- The claim. A translation is a network call, so it is never made inside a
+-- transaction; what keeps two API instances from translating the same post
+-- twice is this row, taken with one atomic INSERT ... ON CONFLICT whose WHERE
+-- is the lease and the backoff. `attempts` counts tries for one `source_hash`;
+-- an edit starts it over.
+CREATE TABLE IF NOT EXISTS community_home_translation_jobs (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  lang TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  PRIMARY KEY (post_id, lang)
+);
+
+-- What the instance has spent today, shared by every API machine, so the
+-- daily cap means the deployment and not one process.
+CREATE TABLE IF NOT EXISTS community_home_translation_usage (
+  day DATE PRIMARY KEY,
+  chars BIGINT NOT NULL DEFAULT 0,
+  requests INTEGER NOT NULL DEFAULT 0
+);
+
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
 -- the session flips live on its own when somebody starts sharing (see
