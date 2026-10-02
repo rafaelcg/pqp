@@ -149,11 +149,18 @@ export interface CallSplitChatHeader {
     active: string;
     onSelect: (id: string) => void;
   };
+  /**
+   * The channel's own tools (pins, settings, the member list), when the page
+   * header that normally carries them has stood down for the call stage.
+   */
+  actions?: ReactNode;
 }
 
 export interface CallSplitState {
   active: boolean;
   canSideBySide: boolean;
+  /** The chat pane is put away, and its header with it. */
+  chatHidden: boolean;
 }
 
 export interface PaneSize {
@@ -315,9 +322,10 @@ export function CallSplit({
   // rule inside a pane it has entirely to itself, and the person who asked
   // for the call to fill the pane gets a band of empty pane under it.
   const fills = sized || collapsed === "chat";
+  const chatHidden = collapsed === "chat";
   useEffect(() => {
-    onSplitStateChange?.({ active: fills, canSideBySide });
-  }, [fills, canSideBySide, onSplitStateChange]);
+    onSplitStateChange?.({ active: fills, canSideBySide, chatHidden });
+  }, [fills, canSideBySide, chatHidden, onSplitStateChange]);
 
   const setCollapsed = useCallback(
     (next: CallSplitCollapsed) => {
@@ -715,6 +723,14 @@ function ChatPaneHeader({
           </span>
         )}
       </span>
+      {header.actions && (
+        <span
+          data-call-split-chat-actions=""
+          className="flex shrink-0 items-center gap-0.5"
+        >
+          {header.actions}
+        </span>
+      )}
       {header.orientation?.canToggle && !videoHidden && (
         <Tooltip
           label={

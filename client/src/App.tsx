@@ -1564,6 +1564,7 @@ function MainAppContent({
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
+    chatHidden: false,
   });
   /**
    * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
@@ -1589,7 +1590,8 @@ function MainAppContent({
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
-      previous.canSideBySide === next.canSideBySide
+      previous.canSideBySide === next.canSideBySide &&
+      previous.chatHidden === next.chatHidden
         ? previous
         : next,
     );
@@ -9145,6 +9147,127 @@ function MainAppContent({
     </>
   );
 
+  /**
+   * THE CALL STAGE TAKES THE PAGE HEADER'S ROW in a server voice call when
+   * everything the header says is already on screen: the channel list is
+   * expanded beside the stage, so it names the room and lists its people,
+   * and the chat pane's own header (under the stage) carries the channel's
+   * tools instead. Anything else keeps the header: a phone (its nav button
+   * lives there), a folded list, the call docked in the composer, the chat
+   * put away, or not being in this channel's call at all.
+   */
+  const voiceStageOwnsHeader = Boolean(
+    selectedChannel &&
+      selectedChannel.kind === "server" &&
+      isVoiceRoomChannelType(selectedChannel.type) &&
+      !partyOwnsHeader &&
+      voiceState.voiceChannelId === selectedChannel.id &&
+      voiceState.status !== "idle" &&
+      columnLayout &&
+      !sidebarIconsOnly &&
+      !callDockOnScreen &&
+      stageShape === "expanded" &&
+      !splitState.chatHidden,
+  );
+
+  const channelHeaderTools = selectedChannel ? (
+    <>
+          {isChannelSessionScheduleEnabled() &&
+            canManageChannels &&
+            selectedChannel.kind === "server" &&
+            selectedChannel.type === "voice" && (
+            <Tooltip label={t("watchPartySchedule.header.schedule")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-schedule-session-button
+                aria-label={t("watchPartySchedule.header.schedule")}
+                onClick={() => setScheduleSheetOpen(true)}
+              >
+                <CalendarClock className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip label={t("chrome.pins")}>
+            <button
+              type="button"
+              className={HEADER_ACTION_TILE}
+              onClick={() => setPinsOpen(true)}
+            >
+              <Pin className="h-4 w-4" />
+            </button>
+          </Tooltip>
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.watchPartyHistory")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-watch-party-history=""
+                aria-label={t("chrome.watchPartyHistory")}
+                onClick={() =>
+                  setWatchPartyHistoryChannelId(selectedChannel.id)
+                }
+              >
+                <History className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {(canManageChannels || canManageRoles) &&
+            selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.channelSettings")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
+                onClick={() =>
+                  setChannelSettings({
+                    channelId: selectedChannel.id,
+                    section: canManageChannels ? "overview" : "permissions",
+                    forceAdvanced: false,
+                  })
+                }
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {/* The roster toggle, last in the row — the same position and the
+              same icon Discord puts it in, because that is where the muscle
+              memory of everybody arriving from Discord already points. Shown at
+              every width: below the column breakpoint it opens the list as a
+              drawer rather than not at all. */}
+          {memberSidebarAvailable && (
+            <Tooltip label={t("memberList.toggle")}>
+              <button
+                type="button"
+                aria-pressed={memberSidebar.open && !openThread}
+                data-member-sidebar-toggle=""
+                className={cn(
+                  HEADER_ACTION_TILE,
+                  memberSidebar.open && !openThread && "text-paper",
+                )}
+                onClick={() => {
+                  // A thread occupies the same right column as the roster. The
+                  // button still means "show me the people": close the thread
+                  // first, and open the list if it was already hidden.
+                  if (openThread) {
+                    closeThreadPanel();
+                    if (!memberSidebar.open) {
+                      memberSidebar.toggle();
+                    }
+                    return;
+                  }
+                  memberSidebar.toggle();
+                }}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+    </>
+  ) : null;
+
   const chatPane = selectedChannel ? (
     <div
       className="relative flex min-h-0 min-w-0 flex-1 flex-col"
@@ -9192,7 +9315,7 @@ function MainAppContent({
           </p>
         </div>
       )}
-      {!partyOwnsHeader && (
+      {!partyOwnsHeader && !voiceStageOwnsHeader && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -9331,100 +9454,9 @@ function MainAppContent({
             })()}
           {/* The side-by-side / stacked switch moved into the chat pane's
               own header (2026-09-13), beside the hide controls it belongs
-              with. */}
-          {isChannelSessionScheduleEnabled() &&
-            canManageChannels &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" && (
-            <Tooltip label={t("watchPartySchedule.header.schedule")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-schedule-session-button
-                aria-label={t("watchPartySchedule.header.schedule")}
-                onClick={() => setScheduleSheetOpen(true)}
-              >
-                <CalendarClock className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <Pin className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.watchPartyHistory")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-watch-party-history=""
-                aria-label={t("chrome.watchPartyHistory")}
-                onClick={() =>
-                  setWatchPartyHistoryChannelId(selectedChannel.id)
-                }
-              >
-                <History className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {(canManageChannels || canManageRoles) &&
-            selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.channelSettings")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-settings=""
-                aria-label={t("chrome.channelSettings")}
-                onClick={() =>
-                  setChannelSettings({
-                    channelId: selectedChannel.id,
-                    section: canManageChannels ? "overview" : "permissions",
-                    forceAdvanced: false,
-                  })
-                }
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {/* The roster toggle, last in the row — the same position and the
-              same icon Discord puts it in, because that is where the muscle
-              memory of everybody arriving from Discord already points. Shown at
-              every width: below the column breakpoint it opens the list as a
-              drawer rather than not at all. */}
-          {memberSidebarAvailable && (
-            <Tooltip label={t("memberList.toggle")}>
-              <button
-                type="button"
-                aria-pressed={memberSidebar.open && !openThread}
-                data-member-sidebar-toggle=""
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  memberSidebar.open && !openThread && "text-paper",
-                )}
-                onClick={() => {
-                  // A thread occupies the same right column as the roster. The
-                  // button still means "show me the people": close the thread
-                  // first, and open the list if it was already hidden.
-                  if (openThread) {
-                    closeThreadPanel();
-                    if (!memberSidebar.open) {
-                      memberSidebar.toggle();
-                    }
-                    return;
-                  }
-                  memberSidebar.toggle();
-                }}
-              >
-                <Users className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
+              with. The channel's own tools are `channelHeaderTools`, shared
+              with that header for when this one stands down. */}
+          {channelHeaderTools}
         </div>
       </header>
       )}
@@ -9747,6 +9779,7 @@ function MainAppContent({
         // no stage above the transcript then.
         chatHeader={callDockOnScreen ? undefined : {
           title: t("chat.paneTitle"),
+          actions: voiceStageOwnsHeader ? channelHeaderTools : undefined,
           tabs: partyOwnsHeader
             ? {
                 items: [
