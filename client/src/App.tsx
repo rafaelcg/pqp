@@ -470,7 +470,7 @@ import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-au
 import {
   channelListRetryDelayMs,
   createChannelListTickets,
-  vanishedChannelFallback,
+  vanishedChannelDecision,
 } from "@/lib/channel-list-refresh";
 import {
   onConnectionCheckRequest,
@@ -1715,7 +1715,9 @@ function MainAppContent({
     },
     [],
   );
-  const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
+  const refreshChannelListRef = useRef<
+    (serverId: string, confirmingVanishedId?: string | null) => void
+  >(() => {});
   /**
    * Servers a navigation is loading the channel list for, with how many. While
    * one is in flight `selectedChannelIdRef` may still name the channel of the
@@ -4805,19 +4807,28 @@ function MainAppContent({
                     ),
                   );
                 }
-                const current = selectedChannelIdRef.current;
+                // The open channel missing from this list goes through the
+                // same confirm-then-leave as a `channels-update`, so there is
+                // one fallback path and it moves the URL with the selection.
                 if (
                   listIsCurrent &&
                   !channelLoadsRef.current.has(message.serverId) &&
-                  current &&
-                  !list.some((channel) => channel.id === current)
+                  vanishedChannelDecision(
+                    list,
+                    selectedChannelIdRef.current,
+                    null,
+                  ).action === "confirm"
                 ) {
-                  const next =
-                    list.find((channel) => channel.type === "text") ?? list[0];
-                  if (next) {
-                    setSelectedChannelId(next.id);
-                    selectedChannelIdRef.current = next.id;
-                  }
+                  console.warn("[pqp] channel.vanished", {
+                    serverId: message.serverId,
+                    channelId: selectedChannelIdRef.current,
+                    step: "confirming",
+                    via: "permissions-update",
+                  });
+                  refreshChannelListRef.current(
+                    message.serverId,
+                    selectedChannelIdRef.current,
+                  );
                 }
               })
               .catch(() => {
@@ -5423,7 +5434,11 @@ function MainAppContent({
    * retry: either would stop the open server's own refresh, and nothing
    * would start it again.
    */
-  function refreshChannelList(serverId: string, failedTries = 0) {
+  function refreshChannelList(
+    serverId: string,
+    failedTries = 0,
+    confirmingVanishedId: string | null = null,
+  ) {
     if (selectedServerIdRef.current !== serverId) {
       return;
     }
@@ -5441,26 +5456,64 @@ function MainAppContent({
         if (!current()) {
           return;
         }
-        channelListTickets.wrote(ticket);
         // Started before a channel this reader just created: keep it, or
         // the fallback below would take them off the channel they made.
         const list = channelListTickets.withCreated(serverId, fetched, ticket);
+        // Deleted under the person reading it: open another channel the same
+        // way a click would, so the transcript and the composer follow, not
+        // just the highlighted row. Only once a second list agrees
+        // (`vanishedChannelDecision`).
+        // Not while a navigation is loading this server: the selection is
+        // then still the previous server's channel (or a DM), which this
+        // list never had. That load picks the landing itself.
+        const decision = channelLoadsRef.current.has(serverId)
+          ? { action: "stay" as const }
+          : vanishedChannelDecision(
+              list,
+              selectedChannelIdRef.current,
+              confirmingVanishedId,
+            );
+        if (decision.action === "confirm") {
+          // Not written: a list that may be missing a channel by mistake
+          // would drop its row from the sidebar until the next fetch.
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "confirming",
+            via: "channels-update",
+          });
+          // A second apart, so one bad moment on the server cannot answer
+          // twice. A newer refetch cancels this one and confirms afresh.
+          const confirmId = decision.channelId;
+          channelListRetryTimerRef.current = setTimeout(() => {
+            channelListRetryTimerRef.current = null;
+            if (current()) {
+              refreshChannelList(serverId, 0, confirmId);
+            }
+          }, 1000);
+          return;
+        }
+        channelListTickets.wrote(ticket);
         if (channelListStaleRef.current === serverId) {
           channelListStaleRef.current = null;
         }
         setChannels(list);
-        // Deleted under the person reading it: open another channel the same
-        // way a click would, so the transcript and the composer follow, not
-        // just the highlighted row.
-        // Not while a navigation is loading this server: the selection is
-        // then still the previous server's channel (or a DM), which this
-        // list never had. That load picks the landing itself.
-        const fallback = channelLoadsRef.current.has(serverId)
-          ? { vanished: false as const }
-          : vanishedChannelFallback(list, selectedChannelIdRef.current);
-        if (fallback.vanished) {
-          if (fallback.nextId) {
-            void selectChannelRef.current(fallback.nextId, serverId);
+        if (confirmingVanishedId && decision.action === "stay") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: confirmingVanishedId,
+            step: "back-in-list",
+          });
+        }
+        if (decision.action === "leave") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "leaving",
+            nextId: decision.nextId,
+          });
+          if (decision.nextId) {
+            void selectChannelRef.current(decision.nextId, serverId);
           } else {
             setSelectedChannelId(null);
             selectedChannelIdRef.current = null;
@@ -5479,13 +5532,14 @@ function MainAppContent({
         channelListRetryTimerRef.current = setTimeout(() => {
           channelListRetryTimerRef.current = null;
           if (current()) {
-            refreshChannelList(serverId, failedTries + 1);
+            refreshChannelList(serverId, failedTries + 1, confirmingVanishedId);
           }
         }, delay);
       },
     );
   }
-  refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
+  refreshChannelListRef.current = (serverId, confirmingVanishedId) =>
+    refreshChannelList(serverId, 0, confirmingVanishedId ?? null);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
   const selectConversation = useCallback(
