@@ -10187,6 +10187,8 @@ function MainAppContent({
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
           composerHidden={splitState.chatHidden}
           onDismissError={() => voice.dismissError()}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}
