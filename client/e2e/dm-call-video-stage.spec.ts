@@ -153,6 +153,20 @@ async function expectVideoPlaying(page: Page, tileName: string) {
     .toBe(true);
 }
 
+/** The composer, call controls included, is inside the window. */
+async function expectComposerOnScreen(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const box = document
+          .querySelector("[data-chat-composer]")
+          ?.getBoundingClientRect();
+        return box ? box.top >= 0 && box.bottom <= window.innerHeight + 0.5 : false;
+      }),
+    )
+    .toBe(true);
+}
+
 async function measuredArea(page: Page, selector: string): Promise<number> {
   const box = await page.locator(selector).first().boundingBox();
   if (!box) {
@@ -207,15 +221,19 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
       .click();
     await expectVideoPlaying(page, pair.calleeName);
 
-    // THE measurement: the remote person occupies at least half the viewport.
+    // THE measurement: the remote person gets everything above the composer,
+    // which stays whole. Two fifths of a 1280x720 window once the composer
+    // carries the call's controls; it was half while the composer's bottom
+    // was cut off by the window.
     const viewport = page.viewportSize()!;
     const remoteArea = await measuredArea(
       page,
       `[data-call-tile="${pair.calleeName}"]`,
     );
     expect(remoteArea).toBeGreaterThanOrEqual(
-      viewport.width * viewport.height * 0.5,
+      viewport.width * viewport.height * 0.4,
     );
+    await expectComposerOnScreen(page);
 
     // Self is a corner preview, not a peer-sized tile.
     const selfArea = await measuredArea(
@@ -342,12 +360,13 @@ test.describe("mobile viewport", () => {
       expect(stageBox.x + stageBox.width).toBeGreaterThanOrEqual(389);
       expect(stageBox.width).toBeGreaterThanOrEqual(300);
 
-      // …and the remote person occupies at least half the viewport.
+      // …and the remote person gets everything above a whole composer.
       const remoteArea = await measuredArea(
         page,
         `[data-call-tile="${pair.calleeName}"]`,
       );
-      expect(remoteArea).toBeGreaterThanOrEqual(390 * 844 * 0.5);
+      expect(remoteArea).toBeGreaterThanOrEqual(390 * 844 * 0.4);
+      await expectComposerOnScreen(page);
 
       // Controls dock at the bottom of the stage — thumb territory.
       const leave = page.getByRole("button", { name: "Leave", exact: true });
