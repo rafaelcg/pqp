@@ -647,6 +647,11 @@ async function translateOnce(
     stats.costUsd += result.costUsd ?? 0;
   } catch (error) {
     await refundTranslationBudget(reserved.day, sentChars);
+    // A failure after a billed call (`TranslateError`) still cost money.
+    const billed = (error as { costUsd?: unknown }).costUsd;
+    if (typeof billed === "number") {
+      stats.costUsd += billed;
+    }
     const message = error instanceof Error ? error.message : String(error);
     const retryInSeconds = BACKOFF_BASE_SECONDS * 3 ** (claim.attempts - 1);
     await releaseClaim(postId, lang, { error: message, retryInSeconds });
