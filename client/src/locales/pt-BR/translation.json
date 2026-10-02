@@ -1452,6 +1452,7 @@
   "call.startVideo": "Iniciar chamada de vídeo",
   "call.header.joinCount": "Entrar na call · {count}",
   "call.stage.collapse": "Recolher a call",
+  "call.controls.more": "Mais",
   "call.stage.expand": "Expandir a call",
   "call.stage.duration": "Duração da call",
   "call.stage.selfPreview": "Prévia flutuante da câmera",

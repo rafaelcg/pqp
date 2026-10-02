@@ -94,14 +94,14 @@ const idle: VoiceState = {
   channelMusic: {},
 };
 
-function render(voiceState: VoiceState) {
+function render(voiceState: VoiceState, collapsed = false) {
   return renderToStaticMarkup(
     <TooltipProvider>
       <CallControls
         voiceState={voiceState}
-        collapsed={false}
+        collapsed={collapsed}
         canExpand={false}
-        userCollapsed={false}
+        userCollapsed={collapsed}
         fullscreenAvailable={false}
         isFullscreen={false}
         onToggleFullscreen={() => {}}
@@ -129,15 +129,24 @@ function render(voiceState: VoiceState) {
  */
 describe("CallControls in a watch party room", () => {
   it("hides the Watch party button from the audience (canStream false)", () => {
-    const html = render({ ...idle, canStream: false });
-    expect(html).not.toContain("lucide-monitor-play");
-    expect(html).not.toContain("lucide-screen-share");
+    for (const collapsed of [false, true]) {
+      const html = render({ ...idle, canStream: false }, collapsed);
+      expect(html).not.toContain("lucide-monitor-play");
+      expect(html).not.toContain("lucide-screen-share");
+    }
   });
 
   it("shows the Watch party button to the presenter (canStream true)", () => {
-    const html = render({ ...idle, canStream: true });
-    expect(html).toContain("lucide-monitor-play");
-    expect(html).toContain("lucide-screen-share");
+    // The docked bar carries it as a tile.
+    const docked = render({ ...idle, canStream: true }, true);
+    expect(docked).toContain("lucide-monitor-play");
+    expect(docked).toContain("lucide-screen-share");
+    // The stage bar keeps share and folds Watch party into "Mais", whose
+    // rows only render once the menu opens.
+    const stage = render({ ...idle, canStream: true });
+    expect(stage).toContain("lucide-screen-share");
+    expect(stage).toContain('data-testid="call-more"');
+    expect(stage).not.toContain("lucide-monitor-play");
   });
 });
 

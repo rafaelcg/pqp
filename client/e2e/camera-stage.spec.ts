@@ -140,7 +140,9 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     "false",
   );
 
-  await page.getByRole("button", { name: "Collapse call" }).click();
+  // Folding the call away lives in the stage bar's "Mais" menu.
+  await page.getByTestId("call-more").click();
+  await page.getByRole("menuitem", { name: "Collapse call" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();
   await expect(page.getByTestId("call-stage")).toHaveCount(0);
 

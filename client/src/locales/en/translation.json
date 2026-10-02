@@ -1452,6 +1452,7 @@
   "call.startVideo": "Start video call",
   "call.header.joinCount": "Join call · {count}",
   "call.stage.collapse": "Collapse call",
+  "call.controls.more": "More",
   "call.stage.expand": "Expand call",
   "call.stage.duration": "Call duration",
   "call.stage.selfPreview": "Floating camera preview",

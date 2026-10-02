@@ -20,6 +20,7 @@ import {
   MousePointerBan,
   ShieldBan,
   Minimize2,
+  MoreHorizontal,
   PhoneOff,
   Pin,
   Scan,
@@ -127,6 +128,8 @@ import {
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { Menu } from "@/components/ui/menu";
 import { seatedInWatchPartyRoom, shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
@@ -2673,6 +2676,120 @@ export function CallControls({
 
   const showMute = !collapsed || !pushToTalk;
 
+  const showCursorToggle =
+    canShare &&
+    !noVideo &&
+    Boolean(onStartScreenShare) &&
+    (!voiceState.isSharingScreen || cursorLiveControl);
+  const showWatchParty =
+    canWatchParty &&
+    !listenOnly &&
+    !noVideo &&
+    Boolean(onStartScreenShare) &&
+    !voiceState.isSharingScreen;
+  const startWatchParty = () => {
+    if (shareCappedOut || !onStartScreenShare) {
+      return;
+    }
+    // Paint the hint in this click, before getDisplayMedia opens the picker
+    // and the rest of the page stops updating. Clear once the picker settles:
+    // cancel, error, or a live share.
+    flushSync(() => {
+      setShareHint(t("voice.control.watchPartyHint"));
+    });
+    void Promise.resolve(
+      onStartScreenShare({ preferBrowserTab: true }),
+    ).finally(() => {
+      setShareHint(null);
+    });
+  };
+
+  // THE STAGE BAR KEEPS WHAT A CALL USES EVERY MINUTE AND FOLDS THE REST.
+  // Mic, camera, share, hand, music and leave stay on the bar; the things a
+  // person sets once (the cursor, the join and leave sounds), starts once (a
+  // watch party) or reaches for rarely (fullscreen of the whole stage,
+  // folding the call away) live behind "Mais". The docked bar is untouched:
+  // its width rules already decide what fits there.
+  const stageMoreItems: ContextMenuItemDef[] = [];
+  if (!collapsed) {
+    if (showWatchParty) {
+      stageMoreItems.push({
+        id: "watch-party",
+        label: t("voice.control.watchParty"),
+        icon: MonitorPlay,
+        disabled: shareCappedOut,
+        onSelect: startWatchParty,
+      });
+    }
+    if (showCursorToggle) {
+      stageMoreItems.push({
+        id: "share-cursor",
+        label:
+          shareCursor === "hide"
+            ? t("voice.control.showCursor")
+            : t("voice.control.hideCursor"),
+        icon: shareCursor === "hide" ? MousePointerBan : MousePointer2,
+        onSelect: () =>
+          setShareCursor(shareCursor === "hide" ? "show" : "hide"),
+      });
+    }
+    if (stageMoreItems.length > 0) {
+      stageMoreItems.push({ id: "share-separator", label: "", separator: true });
+    }
+    stageMoreItems.push({
+      id: "join-leave-sounds",
+      label: joinLeaveAutoMute
+        ? t("voice.control.enableJoinLeaveSounds")
+        : t("voice.control.disableJoinLeaveSounds"),
+      icon: joinLeaveAutoMute ? Bell : BellOff,
+      onSelect: () => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute),
+    });
+    if (fullscreenAvailable) {
+      stageMoreItems.push({
+        id: "stage-fullscreen",
+        label: isFullscreen
+          ? t("voice.share.exitFullscreen")
+          : t("voice.share.fullscreen"),
+        icon: isFullscreen ? Minimize2 : Maximize2,
+        onSelect: onToggleFullscreen,
+      });
+    }
+    if (canExpand) {
+      stageMoreItems.push({
+        id: "stage-collapse",
+        label: userCollapsed ? t("call.stage.expand") : t("call.stage.collapse"),
+        icon: userCollapsed ? ChevronDown : ChevronUp,
+        onSelect: onToggleCollapsed,
+      });
+    }
+  }
+
+  // Raising a hand is the one control here that a listen-only seat needs MORE
+  // than anyone else, so it is never hidden by `listenOnly` and never
+  // disabled: lowering your own hand has to work whatever else the room has
+  // decided about you. It also survives the collapsed bar, because unlike
+  // mute it has no second home on the user panel.
+  const handControl = onToggleRaisedHand ? (
+    <Tooltip label={handLabel}>
+      <button
+        type="button"
+        aria-pressed={handRaised}
+        aria-label={handLabel}
+        data-raise-hand={handRaised ? "up" : "down"}
+        className={cn(
+          "flex items-center justify-center rounded-full",
+          size,
+          handRaised
+            ? "bg-signal/20 text-signal"
+            : "bg-ink-3 text-paper hover:bg-ink-4",
+        )}
+        onClick={onToggleRaisedHand}
+      >
+        <Hand className={iconSize} />
+      </button>
+    </Tooltip>
+  ) : null;
+
   return (
     <div
       className={cn(
@@ -2920,37 +3037,14 @@ export function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      <CallControlGroup className={stageGroup}>
-      {/* Raising a hand is the one control here that a listen-only seat needs
-          MORE than anyone else, so it is never hidden by `listenOnly` and
-          never disabled: lowering your own hand has to work whatever else the
-          room has decided about you. It also survives the collapsed bar,
-          because unlike mute it has no second home on the user panel. */}
-      {onToggleRaisedHand && (
-        <Tooltip label={handLabel}>
-          <button
-            type="button"
-            aria-pressed={handRaised}
-            aria-label={handLabel}
-            data-raise-hand={handRaised ? "up" : "down"}
-            className={cn(
-              "flex items-center justify-center rounded-full",
-              size,
-              handRaised
-                ? "bg-signal/20 text-signal"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
-            )}
-            onClick={onToggleRaisedHand}
-          >
-            <Hand className={iconSize} />
-          </button>
-        </Tooltip>
+      {/* On the stage the hand sits after share, with the other things a
+          person does in the room; the docked bar keeps it beside mute. */}
+      {collapsed && (
+        <>
+          <CallControlGroup className={stageGroup}>{handControl}</CallControlGroup>
+          <CallControlDivider container={collapsed} className="my-1" />
+        </>
       )}
-      </CallControlGroup>
-      <CallControlDivider
-        container={collapsed}
-        className={collapsed ? "my-1" : "my-1.5"}
-      />
       <CallControlGroup className={stageGroup}>
       {!noVideo && (
       <Tooltip
@@ -3037,10 +3131,7 @@ export function CallControls({
           implements the constraint at all, so what a `hide` actually buys is
           the line under the share saying this surface carries the pointer and
           a tab does not. `lib/screen-capture-cursor.ts` has the measurements. */}
-      {canShare &&
-        !noVideo &&
-        onStartScreenShare &&
-        (!voiceState.isSharingScreen || cursorLiveControl) && (
+      {collapsed && showCursorToggle && (
           <Tooltip
             label={
               shareCursor === "hide"
@@ -3159,7 +3250,7 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare && !noVideo && voiceState.isSharingScreen && (
+      {collapsed && canShare && !noVideo && voiceState.isSharingScreen && (
         <Tooltip
           label={
             hidePreviewPref
@@ -3185,11 +3276,7 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      {canWatchParty &&
-        !listenOnly &&
-        !noVideo &&
-        onStartScreenShare &&
-        !voiceState.isSharingScreen && (
+      {collapsed && showWatchParty && (
           <Tooltip
             label={t("voice.control.watchParty")}
             detail={t("voice.control.watchPartyHint")}
@@ -3207,27 +3294,14 @@ export function CallControls({
                 shareCappedOut && "opacity-40",
                 "bg-ink-3 text-paper hover:bg-ink-4",
               )}
-              onClick={() => {
-                if (shareCappedOut) {
-                  return;
-                }
-                // Paint the hint in this click, before getDisplayMedia opens
-                // the picker and the rest of the page stops updating. Clear
-                // once the picker settles: cancel, error, or a live share.
-                flushSync(() => {
-                  setShareHint(t("voice.control.watchPartyHint"));
-                });
-                void Promise.resolve(
-                  onStartScreenShare({ preferBrowserTab: true }),
-                ).finally(() => {
-                  setShareHint(null);
-                });
-              }}
+              onClick={startWatchParty}
             >
               <MonitorPlay className={iconSize} />
             </button>
           </Tooltip>
         )}
+      {!collapsed && handControl}
+      {!collapsed && <CallControlDivider container={false} className="my-1.5" />}
       <Tooltip
         label={musicDock.open ? t("music.close") : t("music.open")}
       >
@@ -3266,37 +3340,11 @@ export function CallControls({
           ) : null}
         </button>
       </Tooltip>
-      {/* The grid / focus toggle used to sit here. It has no question left to
-          answer: publishers are always a grid and everyone else is always a
-          chip, so the only remaining "make this one big" is fullscreen, which
-          every tile carries and a click on the picture reaches. */}
-      {!collapsed && fullscreenAvailable && (
-        <Tooltip
-          label={
-            isFullscreen
-              ? t("voice.share.exitFullscreen")
-              : t("voice.share.fullscreen")
-          }
-        >
-          <button
-            type="button"
-            data-testid="stage-fullscreen"
-            aria-pressed={isFullscreen}
-            className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-              size,
-            )}
-            onClick={onToggleFullscreen}
-          >
-            {isFullscreen ? (
-              <Minimize2 className={iconSize} />
-            ) : (
-              <Maximize2 className={iconSize} />
-            )}
-          </button>
-        </Tooltip>
-      )}
-      {canExpand && (
+      {/* The grid / focus toggle used to sit here, and then a fullscreen
+          tile. Every share carries its own fullscreen and a click on the
+          picture reaches it; fullscreen of the whole stage (a camera grid
+          with no share) is in "Mais". */}
+      {collapsed && canExpand && (
         <Tooltip
           label={userCollapsed ? t("call.stage.expand") : t("call.stage.collapse")}
         >
@@ -3317,7 +3365,25 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
+      {!collapsed && (
+        <Menu items={stageMoreItems} side="top" align="end">
+          <button
+            type="button"
+            data-testid="call-more"
+            aria-label={t("call.controls.more")}
+            title={t("call.controls.more")}
+            className={cn(
+              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
+              size,
+            )}
+          >
+            <MoreHorizontal className={iconSize} aria-hidden="true" />
+          </button>
+        </Menu>
+      )}
       </CallControlGroup>
+      {collapsed && (
+        <>
       <CallControlDivider
         container={collapsed}
         className={collapsed ? "my-1" : "my-1.5"}
@@ -3359,6 +3425,8 @@ export function CallControls({
         </button>
       </Tooltip>
       </CallControlGroup>
+        </>
+      )}
       <CallControlDivider
         container={collapsed}
         className={cn("mx-0.5", collapsed ? "my-1" : "my-1.5")}

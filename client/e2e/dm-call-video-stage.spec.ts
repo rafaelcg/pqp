@@ -223,7 +223,9 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
 
     // Collapse → a slim banner, chat back in reach; expand → the stage again,
     // with the remote video still live.
-    await page.getByRole("button", { name: "Collapse call" }).click();
+    // Folding the call away lives in the stage bar's "Mais" menu.
+    await page.getByTestId("call-more").click();
+    await page.getByRole("menuitem", { name: "Collapse call" }).click();
     const collapsedBox = await page
       .getByTestId("call-stage-collapsed")
       .boundingBox();
