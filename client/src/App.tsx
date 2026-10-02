@@ -472,6 +472,7 @@ import {
   createChannelListTickets,
   vanishedChannelDecision,
 } from "@/lib/channel-list-refresh";
+import { useCollapsedCategories } from "@/lib/collapsed-categories";
 import {
   onConnectionCheckRequest,
   onSettingsRequest,
@@ -1637,6 +1638,7 @@ function MainAppContent({
     useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
+  const collapsedCategories = useCollapsedCategories();
   useEffect(() => {
     setChannelSidebar(loadChannelSidebarPreference());
   }, []);
@@ -9210,6 +9212,17 @@ function MainAppContent({
    * lives there), a folded list, the call docked in the composer, the chat
    * put away, or not being in this channel's call at all.
    */
+  // The room's row is really on screen: the list is expanded AND the room is
+  // not folded away inside a collapsed category. Both the stage (which then
+  // drops the room's name and the row of people) and the header read this
+  // one flag, so they cannot disagree about where the room is named.
+  const voiceRoomRowVisible =
+    columnLayout &&
+    !sidebarIconsOnly &&
+    !(
+      selectedChannel?.parentId &&
+      collapsedCategories.has(selectedChannel.parentId)
+    );
   const voiceStageOwnsHeader = Boolean(
     selectedChannel &&
       selectedChannel.kind === "server" &&
@@ -9217,8 +9230,7 @@ function MainAppContent({
       !partyOwnsHeader &&
       voiceState.voiceChannelId === selectedChannel.id &&
       voiceState.status !== "idle" &&
-      columnLayout &&
-      !sidebarIconsOnly &&
+      voiceRoomRowVisible &&
       !callDockOnScreen &&
       stageShape === "expanded" &&
       !splitState.chatHidden,
@@ -10111,7 +10123,7 @@ function MainAppContent({
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
             onDismissError={() => voice.dismissError()}
             // The expanded channel list already lists this room's people.
-            roomListOnScreen={columnLayout && !sidebarIconsOnly}
+            roomListOnScreen={voiceRoomRowVisible}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}

@@ -1385,9 +1385,10 @@ function ActiveCall({
     fullscreen: fullscreen.isFullscreen,
   });
   // Whatever names this call (the channel, the person in a DM) is the page
-  // header's first line. Only where the header is out of sight, fullscreen
-  // and a phone's landscape takeover, does the stage say it again.
-  const titleOnStage = shape === "fullscreen" || immersive.immersive;
+  // header's first line. Only where the header is out of sight, fullscreen,
+  // does the stage say it again. Not a phone's landscape takeover: that one
+  // folds the side columns away and leaves the header where it was.
+  const titleOnStage = shape === "fullscreen";
   // Overlay chrome vs composer dock. Music-only is a picture with the
   // dock kept; fullscreen still takes the overlay so hang-up is reachable
   // with the composer gone.
@@ -2489,11 +2490,17 @@ function ActiveCall({
         {roomInSidebar && !watchPartyChrome && timerRunning && (
           <p
             data-testid="call-bar-duration"
-            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-text-tertiary @min-[48rem]:flex"
+            // The time alone from 32rem of bar, where it still clears the
+            // pill; the words beside it from 48rem.
+            className="pointer-events-none absolute bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+1.125rem)] left-[max(1rem,env(safe-area-inset-left))] hidden items-center gap-1.5 text-xs text-text-tertiary @min-[32rem]:flex"
           >
             <span aria-hidden="true" className="h-2 w-2 rounded-full bg-success" />
-            {t("voice.bar.connected")}
-            <span aria-hidden="true">·</span>
+            <span className="hidden @min-[48rem]:inline">
+              {t("voice.bar.connected")}
+            </span>
+            <span aria-hidden="true" className="hidden @min-[48rem]:inline">
+              ·
+            </span>
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
