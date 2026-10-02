@@ -91,7 +91,14 @@ export function MenuItemRows({
             )}
             {item.detail ? (
               <span className="flex min-w-0 max-w-64 flex-1 flex-col">
-                <span id={`${idPrefix}-${item.id}-label`}>{item.label}</span>
+                {/* Wraps inside the column's width like the detail does: a long
+                    label ran past the menu's edge and was cut off. */}
+                <span
+                  id={`${idPrefix}-${item.id}-label`}
+                  className="whitespace-normal"
+                >
+                  {item.label}
+                </span>
                 <span
                   id={`${idPrefix}-${item.id}-detail`}
                   className="whitespace-normal text-xs text-text-tertiary"
